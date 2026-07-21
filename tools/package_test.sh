@@ -36,6 +36,7 @@ mkdir -p "$STAGE/pkg/SKSE/Plugins" "$STAGE/pkg/SEQ"
 cp out/MFO.esp        "$STAGE/pkg/"
 cp out/SEQ/MFO.seq    "$STAGE/pkg/SEQ/"
 cp "$STAGE/dll/MFO.dll" "$STAGE/pkg/SKSE/Plugins/"
+[ -f out/SKSE/Plugins/MFO.ini ] && cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
 cp THIRD-PARTY-NOTICES.md "$STAGE/pkg/"   # ships with every build (INVARIANTS #42a)
 
 OUT="$PWD/MFO-test-v${VER}.zip"

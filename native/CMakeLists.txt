@@ -16,6 +16,9 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     plugin.cpp
     Serialization.cpp
     Forms.cpp
+    Config.cpp
+    Followers.cpp
+    Rapport.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)

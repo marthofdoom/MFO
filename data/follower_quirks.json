@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Per-follower detection quirks. DESIGN.md 3.1.",
+    "",
+    "IsPlayerTeammate() is NOT universal -- this file exists because of that.",
+    "Read off Swiftly Order Squad's shipped IsFollower/IsDismissedCustomFollower,",
+    "which has solved this across a large user base.",
+    "",
+    "DYNAMIC_OR_DROP: every entry resolves against the LIVE load order at",
+    "kDataLoaded and is skipped silently when its plugin is absent. Nothing here",
+    "is baked from this machine's load order -- an absent plugin is normal, not",
+    "an error, and must not be logged as one."
+  ],
+
+  "dismissedWhenActorValueEquals": [
+    {
+      "name": "Inigo",
+      "actorValue": "WaitingForPlayer",
+      "value": -1,
+      "note": "Inigo does not use PlayerTeammate at all. His dismissed state is WaitingForPlayer == -1. One of the most-installed followers in existence, so this is not an edge case -- it is THE case the first design draft got wrong."
+    }
+  ],
+
+  "dismissedWhenInFaction": [
+    {
+      "name": "Vilja",
+      "plugin": "EMCompViljaSkyrim.esp",
+      "formID": "0x0D6867",
+      "note": "DismissedFollowerFactionVilja -- membership means dismissed."
+    }
+  ],
+
+  "dismissedWhenFactionRankIs": [
+    {
+      "name": "Tindra",
+      "plugin": "EMCompViljaSkyrim.esp",
+      "formID": "0x1FB779",
+      "rank": 0,
+      "note": "AAEMTindraFollowFaction at rank 0 means dismissed."
+    }
+  ],
+
+  "eligibleWhenFactionRankAtLeast": [
+    {
+      "name": "PetFramework",
+      "plugin": "Skyrim.esm",
+      "formID": "0x000000",
+      "rank": 1,
+      "enabled": false,
+      "note": "PetFramework_PetFollowingFaction rank >= 1 counts as a follower even without teammate status. DISABLED until the real form is confirmed on a list that ships it -- shipping a guessed FormID would silently match nothing, or worse, something else."
+    }
+  ]
+}

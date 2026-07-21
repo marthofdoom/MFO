@@ -93,10 +93,105 @@ SPEL record is well-formed. **The board opener arrives at M7.**
 
 ---
 
-## Session 2+ — added as milestones land
+## Session 2 — M3: follower detection + Rapport
 
-Per `ROADMAP.md`: M3 detection/Rapport, M4 the stick-poking harness, M5 the
-evaluator, M6 logistics, M7 the board.
+**Written before the code, deliberately.** A gate defined afterwards is a
+gate defined to fit whatever got built.
 
-**Write each session's matrix before writing the code it tests.** A gate you
-define afterwards is a gate you will define to fit whatever you built.
+### Why the test list is the right one
+
+LoreRim ships **Inigo**, **Auri**, **Lucien**, and **Simple Follower
+Framework** — so the hardest detection case is already installed. Inigo is
+the one the first draft of `DESIGN.md` §3.1 got wrong: **he does not use
+`IsPlayerTeammate` at all**, and his dismissed state is
+`GetActorValue("WaitingForPlayer") == -1`. If detection works on Inigo it
+probably works.
+
+There is **no debug UI at M3**. Everything below is read out of `MFO.log`,
+so the logging has to be good enough to test with — which is itself part of
+what this session proves.
+
+### 2A. Detection
+
+| # | Step | Expect | Fails ⇒ |
+|---|---|---|---|
+| 1 | Recruit a vanilla follower (Lydia / Faendal) | `[follower] +XXXXXXXX <name> (teammate)` | the base case is broken; stop here |
+| 2 | Walk through a load door | still tracked, **no re-add spam** | handle re-resolution churning |
+| 3 | Fast-travel far, then back | dropped from the active set on unload, re-added on load, **Rapport unchanged** | handle held as a raw pointer |
+| 4 | Dismiss them | leaves the ACTIVE set; **record and Rapport retained** | dismissal is destroying state — the emotional core of §5 |
+| 5 | Re-recruit | resumes with the **same Rapport**, no reset | keyed on something non-persistent |
+| 6 | **Recruit Inigo** | detected — via the quirk table, not teammate status | §3.1's whole correction did not land |
+| 7 | **Dismiss Inigo** | leaves the active set (`WaitingForPlayer == -1`) | treating him as still active is the specific bug this milestone exists to avoid |
+| 8 | Recruit Auri and Lucien together | all three tracked simultaneously, distinct records | |
+| 9 | Follower dies | leaves the active set cleanly, **no crash**, record retained | |
+| 10 | Conjure a familiar | **NOT** tracked (`bAllowSummons` off) | summons would get a session-only board and pollute Rapport |
+| 11 | `bAllowSummons = 1`, re-conjure | tracked, **and its record is NOT written to the co-save** | persisting a 0xFF FormID — INVARIANTS #9 |
+
+### 2B. Rapport — the award rules
+
+The awarding conditions are the part most likely to be subtly wrong, because
+every one of them is a state scan against a non-player actor (#14).
+
+| # | Scenario | Expect | Proves |
+|---|---|---|---|
+| 12 | Player melees a bandit, follower fighting beside them | **+1, exactly once** | `TESDeathEvent` **fires twice** — a +2 here is the classic |
+| 13 | Follower kills a bandit themselves | +1 | follower-as-killer path |
+| 14 | **Archery case:** player snipes from far away, follower is in combat | **+1** | the combat-state test, not distance |
+| 15 | **Stealth case:** player one-shots from hiding, follower beside them and never aggroed | **+1** | the `fSharedRadius` fallback |
+| 16 | Player kills something with the follower left behind, far away, not in combat | **+0** | the radius/combat gate actually gates |
+| 17 | Dismissed follower, player kills something | **+0** | dismissed earns nothing |
+| 18 | Kill a boss / named enemy | **+5** | multiplier |
+| 19 | Kill a dragon | **+10** | multiplier |
+| 20 | Fight ends | survival award fires **once**, on exit | not per-tick |
+| 21 | **Long fight with lulls** | survival does **NOT** fire mid-fight | `aeCombatState == 0` is untrustworthy alone — §4.5a rule 7 |
+| 22 | Two followers present, player kills one enemy | **both** get +1, independently | Rapport is per-follower, never pooled |
+| 23 | Cross a rank threshold | rank increments, slot counts change (log both tables) | `BALANCE.md` ladder |
+| 24 | Save, quit to desktop, relaunch, load | Rapport and rank **exactly** as before | |
+
+### 2C. The performance question this milestone must answer
+
+`TESCombatEvent` is a **global** event source — it fires for every actor in
+the load order entering or leaving combat, not just followers. MRO's most
+expensive lesson was that a global actor event taxed the whole VM and **the
+cost was the dispatch, not the handler body, so filtering inside the handler
+did not help.** A native sink is far cheaper than a Papyrus dispatch, but the
+volume question is real and unmeasured.
+
+| # | Step | Expect |
+|---|---|---|
+| 25 | Log every `TESCombatEvent` with actor + state for 60 s in a **large battle** (a dragon attack on a hold capital, or a Civil War fight) | a *count*, so we know the order of magnitude |
+| 26 | Same, with MFO's handler early-outing on non-followers | no measurable frame cost |
+
+**If dispatch volume is high enough to matter**, the mitigation is to gate on
+`IsPlayerTeammate` **before** any other work in the sink, and to consider
+whether combat-exit survival can be driven off the follower's own polled
+state instead of a global sink. Decide on the number, not the vibe.
+
+### 2D. The measurement `BALANCE.md` is waiting on
+
+| # | Step | Records |
+|---|---|---|
+| 27 | Play normally for **3 sessions of ~1 h** with one steady follower, `bProfileRapport` on | kills/hour, boss kills/hour, encounters/hour, **Rapport/hour** |
+
+`BALANCE.md` §1.1 assumes ~45 Rapport/hour on vanilla-ish play and ~30 on a
+Requiem-class list. **The entire rank ladder rests on that estimate and it
+has never been measured.** If the real number is half, Rank V is 220 hours
+and the ladder is wrong. Feed the result back into `BALANCE.md` §1.2 before
+M5 — the numbers are cheap to change now and expensive to change after
+players have saves.
+
+### Definition of done
+
+2A and 2B fully green, 2C measured with a number written into
+`ENGINE_NOTES.md` §9 item 3, and 2D's kills/hour recorded in `BALANCE.md` §7.
+**Detection working on Inigo is the single most informative result in this
+session** — it is the case that was designed wrong first.
+
+---
+
+## Session 3+ — added as milestones land
+
+Per `ROADMAP.md`: M4 the stick-poking harness, M5 the evaluator, M6
+logistics, M7 the board.
+
+**Write each session's matrix before writing the code it tests.**

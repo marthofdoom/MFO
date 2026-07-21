@@ -2,6 +2,9 @@
 #include "State.h"
 #include "Serialization.h"
 #include "Forms.h"
+#include "Config.h"
+#include "Followers.h"
+#include "Rapport.h"
 
 // MFO — marth's Follower Overhaul.
 // P0 scope (DESIGN.md §10): the DLL loads, logs its version, and the co-save
@@ -80,7 +83,10 @@ namespace {
             // Sinks must come AFTER form resolution or they fire against
             // unresolved forms. P0 registers none yet.
             spdlog::info("[startup] kDataLoaded");
-            MFO::Forms::Resolve();
+            MFO::Config::Read();            // config first -- everything else reads it
+            MFO::Forms::Resolve();          // then forms
+            MFO::Followers::ResolveQuirks();
+            MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
             break;
 
         case SKSE::MessagingInterface::kPostLoadGame:
@@ -95,6 +101,7 @@ namespace {
                          a_msg->type == SKSE::MessagingInterface::kNewGame ? "kNewGame" : "kPostLoadGame",
                          MFO::g_followers.size());
             MFO::Forms::EnsurePlayerSetup();
+            MFO::Followers::Refresh();
             SeedTestData();
             break;
 
