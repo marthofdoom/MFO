@@ -15,6 +15,7 @@ find_package(CommonLibSSE CONFIG REQUIRED)
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     plugin.cpp
     Serialization.cpp
+    Forms.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
