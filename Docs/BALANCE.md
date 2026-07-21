@@ -203,7 +203,9 @@ All keys live in `SKSE/Plugins/MFO.ini`, overridden by MCM Helper's
 | `fRapportSurvival` | 1.0 | Per encounter survived together |
 | `fSharedRadius` | 3000 | Shared-kill fallback radius, units (§2) |
 | `fReactionMult` | 1.0 | Scales M across all ranks — >1 slower/more deliberate, <1 sharper. **Cannot push effective sampling below 3 ticks** |
-| `fSuppressWindow` | 1.5 | Fallback post-action suppression in seconds, for actions with no knowable duration; jittered ±30%. Positional — never blocks a higher-ranked rule (§6) |
+| `fSuppressWindow` | 1.5 | Fallback post-action suppression in seconds, for **transient** actions with no knowable duration; jittered ±30%. Positional — never blocks a higher-ranked rule (§6) |
+| `fTargetSwitchMargin` | 0.15 | How much better a new candidate must score before a **committed** target is abandoned (DESIGN §4.7.3). Below this, the follower stays on target. 0 disables hysteresis and will cause oscillation |
+| `iTargetReresolveTicks` | 4 | Service ticks between expensive target re-resolutions (~530 ms). Validity is still checked every tick, so a dead target drops immediately |
 | `bProfileEvaluator` | 0 | P2 timing instrumentation (§4.2) |
 
 **Rename discipline (inherited, load-bearing):** an INI/MCM key that changes

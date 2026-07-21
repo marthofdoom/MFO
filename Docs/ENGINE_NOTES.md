@@ -286,6 +286,9 @@ content of this document right now.**
 | 11 | Does `IsItemActivated()` hold against the task-pump race? | P3 | Rapid clicks on a delete row; count actual deletions |
 | 12 | Does uninstall leave zero MFO spells on a follower? | P5 | Tutor, uninstall, inspect save |
 | 13 | Do package overrides survive a save/load, and does the ledger catch it? | P6+ | Apply, save, reload, `CountPackageOverride` |
+| 14 | Does a commanded target actually **stick** — does the combat controller keep it, or re-pick within seconds? | P6+ | Issue once, log `GetCombatTarget()` every tick for 60 s without re-issuing. **This is the load-bearing question for §4.7** — if the AI re-picks, the standing-order model needs a refresh cadence rather than pure invalidation |
+| 15 | Does `EvaluatePackage()` need the §4.5a condition flicker from native code, and does it need the delay? | P6+ | Set global, evaluate, read `GetCurrentPackage()`; then flicker and compare |
+| 16 | Does an alias `ForceRefTo` from native code drive a conditioned package the same way Papyrus' does? | P6+ | The whole declarative route rests on this |
 
 ---
 

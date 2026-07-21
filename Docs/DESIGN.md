@@ -912,6 +912,112 @@ the actor. When another system holds a higher-priority override, MFO
 priority. Escalation wars with follower frameworks are unwinnable and the
 loser is the user's save.
 
+### 4.7 Standing orders and target commitment (DECIDED — marth)
+
+Until now the design treated every action as a one-shot. That is wrong for a
+whole class of them. **Actions divide into two kinds, and they need different
+lifecycles:**
+
+| Kind | Examples | Lifecycle |
+|---|---|---|
+| **Transient** | cast a spell, drink a potion, swap weapon | Fires once. Governed by the §4.4 suppression window |
+| **Standing order** | attack *this* target, hold position, keep distance | **Issued once, then persists.** Governed by a commitment latch — re-issued only when invalidated |
+
+A rule like `Always -> Attack lowest-HP foe` must **not** re-issue every tick.
+Re-issuing means `StopCombat`/`StartCombat` churn several times a second,
+which resets the combat state the follower is trying to act on and produces
+exactly the stuttering, never-actually-attacking behavior the whole system
+exists to avoid. The order is given once; vanilla AI executes it
+uninterrupted; MFO stays quiet until something makes the order wrong.
+
+#### 4.7.1 The mechanism
+
+Per §4.5a, targeting goes through the **declarative** route, not a package
+override:
+
+1. `ForceRefTo` the chosen actor into MFO's per-follower **combat-target
+   alias** (`MFO.esp` ships a fixed pool; see §8.2).
+2. Set that follower's `MFO_HasCommandedTarget` global/AV.
+3. `EvaluatePackage()` — and if the same package is already current, use the
+   §4.5a flicker (set 0 → evaluate → set 1 → evaluate), because
+   `EvaluatePackage()` no-ops otherwise.
+4. Kick combat with `StopCombat()` → `StartCombat(target)`, preserving
+   aggression across the switch (§4.5a rule 6).
+
+Release is the same in reverse: clear the alias, unset the global,
+`EvaluatePackage()`. **Release is mandatory and ledgered** — a follower left
+latched onto a corpse is the failure mode this section exists to prevent.
+
+#### 4.7.2 The latch, and why it does not violate statelessness
+
+Actuation holds, per follower:
+
+```
+CommandedTarget { ActorHandle target; uint8 issuedByRule; uint32 issuedAtTick; }
+```
+
+Each tick the scan runs top-down from rule 1 exactly as before. When the
+winning rule is a standing order, MFO compares the resolved target against
+the latch:
+
+- **Same target, still valid → NO ENGINE CALL AT ALL.** The tick ends having
+  done nothing, which is the desired behavior and also free.
+- **Different target, or invalid, or issued by a rule that no longer wins →
+  release and re-issue.**
+
+**This is actuation state, not evaluator state, and the distinction is
+load-bearing** (`INVARIANTS.md` #22). The test: *if the latch were lost
+entirely, would behavior change?* Only by a redundant re-issue of an
+identical order. The scan still produces the same winner; the latch only
+decides whether to repeat itself. It is a smoothing layer over the world, not
+a memory the evaluator reads to decide. A skipped tick still loses nothing.
+
+#### 4.7.3 Invalidation — two questions, never conflated
+
+**Is the target still VALID?** (mechanical, cheap, checked every tick)
+dead · handle unresolvable · left the high process · no longer hostile ·
+disabled or deleted. Any of these → release immediately.
+
+**Is the target still CORRECT for the rule?** (semantic, expensive) — "lowest
+HP" moves as damage lands; "nearest" moves as everyone runs around.
+
+**Commitment rule: MFO does not switch targets for a marginal improvement.**
+Once committed, it switches only when the target is invalid, when a
+**higher-positioned rule** wins instead (positional preemption, §4.4), or
+when a new candidate is better **by more than `fTargetSwitchMargin`**
+(default **15%**). That margin is taken directly from Aggro Management's
+shipped threat table, which uses the same figure for the same reason —
+without hysteresis, two foes at 41% and 39% health make a follower oscillate
+between them forever. This is the one place MFO adds damping, and it is
+damping of *its own re-selection*, not of the player's rule order (§4.3a).
+
+#### 4.7.4 Re-resolution is throttled independently of the tick
+
+Evaluating `Always` is cheap; resolving "lowest-HP foe" needs the world
+snapshot and is expensive-tier (§4.2). So **target re-resolution runs on its
+own slower cadence** — default every 4th service tick (~530 ms) — while the
+cheap validity check runs every tick.
+
+The effect: a target that dies is dropped within one tick, but the expensive
+"who is lowest now?" question is asked four times less often. Cheap
+selectors (`my current target`, `player's target`) are direct reads and skip
+the throttle entirely.
+
+#### 4.7.5 What this costs, honestly
+
+A standing order means MFO is holding engine state between ticks, which is
+the thing §8.5's clean-uninstall promise is most exposed to. Consequently:
+
+- Every latch is **released on**: combat exit, follower death, dismissal,
+  cell detach (`KeepOffsetFromActor` does not survive high-process exit —
+  §4.5a rule 4), board edit of the issuing rule, MFO shutdown, and the panic
+  reset.
+- The latch is **not serialized.** It is rebuilt from live state after a
+  load, because a target handle that survived a save is exactly the dangling
+  reference `INVARIANTS.md` #9 forbids.
+- On load, MFO **clears any commanded-target alias it owns** before the first
+  tick, so a save made mid-order does not resume pointing at something stale.
+
 ---
 
 ## 5. Rapport — per-follower progression (DECIDED — marth)
@@ -1281,7 +1387,18 @@ AND shrink).
 | `0x802` | MFO-granted keyword (tutored-spell tagging, §5.4) |
 | `0x804` | startup QUST |
 | `0x808` | MCM QUST |
+| `0x80A` | **command QUST** — owns the combat-target alias pool (§4.7.1) |
+| `0x80B` | `MFO_HasCommandedTarget` GLOB |
+| `0x80C`–`0x80F` | reserved for further command globals (hold/spacing flags) |
 | `0x810`+ | reserved — future player-side perks (§11) |
+| `0x820`+ | MFO's own conditioned PACKAGEs (attack-commanded-target, hold, spacing) — §4.5a's declarative route |
+
+**Alias pool sizing (§4.7.1).** Aliases are a fixed count on a quest, so the
+pool caps how many followers can hold a standing order simultaneously.
+**Default 8**, which comfortably exceeds vanilla's follower limit and matches
+the party sizes framework users actually run. Beyond the cap, a follower gets
+Tier-A actions only and the board says so — the same graceful degradation as
+§4.6, never a silent failure.
 
 `MFO.esp` declares a single master (`Skyrim.esm`) and references no external
 records. **There is no patch plugin and no installer** — unlike MEO's

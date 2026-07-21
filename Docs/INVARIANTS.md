@@ -179,6 +179,34 @@ nothing, because the next tick asks the same questions of fresher state.
 jitter the *observation*, never queue the *action* (`DESIGN.md` §4.1b).
 `DESIGN` (`DESIGN.md` §4.1a).
 
+**#22a — A standing order is issued ONCE and re-issued only on invalidation.**
+Never re-issue an identical target command per tick: `StopCombat`/
+`StartCombat` churn resets the combat state the follower is acting on and
+produces stuttering, never-actually-attacking behavior. Same target + still
+valid + still the winning rule ⇒ **no engine call at all**.
+`DESIGN` (`DESIGN.md` §4.7.2).
+
+**#22b — The target latch is ACTUATION state, never EVALUATOR state.** The
+test that keeps #22 intact: *if the latch were lost, would behavior change?*
+Only by a redundant re-issue. The scan still runs top-down from rule 1 and
+produces the same winner; the latch only decides whether to repeat itself. If
+a change ever makes the latch affect *which rule wins*, that change is wrong.
+`DESIGN` (`DESIGN.md` §4.7.2).
+
+**#22c — Never switch a committed target for a marginal improvement.**
+Switch only on invalidity, positional preemption, or a candidate better by
+more than `fTargetSwitchMargin` (default 15%). Without hysteresis two foes at
+41% and 39% health oscillate a follower between them forever. Damping applies
+to MFO's own re-selection ONLY — never to the player's rule ordering (#28).
+`DESIGN` (`DESIGN.md` §4.7.3) + `INHERITED` (Aggro Management ships the same
+15% for the same reason).
+
+**#22d — The target latch is never serialized, and is cleared on load.** A
+target handle that survived a save is the dangling reference #9 forbids.
+Rebuild from live state; clear any owned command alias before the first tick
+so a save made mid-order does not resume pointing at something stale.
+`DESIGN` (`DESIGN.md` §4.7.5).
+
 **#23 — Conditions are pure reads. No mutation, no allocation.** A predicate
 that mutates is a bug even when it works, because #21's early-out means it
 runs an unpredictable number of times.
