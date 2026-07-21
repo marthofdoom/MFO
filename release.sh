@@ -46,8 +46,13 @@ echo "== MFO v${VER} =="
 
 # 1. Stamp the version so the in-game log header matches the zip. INVARIANTS
 #    #44: a stale binary voids every test, and this header is how that is caught.
+#
+#    ONLY CMakeLists.txt. Do NOT stamp native/vcpkg.json: its version-string is
+#    metadata about our own port and affects nothing, but it IS part of the CI
+#    cache key (hashFiles over the manifests), so touching it invalidates the
+#    vcpkg cache and turns every release into a ~30 min cold rebuild instead of
+#    ~2.5 min. Learned by doing it once.
 sed -i "s/^project(MFO VERSION [0-9.]*/project(MFO VERSION ${VER}/" native/CMakeLists.txt
-sed -i "s/\"version-string\": \"[0-9.]*\"/\"version-string\": \"${VER}\"/" native/vcpkg.json
 if [[ -n "$(git status --porcelain native/ 2>/dev/null)" ]]; then
     echo "Version stamp changed native/ — commit and let CI rebuild, then re-run." >&2
     git status --short native/ >&2
