@@ -439,8 +439,23 @@ the first compiler that ever sees the code and an in-game test is the first
 runtime. A review is the only check that happens before either.
 *Scope:* new subsystems, engine-facing code, anything touching the co-save or
 threading. Not doc-only commits.
-`INHERITED` (MAO BUILD.md, MEO ROADMAP-1.0.7) — **and MFO already violated it
-once, pushing M3 to CI unreviewed.**
+`INHERITED` (MAO BUILD.md, MEO ROADMAP-1.0.7).
+
+**MFO has violated this FOUR times** — M3, then three builds in a row on
+2026-07-21: the v0.3.0 field fixes, the tutoring removal, and **the co-save
+schema v2 bump**. The last of those shipped in the same session as telling
+marth it was safe to start saving real games.
+
+**The pattern, because it is a pattern and not four slips:** the violations
+all happened when something *else* was the headline. Fixing a reported bug,
+cutting scope, reacting to "I'll be saving from now on" — the review got
+skipped precisely when momentum felt highest, which is exactly when review is
+worth most. A rule obeyed only when nothing is happening is not a rule.
+
+**Mechanical form, so it does not depend on remembering:** a commit touching
+`native/**` does not get pushed until a review of that change has reported.
+Not "usually", not "when substantial" — the schema change looked small and was
+the most dangerous thing in the project.
 
 ---
 
