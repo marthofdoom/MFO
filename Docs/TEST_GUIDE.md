@@ -105,11 +105,16 @@ gate defined to fit whatever got built.
 ### Why the test list is the right one
 
 LoreRim ships **Inigo**, **Auri**, **Lucien**, and **Simple Follower
-Framework** — so the hardest detection case is already installed. Inigo is
-the one the first draft of `DESIGN.md` §3.1 got wrong: **he does not use
-`IsPlayerTeammate` at all**, and his dismissed state is
-`GetActorValue("WaitingForPlayer") == -1`. If detection works on Inigo it
-probably works.
+Framework** — so the hardest detection case is already installed.
+
+Inigo is the one `DESIGN.md` §3.1 got wrong twice, and the precise statement
+matters because it decides what the test proves: **he sets `IsPlayerTeammate`
+while following, but does NOT clear it when dismissed** — he signals that with
+`GetActorValue("WaitingForPlayer") == -1` instead. So the teammate flag alone
+reports him as an active follower *forever after you dismiss him*.
+
+That makes **step 7, not step 6, the load-bearing one.** Detecting Inigo is
+easy; *un*-detecting him is the bug.
 
 There is **no debug UI at M3**. Everything below is read out of `MFO.log`,
 so the logging has to be good enough to test with — which is itself part of
@@ -124,8 +129,8 @@ what this session proves.
 | 3 | Fast-travel far, then back | dropped from the active set on unload, re-added on load, **Rapport unchanged** | handle held as a raw pointer |
 | 4 | Dismiss them | leaves the ACTIVE set; **record and Rapport retained** | dismissal is destroying state — the emotional core of §5 |
 | 5 | Re-recruit | resumes with the **same Rapport**, no reset | keyed on something non-persistent |
-| 6 | **Recruit Inigo** | detected — via the quirk table, not teammate status | §3.1's whole correction did not land |
-| 7 | **Dismiss Inigo** | leaves the active set (`WaitingForPlayer == -1`) | treating him as still active is the specific bug this milestone exists to avoid |
+| 6 | **Recruit Inigo** | detected as a normal teammate | the base gate is broken |
+| 7 | **Dismiss Inigo** | **leaves the active set** — the quirk revokes despite the teammate flag still being set | **THE test of this session.** Still-active here means the quirk table never fired, and he would keep earning Rapport after dismissal |
 | 8 | Recruit Auri and Lucien together | all three tracked simultaneously, distinct records | |
 | 9 | Follower dies | leaves the active set cleanly, **no crash**, record retained | |
 | 10 | Conjure a familiar | **NOT** tracked (`bAllowSummons` off) | summons would get a session-only board and pollute Rapport |
