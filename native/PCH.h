@@ -16,5 +16,12 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
+
+// REQUIRED, not stylistic. add_commonlibsse_plugin generates
+// __MFOPlugin.cpp with "..."sv literals and force-includes this PCH; without
+// this the build dies with C3688 "invalid literal suffix 'sv'" in a file we
+// never wrote. MEO's PCH ends with the same line for the same reason.
+using namespace std::literals;
