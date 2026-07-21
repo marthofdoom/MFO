@@ -47,11 +47,20 @@ namespace MFO::Probe {
             return (n && *n) ? std::string(n) : std::string("<unnamed>");
         }
 
-        RE::Actor* NearestFoe(RE::Actor* a_follower, float& a_outDist) {
+        // Pick a foe to command the follower onto -- and, when there is a
+        // choice, deliberately pick one they are NOT already fighting. That is
+        // the only way the retention watch tests whether OUR command overrides
+        // the engine's own pick rather than merely agreeing with it (the v0.4.1
+        // test was confounded: single target, so "no defection" proved nothing).
+        RE::Actor* PickFoe(RE::Actor* a_follower, float& a_outDist, int& a_outCount, bool& a_outWasCurrent) {
             auto* pl = RE::ProcessLists::GetSingleton();
             if (!pl || !a_follower) return nullptr;
-            RE::Actor* best = nullptr;
-            float bestDist = kMaxFoeDistance;   // capped: do not send them across the cell
+
+            auto* current = a_follower->GetActorRuntimeData().currentCombatTarget.get().get();
+
+            RE::Actor* nearest = nullptr;      float nearestDist = kMaxFoeDistance;
+            RE::Actor* nonCurrent = nullptr;   float nonCurrentDist = kMaxFoeDistance;
+            int count = 0;
             for (auto& h : pl->highActorHandles) {
                 auto* a = h.get().get();
                 if (!a || a == a_follower) continue;
@@ -59,10 +68,15 @@ namespace MFO::Probe {
                 if (!a->Is3DLoaded()) continue;
                 if (!a->IsHostileToActor(a_follower)) continue;
                 const float d = a->GetPosition().GetDistance(a_follower->GetPosition());
-                if (d < bestDist) { bestDist = d; best = a; }
+                if (d >= kMaxFoeDistance) continue;
+                ++count;
+                if (d < nearestDist) { nearestDist = d; nearest = a; }
+                if (a != current && d < nonCurrentDist) { nonCurrentDist = d; nonCurrent = a; }
             }
-            a_outDist = bestDist;
-            return best;
+            a_outCount = count;
+            // Prefer a foe they are NOT already fighting; fall back to nearest.
+            if (nonCurrent) { a_outDist = nonCurrentDist; a_outWasCurrent = false; return nonCurrent; }
+            a_outDist = nearestDist; a_outWasCurrent = (nearest == current); return nearest;
         }
 
         // Build the message under the lock, LOG AFTER RELEASING IT. A spdlog
@@ -121,7 +135,9 @@ namespace MFO::Probe {
 
         case Action::StartCombatOnNearestFoe: {
             float dist = 0.0f;
-            auto* foe = NearestFoe(f, dist);
+            int   candidates = 0;
+            bool  wasCurrent = false;
+            auto* foe = PickFoe(f, dist, candidates, wasCurrent);
             if (!foe) {
                 Record(Name(a_action), f, false,
                        std::format("no loaded hostile within {:.0f}u", kMaxFoeDistance));
@@ -152,8 +168,17 @@ namespace MFO::Probe {
                 g_ret.active      = true;
                 g_ret.valid       = true;
             }
+            const char* quality = (candidates <= 1)
+                ? " -- INCONCLUSIVE by construction: only 1 candidate, vanilla AI sticks to it anyway"
+                : (wasCurrent ? " -- weak: had to reuse their current target"
+                              : " -- valid: commanded onto a foe they were NOT fighting");
+            {
+                std::scoped_lock lk(g_mx);
+                g_ret.commanded = std::format("{} ({} candidate(s))", SafeName(foe), candidates);
+            }
             Record(Name(a_action), f, true,
-                   std::format("target {} at {:.0f}u -- retention watch started", SafeName(foe), dist));
+                   std::format("target {} at {:.0f}u, {} candidate(s){}",
+                               SafeName(foe), dist, candidates, quality));
             return;
         }
 

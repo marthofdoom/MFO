@@ -16,34 +16,33 @@ namespace MFO::Rapport {
         std::atomic<std::uint32_t> g_sessionKills{ 0 };
         std::atomic<std::uint32_t> g_sessionRapport{ 0 };
 
-        // What counts as a boss.
+        // What counts as a boss. LEVEL-RELATIVE ONLY.
         //
-        // FIELD-CORRECTED 2026-07-21: this was IsUnique() alone, and it missed
-        // a bandit chief that the game itself gave a boss bar. IsUnique() means
-        // "a NAMED one-off actor" (dragon priests, jarls, quest bosses) -- it
-        // says nothing about difficulty, and generic dungeon bosses are exactly
-        // that: generic, leveled, not unique. The player's read of "boss" is
-        // "that was a step up", and level is the portable proxy for it.
+        // FIELD-CORRECTED TWICE:
+        //   v0.3.0 -- IsUnique() alone missed a bandit chief with a boss bar
+        //             (chiefs are leveled non-uniques).
+        //   v0.4.1 -- adding IsUnique() as an OR then caught the opposite: the
+        //             log showed Weylin (lvl 3) and Hogni Red-Arm (a Markarth
+        //             butcher) scored as "boss x5" against a level-21 player,
+        //             because both are NAMED uniques. Named is not boss.
         //
-        // Deliberately still coarse (BALANCE.md §1.3): two tiers, no per-enemy
-        // difficulty scaling, because finer grain is unknowable per install and
-        // would make the ladder unpredictable.
+        // Both errors were the same mistake -- treating "unique" as a proxy for
+        // "hard". It is not, in either direction. Level relative to the player
+        // is the one signal that matches what a player means by "that was a
+        // step up": a chief scaled to your level counts; a named townsperson
+        // well below you does not. A true unique boss is caught when it is at
+        // or above your level, which is exactly when it is actually a fight.
+        //
+        // Coarse by design (BALANCE.md §1.3). No IsUnique, no keyword guessing
+        // (the "boss bar" has no clean bound API I have verified -- and the
+        // binding-gap lesson says do not guess one).
         bool IsBoss(RE::Actor* a_victim) {
             if (!a_victim) return false;
-
-            if (auto* base = a_victim->GetActorBase()) {
-                if (base->IsUnique()) return true;      // named one-offs
-            }
-
-            // RELATIVE level, not absolute. A bandit chief is a boss at level 8
-            // and an inconvenience at level 50, and that is the right answer
-            // both times -- it tracks whether the fight was actually a step up.
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!player) return false;
-            const auto vLvl = a_victim->GetLevel();
-            const auto pLvl = player->GetLevel();
             const auto delta = static_cast<std::int32_t>(Config::g_bossLevelDelta.load());
-            return static_cast<std::int32_t>(vLvl) >= static_cast<std::int32_t>(pLvl) + delta;
+            return static_cast<std::int32_t>(a_victim->GetLevel()) >=
+                   static_cast<std::int32_t>(player->GetLevel()) + delta;
         }
 
         bool IsDragon(RE::Actor* a_victim) {

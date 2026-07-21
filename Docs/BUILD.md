@@ -24,6 +24,15 @@ session, so defects accumulated across five builds instead of being caught one
 at a time. A build that has not been tested is not finished, however green CI
 is.
 
+**Granularity (marth, 2026-07-21): batch small changes; do not atomize.** "One
+change per build" is about *bisectable risk*, not literal minimalism — a
+one-function bug fix does not deserve its own review-and-release cycle. **Very
+small changes are a waste; roll them into the next substantive build.** The
+balance: one *hook class* or one *risky mechanism* per build (so a CTD
+bisects), but a bug fix found in testing rides along with the next change and
+is reviewed as part of that change's diff. The boss-detection fix
+(v0.4.1→next) is the worked example — held, not cut alone.
+
 ## Ordering: lowest crash surface first
 
 Inherited from MRO, restated in MAO: **one hook class per build, so a CTD
@@ -60,6 +69,19 @@ its failure mode), or `ENGINE_NOTES.md` (if it is an engine fact).
 - **Two-phase**: `./release.sh X.Y.Z` stamps and pushes; after CI is green,
   `./release.sh` verifies, packages and tags.
 - **Releases and tags are immutable. Bump VERSION instead.**
+- **Version granularity (marth):** a **patch** (`0.4.1`) is for review fixes on
+  a build just cut. **Minor corrections found in testing do NOT earn their own
+  patch** — they fold into the next **minor** (`0.5.0`) alongside its
+  substantive milestone. The boss-detection and probe fixes are staged for
+  `0.5.0`, not cut as `0.4.2`.
+- **Minor bumps (`0.x.0`) are for MILESTONES only** — a real capability jump
+  (gambits execute, board authorable, 1.0). Everything else is a patch.
+  *Retrospective:* the first arc over-inflated — 0.1.0→0.4.0 should have been a
+  handful of patches on a `0.0.x` line, since it was all pre-alpha foundation.
+  0.3.0 (a bug fix) is the clearest offender. **This is not fixable** — tags
+  are immutable, and numbering *down* would read as a downgrade and trip the
+  newer-save guard. Forward-only from 0.4.x, with the discipline applied from
+  here: `0.5.0` = M5 (the evaluator), then `0.5.x` patches until M6/M7.
 - A release **must** carry its CHANGELOG entry (the script enforces it), and
   the entry must state **save compatibility** and any **upgrade action**.
 - **FormIDs are forever once a build reaches a save. Never renumber.**

@@ -55,14 +55,57 @@ is normal, not a fault.
 **Same session.** Nine `STATE REPORT (power)` blocks, one per cast. Proves
 the opener mechanism M7's board depends on.
 
+### 0.5 Rapport crediting works end to end
+**2026-07-21, game 1.6.1170, MFO 0.4.1.** Six kills with follower Cosnach
+(`000198FA`) present: each logged `+1.0 (standard) -> N`, rapport climbing
+1→2→3→4→5→6, exactly one award per kill. `TESDeathEvent`'s double-fire is
+correctly guarded (no +2), the follower-shared gate credits, and kills before
+recruitment credited nobody (correct). **This is the first time any of Rapport
+has executed.** Still untested: the boss/dragon multipliers landing on the
+right actors (see the boss-detection correction, §0.7), and rank-threshold
+crossings.
+
+### 0.6 The §4.7 retention question is STILL OPEN — the first test was confounded
+**Same session, probe.** `StartCombat` held the commanded Boethiah Cultist for
+7.0s with no defection — but **the cultist was the ONLY hostile present**
+(marth's observation). Vanilla AI would have stuck to the only target
+regardless, so this proves the engine keeps the *only* target, not that it
+keeps *our commanded* one. **No evidence either way about the §4.7 model.**
+
+To be meaningful the test must: (a) have **multiple** candidate hostiles, and
+(b) command the follower onto one they are **not already fighting** — then see
+whether our pick survives or the engine drifts back to its own. The v0.4.2
+probe does exactly that (counts candidates, targets a non-current foe, and
+says "inconclusive by construction" when only one exists). Until that runs in
+a real multi-enemy fight, `StartCombat` retention is **UNKNOWN**, and §4.7
+rests on nothing measured.
+
+### 0.7 `EvaluatePackage()` NO-OPS when the package is unchanged — CONFIRMED
+**Same session, probe.** `EvaluatePackage on Cosnach -> package 0005C84B ->
+0005C84B (UNCHANGED)`. This is exactly the §4.5a hazard, now proven in-game:
+re-evaluating when the same conditioned package would be chosen does nothing,
+so **any native re-targeting will need the condition flicker** (set 0 →
+evaluate → set 1 → evaluate). Promotes §4.5a rule 3 from RESEARCHED to PROVEN.
+
+### 0.8 `CastSpellImmediate` applies the effect but plays NO ANIMATION
+**Same session, probe + marth's report:** healing was cast (effect applied)
+but the follower showed no casting animation. So `CastSpellImmediate` is a
+**silent** effect application, not a visible combat action. Acceptable for a
+self-heal; **not** acceptable as the primary "follower casts a spell at a foe"
+verb, where a player expects to see it. The intended alternative
+`DoCombatSpellApply` is Papyrus-only (§2.0), so a visible cast needs either VM
+dispatch or `LaunchSpell` (po3) — an M5 verification-queue item, not a solved
+one.
+
 ### NOT yet proven, despite the session
-- **The co-save round-trip.** `[cosave] loaded 0 follower(s)` is all that was
-  exercised — the save had no MFO data and none was written. Deferred by
-  decision (`TEST_GUIDE.md`); the schema remains reviewed-but-never-run.
-- **Anything Rapport.** No kills occurred. Awards, the double-fire guard, the
-  radius/combat gate, and the boss/dragon multipliers are all untested.
-- **`TESCombatEvent` volume.** `0 in 1.9 min` — no combat happened, so the
-  question §9 item 3 exists to answer is still open.
+- **The populated co-save ROUND-TRIP.** v0.4.1 *saved* a real record twice
+  (`saved 1 follower record(s), schema v2`) and *loaded* empty saves cleanly,
+  but the save-with-a-record was never reloaded in-session. Save works; load
+  of a real record is still unproven. **This is the next test.**
+- **Boss/dragon multipliers on the right actors.** The boss test surfaced a
+  bug (§0.7 / the v0.4.2 fix), so the corrected classification is untested.
+- **`TESCombatEvent` volume** at scale — no large battle occurred.
+- **The retention answer at all** — the one test was confounded (§0.6). Genuinely open.
 
 The living truth for behavior will always be `native/plugin.cpp`. When this
 file and the code disagree, the code is right.
