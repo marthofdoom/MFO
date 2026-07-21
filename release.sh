@@ -70,10 +70,19 @@ if [[ -z "$RUN_ID" ]]; then
     echo "ERROR: no successful 'native' run to take a DLL from." >&2
     exit 1
 fi
+# Compare the native/ TREE, not the commit sha. The DLL is a function of
+# native/ alone, so a docs- or script-only commit since the last green run is
+# harmless — but any drift in native/ means the artifact is not this code.
+# Comparing shas instead would force a pointless rebuild every time this very
+# file changed.
 RUN_SHA="$($GH run view "$RUN_ID" --json headSha -q '.headSha')"
-if [[ "$RUN_SHA" != "$(git rev-parse HEAD)" ]]; then
-    echo "ERROR: latest green CI run ($RUN_ID) built ${RUN_SHA:0:8}, but HEAD is $(git rev-parse --short HEAD)." >&2
-    echo "       Push and wait for CI, or you will ship a DLL that is not this commit." >&2
+HEAD_TREE="$(git rev-parse HEAD:native)"
+RUN_TREE="$(git rev-parse "${RUN_SHA}:native" 2>/dev/null || echo unknown)"
+if [[ "$RUN_TREE" != "$HEAD_TREE" ]]; then
+    echo "ERROR: native/ has changed since the last green CI run." >&2
+    echo "       run $RUN_ID built ${RUN_SHA:0:8} (native tree ${RUN_TREE:0:8})" >&2
+    echo "       HEAD is $(git rev-parse --short HEAD) (native tree ${HEAD_TREE:0:8})" >&2
+    echo "       Push and wait for CI, or you will ship a DLL that is not this code." >&2
     exit 1
 fi
 
