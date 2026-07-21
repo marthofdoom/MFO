@@ -29,8 +29,6 @@ namespace MFO::Followers {
             { "Tindra", "EMCompViljaSkyrim.esp", 0x1FB779,  0, nullptr },
         };
 
-        bool g_quirksResolved = false;
-
         // Reads THE SUBJECT ACTOR's actor values.
         bool HasDismissedActorValue(RE::Actor* a_actor) {
             auto* avo = a_actor->AsActorValueOwner();
@@ -59,7 +57,6 @@ namespace MFO::Followers {
                 spdlog::debug("[follower] quirk inactive: {} -- {} not in load order", q.name, q.plugin);
             }
         }
-        g_quirksResolved = true;
         spdlog::info("[follower] quirk table: {} active, {} inactive (of {})",
                      found, absent, std::size(g_dismissedFactions));
     }
@@ -113,7 +110,32 @@ namespace MFO::Followers {
         return false;
     }
 
+    bool IsPersistableID(RE::FormID a_actorID) {
+        // 0xFF is the runtime/dynamic form range. NEVER persist one
+        // (INVARIANTS #9): next session the id dangles or has been REUSED by a
+        // different created form, so the record silently attaches to whatever
+        // now owns it.
+        //
+        // IsCommandedActor() alone does NOT cover this. A PlaceAtMe-spawned or
+        // script-cloned teammate -- routine in a Lorerim-class order -- is not
+        // "commanded" but still carries a 0xFF id. And the load side cannot
+        // save us: SKSE's ResolveFormID passes 0xFF ids through as resolved.
+        // So the guard has to be here, on the way in.
+        return (a_actorID >> 24) != 0xFF;
+    }
+
+    FollowerState* TryEnsureRecord(RE::FormID a_actorID) {
+        if (!IsPersistableID(a_actorID)) {
+            spdlog::debug("[follower] {:08X} is a runtime (0xFF) form -- session-only, no record",
+                          a_actorID);
+            return nullptr;
+        }
+        return &g_followers[a_actorID];
+    }
+
     FollowerState& EnsureRecord(RE::FormID a_actorID) {
+        // Callers that already know the id is persistable. Kept for the sites
+        // where a record must exist; the guarded form is TryEnsureRecord.
         return g_followers[a_actorID];
     }
 
@@ -145,11 +167,17 @@ namespace MFO::Followers {
             if (!a) continue;
             const auto id = a->GetFormID();
             if (std::find(before.begin(), before.end(), id) == before.end()) {
-                const bool isSummon = a->IsCommandedActor();
+                const bool isSummon    = a->IsCommandedActor();
+                const bool persistable = IsPersistableID(id);
                 spdlog::info("[follower] + {:08X} {} ({})", id, a->GetName(),
-                             isSummon ? "summon, session-only" : "teammate");
+                             isSummon      ? "summon, session-only"
+                             : !persistable ? "runtime form, session-only"
+                                            : "teammate");
+                // Two independent reasons to withhold a record. Checking only
+                // IsCommandedActor was the gap: a cloned/spawned teammate is
+                // not commanded but still has a 0xFF id.
                 if (!isSummon) {
-                    EnsureRecord(id);   // summons are NEVER given a persisted record
+                    TryEnsureRecord(id);
                 }
             }
         }

@@ -9,10 +9,22 @@
 // names whose state it reads. A nullptr subject is an error, never a wildcard,
 // and nothing defaults to the player.
 //
-// IsPlayerTeammate() is necessary-ish but NOT sufficient: Inigo never sets it,
-// Vilja and Tindra carry their own dismissal factions, pet frameworks use
-// their own. The quirk table (data/follower_quirks.json, compiled in) covers
-// them and resolves against the live load order.
+// IsPlayerTeammate() is NECESSARY but NOT SUFFICIENT.
+//
+// Precise statement, because an earlier draft got this wrong: Inigo DOES set
+// PlayerTeammate while following. What he does not do is CLEAR it on
+// dismissal -- he signals that with WaitingForPlayer == -1 instead. So the
+// teammate flag alone reports him as an active follower forever after you
+// dismiss him. Vilja and Tindra likewise stay teammates and signal dismissal
+// through their own factions.
+//
+// Hence the shape here, copied from Swiftly Order Squad's shipped IsFollower
+// / IsDismissedCustomFollower: teammate is the cheap GATE, and the quirk
+// table REVOKES eligibility for followers whose dismissal the flag misses.
+// The one case that would need an inclusion path instead is a pet framework
+// (faction rank grants eligibility without teammate status) -- carried in the
+// quirk data but disabled until its real FormID is confirmed on a list that
+// ships it.
 
 namespace MFO::Followers {
 
@@ -36,8 +48,17 @@ namespace MFO::Followers {
     // "found none" and "never ran" are indistinguishable (INVARIANTS #46).
     void Refresh();
 
+    // False for runtime (0xFF) FormIDs, which must NEVER be persisted
+    // (INVARIANTS #9). IsCommandedActor() does not cover this: a spawned or
+    // cloned teammate is not commanded but still carries a 0xFF id, and
+    // ResolveFormID passes 0xFF ids through as resolved so the load side
+    // cannot catch it either.
+    bool IsPersistableID(RE::FormID a_actorID);
+
     // Ensure a co-save record exists for this actor. Dismissed followers keep
     // their record -- membership here is independent of active status.
+    // Returns nullptr and logs for a non-persistable id.
+    FollowerState* TryEnsureRecord(RE::FormID a_actorID);
     FollowerState& EnsureRecord(RE::FormID a_actorID);
 
     // Is this actor currently one of ours? Reads THE SUBJECT's state.

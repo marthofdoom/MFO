@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Config.h"
 
+#include <cctype>
 #include <charconv>
 #include <fstream>
 #include <sstream>

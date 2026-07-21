@@ -406,6 +406,20 @@ first check before believing any in-game result — MEO was bitten twice.
 one change. Especially binding for Tier B (`DESIGN.md` §4.5).
 `INHERITED` (MRO NATIVE_REWRITE_PLAN).
 
+**#45a — Substantive code gets a FABLE CODE REVIEW before it goes to CI or
+release.** A standing family rule, not a per-project choice. Precedent: MAO's
+`BUILD.md` records P1d as "✅ Fable-reviewed, tag `v0.8.2-p1d`"; MEO's 1.0.7
+roadmap requires the tally-cap change to get "its own Fable review + deck
+test, not a graft into a finished release."
+*Why it matters here specifically:* this project cannot compile locally —
+there is no MSVC or CommonLibSSE-NG on the dev machine by design — so CI is
+the first compiler that ever sees the code and an in-game test is the first
+runtime. A review is the only check that happens before either.
+*Scope:* new subsystems, engine-facing code, anything touching the co-save or
+threading. Not doc-only commits.
+`INHERITED` (MAO BUILD.md, MEO ROADMAP-1.0.7) — **and MFO already violated it
+once, pushing M3 to CI unreviewed.**
+
 ---
 
 ## G. Diagnostics

@@ -16,4 +16,14 @@ namespace MFO::Rapport {
     // Award to one follower and log any rank change. Main thread only.
     void Award(RE::FormID a_actorID, float a_amount, const char* a_reason);
 
+    // Counters for the diagnostic dump (TEST_GUIDE 2C/2D). Without these the
+    // combat-dispatch volume question cannot be answered at all.
+    std::uint32_t CombatEventCount();
+    std::uint32_t SessionKills();
+    std::uint32_t SessionRapport();
+    double        SessionMinutes();
+
+    // Save-scoped; called from RevertCallback.
+    void ResetSessionCounters();
+
 }

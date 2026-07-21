@@ -15,6 +15,22 @@ Everything after M7 is depth, not viability.
 
 ---
 
+## The gate that applies to every milestone below
+
+**A Fable code review runs before any substantive commit reaches CI**
+(`INVARIANTS.md` #45a). This is a standing family rule — MAO tags builds
+"Fable-reviewed", MEO requires one for its tally-cap rework.
+
+It matters more here than in the siblings: **there is no local compiler.**
+MSVC and CommonLibSSE-NG live only on the CI runner, so CI is the first
+compiler to see any of this and an in-game session is the first runtime. The
+review is the only check that happens before both.
+
+Applies to: new subsystems, engine-facing code, anything touching the co-save
+or threading. Not doc-only commits.
+
+---
+
 ## M0 — CI green *(BLOCKING EVERYTHING)*
 
 **Status: in progress.** First cold vcpkg build was still in `Configure` at

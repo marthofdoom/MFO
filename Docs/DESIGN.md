@@ -205,12 +205,19 @@ Squad's shipped `IsFollower` / `IsDismissedCustomFollower`
 `qfcAliasScript.psc`) — a mod that has solved this across a large user
 base — the real world is messier:
 
-- **Inigo does not use `PlayerTeammate` at all.** His dismissed state is
-  `GetActorValue("WaitingForPlayer") == -1`. He is one of the most-installed
-  followers in existence, so this is not an edge case.
+- **Inigo sets `PlayerTeammate` while following but does NOT clear it on
+  dismissal** — he signals that with `GetActorValue("WaitingForPlayer") == -1`
+  instead. So the teammate flag alone reports him as an active follower
+  forever after you dismiss him. He is one of the most-installed followers in
+  existence, so this is not an edge case.
+  *(Corrected 2026-07-21 in Fable review: an earlier draft of this section
+  claimed he "does not use PlayerTeammate at all". Re-reading Swiftly Order
+  Squad's shipped `IsFollower` shows it gates on `IsPlayerTeammate()` and puts
+  the Inigo check in the DISMISSAL path — so the flag is necessary, just not
+  sufficient. The distinction decides whether quirks grant or revoke.)*
 - **Vilja** carries her own `DismissedFollowerFaction`; **Tindra** signals
-  dismissal as rank 0 in her own follow faction. A dismissed custom follower
-  can remain a teammate by the engine's reckoning.
+  dismissal as rank 0 in her own follow faction. Same shape: still teammates,
+  dismissal signalled elsewhere.
 - **Pet frameworks** use their own faction (`PetFramework_PetFollowingFaction`
   rank ≥ 1) rather than teammate status.
 

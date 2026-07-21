@@ -19,6 +19,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Config.cpp
     Followers.cpp
     Rapport.cpp
+    Diagnostics.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)

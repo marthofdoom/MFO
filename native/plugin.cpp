@@ -5,11 +5,15 @@
 #include "Config.h"
 #include "Followers.h"
 #include "Rapport.h"
+#include "Diagnostics.h"
 
 // MFO — marth's Follower Overhaul.
-// P0 scope (DESIGN.md §10): the DLL loads, logs its version, and the co-save
-// round-trips a hand-authored rule list across save / load / load-order
-// change. NO gameplay, NO hooks, NO sinks yet.
+// Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
+// forms, grants the Field Orders power, detects followers, accrues Rapport,
+// and round-trips all of it through the co-save.
+//
+// NO code hooks -- Tier A needs none (ARCHITECTURE.md §5). Event sinks only:
+// death + combat (Rapport) and spell-cast (the diagnostic dump).
 //
 // Read before editing: Docs/INVARIANTS.md, Docs/ARCHITECTURE.md.
 
@@ -81,12 +85,13 @@ namespace {
         case SKSE::MessagingInterface::kDataLoaded:
             // ARCHITECTURE.md §9 order: config -> forms -> sinks -> vocabulary.
             // Sinks must come AFTER form resolution or they fire against
-            // unresolved forms. P0 registers none yet.
+            // unresolved forms.
             spdlog::info("[startup] kDataLoaded");
             MFO::Config::Read();            // config first -- everything else reads it
             MFO::Forms::Resolve();          // then forms
             MFO::Followers::ResolveQuirks();
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
+            MFO::Diagnostics::Install();
             break;
 
         case SKSE::MessagingInterface::kPostLoadGame:
@@ -103,6 +108,8 @@ namespace {
             MFO::Forms::EnsurePlayerSetup();
             MFO::Followers::Refresh();
             SeedTestData();
+            MFO::Diagnostics::StartPump();
+            MFO::Diagnostics::DumpReport("load");
             break;
 
         default:
@@ -126,9 +133,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
                  ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
 
-    // NOTE: the ImGui board (P3) installs its three trampoline hooks HERE,
+    // NOTE: the ImGui board (M7) installs its three trampoline hooks HERE,
     // before the renderer initializes, with SKSE::AllocTrampoline(256).
-    // P0 installs no hooks at all — Tier A needs none (ARCHITECTURE.md §5).
+    // Nothing installs a code hook today — Tier A needs none.
 
     auto* serialization = SKSE::GetSerializationInterface();
     serialization->SetUniqueID(MFO::kSerID);
@@ -138,6 +145,6 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
 
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
 
-    spdlog::info("=== MFO loaded (P0: co-save only, no gameplay) ===");
+    spdlog::info("=== MFO loaded (M3: detection + rapport, no gameplay actions) ===");
     return true;
 }

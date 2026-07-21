@@ -77,6 +77,21 @@ namespace MFO::Rapport {
                     auto* player = RE::PlayerCharacter::GetSingleton();
                     if (!player) return;
 
+                    // GATE BEFORE THE SCAN. Without this the sink ran a full
+                    // ProcessLists sweep for EVERY death in the world -- a
+                    // dragon eating a giant three cells away, faction
+                    // skirmishes, ambient wildlife -- and counted them all as
+                    // "kills". TEST_GUIDE 2D exists to measure PARTY kills/hr
+                    // against BALANCE.md's ~45/hr assumption, so counting
+                    // ambient world deaths would have delivered a measurement
+                    // that cannot answer the question it was built for.
+                    const bool killerIsPlayer = killer && killer->IsPlayerRef();
+                    const bool killerIsOurs   = killer && Followers::IsTracked(killer->GetFormID());
+                    if (!killerIsPlayer && !killerIsOurs) {
+                        spdlog::debug("[rapport] world death (not ours) -- ignored");
+                        return;
+                    }
+
                     float mult = 1.0f;
                     const char* kind = "standard";
                     if (IsDragon(victim))     { mult = Config::g_rapportDragonMult.load(); kind = "dragon"; }
@@ -92,7 +107,7 @@ namespace MFO::Rapport {
                         if (f->IsCommandedActor()) continue;   // summons earn nothing
 
                         const bool followerKilled = (killer && killer->GetFormID() == f->GetFormID());
-                        const bool playerKilled   = (killer && killer->IsPlayerRef());
+                        const bool playerKilled   = killerIsPlayer;
 
                         // The follower's own kills always count -- they were
                         // unambiguously fighting.
@@ -122,6 +137,9 @@ namespace MFO::Rapport {
             }
         };
 
+        std::atomic<std::uint32_t> g_combatEvents{ 0 };
+        std::chrono::steady_clock::time_point g_sessionStart = std::chrono::steady_clock::now();
+
         class CombatSink final : public RE::BSTEventSink<RE::TESCombatEvent> {
         public:
             static CombatSink* GetSingleton() {
@@ -147,10 +165,26 @@ namespace MFO::Rapport {
                 ++g_combatEvents;
                 return RE::BSEventNotifyControl::kContinue;
             }
-
-            static inline std::atomic<std::uint32_t> g_combatEvents{ 0 };
         };
 
+    }
+
+    std::uint32_t CombatEventCount() { return g_combatEvents.load(); }
+    std::uint32_t SessionKills()     { return g_sessionKills.load(); }
+    std::uint32_t SessionRapport()   { return g_sessionRapport.load(); }
+
+    void ResetSessionCounters() {
+        // Save-scoped: without this the kills/hr denominator includes main-menu
+        // time and every previously-loaded save in the same process.
+        g_sessionKills   = 0;
+        g_sessionRapport = 0;
+        g_combatEvents   = 0;
+        g_sessionStart   = std::chrono::steady_clock::now();
+    }
+
+    double SessionMinutes() {
+        using namespace std::chrono;
+        return duration_cast<seconds>(steady_clock::now() - g_sessionStart).count() / 60.0;
     }
 
     std::uint8_t RankFor(std::uint32_t a_rapport) {

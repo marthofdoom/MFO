@@ -1,6 +1,9 @@
 #include "PCH.h"
 #include "State.h"
 #include "Serialization.h"
+#include "Followers.h"
+#include "Rapport.h"
+#include "Diagnostics.h"
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
 //
@@ -52,11 +55,20 @@ namespace MFO {
             return;
         }
 
-        const auto count = static_cast<std::uint32_t>(g_followers.size());
-        a_intfc->WriteRecordData(count);
-
-        std::uint32_t written = 0;
+        // Count only what will actually be written, or the reader expects more
+        // records than follow and desyncs.
+        std::uint32_t persistable = 0;
         for (const auto& [formID, st] : g_followers) {
+            if (Followers::IsPersistableID(formID)) ++persistable;
+        }
+        a_intfc->WriteRecordData(persistable);
+
+        std::uint32_t written = 0, skippedRuntime = 0;
+        for (const auto& [formID, st] : g_followers) {
+            // Defence in depth. Followers::TryEnsureRecord should prevent a
+            // 0xFF id ever getting in here; if one did, writing it would
+            // silently re-attach the record to an unrelated form next session.
+            if (!Followers::IsPersistableID(formID)) { ++skippedRuntime; continue; }
             a_intfc->WriteRecordData(formID);
             a_intfc->WriteRecordData(st.rapport);
             a_intfc->WriteRecordData(st.rank);
@@ -68,9 +80,14 @@ namespace MFO {
             a_intfc->WriteRecordData(tableCount);
             for (std::uint8_t t = 0; t < tableCount; ++t) {
                 const auto& list = st.tables[t];
-                const auto gambitCount = static_cast<std::uint8_t>(list.size());
+                // Clamp the COUNT and the LOOP together. Casting the count to
+                // u8 while writing the whole list desyncs the stream at 256
+                // entries -- everything after it becomes garbage.
+                const size_t n = std::min<size_t>(list.size(), 0xFF);
+                const auto gambitCount = static_cast<std::uint8_t>(n);
                 a_intfc->WriteRecordData(gambitCount);
-                for (const auto& g : list) {
+                for (size_t gi = 0; gi < n; ++gi) {
+                    const auto& g = list[gi];
                     if (!WriteString(a_intfc, g.conditionOpcode)) return;
                     a_intfc->WriteRecordData(g.conditionParam);
                     a_intfc->WriteRecordData(g.subjectSelector);
@@ -81,16 +98,22 @@ namespace MFO {
                 }
             }
 
-            const auto tutoredCount = static_cast<std::uint16_t>(st.tutored.size());
+            // Bound at BOTH ends: writing more than the reader's cap makes the
+            // reader abort the entire co-save (total data loss for this mod).
+            const size_t tn = std::min<size_t>(st.tutored.size(), kMaxTutored);
+            const auto tutoredCount = static_cast<std::uint16_t>(tn);
             a_intfc->WriteRecordData(tutoredCount);
-            for (const auto& t : st.tutored) {
+            for (size_t ti = 0; ti < tn; ++ti) {
+                const auto& t = st.tutored[ti];
                 a_intfc->WriteRecordData(t.spell);
                 a_intfc->WriteRecordData(t.grantedAtVersion);
             }
 
-            const auto overrideCount = static_cast<std::uint16_t>(st.overrides.size());
+            const size_t on = std::min<size_t>(st.overrides.size(), kMaxOverrides);
+            const auto overrideCount = static_cast<std::uint16_t>(on);
             a_intfc->WriteRecordData(overrideCount);
-            for (const auto& o : st.overrides) {
+            for (size_t oi = 0; oi < on; ++oi) {
+                const auto& o = st.overrides[oi];
                 a_intfc->WriteRecordData(o.package);
                 a_intfc->WriteRecordData(o.priority);
             }
@@ -99,14 +122,17 @@ namespace MFO {
 
         // Log the zero case too (INVARIANTS.md #46): "saved nothing" and
         // "never ran" must not look identical.
-        spdlog::info("[cosave] saved {} follower record(s), schema v{}", written, kSchemaVersion);
+        spdlog::info("[cosave] saved {} follower record(s), schema v{}{}", written, kSchemaVersion,
+                     skippedRuntime ? fmt::format(" -- SKIPPED {} runtime (0xFF) record(s)", skippedRuntime)
+                                    : std::string{});
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
         g_followers.clear();
 
         std::uint32_t type = 0, version = 0, length = 0;
-        std::uint32_t loaded = 0, droppedActor = 0, droppedSpell = 0, disabledRules = 0;
+        std::uint32_t loaded = 0, droppedActor = 0, droppedSpell = 0, disabledRules = 0,
+                      droppedOverride = 0, collisions = 0;
 
         while (a_intfc->GetNextRecordInfo(type, version, length)) {
             if (type != kRecFollowers) {
@@ -172,9 +198,11 @@ namespace MFO {
                     const auto table = static_cast<MFO::Table>(t);
                     const std::uint8_t slotMax = SlotsForRank(st.rank, table);
                     if (gambitCount > slotMax) {
-                        spdlog::warn("[cosave] follower {:08X} table {}: {} gambits exceeds rank {} max {} "
-                                     "-- extra rules DROPPED",
-                                     resolvedID, t, gambitCount, st.rank, slotMax);
+                        // raw AND resolved: resolvedID is 0 when resolution
+                        // failed, which made this line print 00000000.
+                        spdlog::warn("[cosave] follower raw {:08X} / resolved {:08X} table {}: "
+                                     "{} gambits exceeds rank {} max {} -- extra rules DROPPED",
+                                     rawID, resolvedID, t, gambitCount, st.rank, slotMax);
                     }
 
                     for (std::uint8_t gi = 0; gi < gambitCount; ++gi) {
@@ -247,12 +275,23 @@ namespace MFO {
                     if (a_intfc->ResolveFormID(rawPkg, resolvedPkg)) {
                         o.package = resolvedPkg;
                         st.overrides.push_back(o);
+                    } else {
+                        // A dropped record gets a counter and a line. Silent
+                        // drops are how "the mod ate my save" starts.
+                        ++droppedOverride;
                     }
                 }
 
                 if (!resolved) {
                     ++droppedActor;
                     continue;   // the actor is gone; its whole record goes
+                }
+                if (g_followers.contains(resolvedID)) {
+                    // Two raw ids resolving to one -- the first record would be
+                    // silently overwritten.
+                    ++collisions;
+                    spdlog::warn("[cosave] {:08X} already loaded; a second record resolved to the "
+                                 "same id and OVERWRITES it", resolvedID);
                 }
                 g_followers[resolvedID] = std::move(st);
                 ++loaded;
@@ -262,8 +301,9 @@ namespace MFO {
         // INVARIANTS.md #47: split the skip counters by REASON. A single
         // aggregate hides a systematic failure inside ordinary attrition.
         spdlog::info("[cosave] loaded {} follower(s); dropped {} unresolvable actor(s), "
-                     "{} unresolvable tutored spell(s); disabled {} rule(s) with missing targets",
-                     loaded, droppedActor, droppedSpell, disabledRules);
+                     "{} unresolvable tutored spell(s), {} unresolvable override(s); "
+                     "disabled {} rule(s) with missing targets; {} id collision(s)",
+                     loaded, droppedActor, droppedSpell, droppedOverride, disabledRules, collisions);
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
@@ -273,6 +313,14 @@ namespace MFO {
 
     void ResetAllState() {
         g_followers.clear();
+        // ARCHITECTURE §7: revert zeroes EVERYTHING save-scoped. The active
+        // handle list is save-scoped too -- handle slots get reused, so a
+        // stale handle from the previous save can resolve to a DIFFERENT
+        // actor, and the sleeper pump can queue a Refresh into the load window
+        // and read them.
+        Followers::g_active.clear();
+        Rapport::ResetSessionCounters();
+        Diagnostics::StopPump();   // restarted on the next kPostLoadGame/kNewGame
     }
 
 }

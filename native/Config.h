@@ -42,8 +42,10 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_enableLogging{ true };
     inline std::atomic<bool>  g_profileRapport{ false };
 
-    // Reset-then-parse both files, seed then MCM. Safe to call repeatedly;
-    // called at kDataLoaded and on JournalMenu close.
+    // Reset-then-parse both files, seed then MCM. Safe to call repeatedly.
+    // CURRENTLY CALLED ONLY AT kDataLoaded -- there is no MenuOpenCloseEvent
+    // sink yet, so MCM edits need a restart until M7 adds one. ARCHITECTURE
+    // 6 lists that sink as planned, not shipped.
     void Read();
 
 }
