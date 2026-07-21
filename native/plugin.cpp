@@ -132,6 +132,15 @@ namespace {
             spdlog::info("[startup] {} — {} follower record(s) live",
                          a_msg->type == SKSE::MessagingInterface::kNewGame ? "kNewGame" : "kPostLoadGame",
                          MFO::g_followers.size());
+            // INVARIANTS #12: a downgraded DLL DESTROYS newer co-save records
+            // on its next save. A log line is not enough -- the user never
+            // reads it until the data is gone.
+            if (MFO::ConsumeNewerSaveWarning()) {
+                RE::DebugMessageBox(
+                    "MFO: this save was written by a NEWER version of the mod.\n\n"
+                    "Its follower data could not be read, and SAVING NOW WILL DESTROY IT.\n\n"
+                    "Load an older save, or reinstall the newer MFO before saving.");
+            }
             MFO::Probe::ReleaseAll();   // nothing the probe did outlives a session
             MFO::Forms::EnsurePlayerSetup();
             MFO::Followers::Refresh();

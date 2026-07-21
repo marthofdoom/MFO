@@ -29,7 +29,9 @@ namespace MFO {
         constexpr std::uint32_t kMaxFollowers = 4096;
         constexpr std::uint32_t kMaxOpcodeLen = 64;
         constexpr std::uint16_t kMaxOverrides = 64;
-        constexpr std::uint16_t kMaxTutoredV1 = 512;   // v1 only, consumed and discarded
+        constexpr std::uint16_t kMaxTutoredV1 = 512;
+
+        std::atomic<bool> g_sawNewerSave{ false };   // v1 only, consumed and discarded
 
         bool WriteString(SKSE::SerializationInterface* a_intfc, const std::string& a_s) {
             const auto len = static_cast<std::uint32_t>(a_s.size());
@@ -90,14 +92,33 @@ namespace MFO {
                 // u8 while writing the whole list desyncs the stream at 256
                 // entries -- everything after it becomes garbage.
                 const size_t n = std::min<size_t>(list.size(), 0xFF);
+                if (list.size() > n) {
+                    spdlog::warn("[cosave] {:08X} table {}: {} rules truncated to {} -- "
+                                 "silent drops are how 'the mod ate my save' starts",
+                                 formID, t, list.size(), n);
+                }
                 const auto gambitCount = static_cast<std::uint8_t>(n);
                 a_intfc->WriteRecordData(gambitCount);
                 for (size_t gi = 0; gi < n; ++gi) {
                     const auto& g = list[gi];
-                    if (!WriteString(a_intfc, g.conditionOpcode)) return;
+                    if (!WriteString(a_intfc, g.conditionOpcode)) {
+                        // The follower and gambit counts are already written, so
+                        // the record is now TRUNCATED and overstates what
+                        // follows. The reader will short-read and abort. Say so
+                        // plainly rather than leaving one terse error (F3).
+                        spdlog::error("[cosave] WRITE FAILED mid-record for {:08X}. This save's MFO "
+                                      "data is TRUNCATED -- followers after this one will not load. "
+                                      "Re-save before relying on it.", formID);
+                        return;
+                    }
                     a_intfc->WriteRecordData(g.conditionParam);
                     a_intfc->WriteRecordData(g.subjectSelector);
-                    if (!WriteString(a_intfc, g.actionOpcode)) return;
+                    if (!WriteString(a_intfc, g.actionOpcode)) {
+                        spdlog::error("[cosave] WRITE FAILED mid-record for {:08X}. This save's MFO "
+                                      "data is TRUNCATED -- followers after this one will not load. "
+                                      "Re-save before relying on it.", formID);
+                        return;
+                    }
                     a_intfc->WriteRecordData(g.actionParamForm);
                     const std::uint8_t flags = g.enabled ? 1u : 0u;
                     a_intfc->WriteRecordData(flags);
@@ -105,6 +126,10 @@ namespace MFO {
             }
 
             const size_t on = std::min<size_t>(st.overrides.size(), kMaxOverrides);
+            if (st.overrides.size() > on) {
+                spdlog::warn("[cosave] {:08X}: {} overrides truncated to {}",
+                             formID, st.overrides.size(), on);
+            }
             const auto overrideCount = static_cast<std::uint16_t>(on);
             a_intfc->WriteRecordData(overrideCount);
             for (size_t oi = 0; oi < on; ++oi) {
@@ -143,13 +168,14 @@ namespace MFO {
                               "Records this build cannot read WILL BE DESTROYED on the next save. "
                               "Do not save over this file with this version.",
                               version, kSchemaVersion);
-                // TODO(P0): also surface a kPostLoadGame message box, per MAO §13.
+                g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
                 return;
             }
 
             std::uint32_t count = 0;
             if (!a_intfc->ReadRecordData(count)) {
-                spdlog::error("[cosave] short read on follower count -- ABORTING");
+                spdlog::error("[cosave] short read on follower count -- ABORTING, "
+                              "keeping {} follower(s) parsed so far", loaded);
                 return;
             }
             if (count > kMaxFollowers) {
@@ -301,6 +327,8 @@ namespace MFO {
                      loaded, droppedActor, droppedOverride, disabledRules, collisions);
     }
 
+    bool ConsumeNewerSaveWarning() { return g_sawNewerSave.exchange(false); }
+
     void RevertCallback(SKSE::SerializationInterface*) {
         ResetAllState();
         spdlog::info("[cosave] revert -- all save-scoped state cleared");
@@ -314,6 +342,7 @@ namespace MFO {
         // actor, and the sleeper pump can queue a Refresh into the load window
         // and read them.
         Followers::g_active.clear();
+        Followers::ClearTransientState();   // streak map is save-scoped (F1)
         Rapport::ResetSessionCounters();
         Diagnostics::StopPump();   // restarted on the next kPostLoadGame/kNewGame
         Board::SetHud(false);      // else it lingers over the main menu with stale rows

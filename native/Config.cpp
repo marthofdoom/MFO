@@ -86,7 +86,7 @@ namespace MFO::Config {
             else if (a_key == "fRapportDragonMult") setF(g_rapportDragonMult, 0.0f, 1000.0f);
             else if (a_key == "fRapportSurvival")   setF(g_rapportSurvival,   0.0f, 1000.0f);
             else if (a_key == "fSharedRadius")      setF(g_sharedRadius,      0.0f, 1000000.0f);
-            else if (a_key == "iBossLevelDelta")    setI(g_bossLevelDelta, 0, 1000);
+            else if (a_key == "iBossLevelDelta")    setI(g_bossLevelDelta, 1, 1000);   // 0 would make every equal-level kill a boss
             else if (a_key == "iRapportRank2")      setI(g_rank2, 1, 100000000);
             else if (a_key == "iRapportRank3")      setI(g_rank3, 1, 100000000);
             else if (a_key == "iRapportRank4")      setI(g_rank4, 1, 100000000);

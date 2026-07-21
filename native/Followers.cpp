@@ -73,6 +73,11 @@ namespace MFO::Followers {
                      found, absent, std::size(g_dismissedFactions));
     }
 
+    void ClearTransientState() {
+        g_missStreak.clear();
+        g_activeIds.clear();
+    }
+
     int QuirksActive()   { return g_quirksActive; }
     int QuirksInactive() { return g_quirksInactive; }
 
@@ -161,19 +166,19 @@ namespace MFO::Followers {
             return;
         }
 
-        // Snapshot the previous set so we can log deltas rather than state.
-        std::vector<RE::FormID> before;
-        before.reserve(g_active.size());
-        for (const auto& h : g_active) {
-            if (auto* a = h.get().get()) before.push_back(a->GetFormID());
-        }
+        // Previous set, taken from the ID list rather than by re-resolving --
+        // a handle that momentarily fails to resolve must still count as a
+        // MISS (and get the hold), not silently disappear (F6).
+        const std::vector<RE::FormID> before = g_activeIds;
 
         std::vector<RE::ActorHandle> next;
+        std::vector<RE::FormID>      nextIds;
         for (auto& handle : pl->highActorHandles) {
             auto* actor = handle.get().get();
             if (!actor) continue;                  // unloaded between frames
             if (!IsEligibleFollower(actor)) continue;
             next.push_back(handle);
+            nextIds.push_back(actor->GetFormID());
         }
 
         // Deltas, by name, so the log is testable per TEST_GUIDE 2A.
@@ -206,8 +211,8 @@ namespace MFO::Followers {
                 // Not seen this sweep -- but hold them until it repeats.
                 const int misses = ++g_missStreak[id];
                 if (misses < kMissesBeforeDrop) {
-                    for (const auto& h : g_active) {
-                        if (auto* a = h.get().get(); a && a->GetFormID() == id) { next.push_back(h); break; }
+                    for (size_t i = 0; i < g_active.size() && i < g_activeIds.size(); ++i) {
+                        if (g_activeIds[i] == id) { next.push_back(g_active[i]); nextIds.push_back(id); break; }
                     }
                     spdlog::debug("[follower] {:08X} missed sweep {}/{} -- holding",
                                   id, misses, kMissesBeforeDrop);
@@ -220,7 +225,8 @@ namespace MFO::Followers {
             }
         }
 
-        g_active = std::move(next);
+        g_active   = std::move(next);
+        g_activeIds = std::move(nextIds);
 
         // Log the zero case too, or "found none" and "never ran" look the same.
         spdlog::debug("[follower] refresh: {} active, {} record(s) stored",

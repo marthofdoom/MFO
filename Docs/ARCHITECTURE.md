@@ -225,7 +225,8 @@ globals, seed the scheduler).
 
 ## 7. Co-save schema
 
-Record `MFOD`, versioned. Readers for every shipped version are kept
+Record `'FLWR'` under serialization ID `'MFO0'`, versioned. (An earlier draft
+of this section said `MFOD`; the code is authoritative — F8.) Readers for every shipped version are kept
 **forever**; writers emit only the newest.
 
 ```

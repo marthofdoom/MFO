@@ -240,7 +240,15 @@ namespace MFO::Rapport {
         const float scaled = a_amount * Config::g_rapportRate.load();
         if (scaled <= 0.0f) return;
 
-        auto& st = Followers::EnsureRecord(a_actorID);
+        // TryEnsureRecord, NOT EnsureRecord. The award loop skips commanded
+        // summons, but g_active legitimately holds PlaceAtMe/cloned teammates
+        // with 0xFF ids -- exactly the case IsCommandedActor does not cover.
+        // EnsureRecord would create a doomed record that SaveCallback then has
+        // to skip, leaving the invariant standing only on its last line of
+        // defence (F2).
+        auto* rec = Followers::TryEnsureRecord(a_actorID);
+        if (!rec) return;
+        auto& st = *rec;
         const auto before = st.rank;
         st.rapport += static_cast<std::uint32_t>(scaled + 0.5f);
         st.rank = RankFor(st.rapport);

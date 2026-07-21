@@ -26,4 +26,10 @@ namespace MFO {
     void LoadCallback(SKSE::SerializationInterface* a_intfc);
     void RevertCallback(SKSE::SerializationInterface* a_intfc);
 
+    // True when the last load saw a co-save record NEWER than this DLL can
+    // read. INVARIANTS #12 requires an ON-SCREEN warning, not just a log line:
+    // the user who downgrades and saves never reads the log until the data is
+    // already gone. Surfaced at kPostLoadGame.
+    bool ConsumeNewerSaveWarning();
+
 }

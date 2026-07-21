@@ -32,12 +32,23 @@ namespace MFO::Followers {
     // dismissed, and die mid-tick (INVARIANTS #2).
     inline std::vector<RE::ActorHandle> g_active;
 
+    // Parallel id list. g_active holds handles, and a handle that fails to
+    // resolve cannot tell us WHO it was -- so a follower whose handle briefly
+    // nulls would leave the active set with no miss streak and no log line,
+    // bypassing the hysteresis entirely (F6).
+    inline std::vector<RE::FormID> g_activeIds;
+
     // Resolve quirk-table forms at kDataLoaded. Absent plugins are NORMAL and
     // are logged at debug level, never as errors.
     void ResolveQuirks();
 
     // How many quirk entries resolved against this load order. Reported in the
     // Field Kit -- a diagnostic that always said 0/0 is worse than none.
+    // Save-scoped transient state. RevertCallback must clear it: the streak map
+    // is keyed by FormID and the same NPC has the same FormID in every save, so
+    // a streak carried from save A applies to save B (F1).
+    void ClearTransientState();
+
     int QuirksActive();
     int QuirksInactive();
 
