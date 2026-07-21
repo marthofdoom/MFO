@@ -4,7 +4,7 @@
 // WIN32_LEAN_AND_MEAN / NOMINMAX come from CMakePresets; the GetObject macro
 // does not, and wingdi.h #defines GetObject -> GetObjectW, which silently
 // hijacks BGSDefaultObjectManager::GetObject<T>(). #undef AFTER the includes
-// (ENGINE_NOTES §6 -- this one is a compile error that reads like nonsense).
+// (ENGINE_NOTES §9 -- a compile error that reads like nonsense).
 #include <d3d11.h>
 #include <dxgi.h>
 #undef GetObject
@@ -34,7 +34,10 @@ namespace MFO::Board {
 
         std::atomic<bool> g_ready{ false };   // D3D init succeeded
         std::atomic<bool> g_open{ false };     // full panel -- SWALLOWS input
-        std::atomic<bool> g_hud{ true };       // compact readout -- passive, never takes input
+        // OFF until a game is actually loaded. g_ready goes true at renderer init,
+        // long before any save, so defaulting this on drew the HUD over the
+        // title screen, loading screens and every vanilla menu.
+        std::atomic<bool> g_hud{ false };      // compact readout -- passive, never takes input
         std::atomic<bool> g_wantClose{ false };
         std::atomic<bool> g_cursorInit{ false };
         std::atomic<float> g_cursorX{ 0.0f }, g_cursorY{ 0.0f };
@@ -42,7 +45,7 @@ namespace MFO::Board {
 
         // io.DisplaySize LIES under Proton/upscalers: the Win32 backend reads
         // GetClientRect, which can disagree with the backbuffer. Cache the real
-        // size and overwrite every frame (ENGINE_NOTES §6).
+        // size and overwrite every frame (ENGINE_NOTES §9).
         float g_bbW = 0.0f, g_bbH = 0.0f;
 
         ID3D11Device*        g_device  = nullptr;
@@ -93,7 +96,7 @@ namespace MFO::Board {
         }
 
         // ── the panel ───────────────────────────────────────────────────────
-        void DrawFieldKit() {
+        void DrawFieldKit(const Snapshot& snap) {
             if (g_wantClose.exchange(false)) { g_open = false; return; }
 
             auto& io = ImGui::GetIO();
@@ -110,14 +113,10 @@ namespace MFO::Board {
                 return;
             }
 
-            Snapshot snap;
-            {
-                std::scoped_lock lk(g_snapMx);
-                snap = g_snapshot;
-            }
-
-            ImGui::TextDisabled("MFO v%d.%d.%d  |  frame %llu  |  %.1f min",
-                                0, 1, 0, static_cast<unsigned long long>(snap.frame), snap.minutes);
+            const auto pv = SKSE::PluginDeclaration::GetSingleton()->GetVersion();
+            ImGui::TextDisabled("MFO v%u.%u.%u  |  frame %llu  |  %.1f min",
+                                pv.major(), pv.minor(), pv.patch(),
+                                static_cast<unsigned long long>(snap.frame), snap.minutes);
             ImGui::Separator();
 
             if (ImGui::BeginTabBar("##tabs")) {
@@ -126,9 +125,13 @@ namespace MFO::Board {
                     ImGui::TextDisabled("%zu tracked  (active + retained)", snap.rows.size());
                     ImGui::Spacing();
 
+                    // Reserve the footer, or ScrollY takes the remaining height
+                    // and pushes the hint line below the fold.
+                    const float footer = ImGui::GetFrameHeightWithSpacing() + 6.0f;
                     if (ImGui::BeginTable("##followers", 7,
                                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                          ImGuiTableFlags_ScrollY)) {
+                                          ImGuiTableFlags_ScrollY,
+                                          ImVec2(0.0f, -footer))) {
                         ImGui::TableSetupColumn("Follower", ImGuiTableColumnFlags_WidthStretch);
                         ImGui::TableSetupColumn("State",   ImGuiTableColumnFlags_WidthFixed, 110.0f);
                         ImGui::TableSetupColumn("Rapport", ImGuiTableColumnFlags_WidthFixed, 90.0f);
@@ -255,13 +258,7 @@ namespace MFO::Board {
         // swallowed, so you cannot watch it WHILE fighting -- which is exactly
         // when rapport ticks and vitals move. This compact readout draws every
         // frame and takes NO input, so it can sit on screen during combat.
-        void DrawHud() {
-            Snapshot snap;
-            {
-                std::scoped_lock lk(g_snapMx);
-                snap = g_snapshot;
-            }
-
+        void DrawHud(const Snapshot& snap) {
             const auto& io = ImGui::GetIO();
             ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 12.0f, 12.0f), ImGuiCond_Always,
                                     ImVec2(1.0f, 0.0f));
@@ -312,7 +309,7 @@ namespace MFO::Board {
         // ── hooks ───────────────────────────────────────────────────────────
         struct WndProcHook {
             static LRESULT thunk(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-                if (uMsg == WM_KILLFOCUS) {
+                if (uMsg == WM_KILLFOCUS && g_ready.load()) {
                     std::scoped_lock lk(g_ioMx);
                     ImGui::GetIO().ClearInputKeys();
                 }
@@ -332,13 +329,15 @@ namespace MFO::Board {
                 if (!swapChain) { spdlog::error("[board] no swapchain -- Field Kit disabled"); return; }
 
                 DXGI_SWAP_CHAIN_DESC sd{};
-                if (FAILED(reinterpret_cast<IDXGISwapChain*>(swapChain)->GetDesc(&sd))) {
+                if (FAILED(swapChain->GetDesc(&sd))) {
                     spdlog::error("[board] GetDesc failed -- Field Kit disabled");
                     return;
                 }
 
-                g_device  = reinterpret_cast<ID3D11Device*>(renderer->data.forwarder);
-                g_context = reinterpret_cast<ID3D11DeviceContext*>(renderer->data.context);
+                // No casts: on the pinned NG these are already the real D3D
+                // types. Decorative reinterpret_casts hide a future type change.
+                g_device  = renderer->data.forwarder;
+                g_context = renderer->data.context;
                 if (!g_device || !g_context) {
                     spdlog::error("[board] no device/context -- Field Kit disabled");
                     return;
@@ -349,7 +348,6 @@ namespace MFO::Board {
                 io.IniFilename = nullptr;    // never write imgui.ini into the game dir
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
                 io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
-                io.MouseDrawCursor = true;
 
                 if (!ImGui_ImplWin32_Init(sd.OutputWindow) ||
                     !ImGui_ImplDX11_Init(g_device, g_context)) {
@@ -378,12 +376,28 @@ namespace MFO::Board {
                 const bool wantHud   = g_hud.load();
                 if (!g_ready.load() || (!wantPanel && !wantHud)) return;
 
+                // Copy the snapshot BEFORE taking the IO lock. INVARIANTS #6
+                // says these two are never nested; MEO's shipped code actually
+                // does nest them, but the rule as written is the stronger one
+                // and the first person to touch ImGui IO inside PublishSnapshot
+                // would deadlock the render thread. Make the code match the doc.
+                Snapshot snap;
+                {
+                    std::scoped_lock snapLk(g_snapMx);
+                    snap = g_snapshot;
+                }
+
                 std::scoped_lock lk(g_ioMx);
+
+                // B1: drive the software cursor PER FRAME from panel state. Set
+                // once at init it renders an ImGui arrow over ordinary gameplay
+                // for the whole session, because the HUD draws every frame.
+                ImGui::GetIO().MouseDrawCursor = wantPanel;
 
                 ImGui_ImplDX11_NewFrame();
                 ImGui_ImplWin32_NewFrame();
 
-                // MUST sit between the two NewFrame calls (ENGINE_NOTES §6).
+                // MUST sit between the two NewFrame calls (ENGINE_NOTES §9).
                 if (g_bbW > 0.0f) ImGui::GetIO().DisplaySize = ImVec2(g_bbW, g_bbH);
 
                 if (g_cursorInit.exchange(false)) {
@@ -391,8 +405,8 @@ namespace MFO::Board {
                 }
 
                 ImGui::NewFrame();
-                if (wantHud)   DrawHud();
-                if (wantPanel) DrawFieldKit();
+                if (wantHud)   DrawHud(snap);
+                if (wantPanel) DrawFieldKit(snap);
                 ImGui::EndFrame();
                 ImGui::Render();
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -413,8 +427,12 @@ namespace MFO::Board {
                 for (auto* e = *a_events; e; e = e->next) {
                     if (e->eventType == RE::INPUT_EVENT_TYPE::kButton) {
                         auto* b = static_cast<RE::ButtonEvent*>(e);
+                        // Skyrim re-fires button events every input frame while a
+                        // key is HELD. Filter to real edges at the source rather
+                        // than relying on ImGui's dedupe (MEO's filter, verbatim).
+                        if (!b->IsDown() && !b->IsUp()) continue;
                         const auto code = b->GetIDCode();
-                        const bool down = b->IsPressed();
+                        const bool down = b->IsDown();
 
                         switch (b->device.get()) {
                         case RE::INPUT_DEVICE::kMouse:
@@ -480,9 +498,13 @@ namespace MFO::Board {
 
                 // Swallow everything: the game sees no input while we are open,
                 // so no vanilla menu bleed-through and no control-flag toggling.
-                RE::InputEvent* none = nullptr;
+                // NULL THE CALLER'S OWN HEAD POINTER, exactly as MEO does --
+                // handing the engine a stack-local instead leaves the caller's
+                // list intact and changes what a chained hook at the same site
+                // observes.
+                *a_events = nullptr;
                 ioLk.unlock();          // never hold the IO lock across the passthrough
-                func(a_source, &none);
+                func(a_source, a_events);
             }
             static inline REL::Relocation<decltype(thunk)> func;
         };
@@ -537,6 +559,8 @@ namespace MFO::Board {
         s.allowSummons = Config::g_allowSummons.load();
         s.rank2 = Config::g_rank2.load(); s.rank3 = Config::g_rank3.load();
         s.rank4 = Config::g_rank4.load(); s.rank5 = Config::g_rank5.load();
+        s.quirksActive   = Followers::QuirksActive();
+        s.quirksInactive = Followers::QuirksInactive();
 
         auto* player = RE::PlayerCharacter::GetSingleton();
 
@@ -580,7 +604,7 @@ namespace MFO::Board {
             if (Followers::IsTracked(id)) continue;
             FollowerRow r;
             r.id      = id;
-            r.name    = fmt::format("{:08X}", id);
+            r.name    = std::format("{:08X}", id);
             if (auto* f = RE::TESForm::LookupByID(id)) {
                 if (auto* a = f->As<RE::Actor>(); a && a->GetName() && *a->GetName()) {
                     r.name = a->GetName();

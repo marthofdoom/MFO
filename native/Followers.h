@@ -36,6 +36,11 @@ namespace MFO::Followers {
     // are logged at debug level, never as errors.
     void ResolveQuirks();
 
+    // How many quirk entries resolved against this load order. Reported in the
+    // Field Kit -- a diagnostic that always said 0/0 is worse than none.
+    int QuirksActive();
+    int QuirksInactive();
+
     // Reads THE SUBJECT ACTOR's state (not the player's).
     bool IsEligibleFollower(RE::Actor* a_actor);
 

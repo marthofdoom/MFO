@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <format>
 #include <mutex>
 #include <string>
 #include <string_view>

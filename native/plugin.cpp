@@ -13,8 +13,10 @@
 // forms, grants the Field Orders power, detects followers, accrues Rapport,
 // and round-trips all of it through the co-save.
 //
-// NO code hooks -- Tier A needs none (ARCHITECTURE.md §5). Event sinks only:
-// death + combat (Rapport) and spell-cast (the diagnostic dump).
+// Hooks: THREE, all for the Field Kit overlay (Board.cpp) -- D3DInit,
+// DXGIPresent, InputDispatch. No GAMEPLAY hooks; Tier A actuation needs none
+// (ARCHITECTURE.md §5). Event sinks: death + combat (Rapport), spell-cast
+// (the Field Kit opener).
 //
 // Read before editing: Docs/INVARIANTS.md, Docs/ARCHITECTURE.md.
 

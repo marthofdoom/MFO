@@ -4,6 +4,7 @@
 #include "Followers.h"
 #include "Rapport.h"
 #include "Diagnostics.h"
+#include "Board.h"
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
 //
@@ -321,6 +322,7 @@ namespace MFO {
         Followers::g_active.clear();
         Rapport::ResetSessionCounters();
         Diagnostics::StopPump();   // restarted on the next kPostLoadGame/kNewGame
+        Board::SetHud(false);      // else it lingers over the main menu with stale rows
     }
 
 }

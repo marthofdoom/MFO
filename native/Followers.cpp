@@ -24,6 +24,8 @@ namespace MFO::Followers {
         // PlayerTeammate. THE case the first design draft got wrong.
         constexpr float kInigoDismissedAV = -1.0f;
 
+        int g_quirksActive = 0, g_quirksInactive = 0;
+
         FactionQuirk g_dismissedFactions[] = {
             { "Vilja",  "EMCompViljaSkyrim.esp", 0x0D6867, -1, nullptr },
             { "Tindra", "EMCompViljaSkyrim.esp", 0x1FB779,  0, nullptr },
@@ -57,9 +59,14 @@ namespace MFO::Followers {
                 spdlog::debug("[follower] quirk inactive: {} -- {} not in load order", q.name, q.plugin);
             }
         }
+        g_quirksActive   = found;
+        g_quirksInactive = absent;
         spdlog::info("[follower] quirk table: {} active, {} inactive (of {})",
                      found, absent, std::size(g_dismissedFactions));
     }
+
+    int QuirksActive()   { return g_quirksActive; }
+    int QuirksInactive() { return g_quirksInactive; }
 
     bool IsDismissedCustomFollower(RE::Actor* a_actor) {
         if (!a_actor) return false;   // nullptr is an ERROR, never a wildcard

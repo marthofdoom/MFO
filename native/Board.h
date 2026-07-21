@@ -8,7 +8,7 @@
 // it shows live state so every milestone from here is observable while it
 // happens. Rule editing comes later; the plumbing here is what M7 needs anyway.
 //
-// Architecture is MEO's, transcribed rather than re-derived (ENGINE_NOTES §6):
+// Architecture is MEO's, transcribed rather than re-derived (ENGINE_NOTES §9):
 // three trampoline hooks installed before the renderer exists, a render thread
 // that draws from a mutex-guarded snapshot, and an input hook that swallows
 // input while open.
