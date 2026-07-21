@@ -804,6 +804,47 @@ sanctioned. These are not blind spots; they are unwritten milestones.
    removes only its own, by handle, one at a time. This is the
    `RemoveByType`-class lesson arriving before the crash rather than after.
 
+### 4.5aa THE BINDING GAP — Tier B's natives are not in the library (2026-07-21)
+
+**Found by Fable review of the M4 harness, before it ever ran.** Five of the
+primitives §4.5 lists as Tier B have **no C++ binding in CommonLibSSE-NG**:
+
+| Primitive | Reality |
+|---|---|
+| `KeepOffsetFromActor` / `ClearKeepOffsetFromActor` | **Papyrus-only.** Not in NG, not in po3's fork. Only `RTTI_IMovementSetKeepOffsetFromActor` exists |
+| `SetDontMove` | **Papyrus-only.** Not bound anywhere |
+| `DoCombatSpellApply` | **Papyrus-only.** Not bound anywhere |
+| `StartCombat` | **po3's fork only**, as a relocation thunk (`RelocationID(37608, 38561)`, SE/AE — no sourced VR id) |
+
+**§4.5a is not wrong — it is incomplete.** The Papyrus surface named the right
+engine flows, and the research method that found them (read the native, call
+the same flow) still holds. What it could not tell us is whether the *library*
+exposes them, and it does not. "There is a Papyrus native" and "I can call it
+from C++" are different claims, and only the first was verified.
+
+**Two routes, and they are different mechanisms with different risks:**
+
+1. **Papyrus VM dispatch** — `DispatchMethodCall2` on the actor's handle.
+   Lands on the next VM frame rather than immediately, so it is not a
+   drop-in for a synchronous call. **Measurement-wise this is the honest
+   route**: the precedent MFO is imitating (Kaidan, Swiftly Order Squad) *is*
+   Papyrus, so this probes the same mechanism M9 would ship.
+2. **Sourced relocation** — take a maintained reference's *published* Address
+   Library ID, as with po3's `StartCombat`. Fast and synchronous, but it
+   probes a **different** mechanism than the Papyrus precedent, and an
+   unsourced ID is exactly what the family's hook doctrine forbids.
+
+**This is its own milestone, not a footnote in M4.** M4 ships only what the
+pinned library verifiably binds, and shows the unavailable primitives in the
+UI rather than omitting them — a probe that hides what it cannot reach hides
+its most important finding.
+
+**Consequence for §4.7 and the roadmap:** the standing-order model still rests
+on `StartCombat`, which *is* reachable via po3's published ID, so the retention
+question can be answered now. Positioning (`KeepOffsetFromActor`) cannot be
+tested until the VM-dispatch route exists — so **§4.5a's positioning
+conclusions remain RESEARCHED, and cannot be promoted by M4.**
+
 ### 4.5a Tier B corrections from the prior-art survey (2026-07-21)
 
 Reading shipped follower code — chiefly **Immersive Kaidan AIO**

@@ -140,6 +140,24 @@ each native actually calls.
 | Combat observation | `TESCombatEvent` (== `OnCombatStateChanged`), `OnPackageStart` / `OnPackageChange` / `OnPackageEnd` | |
 | Full AI disable | `EnableAI(bool)` | Documented; **not used by MFO** — it is exactly the "seize control" this design refuses |
 
+### 2.0 A Papyrus native is NOT a C++ binding (2026-07-21, review-found)
+
+Before any of §2's table can be called RESEARCHED-and-reachable, note what a
+Fable review of the M4 harness established by grepping the real headers:
+
+**`KeepOffsetFromActor`, `ClearKeepOffsetFromActor`, `SetDontMove` and
+`DoCombatSpellApply` do not exist in CommonLibSSE-NG or po3's fork.** They are
+Papyrus-only natives. **`StartCombat` exists only in po3's fork**, as a
+relocation thunk at `RelocationID(37608, 38561)` (SE/AE; no sourced VR id).
+
+The research method was sound and the flows are real — but *"a Papyrus native
+exists"* and *"I can call it from C++"* are separate claims, and only the
+first had been checked. Reaching the rest means VM dispatch or a sourced
+relocation; see `DESIGN.md` §4.5aa.
+
+**Generalised rule: verify the BINDING, not just the mechanism.** Grep the
+pinned library's headers before a design depends on a call being available.
+
 ### 2.1 Three facts found while mapping, each of which changed the design
 
 1. **`PathToReference` is LATENT.** Its own doc: *"this method doesn't return

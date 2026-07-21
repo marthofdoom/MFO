@@ -4,35 +4,35 @@
 // M4 — the stick-poking harness. ROADMAP.md.
 //
 // Fires ONE engine primitive at a chosen follower and records what happened.
-// No evaluator, no rules. Its whole purpose is to answer questions that cannot
-// be answered by reading source, because they are emergent engine behaviour
-// that no mod documents and no header states:
+// No evaluator, no rules. It answers questions that cannot be answered by
+// reading source, because they are emergent engine behaviour.
 //
-//   * Does a commanded combat target STICK, or does the combat controller
-//     re-pick within seconds? -- DESIGN.md §4.7's entire standing-order model
-//     depends on the answer, and getting it wrong at M9 is far more expensive
-//     than getting it now.
-//   * Does CastSpellImmediate read as a real combat action, or does
-//     DoCombatSpellApply behave differently?
-//   * Does KeepOffsetFromActor survive what we think it survives, and does it
-//     really fight the combat controller the way Kaidan's code implies?
-//   * Does EvaluatePackage need the condition flicker from native code?
+// ── WHAT M4 ALREADY TAUGHT US, BEFORE RUNNING ────────────────────────────
+// A Fable review of the first draft found that FIVE of the twelve primitives
+// DESIGN.md §4.5 lists as Tier B have NO C++ BINDING in CommonLibSSE-NG:
 //
-// Everything here is REVERSIBLE and ledger-free by construction: no package
-// overrides, no persisted state, nothing that outlives the session.
+//     KeepOffsetFromActor / ClearKeepOffsetFromActor   Papyrus-only
+//     SetDontMove                                      Papyrus-only
+//     DoCombatSpellApply                               Papyrus-only
+//     StartCombat                                      po3's fork only
+//
+// The Papyrus surface named the right engine flows (§4.5a stands), but the
+// library does not expose them. Reaching them means either dispatching
+// through the Papyrus VM or relocating the engine implementation with a
+// SOURCED address — and those are different mechanisms with different risks,
+// so they are their own milestone rather than a footnote in this one.
+//
+// This harness therefore ships ONLY primitives verified present in the pinned
+// CommonLibSSE-NG, plus StartCombat via po3's published relocation. The
+// unavailable ones appear in the UI marked as such, because a probe that
+// silently omits them would hide the most important thing M4 discovered.
 
 namespace MFO::Probe {
 
     enum class Action : std::uint8_t {
-        StartCombatOnNearestFoe,
+        StartCombatOnNearestFoe,   // via po3's published relocation
         StopCombat,
         CastHealOnSelf,
-        DoCombatSpellApplyOnTarget,
-        KeepOffsetClose,
-        KeepOffsetFar,
-        ClearKeepOffset,
-        SetDontMoveOn,
-        SetDontMoveOff,
         EvaluatePackage,
         DrawWeapon,
         SheatheWeapon,
@@ -42,39 +42,49 @@ namespace MFO::Probe {
     const char* Name(Action a_action);
     const char* Blurb(Action a_action);
 
+    // Primitives DESIGN.md §4.5 wants that the library does not bind. Listed
+    // so the gap is visible in game, not just in a doc.
+    struct Unavailable {
+        const char* name;
+        const char* why;
+    };
+    std::span<const Unavailable> UnavailableActions();
+
     // Fire one primitive at a follower. MAIN THREAD ONLY.
     void Fire(RE::FormID a_followerID, Action a_action);
 
-    // What the last probe did, and what happened afterwards.
     struct Result {
-        std::string action;
-        std::string subject;
-        std::string detail;      // immediate outcome
-        bool        ok = false;
-        bool        valid = false;
+        std::string action, subject, detail;
+        bool ok = false;
+        bool valid = false;
     };
     Result GetLast();
 
-    // TARGET RETENTION WATCH -- the load-bearing measurement.
+    // TARGET RETENTION WATCH — the load-bearing measurement.
     //
-    // After StartCombat, sample the follower's actual combat target every tick
-    // and record how long our chosen target survived. If the controller
-    // re-picks quickly, §4.7's "issue once and stay quiet" model needs a
-    // refresh cadence instead of pure invalidation.
+    // After StartCombat, sample the follower's ACTUAL combat target each tick.
+    // If the controller re-picks quickly, DESIGN.md §4.7's "issue once, stay
+    // quiet until invalidated" model needs a refresh cadence instead.
+    //
+    // Compared by HANDLE, never by name: two enemies both called "Bandit" would
+    // make a re-pick invisible, and a brief target→none→target blip would read
+    // as two changes.
     struct Retention {
-        std::string follower;
-        std::string commanded;      // what we told them to attack
-        std::string current;        // what they are actually attacking now
-        float       heldSeconds = 0.0f;
-        int         samples = 0;
-        int         changes = 0;    // times the engine picked something else
-        bool        active = false;
+        std::string follower, commanded, current;
+        float watchSeconds = 0.0f;    // how long the watch has run
+        float heldSeconds  = 0.0f;    // how long the COMMANDED target survived
+        int   samples = 0;
+        int   changes = 0;
+        bool  onCommanded = false;    // still attacking who we said?
+        bool  everEngaged = false;    // did StartCombat take at all?
+        bool  commandedDied = false;  // invalidation, NOT a re-pick
+        bool  active = false;
+        bool  valid = false;
     };
     Retention GetRetention();
 
-    // Called from the pump each tick. Cheap no-op when no watch is running.
-    void Tick();
-
-    void Stop();
+    void Tick();      // from the pump; cheap no-op when idle
+    void Stop();      // ends the watch and releases anything the probe rooted
+    void ReleaseAll();// on load/new game — nothing the probe did outlives a session
 
 }

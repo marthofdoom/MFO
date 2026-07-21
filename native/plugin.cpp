@@ -7,6 +7,7 @@
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Board.h"
+#include "Probe.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -91,7 +92,7 @@ namespace {
         MFO::Gambit g2{};
         g2.conditionOpcode = "cond.always";
         g2.actionOpcode    = "act.cast_spell";
-        g2.actionParamForm = 0x00012FCD;   // Healing (Skyrim.esm) — resolves everywhere
+        g2.actionParamForm = 0x00012FCC;   // Healing (Skyrim.esm). NOT 0x12FCD -- that is FLAMES.
         st.combat().push_back(g2);
 
         // Logistics table (DESIGN.md 4.8) -- proves both tables round-trip
@@ -131,6 +132,7 @@ namespace {
             spdlog::info("[startup] {} — {} follower record(s) live",
                          a_msg->type == SKSE::MessagingInterface::kNewGame ? "kNewGame" : "kPostLoadGame",
                          MFO::g_followers.size());
+            MFO::Probe::ReleaseAll();   // nothing the probe did outlives a session
             MFO::Forms::EnsurePlayerSetup();
             MFO::Followers::Refresh();
             SeedTestData();

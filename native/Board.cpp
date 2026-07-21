@@ -255,8 +255,11 @@ namespace MFO::Board {
                                        "emergent engine behaviour. Nothing here persists.");
                     ImGui::Spacing();
 
-                    // Pick a subject from the ACTIVE followers only.
-                    static int sel = 0;
+                    // Subject keyed on IDENTITY, never an index (INVARIANTS #31).
+                    // The active list is rebuilt per frame and reorders when the
+                    // roster changes -- an index would silently retarget the
+                    // probe at whoever now occupies that slot.
+                    static RE::FormID selId = 0;
                     std::vector<const FollowerRow*> active;
                     for (const auto& r : snap.rows) if (r.active) active.push_back(&r);
 
@@ -264,20 +267,26 @@ namespace MFO::Board {
                         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),
                                            "No active follower. Recruit one first.");
                     } else {
-                        sel = std::clamp(sel, 0, static_cast<int>(active.size()) - 1);
-                        if (ImGui::BeginCombo("Subject", active[sel]->name.c_str())) {
-                            for (int i = 0; i < static_cast<int>(active.size()); ++i) {
-                                const bool chosen = (i == sel);
-                                if (ImGui::Selectable(active[i]->name.c_str(), chosen)) sel = i;
+                        const FollowerRow* cur = nullptr;
+                        for (const auto* r : active) if (r->id == selId) { cur = r; break; }
+                        if (!cur) { cur = active.front(); selId = cur->id; }
+
+                        if (ImGui::BeginCombo("Subject", cur->name.c_str())) {
+                            for (const auto* r : active) {
+                                const bool chosen = (r->id == selId);
+                                if (ImGui::Selectable(r->name.c_str(), chosen)) selId = r->id;
                                 if (chosen) ImGui::SetItemDefaultFocus();
                             }
                             ImGui::EndCombo();
                         }
-                        const RE::FormID subject = active[sel]->id;
+                        const RE::FormID subject = selId;
 
                         ImGui::Spacing();
                         // Single-shot via IsItemActivated equivalent: Button
                         // returns true once per click, which is the safe form.
+                        // ImGui::Button fires once per physical click, on
+                        // release. That is not the Selectable-return ||
+                        // IsItemClicked double-fire shape INVARIANTS #30 bans.
                         auto fire = [&](Probe::Action a) {
                             if (ImGui::Button(Probe::Name(a), ImVec2(-1.0f, 0.0f))) {
                                 SKSE::GetTaskInterface()->AddTask([subject, a]() {
@@ -294,19 +303,24 @@ namespace MFO::Board {
 
                         ImGui::SeparatorText("Casting");
                         fire(Probe::Action::CastHealOnSelf);
-                        fire(Probe::Action::DoCombatSpellApplyOnTarget);
-
-                        ImGui::SeparatorText("Positioning");
-                        fire(Probe::Action::KeepOffsetClose);
-                        fire(Probe::Action::KeepOffsetFar);
-                        fire(Probe::Action::ClearKeepOffset);
-                        fire(Probe::Action::SetDontMoveOn);
-                        fire(Probe::Action::SetDontMoveOff);
 
                         ImGui::SeparatorText("Packages / stance");
                         fire(Probe::Action::EvaluatePackage);
                         fire(Probe::Action::DrawWeapon);
                         fire(Probe::Action::SheatheWeapon);
+
+                        // The gap M4 found before it ever ran. Shown here rather
+                        // than silently omitted -- a probe that hides what it
+                        // cannot reach hides its most important result.
+                        ImGui::SeparatorText("Not reachable from C++");
+                        for (const auto& u : Probe::UnavailableActions()) {
+                            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "  %s", u.name);
+                            ImGui::TextDisabled("    %s", u.why);
+                        }
+                        ImGui::TextWrapped("DESIGN 4.5 lists these as Tier B. The Papyrus surface named "
+                                           "the right flows, but CommonLibSSE-NG does not bind them -- "
+                                           "reaching them needs VM dispatch or a sourced relocation, "
+                                           "which is its own milestone.");
                     }
 
                     ImGui::Spacing(); ImGui::Separator();
@@ -323,20 +337,29 @@ namespace MFO::Board {
                     ImGui::Spacing(); ImGui::Separator();
                     const auto ret = Probe::GetRetention();
                     ImGui::TextDisabled("Target retention  <-- THE question for DESIGN 4.7");
-                    if (!ret.active && ret.samples == 0) {
+                    if (!ret.valid) {
                         ImGui::TextDisabled("  not running -- use StartCombat above");
                     } else {
                         ImGui::Text("  %s commanded to attack %s", ret.follower.c_str(), ret.commanded.c_str());
                         ImGui::Text("  now attacking: %s", ret.current.c_str());
-                        ImGui::Text("  held %.1fs, %d sample(s)", ret.heldSeconds, ret.samples);
-                        if (ret.changes == 0) {
+                        ImGui::Text("  watching %.1fs, %d sample(s)", ret.watchSeconds, ret.samples);
+                        if (!ret.everEngaged) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
+                                               "  never entered combat -- StartCombat did not take");
+                        } else if (ret.commandedDied) {
+                            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
+                                               "  commanded target DIED -- invalidation, not a re-pick");
+                        } else if (ret.changes == 0) {
                             ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f),
-                                               "  0 changes -- the order STICKS (4.7 model holds)");
+                                               "  0 changes -- the order STICKS (4.7's model holds)");
                         } else {
                             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
-                                               "  %d change(s) -- engine re-picked; 4.7 needs a refresh cadence",
-                                               ret.changes);
+                                               "  %d change(s), held commanded target %.1fs",
+                                               ret.changes, ret.heldSeconds);
+                            ImGui::TextDisabled("    engine re-picked -- 4.7 needs a refresh cadence");
                         }
+                        ImGui::TextDisabled("  on commanded target: %s", ret.onCommanded ? "yes" : "NO");
+                        ImGui::TextDisabled("  (500ms sampling cannot see a re-pick-and-return inside one tick)");
                         if (!ret.active) ImGui::TextDisabled("  (watch ended)");
                     }
                     ImGui::EndTabItem();
