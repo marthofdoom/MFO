@@ -3,6 +3,40 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.3.0 — kills actually get credited
+
+Field fixes from reading a real session log. The reported symptom was "boss
+multiplier didn't apply"; the log showed something worse underneath it.
+
+**Kills were being silently dropped.** A follower transiently absent from the
+engine's high-actor list was removed from the tracked set instantly — and the
+death sink refreshes that set *before* awarding, so a kill landing in that
+window credited nobody at all. The log signature was a remove and re-add
+**117 ms apart**, far tighter than the 500 ms refresh. Now held for three
+consecutive missed sweeps: one miss is not evidence of absence.
+
+**The log had gone blind to Rapport.** Awards only logged on a rank change,
+so the overlay made Rapport visible in game and invisible in the log in the
+same release. Every award and every credited kill now logs at info —
+including the zero case — with victim name, both levels, and classification.
+
+**Boss detection was wrong, as reported.** `IsUnique()` means *named one-off
+actor*, not *hard fight*; generic dungeon bosses are leveled and not unique,
+so a bandit chief with a boss bar read as standard. Now unique **or** at
+least `iBossLevelDelta` levels above you (default 5) — relative, so a chief
+is a boss at level 8 and an inconvenience at 50. Tunable in `MFO.ini`.
+
+**The panel explains itself.** Measurements now shows the last credited kill:
+name, its level, your level, the classification, and what was awarded to how
+many followers. "Why wasn't that a boss?" is answerable without a log.
+
+*Two of these became this project's first invariants earned in the field
+rather than inherited from a sibling (#22i, #22j).*
+
+*Note: `[cosave] saved 0 follower record(s)` appeared in a session with no
+manual save — autosave and quicksave fire regardless of intent. Harmless with
+seeding off, but worth knowing that "not saving" is not under your control.*
+
 ## v0.2.0 — the Field Kit (in-game overlay)
 
 Everything v0.1.0 had, now **visible in game**. Reading a log after the fact
