@@ -1,0 +1,310 @@
+# MFO — Engine Notes
+
+Engine mechanisms MFO depends on, and how much each is actually trusted.
+
+**Read this before any native work.** But read it knowing what it is: in the
+sibling projects `ENGINE_NOTES.md` records mechanisms **proven in-game**, with
+dates and symptoms. **MFO has proven nothing in-game.** Writing this file in
+that voice would make it exactly the document the family's own doctrine warns
+about — *never trust format docs, including this documentation.*
+
+So this is a **research ledger** instead. Every entry carries a status, and
+the status is the most important field on it.
+
+| Status | Means | Trust |
+|---|---|---|
+| **PROVEN (sibling)** | Shipped and field-validated in MRO / MEO / MAO. Cited. | Build on it |
+| **RESEARCHED** | Mapped from a primary source (SKSE64 `Actor.psc`, PapyrusUtil, po3, a reference repo) but **never run by anyone in this family** | Design against it; verify before relying |
+| **UNKNOWN** | Named, not investigated | Do not plan around |
+| **PROVEN (MFO)** | Validated in-game by MFO, with date, game version, and observed symptom | — |
+
+**PROVEN (MFO) is currently empty.** The promotion protocol is §10.
+
+The living truth for behavior will always be `native/plugin.cpp`. When this
+file and the code disagree, the code is right.
+
+---
+
+## 1. Actor control — Tier A primitives
+
+**Status: PROVEN (sibling).** Each has a working call site in shipped code.
+
+| Mechanism | Call | Cited |
+|---|---|---|
+| Cast a spell as an actor | `ActorMagicCaster::CastSpellImmediate` | MEO Echo follower-share; MAO flask payload |
+| Grant / revoke a spell | `Actor::AddSpell` / `RemoveSpell` | MEO startup grants |
+| Remove an active effect | `ActiveEffect::Dispel(true)` | MEO `DispelStaleGemEffects` |
+| Equip / unequip | `ActorEquipManager::UnequipObject` → `EquipObject`; hand slots from `BGSDefaultObjectManager` (`kLeftHandEquip` / `kRightHandEquip`); armor is slotless | MEO worn-ability cycle |
+| Drink a potion | the equip path on an `AlchemyItem` | MAO consume intercept |
+| Read actor state | `AsActorValueOwner()`, `HasSpell`, `HasPerk`, active-effect walk | all three siblings |
+| Per-actor passives | `AddPerk` / `RemovePerk` | MRO — "the way to give player/follower-only passives" |
+
+**Load-bearing details carried over:**
+
+- **`Dispel` — collect the full list BEFORE dispelling.** Never dispel while
+  walking the active-effect list.
+- **The unequip→equip cycle is idempotent**: unequip drops all old abilities,
+  equip installs exactly one, so repeated passes cannot accumulate. This is
+  why it is the *only* complete teardown — `Update*Ability` early-outs on
+  teardown, so a strip-and-restamp leaves old abilities alive and effects
+  doubled.
+- **`BGSBipedObjectForm::HasPartOf(mask)` is `.all()`** — a combined
+  multi-slot mask is always false. Test each slot and OR.
+- **`TESDataHandler::LookupForm<T>` takes CONCRETE record classes only.** It
+  gates on `form->Is(T::FORMTYPE)`, and abstract intermediates like
+  `TESBoundObject` inherit `FormType::None`, so it returns nullptr **100% of
+  the time** — compiles clean, fails silently. Use `TESForm::LookupByID<T>`
+  (routes through `As<T>()`) or the non-template lookup plus `->As<T>()`.
+  *This one cost MEO a 10,146-row table that resolved "0 live."*
+
+### 1.1 The Tier-A trap MFO steps on constantly
+
+**Equip/unequip dispatch is SYNCHRONOUS into every registered sink.** Cycling
+gear on a follower hands control, mid-call, to follower AI and to third-party
+outfit managers — **guaranteed present in a Lorerim-class order** — which
+mutate the same inventory. MEO ate a node use-after-free here.
+
+Discipline, non-negotiable on MFO's equip path: snapshot `(object, xList,
+key)` tuples first, act second, **re-find live records by key at act time**,
+hold actors by `ActorHandle` re-resolved at act time.
+
+`INVARIANTS.md` #2/#3. Status: PROVEN (sibling) — the *trap* is proven, which
+is the part that matters.
+
+---
+
+## 2. Actor control — Tier B
+
+**Status: RESEARCHED.** Mapped from SKSE64's `Actor.psc`, PapyrusUtil's
+`ActorUtil.psc`, and po3's `PO3_SKSEFunctions.psc` — all of which ship their
+sources inside the LoreRim install. **No one in this family has run any of
+it.** Per the standing doctrine, the Papyrus native names the engine flow;
+the implementation path is to read SKSE64 / po3 / PapyrusUtil source for what
+each native actually calls.
+
+| Capability | Papyrus native | Notes |
+|---|---|---|
+| Positioning | `KeepOffsetFromActor(target, x,y,z, angX,angY,angZ, catchUpRadius, followRadius)` / `ClearKeepOffsetFromActor()` | **Preferred.** A state set, not a journey. No package involved, explicitly reversible, composes with vanilla AI |
+| Hold ground | `SetDontMove(bool)` | Trivially reversible |
+| Combat targeting | `StartCombat(target)`, `StopCombat()`, `GetCombatTarget()`, `GetCombatState()` | State: 0 not in combat, 1 in combat, 2 searching |
+| Combat-context cast | `DoCombatSpellApply(spell, target)` | Likely a better fit than `CastSpellImmediate` for gambit casts — verify which the engine treats as a real combat action |
+| Projectile-level cast | `PO3.LaunchSpell(actor, spell, source)` | Alternative |
+| Hand assignment | `EquipSpell(spell, source)` (0 left, 1 right), `EquipShout(shout)` | |
+| Look-at | `SetLookAt(target, pathingLookAt)` / `ClearLookAt()` | Cheap, cosmetic, high perceived value |
+| Stance | `StartSneaking()`, `DrawWeapon()`, `IsWeaponDrawn()`, `IsSneaking()` | |
+| Package control | `EvaluatePackage()`, `GetCurrentPackage()`, `PO3.GetRunningPackage()`, PapyrusUtil `AddPackageOverride(actor, pkg, priority 0–100, flags)` / `RemovePackageOverride` / `CountPackageOverride` | **Last resort** — see the three rules below |
+| Combat observation | `TESCombatEvent` (== `OnCombatStateChanged`), `OnPackageStart` / `OnPackageChange` / `OnPackageEnd` | |
+| Full AI disable | `EnableAI(bool)` | Documented; **not used by MFO** — it is exactly the "seize control" this design refuses |
+
+### 2.1 Three facts found while mapping, each of which changed the design
+
+1. **`PathToReference` is LATENT.** Its own doc: *"this method doesn't return
+   until the goal is reached or pathing failed or was interrupted."* A call
+   from the tick would stall the main thread for the duration of a walk.
+   **Banned outright** (`INVARIANTS.md` #17) — there is no safe caller in
+   this architecture.
+2. **Package overrides PERSIST THROUGH SAVES.** PapyrusUtil states it
+   plainly. An unledgered override outlives the mod and breaks the
+   clean-uninstall promise. Hence the co-save ledger and the
+   `CountPackageOverride` reconcile (`INVARIANTS.md` #19).
+3. **`ClearPackageOverride` removes overrides added by OTHER MODS.** Banned
+   (`INVARIANTS.md` #18). Same shape as NG's `RemoveByType`: a library call
+   whose contract is wider than the caller's intent — obeyed before the
+   crash, for once, rather than after.
+
+### 2.2 Verification each Tier-B item needs before it ships
+
+Per `DESIGN.md` §4.5, one mechanism per release, in reversibility order.
+Each needs, minimally: does the call reach the actor at all (log the return);
+does vanilla AI resume cleanly when released; does anything persist across a
+save/load cycle that shouldn't; does it fight a follower framework's own
+packages.
+
+---
+
+## 3. Follower enumeration and lifetime
+
+**Status: PROVEN (sibling).**
+
+- **Native:** iterate `RE::ProcessLists::highActorHandles`, filter to
+  teammates. MEO's `ReapplyFollowerSockets` shape.
+- **Papyrus cross-check:** `PO3_SKSEFunctions.GetPlayerFollowers()` — no
+  quest alias needed. The documented fix for "works for player, not
+  followers."
+- **Hold by `ActorHandle`, re-resolve at act time.** Followers cross cells,
+  get dismissed, and die mid-tick.
+
+**RESEARCHED additions MFO wants:**
+`PO3.GetCombatAllies(actor)` / `GetCombatTargets(actor)` (engine-maintained
+target sets — prefer over hand-rolled hostility scans),
+`PO3.GetCommandedActors(actor)` (summons),
+`PO3.GetAllActorPlayableSpells(actor)` (**the action-vocabulary query**,
+exactly), `PO3.CanActorDetect` / `CanActorBeDetected` / `IsDetectedByAnyone`
+(stealth conditions), `PO3.EvaluateConditionList(form, actionRef, targetRef)`
+(would let conditions be authored as engine CTDA data — the open option in
+`DESIGN.md` §3.2).
+
+---
+
+## 4. Event sinks
+
+**Status: PROVEN (sibling)** except where noted. Register on
+`RE::ScriptEventSourceHolder`; **defer all mutation to `AddTask`.**
+
+| Event | Shape | Gotcha |
+|---|---|---|
+| `TESDeathEvent` | `{actorDying, actorKiller, dead}` | **Fires twice — act only on `dead == true`** |
+| `TESCombatEvent` | combat state change | **UNKNOWN to this family.** No sibling has used it. Verify: does it fire for followers as well as the player's targets; does it fire on searching↔combat transitions; does it fire during load |
+| `TESSpellCastEvent` | `{object, spell}` | Fires for lesser powers too — this is what makes the power-opener work |
+| `SKSE::CrosshairRefEvent` | `{crosshairRef}` | via `GetCrosshairRefEventSource()` |
+| `MenuOpenCloseEvent` | menu name + opening | **LoadingMenu-CLOSE is the "gameplay resumed" anchor** — never a blind timer; one fired during a long load is swallowed |
+| `TESEquipEvent` | `{actor, baseObject, uniqueID, equipped}` | Synchronous into follower AI (§1.1). Plain items report `uniqueID = 0` |
+
+**The load-wide performance warning that shaped `DESIGN.md` §4.2:** MRO found
+that a *global* SKSE actor event (`RegisterForActorAction`) fires for **every
+actor in the load order**, and each firing is dispatched to the handler even
+when it bails immediately. **The cost is the dispatch, not the handler body,
+so filtering inside the handler does not help.** On a large list this tanked
+FPS. MFO's sinks are all low-frequency by comparison, but the lesson governs
+any future "watch every actor do X" idea.
+
+---
+
+## 5. Co-save serialization
+
+**Status: PROVEN (sibling).** Full rules in `INVARIANTS.md` §B; the
+mechanisms:
+
+- Versioned records; **keep readers for every shipped version forever**;
+  write only the newest.
+- **Every stored FormID through `SerializationInterface::ResolveFormID`.**
+  Applies to dynamic FF ids too — an unresolvable one means the object is
+  gone; recreate, never reuse.
+- **SKSE does NOT round-trip unread records** — a downgraded DLL destroys
+  newer ones on its next save.
+- Store **stable string identities**, never enumeration indexes.
+- `RevertCallback` zeroes everything save-scoped.
+- **One-time grants:** consume the latch only when the grant actually
+  succeeded — a missing ESP must retry next load, not burn it.
+
+**GlobalVariable values are save-persisted.** A DLL that writes a global at
+`kDataLoaded` is overwritten when a save loads. Re-assert on `kPostLoadGame`
+**and** `kNewGame`. (MRO lost a release to this on its DR handshake.)
+
+---
+
+## 6. The ImGui board
+
+**Status: PROVEN (sibling)** — MEO shipped and field-validated this under an
+ENB/Community Shaders stack on 1.6.1170, verified against `D7ry/wheeler`.
+MFO copies it wholesale; full implementation brief in `DESIGN.md` §6 and the
+hook table in `ARCHITECTURE.md` §5.
+
+Facts worth repeating here because they are engine-level, not design-level:
+
+- **`io.DisplaySize` lies under Proton and upscalers** — the Win32 backend
+  reads `GetClientRect`, which disagrees with the backbuffer. Cache
+  `sd.BufferDesc.{Width,Height}` and overwrite every frame between
+  `ImGui_ImplWin32_NewFrame()` and `ImGui::NewFrame()`.
+- **Renderer access (NG 3.7):**
+  `RE::BSGraphics::Renderer::GetSingleton()->data.{forwarder, context,
+  renderWindows[0].swapChain}`; hwnd from `swapChain->GetDesc().OutputWindow`.
+- **Input:** while open, walk the event list into ImGui IO and set
+  `*a_events = nullptr`. The game sees nothing — no vanilla bleed-through, no
+  control-flag toggling, no stuck-controls failure mode.
+- **`SKSE::AllocTrampoline(256)`** — MEO's ENGINE_NOTES says 64; **the
+  shipped code uses 256. Trust the code.**
+- **Build traps:** `d3d11.h` pulls `windows.h` (which NG never includes) —
+  `WIN32_LEAN_AND_MEAN` + `NOMINMAX` or its min/max macros break
+  `std::max`/`std::clamp` everywhere; and `wingdi.h` `#define`s
+  `GetObject`→`GetObjectW`, hijacking
+  `BGSDefaultObjectManager::GetObject<T>()` — **`#undef GetObject` after the
+  D3D includes.**
+- **Hiding a vanilla menu fires that menu's own CLOSE event.** Any "that menu
+  closed → close mine" coupling must be gated or it kills the menu you just
+  opened.
+
+---
+
+## 7. Records and forms
+
+**Status: PROVEN (sibling).** MFO's record needs (MGEF, SPEL, KYWD, QUST +
+VMAD, SEQ) are a strict subset of what MEO's
+`MANUAL_MOD_CREATION_GUIDE.md` already documents. Copy that file rather than
+re-deriving.
+
+The two that bite:
+- **SPEL type must be 4 (Ability) for a constant ability**; type 3 is Lesser
+  Power. A lesser power is what MFO's Field Orders opener actually wants.
+- **The engine drops malformed records silently.** Dump a vanilla twin and
+  diff subrecords — type, order, size, bytes.
+
+---
+
+## 8. Traps inherited that will reach MFO
+
+Listed because each is a live hazard on a path MFO will walk:
+
+- **`ExtraDataList::RemoveByType` null-derefs when the removal empties the
+  list** (disasm-proven, MEO m50, a deterministic every-load CTD). Never call
+  it. MFO touches extra data far less than MEO, but any code that strips
+  extras must own its empty-list behavior.
+- **`AddObjectToContainer` LINKS the `ExtraDataList` pointer — it does not
+  copy.** The entry takes ownership. Two owners of one allocation, one of
+  them freeing, is the whole bug class. *"When a fix hands memory across an
+  API boundary, prove who owns it, don't infer it from behavior."*
+- **`PlaceObjectAtMe` refs have no owner** — `SetOwner(player)` before any
+  pickup, or it is witnessed theft.
+- **Never give an item two live effect sources.**
+- **po3 Tweaks' editorID caching populates the map for ALL forms, and LoreRim
+  ships it** — so an editorID lookup that works on this machine may fail for
+  Nexus users. **Never validate an editorID lookup on the dev deck alone.**
+- **po3 per-form events only deliver to scripts extending ObjectReference,
+  ActiveMagicEffect, or ReferenceAlias.** Registering a Quest script
+  "succeeds" and never delivers. (Relevant only if MFO ever grows a Papyrus
+  surface — it currently must not.)
+
+---
+
+## 9. The verification queue
+
+What MFO must actually establish in-game, in phase order. **This is the real
+content of this document right now.**
+
+| # | Question | Phase | Method |
+|---|---|---|---|
+| 1 | Does the co-save round-trip a rule list across a load-order change? | P0 | Add/remove a plugin between saves; check `ResolveFormID` drops cleanly |
+| 2 | Does teammate detection catch NFF/AFT-managed followers? | P1 | Install a framework; log the detected set vs `GetPlayerFollowers()` |
+| 3 | Does `TESCombatEvent` fire usefully for followers? | P1 | Log every event with actor/state; watch a real fight |
+| 4 | Real kills/hour on a Requiem-class list | P1 | Instrument Rapport income for several sessions |
+| 5 | Does the evaluator hold its budget under a real fight? | P2 | `bProfileEvaluator`, Lorerim order, multi-follower, worst-case rule list |
+| 6 | Is per-tick cost flat from 1→12 followers? | P2 | Same run, vary party size |
+| 7 | Does the frame clock adapt (7.5 ticks/s at 30/60/144)? | P2 | Same run, cap framerate |
+| 8 | Does `CastSpellImmediate` or `DoCombatSpellApply` read as a real combat action? | P2 | Both, on the same spell, observe AI and animation |
+| 9 | Does a load screen produce a tick burst? | P2 | Instrument tick timestamps across a load |
+| 10 | Does controller nav reach every board action including reorder? | P3 | Gamepad only, no keyboard |
+| 11 | Does `IsItemActivated()` hold against the task-pump race? | P3 | Rapid clicks on a delete row; count actual deletions |
+| 12 | Does uninstall leave zero MFO spells on a follower? | P5 | Tutor, uninstall, inspect save |
+| 13 | Do package overrides survive a save/load, and does the ledger catch it? | P6+ | Apply, save, reload, `CountPackageOverride` |
+
+---
+
+## 10. Promotion protocol
+
+An entry moves to **PROVEN (MFO)** only when it has:
+
+1. A **date** and the **game version** it was tested on.
+2. The **observed symptom** that constitutes proof — not "it worked," but
+   what was seen. *"Follower cast Fast Healing within 400 ms of the ally
+   dropping below 50%, logged 14 times across 3 fights"* is proof;
+   *"healing works"* is not.
+3. A **log line or console command** that reproduces the observation.
+
+Then, per `INDEX.md`, the mechanism is written up **here and into
+Linux-Native-Tools in the same release that ships it** — MFO is the project
+that owes the family an actor-AI document, and that debt is paid
+incrementally or not at all.
+
+**Instrument, don't eyeball.** Temporary `spdlog::info` dumping the values in
+question, reproduce in-game, read the log, strip before release. A mechanism
+"confirmed" by watching a follower and feeling good about it is not confirmed.

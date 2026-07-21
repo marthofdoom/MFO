@@ -1,0 +1,45 @@
+name: native
+
+on:
+  push:
+    paths:
+      - "native/**"
+      - ".github/workflows/native.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      # Turns a ~15 min cold build into ~2 min warm. Keyed on the manifests so
+      # a pinned-baseline bump correctly invalidates it.
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ hashFiles('native/vcpkg.json', 'native/vcpkg-configuration.json') }}
+          restore-keys: vcpkg-
+
+      - name: Configure
+        run: cmake --preset release
+        env:
+          VCPKG_ROOT: C:\vcpkg
+
+      - name: Build
+        run: cmake --build build/release
+
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: MFO-dll
+          path: |
+            native/build/release/MFO.dll
+            native/build/release/MFO.pdb
+          if-no-files-found: error

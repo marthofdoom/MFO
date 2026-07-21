@@ -1,0 +1,9 @@
+native/build/
+native/install/
+native/out/
+__pycache__/
+*.pyc
+*.zip
+*.log
+.vs/
+compile_commands.json
