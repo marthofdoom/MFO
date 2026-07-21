@@ -956,14 +956,30 @@ Actuation holds, per follower:
 CommandedTarget { ActorHandle target; uint8 issuedByRule; uint32 issuedAtTick; }
 ```
 
-Each tick the scan runs top-down from rule 1 exactly as before. When the
-winning rule is a standing order, MFO compares the resolved target against
-the latch:
+**The order persists exactly as long as that rule keeps winning with the same
+resolved target. Nothing more is going on than that.** Each tick the scan
+runs top-down from rule 1 exactly as before, produces a winner, and the
+winner resolves to an `(action, target)` pair. Then:
 
-- **Same target, still valid → NO ENGINE CALL AT ALL.** The tick ends having
-  done nothing, which is the desired behavior and also free.
-- **Different target, or invalid, or issued by a rule that no longer wins →
-  release and re-issue.**
+- **Identical to what is already commanded, and still valid → NO ENGINE CALL
+  AT ALL.** The tick ends having done nothing.
+- **Anything else → issue the new order, which supersedes the old.**
+
+There is no separate preemption machinery, because none is needed. A
+different rule winning *is* the mechanism:
+
+```
+Tick 40:  rule 4 wins  ->  attack lowest-HP foe (bandit B)   [issued]
+Tick 41:  rule 4 wins  ->  attack lowest-HP foe (bandit B)   [no-op, already commanded]
+Tick 42:  rule 1 wins  ->  Ally HP<40%: heal the player       [supersedes -- follower turns to heal]
+Tick 43:  rule 3 wins  ->  Foe weak to fire: cast Flames      [supersedes -- switches to that foe]
+Tick 44:  rule 4 wins  ->  attack lowest-HP foe (bandit B)    [re-issued; the order had lapsed]
+```
+
+**If no rule matches, the standing order simply stands.** §4.4 says MFO makes
+no engine call on a non-matching tick, and that includes not tearing down an
+order — the follower keeps attacking who they were told to attack, and
+vanilla AI keeps executing it.
 
 **This is actuation state, not evaluator state, and the distinction is
 load-bearing** (`INVARIANTS.md` #22). The test: *if the latch were lost
@@ -981,15 +997,23 @@ disabled or deleted. Any of these → release immediately.
 **Is the target still CORRECT for the rule?** (semantic, expensive) — "lowest
 HP" moves as damage lands; "nearest" moves as everyone runs around.
 
-**Commitment rule: MFO does not switch targets for a marginal improvement.**
-Once committed, it switches only when the target is invalid, when a
-**higher-positioned rule** wins instead (positional preemption, §4.4), or
-when a new candidate is better **by more than `fTargetSwitchMargin`**
-(default **15%**). That margin is taken directly from Aggro Management's
-shipped threat table, which uses the same figure for the same reason —
-without hysteresis, two foes at 41% and 39% health make a follower oscillate
-between them forever. This is the one place MFO adds damping, and it is
-damping of *its own re-selection*, not of the player's rule order (§4.3a).
+**The crux — two kinds of switch, and only one of them is damped:**
+
+| Switch | Cause | Behavior |
+|---|---|---|
+| **Between rules** | A different rule wins this tick | **Instant. Never damped.** The player's ordering decided it, and §4.3a forbids MFO second-guessing that. Heal-the-player outranking attack means it outranks it *now* |
+| **Within one rule** | Same rule still wins, but its target re-resolved to someone else | **Damped by `fTargetSwitchMargin`** (default 15%) |
+
+Only the second is MFO making a choice, so only the second gets hysteresis.
+Without it, two foes at 41% and 39% health oscillate a follower between them
+forever; the margin is taken from Aggro Management's shipped threat table,
+which uses the same figure for the same reason. Applying damping to the first
+kind would be the mod overriding the player's rule order, which is exactly
+what it must never do.
+
+**Invalidity always wins over commitment.** A dead or unloaded target is
+released immediately regardless of margin — hysteresis governs *preference*,
+never *validity*.
 
 #### 4.7.4 Re-resolution is throttled independently of the tick
 
@@ -1015,6 +1039,13 @@ the thing §8.5's clean-uninstall promise is most exposed to. Consequently:
 - The latch is **not serialized.** It is rebuilt from live state after a
   load, because a target handle that survived a save is exactly the dangling
   reference `INVARIANTS.md` #9 forbids.
+- **MFO may always clean up after itself; it may only ACT when a rule
+  matches.** These are different permissions and the distinction resolves the
+  apparent conflict with §4.4. Releasing a latch whose target just died is
+  cleanup of MFO's own prior call — always allowed, even on a tick where
+  nothing matched. Issuing a *new* order always requires a winning rule.
+  Leaving an alias pointing at a corpse because "no rule matched this tick"
+  would be a bug wearing a principle's clothes.
 - On load, MFO **clears any commanded-target alias it owns** before the first
   tick, so a save made mid-order does not resume pointing at something stale.
 

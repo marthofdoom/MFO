@@ -193,11 +193,14 @@ produces the same winner; the latch only decides whether to repeat itself. If
 a change ever makes the latch affect *which rule wins*, that change is wrong.
 `DESIGN` (`DESIGN.md` §4.7.2).
 
-**#22c — Never switch a committed target for a marginal improvement.**
-Switch only on invalidity, positional preemption, or a candidate better by
-more than `fTargetSwitchMargin` (default 15%). Without hysteresis two foes at
-41% and 39% health oscillate a follower between them forever. Damping applies
-to MFO's own re-selection ONLY — never to the player's rule ordering (#28).
+**#22c — Hysteresis damps WITHIN-rule target re-resolution ONLY. A different
+rule winning supersedes instantly and is never damped.** Two switch kinds:
+between-rule (the player's ordering decided it — instant) and within-rule
+(MFO re-resolved the same rule's target — damped by `fTargetSwitchMargin`,
+default 15%). Without damping on the second, two foes at 41% and 39% health
+oscillate a follower forever. **Damping the first would be MFO overriding the
+player's rule order** (#28). Invalidity always wins over commitment —
+hysteresis governs preference, never validity.
 `DESIGN` (`DESIGN.md` §4.7.3) + `INHERITED` (Aggro Management ships the same
 15% for the same reason).
 
