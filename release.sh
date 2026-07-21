@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./release.sh            release the version currently in VERSION
-#   ./release.sh 0.1.0      bump VERSION to 0.1.0 and release it
+#   ./release.sh 0.2.0      PHASE 1: stamp + commit + push, then wait for CI
 #
 # Release folders and tags are IMMUTABLE — bump VERSION for every build you
 # want to keep. Nothing is ever overwritten or deleted. This is the ONLY way a
@@ -17,9 +17,32 @@ cd "$(dirname "$0")"
 
 GH="${GH:-$HOME/.local/bin/gh}"
 
+# TWO-PHASE, deliberately. Stamping the version touches native/CMakeLists.txt,
+# which changes the native/ tree -- and the DLL we ship must come from a CI run
+# that built exactly that tree. So the bump has to be committed and BUILT before
+# the release can be cut. Trying to do both in one pass means either shipping a
+# DLL whose version header does not match the zip, or skipping the check that
+# catches exactly that.
+#
+#   ./release.sh 0.2.0   -> phase 1: stamp, commit, push. Wait for CI.
+#   ./release.sh         -> phase 2: verify + package + tag.
 if [[ $# -ge 1 ]]; then
-    echo "$1" > VERSION
+    NEWVER="$1"
+    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+        echo "ERROR: commit your work before bumping the version." >&2
+        git status --short >&2
+        exit 1
+    fi
+    echo "$NEWVER" > VERSION
+    sed -i "s/^project(MFO VERSION [0-9.]*/project(MFO VERSION ${NEWVER}/" native/CMakeLists.txt
+    git add VERSION native/CMakeLists.txt
+    git commit -q -m "Bump version to ${NEWVER}"
+    git push -q origin main
+    echo "Stamped ${NEWVER} and pushed. CI is rebuilding native/."
+    echo "When it is green:  ./release.sh"
+    exit 0
 fi
+
 VER="$(cat VERSION)"
 DEST="releases/v${VER}"
 
@@ -44,18 +67,18 @@ fi
 
 echo "== MFO v${VER} =="
 
-# 1. Stamp the version so the in-game log header matches the zip. INVARIANTS
-#    #44: a stale binary voids every test, and this header is how that is caught.
+# 1. VERIFY the stamp. The log header is how a stale binary gets caught
+#    (INVARIANTS #44), so it must match the zip. Phase 1 does the stamping;
+#    here we only check it happened and was built.
 #
-#    ONLY CMakeLists.txt. Do NOT stamp native/vcpkg.json: its version-string is
-#    metadata about our own port and affects nothing, but it IS part of the CI
-#    cache key (hashFiles over the manifests), so touching it invalidates the
-#    vcpkg cache and turns every release into a ~30 min cold rebuild instead of
-#    ~2.5 min. Learned by doing it once.
-sed -i "s/^project(MFO VERSION [0-9.]*/project(MFO VERSION ${VER}/" native/CMakeLists.txt
-if [[ -n "$(git status --porcelain native/ 2>/dev/null)" ]]; then
-    echo "Version stamp changed native/ — commit and let CI rebuild, then re-run." >&2
-    git status --short native/ >&2
+#    Note: only CMakeLists.txt carries the version. native/vcpkg.json's
+#    version-string is metadata that affects nothing at build time but IS part
+#    of the CI cache key, so stamping it would invalidate the vcpkg cache on
+#    every release. Learned by doing it once.
+STAMPED="$(grep -oP '^project\(MFO VERSION \K[0-9.]+' native/CMakeLists.txt)"
+if [[ "$STAMPED" != "$VER" ]]; then
+    echo "ERROR: VERSION says ${VER} but native/CMakeLists.txt says ${STAMPED}." >&2
+    echo "       Run:  ./release.sh ${VER}    (stamps, commits, pushes; then wait for CI)" >&2
     exit 1
 fi
 
