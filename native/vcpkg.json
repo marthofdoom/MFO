@@ -3,6 +3,13 @@
     "name": "mfo",
     "version-string": "0.1.0",
     "dependencies": [
-        "commonlibsse-ng"
+        "commonlibsse-ng",
+        {
+            "name": "imgui",
+            "features": [
+                "dx11-binding",
+                "win32-binding"
+            ]
+        }
     ]
 }

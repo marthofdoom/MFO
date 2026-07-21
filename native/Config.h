@@ -41,6 +41,17 @@ namespace MFO::Config {
     // -- diagnostics ---------------------------------------------------------
     inline std::atomic<bool>  g_enableLogging{ true };
     inline std::atomic<bool>  g_profileRapport{ false };
+    inline std::atomic<bool>  g_showHud{ true };
+
+    // Writes test gambits onto a player-keyed record so the co-save round-trip
+    // is provable without a UI. DEFAULT OFF: it is only meaningful if you
+    // intend to SAVE with the mod active, and until that is on the table it
+    // just puts a synthetic record in the Field Kit.
+    //
+    // An INI key rather than the compile-time constant INVARIANTS #37 would
+    // normally ask for, because there is no local compiler here -- flipping a
+    // constant costs a CI round-trip, flipping a key costs nothing.
+    inline std::atomic<bool>  g_seedTestData{ false };
 
     // Reset-then-parse both files, seed then MCM. Safe to call repeatedly.
     // CURRENTLY CALLED ONLY AT kDataLoaded -- there is no MenuOpenCloseEvent

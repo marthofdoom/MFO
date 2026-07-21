@@ -12,6 +12,31 @@ clean reload — persisted state lies.
 
 ---
 
+## ⚠ DEFERRED: everything that requires SAVING (marth, 2026-07-21)
+
+**No saving with MFO active until further along.** That is the right call this
+early, and it is cheap because the co-save callbacks only fire on save/load —
+with `bSeedTestData = 0` and no saving, **MFO writes nothing anywhere.** It
+reads state and draws it.
+
+**What it costs, stated plainly so it does not get forgotten:**
+
+- **The co-save stays UNPROVEN.** It is the highest-blast-radius subsystem in
+  the mod — a schema bug there is the "mod ate my save" class — and it has
+  been reviewed but never executed. Every session below that says "save, quit,
+  reload" is deferred, not passed.
+- Specifically deferred: session 1 step 9, tests A (load-order remap) and B
+  (downgrade guard), and 2A steps 4/5 in their persistent form (dismissal
+  *retention* is still observable live in the Field Kit, just not across a
+  reload).
+
+**Un-defer it with a dedicated throwaway save**, not the real playthrough —
+one save file created solely to be destroyed. Do it before M5, because the
+evaluator will start writing per-follower state that matters and a schema
+defect gets more expensive every milestone.
+
+---
+
 ## Session 1 — M1 + M2: the DLL loads, forms resolve, the co-save round-trips
 
 The first real evidence the mod exists. Nothing here is gameplay.

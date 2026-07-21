@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "Forms.h"
 #include "State.h"
+#include "Board.h"
 
 // The M3 test instrument.
 //
@@ -24,7 +25,9 @@ namespace MFO::Diagnostics {
 
     namespace {
 
-        constexpr std::uint32_t kRefreshMs = 2000;
+        // 2s was fine for detection-only logging. The HUD shows live vitals, so
+// it needs to be quick enough to read as live without being a tick loop.
+constexpr std::uint32_t kRefreshMs = 500;
         std::atomic<bool> g_pumpRunning{ false };
 
         class SpellSink final : public RE::BSTEventSink<RE::TESSpellCastEvent> {
@@ -43,7 +46,17 @@ namespace MFO::Diagnostics {
                     return RE::BSEventNotifyControl::kContinue;
 
                 // Sinks queue; they never do engine work inline.
-                SKSE::GetTaskInterface()->AddTask([]() { DumpReport("power"); });
+                SKSE::GetTaskInterface()->AddTask([]() {
+                    if (Board::IsAvailable()) {
+                        Board::PublishSnapshot();
+                        Board::Toggle();
+                    } else {
+                        // The overlay is not the only way to see state, and the
+                        // evaluator must never depend on the renderer
+                        // (INVARIANTS #25). Fall back to the log.
+                        DumpReport("power (overlay unavailable)");
+                    }
+                });
                 return RE::BSEventNotifyControl::kContinue;
             }
         };
@@ -63,7 +76,11 @@ namespace MFO::Diagnostics {
                 // this thread is still awake.
                 if (auto* task = SKSE::GetTaskInterface()) {
                     task->AddTask([]() {
-                        if (g_pumpRunning.load()) Followers::Refresh();
+                        if (!g_pumpRunning.load()) return;
+                        Followers::Refresh();
+                        // Republish every tick so the passive HUD stays live
+                        // during combat without anything being opened.
+                        Board::PublishSnapshot();
                     });
                 }
             }

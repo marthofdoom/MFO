@@ -6,6 +6,7 @@
 #include "Followers.h"
 #include "Rapport.h"
 #include "Diagnostics.h"
+#include "Board.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -57,16 +58,13 @@ namespace {
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
     }
 
-    // P0 test seam. INVARIANTS.md #37 in spirit: a testing relaxation is ONE
-    // compile-time constant with its flip-back condition stated, never
-    // scattered `// TODO re-enable` checks (MAO §37).
+    // Test seam, now `bSeedTestData` in MFO.ini and DEFAULT OFF.
     //
-    // FLIP BACK TO 0 once the board (P3) can author rules. Until then this is
-    // the only way to get a rule list into the co-save to prove round-trip.
-    constexpr bool kP0SeedTestData = true;
-
+    // NOTHING MFO HOLDS REACHES A SAVE UNLESS YOU SAVE. The co-save callbacks
+    // only fire on save/load, so with this off and no saving, MFO is purely
+    // observational -- it reads state and draws it, and leaves nothing behind.
     void SeedTestData() {
-        if constexpr (!kP0SeedTestData) return;
+        if (!MFO::Config::g_seedTestData.load()) return;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return;
@@ -134,6 +132,7 @@ namespace {
             MFO::Forms::EnsurePlayerSetup();
             MFO::Followers::Refresh();
             SeedTestData();
+            MFO::Board::SetHud(MFO::Config::g_showHud.load());
             MFO::Diagnostics::StartPump();
             MFO::Diagnostics::DumpReport("load");
             break;
@@ -159,9 +158,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
                  ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
 
-    // NOTE: the ImGui board (M7) installs its three trampoline hooks HERE,
-    // before the renderer initializes, with SKSE::AllocTrampoline(256).
-    // Nothing installs a code hook today — Tier A needs none.
+    // The Field Kit's three trampoline hooks MUST be installed here, before
+    // the renderer initializes. This is the only place they can go.
+    MFO::Board::Install();
 
     auto* serialization = SKSE::GetSerializationInterface();
     serialization->SetUniqueID(MFO::kSerID);
@@ -171,6 +170,6 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
 
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
 
-    spdlog::info("=== MFO loaded (M3: detection + rapport, no gameplay actions) ===");
+    spdlog::info("=== MFO loaded (M3 + Field Kit overlay) ===");
     return true;
 }

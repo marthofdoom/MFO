@@ -46,7 +46,20 @@ on the string path, `std::clamp` template deduction on `uint8_t`.
 
 ---
 
-## M1 — P0 proof: the co-save round-trips
+## M1 — P0 proof: the co-save round-trips *(DEFERRED — marth, 2026-07-21)*
+
+**Not being tested yet: no saving with MFO active until further along.** Safe,
+because the co-save callbacks only fire on save/load — with seeding off and no
+saving, MFO writes nothing.
+
+**The carried risk:** the co-save is the highest-blast-radius subsystem here,
+it has been Fable-reviewed but never *executed*, and every milestone from M5
+adds per-follower state that depends on it. A schema defect gets more
+expensive to find with each one. **Un-defer before M5**, on a save file made
+solely to be thrown away.
+
+The steps below stand for whenever that happens.
+
 
 No ESP required — the P0 seed is code-side, so the DLL installs alone.
 

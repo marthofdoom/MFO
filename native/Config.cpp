@@ -92,6 +92,8 @@ namespace MFO::Config {
             else if (a_key == "iRapportRank5")      setI(g_rank5, 1, 100000000);
             else if (a_key == "bEnableLogging")     setB(g_enableLogging);
             else if (a_key == "bProfileRapport")    setB(g_profileRapport);
+            else if (a_key == "bShowHud")           setB(g_showHud);
+            else if (a_key == "bSeedTestData")      setB(g_seedTestData);
             // Unknown keys are ignored in silence: MCM Helper writes keys we
             // may not know yet, and warning on them would cry wolf every load.
         }
@@ -136,6 +138,8 @@ namespace MFO::Config {
             g_rank2 = 250;  g_rank3 = 1000;  g_rank4 = 2500;  g_rank5 = 5000;
             g_enableLogging  = true;
             g_profileRapport = false;
+            g_showHud        = true;
+            g_seedTestData   = false;
         }
 
     }
