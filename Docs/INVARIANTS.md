@@ -380,6 +380,18 @@ what you want and mirror its subrecord list, order, and byte layout exactly.**
 The engine drops malformed records **silently** — there is no error.
 `INHERITED` (the family's one principle).
 
+**#42a — Every statically-linked dependency's licence notice ships with the
+release, and `THIRD-PARTY-NOTICES.md` is updated in the SAME COMMIT that
+changes `native/vcpkg.json`.** The `x64-windows-static-md` triplet links
+dependencies into the binary, and MIT requires its notice to accompany
+"copies or substantial portions" — a statically-linked DLL is a copy. No
+third-party source is ever vendored into the repo; that is a separate matter
+and is not what discharges this obligation.
+*Do not assume a transitive dependency's licence* — enumerate the real linked
+set and reproduce each licence from its own repository. Assuming a licence is
+the same mistake as assuming an engine mechanism.
+`DESIGN` — and a gap in MRO/MEO/MAO, none of which currently carries one.
+
 **#43 — Do not ship VMADs for scripts you don't ship.**
 *Failure:* orphaned script references spammed Papyrus errors every load in
 every MEO 1.0.x zip.

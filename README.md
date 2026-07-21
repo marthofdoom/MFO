@@ -58,4 +58,10 @@ vcpkg registry baselines are **pinned deliberately** in
 
 ## Licence
 
-MIT.
+MFO's own code is MIT — see [`LICENSE`](LICENSE). All of it lives in
+`native/`; no third-party source is vendored into this repository.
+
+The shipped DLL statically links CommonLibSSE-NG (MIT, © 2018
+Ryan-rsm-McKenzie) and its dependencies. Their notices are in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), which ships with every
+release. Update it in the same commit that changes `native/vcpkg.json`.
