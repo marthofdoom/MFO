@@ -3,6 +3,39 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.4.1 — review fixes. **Save on this one, not v0.4.0.**
+
+v0.4.0 shipped without a Fable review — a process failure, since the same
+build changed the save schema. The review that should have run first came back
+with the schema **verified clean** (read/write symmetry, the v1 compatibility
+reader, version handling and hostile-input bounds, checked against the actual
+shipped v0.1.0–v0.3.0 writers) but found four real defects around it. Two of
+them cost you data during ordinary play.
+
+**A follower's miss-streak survived across saves.** The hysteresis that stops
+a transiently-unresolvable follower being dropped is keyed by FormID — and the
+same NPC has the same FormID in every save, so a streak from one save applied
+to the next. From the second save load onward, that re-opened the exact
+"a kill in the drop window credits nobody" bug the hysteresis exists to fix.
+
+**A cloned or spawned teammate's first kill created a doomed record.** The
+award path used the unguarded record accessor, so an actor with a runtime
+FormID — routine in a big load order, and *not* covered by the summon check —
+got a record that the save layer then had to throw away every single save.
+
+**The downgrade warning is now on screen**, not only in the log. If a save was
+written by a newer MFO than the DLL reading it, saving over it destroys that
+data — and nobody reads a log until after they have lost something.
+
+Also: a write failure now says plainly that the save's MFO data is truncated
+and to re-save, rather than looking normal; a follower whose handle briefly
+fails to resolve now gets the hysteresis hold instead of vanishing silently;
+truncation at the rule and override caps logs instead of dropping quietly; and
+`iBossLevelDelta` is floored at 1, since 0 would have made every equal-level
+kill a boss.
+
+Everything in v0.4.0 below still applies.
+
 ## v0.4.0 — scope cut, co-save v2, and the probe harness
 
 **Read this one before installing** — it changes the save schema and removes a
