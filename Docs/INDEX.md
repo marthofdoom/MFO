@@ -62,6 +62,12 @@ family's one principle warns about.
 8. **DYNAMIC_OR_DROP.md** — the portability ledger. MFO is structurally
    compliant by construction (the whole action vocabulary derives from the
    live actor), so this file may stay thin — but the ledger still gates 1.0.
+9. **ROADMAP.md** — the build order from here: M0 (CI green) through M9+
+   (Tier B). Names two targets explicitly — **M5 first playable** (gambits
+   work, console-seeded) and **M7 first shareable** (a human can author
+   them). Its M4 is the de-risking step that is deliberately *not* in
+   `DESIGN.md`'s phase table: poke each engine primitive with a stick and log
+   what happens, before building on assumptions about it.
 
 ## Sibling projects — reuse, don't re-derive
 

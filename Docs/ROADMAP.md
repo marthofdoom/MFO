@@ -1,0 +1,214 @@
+# MFO — Roadmap to a functional build
+
+`DESIGN.md` §10 lists the phase *gates*. This is the build order: what to
+write, in what sequence, and which unknowns could reorder it.
+
+**Two targets worth naming separately, because they are far apart in effort
+and close together in value:**
+
+| Target | Milestone | What it means |
+|---|---|---|
+| **First playable** | **M5** | Followers execute gambits. Rules seeded from console — no UI. Proves the entire thesis. |
+| **First shareable** | **M7** | A human can author rules in-game on keyboard or pad. This is the first build worth showing anyone. |
+
+Everything after M7 is depth, not viability.
+
+---
+
+## M0 — CI green *(BLOCKING EVERYTHING)*
+
+**Status: in progress.** First cold vcpkg build was still in `Configure` at
+26 min; vcpkg compiles CommonLibSSE-NG from source at cmake-configure time.
+Warm runs hit the archive cache at ~2 min.
+
+Nothing in `native/` has ever been compiled, so expect a round of errors.
+Likely suspects, in order: `SKSE::PluginDeclaration` availability, the
+`SKSEPluginLoad` macro's expectations, `ReadRecordData` overload resolution
+on the string path, `std::clamp` template deduction on `uint8_t`.
+
+**Gate:** `gh run download <id> -n MFO-dll` produces a DLL.
+
+---
+
+## M1 — P0 proof: the co-save round-trips
+
+No ESP required — the P0 seed is code-side, so the DLL installs alone.
+
+1. Deploy to a test profile; confirm `skse64.log` shows it loading and
+   `MFO.log` prints the version header.
+2. New game → seed fires → save → reload → **both tables come back intact.**
+3. **Load-order change test**: add or remove a plugin between save and load,
+   confirm `ResolveFormID` drops cleanly rather than mis-keying.
+4. Downgrade test: bump `kSchemaVersion`, save, revert the DLL, confirm the
+   loud newer-save warning fires.
+
+**Gate:** `DESIGN.md` §10 P0. This is the first real evidence the mod exists.
+
+---
+
+## M2 — The ESP generator
+
+`MFO_GenerateESP.py`, copying MEO's record primitives (`subrec`, `record`,
+`group`, `zstr`, `prop_obj`, `make_tes4`). Records needed:
+
+| Form | Purpose |
+|---|---|
+| `0x800/0x801` | Field Orders MGEF + SPEL (**SPIT type 3, lesser power**) |
+| `0x802` | MFO-granted keyword (tutored-spell tagging) |
+| `0x804` | startup QUST + `SEQ/MFO.seq` |
+| `0x808` | MCM QUST |
+
+Plus `data/mfo_forms.frozen.json` (the freeze anchor, tripping on **both**
+drift and shrink) and `tools/audit_esp.py` as a merge gate.
+
+**Do not build the command quest / alias pool / packages yet** — those are
+Tier B (M9) and the band is already reserved for them.
+
+**Gate:** `audit_esp.py` PASS; `help MFO_ 0` finds the forms in game.
+
+---
+
+## M3 — Follower detection + Rapport *(P1)*
+
+- `ProcessLists::highActorHandles` teammate sweep, held by `ActorHandle`.
+- **The quirk table** (`data/follower_quirks.json`) — Inigo's
+  `WaitingForPlayer == -1`, Vilja's and Tindra's factions, pet frameworks.
+  Every entry resolves against the live load order and is skipped silently
+  when its plugin is absent.
+- Blocklist by actor **and** ActorBase.
+- `TESDeathEvent` (act on `dead == true` only) and `TESCombatEvent` sinks.
+- Rapport accrual, ranks, `BALANCE.md` thresholds.
+
+**Gate:** detection survives dismissal, death, cell change, and a follower
+framework installed. **Also measures real kills/hour** — the number the
+entire Rapport ladder rests on (`BALANCE.md` §7).
+
+---
+
+## M4 — The stick-poking harness *(the de-risking step)*
+
+**A console command / debug power that fires ONE primitive at the crosshair
+follower and logs what happened.** No evaluator, no rules.
+
+This is not in `DESIGN.md`'s phase table and it should be. The questions it
+answers cannot be answered by reading any source, and **two of them can
+invalidate committed design**:
+
+| Question | If the answer is bad |
+|---|---|
+| **Does a commanded target STICK, or does the combat controller re-pick?** | §4.7's whole standing-order model needs a refresh cadence instead of pure invalidation |
+| Does `EvaluatePackage()` need the condition flicker from native code — and the delay? | Every Tier-B action needs the dance |
+| Does an alias `ForceRefTo` from native drive a conditioned package like Papyrus' does? | The entire declarative route (§4.5a) collapses |
+| Does `CastSpellImmediate` or `DoCombatSpellApply` read as a real combat action? | Changes the primary cast primitive |
+| Does `KeepOffsetFromActor` survive what we think it survives? | Formation actions need re-assert plumbing |
+
+**Run this BEFORE the evaluator.** An afternoon here is worth a week of
+building on assumptions. Everything learned goes straight into
+`ENGINE_NOTES.md` §9 with a date and an observed symptom, and into
+Linux-Native-Tools per the standing debt.
+
+---
+
+## M5 — Evaluator + Tier A *(P2)* — **FIRST PLAYABLE**
+
+- Scheduler: frame clock off the present hook with a `chrono` fallback,
+  `max(4 frames, 133 ms)`, round-robin with K, jitter, **no catch-up**.
+- Evaluator: snapshot → top-down scan → first match. Lazy world snapshot.
+- Tier A actuation: cast, drink (H/S/M), equip swap.
+- Suppression: per-action duration, **positional**.
+- Target latch (§4.7) — if M4 said targets stick.
+- `bProfileEvaluator` timing, split by phase.
+
+**Gate — a hard one:** budget met in a Lorerim-class order, real
+multi-follower fight, worst-case all-expensive rule list. Per-tick cost flat
+1→12 followers. Tick rate holds ~7.5/s across 30/60/144 fps. No burst after
+a load screen. **Behavior diffed against an MFO-absent baseline save** to
+prove the do-nothing guarantee.
+
+At this point the mod works. It just has no interface.
+
+---
+
+## M6 — Logistics table *(§4.8)*
+
+Deliberately before the board, because it is console-testable and its
+mechanisms are independent.
+
+- Idle-tick evaluation, never interleaved with combat.
+- Loot H/S/M potions, ammo, better equipment (generalized by category and
+  metric, weighted by the follower's own skills).
+- **First dibs**: 25 s delay, collapsing to 4 s on a player *take*, timer
+  reset per take. Detection via `TESContainerChangedEvent` filtered to items
+  entering the player — **not** menu-close, which QuickLoot never fires.
+- Ownership absolute; never mutate a container whose menu is open.
+
+**Gate:** a follower tops up arrows and potions from bodies at their feet,
+never takes owned goods, never beats the player to a fresh corpse, and never
+snatches mid-QuickLoot.
+
+---
+
+## M7 — The board *(P3)* — **FIRST SHAREABLE**
+
+The largest single chunk, and mostly transcription: MEO's `menuhook`
+namespace is ~900 lines and MFO re-skins it.
+
+- Three trampoline hooks, `AllocTrampoline(256)`, installed first in
+  `SKSEPluginLoad`.
+- Two-pane layout: roster | rule list. Per-pane draw lists.
+- **`IsItemActivated()` single-shot** — the year-long MEO bug; here it
+  deletes two rules per click.
+- **Selection keyed on rule id**, never index — matters more here than in
+  MEO because reorder is a primary action.
+- Reorder via `▲▼` and **L1/R1** (MEO translates them already and doesn't
+  use them). No drag.
+- Controller parity in the same milestone, not after.
+- Both tables reachable; cost tier and failure reason shown per rule.
+
+**Gate:** every action including reorder reachable on a pad with no keyboard;
+no double-fire under a task-pump race.
+
+---
+
+## M8 — Tutoring *(P5)*
+
+`AddSpell`/`RemoveSpell` only — **never** `AddBaseSpell` (that edits the
+ActorBase and hits every actor sharing it). Ledgered, reconciled every load,
+with `PO3.RemoveAddedSpells` as the keyword-tagged backstop.
+
+**Gate:** install → tutor → uninstall leaves the follower with **zero** MFO
+spells, verified by save inspection.
+
+---
+
+## M9+ — Tier B, one mechanism per release
+
+In reversibility order, per §4.5: reversible state sets → combat-state calls
+→ conditioned packages → package overrides last. Each its own release, each
+instrumented, each written up on landing. **Anything that cannot cleanly
+release the AI is dropped, not shipped half-working.**
+
+Requires the command QUST, alias pool (8), globals, and MFO's own conditioned
+packages — all band-reserved, none built.
+
+---
+
+## The three things most likely to reorder this
+
+1. **M4 says commanded targets don't stick.** §4.7 becomes a refresh model.
+   Cheap to find out, expensive to discover at M9 — which is exactly why M4
+   sits where it does.
+2. **M5's perf gate fails.** Most likely culprit is the world snapshot being
+   built more often than the design assumes. Mitigations are already
+   specified (interval extension, K, Tier-B suspension); the risk is that the
+   *architecture* needs distance-based LOD, which Enhanced Combat AI ships
+   and MFO currently lacks.
+3. **CI never goes green cheaply.** If cold builds keep exceeding ~25 min,
+   pin a narrower vcpkg baseline or vendor a prebuilt CommonLibSSE-NG.
+
+## What is deliberately NOT on this roadmap
+
+No installer, no patch plugin, no calibration pass, no leveled-list edits,
+no runtime Papyrus. MFO bakes nothing from a load order — its entire data
+surface is the actor in front of you, which is why it needs none of the
+machinery MEO and MAO required.
