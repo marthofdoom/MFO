@@ -33,12 +33,15 @@ two release cycles):
 
 ## 0. Environment facts (verified 2026-07-21 on this machine)
 
+**Two instances are in play and they are not interchangeable.** Confusing them
+cost a test session.
+
 | Fact | Value |
 |---|---|
-| MO2 instance | `/mnt/gaming/modlists/LoreRim` |
-| MO2 profile | `Default` |
-| Game path (MO2 `gamePath`) | `/mnt/gaming/modlists/LoreRim/Stock Game` (MO2 stores it as `Z:\mnt\gaming\...`) |
-| Vanilla masters | `/mnt/gaming/modlists/LoreRim/Stock Game/Data/` |
+| **TEST instance** (where MFO is installed and run) | `/mnt/gaming/modlists/custom-modlist`, profile **`Requiem`** |
+| **SURVEY instance** (where the prior-art mod survey was done — *not* a test target) | `/mnt/gaming/modlists/LoreRim`, profile `Default` |
+| Game path, test instance | `/mnt/gaming/modlists/custom-modlist/Stock Game` |
+| Vanilla masters | `<instance>/Stock Game/Data/` |
 | **MFO.log and most plugin logs** | `/mnt/gaming/modlists/custom-modlist/overwrite/SKSE/Plugins/MFO.log` |
 | **`skse64.log` / `skse64_loader.log`** | `/home/marth/Games/umu/489830/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/` |
 | Wine prefix | **umu**, `/home/marth/Games/umu/489830/` — *not* Steam compatdata |
@@ -52,7 +55,7 @@ This tripped up an earlier version of this document, so it is worth being
 exact:
 
 1. **Game-root-relative writes** (`Data/SKSE/Plugins/X.log`) are redirected by
-   MO2's USVFS into `LoreRim/overwrite/SKSE/Plugins/`. This is where
+   MO2's USVFS into `<instance>/overwrite/SKSE/Plugins/`. This is where
    ActorLimitFix, BugFixesSSE, ScrambledBugs, BarterLimitFix,
    MainMenuRandomizer and NPCWaterAIFix all land — i.e. **most plugins in
    this setup**.
