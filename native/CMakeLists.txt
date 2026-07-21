@@ -8,7 +8,7 @@
 # in the DLL (ARCHITECTURE.md §8.2).
 cmake_minimum_required(VERSION 3.21)
 
-project(MFO VERSION 0.0.1 LANGUAGES CXX)
+project(MFO VERSION 0.1.0 LANGUAGES CXX)
 
 find_package(CommonLibSSE CONFIG REQUIRED)
 
