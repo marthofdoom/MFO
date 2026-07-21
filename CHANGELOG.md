@@ -3,6 +3,68 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.5.1 — first field session. M1 closed, one hypothesis dead.
+
+### M1 is closed
+
+A save carrying Cosnach at **rapport 5 reloaded with the record intact** —
+nothing dropped, no collisions, rapport preserved. The co-save is the
+"mod ate my save" subsystem; it had been reviewed four times and never once
+executed end to end. It is now proven (ENGINE_NOTES §0.11).
+
+### The animation hypothesis is refuted
+
+**All four casting sources — kLeftHand, kRightHand, kOther, kInstant — cast
+with no animation.** `CastSpellImmediate` is a silent effect application
+regardless of which `MagicCaster` issues it; the casting source is not the
+variable. `iCastSource` stays configurable but defaults back to `3`/kInstant,
+which at least names what happens.
+
+A visible cast still needs `LaunchSpell`, Papyrus VM dispatch, or a separate
+animation event. **This is now the biggest open problem in the mod** — the core
+loop's most visible action has no visible action (§0.10).
+
+### The engine does not gate casts on magicka
+
+Casting works **unlimited times at zero magicka**. So `CastSpellImmediate`
+deducts while a pool exists, then casts free forever — which makes MFO's own
+`CalculateMagickaCost` pre-check **the only gate that exists**, not
+belt-and-braces. Delete it and every follower is an infinite spell battery
+(§0.9).
+
+### Rapport was losing followers' kills
+
+Cosnach fought and killed a fox ~2792u away and earned nothing.
+
+The shared-kill test ran from a **queued** death task and asked `IsInCombat()`
+— but killing the last enemy *ends combat*, so a follower who fought the whole
+battle reads `false` at the only instant the test gets to look. The radius
+fallback then measured to the **player**, and the follower who did the work is
+the one most likely to be far from them. Both checks failed.
+
+Combat participation is now **sampled on the sweep** and tested as "was
+fighting within `fSharedCombatGrace` (15s)", with proximity to the **victim**
+as a third clause. The zero-credit case now logs why, per follower (#51).
+
+Review caught that the first fix left the same signature reachable: a
+held-but-unresolvable handle was skipped by both the award loop and the new
+diagnostic, though neither needs the actor — the kill test is a FormID compare
+and `Award` takes a FormID. Both are index-aligned now, and the unresolvable
+case reports itself instead of printing an empty block under "0 credited".
+
+### The HUD contradicted itself
+
+It read `0 rap` directly above a follower showing `5`. Both correct — session
+versus lifetime — but together they say the mod lost your save. Now labelled
+`session` and `total` (#52).
+
+### Also
+
+`StartCombat` **did not take**: returned OK, then `NEVER ENTERED COMBAT`. The
+earlier result that looked like success was the confounded single-target case,
+so §4.7 standing orders rest on nothing measured (§0.12). Seeds are enabled in
+the shipped INI.
+
 ## v0.5.0 — the evaluator. Gambits execute.
 
 **First playable.** A follower with a rule list now acts on it: round-robin one
