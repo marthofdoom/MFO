@@ -225,6 +225,26 @@ namespace MFO::Board {
                     ImGui::TextWrapped("BALANCE.md assumes ~45 rapport/hr and that number has NEVER been "
                                        "measured. At half of it, Rank V is ~220 hours and the ladder "
                                        "needs redoing while it is still free to change.");
+
+                    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+                    // Explains a classification without needing the log.
+                    ImGui::TextDisabled("Last credited kill");
+                    if (!snap.lastValid) {
+                        ImGui::TextDisabled("  (none yet)");
+                    } else {
+                        ImGui::Text("  %s  lvl %u  (you: %u)", snap.lastKillName.c_str(),
+                                    snap.lastVictimLevel, snap.lastPlayerLevel);
+                        if (snap.lastKillKind == "boss") {
+                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "  BOSS  x%.0f", snap.bossMult);
+                        } else if (snap.lastKillKind == "dragon") {
+                            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "  DRAGON  x%.0f", snap.dragonMult);
+                        } else {
+                            ImGui::Text("  standard");
+                            ImGui::TextDisabled("  boss needs unique, or level >= yours + %d", snap.bossLevelDelta);
+                        }
+                        ImGui::Text("  awarded %.1f to %d follower(s)", snap.lastAwarded, snap.lastCredited);
+                    }
                     ImGui::EndTabItem();
                 }
 
@@ -559,6 +579,17 @@ namespace MFO::Board {
         s.allowSummons = Config::g_allowSummons.load();
         s.rank2 = Config::g_rank2.load(); s.rank3 = Config::g_rank3.load();
         s.rank4 = Config::g_rank4.load(); s.rank5 = Config::g_rank5.load();
+        {
+            const auto lk = Rapport::GetLastKill();
+            s.lastKillName    = lk.name;
+            s.lastKillKind    = lk.kind;
+            s.lastVictimLevel = lk.victimLevel;
+            s.lastPlayerLevel = lk.playerLevel;
+            s.lastAwarded     = lk.awarded;
+            s.lastCredited    = lk.credited;
+            s.lastValid       = lk.valid;
+        }
+        s.bossLevelDelta = Config::g_bossLevelDelta.load();
         s.quirksActive   = Followers::QuirksActive();
         s.quirksInactive = Followers::QuirksInactive();
 

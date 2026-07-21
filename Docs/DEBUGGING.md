@@ -107,6 +107,15 @@ not about the machine.
 
 ---
 
+## 2b. Rapport and detection — REAL, from field logs
+
+| Symptom | Tag | Cause | Fix |
+|---|---|---|---|
+| Rapport visibly increments in game but the log says nothing | **[MFO v0.2.0]** | `Award()` only logged on a rank change or under `bProfileRapport`. The overlay landed and the log went silent for the same data in the same release | Log **every** award and every credited kill at info. An observation surface that replaces another must not *reduce* coverage |
+| A kill credits nobody, seemingly at random | **[MFO v0.2.0]** | Follower briefly absent from `highActorHandles`, dropped instantly, and the death sink `Refresh()`es before awarding — so the award loop iterated a set the follower was not in. Signature in the log is `- id` then `+ id` **~100 ms apart**, far tighter than the pump interval | Hysteresis: hold a follower for `kMissesBeforeDrop` consecutive missed sweeps. **One sweep is not evidence of absence** |
+| A "boss" kill awards the standard multiplier | **[MFO v0.2.0]** | `IsUnique()` alone. That means *named one-off actor*, which is not what a player means by boss — generic dungeon bosses (bandit chief with a boss bar) are leveled and not unique | Unique **OR** level ≥ player + `iBossLevelDelta`. Relative, so a chief is a boss at level 8 and not at 50 |
+| Autosave writes a co-save record while "not saving" | **[MFO v0.2.0]** | Autosave and quicksave fire regardless of intent — `[cosave] saved 0 follower record(s)` appeared in a session where no manual save was made | Not a bug, but "I am not saving" is **not** under the player's control. Anything that must not reach a save has to be gated at the source, not by intention |
+
 ## 3. The evaluator — MFO's own failure surface
 
 All **[PREDICTED]**. This is the subsystem with no sibling precedent, so

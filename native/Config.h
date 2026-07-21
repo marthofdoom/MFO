@@ -32,6 +32,9 @@ namespace MFO::Config {
     inline std::atomic<float> g_rapportDragonMult{ 10.0f };
     inline std::atomic<float> g_rapportSurvival{ 1.0f };
     inline std::atomic<float> g_sharedRadius{ 3000.0f };
+    // Levels ABOVE the player at which a kill counts as a boss. IsUnique()
+    // alone missed generic dungeon bosses (a bandit chief with a boss bar).
+    inline std::atomic<int>   g_bossLevelDelta{ 5 };
 
     inline std::atomic<int>   g_rank2{ 250 };
     inline std::atomic<int>   g_rank3{ 1000 };

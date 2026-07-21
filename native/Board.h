@@ -49,6 +49,13 @@ namespace MFO::Board {
         bool  allowSummons = false;
         int   quirksActive = 0, quirksInactive = 0;
         std::uint64_t frame = 0;
+        // last credited kill, for explaining a boss/standard classification
+        std::string lastKillName, lastKillKind;
+        std::uint16_t lastVictimLevel = 0, lastPlayerLevel = 0;
+        float lastAwarded = 0.0f;
+        int   lastCredited = 0;
+        bool  lastValid = false;
+        int   bossLevelDelta = 5;
     };
 
     // Install the three trampoline hooks. MUST be called from SKSEPluginLoad,

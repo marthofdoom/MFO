@@ -10,18 +10,40 @@ namespace MFO::Rapport {
 
         // TEST_GUIDE 2D: the number BALANCE.md's entire ladder rests on and
         // which has never been measured. bProfileRapport dumps it.
+        std::mutex     g_lastKillMx;
+        LastKill       g_lastKill;
+
         std::atomic<std::uint32_t> g_sessionKills{ 0 };
         std::atomic<std::uint32_t> g_sessionRapport{ 0 };
 
+        // What counts as a boss.
+        //
+        // FIELD-CORRECTED 2026-07-21: this was IsUnique() alone, and it missed
+        // a bandit chief that the game itself gave a boss bar. IsUnique() means
+        // "a NAMED one-off actor" (dragon priests, jarls, quest bosses) -- it
+        // says nothing about difficulty, and generic dungeon bosses are exactly
+        // that: generic, leveled, not unique. The player's read of "boss" is
+        // "that was a step up", and level is the portable proxy for it.
+        //
+        // Deliberately still coarse (BALANCE.md §1.3): two tiers, no per-enemy
+        // difficulty scaling, because finer grain is unknowable per install and
+        // would make the ladder unpredictable.
         bool IsBoss(RE::Actor* a_victim) {
             if (!a_victim) return false;
-            // Coarse by design (BALANCE.md §1.3): no per-enemy difficulty
-            // scaling, because it is unknowable per install and would make the
-            // ladder unpredictable. Unique actors count as named/boss.
+
             if (auto* base = a_victim->GetActorBase()) {
-                if (base->IsUnique()) return true;
+                if (base->IsUnique()) return true;      // named one-offs
             }
-            return false;
+
+            // RELATIVE level, not absolute. A bandit chief is a boss at level 8
+            // and an inconvenience at level 50, and that is the right answer
+            // both times -- it tracks whether the fight was actually a step up.
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player) return false;
+            const auto vLvl = a_victim->GetLevel();
+            const auto pLvl = player->GetLevel();
+            const auto delta = static_cast<std::int32_t>(Config::g_bossLevelDelta.load());
+            return static_cast<std::int32_t>(vLvl) >= static_cast<std::int32_t>(pLvl) + delta;
         }
 
         bool IsDragon(RE::Actor* a_victim) {
@@ -121,16 +143,29 @@ namespace MFO::Rapport {
                         ++awarded;
                     }
 
-                    g_sessionKills.fetch_add(1);
-                    if (Config::g_profileRapport.load()) {
-                        spdlog::info("[rapport-profile] kill #{} ({}), {} follower(s) credited, "
-                                     "session rapport {}",
-                                     g_sessionKills.load(), kind, awarded, g_sessionRapport.load());
-                    } else if (awarded == 0) {
-                        // Log the zero case (INVARIANTS #46): "nobody qualified"
-                        // and "the sink never ran" must not look identical.
-                        spdlog::debug("[rapport] kill ({}) -- no follower qualified", kind);
+                    // Record it for the overlay BEFORE the counters, so the
+                    // classification is inspectable even when nobody qualified.
+                    {
+                        std::scoped_lock lk(g_lastKillMx);
+                        g_lastKill.name        = victim->GetName() ? victim->GetName() : "?";
+                        g_lastKill.victimLevel = victim->GetLevel();
+                        g_lastKill.playerLevel = player->GetLevel();
+                        g_lastKill.kind        = kind;
+                        g_lastKill.awarded     = base * Config::g_rapportRate.load();
+                        g_lastKill.credited    = awarded;
+                        g_lastKill.valid       = true;
                     }
+
+                    g_sessionKills.fetch_add(1);
+                    // Always log the kill AND its classification, including the
+                    // zero case (INVARIANTS #46). "Why was that not a boss?" and
+                    // "why did nobody get credit?" must both be answerable from
+                    // the log without a rebuild.
+                    spdlog::info("[rapport] kill #{}: {} lvl {} (you {}) -> {} x{:.0f}, "
+                                 "{} follower(s) credited",
+                                 g_sessionKills.load(),
+                                 victim->GetName() ? victim->GetName() : "?",
+                                 victim->GetLevel(), player->GetLevel(), kind, mult, awarded);
                 });
 
                 return RE::BSEventNotifyControl::kContinue;
@@ -173,6 +208,11 @@ namespace MFO::Rapport {
     std::uint32_t SessionKills()     { return g_sessionKills.load(); }
     std::uint32_t SessionRapport()   { return g_sessionRapport.load(); }
 
+    LastKill GetLastKill() {
+        std::scoped_lock lk(g_lastKillMx);
+        return g_lastKill;
+    }
+
     void ResetSessionCounters() {
         // Save-scoped: without this the kills/hr denominator includes main-menu
         // time and every previously-loaded save in the same process.
@@ -180,6 +220,7 @@ namespace MFO::Rapport {
         g_sessionRapport = 0;
         g_combatEvents   = 0;
         g_sessionStart   = std::chrono::steady_clock::now();
+        { std::scoped_lock lk(g_lastKillMx); g_lastKill = {}; }
     }
 
     double SessionMinutes() {
@@ -205,14 +246,17 @@ namespace MFO::Rapport {
         st.rank = RankFor(st.rapport);
         g_sessionRapport.fetch_add(static_cast<std::uint32_t>(scaled + 0.5f));
 
+        // Log EVERY award at info. Previously this only spoke on a rank change
+        // or under bProfileRapport, so the log had nothing to say about the one
+        // thing being tested (found by reading a real session log, 2026-07-21).
+        spdlog::info("[rapport] {:08X} +{:.1f} ({}) -> {}", a_actorID, scaled, a_reason, st.rapport);
+
         if (st.rank != before) {
             spdlog::info("[rapport] {:08X} RANK {} -> {} at {} rapport "
                          "(combat slots {} -> {}, logistics {} -> {})",
                          a_actorID, before, st.rank, st.rapport,
                          SlotsForRank(before, Table::Combat),    SlotsForRank(st.rank, Table::Combat),
                          SlotsForRank(before, Table::Logistics), SlotsForRank(st.rank, Table::Logistics));
-        } else if (Config::g_profileRapport.load()) {
-            spdlog::info("[rapport] {:08X} +{:.1f} ({}) -> {}", a_actorID, scaled, a_reason, st.rapport);
         }
     }
 

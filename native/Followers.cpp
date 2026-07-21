@@ -26,6 +26,14 @@ namespace MFO::Followers {
 
         int g_quirksActive = 0, g_quirksInactive = 0;
 
+        // Consecutive sweeps a follower may be missing before we believe it.
+        // FIELD-FOUND 2026-07-21: the log showed `- id` then `+ id` 117ms apart,
+        // i.e. a transient miss -- and because the death sink Refreshes before
+        // awarding, a kill landing in that window credited NOBODY. One sweep is
+        // not evidence of absence.
+        constexpr int kMissesBeforeDrop = 3;
+        std::unordered_map<RE::FormID, int> g_missStreak;
+
         FactionQuirk g_dismissedFactions[] = {
             { "Vilja",  "EMCompViljaSkyrim.esp", 0x0D6867, -1, nullptr },
             { "Tindra", "EMCompViljaSkyrim.esp", 0x1FB779,  0, nullptr },
@@ -173,6 +181,7 @@ namespace MFO::Followers {
             auto* a = h.get().get();
             if (!a) continue;
             const auto id = a->GetFormID();
+            g_missStreak.erase(id);   // seen -- reset any streak
             if (std::find(before.begin(), before.end(), id) == before.end()) {
                 const bool isSummon    = a->IsCommandedActor();
                 const bool persistable = IsPersistableID(id);
@@ -194,6 +203,17 @@ namespace MFO::Followers {
                 if (auto* a = h.get().get(); a && a->GetFormID() == id) { still = true; break; }
             }
             if (!still) {
+                // Not seen this sweep -- but hold them until it repeats.
+                const int misses = ++g_missStreak[id];
+                if (misses < kMissesBeforeDrop) {
+                    for (const auto& h : g_active) {
+                        if (auto* a = h.get().get(); a && a->GetFormID() == id) { next.push_back(h); break; }
+                    }
+                    spdlog::debug("[follower] {:08X} missed sweep {}/{} -- holding",
+                                  id, misses, kMissesBeforeDrop);
+                    continue;
+                }
+                g_missStreak.erase(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport
                 // (DESIGN.md §3.1, the emotional core of the progression).
                 spdlog::info("[follower] - {:08X} (record and Rapport retained)", id);

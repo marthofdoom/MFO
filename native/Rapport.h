@@ -23,6 +23,19 @@ namespace MFO::Rapport {
     std::uint32_t SessionRapport();
     double        SessionMinutes();
 
+    // The last kill MFO credited, so "why was that not a boss?" is answerable
+    // in game rather than only in a log nobody can read mid-fight.
+    struct LastKill {
+        std::string name;
+        std::uint16_t victimLevel = 0;
+        std::uint16_t playerLevel = 0;
+        std::string   kind;        // standard / boss / dragon
+        float         awarded = 0.0f;
+        int           credited = 0;
+        bool          valid = false;
+    };
+    LastKill GetLastKill();
+
     // Save-scoped; called from RevertCallback.
     void ResetSessionCounters();
 

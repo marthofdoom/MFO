@@ -246,6 +246,22 @@ before being dropped.** Clamping the count and skipping the remaining reads
 desyncs every byte after it. Read all, store `min(count, slotMax)`.
 `DESIGN` (`ARCHITECTURE.md` §7) — the general form of #11.
 
+**#22i — One missed sweep is not evidence of absence.** `highActorHandles`
+can transiently omit a live actor. Dropping a follower on a single miss is
+not merely cosmetic: the death sink refreshes before awarding, so a kill in
+that window credits nobody.
+*Failure (MFO v0.2.0, field log):* `- 000E1BA9` then `+ 000E1BA9` 117 ms
+apart — far tighter than the 500 ms pump, i.e. a death-triggered refresh
+re-finding a follower the previous sweep had just dropped.
+`MFO` — first invariant earned in the field rather than inherited.
+
+**#22j — An observation surface that replaces another must not reduce
+coverage.** *Failure (MFO v0.2.0):* the Field Kit made Rapport visible in game
+and, in the same release, awards stopped being logged at all — they only
+spoke on a rank change. The log had nothing to say about the one thing being
+tested.
+`MFO`.
+
 **#23 — Conditions are pure reads. No mutation, no allocation.** A predicate
 that mutates is a bug even when it works, because #21's early-out means it
 runs an unpredictable number of times.
