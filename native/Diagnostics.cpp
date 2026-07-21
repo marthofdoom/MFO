@@ -6,6 +6,7 @@
 #include "Forms.h"
 #include "State.h"
 #include "Board.h"
+#include "Probe.h"
 
 // The M3 test instrument.
 //
@@ -78,6 +79,7 @@ constexpr std::uint32_t kRefreshMs = 500;
                     task->AddTask([]() {
                         if (!g_pumpRunning.load()) return;
                         Followers::Refresh();
+                        Probe::Tick();
                         // Republish every tick so the passive HUD stays live
                         // during combat without anything being opened.
                         Board::PublishSnapshot();

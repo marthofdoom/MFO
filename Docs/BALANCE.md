@@ -169,13 +169,18 @@ cheaper than a party of veterans. Cost rises with investment, is bounded by
 
 From `DESIGN.md` §5.2, restated with the hours attached:
 
-| Rank | Slots | Hours (@45/hr) | Slots per hour invested |
-|---|---|---|---|
-| I | 2 | 0 | — |
-| II | 4 | 6 | 0.33 |
-| III | 6 | 22 | 0.09 |
-| IV | 8 | 55 | 0.04 |
-| V | 12 | 110 | 0.02 |
+| Rank | Combat slots | Logistics slots | Hours (@45/hr) | Combat slots per hour |
+|---|---|---|---|---|
+| I | 2 | 1 | 0 | — |
+| II | 4 | 2 | 6 | 0.33 |
+| III | 6 | 3 | 22 | 0.09 |
+| IV | 8 | 4 | 55 | 0.04 |
+| V | 12 | 5 | 110 | 0.02 |
+
+The logistics ladder is shallow on purpose: **5 slots covers its entire
+vocabulary** (three potions, ammo, equipment), so a Rank V follower is fully
+self-sufficient rather than merely closer to it. Depth belongs in the combat
+table, where slots stay scarce enough to force real choices.
 
 Sharply diminishing, deliberately. The first two slots arrive fast because a
 2-slot board cannot express anything interesting; the last four are the
@@ -206,6 +211,8 @@ All keys live in `SKSE/Plugins/MFO.ini`, overridden by MCM Helper's
 | `fSuppressWindow` | 1.5 | Fallback post-action suppression in seconds, for **transient** actions with no knowable duration; jittered ±30%. Positional — never blocks a higher-ranked rule (§6) |
 | `fTargetSwitchMargin` | 0.15 | How much better a new candidate must score before a **committed** target is abandoned (DESIGN §4.7.3). Below this, the follower stays on target. 0 disables hysteresis and will cause oscillation |
 | `iTargetReresolveTicks` | 4 | Service ticks between expensive target re-resolutions (~530 ms). Validity is still checked every tick, so a dead target drops immediately |
+| `bShowHud` | 1 | Passive overlay readout. The primary observation surface while playing |
+| `iBossLevelDelta` | 5 | Levels above you at which a kill counts as a boss. `IsUnique()` alone missed generic dungeon bosses — a bandit chief has a boss bar but is not a unique actor |
 | `fLootDelaySeconds` | 25 | **First-dibs delay** (DESIGN §4.8.3). How long a corpse or container must sit in the follower's radius before they may loot it. 0 disables the delay |
 | `fLootWaiverSeconds` | 4 | What the delay collapses to once the player has **taken** from that ref, timer **reset on every take**. Not zero, because QuickLoot takes items one at a time over several seconds and the follower must not grab from a corpse the player is still working through. Raise if QuickLoot feels rushed; below ~2 it will |
 | `bScavengeInCombat` | 0 | Whether the logistics table runs during combat. Off by design — the two tables do not interleave (§4.8) |

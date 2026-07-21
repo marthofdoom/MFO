@@ -19,6 +19,7 @@
 #include "Config.h"
 #include "Forms.h"
 #include "State.h"
+#include "Probe.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -244,6 +245,99 @@ namespace MFO::Board {
                             ImGui::TextDisabled("  boss needs unique, or level >= yours + %d", snap.bossLevelDelta);
                         }
                         ImGui::Text("  awarded %.1f to %d follower(s)", snap.lastAwarded, snap.lastCredited);
+                    }
+                    ImGui::EndTabItem();
+                }
+
+                if (ImGui::BeginTabItem("Probe")) {
+                    ImGui::TextWrapped("M4: fire one engine primitive at a follower and watch what "
+                                       "happens. These answer questions no source states -- they are "
+                                       "emergent engine behaviour. Nothing here persists.");
+                    ImGui::Spacing();
+
+                    // Pick a subject from the ACTIVE followers only.
+                    static int sel = 0;
+                    std::vector<const FollowerRow*> active;
+                    for (const auto& r : snap.rows) if (r.active) active.push_back(&r);
+
+                    if (active.empty()) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),
+                                           "No active follower. Recruit one first.");
+                    } else {
+                        sel = std::clamp(sel, 0, static_cast<int>(active.size()) - 1);
+                        if (ImGui::BeginCombo("Subject", active[sel]->name.c_str())) {
+                            for (int i = 0; i < static_cast<int>(active.size()); ++i) {
+                                const bool chosen = (i == sel);
+                                if (ImGui::Selectable(active[i]->name.c_str(), chosen)) sel = i;
+                                if (chosen) ImGui::SetItemDefaultFocus();
+                            }
+                            ImGui::EndCombo();
+                        }
+                        const RE::FormID subject = active[sel]->id;
+
+                        ImGui::Spacing();
+                        // Single-shot via IsItemActivated equivalent: Button
+                        // returns true once per click, which is the safe form.
+                        auto fire = [&](Probe::Action a) {
+                            if (ImGui::Button(Probe::Name(a), ImVec2(-1.0f, 0.0f))) {
+                                SKSE::GetTaskInterface()->AddTask([subject, a]() {
+                                    Probe::Fire(subject, a);
+                                });
+                            }
+                            const char* b = Probe::Blurb(a);
+                            if (b && *b) ImGui::TextDisabled("  %s", b);
+                        };
+
+                        ImGui::SeparatorText("Combat targeting");
+                        fire(Probe::Action::StartCombatOnNearestFoe);
+                        fire(Probe::Action::StopCombat);
+
+                        ImGui::SeparatorText("Casting");
+                        fire(Probe::Action::CastHealOnSelf);
+                        fire(Probe::Action::DoCombatSpellApplyOnTarget);
+
+                        ImGui::SeparatorText("Positioning");
+                        fire(Probe::Action::KeepOffsetClose);
+                        fire(Probe::Action::KeepOffsetFar);
+                        fire(Probe::Action::ClearKeepOffset);
+                        fire(Probe::Action::SetDontMoveOn);
+                        fire(Probe::Action::SetDontMoveOff);
+
+                        ImGui::SeparatorText("Packages / stance");
+                        fire(Probe::Action::EvaluatePackage);
+                        fire(Probe::Action::DrawWeapon);
+                        fire(Probe::Action::SheatheWeapon);
+                    }
+
+                    ImGui::Spacing(); ImGui::Separator();
+                    const auto last = Probe::GetLast();
+                    ImGui::TextDisabled("Last probe");
+                    if (!last.valid) {
+                        ImGui::TextDisabled("  (none yet)");
+                    } else {
+                        ImGui::Text("  %s on %s", last.action.c_str(), last.subject.c_str());
+                        if (last.ok) ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "  %s", last.detail.c_str());
+                        else         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "  %s", last.detail.c_str());
+                    }
+
+                    ImGui::Spacing(); ImGui::Separator();
+                    const auto ret = Probe::GetRetention();
+                    ImGui::TextDisabled("Target retention  <-- THE question for DESIGN 4.7");
+                    if (!ret.active && ret.samples == 0) {
+                        ImGui::TextDisabled("  not running -- use StartCombat above");
+                    } else {
+                        ImGui::Text("  %s commanded to attack %s", ret.follower.c_str(), ret.commanded.c_str());
+                        ImGui::Text("  now attacking: %s", ret.current.c_str());
+                        ImGui::Text("  held %.1fs, %d sample(s)", ret.heldSeconds, ret.samples);
+                        if (ret.changes == 0) {
+                            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f),
+                                               "  0 changes -- the order STICKS (4.7 model holds)");
+                        } else {
+                            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                                               "  %d change(s) -- engine re-picked; 4.7 needs a refresh cadence",
+                                               ret.changes);
+                        }
+                        if (!ret.active) ImGui::TextDisabled("  (watch ended)");
                     }
                     ImGui::EndTabItem();
                 }

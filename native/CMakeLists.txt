@@ -22,6 +22,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Rapport.cpp
     Diagnostics.cpp
     Board.cpp
+    Probe.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)

@@ -42,9 +42,11 @@ family's one principle warns about.
 ## Read order
 
 1. **DESIGN.md** (always) — what MFO is: the player loop, the gambit
-   vocabulary, the evaluator, Rapport, the board. §4.5 is the one section to
-   read before estimating anything; it splits the mod into proven and
-   unproven ground.
+   vocabulary, the evaluator, Rapport, the board. **Two rule tables per
+   follower** — combat (§3–§4) and logistics (§4.8, upkeep: potions, ammo,
+   equipment) — with separate slots, separate cadences, and no interleaving.
+   §4.5 is the one section to read before estimating anything; it splits the
+   mod into proven and unproven engine ground.
 2. **BALANCE.md** — the Rapport ladder (250/1,000/2,500/5,000), its content
    budget, shared-kill credit, the reaction-spread curve, and the full tuning
    surface. **Derived, not validated** — every number has a stated model and
