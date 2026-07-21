@@ -3,6 +3,72 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.5.0 — the evaluator. Gambits execute.
+
+**First playable.** A follower with a rule list now acts on it: round-robin one
+follower per tick, top-down first-match, one action per tick — the FFXII
+contract. Conditions are self HP/MP/SP % and player HP % plus `always`; actions
+are cast (self/target) and wait.
+
+Set `bSeedEvaluatorRules = 1` to seed `Self HP < 40% -> Cast Healing` and
+`Always -> Wait` onto every follower; the rule board arrives at M7.
+
+**The evaluator only runs in combat.** A wounded follower standing in town is
+supposed to do nothing — the combat and logistics tables never interleave
+(§4.8). Testing out of combat reads as "broken" when it is behaving.
+
+### Deliberately not in this slice
+
+Jitter, urgency tiers, distance LOD, standing orders, drink/equip, and the
+logistics table. Each is designed and each is its own build. Standing orders in
+particular wait on §4.7's retention question, which is still confounded — no
+target latch gets built on an unproven assumption.
+
+### What the reviews caught
+
+Two Fable passes. The first found two blockers that would have made the whole
+milestone test nothing:
+
+- **The seed was never called.** Defined, wired to a config key, documented in
+  the test guide — and no call site. With no board until M7 that seam is the
+  only way a follower ever gets rules, so every follower would have returned on
+  an empty table forever. M5 would have shipped, run, logged nothing, and
+  looked like a design failure.
+- **The "133 ms" tick ran at 500 ms.** It rode the diagnostics pump, whose
+  interval existed to pace a HUD redraw, so the self-gate was dead code — the
+  caller never arrived faster than it. When that constant moved 2000 -> 500 ms
+  for the Field Kit, it silently quadrupled how fast gambits fire. A display
+  constant must never set behaviour (#46).
+
+Also fixed: suppression was **absolute**, so a just-fired low-priority rule
+deafened a follower to a higher one for the full window — the priority
+inversion #26 exists to forbid. It is positional now; a higher rule always
+preempts. HP% used `GetPermanentActorValue`, which omits the temporary modifier
+where fortify-health gear lives, so heals came late on any buffed follower
+(#47) — the Field Kit's bars now share the one formula, because a HUD that
+disagreed with the evaluator would lie exactly when consulted. Repeating
+failures logged every tick with a synchronous flush (#48). A fast revert->load
+could leave two pump threads running (#49).
+
+The verification pass then caught a bug the **first round's own fix**
+introduced: the new identity-keyed cursor did not advance past a held null
+handle, so one unresolvable follower pinned the entire rotation for up to
+~1.6 s — in combat, the only time it matters (#50).
+
+### Engine findings
+
+- **`CastSpellImmediate` DOES deduct magicka** (§0.9). This refutes the
+  standing assumption that it is a free scripted cast. §5.3's competence gate
+  is load-bearing rather than decorative, and MFO must **not** hand-write a
+  deduction — the engine produces that state (#16).
+- **`kInstant` is by name the no-animation caster** (§0.10), which likely
+  explains the missing cast animation. The probe now fires one variant per
+  casting source, and `iCastSource` selects the winner **without a rebuild**.
+  This may make `LaunchSpell`/VM dispatch unnecessary.
+
+Folded in from the held batch: level-relative boss detection, `PickFoe`
+candidate counting.
+
 ## v0.4.1 — review fixes. **Save on this one, not v0.4.0.**
 
 v0.4.0 shipped without a Fable review — a process failure, since the same
