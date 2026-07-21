@@ -3,7 +3,7 @@
 This project is designed so any capable model or person can continue it from
 these docs alone. Load documents on demand, not all at once.
 
-**CURRENT STATE (v0.0.0):** design only. Nothing is implemented, no ESP is
+**CURRENT STATE (v0.1.0, first testable build):** the DLL loads, resolves forms, grants the Field Orders power, detects followers, accrues Rapport, and draws an in-game Field Kit overlay. **No gambit execution yet** — the evaluator is M5. Detection and form resolution are VALIDATED in-game (`ENGINE_NOTES.md` §0); the co-save is reviewed but deliberately unexercised (no saving with MFO active yet).
 generated, no DLL exists. `DESIGN.md`, `BALANCE.md`, and `ARCHITECTURE.md`
 are SPECS, not reconciliations to a shipped build — a distinction the sibling
 projects' docs do not carry and these must, until P0 lands.
@@ -12,9 +12,22 @@ The next concrete step is **P0** in `DESIGN.md` §10: co-save round-trip of a
 hand-authored rule list, no gameplay. Its schema is `ARCHITECTURE.md` §7 and
 the rules it must satisfy are `INVARIANTS.md` §B.
 
-Still owed: `ANTI_PATTERNS.md` (port MEO's digest at first release),
-`MANUAL_MOD_CREATION_GUIDE.md` (copy MEO's), `TEST_GUIDE.md`,
-`DYNAMIC_OR_DROP.md`.
+Still owed: `MANUAL_MOD_CREATION_GUIDE.md` (copy MEO's), `DYNAMIC_OR_DROP.md`.
+
+**Knowledge routing — where a finding goes when you learn it:**
+
+| What you learned | Goes to |
+|---|---|
+| An engine mechanism worked, with a date/version/observed symptom | `ENGINE_NOTES.md` §0 (PROVEN), promoted per §10 |
+| A mechanism is mapped but unrun | `ENGINE_NOTES.md` with a RESEARCHED tag |
+| A rule whose violation caused a real failure | `INVARIANTS.md`, with the incident |
+| A portable "never again" | `ANTI_PATTERNS.md`, tagged `[MFO]` + dated |
+| Symptom → cause → fix | `DEBUGGING.md`, promoted from [PREDICTED] |
+| **Generic to any CommonLibSSE-NG project** | **`../Linux-Native-Tools/`, in the same session** |
+
+That last row is the one that decays if left. MFO has already contributed the
+`actions/cache`-only-saves-on-success finding, the PCH `std::literals` trap,
+follower-detection semantics, and the two log destinations.
 
 **Two docs carry a status tag rather than facts, deliberately.**
 `ENGINE_NOTES.md` marks every mechanism `PROVEN (sibling)` / `RESEARCHED` /
@@ -53,9 +66,11 @@ family's one principle warns about.
    (following from MFO's own decisions). **Replace a tag with a version and
    symptom the moment MFO earns its own scar** — a local incident outranks a
    borrowed one because the next person will believe it.
-6. **ANTI_PATTERNS.md** (NOT YET WRITTEN) — port MEO's release-proven digest,
-   trimmed to what has an MFO analog, extended with MFO's own as they are
-   earned. This is the family convention for a new sibling.
+6. **ANTI_PATTERNS.md** (before repeating history) — the portable "never
+   again" catalog. MEO's digest trimmed to what applies, plus **MFO's own**
+   tagged `[MFO]` and dated. Most MFO entries come from Fable reviews: with no
+   local compiler, review is the only gate before CI, and it has caught two
+   save-corruption paths and a cursor-over-gameplay blocker.
 7. **MANUAL_MOD_CREATION_GUIDE.md** — the binary format reference. Copy
    MEO's; MFO's record needs (MGEF, SPEL, QUST+VMAD, SEQ) are a strict
    subset of what it already documents.

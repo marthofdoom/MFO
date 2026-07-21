@@ -18,7 +18,51 @@ the status is the most important field on it.
 | **UNKNOWN** | Named, not investigated | Do not plan around |
 | **PROVEN (MFO)** | Validated in-game by MFO, with date, game version, and observed symptom | — |
 
-**PROVEN (MFO) is currently empty.** The promotion protocol is §10.
+**PROVEN (MFO) — first entries below, from the 2026-07-21 session.** The
+promotion protocol is §10.
+
+---
+
+## 0. PROVEN (MFO) — validated in-game
+
+### 0.1 Follower detection via `IsPlayerTeammate` + `ProcessLists`
+**2026-07-21, game 1.6.1170, MFO 0.0.1, `custom-modlist`/Requiem.**
+
+Observed: a Bruma Guard set to `setplayerteammate 1` appeared within one 2 s
+refresh as `[follower] + 1008B402 Bruma Guard (teammate)`; `setplayerteammate
+0` produced `[follower] - 1008B402 (record and Rapport retained)`; re-setting
+it re-added the same FormID. Cycled three times, deterministic each time.
+
+Proves: the `highActorHandles` sweep filtered by `IsPlayerTeammate` detects
+and un-detects reliably, `ActorHandle` round-trips without a stale resolve,
+and dismissal is **non-destructive** — the record persisted in the STORED
+list across all three cycles.
+
+### 0.2 Form resolution and the power grant
+**Same session.** `[forms] resolved MFO_FieldOrdersPower -> FE08F801` and
+`MFO_GrantedSpell -> FE08F802` — note **`FE08`**, i.e. the ESL slot, which
+also confirms the TES4 `0x200` flag and the `0x800`–`0xFFF` band are correct
+end-to-end. `[setup] granted Field Orders power` fired once and the power was
+usable, which proves **SPIT type 3 is right for a castable lesser power**.
+
+### 0.3 The quirk table degrades correctly on an absent plugin
+**Same session.** `[follower] quirk table: 0 active, 2 inactive (of 2)` —
+Vilja/Tindra are not in this load order, and the absence was logged at info
+without a single error. Proves the DYNAMIC_OR_DROP handling: an absent plugin
+is normal, not a fault.
+
+### 0.4 `TESSpellCastEvent` fires for a lesser power
+**Same session.** Nine `STATE REPORT (power)` blocks, one per cast. Proves
+the opener mechanism M7's board depends on.
+
+### NOT yet proven, despite the session
+- **The co-save round-trip.** `[cosave] loaded 0 follower(s)` is all that was
+  exercised — the save had no MFO data and none was written. Deferred by
+  decision (`TEST_GUIDE.md`); the schema remains reviewed-but-never-run.
+- **Anything Rapport.** No kills occurred. Awards, the double-fire guard, the
+  radius/combat gate, and the boss/dragon multipliers are all untested.
+- **`TESCombatEvent` volume.** `0 in 1.9 min` — no combat happened, so the
+  question §9 item 3 exists to answer is still open.
 
 The living truth for behavior will always be `native/plugin.cpp`. When this
 file and the code disagree, the code is right.
