@@ -210,15 +210,36 @@ Rebuild from live state; clear any owned command alias before the first tick
 so a save made mid-order does not resume pointing at something stale.
 `DESIGN` (`DESIGN.md` §4.7.5).
 
-**#22e — A follower NEVER takes an owned item, and never loots what the
-player is looking at.** Ownership is absolute — houses, shops, player-owned
-containers. A container the player has open is off limits, and stays off
-limits for `fLootGraceSeconds` after they close it.
+**#22e — A follower NEVER takes an owned item.** Ownership is absolute —
+houses, shops, player-owned containers.
 *Why:* an auto-looting follower that takes owned goods makes the player a
 thief by proxy — the same class as the ownerless-`PlaceObjectAtMe` bounty
-bug (#E), arriving before the incident rather than after. And snatching the
-good item first is the single most common complaint about looting followers.
+bug (#E), arriving before the incident rather than after.
 `DESIGN` (`DESIGN.md` §4.8.3).
+
+**#22g — NEVER mutate a container while the player has its menu OPEN. This is
+a safety rule, not a courtesy one.** Mutating an engine container while a
+vanilla menu is building its list from it breaks that menu — it broke
+Belethor's barter menu in MEO (m19e). An open `ContainerMenu` is an absolute
+bar, ahead of every loot delay and waiver. Where a mutation genuinely must
+follow a menu interaction, defer with `AddTask` inside `AddTask` (two frames).
+`INHERITED` (MEO m19e).
+
+**#22h — First dibs: delay by default, collapsed (never zeroed) by a player
+TAKE.** A ref is ineligible until `fLootDelaySeconds` (25) in radius; once the
+player takes from it the delay drops to `fLootWaiverSeconds` (4), **with the
+timer reset on every take.**
+*Why not zero:* QuickLoot IE — present in 4 of 5 lists here, so the normal
+case — takes items one at a time over seconds. An instant waiver lets the
+follower grab from a corpse the player is still working through.
+**Detect via `TESContainerChangedEvent` filtered to items entering the
+player.** Two traps: (a) QuickLoot **never opens `ContainerMenu`**, so
+menu-close detection alone misses nearly every user; (b) QuickLoot's menu
+appears **passively on crosshair**, so *opening is not intent* — key the
+waiver on TAKING, never on looking. The direction filter is mandatory or the
+sink re-triggers on its own removal (MAO's infinite credit loop). Marked set
+is a bounded LRU, deliberately not serialized.
+`DESIGN` (`DESIGN.md` §4.8.3) + `INHERITED` (MAO §23 direction filter).
 
 **#22f — Over-cap gambits must be fully CONSUMED from the co-save stream
 before being dropped.** Clamping the count and skipping the remaining reads

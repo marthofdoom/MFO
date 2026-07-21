@@ -206,6 +206,9 @@ All keys live in `SKSE/Plugins/MFO.ini`, overridden by MCM Helper's
 | `fSuppressWindow` | 1.5 | Fallback post-action suppression in seconds, for **transient** actions with no knowable duration; jittered ±30%. Positional — never blocks a higher-ranked rule (§6) |
 | `fTargetSwitchMargin` | 0.15 | How much better a new candidate must score before a **committed** target is abandoned (DESIGN §4.7.3). Below this, the follower stays on target. 0 disables hysteresis and will cause oscillation |
 | `iTargetReresolveTicks` | 4 | Service ticks between expensive target re-resolutions (~530 ms). Validity is still checked every tick, so a dead target drops immediately |
+| `fLootDelaySeconds` | 25 | **First-dibs delay** (DESIGN §4.8.3). How long a corpse or container must sit in the follower's radius before they may loot it. 0 disables the delay |
+| `fLootWaiverSeconds` | 4 | What the delay collapses to once the player has **taken** from that ref, timer **reset on every take**. Not zero, because QuickLoot takes items one at a time over several seconds and the follower must not grab from a corpse the player is still working through. Raise if QuickLoot feels rushed; below ~2 it will |
+| `bScavengeInCombat` | 0 | Whether the logistics table runs during combat. Off by design — the two tables do not interleave (§4.8) |
 | `bProfileEvaluator` | 0 | P2 timing instrumentation (§4.2) |
 
 **Rename discipline (inherited, load-bearing):** an INI/MCM key that changes

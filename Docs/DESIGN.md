@@ -1123,11 +1123,49 @@ Auto-looting followers have a long history of being hated. Four hard limits:
   houses, not from shops, not from player-owned containers. Anything else
   makes the follower a pickpocket who gets the player arrested — the
   ownerless-`PlaceObjectAtMe` lesson (`INVARIANTS.md` §E) in a new costume.
-- **Never take what the player is looking at.** While the player has a
-  container or corpse open, that container is off limits, and it stays off
-  limits for `fLootGraceSeconds` (default 10) after they close it. The
-  single most common complaint about looting followers is that they snatch
-  the good item first.
+- **First dibs belong to the player, and they are claimed by DELAY, waived by
+  USE (RULED — marth).** Two mechanisms, one visible and one not:
+
+  1. **The delay** — `fLootDelaySeconds`, MCM-tunable, **default 25 s**. A
+     corpse or container is not eligible for follower looting until it has
+     been in the follower's consideration radius that long. Long enough that
+     the player who wants the good sword will have walked over and taken it;
+     short enough that a follower topping up arrows still feels responsive.
+  2. **The waiver — invisible, always on, not configurable.** Once the player
+     has taken from a ref, its delay collapses from 25 s to
+     `fLootWaiverSeconds` (**default 4 s**) — *not to zero*.
+
+  **Why the waiver is 4 s and not instant: QuickLoot.** QuickLoot IE is
+  installed in **4 of the 5 Skyrim lists on this machine**, so it is the
+  normal looting UX, not an edge case. It takes items **one at a time over
+  several seconds**, so an instant waiver would let the follower start
+  grabbing things out of the same corpse while the player is still working
+  down the list. The waiver timer therefore **resets on every take**: the
+  follower moves in 4 s after the player's *last* take, not their first.
+
+  **QuickLoot also breaks the obvious detection, in two ways:**
+
+  - **It never opens `ContainerMenu`.** A design that marks refs on
+    container-menu close would miss QuickLoot users entirely — i.e. almost
+    everyone. **The primary signal is therefore
+    `TESContainerChangedEvent` filtered to items whose new container is the
+    player.** The direction filter is mandatory: without it the sink
+    re-triggers on its own removal, which is MAO's infinite credit loop.
+  - **Its menu appears passively on crosshair.** So *looking* is not intent —
+    a QuickLoot user glances at every corpse they walk past. **The waiver
+    keys on TAKING, never on opening.** The one exception is a deliberate
+    full `ContainerMenu` activation, which is an explicit act and counts on
+    its own.
+
+  The marked set is a **bounded LRU (256 refs), deliberately NOT serialized**:
+  worst case after a load is one more 25 s wait on an already-picked corpse,
+  which is not worth a growing save record.
+
+- **Never touch a container while the player has it OPEN — and this is a
+  SAFETY rule, not only a courtesy one.** MEO learned that mutating an engine
+  container while a vanilla menu is building its list from it breaks that menu
+  (it broke Belethor's barter menu, m19e). An open `ContainerMenu` is an
+  absolute bar regardless of delay or waiver.
 - **Respect carry weight.** Never loot a follower into being overencumbered;
   that turns a convenience into a bug report.
 - **Rate-limited and bounded.** At most one loot action per idle tick, per
