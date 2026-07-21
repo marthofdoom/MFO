@@ -4,13 +4,15 @@ This project is designed so any capable model or person can continue it from
 these docs alone. Load documents on demand, not all at once.
 
 **CURRENT STATE (v0.1.0, first testable build):** the DLL loads, resolves forms, grants the Field Orders power, detects followers, accrues Rapport, and draws an in-game Field Kit overlay. **No gambit execution yet** — the evaluator is M5. Detection and form resolution are VALIDATED in-game (`ENGINE_NOTES.md` §0); the co-save is reviewed but deliberately unexercised (no saving with MFO active yet).
-generated, no DLL exists. `DESIGN.md`, `BALANCE.md`, and `ARCHITECTURE.md`
-are SPECS, not reconciliations to a shipped build — a distinction the sibling
-projects' docs do not carry and these must, until P0 lands.
+`DESIGN.md`, `BALANCE.md` and `ARCHITECTURE.md` remain **specs**, not
+reconciliations to a shipped build — everything from the evaluator onward is
+designed, not written. `ENGINE_NOTES.md` §0 is the short list of what has
+actually been observed working.
 
-The next concrete step is **P0** in `DESIGN.md` §10: co-save round-trip of a
-hand-authored rule list, no gameplay. Its schema is `ARCHITECTURE.md` §7 and
-the rules it must satisfy are `INVARIANTS.md` §B.
+**Next: M4** in `ROADMAP.md` — the stick-poking harness. Two of its questions
+can invalidate design already on paper (whether a commanded target sticks;
+whether an alias `ForceRefTo` from native drives a conditioned package), and
+both are cheaper to answer now than after M5's evaluator is built on them.
 
 Still owed: `MANUAL_MOD_CREATION_GUIDE.md` (copy MEO's), `DYNAMIC_OR_DROP.md`.
 
@@ -50,9 +52,10 @@ family's one principle warns about.
 3. **ENGINE_NOTES.md** (before any native work) — the engine mechanisms MFO
    depends on, **each tagged with how much it is actually trusted**:
    `PROVEN (sibling)`, `RESEARCHED` (mapped from a primary source, never run
-   by anyone here), or `UNKNOWN`. `PROVEN (MFO)` is currently empty. Its §9
-   verification queue is the real research plan; §10 is the promotion
-   protocol. Also read **MEO's copy**, the authoritative one in the family —
+   by anyone here), or `UNKNOWN`. **§0 holds the first `PROVEN (MFO)` entries**
+   — detection, form resolution, the ESL band, SPIT type 3, and what the same
+   session explicitly did NOT prove. §9 is the verification queue (the real
+   research plan); §10 is the promotion protocol. Also read **MEO's copy**, the authoritative one in the family —
    but not MAO's, which is a stale fork whose §3 lacks the cost-override fix
    and whose §6 still contains a retracted co-save claim.
 4. **ARCHITECTURE.md** (before touching `native/plugin.cpp`) — module split,
