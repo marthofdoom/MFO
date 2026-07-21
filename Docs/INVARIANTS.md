@@ -487,3 +487,56 @@ surface of the mechanism.
 this basis — controller support (shipped in MEO, undocumented) and the entire
 Tier-B action vocabulary (one `Actor.psc` read away).
 `INHERITED` — **and the only rule here MFO has already broken.**
+
+### 46. The evaluator's cadence is the evaluator's constant
+
+M5 rode the diagnostics pump's refresh interval. That interval existed to
+decide how often a HUD redraws; when it moved 2000 ms -> 500 ms for the Field
+Kit, it silently quadrupled how fast gambits fire, and the `133 ms` constant in
+`Scheduler.cpp` was dead code the whole time because the caller never arrived
+faster than it. A display constant must never set behaviour. The pump now wakes
+at the response deadline and DIAGNOSTICS subsample it, not the reverse.
+
+*Caught in the M5 pre-CI review, before the first field session.*
+
+### 47. A percentage is over the TRUE maximum, temporary modifiers included
+
+`GetPermanentActorValue` is base + permanent and OMITS the temporary modifier,
+which is exactly where fortify-health from gear and potions lives. Using it as
+"max" makes a buffed follower read full while wounded, so `HP < 40%` fires near
+27% of real maximum. In a heavily-modded order every follower wears that gear.
+One shared helper (`Vocab::Pct`) computes it, and the Field Kit's bars call the
+same helper -- a HUD that disagreed with the evaluator would lie at exactly the
+moment the player consults it to ask why a rule did not fire.
+
+### 48. A repeating failure logs on transition, never per tick
+
+A permanently failing rule is the WINNING rule every tick, because failures
+correctly do not buy suppression. Logging it unconditionally is ~7.5 lines per
+second per follower, each with a synchronous flush on the main thread: a frame
+cost and a flood that drowns the signal #22j protects. Log on change of
+(rule, reason); the board carries the per-tick truth.
+
+### 49. One pump thread, enforced by generation token
+
+`StopPump` clears a flag and `StartPump` sets it. A thread mid-`sleep_for`
+across a fast revert -> load wakes, re-reads a flag that is true again, and
+keeps looping alongside its own replacement -- doubling the tick rate, once per
+fast load, permanently. A boolean cannot express "you specifically should
+stop". An epoch counter can.
+
+### 50. Every path out of the round-robin advances the cursor
+
+An identity-keyed cursor fixes the reordering unfairness of a bare index, but
+it introduces a failure the index form did not have: any `return` that skips
+the cursor update makes the NEXT tick select the SAME slot. A held null handle
+is the live case -- `Followers::Refresh` deliberately re-pushes handles that
+fail to resolve for up to `kMissesBeforeDrop` sweeps, so a transient null sits
+at a fixed position and pins the rotation. Nobody in the party is evaluated for
+up to ~1.6 s, in combat, which is the only time it matters.
+
+`g_activeIds` exists for exactly this: it still knows who a slot is when the
+handle cannot say. **Advance on the null path, then return.**
+
+*A fix for one review finding (index-based unfairness) creating a worse one is
+the argument for the verification pass, not against the first review.*

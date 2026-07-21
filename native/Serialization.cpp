@@ -4,6 +4,7 @@
 #include "Followers.h"
 #include "Rapport.h"
 #include "Diagnostics.h"
+#include "Scheduler.h"
 #include "Board.h"
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
@@ -143,7 +144,7 @@ namespace MFO {
         // Log the zero case too (INVARIANTS.md #46): "saved nothing" and
         // "never ran" must not look identical.
         spdlog::info("[cosave] saved {} follower record(s), schema v{}{}", written, kSchemaVersion,
-                     skippedRuntime ? fmt::format(" -- SKIPPED {} runtime (0xFF) record(s)", skippedRuntime)
+                     skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) record(s)", skippedRuntime)
                                     : std::string{});
     }
 
@@ -343,6 +344,7 @@ namespace MFO {
         // and read them.
         Followers::g_active.clear();
         Followers::ClearTransientState();   // streak map is save-scoped (F1)
+        Scheduler::ClearTransientState();   // suppression + round-robin cursor likewise
         Rapport::ResetSessionCounters();
         Diagnostics::StopPump();   // restarted on the next kPostLoadGame/kNewGame
         Board::SetHud(false);      // else it lingers over the main menu with stale rows

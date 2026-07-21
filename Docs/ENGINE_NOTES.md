@@ -95,7 +95,43 @@ self-heal; **not** acceptable as the primary "follower casts a spell at a foe"
 verb, where a player expects to see it. The intended alternative
 `DoCombatSpellApply` is Papyrus-only (§2.0), so a visible cast needs either VM
 dispatch or `LaunchSpell` (po3) — an M5 verification-queue item, not a solved
-one.
+one. **But test the cheap explanation first: §0.10.** This probe used
+`kInstant`, which is by name the no-animation caster; a hand source may animate
+and make both alternatives unnecessary.
+
+### 0.9 `CastSpellImmediate` DOES deduct magicka — PROVEN 2026-07-21
+**marth's report:** firing a probe cast removed magicka from the caster.
+
+This **refutes** the assumption carried into the M5 review. The reasoning there
+was that `CastSpellImmediate` is the scripted/trap path — the same call MEO
+uses for free follower-shares — and therefore a free cast. It is not.
+
+Consequences, all favourable:
+
+- DESIGN §5.3 ("competence is not permission") is **load-bearing, not
+  decorative.** A gambit cast spends the follower's pool, so a caster with a
+  heal rule genuinely runs dry and genuinely falls through to the rules below
+  it. The resource economy the design assumes actually exists.
+- MFO must **not** hand-write a deduction. The engine produces this state;
+  writing it ourselves would double-spend (INVARIANTS #16).
+- `Actuation::CastOn`'s pre-check against `CalculateMagickaCost` gates a real
+  resource rather than being a tautology.
+
+**Still open, and much smaller:** what the engine does when magicka is *below*
+cost — refuse, cast anyway, or drive the pool negative. MFO never issues that
+call (its own pre-check refuses first), so this is a question about whether our
+belt-and-braces is belt *and* braces, not a blocker. marth is testing next round.
+
+### 0.10 Casting source vs. animation — OPEN, instrumented
+`CastingSource::kInstant` applies the effect and plays no animation (§0.8,
+reported twice). The enum is `kLeftHand = 0`, `kRightHand = 1`, `kOther = 2`,
+`kInstant = 3` — and `kInstant` is, by name, *the no-animation caster*.
+
+**Hypothesis:** a hand source routes through the animated cast path. NOT YET
+OBSERVED — the M4 probe now fires one variant per source so this is settled by
+looking rather than by reasoning, and `iCastSource` in `MFO.ini` selects the
+winner without a rebuild. Note this may make `LaunchSpell`/VM dispatch (§0.8's
+proposed alternatives) unnecessary.
 
 ### NOT yet proven, despite the session
 - **The populated co-save ROUND-TRIP.** v0.4.1 *saved* a real record twice

@@ -105,7 +105,10 @@ namespace MFO::Probe {
         switch (a) {
         case Action::StartCombatOnNearestFoe: return "StartCombat (nearest foe)";
         case Action::StopCombat:              return "StopCombat";
-        case Action::CastHealOnSelf:          return "CastSpellImmediate (Healing, self)";
+        case Action::CastHealInstant:         return "Cast Healing -- kInstant";
+        case Action::CastHealRightHand:       return "Cast Healing -- kRightHand";
+        case Action::CastHealLeftHand:        return "Cast Healing -- kLeftHand";
+        case Action::CastHealOther:           return "Cast Healing -- kOther";
         case Action::EvaluatePackage:         return "EvaluatePackage";
         case Action::DrawWeapon:              return "Draw weapon";
         case Action::SheatheWeapon:           return "Sheathe";
@@ -117,8 +120,14 @@ namespace MFO::Probe {
         switch (a) {
         case Action::StartCombatOnNearestFoe:
             return "Starts the retention watch. THE question for DESIGN 4.7.";
-        case Action::CastHealOnSelf:
-            return "Does a native cast read as a real action, with animation?";
+        case Action::CastHealInstant:
+            return "Known: applies the effect, NO animation. The baseline to compare against.";
+        case Action::CastHealRightHand:
+            return "Does a HAND source animate? kInstant is literally the no-animation caster.";
+        case Action::CastHealLeftHand:
+            return "Same question, other hand.";
+        case Action::CastHealOther:
+            return "The remaining source. Try it if neither hand animates.";
         case Action::EvaluatePackage:
             return "Does it no-op when the same package would be chosen again?";
         default:
@@ -188,13 +197,24 @@ namespace MFO::Probe {
             Record(Name(a_action), f, true, "combat stopped, watch ended");
             return;
 
-        case Action::CastHealOnSelf: {
+        case Action::CastHealInstant:
+        case Action::CastHealRightHand:
+        case Action::CastHealLeftHand:
+        case Action::CastHealOther: {
             auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(kHealingSpell);
             if (!spell) { Record(Name(a_action), f, false, "Healing did not resolve"); return; }
-            auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
-            if (!caster) { Record(Name(a_action), f, false, "no magic caster"); return; }
+
+            using CS = RE::MagicSystem::CastingSource;
+            CS src = CS::kInstant;
+            if (a_action == Action::CastHealRightHand) src = CS::kRightHand;
+            else if (a_action == Action::CastHealLeftHand) src = CS::kLeftHand;
+            else if (a_action == Action::CastHealOther)    src = CS::kOther;
+
+            auto* caster = f->GetMagicCaster(src);
+            if (!caster) { Record(Name(a_action), f, false, "no magic caster for that source"); return; }
             caster->CastSpellImmediate(spell, false, f, 1.0f, false, 0.0f, f);
-            Record(Name(a_action), f, true, "issued -- watch for effect AND animation");
+            Record(Name(a_action), f, true,
+                   "issued -- DID IT ANIMATE? kInstant is known not to; that is the comparison");
             return;
         }
 

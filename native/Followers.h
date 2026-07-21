@@ -42,13 +42,13 @@ namespace MFO::Followers {
     // are logged at debug level, never as errors.
     void ResolveQuirks();
 
-    // How many quirk entries resolved against this load order. Reported in the
-    // Field Kit -- a diagnostic that always said 0/0 is worse than none.
     // Save-scoped transient state. RevertCallback must clear it: the streak map
     // is keyed by FormID and the same NPC has the same FormID in every save, so
     // a streak carried from save A applies to save B (F1).
     void ClearTransientState();
 
+    // How many quirk entries resolved against this load order. Reported in the
+    // Field Kit -- a diagnostic that always said 0/0 is worse than none.
     int QuirksActive();
     int QuirksInactive();
 

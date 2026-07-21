@@ -8,6 +8,7 @@
 #include "Diagnostics.h"
 #include "Board.h"
 #include "Probe.h"
+#include "Vocabulary.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -84,14 +85,14 @@ namespace {
         // Combat table: one rule with no form param, one with, so the load
         // path exercises both ResolveFormID branches.
         MFO::Gambit g1{};
-        g1.conditionOpcode = "cond.self_hp_below";
+        g1.conditionOpcode = MFO::Vocab::kCondSelfHpBelow;
         g1.conditionParam  = 0.5f;
         g1.actionOpcode    = "act.wait";
         st.combat().push_back(g1);
 
         MFO::Gambit g2{};
         g2.conditionOpcode = "cond.always";
-        g2.actionOpcode    = "act.cast_spell";
+        g2.actionOpcode    = MFO::Vocab::kActCastSelf;
         g2.actionParamForm = 0x00012FCC;   // Healing (Skyrim.esm). NOT 0x12FCD -- that is FLAMES.
         st.combat().push_back(g2);
 
@@ -105,6 +106,45 @@ namespace {
 
         spdlog::info("[p0] seeded {} combat + {} logistics gambit(s) on {:08X}",
                      st.combat().size(), st.logistics().size(), player->GetFormID());
+    }
+
+    // M5 test seam: a default combat table, so the evaluator is testable
+    // before the board exists (M7). `bSeedEvaluatorRules`, default OFF.
+    //
+    //   rule 0:  Self HP < 40%  ->  Cast Healing on self
+    //   rule 1:  Always         ->  Wait
+    //
+    // Rule 1 matters: it proves first-match-wins by CONSUMING the tick, so a
+    // healthy follower demonstrably reaches rule 1 and stops rather than
+    // falling out of the scan.
+    void SeedEvaluatorRules() {
+        if (!MFO::Config::g_seedEvaluatorRules.load()) return;
+
+        int seeded = 0;
+        for (const auto& h : MFO::Followers::g_active) {
+            auto* a = h.get().get();
+            if (!a) continue;
+            auto* rec = MFO::Followers::TryEnsureRecord(a->GetFormID());
+            if (!rec || !rec->combat().empty()) continue;   // never overwrite authored rules
+
+            MFO::Gambit heal{};
+            heal.conditionOpcode = MFO::Vocab::kCondSelfHpBelow;
+            heal.conditionParam  = 0.40f;
+            heal.actionOpcode    = MFO::Vocab::kActCastSelf;
+            heal.actionParamForm = 0x00012FCC;   // Healing. NOT 0x12FCD -- that is Flames.
+            rec->combat().push_back(heal);
+
+            MFO::Gambit wait{};
+            wait.conditionOpcode = MFO::Vocab::kCondAlways;
+            wait.actionOpcode    = MFO::Vocab::kActWait;
+            rec->combat().push_back(wait);
+
+            ++seeded;
+            spdlog::info("[eval] seeded default rules on {:08X} {}", a->GetFormID(), a->GetName());
+        }
+        if (seeded == 0) {
+            spdlog::info("[eval] seed pass: nothing to seed (no followers, or rules already present)");
+        }
     }
 
     void OnMessage(SKSE::MessagingInterface::Message* a_msg) {
@@ -145,6 +185,7 @@ namespace {
             MFO::Forms::EnsurePlayerSetup();
             MFO::Followers::Refresh();
             SeedTestData();
+            SeedEvaluatorRules();   // after Refresh(): it iterates g_active
             MFO::Board::SetHud(MFO::Config::g_showHud.load());
             MFO::Diagnostics::StartPump();
             MFO::Diagnostics::DumpReport("load");

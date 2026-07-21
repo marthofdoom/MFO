@@ -56,6 +56,15 @@ namespace MFO::Config {
     // constant costs a CI round-trip, flipping a key costs nothing.
     inline std::atomic<bool>  g_seedTestData{ false };
 
+    // -- evaluator (M5) ------------------------------------------------------
+    inline std::atomic<bool>  g_seedEvaluatorRules{ false };
+    inline std::atomic<bool>  g_profileEvaluator{ false };
+    inline std::atomic<float> g_suppressWindow{ 1.5f };
+    // Which caster a gambit spell goes through. 3 (kInstant) applies the effect
+    // but plays NO animation -- proven in-game. 1 (kRightHand) is the leading
+    // candidate for a VISIBLE cast; the M4 probe settles it empirically.
+    inline std::atomic<int>   g_castSource{ 1 };
+
     // Reset-then-parse both files, seed then MCM. Safe to call repeatedly.
     // CURRENTLY CALLED ONLY AT kDataLoaded -- there is no MenuOpenCloseEvent
     // sink yet, so MCM edits need a restart until M7 adds one. ARCHITECTURE

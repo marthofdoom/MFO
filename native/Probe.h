@@ -32,7 +32,10 @@ namespace MFO::Probe {
     enum class Action : std::uint8_t {
         StartCombatOnNearestFoe,   // via po3's published relocation
         StopCombat,
-        CastHealOnSelf,
+        CastHealInstant,
+        CastHealRightHand,
+        CastHealLeftHand,
+        CastHealOther,
         EvaluatePackage,
         DrawWeapon,
         SheatheWeapon,

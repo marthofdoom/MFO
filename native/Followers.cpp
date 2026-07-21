@@ -20,8 +20,10 @@ namespace MFO::Followers {
             RE::TESFaction* resolved = nullptr;
         };
 
-        // Inigo: dismissed state is WaitingForPlayer == -1. He never sets
-        // PlayerTeammate. THE case the first design draft got wrong.
+        // Inigo: sets PlayerTeammate but does NOT reliably clear it on
+        // dismissal (DESIGN.md §3.1, corrected 2026-07-21). THE case the first
+        // design draft got wrong -- the draft claimed he never sets it at all,
+        // which is why the quirk AV below, not the teammate flag, is decisive.
         constexpr float kInigoDismissedAV = -1.0f;
 
         int g_quirksActive = 0, g_quirksInactive = 0;

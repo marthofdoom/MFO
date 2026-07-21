@@ -7,6 +7,7 @@
 #include "State.h"
 #include "Board.h"
 #include "Probe.h"
+#include "Scheduler.h"
 
 // The M3 test instrument.
 //
@@ -26,10 +27,18 @@ namespace MFO::Diagnostics {
 
     namespace {
 
-        // 2s was fine for detection-only logging. The HUD shows live vitals, so
-// it needs to be quick enough to read as live without being a tick loop.
-constexpr std::uint32_t kRefreshMs = 500;
-        std::atomic<bool> g_pumpRunning{ false };
+        // THE EVALUATOR OWNS THIS NUMBER NOW (§4.1). It used to be a HUD
+        // refresh rate, and when M5 started riding it the "133 ms" tick was
+        // silently whatever the HUD happened to want -- a review caught the
+        // evaluator running 4x slow because a display constant moved. The pump
+        // wakes at the response deadline; DIAGNOSTICS subsample it instead.
+        constexpr std::uint32_t kPumpMs        = 133;
+        constexpr std::uint32_t kDiagEveryNth  = 4;    // ~532 ms, the old cadence
+        std::atomic<bool>          g_pumpRunning{ false };
+        // Generation token: StopPump/StartPump bump it, so a thread that was
+        // mid-sleep across a revert->load exits instead of running alongside
+        // its own replacement.
+        std::atomic<std::uint64_t> g_pumpEpoch{ 0 };
 
         class SpellSink final : public RE::BSTEventSink<RE::TESSpellCastEvent> {
         public:
@@ -69,20 +78,30 @@ constexpr std::uint32_t kRefreshMs = 500;
         //
         // This is the M3 stand-in for M5's real scheduler: deliberately dumb
         // and slow, because detection changes are all it needs to catch.
-        void SleeperLoop() {
-            while (g_pumpRunning.load()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kRefreshMs));
-                if (!g_pumpRunning.load()) break;
+        void SleeperLoop(std::uint64_t a_epoch) {
+            std::uint32_t wake = 0;
+            while (g_pumpRunning.load() && g_pumpEpoch.load() == a_epoch) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kPumpMs));
+                if (!g_pumpRunning.load() || g_pumpEpoch.load() != a_epoch) break;
+
+                const bool diagTurn = (++wake % kDiagEveryNth) == 0;
+
                 // Null-check: on shutdown the interface can be gone while
                 // this thread is still awake.
                 if (auto* task = SKSE::GetTaskInterface()) {
-                    task->AddTask([]() {
-                        if (!g_pumpRunning.load()) return;
-                        Followers::Refresh();
-                        Probe::Tick();
-                        // Republish every tick so the passive HUD stays live
-                        // during combat without anything being opened.
-                        Board::PublishSnapshot();
+                    task->AddTask([a_epoch, diagTurn]() {
+                        if (!g_pumpRunning.load() || g_pumpEpoch.load() != a_epoch) return;
+
+                        // Detection and the HUD stay on the old ~532 ms budget;
+                        // only the evaluator runs at the deadline.
+                        if (diagTurn) Followers::Refresh();
+
+                        Scheduler::Tick();
+
+                        if (diagTurn) {
+                            Probe::Tick();
+                            Board::PublishSnapshot();
+                        }
                     });
                 }
             }
@@ -177,12 +196,15 @@ constexpr std::uint32_t kRefreshMs = 500;
         // cleared this flag, and the "safe across shutdown" comment was
         // therefore fiction. This makes it true.
         g_pumpRunning.store(false);
+        g_pumpEpoch.fetch_add(1);   // strand any thread still mid-sleep
     }
 
     void StartPump() {
         if (g_pumpRunning.exchange(true)) return;   // idempotent across loads
-        spdlog::info("[diag] detection refresh every {}ms", kRefreshMs);
-        std::thread(SleeperLoop).detach();
+        const auto epoch = g_pumpEpoch.fetch_add(1) + 1;
+        spdlog::info("[diag] pump {}ms (evaluator), diagnostics every {}th wake (~{}ms)",
+                     kPumpMs, kDiagEveryNth, kPumpMs * kDiagEveryNth);
+        std::thread(SleeperLoop, epoch).detach();
     }
 
 }

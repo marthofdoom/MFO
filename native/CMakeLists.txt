@@ -8,7 +8,7 @@
 # DLL (ARCHITECTURE.md §8.2).
 cmake_minimum_required(VERSION 3.21)
 
-project(MFO VERSION 0.4.1 LANGUAGES CXX)
+project(MFO VERSION 0.5.0 LANGUAGES CXX)
 
 find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
@@ -23,6 +23,9 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Diagnostics.cpp
     Board.cpp
     Probe.cpp
+    Evaluator.cpp
+    Actuation.cpp
+    Scheduler.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)

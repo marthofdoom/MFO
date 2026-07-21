@@ -229,3 +229,50 @@ Per `ROADMAP.md`: M4 the stick-poking harness, M5 the evaluator, M6
 logistics, M7 the board.
 
 **Write each session's matrix before writing the code it tests.**
+
+---
+
+## Session 5 — M5: the evaluator (first playable)
+
+**Written before the code.** This is the milestone that makes gambits execute.
+The slice is deliberately narrow: cheap conditions, cast/wait actions, no
+standing orders (§4.7 is unproven), no drink/equip (own build).
+
+**Setup:** `bSeedEvaluatorRules = 1` in `MFO.ini` seeds a default combat rule
+onto each detected follower — `Self HP < 40% → Cast Healing`, plus
+`Always → Wait`. No board needed. Turn it off for anything but this test.
+
+> **The evaluator only runs IN COMBAT.** The combat table is combat-only
+> (§4.8); a wounded follower standing in town is *supposed* to do nothing.
+> Testing out of combat will read as "it's broken" when it is behaving.
+
+| # | Step | Expect | Failure means |
+|---|---|---|---|
+| 1 | Follower takes damage **in combat**, HP drops below 40% | **Follower casts Healing on itself** — `[eval] <id> fired rule 0 (act.cast_self)` in the log | The evaluator does not fire, or the condition does not read follower HP — **the entire thesis is unproven** |
+| 2 | Follower at full HP, in combat | **Does NOT cast** (rule 0 false; `Always→Wait` consumes the tick) | Conditions read as always-true, or the evaluator acts unconditionally |
+| 3 | `bSeedEvaluatorRules = 0` (empty tables) | **Behaves exactly as vanilla — zero `[eval]` action lines** | MFO is acting without a matching rule; the §4.4 do-nothing guarantee is broken |
+| 4 | Follower wounded **out of combat** (town, after a fight) | **Nothing. No cast, no `[eval]` line** | The combat gate is missing — the combat table is running the logistics table's shift |
+| 5 | Follower whose magicka is below the spell cost | **Does NOT cast; log shows `insufficient magicka`** and the tick falls through | Competence-is-not-permission (§5.3) not enforced |
+| 6 | Same heal fires, then 1.5 s passes | **One cast, then quiet for the window** — not a cast every tick | Suppression not applied; follower spam-heals |
+| 7 | `bProfileEvaluator = 1`, watch the log in a fight | **Per-tick wall time logged, well under a frame** | Perf problem — the hot path is too heavy |
+| 8 | Two followers, both seeded | **Both heal when hurt; log shows round-robin, one serviced per tick** | O(N) tick — party size scales cost |
+
+### 5b — the two open engine questions (Probe tab, ~2 minutes)
+
+These are measurements, not pass/fail. Both change the design.
+
+| # | Step | What to record |
+|---|---|---|
+| A | Fire **Cast Healing — kInstant**, then **kRightHand**, **kLeftHand**, **kOther**, watching the follower each time | **Which one plays a cast animation?** `kInstant` is known not to — it is the control. Whichever animates becomes `iCastSource` in the INI, no rebuild needed (ENGINE_NOTES §0.10) |
+| B | ~~Does a cast spend magicka?~~ | **ANSWERED 2026-07-21: yes, it deducts** (ENGINE_NOTES §0.9). §5.3's gate is load-bearing; MFO must not deduct manually. Nothing to retest |
+| C | Drain a follower to *below* a spell's cost, then let the heal rule win | **Log shows `insufficient magicka (X < Y)` and no cast.** MFO's own gate should refuse before the engine is ever asked — this tests OUR check, not the engine's |
+
+**Definition of done:** steps 1–3 green (fire / don't-fire-when-false /
+don't-fire-when-absent — the three that prove the evaluator is a program and
+not a spammer), 4 green (the combat gate), 5 green (the competence gate), and
+7 showing a sane number. 6 and 8 are refinements; note them if they misbehave
+but they do not block. **A and B should be answered even if everything else
+fails** — they are cheap and they unblock the next build.
+
+**Read the log regardless of what the HUD shows.** Every fired rule and every
+fall-through-with-reason logs at info.

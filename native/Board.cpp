@@ -20,6 +20,7 @@
 #include "Forms.h"
 #include "State.h"
 #include "Probe.h"
+#include "Vocabulary.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -302,7 +303,10 @@ namespace MFO::Board {
                         fire(Probe::Action::StopCombat);
 
                         ImGui::SeparatorText("Casting");
-                        fire(Probe::Action::CastHealOnSelf);
+                        fire(Probe::Action::CastHealInstant);
+                        fire(Probe::Action::CastHealRightHand);
+                        fire(Probe::Action::CastHealLeftHand);
+                        fire(Probe::Action::CastHealOther);
 
                         ImGui::SeparatorText("Packages / stance");
                         fire(Probe::Action::EvaluatePackage);
@@ -724,15 +728,13 @@ namespace MFO::Board {
             r.commanded = a->IsCommandedActor();
             r.inCombat  = a->IsInCombat();
 
-            if (auto* avo = a->AsActorValueOwner()) {
-                auto pct = [&](RE::ActorValue av) {
-                    const float max = avo->GetPermanentActorValue(av);
-                    return max > 0.0f ? std::clamp(avo->GetActorValue(av) / max, 0.0f, 1.0f) : 0.0f;
-                };
-                r.healthPct  = pct(RE::ActorValue::kHealth);
-                r.magickaPct = pct(RE::ActorValue::kMagicka);
-                r.staminaPct = pct(RE::ActorValue::kStamina);
-            }
+            // ONE formula, shared with the evaluator. These bars are how the
+            // player checks why a rule did or did not fire, so a HUD that
+            // computed HP% differently from the thing deciding would make the
+            // Field Kit lie at exactly the moment it is consulted.
+            r.healthPct  = Vocab::HealthPct(a);
+            r.magickaPct = Vocab::MagickaPct(a);
+            r.staminaPct = Vocab::StaminaPct(a);
             if (player) r.distance = a->GetPosition().GetDistance(player->GetPosition());
 
             if (auto it = g_followers.find(r.id); it != g_followers.end()) {
