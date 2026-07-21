@@ -255,12 +255,23 @@ Per follower:
     u32 packageFormID, u8 priority
 ```
 
-**Schema note (2026-07-21):** the tutored-spell block was removed at v1 rather
-than by a version bump, which is normally forbidden. It was safe only because
-**no save has ever contained an MFO follower record** — seeding defaults off,
-no saving with the mod active, and the only co-save line ever logged was
-`saved 0 follower record(s)`. Recorded here because it was the last moment
-that was true; from here, schema changes take a version bump.
+**Schema history — readers kept forever (INVARIANTS #12):**
+
+| Version | Shipped in | Layout |
+|---|---|---|
+| **v1** | v0.1.0 – v0.3.0 | `{rapport, rank, tables[], tutored[], overrides[]}` |
+| **v2** | v0.4.0+ | `{rapport, rank, tables[], overrides[]}` — tutoring out of scope (`DESIGN.md` §5.4) |
+
+The v1 reader survives and **consumes and discards** the tutored block;
+skipping the read rather than performing it would desync every byte after it.
+
+**A near-miss worth recording.** The tutored block was first deleted at v1
+*without* a bump, justified by "no save has ever contained an MFO record" —
+which was true when written and stopped being true the moment saving with the
+mod active was planned. A v0.3.0 save read by a v0.4.0 DLL would have
+misparsed, and the newer-than-me guard could not have caught it because both
+claim v1. **"Nobody has data yet" is a fact with an expiry date; a version
+number is not.**
 
 **Not serialized:** anything derived (current rank thresholds, vocabulary
 tables, suppression state, the board snapshot, per-rule outcomes). Derived

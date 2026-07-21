@@ -13,12 +13,10 @@
 //   #9  Never persist a runtime-created (0xFF) FormID.
 //   #10 Persist stable string opcodes, never enum ordinals.
 //   #11 Bound every count, bail on short reads, clamp at ingestion.
-//   NOTE (2026-07-21): the tutored-spell block was REMOVED from the schema at
-//   v1 rather than by a version bump. That is normally forbidden -- but no save
-//   has ever contained an MFO follower record (seeding defaults off, marth is
-//   not saving with the mod active, and the only cosave line ever logged was
-//   "saved 0 follower record(s)"). This is the last moment that is true, and it
-//   is recorded here so the exception is visible rather than inferred.
+//   SCHEMA HISTORY (INVARIANTS #12 -- readers kept forever):
+//     v1  v0.1.0-v0.3.0. Had a tutored-spell block between the tables and the
+//         overrides. Still READ below; never written again.
+//     v2  tutoring removed (DESIGN.md 5.4).
 //
 //   #12 Versioned schema; readers kept FOREVER; SKSE does NOT round-trip
 //       unread records, so a downgraded DLL DESTROYS newer ones -> warn loud.
@@ -31,6 +29,7 @@ namespace MFO {
         constexpr std::uint32_t kMaxFollowers = 4096;
         constexpr std::uint32_t kMaxOpcodeLen = 64;
         constexpr std::uint16_t kMaxOverrides = 64;
+        constexpr std::uint16_t kMaxTutoredV1 = 512;   // v1 only, consumed and discarded
 
         bool WriteString(SKSE::SerializationInterface* a_intfc, const std::string& a_s) {
             const auto len = static_cast<std::uint32_t>(a_s.size());
@@ -231,6 +230,28 @@ namespace MFO {
                         // over the slot cap -- bailing early would desync the
                         // byte stream for everything after it.
                         if (gi < slotMax) st.tables[t].push_back(std::move(g));
+                    }
+                }
+
+                // v1 carried a tutored-spell block here. Consume and discard
+                // it: skipping the READ would desync every byte after it.
+                if (version == 1) {
+                    std::uint16_t tutoredCount = 0;
+                    if (!a_intfc->ReadRecordData(tutoredCount)) return;
+                    if (tutoredCount > kMaxTutoredV1) {
+                        spdlog::error("[cosave] v1 tutored count {} implausible -- ABORTING", tutoredCount);
+                        return;
+                    }
+                    for (std::uint16_t ti = 0; ti < tutoredCount; ++ti) {
+                        RE::FormID rawSpell = 0;
+                        std::uint32_t grantedAt = 0;
+                        if (!a_intfc->ReadRecordData(rawSpell)) return;
+                        if (!a_intfc->ReadRecordData(grantedAt)) return;
+                    }
+                    if (tutoredCount) {
+                        spdlog::info("[cosave] discarded {} v1 tutored-spell entr(ies) -- "
+                                     "acquisition is out of scope; the spells themselves are "
+                                     "untouched on the actor", tutoredCount);
                     }
                 }
 
