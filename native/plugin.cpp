@@ -41,24 +41,35 @@ namespace {
         // Two rules, one with a form param and one without, so the load path
         // exercises both ResolveFormID branches.
         auto& st = MFO::g_followers[player->GetFormID()];
-        if (!st.gambits.empty()) return;   // already seeded or loaded
+        if (!st.combat().empty() || !st.logistics().empty()) return;   // seeded or loaded
 
         st.rank = 1;
         st.rapport = 0;
 
+        // Combat table: one rule with no form param, one with, so the load
+        // path exercises both ResolveFormID branches.
         MFO::Gambit g1{};
         g1.conditionOpcode = "cond.self_hp_below";
         g1.conditionParam  = 0.5f;
         g1.actionOpcode    = "act.wait";
-        st.gambits.push_back(g1);
+        st.combat().push_back(g1);
 
         MFO::Gambit g2{};
         g2.conditionOpcode = "cond.always";
         g2.actionOpcode    = "act.cast_spell";
         g2.actionParamForm = 0x00012FCD;   // Healing (Skyrim.esm) — resolves everywhere
-        st.gambits.push_back(g2);
+        st.combat().push_back(g2);
 
-        spdlog::info("[p0] seeded {} test gambit(s) on {:08X}", st.gambits.size(), player->GetFormID());
+        // Logistics table (DESIGN.md 4.8) -- proves both tables round-trip
+        // independently, which is the point of P0.
+        MFO::Gambit g3{};
+        g3.conditionOpcode = "cond.potions_below";
+        g3.conditionParam  = 3.0f;
+        g3.actionOpcode    = "act.loot_potion_health";
+        st.logistics().push_back(g3);
+
+        spdlog::info("[p0] seeded {} combat + {} logistics gambit(s) on {:08X}",
+                     st.combat().size(), st.logistics().size(), player->GetFormID());
     }
 
     void OnMessage(SKSE::MessagingInterface::Message* a_msg) {

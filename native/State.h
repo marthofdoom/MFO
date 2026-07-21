@@ -42,21 +42,41 @@ namespace MFO {
         std::uint8_t priority = 0;
     };
 
+    // DESIGN.md 4.8: two independent tables per follower. They never
+    // interleave -- combat runs in combat, logistics runs out of it -- and
+    // they have separate slot ladders so upkeep rules never compete with
+    // combat rules for the Rapport reward.
+    enum class Table : std::uint8_t {
+        Combat    = 0,
+        Logistics = 1,
+        kCount    = 2
+    };
+
     struct FollowerState {
         std::uint32_t rapport = 0;
         std::uint8_t  rank = 1;                 // clamped [1,5] on load
-        std::vector<Gambit> gambits;            // clamped to rank slot max
-        std::vector<TutoredSpell>   tutored;
+        std::vector<Gambit> tables[static_cast<size_t>(Table::kCount)];
+        std::vector<TutoredSpell>    tutored;
         std::vector<PackageOverride> overrides;
+
+        std::vector<Gambit>&       combat()          { return tables[0]; }
+        std::vector<Gambit>&       logistics()       { return tables[1]; }
+        const std::vector<Gambit>& combat()    const { return tables[0]; }
+        const std::vector<Gambit>& logistics() const { return tables[1]; }
     };
 
     inline constexpr std::uint8_t kMaxRank = 5;
 
     // Slots by rank -- DESIGN.md 5.2. Index 0 unused so rank indexes directly.
-    inline constexpr std::uint8_t kSlotsByRank[kMaxRank + 1] = { 0, 2, 4, 6, 8, 12 };
+    // Logistics is deliberately shallow: 5 slots covers the whole 4.8
+    // vocabulary (3 potions + ammo + equipment), so Rank V is fully
+    // self-sufficient rather than merely closer to it.
+    inline constexpr std::uint8_t kCombatSlotsByRank[kMaxRank + 1]    = { 0, 2, 4, 6, 8, 12 };
+    inline constexpr std::uint8_t kLogisticsSlotsByRank[kMaxRank + 1] = { 0, 1, 2, 3, 4, 5 };
 
-    inline std::uint8_t SlotsForRank(std::uint8_t a_rank) {
-        return kSlotsByRank[std::clamp<std::uint8_t>(a_rank, 1, kMaxRank)];
+    inline std::uint8_t SlotsForRank(std::uint8_t a_rank, Table a_table) {
+        const auto r = std::clamp<std::uint8_t>(a_rank, 1, kMaxRank);
+        return a_table == Table::Combat ? kCombatSlotsByRank[r] : kLogisticsSlotsByRank[r];
     }
 
     // Keyed on the actor's PERSISTENT FormID. Dismissed followers keep their

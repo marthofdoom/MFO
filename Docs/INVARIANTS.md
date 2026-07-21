@@ -210,6 +210,21 @@ Rebuild from live state; clear any owned command alias before the first tick
 so a save made mid-order does not resume pointing at something stale.
 `DESIGN` (`DESIGN.md` §4.7.5).
 
+**#22e — A follower NEVER takes an owned item, and never loots what the
+player is looking at.** Ownership is absolute — houses, shops, player-owned
+containers. A container the player has open is off limits, and stays off
+limits for `fLootGraceSeconds` after they close it.
+*Why:* an auto-looting follower that takes owned goods makes the player a
+thief by proxy — the same class as the ownerless-`PlaceObjectAtMe` bounty
+bug (#E), arriving before the incident rather than after. And snatching the
+good item first is the single most common complaint about looting followers.
+`DESIGN` (`DESIGN.md` §4.8.3).
+
+**#22f — Over-cap gambits must be fully CONSUMED from the co-save stream
+before being dropped.** Clamping the count and skipping the remaining reads
+desyncs every byte after it. Read all, store `min(count, slotMax)`.
+`DESIGN` (`ARCHITECTURE.md` §7) — the general form of #11.
+
 **#23 — Conditions are pure reads. No mutation, no allocation.** A predicate
 that mutates is a bug even when it works, because #21's early-out means it
 runs an unpredictable number of times.

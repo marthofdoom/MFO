@@ -61,16 +61,24 @@ namespace MFO {
             a_intfc->WriteRecordData(st.rapport);
             a_intfc->WriteRecordData(st.rank);
 
-            const auto gambitCount = static_cast<std::uint8_t>(st.gambits.size());
-            a_intfc->WriteRecordData(gambitCount);
-            for (const auto& g : st.gambits) {
-                if (!WriteString(a_intfc, g.conditionOpcode)) return;
-                a_intfc->WriteRecordData(g.conditionParam);
-                a_intfc->WriteRecordData(g.subjectSelector);
-                if (!WriteString(a_intfc, g.actionOpcode)) return;
-                a_intfc->WriteRecordData(g.actionParamForm);
-                const std::uint8_t flags = g.enabled ? 1u : 0u;
-                a_intfc->WriteRecordData(flags);
+            // Two tables, written in Table enum order (DESIGN.md 4.8).
+            // The table COUNT is written explicitly so a future third table
+            // is an append, not a reinterpretation of existing bytes.
+            const auto tableCount = static_cast<std::uint8_t>(MFO::Table::kCount);
+            a_intfc->WriteRecordData(tableCount);
+            for (std::uint8_t t = 0; t < tableCount; ++t) {
+                const auto& list = st.tables[t];
+                const auto gambitCount = static_cast<std::uint8_t>(list.size());
+                a_intfc->WriteRecordData(gambitCount);
+                for (const auto& g : list) {
+                    if (!WriteString(a_intfc, g.conditionOpcode)) return;
+                    a_intfc->WriteRecordData(g.conditionParam);
+                    a_intfc->WriteRecordData(g.subjectSelector);
+                    if (!WriteString(a_intfc, g.actionOpcode)) return;
+                    a_intfc->WriteRecordData(g.actionParamForm);
+                    const std::uint8_t flags = g.enabled ? 1u : 0u;
+                    a_intfc->WriteRecordData(flags);
+                }
             }
 
             const auto tutoredCount = static_cast<std::uint16_t>(st.tutored.size());
@@ -144,42 +152,62 @@ namespace MFO {
                 if (!a_intfc->ReadRecordData(st.rank)) return;
                 st.rank = std::clamp<std::uint8_t>(st.rank, 1, kMaxRank);
 
-                std::uint8_t gambitCount = 0;
-                if (!a_intfc->ReadRecordData(gambitCount)) return;
-                // Clamp to the rank's slot maximum, not to a global constant.
-                const std::uint8_t slotMax = SlotsForRank(st.rank);
-                if (gambitCount > slotMax) {
-                    spdlog::warn("[cosave] follower {:08X}: {} gambits exceeds rank {} max {} -- extra rules DROPPED",
-                                 resolvedID, gambitCount, st.rank, slotMax);
+                std::uint8_t tableCount = 0;
+                if (!a_intfc->ReadRecordData(tableCount)) return;
+                if (tableCount > static_cast<std::uint8_t>(MFO::Table::kCount)) {
+                    // A NEWER save with more tables than this build knows.
+                    // The version guard above should already have caught it;
+                    // refuse rather than misread the byte stream.
+                    spdlog::error("[cosave] record declares {} tables, this build knows {} -- ABORTING",
+                                  tableCount, static_cast<int>(MFO::Table::kCount));
+                    return;
                 }
 
-                for (std::uint8_t gi = 0; gi < gambitCount; ++gi) {
-                    Gambit g{};
-                    if (!ReadString(a_intfc, g.conditionOpcode)) return;
-                    if (!a_intfc->ReadRecordData(g.conditionParam)) return;
-                    if (!a_intfc->ReadRecordData(g.subjectSelector)) return;
-                    if (!ReadString(a_intfc, g.actionOpcode)) return;
+                for (std::uint8_t t = 0; t < tableCount; ++t) {
+                    std::uint8_t gambitCount = 0;
+                    if (!a_intfc->ReadRecordData(gambitCount)) return;
 
-                    RE::FormID rawParam = 0;
-                    if (!a_intfc->ReadRecordData(rawParam)) return;
-                    std::uint8_t flags = 0;
-                    if (!a_intfc->ReadRecordData(flags)) return;
-                    g.enabled = (flags & 1u) != 0;
-
-                    if (rawParam != 0) {
-                        RE::FormID resolvedParam = 0;
-                        if (a_intfc->ResolveFormID(rawParam, resolvedParam)) {
-                            g.actionParamForm = resolvedParam;
-                        } else {
-                            // DESIGN.md §3.3: disable THIS rule, with a marker.
-                            // Never guess, and never drop the whole list.
-                            g.actionParamForm = 0;
-                            g.enabled = false;
-                            g.lastFailReason = "action target missing from load order";
-                            ++disabledRules;
-                        }
+                    // Clamp to THIS TABLE's slot maximum for the rank, not a
+                    // global constant -- combat and logistics differ.
+                    const auto table = static_cast<MFO::Table>(t);
+                    const std::uint8_t slotMax = SlotsForRank(st.rank, table);
+                    if (gambitCount > slotMax) {
+                        spdlog::warn("[cosave] follower {:08X} table {}: {} gambits exceeds rank {} max {} "
+                                     "-- extra rules DROPPED",
+                                     resolvedID, t, gambitCount, st.rank, slotMax);
                     }
-                    if (gi < slotMax) st.gambits.push_back(std::move(g));
+
+                    for (std::uint8_t gi = 0; gi < gambitCount; ++gi) {
+                        Gambit g{};
+                        if (!ReadString(a_intfc, g.conditionOpcode)) return;
+                        if (!a_intfc->ReadRecordData(g.conditionParam)) return;
+                        if (!a_intfc->ReadRecordData(g.subjectSelector)) return;
+                        if (!ReadString(a_intfc, g.actionOpcode)) return;
+
+                        RE::FormID rawParam = 0;
+                        if (!a_intfc->ReadRecordData(rawParam)) return;
+                        std::uint8_t flags = 0;
+                        if (!a_intfc->ReadRecordData(flags)) return;
+                        g.enabled = (flags & 1u) != 0;
+
+                        if (rawParam != 0) {
+                            RE::FormID resolvedParam = 0;
+                            if (a_intfc->ResolveFormID(rawParam, resolvedParam)) {
+                                g.actionParamForm = resolvedParam;
+                            } else {
+                                // DESIGN.md §3.3: disable THIS rule, with a
+                                // marker. Never guess, never drop the whole list.
+                                g.actionParamForm = 0;
+                                g.enabled = false;
+                                g.lastFailReason = "action target missing from load order";
+                                ++disabledRules;
+                            }
+                        }
+                        // NOTE: the read must CONSUME every gambit even when
+                        // over the slot cap -- bailing early would desync the
+                        // byte stream for everything after it.
+                        if (gi < slotMax) st.tables[t].push_back(std::move(g));
+                    }
                 }
 
                 std::uint16_t tutoredCount = 0;

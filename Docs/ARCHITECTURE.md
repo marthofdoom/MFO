@@ -223,8 +223,15 @@ Per follower:
   u32  actorFormID        -> ResolveFormID on load; unresolvable = drop record
   u32  rapport
   u8   rank               -> clamped [1,5]
-  u8   gambitCount        -> clamped to the rank's slot max
-  Per gambit:
+  u8   tableCount         -> 2 (Combat, Logistics). Written EXPLICITLY so a
+                             third table is an append, not a reinterpretation
+  Per table:
+   u8  gambitCount        -> clamped to THAT TABLE's slot max for the rank
+                             (combat and logistics ladders differ, DESIGN 5.2).
+                             Over-cap gambits are still fully CONSUMED from the
+                             stream before being dropped -- bailing early would
+                             desync everything after them
+   Per gambit:
     str  conditionOpcode  -> stable string id, NEVER an enum ordinal
     f32  conditionParam
     u8   subjectSelector

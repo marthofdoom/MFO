@@ -310,11 +310,14 @@ MFO enumerates what *this actor* can actually do:
   and race/class lists. Modded spells appear with zero patching. This is the
   load-order-derived half of the vocabulary and the reason MFO needs no
   compatibility patches for spell mods.
-- **Drink <potion>** — from the actor's own inventory, classified by MGEF
-  **archetype** (`kValueModifier`/`kDualValueModifier` for real resource
-  effects), never by the effect's target actor value. *Requiem note inherited
-  from MRO: elements damage different resources (fire→health, frost→stamina,
-  shock→magicka), so archetype is the only portable classifier.*
+- **Drink <potion> — health, stamina, or magicka only** (RULED — marth;
+  §4.8.2). From the actor's own inventory, classified by MGEF **archetype**
+  (`kValueModifier`/`kDualValueModifier` for real resource effects), never by
+  the effect's target actor value. *Requiem note inherited from MRO: elements
+  damage different resources (fire→health, frost→stamina, shock→magicka), so
+  archetype is the only portable classifier.* Cure/fortify/resist potions are
+  deliberately out of the vocabulary — nobody writes those rules, and every
+  entry in a picker is a tax on reading it.
 - **Shout <shout>** — where the actor has one. MFO-tutored shouts are out of
   scope for 1.0.
 - **Equip <item>** — weapon/shield/torch swaps from the actor's own
@@ -1049,6 +1052,102 @@ the thing §8.5's clean-uninstall promise is most exposed to. Consequently:
 - On load, MFO **clears any commanded-target alias it owns** before the first
   tick, so a save made mid-order does not resume pointing at something stale.
 
+### 4.8 The logistics table — non-combat rules (DECIDED — marth)
+
+Gambits govern **upkeep** as well as fighting. A follower who runs dry of
+arrows, has no health potion, or is still wearing the fur armor they were
+recruited in is a follower the player has to micromanage — which is the
+chore this mod exists to delete.
+
+**These are a SEPARATE TABLE with their own slots.** Not a section of the
+combat list. Three reasons, all structural:
+
+1. **Different cadence.** Logistics runs on the out-of-combat idle tick
+   (~1 s, §4.1), never at 133 ms. Nothing here is reflex-timed.
+2. **Different conditions.** "Fewer than 20 arrows" is not the same kind of
+   question as "ally below 40% health", and mixing them makes both lists
+   harder to read.
+3. **No slot competition.** Combat slots are the Rapport reward (§5.2).
+   Making a player choose between "heal me when I'm dying" and "pick up
+   arrows" is a false and annoying choice.
+
+**The two tables never interleave.** Combat table runs in combat; logistics
+runs out of it. A follower in combat does not stop to loot, and a follower
+looting is not mid-fight. `bScavengeInCombat` exists and defaults **OFF**.
+
+#### 4.8.1 Conditions (supply-oriented)
+
+| Condition | Param |
+|---|---|
+| I have fewer than N health / stamina / magicka potions | count, which |
+| I have fewer than N arrows / bolts for my equipped bow or crossbow | count |
+| There is lootable equipment nearby better than mine | category (below) |
+| A lootable corpse or container is within N units | radius |
+| My carry weight is above X% | threshold |
+| The player is / is not looting right now | — |
+
+#### 4.8.2 Actions
+
+- **Loot potions — health, stamina, magicka ONLY (RULED — marth).** Not
+  cure-disease, not fortify, not resist. Those three are what
+  self-sufficiency means; everything else is a rule nobody writes and a
+  vocabulary nobody reads. Other potions are left where they lie for the
+  player. *(The combat table's `Drink` action narrows to the same three, §3.3
+  — a follower drinking a cure-disease potion mid-fight is not a gambit
+  anyone wants.)*
+- **Loot ammo** matching the equipped bow or crossbow, preferring higher
+  damage. **Portability note:** vanilla grants a follower infinite arrows of
+  any type they own one of, which makes this rule near-pointless; Requiem-class
+  lists remove that, which makes it essential. The rule is written for the
+  list that needs it and is harmlessly idle on the one that doesn't.
+- **Loot better equipment**, generalized by category — **never by item**:
+
+  | Category | "Better" means |
+  |---|---|
+  | Heavy armor / light armor | higher armor rating, weighted by *their* armor skill |
+  | One-handed / two-handed / bow / crossbow | higher damage, weighted by *their* weapon skill |
+  | Shield | higher block rating |
+
+  A rule reads `Loot better heavy armor`, not `Loot Ebony Cuirass`. This is
+  the §3.3 derived-vocabulary principle applied to loot: **modded gear works
+  with no patch**, because "better" is computed from the item's own stats
+  against the follower's own skills at runtime. A follower skilled in light
+  armor is not upgraded into heavy just because the number is bigger.
+- **Equip what was looted** — otherwise the upgrade sits in a bag.
+
+#### 4.8.3 The rules that keep this from being a menace
+
+Auto-looting followers have a long history of being hated. Four hard limits:
+
+- **Ownership is absolute. A follower never takes an owned item.** Not from
+  houses, not from shops, not from player-owned containers. Anything else
+  makes the follower a pickpocket who gets the player arrested — the
+  ownerless-`PlaceObjectAtMe` lesson (`INVARIANTS.md` §E) in a new costume.
+- **Never take what the player is looking at.** While the player has a
+  container or corpse open, that container is off limits, and it stays off
+  limits for `fLootGraceSeconds` (default 10) after they close it. The
+  single most common complaint about looting followers is that they snatch
+  the good item first.
+- **Respect carry weight.** Never loot a follower into being overencumbered;
+  that turns a convenience into a bug report.
+- **Rate-limited and bounded.** At most one loot action per idle tick, per
+  the one-action-per-tick contract (§4.3). A follower does not vacuum a room
+  in a frame.
+
+#### 4.8.4 Phasing
+
+- **Tier A — loot what is already in reach.** When the follower is near a
+  valid container or corpse, MFO performs the transfer directly. No pathing,
+  no packages, engine calls only. This is the whole feature for most play,
+  because followers stand next to the corpses anyway.
+- **Tier B — go and fetch.** Sending a follower across a room to a corpse
+  needs positioning, so it inherits every §4.5a constraint and ships later,
+  or not at all.
+
+Ship Tier A. A follower who tops up arrows and potions from the bodies at
+their feet, and upgrades their own armor when something better is lying
+there, is the entire value; walking to fetch is a refinement.
+
 ---
 
 ## 5. Rapport — per-follower progression (DECIDED — marth)
@@ -1075,13 +1174,18 @@ Sources:
 
 ### 5.2 Ranks, slots, vocabulary
 
-| Rank | Slots | Vocabulary opened | Reaction (§4.1b) |
-|---|---|---|---|
-| I (start) | 2 | Vitals conditions; Cast/Drink from what they already know | widest spread, tail-heavy — visibly hesitant |
-| II | 4 | Status + Kind conditions; Equip actions | ↓ |
-| III | 6 | Threat + Range + Stealth conditions; Tier-B stance when available | ↓ |
-| IV | 8 | Party/Self conditions; **tutoring unlocked** (§5.4) | ↓ |
-| V | 12 | Full condition set; full derived action set | tightest spread, lowest floor — anticipates |
+| Rank | Combat slots | Logistics slots (§4.8) | Vocabulary opened | Reaction (§4.1b) |
+|---|---|---|---|---|
+| I (start) | 2 | 1 | Vitals conditions; Cast/Drink from what they already know; loot potions | widest spread, tail-heavy — visibly hesitant |
+| II | 4 | 2 | Status + Kind conditions; Equip actions; loot ammo | ↓ |
+| III | 6 | 3 | Threat + Range + Stealth conditions; Tier-B stance when available; loot better equipment | ↓ |
+| IV | 8 | 4 | Party/Self conditions; **tutoring unlocked** (§5.4) | ↓ |
+| V | 12 | 5 | Full condition set; full derived action set | tightest spread, lowest floor — anticipates |
+
+The logistics ladder is deliberately shallow — **5 slots covers the entire
+vocabulary in §4.8** (three potions, ammo, equipment), so a Rank V follower
+is fully self-sufficient rather than merely closer to it. Combat is where the
+depth is, and where slots stay scarce enough to force real choices.
 
 The reaction column is deliberate: it is the one Rapport reward the player
 **feels without being told about it**. Slots and vocabulary are read off a
