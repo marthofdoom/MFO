@@ -3,6 +3,82 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.4.0 — scope cut, co-save v2, and the probe harness
+
+**Read this one before installing** — it changes the save schema and removes a
+feature.
+
+### Spell acquisition is out of scope
+
+MFO does gambits. It no longer teaches followers spells. *A Fun Way To Level
+Followers* (TrumanAE, SKSE, open source) already does that properly — skill
+points per player level, perks and spells at 20/40/50/60/80/100, configurable
+so it works with any perk or spell overhaul.
+
+The split: **they own acquisition** (how a follower comes to know Fireball),
+**MFO owns deployment** (when they should cast it).
+
+This is synergy rather than deconfliction. MFO's aptitude gate reads a
+follower's skills to decide what vocabulary they're offered, and without a
+levelling system those values barely move — the gate is nearly static. Their
+mod makes it live: spend skill points, and MFO's vocabulary opens in response.
+
+Deleted with it: the tutored-spell ledger, the revoke path, the
+`RemoveAddedSpells` backstop, and the reconcile-on-load. **That was the
+largest remaining surface in MFO that could damage another mod's state** — a
+mis-scoped revoke would have eaten spells another mod granted. MFO now adds no
+spells or perks to any actor, ever.
+
+MFO's derived action vocabulary still reads whatever a follower knows, so a
+spell from a levelling mod, a perk overhaul, or a quest all appear identically
+with no patch.
+
+### Co-save schema v2
+
+**v1 saves are still readable**; the v1 reader consumes and discards the old
+tutored block. Nothing is lost that MFO owned, and spells already on an actor
+are untouched — MFO never held them, it only remembered granting them.
+
+*Why the bump:* the tutored block was first removed at v1 without one, on the
+reasoning that no save had ever held an MFO record. That was true when written
+and expired as soon as saving with the mod active was on the table — and
+v0.3.0 already writes v1 *with* that block, so a v0.3.0 save read by this
+build would have misparsed with no guard able to catch it. "Nobody has data
+yet" is a fact with an expiry date; a version number is not.
+
+What a save actually carries right now is 14 bytes per follower, all
+fixed-width: FormID, rapport, rank, table count, two zero rule counts, zero
+overrides. No strings, no form references — those arrive with the evaluator.
+
+### The Probe tab (M4)
+
+A new tab in the Field Kit: pick a follower, fire one engine primitive, watch
+what happens. Nothing persists. Its centrepiece is the **target-retention
+watch** — press *StartCombat*, and it samples the follower's actual combat
+target every tick, comparing by handle rather than name, distinguishing "the
+commanded target died" (invalidation) from "the engine re-picked" (a problem),
+and reporting how long the commanded target actually survived.
+
+That single measurement decides whether the standing-order model in the design
+holds or needs a refresh cadence, and it cannot be answered by reading any
+source.
+
+**It already produced its most valuable finding before running.** Review
+established that **five of the twelve primitives the design lists as Tier B
+have no C++ binding in CommonLibSSE-NG**: `KeepOffsetFromActor`,
+`ClearKeepOffsetFromActor`, `SetDontMove` and `DoCombatSpellApply` are
+Papyrus-only, and `StartCombat` exists only in po3's fork. The research was
+sound — the Papyrus surface named the right engine flows — but *"a Papyrus
+native exists"* and *"I can call it from C++"* are different claims and only
+the first had been checked. Positioning probes are therefore **blocked** and
+shown as such in the UI rather than quietly omitted.
+
+### Also
+- `bSeedTestData` writes synthetic rules onto a player-keyed record. Leave it
+  **off** for real play; turn it on to exercise the co-save.
+- FormID `0x802` shipped as the granted-spell keyword and is now reserved and
+  unused. FormIDs are never recycled.
+
 ## v0.3.0 — kills actually get credited
 
 Field fixes from reading a real session log. The reported symptom was "boss
