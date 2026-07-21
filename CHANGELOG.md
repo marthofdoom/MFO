@@ -3,6 +3,61 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.2.0 — the Field Kit (in-game overlay)
+
+Everything v0.1.0 had, now **visible in game**. Reading a log after the fact
+is a hopeless loop for a behaviour mod, so the overlay was pulled forward
+from M7.
+
+**⚠ First code hooks in the project.** Three trampoline hooks (D3DInit,
+DXGIPresent, InputDispatch) install at plugin load, **before** the renderer
+exists, and they install regardless of any INI setting. Offsets and thunk
+shapes are transcribed from MEO's shipped, field-validated implementation and
+were confirmed against it in review — but **this build has never run**. If the
+game hard-crashes on launch, this is the suspect, and `bShowHud = 0` will not
+help because the hooks are already in by then.
+
+**The HUD** — top-right, passive, draws every frame and takes **no input**, so
+it stays readable while fighting. Per follower: name, combat flag, rank,
+rapport, live health/magicka/stamina bars, distance. Plus session kills,
+rapport, and rapport/hour. This is the primary observation surface; the panel
+is for detail. `bShowHud` in `MFO.ini`.
+
+**The panel** — the **Field Orders** power opens it; Esc, gamepad B, or the
+shout key closes it. Three tabs:
+- *Followers* — the full table, **including retained-but-inactive records**,
+  so dismissal being non-destructive is visible rather than taken on faith.
+- *Measurements* — the two numbers this build exists to take: the
+  teammate-filtered combat-event rate, and kills/rapport per hour. The
+  rapport/hr figure turns amber below 30, which is the case where
+  `BALANCE.md`'s rank ladder needs redoing.
+- *Config* — what is actually in force, plus quirk-table resolution.
+
+Full controller parity throughout (family standing rule): gamepad nav, stick
+edge-triggered into d-pad, B to close.
+
+**Also**
+- Test seeding moved to `bSeedTestData` in `MFO.ini`, **default off**. With it
+  off and no saving, **MFO writes nothing anywhere** — it reads state and
+  draws it.
+- Detection refresh 2 s → 500 ms so the HUD reads as live.
+- Log now lands in the MO2 profile's `overwrite/SKSE/Plugins/MFO.log`,
+  alongside every other plugin's, rather than in the wine prefix.
+
+**Validated in-game (from v0.1.0 testing)** — follower detect/undetect across
+three cycles with records retained, form resolution to the ESL band, SPIT
+type 3 correct for a castable lesser power, `TESSpellCastEvent` firing for
+lesser powers. See `ENGINE_NOTES.md` §0.
+
+**Still unproven, deliberately:** the co-save (no saving with MFO active yet),
+all of Rapport (no kills have occurred), and combat-event volume.
+
+**Review:** Fable pre-CI review found one blocker — a software mouse cursor
+that would have been composited over ordinary gameplay from the moment the
+renderer came up — plus four majors including a mutex-nesting violation of the
+project's own invariant and an input-swallow divergence from the reference.
+All fixed before this build.
+
 ## v0.1.0 — first testable build
 
 Detection, Rapport, and the co-save. **No gambit execution yet** — the
