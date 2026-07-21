@@ -25,6 +25,7 @@ Still owed: `MANUAL_MOD_CREATION_GUIDE.md` (copy MEO's), `DYNAMIC_OR_DROP.md`.
 | A rule whose violation caused a real failure | `INVARIANTS.md`, with the incident |
 | A portable "never again" | `ANTI_PATTERNS.md`, tagged `[MFO]` + dated |
 | Symptom → cause → fix | `DEBUGGING.md`, promoted from [PREDICTED] |
+| A working-practice rule | `BUILD.md` |
 | **Generic to any CommonLibSSE-NG project** | **`../Linux-Native-Tools/`, in the same session** |
 
 That last row is the one that decays if left. MFO has already contributed the
@@ -82,7 +83,13 @@ family's one principle warns about.
 8. **DYNAMIC_OR_DROP.md** — the portability ledger. MFO is structurally
    compliant by construction (the whole action vocabulary derives from the
    live actor), so this file may stay thin — but the ledger still gates 1.0.
-9. **ROADMAP.md** — the build order from here: M0 (CI green) through M9+
+9. **BUILD.md** (before starting any milestone) — the working agreement: the
+   per-build checklist, review recording, release procedure, testing gates,
+   and the division of labour. **This file was missing for MFO's first
+   session, and every rule in it was already written down in MAO's and MRO's
+   `BUILD.md` — that gap is why the review rule went unfound.** It carries an
+   honest table of the process violations that cost real work.
+10. **ROADMAP.md** — the build order from here: M0 (CI green) through M9+
    (Tier B). Names two targets explicitly — **M5 first playable** (gambits
    work, console-seeded) and **M7 first shareable** (a human can author
    them). Its M4 is the de-risking step that is deliberately *not* in

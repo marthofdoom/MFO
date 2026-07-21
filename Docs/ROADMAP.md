@@ -15,6 +15,13 @@ Everything after M7 is depth, not viability.
 
 ---
 
+## Read `BUILD.md` first
+
+It carries the per-build checklist, and the one rule this project has broken
+hardest: **a milestone is tested in-game before the next is written.** Five
+releases were cut on a single test session, which is why defects accumulated
+across builds rather than bisecting to one.
+
 ## The gate that applies to every milestone below
 
 **A Fable code review runs before any substantive commit reaches CI**
