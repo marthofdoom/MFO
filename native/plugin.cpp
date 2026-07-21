@@ -19,14 +19,40 @@
 
 namespace {
 
+    // Log to the GAME-ROOT-RELATIVE path, not SKSE::log::log_directory().
+    //
+    // Why: under MO2 + USVFS, a game-root-relative write is redirected into
+    // the profile's Overwrite folder, which is where every other SKSE plugin's
+    // log in this setup actually lands (ActorLimitFix.log, BugFixesSSE.log,
+    // ScrambledBugs.log, ...). log_directory() resolves instead to the Proton
+    // prefix's My Games\...\SKSE\ — a different filesystem entirely, which on
+    // this machine is a umu prefix (~/Games/umu/489830/...) that holds only
+    // skse64's own logs. A log nobody can find alongside the others is a log
+    // that does not get read.
+    //
+    // MRO documents the same trick. Fall back to log_directory() if the
+    // redirect target is not writable (e.g. running outside MO2).
     void SetupLog() {
-        auto path = SKSE::log::log_directory();
-        if (!path) return;
-        *path /= "MFO.log";
-        auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
+        std::shared_ptr<spdlog::sinks::basic_file_sink_mt> sink;
+
+        try {
+            sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("Data/SKSE/Plugins/MFO.log", true);
+        } catch (const spdlog::spdlog_ex&) {
+            if (auto dir = SKSE::log::log_directory()) {
+                try {
+                    sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+                        (*dir / "MFO.log").string(), true);
+                } catch (const spdlog::spdlog_ex&) {
+                    return;   // no log is survivable; a crash here is not
+                }
+            } else {
+                return;
+            }
+        }
+
         auto log = std::make_shared<spdlog::logger>("global", std::move(sink));
         log->set_level(spdlog::level::info);
-        log->flush_on(spdlog::level::info);
+        log->flush_on(spdlog::level::info);   // flush every line: a CTD must not eat the last one
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
     }

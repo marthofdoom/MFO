@@ -40,7 +40,11 @@ loaded, and the only symptom is MFO's own "form not found" line.
 | Log | Path |
 |---|---|
 | MFO's own | `LoreRim/overwrite/SKSE/Plugins/MFO.log` |
-| SKSE's | same directory, `skse64.log` |
+| SKSE's | `~/Games/umu/489830/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/skse64.log` |
+
+MFO writes game-root-relative on purpose so USVFS lands its log beside every
+other plugin's. `skse64.log` is in the wine prefix instead — a **different
+filesystem**; see `DEBUGGING.md` §0.
 
 If `MFO.log` is missing:
 `find /mnt/gaming/modlists/LoreRim -iname 'MFO.log'` **before** concluding the

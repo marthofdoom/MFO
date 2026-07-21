@@ -39,26 +39,43 @@ two release cycles):
 | MO2 profile | `Default` |
 | Game path (MO2 `gamePath`) | `/mnt/gaming/modlists/LoreRim/Stock Game` (MO2 stores it as `Z:\mnt\gaming\...`) |
 | Vanilla masters | `/mnt/gaming/modlists/LoreRim/Stock Game/Data/` |
-| **SKSE plugin logs land here** | `/mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/*.log` |
-| Proton prefix (Skyrim SE) | `/mnt/gaming/Steam/steamapps/compatdata/489830` |
-| Saves + game INIs | `<prefix>/pfx/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/` |
+| **MFO.log and most plugin logs** | `/mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log` |
+| **`skse64.log` / `skse64_loader.log`** | `/home/marth/Games/umu/489830/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/` |
+| Wine prefix | **umu**, `/home/marth/Games/umu/489830/` — *not* Steam compatdata |
+| Saves + game INIs | under the umu prefix's `My Games/Skyrim Special Edition/` |
 | `gh` CLI | `/home/marth/.local/bin/gh` (use the absolute path; auth in keyring) |
 | capstone | installed, 5.0.7 |
 
-**Two corrections to what MRO's `PROJECT_PLAYBOOK.md` says — check before
-copying paths out of it:**
+### There are TWO log destinations, and which one a plugin uses is a choice
 
-- It cites Proton appid **3375297225**. **That directory does not exist on
-  this machine.** The live Skyrim prefix is **489830**. Verify before using
-  any path derived from the old appid.
-- It describes logs under `My Games/.../SKSE/`. **That directory does not
-  exist in prefix 489830 either.** Every SKSE plugin log actually present is
-  under `LoreRim/overwrite/SKSE/Plugins/` — the USVFS redirect of a
-  game-root-relative write. **Look there first.**
+This tripped up an earlier version of this document, so it is worth being
+exact:
 
-This is itself a worked example of the doctrine: the documented environment
-had drifted from the real one, and a search that "found nothing" was evidence
-about the docs, not about the machine.
+1. **Game-root-relative writes** (`Data/SKSE/Plugins/X.log`) are redirected by
+   MO2's USVFS into `LoreRim/overwrite/SKSE/Plugins/`. This is where
+   ActorLimitFix, BugFixesSSE, ScrambledBugs, BarterLimitFix,
+   MainMenuRandomizer and NPCWaterAIFix all land — i.e. **most plugins in
+   this setup**.
+2. **`SKSE::log::log_directory()`** resolves into the *wine prefix's*
+   `My Games\Skyrim Special Edition\SKSE\`, on a different filesystem. On this
+   machine that is the umu prefix above, and it contains only skse64's own
+   two logs.
+
+**MFO deliberately uses (1)**, so its log sits alongside every other plugin's
+where you are already looking. MEO uses (2), which is why `MEO.log` is not in
+the Overwrite folder next to the others.
+
+**Corrections to MRO's `PROJECT_PLAYBOOK.md` — verify before copying paths:**
+
+- It cites Proton appid **3375297225**; no such directory exists here.
+- It implies Steam compatdata. The live prefix is a **umu** prefix at
+  `/home/marth/Games/umu/489830/`. Steam's `compatdata/489830` exists but has
+  **no SKSE directory at all**, so a path built from it will silently find
+  nothing.
+
+A worked example of the doctrine: the documented environment had drifted from
+the real one, and a search that "found nothing" was evidence about the docs,
+not about the machine.
 
 ---
 
