@@ -3,12 +3,15 @@
 The load-bearing rules. Each is an imperative plus the failure mode that
 violating it produced. **Read before ANY code change.**
 
-**Every rule here is currently `INHERITED`** — MFO has shipped nothing, so no
-rule yet carries a local incident. Inherited rules are not weaker: each was
-bought with debugging time on MRO, MEO, or MAO, and the citation names who
-paid. Rules marked `DESIGN` follow from MFO's own design decisions rather
-than from an incident; they are the ones most likely to be argued with, so
-their reasoning is stated rather than assumed.
+Tags: `INHERITED` (bought with debugging time on MRO/MEO/MAO — the citation
+names who paid), `DESIGN` (follows from MFO's own decisions rather than an
+incident; the ones most likely to be argued with, so the reasoning is stated),
+and **`MFO`** (earned here, in the field, with the version and symptom).
+
+**MFO now has its own scars: #22i and #22j**, both found by reading a real
+session log rather than by review or by the tester's verbal report. That is
+the point of the tag — a rule with a local incident outranks the same rule
+with a borrowed one, because the next person will believe it.
 
 **When MFO earns its own incident, replace the tag with the version and
 symptom.** A rule with a local scar outranks the same rule with a borrowed
