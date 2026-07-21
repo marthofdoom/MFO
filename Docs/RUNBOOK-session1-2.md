@@ -12,12 +12,21 @@ gambits onto a record keyed to the player, and `bAllowSummons` gets toggled.
 
 ```bash
 cd /mnt/gaming/modlists/Projects/marth-follower-overhaul
-./tools/package_test.sh          # rebuilds from the latest green CI run
-rm -f /mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log   # start clean
+./release.sh                     # cuts releases/vX.Y.Z/ from the latest green CI run
+rm -f /mnt/gaming/modlists/custom-modlist/overwrite/SKSE/Plugins/MFO.log   # start clean
 ```
 
-Install `MFO-test-v0.0.1.zip` in MO2. **Tick BOTH boxes** — the mod on the
-left, `MFO.esp` on the right.
+Releases are cut here and handed over; MO2 setup is marth's side.
+
+Install the current `releases/vX.Y.Z/MFO-vX.Y.Z.zip` in MO2.
+
+**Tick BOTH boxes** — the mod in the LEFT pane, `MFO.esp` in the RIGHT pane.
+This is the single most common way to get "nothing happened": a `-MFO` line in
+`modlist.txt` or a missing/unstarred `MFO.esp` in `plugins.txt` produces no
+error anywhere, just silence.
+
+**Instance:** `custom-modlist`, profile `Requiem`. (Not LoreRim — that is
+where the mod SURVEY was done, not where testing happens.)
 
 ---
 
@@ -25,7 +34,7 @@ left, `MFO.esp` on the right.
 
 1. **Launch to the main menu. Stop there.** Check SKSE loaded the plugin:
    ```bash
-   grep -i mfo "/home/marth/Games/umu/489830/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/skse64.log"
+   grep -i mfo "$HOME/Games/umu/489830/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/skse64.log"
    ```
    Want: `plugin MFO.dll ... loaded correctly`.
    **Nothing? Stop — it isn't deployed.** Everything below is meaningless.
@@ -34,10 +43,11 @@ left, `MFO.esp` on the right.
 
 3. **Read the log:**
    ```bash
-   cat /mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log
+   cat /mnt/gaming/modlists/custom-modlist/overwrite/SKSE/Plugins/MFO.log
    ```
    Four things must be there:
-   - `=== MFO 0.0.1 loading — game 1.6.…` ← if the version is wrong, **stop and redeploy**
+   - `=== MFO <version> loading — game 1.6.…` ← must match the release you installed;
+     a mismatch means a stale DLL and **every result below is void**
    - `[forms] resolved MFO_FieldOrdersPower -> …0801`
    - `[forms] resolved MFO_GrantedSpell -> …0802`
    - `[p0] seeded 2 combat + 1 logistics gambit(s)`
@@ -52,7 +62,7 @@ left, `MFO.esp` on the right.
 6. **The co-save test.** Save → **quit to desktop** (not main menu) → relaunch
    → load that save. Then:
    ```bash
-   grep -E "cosave|seeded" /mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log
+   grep -E "cosave|seeded" /mnt/gaming/modlists/custom-modlist/overwrite/SKSE/Plugins/MFO.log
    ```
    Want `[cosave] saved 1 follower record(s)` and then
    `[cosave] loaded 1 follower(s); dropped 0 …`.
@@ -109,7 +119,7 @@ Go find a bandit camp with your follower.
 ## 4. Send me this
 
 ```bash
-cp /mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log /tmp/mfo-session.log
+cp /mnt/gaming/modlists/custom-modlist/overwrite/SKSE/Plugins/MFO.log /tmp/mfo-session.log
 ```
 
 The whole file. The `MFO STATE REPORT` blocks carry the two measurements I

@@ -47,7 +47,7 @@ other plugin's. `skse64.log` is in the wine prefix instead — a **different
 filesystem**; see `DEBUGGING.md` §0.
 
 If `MFO.log` is missing:
-`find /mnt/gaming/modlists/LoreRim -iname 'MFO.log'` **before** concluding the
+`find /mnt/gaming/modlists/custom-modlist -iname 'MFO.log'` **before** concluding the
 DLL never ran. (MRO's playbook cites a Proton appid and a `My Games/.../SKSE/`
 path that do not exist on this machine — see `DEBUGGING.md` §0.)
 

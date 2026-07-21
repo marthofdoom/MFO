@@ -39,7 +39,7 @@ two release cycles):
 | MO2 profile | `Default` |
 | Game path (MO2 `gamePath`) | `/mnt/gaming/modlists/LoreRim/Stock Game` (MO2 stores it as `Z:\mnt\gaming\...`) |
 | Vanilla masters | `/mnt/gaming/modlists/LoreRim/Stock Game/Data/` |
-| **MFO.log and most plugin logs** | `/mnt/gaming/modlists/LoreRim/overwrite/SKSE/Plugins/MFO.log` |
+| **MFO.log and most plugin logs** | `/mnt/gaming/modlists/custom-modlist/overwrite/SKSE/Plugins/MFO.log` |
 | **`skse64.log` / `skse64_loader.log`** | `/home/marth/Games/umu/489830/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/` |
 | Wine prefix | **umu**, `/home/marth/Games/umu/489830/` — *not* Steam compatdata |
 | Saves + game INIs | under the umu prefix's `My Games/Skyrim Special Edition/` |
@@ -86,7 +86,7 @@ not about the machine.
 | Changed code, behavior identical | [SIBLING] | **Stale DLL.** The running game loaded a different binary than you built | **Check the log's version header before believing ANY in-game result.** MEO was bitten twice. `sha256sum` the artifact against the deployed file |
 | DLL not in `skse64.log` at all | [SIBLING] | Not deployed, or MO2 mod unchecked | `skse64.log` prints `plugin MFO.dll ... loaded correctly`. **MO2 has TWO checkboxes** — left-pane mod AND right-pane plugin |
 | ESP present but records missing in game | [SIBLING] | `plugins.txt` entry lacks the leading `*` | Starless = not loaded. The only symptom is your own "form not found" line |
-| Plugin log missing entirely | [SIBLING] | Log path resolved somewhere unexpected | `find /mnt/gaming/modlists/LoreRim -iname 'MFO.log'` before assuming the DLL didn't run |
+| Plugin log missing entirely | [SIBLING] | Log path resolved somewhere unexpected | `find /mnt/gaming/modlists/custom-modlist -iname 'MFO.log'` before assuming the DLL didn't run |
 | CI build fails on a `fmt`/CommonLib error after months of green | [SIBLING] | A floated vcpkg baseline picked up a breaking change | Baselines are **pinned deliberately, never floated** |
 | API compiles locally in your head, fails in CI | [SIBLING] | Wrong CommonLibSSE-NG fork assumed | Verify signatures against **CharmedBaryon/CommonLibSSE-NG** raw headers. The forks diverge; no headers exist locally |
 
