@@ -80,4 +80,11 @@ namespace MFO::Followers {
     // Is this actor currently one of ours? Reads THE SUBJECT's state.
     bool IsTracked(RE::FormID a_actorID);
 
+    // Seconds since this follower was last OBSERVED in combat, or a huge value
+    // if never. Rapport needs this because combat state is already gone by the
+    // time a death event's queued task runs: killing the last enemy ENDS the
+    // fight, so a follower who fought the whole battle reads IsInCombat()==false
+    // at the only moment we get to ask (#51).
+    float SecondsSinceCombat(RE::FormID a_actorID);
+
 }

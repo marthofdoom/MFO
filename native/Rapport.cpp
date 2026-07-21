@@ -55,7 +55,7 @@ namespace MFO::Rapport {
 
         // Reads THE FOLLOWER's state and the PLAYER's position. Named because
         // INVARIANTS #15 requires every scan helper to say whose state it reads.
-        bool FollowerSharedTheKill(RE::Actor* a_follower, RE::Actor* a_player) {
+        bool FollowerSharedTheKill(RE::Actor* a_follower, RE::Actor* a_player, RE::Actor* a_victim) {
             if (!a_follower || !a_player) return false;
 
             // 1. Combat state carries the archery case: the player snipes from
@@ -63,10 +63,32 @@ namespace MFO::Rapport {
             //    distance is irrelevant. (BALANCE.md §2.)
             if (a_follower->IsInCombat()) return true;
 
+            // 1b. RECENTLY in combat counts too, and this is the case that was
+            //     silently losing awards in the field. This test runs from a
+            //     QUEUED task, so by the time it asks, the victim is dead --
+            //     and killing the last enemy ENDS the fight. A follower who
+            //     fought the entire battle reads IsInCombat()==false at the
+            //     only instant we get to look. Observed 2026-07-21: Cosnach
+            //     fought a fox 2792u out and was credited nothing (#51).
+            if (Followers::SecondsSinceCombat(a_follower->GetFormID()) <=
+                Config::g_sharedCombatGrace.load()) {
+                return true;
+            }
+
             // 2. Radius is the fallback for stealth kills that end a fight
-            //    before the follower ever engages.
+            //    before the follower ever engages -- measured to the PLAYER,
+            //    who is the one being shared with.
             const float r = Config::g_sharedRadius.load();
-            return a_follower->GetPosition().GetDistance(a_player->GetPosition()) <= r;
+            if (a_follower->GetPosition().GetDistance(a_player->GetPosition()) <= r) return true;
+
+            // 3. Standing over the corpse is participation even when the player
+            //    is far away and combat has already dropped. Without this, the
+            //    follower who did the work is the one most likely to be out of
+            //    the player's radius.
+            if (a_victim && a_follower->GetPosition().GetDistance(a_victim->GetPosition()) <= r) {
+                return true;
+            }
+            return false;
         }
 
         class DeathSink final : public RE::BSTEventSink<RE::TESDeathEvent> {
@@ -122,23 +144,39 @@ namespace MFO::Rapport {
 
                     Followers::Refresh();
                     int awarded = 0;
-                    for (const auto& h : Followers::g_active) {
-                        auto* f = h.get().get();
-                        if (!f) continue;
-                        if (f->IsCommandedActor()) continue;   // summons earn nothing
+                    // INDEX-ALIGNED with g_activeIds, because a null handle must
+                    // NOT mean "no credit". Followers::Refresh deliberately holds
+                    // handles that fail to resolve for up to kMissesBeforeDrop
+                    // sweeps -- a 117 ms transient was already caught eating
+                    // kills once. Nothing below actually needs the actor: the
+                    // kill test is a FormID compare, the grace test takes a
+                    // FormID, and Award takes a FormID. Skipping on `!f` would
+                    // reproduce the exact field signature this fix exists to
+                    // remove (#51).
+                    const auto& ids = Followers::g_activeIds;
+                    for (size_t i = 0; i < Followers::g_active.size(); ++i) {
+                        auto* f = Followers::g_active[i].get().get();
+                        const RE::FormID fid = f ? f->GetFormID()
+                                                 : (i < ids.size() ? ids[i] : 0);
+                        if (fid == 0) continue;                        // truly unknown
+                        if (f && f->IsCommandedActor()) continue;      // summons earn nothing
 
-                        const bool followerKilled = (killer && killer->GetFormID() == f->GetFormID());
+                        const bool followerKilled = (killer && killer->GetFormID() == fid);
                         const bool playerKilled   = killerIsPlayer;
 
                         // The follower's own kills always count -- they were
                         // unambiguously fighting.
                         bool share = followerKilled;
                         if (!share && playerKilled) {
-                            share = FollowerSharedTheKill(f, player);
+                            share = f ? FollowerSharedTheKill(f, player, victim)
+                                      // No actor to measure from: fall back to the
+                                      // one test that needs no position at all.
+                                      : (Followers::SecondsSinceCombat(fid) <=
+                                         Config::g_sharedCombatGrace.load());
                         }
                         if (!share) continue;
 
-                        Award(f->GetFormID(), base, kind);
+                        Award(fid, base, kind);
                         ++awarded;
                     }
 
@@ -165,6 +203,37 @@ namespace MFO::Rapport {
                                  g_sessionKills.load(),
                                  victim->GetName() ? victim->GetName() : "?",
                                  victim->GetLevel(), player->GetLevel(), kind, mult, awarded);
+                    if (awarded == 0) {
+                        // #22j: the zero case must say why, or "no rapport" is
+                        // indistinguishable from "rapport is broken".
+                        if (Followers::g_active.empty()) {
+                            spdlog::info("[rapport]   no followers active at kill time");
+                        }
+                        for (size_t i = 0; i < Followers::g_active.size(); ++i) {
+                            auto* f = Followers::g_active[i].get().get();
+                            if (!f) {
+                                // The held-but-unresolvable case. Reporting
+                                // NOTHING here is what made the field bug
+                                // unreadable: an empty diagnostic block under
+                                // "0 credited" says the loop never ran.
+                                spdlog::info("[rapport]   no credit for {:08X}: handle unresolved "
+                                             "(held by miss-streak); sinceCombat={:.1f}s",
+                                             i < ids.size() ? ids[i] : 0,
+                                             Followers::SecondsSinceCombat(i < ids.size() ? ids[i] : 0));
+                                continue;
+                            }
+                            // GetName() is nullable -- and a crash HERE would be
+                            // the diagnostic path taking down the thing it exists
+                            // to diagnose.
+                            const char* nm = f->GetName();
+                            spdlog::info("[rapport]   no credit for {:08X} {}: inCombat={} "
+                                         "sinceCombat={:.1f}s distToPlayer={:.0f}u distToVictim={:.0f}u",
+                                         f->GetFormID(), nm ? nm : "?", f->IsInCombat() ? "Y" : "n",
+                                         Followers::SecondsSinceCombat(f->GetFormID()),
+                                         f->GetPosition().GetDistance(player->GetPosition()),
+                                         f->GetPosition().GetDistance(victim->GetPosition()));
+                        }
+                    }
                 });
 
                 return RE::BSEventNotifyControl::kContinue;

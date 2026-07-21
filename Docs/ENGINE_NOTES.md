@@ -117,24 +117,71 @@ Consequences, all favourable:
 - `Actuation::CastOn`'s pre-check against `CalculateMagickaCost` gates a real
   resource rather than being a tautology.
 
-**Still open, and much smaller:** what the engine does when magicka is *below*
-cost — refuse, cast anyway, or drive the pool negative. MFO never issues that
-call (its own pre-check refuses first), so this is a question about whether our
-belt-and-braces is belt *and* braces, not a blocker. marth is testing next round.
+**RESOLVED 2026-07-21, and the answer matters:** the engine does **NOT** refuse.
+marth cast repeatedly with no magicka — *unlimited* casting. So
+`CastSpellImmediate` deducts while there is a pool to deduct from, and then
+casts for free forever.
 
-### 0.10 Casting source vs. animation — OPEN, instrumented
-`CastingSource::kInstant` applies the effect and plays no animation (§0.8,
-reported twice). The enum is `kLeftHand = 0`, `kRightHand = 1`, `kOther = 2`,
-`kInstant = 3` — and `kInstant` is, by name, *the no-animation caster*.
+**MFO's own pre-check is therefore the ONLY gate that exists.** Not
+belt-and-braces — the sole belt. `Actuation::CastOn`'s `CalculateMagickaCost`
+comparison is what makes §5.3 true; delete it and every follower becomes an
+infinite spell battery. The probe bypasses that check by design (it calls the
+engine directly), which is exactly why it could demonstrate this.
 
-**Hypothesis:** a hand source routes through the animated cast path. NOT YET
-OBSERVED — the M4 probe now fires one variant per source so this is settled by
-looking rather than by reasoning, and `iCastSource` in `MFO.ini` selects the
-winner without a rebuild. Note this may make `LaunchSpell`/VM dispatch (§0.8's
-proposed alternatives) unnecessary.
+### 0.10 Casting source does NOT explain the animation — HYPOTHESIS REFUTED 2026-07-21
+**marth, all four sources fired from the probe:** `kLeftHand`, `kRightHand`,
+`kOther` and `kInstant` **all cast with no animation.**
+
+The hypothesis was that `kInstant` is by name the no-animation caster, so a
+hand source would route through the animated path. It does not. The casting
+source is not the variable — `CastSpellImmediate` is a silent effect
+application *regardless* of which `MagicCaster` issues it.
+
+`iCastSource` stays in the INI (it costs nothing and the next question may want
+it) but is defaulted back to `3`/kInstant, which at least names what happens.
+
+**A visible cast therefore still needs a different mechanism**, and §0.8's
+options are back on the table unreduced: po3's `LaunchSpell`, Papyrus VM
+dispatch of `DoCombatSpellApply`, or driving the animation separately via
+`NotifyAnimationGraph` / an equipped-spell + AI-issued cast. All are their own
+milestone. **This is the single biggest open problem in the mod** — the core
+loop's most visible action currently has no visible action.
+
+### 0.11 The populated co-save ROUND-TRIPS — PROVEN 2026-07-21, M1 CLOSED
+**MFO 0.5.0, game 1.6.1170.** A save carrying Cosnach at rapport 5 was reloaded:
+
+```
+[cosave] loaded 1 follower(s); dropped 0 unresolvable actor(s), 0 unresolvable
+override(s); disabled 0 rule(s) with missing targets; 0 id collision(s)
+000198FA Cosnach   rapport 5  rank 1  slots 2c/1l
+```
+
+Rapport survived, the FormID resolved, nothing was dropped or disabled. This is
+the **highest-blast-radius subsystem in the mod** — the "mod ate my save" class
+— and it had been reviewed four times but never executed end to end. It is now
+proven. **M1 is closed.**
+
+Still untested within it: load-order remap (test A) and the downgrade guard
+(test B), both of which need a deliberately perturbed load order.
+
+### 0.12 `StartCombat` (po3 relocation) did NOT take — 2026-07-21
+`[probe] StartCombat (nearest foe) on Cosnach -> OK (target Fox at 2792u, 4
+candidates -- valid: commanded onto a foe they were NOT fighting)` was followed
+0.4 s later by `Cosnach now on <none>` and then `NEVER ENTERED COMBAT --
+StartCombat did not take`.
+
+The call returned without error and had **no effect**. Note the earlier §0.6
+session *looked* like it worked, but that was the confounded single-target
+case. With a proper multi-candidate setup the honest answer is that the
+relocation either resolved to the wrong function, needs different arguments, or
+the engine rejected the target at 2792u.
+
+**§4.7 standing orders rest on nothing.** Not building the target latch was the
+right call.
 
 ### NOT yet proven, despite the session
-- **The populated co-save ROUND-TRIP.** v0.4.1 *saved* a real record twice
+- ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
+- (historical) v0.4.1 *saved* a real record twice
   (`saved 1 follower record(s), schema v2`) and *loaded* empty saves cleanly,
   but the save-with-a-record was never reloaded in-session. Save works; load
   of a real record is still unproven. **This is the next test.**

@@ -28,6 +28,10 @@ namespace MFO::Followers {
 
         int g_quirksActive = 0, g_quirksInactive = 0;
 
+        // Last time each follower was SEEN fighting. Sampled on the sweep, not
+        // read at death time -- see SecondsSinceCombat's note (#51).
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_lastCombat;
+
         // Consecutive sweeps a follower may be missing before we believe it.
         // FIELD-FOUND 2026-07-21: the log showed `- id` then `+ id` 117ms apart,
         // i.e. a transient miss -- and because the death sink Refreshes before
@@ -77,7 +81,14 @@ namespace MFO::Followers {
 
     void ClearTransientState() {
         g_missStreak.clear();
+        g_lastCombat.clear();
         g_activeIds.clear();
+    }
+
+    float SecondsSinceCombat(RE::FormID a_actorID) {
+        const auto it = g_lastCombat.find(a_actorID);
+        if (it == g_lastCombat.end()) return 1.0e9f;
+        return std::chrono::duration<float>(std::chrono::steady_clock::now() - it->second).count();
     }
 
     int QuirksActive()   { return g_quirksActive; }
@@ -189,6 +200,7 @@ namespace MFO::Followers {
             if (!a) continue;
             const auto id = a->GetFormID();
             g_missStreak.erase(id);   // seen -- reset any streak
+            if (a->IsInCombat()) g_lastCombat[id] = std::chrono::steady_clock::now();
             if (std::find(before.begin(), before.end(), id) == before.end()) {
                 const bool isSummon    = a->IsCommandedActor();
                 const bool persistable = IsPersistableID(id);

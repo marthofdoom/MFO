@@ -540,3 +540,37 @@ handle cannot say. **Advance on the null path, then return.**
 
 *A fix for one review finding (index-based unfairness) creating a worse one is
 the argument for the verification pass, not against the first review.*
+
+### 51. Combat participation is remembered, never sampled after the fact
+
+Rapport's shared-kill test ran from a queued death task and asked
+`IsInCombat()`. But killing the last enemy **ends the fight**, so a follower who
+fought the entire battle reads `false` at the only instant the test gets to
+look. The radius fallback then measures to the PLAYER — and the follower who
+did the work is the one most likely to be far from them.
+
+Observed: Cosnach fought and killed a fox ~2792u out and was credited nothing.
+The log said `0 follower(s) credited` and could not say why.
+
+Sample combat state on the sweep and keep a timestamp; test "was fighting
+within N seconds", plus proximity to the VICTIM as well as the player. **Any
+state that the triggering event itself destroys must be observed before the
+event, not after it.**
+
+**Corollary, review-found while fixing the above:** a null handle must not mean
+"no credit". `Refresh` deliberately HOLDS unresolvable handles for up to
+`kMissesBeforeDrop` sweeps, and `if (!f) continue;` silently skipped exactly
+those followers — in both the award loop and the new diagnostic. Nothing in
+either needed the actor: the kill test is a FormID compare, the grace test
+takes a FormID, `Award` takes a FormID. Iterate index-aligned with
+`g_activeIds` and fall back to id-only tests. A diagnostic that skips the
+unresolvable case prints an EMPTY block under "0 credited", which reads as
+"the loop never ran" — the least useful possible output from the code whose
+only job is explaining the zero.
+
+### 52. A HUD counter says whose and over what window
+
+The overlay showed `0 rap` directly above a follower reading `5`. Both were
+correct — the header is session-earned, the row is lifetime — but read together
+they say "the mod lost your save". A number with no scope label is a bug report
+waiting to happen, and this one arrived within a day.

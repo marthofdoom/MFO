@@ -217,7 +217,7 @@ namespace MFO::Board {
                     const double rph = snap.minutes > 0.01 ? snap.rapport * 60.0 / snap.minutes : 0.0;
                     ImGui::Text("Kills: %u", snap.kills);
                     ImGui::SameLine(); ImGui::TextDisabled("(%.1f/hr)", kph);
-                    ImGui::Text("Rapport: %u", snap.rapport);
+                    ImGui::Text("Rapport this session: %u", snap.rapport);
                     ImGui::SameLine();
                     if (rph > 0.0 && rph < 30.0) {
                         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "(%.1f/hr)", rph);
@@ -412,7 +412,11 @@ namespace MFO::Board {
             if (ImGui::Begin("##mfohud", nullptr, flags)) {
                 ImGui::TextDisabled("MFO");
                 ImGui::SameLine();
-                ImGui::TextDisabled("| %u kill  %u rap  %.0f/hr", snap.kills, snap.rapport,
+                // SAY "session". This counter is rapport earned SINCE LOAD, and
+                // it sits one line above each follower's LIFETIME rapport. Read
+                // as "0 rap" next to a follower showing 5, it looks like the
+                // mod lost the save (marth, 2026-07-21 -- exactly that report).
+                ImGui::TextDisabled("| session %u kill  %u rap  %.0f/hr", snap.kills, snap.rapport,
                                     snap.minutes > 0.01 ? snap.rapport * 60.0 / snap.minutes : 0.0);
                 ImGui::Separator();
 
@@ -425,7 +429,7 @@ namespace MFO::Board {
                     if (r.inCombat) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "[C]");
                     else            ImGui::TextDisabled("[ ]");
                     ImGui::SameLine();
-                    ImGui::Text("R%u %u", r.rank, r.rapport);
+                    ImGui::Text("R%u %u total", r.rank, r.rapport);
 
                     const float w = 54.0f;
                     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
