@@ -13,6 +13,13 @@
 //   #9  Never persist a runtime-created (0xFF) FormID.
 //   #10 Persist stable string opcodes, never enum ordinals.
 //   #11 Bound every count, bail on short reads, clamp at ingestion.
+//   NOTE (2026-07-21): the tutored-spell block was REMOVED from the schema at
+//   v1 rather than by a version bump. That is normally forbidden -- but no save
+//   has ever contained an MFO follower record (seeding defaults off, marth is
+//   not saving with the mod active, and the only cosave line ever logged was
+//   "saved 0 follower record(s)"). This is the last moment that is true, and it
+//   is recorded here so the exception is visible rather than inferred.
+//
 //   #12 Versioned schema; readers kept FOREVER; SKSE does NOT round-trip
 //       unread records, so a downgraded DLL DESTROYS newer ones -> warn loud.
 
@@ -23,7 +30,6 @@ namespace MFO {
         // fabricate (INVARIANTS.md #11).
         constexpr std::uint32_t kMaxFollowers = 4096;
         constexpr std::uint32_t kMaxOpcodeLen = 64;
-        constexpr std::uint16_t kMaxTutored   = 512;
         constexpr std::uint16_t kMaxOverrides = 64;
 
         bool WriteString(SKSE::SerializationInterface* a_intfc, const std::string& a_s) {
@@ -99,17 +105,6 @@ namespace MFO {
                 }
             }
 
-            // Bound at BOTH ends: writing more than the reader's cap makes the
-            // reader abort the entire co-save (total data loss for this mod).
-            const size_t tn = std::min<size_t>(st.tutored.size(), kMaxTutored);
-            const auto tutoredCount = static_cast<std::uint16_t>(tn);
-            a_intfc->WriteRecordData(tutoredCount);
-            for (size_t ti = 0; ti < tn; ++ti) {
-                const auto& t = st.tutored[ti];
-                a_intfc->WriteRecordData(t.spell);
-                a_intfc->WriteRecordData(t.grantedAtVersion);
-            }
-
             const size_t on = std::min<size_t>(st.overrides.size(), kMaxOverrides);
             const auto overrideCount = static_cast<std::uint16_t>(on);
             a_intfc->WriteRecordData(overrideCount);
@@ -132,7 +127,7 @@ namespace MFO {
         g_followers.clear();
 
         std::uint32_t type = 0, version = 0, length = 0;
-        std::uint32_t loaded = 0, droppedActor = 0, droppedSpell = 0, disabledRules = 0,
+        std::uint32_t loaded = 0, droppedActor = 0, disabledRules = 0,
                       droppedOverride = 0, collisions = 0;
 
         while (a_intfc->GetNextRecordInfo(type, version, length)) {
@@ -239,28 +234,6 @@ namespace MFO {
                     }
                 }
 
-                std::uint16_t tutoredCount = 0;
-                if (!a_intfc->ReadRecordData(tutoredCount)) return;
-                if (tutoredCount > kMaxTutored) {
-                    spdlog::error("[cosave] implausible tutored count {} -- ABORTING", tutoredCount);
-                    return;
-                }
-                for (std::uint16_t ti = 0; ti < tutoredCount; ++ti) {
-                    TutoredSpell t{};
-                    RE::FormID rawSpell = 0;
-                    if (!a_intfc->ReadRecordData(rawSpell)) return;
-                    if (!a_intfc->ReadRecordData(t.grantedAtVersion)) return;
-                    RE::FormID resolvedSpell = 0;
-                    if (a_intfc->ResolveFormID(rawSpell, resolvedSpell)) {
-                        t.spell = resolvedSpell;
-                        st.tutored.push_back(t);
-                    } else {
-                        // DESIGN.md §5.4: drop with a log line rather than
-                        // attempting a revoke against a dangling id.
-                        ++droppedSpell;
-                    }
-                }
-
                 std::uint16_t overrideCount = 0;
                 if (!a_intfc->ReadRecordData(overrideCount)) return;
                 if (overrideCount > kMaxOverrides) {
@@ -302,9 +275,9 @@ namespace MFO {
         // INVARIANTS.md #47: split the skip counters by REASON. A single
         // aggregate hides a systematic failure inside ordinary attrition.
         spdlog::info("[cosave] loaded {} follower(s); dropped {} unresolvable actor(s), "
-                     "{} unresolvable tutored spell(s), {} unresolvable override(s); "
-                     "disabled {} rule(s) with missing targets; {} id collision(s)",
-                     loaded, droppedActor, droppedSpell, droppedOverride, disabledRules, collisions);
+                     "{} unresolvable override(s); disabled {} rule(s) with missing targets; "
+                     "{} id collision(s)",
+                     loaded, droppedActor, droppedOverride, disabledRules, collisions);
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {

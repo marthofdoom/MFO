@@ -154,7 +154,10 @@ co-save, and reconciled against live state every load.** Package overrides
 is a bug and is logged as one.
 `DESIGN` (`DESIGN.md` §4.5 / §5.4).
 
-**#20 — Never use `AddBaseSpell` / `RemoveBaseSpell` on a follower.** They
+**#20 — Never use `AddBaseSpell` / `RemoveBaseSpell` on a follower.**
+*(Moot in practice since 2026-07-21: MFO grants no spells at all — acquisition
+is out of scope, `DESIGN.md` §5.4. Kept because the reasoning is sound and
+costs nothing to retain.)* They
 edit the **ActorBase** spell list, which is shared by every actor using that
 base — for a generic follower, an entire class of NPCs. Tutoring uses
 `AddSpell`/`RemoveSpell` (the added-spell list) only.

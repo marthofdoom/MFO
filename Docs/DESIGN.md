@@ -112,9 +112,9 @@ see `ANTI_PATTERNS.md` (ported digest) and `INVARIANTS.md`.
 4. Rapport ranks unlock more slots and a wider vocabulary. **What unlocks is
    gated by that follower's own skills** — a battlemage unlocks spell
    actions a pure warrior never will.
-5. At high Rapport, MFO can **tutor**: assigning a gambit whose action needs
-   a spell the follower lacks teaches them that spell on the spot, and
-   un-assigning it takes the spell back (§5.4).
+5. A follower's vocabulary tracks their own skills, so anything that levels
+   them — *A Fun Way To Level Followers*, a perk overhaul, a quest reward —
+   widens what you can tell them to do, with no patch (§5.4).
 6. Watch it run. A follower whose gambits fire well is doing what you told
    them to; one whose gambits fall through is telling you their skills or
    magicka aren't up to the rule you wrote.
@@ -325,8 +325,8 @@ MFO enumerates what *this actor* can actually do:
   archetype is the only portable classifier.* Cure/fortify/resist potions are
   deliberately out of the vocabulary — nobody writes those rules, and every
   entry in a picker is a tax on reading it.
-- **Shout <shout>** — where the actor has one. MFO-tutored shouts are out of
-  scope for 1.0.
+- **Shout <shout>** — where the actor has one. MFO never grants shouts; if a
+  levelling mod gives them one, it appears here like any other (§5.4).
 - **Equip <item>** — weapon/shield/torch swaps from the actor's own
   inventory (§4.5 Tier A). The classic "bow at range, sword in melee" gambit.
 - **Positioning / Targeting / Stance** — §4.5 Tier B.
@@ -794,7 +794,7 @@ sanctioned. These are not blind spots; they are unwritten milestones.
 2. **Package overrides PERSIST THROUGH SAVES.** PapyrusUtil states it
    plainly. That directly threatens §8.5's clean-uninstall promise: an
    override left on a follower outlives the mod. Therefore — **every override
-   MFO adds is ledgered in the co-save exactly like a tutored spell**, is
+   MFO adds is ledgered in the co-save**, is
    removed by `RemovePackageOverride` when its action ends, and is reconciled
    against `CountPackageOverride` every load. An override with no ledger
    entry is a bug, and MFO logs it.
@@ -1265,7 +1265,7 @@ Sources:
 | I (start) | 2 | 1 | Vitals conditions; Cast/Drink from what they already know; loot potions | widest spread, tail-heavy — visibly hesitant |
 | II | 4 | 2 | Status + Kind conditions; Equip actions; loot ammo | ↓ |
 | III | 6 | 3 | Threat + Range + Stealth conditions; Tier-B stance when available; loot better equipment | ↓ |
-| IV | 8 | 4 | Party/Self conditions; **tutoring unlocked** (§5.4) | ↓ |
+| IV | 8 | 4 | Party/Self conditions | ↓ |
 | V | 12 | 5 | Full condition set; full derived action set | tightest spread, lowest floor — anticipates |
 
 The logistics ladder is deliberately shallow — **5 slots covers the entire
@@ -1309,35 +1309,57 @@ magicka`, `spell not known`, `no valid target`) rather than silently doing
 nothing — the inherited "log the zero case" doctrine applied to UI. A failure
 the player cannot see reads as "never examined."
 
-### 5.4 Tutoring (Rank IV+)
+### 5.4 Spell acquisition is OUT OF SCOPE (RULED — marth, 2026-07-21)
 
-Assigning a gambit whose action references a spell the follower lacks offers
-**Tutor** — `Actor::AddSpell`, ledgered.
+**MFO does gambits. It does not teach followers spells.**
 
-Hard rules, all save-safety driven:
-- **Every tutored spell is ledgered in the co-save** as
-  `{actorFormID, spellFormID, grantedAtVersion}`. The ledger is the *only*
-  authority on what MFO gave an actor.
-- **Removing the gambit removes the spell** — `RemoveSpell`, entry cleared.
-  No orphan spells accumulate across a playthrough.
-- **A keyword-tagged backstop (RESEARCHED).**
-  `PO3.RemoveAddedSpells(actor, modName, keywords, matchAll)` removes every
-  spell a *named mod* added to an actor. If MFO tags what it grants, this is
-  a purpose-built total revoke that does not depend on the ledger being
-  intact — the belt to the ledger's braces, and the mechanism behind
-  `bPurgeTutored` and the uninstall path. **The ledger stays authoritative**;
-  this is recovery, not routine.
-- Prefer `AddSpell`/`RemoveSpell` (added-spell list) over
-  `PO3.AddBaseSpell`/`RemoveBaseSpell` (the ActorBase list) — base-list edits
-  affect **every actor sharing that base**, which for a generic follower is a
-  whole class of NPCs. **Base-spell functions are banned in MFO.**
-- **Never grant a spell whose FormID cannot be resolved**, and never from an
-  absent plugin. On load, drop unresolvable ledger entries with a log line
-  rather than revoking against a dangling id.
-- **Tutoring cannot exceed the source.** MFO only teaches spells the *player*
-  knows.
-- Tutoring does **not** raise skill (§5.3): teaching Fireball to a
-  Destruction-20 follower gets you a Destruction-20 Fireball.
+Earlier drafts had a "Tutoring" system: at Rank IV, assigning a gambit whose
+action needed an unknown spell would grant it, ledgered, and un-assigning
+would revoke it. **Cut.**
+
+**Why.** *A Fun Way To Level Followers* (TrumanAE, Nexus 181813, SKSE,
+[open source](https://github.com/TrumanGIT/Follower-Leveling-System-Redone))
+already does this properly: followers gain skill points per player level, and
+learn perks and spells at 20/40/50/60/80/100, configurable through
+`PerksAndSpells.json` so it works with any perk or spell overhaul. It is
+installed and enabled in the test profile.
+
+Two mods granting spells to the same actor is not a feature. The clean split:
+
+| | Owns |
+|---|---|
+| **A Fun Way To Level Followers** | **Acquisition** — how a follower comes to know Fireball |
+| **MFO** | **Deployment** — when they should cast it |
+
+**This is synergy, not merely deconfliction.** §5.3's aptitude gate reads
+`GetBaseActorValue` to decide what vocabulary a follower is *offered* — and
+without a levelling system those values barely move, so the gate is nearly
+static and the progression it implies never really happens. AFWTLF makes it
+live: you spend skill points, their skills rise, and MFO's vocabulary opens in
+response. **Their mod is what makes MFO's aptitude gate mean something.**
+
+**What this deletes**, and the deletion is the point: the tutored-spell
+ledger, the revoke path, the `MFO_GrantedSpell` keyword, the
+`PO3.RemoveAddedSpells` backstop, and the reconcile-on-load. That was the
+largest remaining surface in MFO that could damage someone else's state — a
+revoke that mis-scoped would have eaten spells another mod granted.
+
+**What remains**: §3.3's derived action vocabulary reads whatever the follower
+knows, via `PO3.GetAllActorPlayableSpells`. It does not care who taught them.
+A spell learned through AFWTLF, a perk overhaul, or a quest all appear the
+same way, with no patch.
+
+**Consequences elsewhere**
+- Rank IV no longer unlocks tutoring; it unlocks Party/Self conditions only.
+- `MFO.esp` FormID `0x802` shipped as the granted-spell keyword and is now
+  **RESERVED and unused**. FormIDs are forever — it is never recycled
+  (`INVARIANTS.md` #41).
+- `INVARIANTS.md` #20 (never `AddBaseSpell`) becomes moot in practice: MFO
+  adds no spells at all. It stays on the list because the reasoning is sound
+  and cheap to keep.
+- The co-save loses its tutored block — see `ARCHITECTURE.md` §7 for why that
+  was safe to do without a version bump, and why this was the last moment it
+  would have been.
 
 ---
 
@@ -1515,7 +1537,7 @@ Tooltips explain what the row will do, sourced from engine data (the spell's
 own description, the actor's current magicka vs cost) rather than hardcoded
 strings.
 
-Destructive actions (delete a rule, purge tutored spells) use MEO's two-click
+Destructive actions (delete a rule, clear a table) use MEO's two-click
 arm: label flips to "Confirm", color to `skin.danger`, and the arm is cleared
 by *any* other interaction.
 
@@ -1574,8 +1596,7 @@ Inherited rules that bite here:
 
 ### 8.1 What lives in the co-save
 
-Per-actor `{actorFormID, rapport, rank, gambits[], tutoredSpells[],
-packageOverrides[]}` plus globals (grant latches, schema version). Rules
+Per-actor `{actorFormID, rapport, rank, gambits[], packageOverrides[]}` plus globals (grant latches, schema version). Rules
 serialize as string opcode ids + resolved FormID params (§3.3).
 
 Inherited invariants, none optional:
@@ -1605,7 +1626,7 @@ AND shrink).
 |---|---|
 | `0x800` | Field Orders MGEF |
 | `0x801` | Field Orders SPEL (lesser power) |
-| `0x802` | MFO-granted keyword (tutored-spell tagging, §5.4) |
+| `0x802` | shipped as a granted-spell keyword; now **RESERVED, unused** (§5.4). FormIDs are forever — never recycled |
 | `0x804` | startup QUST |
 | `0x808` | MCM QUST |
 | `0x80A` | **command QUST** — owns the combat-target alias pool (§4.7.1) |
@@ -1659,9 +1680,8 @@ state scan, and every one runs against a follower.
 
 - **Install mid-save: safe.** New records only; no vanilla record edited.
 - **Update in place: safe by design.** FormIDs frozen post-release; the
-  co-save migrates forward; the tutored ledger is reconciled against actual
-  `HasSpell` state every load, and package overrides against
-  `CountPackageOverride`, so a missed revoke self-heals.
+  co-save migrates forward; package overrides are reconciled against
+  `CountPackageOverride` every load, so a missed release self-heals.
 - **Uninstall mid-save: genuinely clean, uniquely for this family.** MFO
   attaches nothing durable to items or the world. Walk the ledgers, revoke
   spells (with the `RemoveAddedSpells` backstop) and remove every MFO package
@@ -1679,8 +1699,8 @@ state scan, and every one runs against a follower.
 Everything lives in **`MFO.dll`** (CommonLibSSE-NG; `native/plugin.cpp`):
 
 - **Startup** (`kDataLoaded` / `kPostLoadGame` / `kNewGame`): resolve forms,
-  grant Field Orders, load and migrate the co-save, reconcile the tutored and
-  override ledgers, re-assert GlobalVariable handshakes.
+  grant Field Orders, load and migrate the co-save, reconcile the override
+  ledger, re-assert GlobalVariable handshakes.
 - **Event sinks:** `TESDeathEvent` (Rapport; `dead == true` only),
   `TESCombatEvent` (combat entry/exit, shared-survival award),
   `TESSpellCastEvent` (opener), `CrosshairRefEvent` (board target),
@@ -1719,10 +1739,9 @@ change. **One new hook or engine mechanism per release.**
 | **P2** | Evaluator + Tier-A cast/drink, rules seeded from console. Proves §4.4's do-nothing guarantee — **tested by diffing behavior against an MFO-absent baseline save.** **Hard perf gate: `bProfileEvaluator` numbers from a Lorerim-class order in a real multi-follower fight must meet §4.2's budget, worst case being a full rule list of expensive conditions.** An empty-cell measurement does not count. Also verify the §4.1 cadence adapts (**tick rate holds at ~7.5/s across 30 / 60 / 144 fps and drops below 30** — if not, the frame clock is wrong) and that §4.1a holds (**per-tick cost is flat from 1 to 12 followers**; if it scales with party size, the round-robin is broken). Confirm no tick burst follows a load screen. Settles §3.2's CTDA option on these numbers. |
 | **P3** | The board — ImGui, **mouse/keyboard AND controller together**, copied from MEO. Gate: every action including reorder reachable on a gamepad with no keyboard; no double-fire (§6.4a) under a task-pump race. |
 | **P4** | Tier-A equip actions. Isolated because of the synchronous-equip-dispatch landmine. |
-| **P5** | Tutoring + revoke ledger. Gate: **install → tutor → uninstall leaves the follower with zero MFO spells**, verified by save inspection. |
 | **P6+** | Tier B, one mechanism per release, in the §4.5 preference order, each instrumented — or dropped. Each proven mechanism is written into `ENGINE_NOTES.md` and Linux-Native-Tools **in the release that ships it.** |
 
-1.0 requires P0–P5 green, a DYNAMIC_OR_DROP ledger with no open
+1.0 requires P0–P4 green, a DYNAMIC_OR_DROP ledger with no open
 DROP-CANDIDATEs, and a clean-install test on a load order that is not this
 machine's.
 
@@ -1743,13 +1762,13 @@ machine's.
 the reaction curve are now derived in `BALANCE.md` §1–3.*
 - **Does the player get a perk tree?** Every sibling has one. MFO's
   progression is per-follower by design, and a player-side "Tactician" tree
-  (more slots, cheaper tutoring, a second board preset) cuts across that.
+  (more slots, a second board preset) cuts across that.
   Band `0x810`+ is reserved; the decision is deferred, not made.
 
 **Post-1.0 candidates:**
 - Gambit **presets** — save a rule list as a template, apply to a new
   follower. Cheap once the schema exists; deferred so the schema settles.
 - Cross-follower conditions (§3.4).
-- Shout tutoring; Tier-B formation actions.
+- Tier-B formation actions.
 - Explicit NFF/AFT integration — surfacing the board inside their menus. A
   soft, optional layer only; §3.1's independence is not traded for it.

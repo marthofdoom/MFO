@@ -20,7 +20,10 @@ namespace MFO::Forms {
 
     inline constexpr RE::FormID kFieldOrdersMGEF  = 0x800;
     inline constexpr RE::FormID kFieldOrdersSpell = 0x801;
-    inline constexpr RE::FormID kGrantedKeyword   = 0x802;
+    // 0x802 shipped in v0.1.0-v0.3.0 as the tutored-spell tag. Tutoring is
+    // OUT OF SCOPE (DESIGN.md 5.4) but FormIDs are forever: the id stays
+    // reserved and is never recycled, per INVARIANTS #41.
+    inline constexpr RE::FormID kGrantedKeyword   = 0x802;   // RESERVED, unused
     inline constexpr RE::FormID kStartupQuest     = 0x804;
     inline constexpr RE::FormID kMCMQuest         = 0x808;
 

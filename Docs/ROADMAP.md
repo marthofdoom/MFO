@@ -58,10 +58,7 @@ adds per-follower state that depends on it. A schema defect gets more
 expensive to find with each one. **Un-defer before M5**, on a save file made
 solely to be thrown away.
 
-The steps below stand for whenever that happens.
-
-
-No ESP required — the P0 seed is code-side, so the DLL installs alone.
+The steps below stand for whenever that happens. No ESP required — the P0 seed is code-side, so the DLL installs alone.
 
 1. Deploy to a test profile; confirm `skse64.log` shows it loading and
    `MFO.log` prints the version header.
@@ -83,7 +80,7 @@ No ESP required — the P0 seed is code-side, so the DLL installs alone.
 | Form | Purpose |
 |---|---|
 | `0x800/0x801` | Field Orders MGEF + SPEL (**SPIT type 3, lesser power**) |
-| `0x802` | MFO-granted keyword (tutored-spell tagging) |
+| `0x802` | shipped as a granted-spell keyword; now RESERVED and unused (DESIGN 5.4) |
 | `0x804` | startup QUST + `SEQ/MFO.seq` |
 | `0x808` | MCM QUST |
 
@@ -114,25 +111,34 @@ entire Rapport ladder rests on (`BALANCE.md` §7).
 
 ---
 
-## M4 — The stick-poking harness *(the de-risking step)*
+## M4 — The probe harness *(BUILT, unrun)*
 
-**A console command / debug power that fires ONE primitive at the crosshair
-follower and logs what happened.** No evaluator, no rules.
+Became a **Probe tab in the Field Kit** rather than console commands, once the
+overlay existed. Pick a follower, press a primitive, watch what the engine
+actually does. Nothing persists.
 
-This is not in `DESIGN.md`'s phase table and it should be. The questions it
-answers cannot be answered by reading any source, and **two of them can
-invalidate committed design**:
+**It already produced its most valuable result before running.** A Fable
+review found that **five of the twelve primitives `DESIGN.md` §4.5 lists as
+Tier B have no C++ binding in CommonLibSSE-NG**: `KeepOffsetFromActor`,
+`ClearKeepOffsetFromActor`, `SetDontMove` and `DoCombatSpellApply` are
+Papyrus-only, and `StartCombat` exists only in po3's fork. See §4.5aa — the
+research was sound, but *"a Papyrus native exists"* and *"I can call it from
+C++"* are different claims and only the first had been checked.
 
-| Question | If the answer is bad |
+**Ships only what the pinned library verifiably binds**, plus `StartCombat`
+via po3's published relocation ID. The unreachable primitives are shown in
+the UI rather than omitted, because a probe that hides what it cannot reach
+hides its most important finding.
+
+| Question | Status |
 |---|---|
-| **Does a commanded target STICK, or does the combat controller re-pick?** | §4.7's whole standing-order model needs a refresh cadence instead of pure invalidation |
-| Does `EvaluatePackage()` need the condition flicker from native code — and the delay? | Every Tier-B action needs the dance |
-| Does an alias `ForceRefTo` from native drive a conditioned package like Papyrus' does? | The entire declarative route (§4.5a) collapses |
-| Does `CastSpellImmediate` or `DoCombatSpellApply` read as a real combat action? | Changes the primary cast primitive |
-| Does `KeepOffsetFromActor` survive what we think it survives? | Formation actions need re-assert plumbing |
+| **Does a commanded target STICK, or does the controller re-pick?** | **Answerable now** — the retention watch. §4.7's whole model depends on it |
+| Does `EvaluatePackage()` no-op when the same package would be chosen? | Answerable now |
+| Does `CastSpellImmediate` read as a real combat action? | Answerable now |
+| Does `KeepOffsetFromActor` fight the combat controller? | **Blocked** — no binding; needs VM dispatch (its own milestone) |
+| Does an alias `ForceRefTo` drive a conditioned package? | **Blocked** — needs the command QUST and alias pool, which are unbuilt |
 
-**Run this BEFORE the evaluator.** An afternoon here is worth a week of
-building on assumptions. Everything learned goes straight into
+**Run this BEFORE the evaluator.** Everything learned goes into
 `ENGINE_NOTES.md` §9 with a date and an observed symptom, and into
 Linux-Native-Tools per the standing debt.
 
@@ -199,14 +205,12 @@ no double-fire under a task-pump race.
 
 ---
 
-## M8 — Tutoring *(P5)*
+## M8 — *(removed: tutoring is out of scope)*
 
-`AddSpell`/`RemoveSpell` only — **never** `AddBaseSpell` (that edits the
-ActorBase and hits every actor sharing it). Ledgered, reconciled every load,
-with `PO3.RemoveAddedSpells` as the keyword-tagged backstop.
-
-**Gate:** install → tutor → uninstall leaves the follower with **zero** MFO
-spells, verified by save inspection.
+Spell acquisition belongs to *A Fun Way To Level Followers*, which already
+does it well and is open source. MFO reads what a follower knows and decides
+when to use it. See `DESIGN.md` §5.4 — the deletion removed the largest
+remaining surface in MFO that could damage another mod's state.
 
 ---
 

@@ -30,11 +30,6 @@ namespace MFO {
         std::string lastFailReason;
     };
 
-    struct TutoredSpell {
-        RE::FormID spell = 0;
-        std::uint32_t grantedAtVersion = 0;
-    };
-
     // Package overrides PERSIST THROUGH SAVES (ENGINE_NOTES.md §2.1).
     // An override with no ledger entry is a bug and is logged as one.
     struct PackageOverride {
@@ -56,7 +51,6 @@ namespace MFO {
         std::uint32_t rapport = 0;
         std::uint8_t  rank = 1;                 // clamped [1,5] on load
         std::vector<Gambit> tables[static_cast<size_t>(Table::kCount)];
-        std::vector<TutoredSpell>    tutored;
         std::vector<PackageOverride> overrides;
 
         std::vector<Gambit>&       combat()          { return tables[0]; }

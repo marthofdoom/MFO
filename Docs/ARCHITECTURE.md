@@ -41,8 +41,8 @@ native/
   Followers.cpp/h   Registry: detection, ActorHandle management, per-actor
                     authoritative state. (P1)
   Rapport.cpp/h     Income, thresholds, rank derivation. (P1)
-  Ledgers.cpp/h     Tutored spells + package overrides: grant, revoke,
-                    reconcile-on-load. (P5)
+  Ledgers.cpp/h     Package overrides: apply, release, reconcile-on-load.
+                    (Tutored spells are OUT OF SCOPE -- DESIGN 5.4.) (M9)
   Serialization.cpp/h  Co-save read/write/revert, schema versions. (P0)
   Board/            The ImGui board — lifted from MEO, re-skinned. (P3)
     BoardHooks.cpp    D3DInit / DXGIPresent / InputDispatch / WndProc
@@ -74,7 +74,7 @@ logs harder to read, and that cost is real.
 | **Actuation** | Executing the selected action; suppression state | P2 |
 | **Vocabulary** | Compiled condition table + per-actor derived action set | P2 |
 | **Board** | ImGui menu, snapshot for render thread, edit actions | P3 |
-| **Ledgers** | Tutored spells, package overrides, revoke paths | P5 |
+| **Ledgers** | Package overrides: apply, release, reconcile | M9 |
 
 **The dependency rule:** Evaluator reads; Actuation writes; nothing else
 mutates actor state. A predicate that mutates is a bug even if it works
@@ -251,11 +251,16 @@ Per follower:
     str  actionOpcode
     u32  actionParamForm  -> ResolveFormID; unresolvable = disable THIS rule
     u8   flags            -> enabled bit
-  u16  tutoredCount
-    u32 spellFormID, u32 grantedAtVersion
   u16  overrideCount
     u32 packageFormID, u8 priority
 ```
+
+**Schema note (2026-07-21):** the tutored-spell block was removed at v1 rather
+than by a version bump, which is normally forbidden. It was safe only because
+**no save has ever contained an MFO follower record** — seeding defaults off,
+no saving with the mod active, and the only co-save line ever logged was
+`saved 0 follower record(s)`. Recorded here because it was the last moment
+that was true; from here, schema changes take a version bump.
 
 **Not serialized:** anything derived (current rank thresholds, vocabulary
 tables, suppression state, the board snapshot, per-rule outcomes). Derived
