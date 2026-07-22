@@ -44,11 +44,23 @@ namespace MFO::CasterConsent {
             if (g_wantCount.load(std::memory_order_relaxed) == 0) return aiSaysYes;
             if (!a_cc) return aiSaysYes;
 
-            // RESOLVE THE ACTOR VIA THE HANDLE, not cachedAttacker. The handle
-            // (.get()) validates and returns null for a stale entry; the cache
-            // pointer does not, and a stale cache is the likeliest source of the
-            // AV that crashed here twice (a small non-null garbage value passes
-            // a null check, then formID at +0x14 faults).
+            // RESOLVE THE ACTOR VIA attackerHandle (0x28), NEVER cachedAttacker.
+            //
+            // This is NOT about staleness -- it is a CommonLibSSE-NG HEADER BUG
+            // (ENGINE_NOTES §0.29). CombatController.h guards its AE-only member
+            // on `SKYRIM_SUPPORT_AE`, a macro NG never defines (it uses
+            // ENABLE_SKYRIM_AE). So the struct always compiles with the SE
+            // layout, but on the 1.6.1170 AE runtime every member past 0x68 is
+            // shifted +8. `cachedAttacker` compiles to 0xC8 -- where the real AE
+            // object holds `handleCount`, which is exactly 1 when the follower
+            // fights one enemy. Read as a pointer that is the value 1; formID at
+            // +0x14 then faults at 0x15. It crashed the game twice, identically.
+            //
+            // attackerHandle is at 0x28, BEFORE the 0x68 divergence, so its
+            // offset is the same in both layouts. NEVER dereference ANY
+            // CombatController member at offset >= 0x68 through this header
+            // (aimControllers, currentAimController, targetSelectors,
+            // cachedAttacker, cachedTarget) -- all are +8 at runtime on AE.
             auto attPtr = a_cc->attackerHandle.get();   // NiPointer<Actor>
             auto* actor = attPtr.get();
             if (!actor) return aiSaysYes;

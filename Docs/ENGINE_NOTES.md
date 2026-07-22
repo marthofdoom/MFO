@@ -1238,6 +1238,36 @@ get frequent chances. Options, cheapest first:
 look wrong; the gambit firing when the follower is disposed to cast is the
 believable behaviour.
 
+### 0.29 A CommonLibSSE-NG HEADER BUG shifts CombatController's AE layout (2026-07-22)
+
+Two crashes, "fixed" twice, recurred identically -- because both fixes touched
+the wrong side. Fable disassembled the deployed DLL and found the real cause.
+
+**`CombatController.h` in the pinned NG guards its AE-only member
+(`aimControllerLock`, a `BSSpinLock` at 0x68) on `#ifdef SKYRIM_SUPPORT_AE` --
+a macro NG NEVER DEFINES.** NG's own build uses `ENABLE_SKYRIM_AE`;
+`SKYRIM_SUPPORT_AE` appears in exactly one file and is dead in every build. So
+the struct always compiles with the **SE layout**, and on the 1.6.1170 (AE)
+runtime every member past 0x68 is **shifted +8**.
+
+The consequence that crashed us: `cachedAttacker` compiles to 0xC8, but at
+runtime 0xC8 holds `handleCount` -- an integer that equals **1 when the actor
+fights a single enemy**. Our hook read `[cc+0xC8]` as an `Actor*`, got the
+value 1, passed the null check, and faulted reading `formID` at `1+0x14 = 0x15`.
+Deterministic; identical every time.
+
+**The rule:** never dereference ANY `CombatController` member at offset >= 0x68
+through this header -- `aimControllers`, `currentAimController`, `areas`,
+`targetSelectors`, `cachedAttacker`, `cachedTarget` are all +8 at runtime on AE.
+Use the members BEFORE 0x68 (`combatGroup` 0x00, `targetHandle` 0x2C,
+`attackerHandle` 0x28), which are layout-stable, or read the shifted ones via
+`REL::Module::IsAE()`-gated manual offsets.
+
+**Scope fact, not a bug:** `CombatMagicCasterRestore` is also the caster for
+POTION drinking (the drink-potion combat behavior uses it), so the CheckStartCast
+consent hook governs a follower's potion use as well as spell casting. Worth
+knowing when logistics and casting interact.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

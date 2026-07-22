@@ -893,3 +893,19 @@ The probe ladder's `GetGlobalValue` conditions exist only because it force-fills
 the alias permanently for testing convenience. **Do not carry that pattern into
 production** — a gated package on a permanently-filled alias is precisely the
 frozen-follower bug of #69.
+
+### 71. Never deref a CombatController member at offset >= 0x68 (NG AE-layout bug)
+
+CommonLibSSE-NG's `CombatController.h` guards its AE-only member on
+`SKYRIM_SUPPORT_AE`, which NG never defines -- so the struct compiles SE-layout
+on every build and every member past 0x68 is +8 at runtime on AE. Reading
+`cachedAttacker` (compile 0xC8) actually reads `handleCount` (= 1 in a
+one-enemy fight); a pointer valued 1 crashes on the formID read. It CTD'd the
+game twice, identically, and two wrong fixes recurred because both touched the
+actor-resolution PATH, not the corrupt OFFSET (§0.29).
+
+Use only the layout-stable members before 0x68: `combatGroup` (0x00),
+`attackerHandle` (0x28), `targetHandle` (0x2C). For anything past it, gate on
+`REL::Module::IsAE()` and use manual offsets. This is the second time a
+plausible-looking pinned header was wrong (StartCombat relocation §0.12 was the
+first) -- a header compiling is not proof its layout matches the runtime.
