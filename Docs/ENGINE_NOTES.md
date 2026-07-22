@@ -359,6 +359,43 @@ spell from the follower's own. Fixed by resolving as `TESForm` and flagging MFO
 gambit spells explicitly. And the AI is ENTHUSIASTIC -- 1000 magicka is a lot of
 casting, which is a balance question §5 will have to answer.
 
+### 0.16 THE ANIMATED PATH IS AI-DISCRETIONARY — 2026-07-22
+
+**MFO can put a spell in a follower's hand. It cannot make them cast it.**
+
+v0.6.0 field session, Cosnach holding Heal Self (Rank I), a Requiem rank-1
+restoration spell that heals very little: `[eval] fired rule 0 (act.cast_self)`
+fired repeatedly across two fights, and **not one `*** MFO GAMBIT SPELL ***`
+line appeared.** His own AI never chose to cast it. Every heal in that session
+was MFO's silent fallback. marth: *"the heal is too weak to help him, and I
+don't really see when he's casting it."*
+
+The one AI-fired cast the sink caught was `Ale (00034C5E) formType=46` — a
+potion he drank of his own accord, correctly reported as *not ours*.
+
+**The consequence for the design, and it is not small:**
+
+* **The RULE always fires.** `act.cast_self` executes whenever its condition is
+  true, and the fallback guarantees the effect lands. Player sovereignty holds:
+  a badly-chosen spell still runs (§4.3a), and MFO never second-guesses the
+  list.
+* **The ANIMATION does not always happen.** It requires the follower's combat
+  AI to independently judge the spell worth casting. For a spell it does not
+  value, MFO's silent path is what runs.
+
+So §0.15's "the animated path works" is true and incomplete. It works **when
+the AI agrees**. That is a property of the spell and the follower, not of MFO,
+and it cannot be forced without going back to the refuted verbs.
+
+**What MFO must NOT do about it:** make the seed prefer spells the AI likes, or
+otherwise steer which spell a rule names. The rule says what it says. Ruled by
+marth, 2026-07-22 — *"a bad gambit setting still needs to fire."*
+
+**Open, and worth one cheap observation:** whether the AI casts a spell it DOES
+value -- an offensive spell at a foe -- when MFO equips it. That would tell us
+whether the animated path is broadly available or narrow. It needs a follower
+who knows such a spell, not a change to MFO.
+
 ### 0.15a (historical) the path as designed, before it was observed
 
 Three cast VERBS have now been refuted: `CastSpellImmediate` (all four casting

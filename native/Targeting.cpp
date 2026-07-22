@@ -135,10 +135,13 @@ namespace MFO::Targeting {
                      UpdateCombatHook::idx);
     }
 
-    void Command(RE::FormID a_follower, RE::ActorHandle a_target) {
+    bool Command(RE::FormID a_follower, RE::ActorHandle a_target) {
         std::unique_lock lk(g_latchMx);
+        const auto it = g_latch.find(a_follower);
+        if (it != g_latch.end() && it->second == a_target) return false;   // unchanged
         g_latch[a_follower] = a_target;
         g_latchCount.store(g_latch.size(), std::memory_order_relaxed);
+        return true;
     }
 
     void Clear(RE::FormID a_follower) {

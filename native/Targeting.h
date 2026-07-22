@@ -34,7 +34,11 @@ namespace MFO::Targeting {
 
     // Latch a follower onto a target. MAIN THREAD. Held until cleared, and
     // re-asserted by the hook every combat update.
-    void Command(RE::FormID a_follower, RE::ActorHandle a_target);
+    // Returns TRUE only when the latch actually CHANGED. A gambit that keeps
+    // winning re-commands the same foe every tick, and the hook already
+    // re-asserts continuously -- so an unchanged command is a no-op and should
+    // not be reported as an action.
+    bool Command(RE::FormID a_follower, RE::ActorHandle a_target);
     void Clear(RE::FormID a_follower);
     void ClearAll();
 

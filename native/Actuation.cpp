@@ -245,7 +245,15 @@ namespace MFO::Actuation {
                 return { Result::FailedOther, "targeting hook not installed" };
             }
 
-            Targeting::Command(a_follower->GetFormID(), a_choice.target);
+            // Re-commanding the SAME foe is not an action. The latch persists
+            // and the hook re-asserts it every combat update, so a rule that
+            // keeps winning would otherwise report Fired every suppression
+            // window forever -- nine identical log lines in one fight, and a
+            // suppression window burned each time that a higher rule could
+            // have used.
+            if (!Targeting::Command(a_follower->GetFormID(), a_choice.target)) {
+                return { Result::NoOp, "already on that target" };
+            }
             return { Result::Fired,
                      std::format("target {}", foe->GetName() ? foe->GetName() : "?") };
         }

@@ -698,3 +698,18 @@ when something else is the headline).
 **Read the diff before writing the message.** `git show --stat` at minimum, and
 grep for the specific thing being claimed. A status report that was not verified
 is worse than no report, because it stops anyone else from checking.
+
+### 63. Never make the rule smarter than the player wrote it
+
+A field session showed a follower's AI declining to cast a very weak heal, so
+only MFO's silent fallback ran. The instinct was to make the seed prefer spells
+the AI would actually use. **That is the wrong instinct**, and marth stopped it:
+*"a bad gambit setting still needs to fire."*
+
+MFO executes the list as written. It does not substitute a better spell, pick a
+better target than the selector named, or decline a rule because the outcome
+looks poor. A rule that wastes magicka on a useless heal is information the
+player needs to see, and hiding it behind a heuristic makes the board a liar.
+
+The mod's job is to make the list run and to say plainly what happened
+(§5.3, §4.3a). Judging the list is the player's.
