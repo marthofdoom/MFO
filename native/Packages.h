@@ -143,25 +143,33 @@ namespace MFO::Packages {
     // below declines, and the caller must fall back rather than assume.
     bool Available();
 
-    // Command a follower to cast a spell ON THEMSELVES (the alias-0 self
-    // route). This is the PROVEN shape: the follower is in alias 0, and the
-    // package's Target input is PTDA targType=4 -> alias 0, so the carrier and
-    // the target are the same alias. That is why the first proof is a
-    // self-heal.
+    // Command a follower to cast a spell ON THEMSELVES.
+    //
+    // SHAPE (field-proven, probe 6): Target input = PTDA **targType 6**, value
+    // 0 -- the engine's own "self" target type. NO QNAM, because nothing here
+    // names an alias.
+    //
+    // This header previously described `targType 4 -> alias 0`, reasoning that
+    // the carrier alias IS the follower. That shape was FIELD-REFUTED: it
+    // stalls, owning the actor while resolving nothing (§0.19, #65). An alias
+    // indirection back to the DELIVERING alias is the failure; self-targeting
+    // is fine, it just has its own type.
     //
     // Returns Decline::None when the fill was DISPATCHED -- NOT when the spell
     // fired, and NOT when the alias was filled. Watch Status().phase for that.
     Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
-    // Command a follower to cast at another reference.
+    // Command a follower to cast at another actor.
     //
-    // UNVERIFIED (open question Q8): this writes PTDA targType=0 with a live
-    // ObjectRefHandle. CommonLib models `ObjectRefHandle handle` as a member of
-    // PackageTarget::Target at the pin, and targType 0 is the only union member
-    // it can correspond to -- but ON DISK targType 0 stores a FormID, so the
-    // engine must convert form->handle at load, and that conversion has never
-    // been observed. Treat a null result here as "the route is wrong", not as
-    // "the follower refused".
+    // SHAPE (field-proven, probe 5): fill ALIAS 1 with the victim, and the
+    // package's Target input is PTDA **targType 4 -> alias 1**, with QNAM
+    // naming the command quest. This is Bethesda's own
+    // CWFinaleLeaderExecuteEnemyLeader pattern -- follower in alias A attacks
+    // actor in alias B -- and it is how a gambit aims at a runtime choice.
+    //
+    // Preferred over writing a live ObjectRefHandle into targType 0: that route
+    // is also proven (probes 1-3) but names the actor at author time, so it
+    // cannot express "whoever the rule picked this tick".
     Decline CastAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
                    RE::TESObjectREFR* a_target);
 

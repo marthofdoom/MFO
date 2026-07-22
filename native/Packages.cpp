@@ -92,14 +92,16 @@ namespace MFO::Packages {
         //   0 Specific Reference, 1 Object ID, 2 Object Type,
         //   3 Linked Reference,   4 Reference Alias, 6 Self
         constexpr std::int8_t kTargTypeObjectID = 1;   // the Spell slot
-        constexpr std::int8_t kTargTypeAlias    = 4;   // the Target slot, self route
+        constexpr std::int8_t kTargTypeAlias    = 4;   // the Target slot, FOE route -> alias 1
+        constexpr std::int8_t kTargTypeSelf     = 6;   // the Target slot, SELF route
         constexpr std::int8_t kTargTypeRef      = 0;   // the Target slot, foe route
 
         // Alias 0 is the FOLLOWER -- the carrier AND, for a self-cast, the
         // target. ALPC delivers the package BY the actor being in the alias,
         // so the follower cannot be in alias 1; that inversion is the single
         // most important structural fact in this system.
-        constexpr std::uint32_t kAliasCommandActor = 0;
+        constexpr std::uint32_t kAliasCommandActor  = 0;   // carries the package
+        constexpr std::uint32_t kAliasCommandTarget = 1;   // the victim, for the foe route
 
         // §4.5c: an action is BOUNDED. Both halves -- a completion condition
         // and a hard timeout -- or a stuck package is a follower MFO has
@@ -294,8 +296,7 @@ namespace MFO::Packages {
         // the recovered offsets above safe to use at all (see the residual
         // uncertainty note there). A mismatch means our layout model is wrong,
         // and the correct response is to decline loudly, never to write.
-        RE::PackageTarget* ReadTarget(RE::IPackageData* a_pd, std::int8_t a_expectTargType,
-                                      std::string_view a_what) {
+        RE::PackageTarget* ReadTarget(RE::IPackageData* a_pd, std::string_view a_what) {
             if (!a_pd) return nullptr;
 
             const auto& tn = a_pd->GetTypeName();
@@ -316,16 +317,15 @@ namespace MFO::Packages {
                               a_what, name, off);
                 return nullptr;
             }
-            if (pt->targType != a_expectTargType) {
-                // Either the ESP does not say what the generator thinks it
-                // says, or the offset model is wrong. Both are our bug, and
-                // both are silent if we write anyway.
-                spdlog::error("[pkg] {} input '{}' at +0x{:X}: targType is {}, expected {} -- "
-                              "LAYOUT MODEL REJECTED, not writing",
-                              a_what, name, off,
-                              static_cast<int>(pt->targType), static_cast<int>(a_expectTargType));
-                return nullptr;
-            }
+            // Deliberately NO targType equality check. The layout proof is the
+            // TYPE NAME above -- if that reads as a PackageTarget carrier, the
+            // offset model is right. targType is DATA we overwrite every call,
+            // so demanding it match beforehand made a routine authoring
+            // difference fire the alarm reserved for "our offset model is
+            // wrong", poisoning the one diagnostic the whole layout-safety
+            // story rests on. Log it as an observation instead.
+            spdlog::debug("[pkg] {} input '{}' at +0x{:X}: authored targType {}",
+                          a_what, name, off, static_cast<int>(pt->targType));
             return pt;
         }
 
@@ -340,10 +340,14 @@ namespace MFO::Packages {
             auto* targetPd = FindInput(pkg, kInputTarget);
             if (!spellPd || !targetPd) return false;
 
-            const std::int8_t wantTarg = a_ref ? kTargTypeRef : kTargTypeAlias;
-
-            auto* spellTarget  = ReadTarget(spellPd,  kTargTypeObjectID, "Spell");
-            auto* targetTarget = ReadTarget(targetPd, wantTarg,          "Target");
+            // The guard validates the LAYOUT (that we really found a
+            // PackageTarget at the modelled offset, via its reported type
+            // name). It does NOT require the authored targType to equal the one
+            // we are about to write -- we overwrite targType by design, and a
+            // routine authoring difference must not fire the alarm that means
+            // "our offset model is wrong".
+            auto* spellTarget  = ReadTarget(spellPd,  "Spell");
+            auto* targetTarget = ReadTarget(targetPd, "Target");
             if (!spellTarget || !targetTarget) return false;
 
             // BOTH guards passed -- only now do we write.
@@ -352,18 +356,28 @@ namespace MFO::Packages {
             spellTarget->value         = 0;
 
             if (a_ref) {
-                // UNVERIFIED ROUTE (Q8). ObjectRefHandle is a first-class
-                // member of PackageTarget::Target at the pin and targType 0 is
-                // the only union member it can correspond to -- but on disk
-                // targType 0 stores a FormID, so the engine converts
-                // form->handle at load and that conversion was never observed.
-                targetTarget->targType      = kTargTypeRef;
-                targetTarget->target.handle = a_ref->CreateRefHandle();
-                targetTarget->value         = 0;
-            } else {
+                // FOE ROUTE, field-proven (probe 5): targType 4 -> ALIAS 1.
+                //
+                // NOT a live ObjectRefHandle in targType 0. That route also
+                // works (probes 1-3) but names the actor at AUTHOR time, so it
+                // cannot express "whoever the rule picked this tick". The alias
+                // can: the caller fills alias 1 with the victim, the package
+                // points at alias 1, and the same record serves every target.
+                // This is CWFinaleLeaderExecuteEnemyLeader's shape.
                 targetTarget->targType       = kTargTypeAlias;
-                targetTarget->target.aliasID = kAliasCommandActor;
+                targetTarget->target.aliasID = kAliasCommandTarget;
                 targetTarget->value          = 0;
+            } else {
+                // SELF ROUTE, field-proven (probe 6): targType 6, no operand.
+                //
+                // NOT targType 4 -> alias 0. That was the original design and
+                // it is FIELD-REFUTED (§0.19, #65): an alias indirection back
+                // to the DELIVERING alias stalls -- the package owns the actor
+                // and resolves nothing, spending no magicka and playing no
+                // animation.
+                targetTarget->targType      = kTargTypeSelf;
+                targetTarget->target.object = nullptr;
+                targetTarget->value         = 0;
             }
             return true;
         }
