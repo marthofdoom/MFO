@@ -288,8 +288,9 @@ namespace MFO::Actuation {
             // flow produces no deduction at all, so this fills a gap rather
             // than duplicating one -- the same call DAC makes.
             if (avo) {
-                a_follower->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                              RE::ActorValue::kMagicka, -cost);
+                // On ActorValueOwner, not Actor -- and `avo` is already in hand.
+                avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                       RE::ActorValue::kMagicka, -cost);
             }
 
             // Restart the AI's window. Without this the grace is a ONE-SHOT:
