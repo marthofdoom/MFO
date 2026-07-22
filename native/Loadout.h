@@ -70,6 +70,23 @@ namespace MFO::Loadout {
     // otherwise the grace applies once per session and never again.
     void ArmGrace(RE::FormID a_actorID);
 
+    // TAKE THE SPELL BACK when no rule wants it any more.
+    //
+    // This is the frequency limiter, and it is structural rather than a timer:
+    // MFO controls what is in the follower's hands, and their AI casts what is
+    // in their hands. Leaving a heal equipped after the follower is healed is
+    // what let one drain ~1000 magicka -- the condition had gone false and the
+    // spell was still there. A gambit spell is held only while its rule wants
+    // it. No-op when MFO equipped nothing.
+    void ReleaseSpell(RE::FormID a_actorID);
+
+    // Start the cast cooldown for this follower: the spell leaves their hand
+    // and does not come back until it expires. Called after ANY gambit cast --
+    // theirs or MFO's -- because both spend the same pool and the player sees
+    // one follower casting either way.
+    void StartCooldown(RE::FormID a_actorID);
+    bool CoolingDown(RE::FormID a_actorID);
+
     // Restore a displaced SHIELD. Called from the hit sink -- a shield is worth
     // giving back at the instant something hits them, and not before.
     void OnFollowerHit(RE::FormID a_actorID);

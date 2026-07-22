@@ -36,8 +36,37 @@ namespace MFO::Actuation {
                 const float cost = spell->CalculateMagickaCost(a_follower);
                 const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
                 if (cost > have) {
+                    // Take it back. The rule keeps winning while the condition
+                    // holds, so wantsCast stays true and the scheduler's release
+                    // never runs -- leaving a spell they cannot afford in their
+                    // hand for their AI to keep trying.
+                    Loadout::ReleaseSpell(a_follower->GetFormID());
                     return { Result::FailedSkill,
                              std::format("insufficient magicka ({:.0f} < {:.0f})", have, cost) };
+                }
+
+                // THE RESERVE. §5.3 says the follower's competence decides what
+                // they can run -- but a gambit that empties the pool leaves them
+                // unable to do anything ELSE they know, which is not what a
+                // player means by "heal yourself when hurt". Keep a floor.
+                // M2 from review: the floor is about what is left AFTER the
+                // cast. "Do not start below 25%" still lets a 40%-of-pool spell
+                // finish at nearly zero, which is not what "keep something for
+                // everything else you know" means.
+                const float reserve = Config::g_magickaReserve.load();
+                if (reserve > 0.0f) {
+                    auto* avo2 = a_follower->AsActorValueOwner();
+                    const float mx = avo2
+                        ? avo2->GetPermanentActorValue(RE::ActorValue::kMagicka) +
+                          a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
+                                                            RE::ActorValue::kMagicka)
+                        : 0.0f;
+                    if (mx > 0.0f && (have - cost) < reserve * mx) {
+                        Loadout::ReleaseSpell(a_follower->GetFormID());
+                        return { Result::FailedSkill,
+                                 std::format("magicka reserve (would leave {:.0f}, floor {:.0f})",
+                                             have - cost, reserve * mx) };
+                    }
                 }
             }
 
@@ -172,7 +201,10 @@ namespace MFO::Actuation {
             // follower's own AI was never given another opening. The field log
             // showed it as rule 0 firing every 1.6s -- the suppression window,
             // not the 3s grace.
-            if (equipped) Loadout::ArmGrace(a_follower->GetFormID());
+            if (equipped) {
+                Loadout::ArmGrace(a_follower->GetFormID());
+                Loadout::StartCooldown(a_follower->GetFormID());
+            }
 
             return { Result::Fired, equipped ? "silent (their AI declined)" : "" };
         }

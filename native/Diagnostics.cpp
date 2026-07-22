@@ -126,7 +126,10 @@ namespace MFO::Diagnostics {
                             // Their AI just cast. Restart the window so MFO does
                             // not double-cast on top of an animation still
                             // playing -- an animated heal takes about a second.
-                            if (ours) Loadout::ArmGrace(casterID);
+                            // Their AI cast it. That is a real cast -- pace it
+                            // exactly like MFO's own, or the limiter only
+                            // governs the half of the casting MFO does.
+                            if (ours) Loadout::StartCooldown(casterID);
                         });
                     }
                     return RE::BSEventNotifyControl::kContinue;

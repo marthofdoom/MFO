@@ -43,6 +43,18 @@ namespace MFO::Loadout {
         // AI must not be keyed to whether MFO happens to owe them gear.
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_equipClock;
 
+        // When each follower may next hold a gambit spell. Separate from the
+        // debt, which is about GEAR -- this is about PACING, and it has to
+        // outlive an equip/release cycle to mean anything.
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_coolUntil;
+
+        // Which spell MFO put in whose hand. NOT part of Debt: debt is about
+        // GEAR and is settled as soon as nothing is owed, which for an
+        // empty-off-hand caster is one pump wake after the equip. This has to
+        // outlive that or the limiter never fires for the followers it matters
+        // most for.
+        std::unordered_map<RE::FormID, RE::FormID> g_mfoSpell;
+
         const RE::BGSEquipSlot* LeftHandSlot() {
             // NOTE: <d3d11.h> elsewhere in this project #defines GetObject ->
             // GetObjectW, which hijacks this template. That header is not
@@ -228,7 +240,58 @@ namespace MFO::Loadout {
         // stow for the next 6 s.
         if (willStowWeapon) g_lastStow[id] = now;
 
+        g_mfoSpell[id] = a_spell->GetFormID();
         return Ready::Equipped;
+    }
+
+    void ReleaseSpell(RE::FormID a_actorID) {
+        const auto it = g_mfoSpell.find(a_actorID);
+        if (it == g_mfoSpell.end()) return;
+
+        // MINIMUM HOLD. Releasing inside the grace would yank the spell before
+        // the window their AI was just promised, and can interrupt a cast
+        // already in flight. It also bounds churn: a condition flickering at
+        // service cadence can cost at most one equip/release per grace period,
+        // where before it could cost one per tick.
+        if (SecondsSinceEquip(a_actorID) < Config::g_aiCastGrace.load()) return;
+
+        auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
+        auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(it->second);
+        g_mfoSpell.erase(it);
+        g_equipClock.erase(a_actorID);
+        if (!actor || !spell) return;
+
+        // Only if it is still OUR spell in that hand. Their own AI may have
+        // swapped since, and unequipping a choice they made is not ours to do.
+        if (actor->GetEquippedObject(true) != spell) return;
+
+        actor->DeselectSpell(spell);
+        spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
+                      spell->GetName() ? spell->GetName() : "?");
+
+        // DELIBERATELY NOT restoring displaced gear here.
+        //
+        // A cooldown cycle releases and re-equips every few seconds, so forcing
+        // a shield back each time would equip/unequip it for the whole fight --
+        // exactly the churn §4.5b's deferred restore exists to avoid. The gear
+        // has its own triggers and they are better ones: on the next hit, at
+        // combat end, and on dismissal. This only takes back the SPELL.
+    }
+
+    void StartCooldown(RE::FormID a_actorID) {
+        const float cd = Config::g_castCooldown.load();
+        if (cd <= 0.0f) return;
+        g_coolUntil[a_actorID] = std::chrono::steady_clock::now() +
+                                 std::chrono::milliseconds(static_cast<int>(cd * 1000.0f));
+        // Taking the spell back IS the rate limit -- they cannot cast what they
+        // are not holding. Leaving it in hand and merely declining to re-equip
+        // would pace MFO and do nothing about their AI.
+        ReleaseSpell(a_actorID);
+    }
+
+    bool CoolingDown(RE::FormID a_actorID) {
+        const auto it = g_coolUntil.find(a_actorID);
+        return it != g_coolUntil.end() && std::chrono::steady_clock::now() < it->second;
     }
 
     void ArmGrace(RE::FormID a_actorID) {
@@ -338,6 +401,18 @@ namespace MFO::Loadout {
     }
 
     void Restore(RE::FormID a_actorID) {
+        // Take our spell back before they leave -- the hit sink and every other
+        // restore trigger is gated on them still being ours (#55).
+        if (const auto sp = g_mfoSpell.find(a_actorID); sp != g_mfoSpell.end()) {
+            if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_actorID)) {
+                if (auto* s2 = RE::TESForm::LookupByID<RE::SpellItem>(sp->second);
+                    s2 && a->GetEquippedObject(true) == s2) {
+                    a->DeselectSpell(s2);
+                }
+            }
+            g_mfoSpell.erase(sp);
+        }
+        g_coolUntil.erase(a_actorID);
         if (const int n = RestoreOne(a_actorID); n > 0) {
             spdlog::info("[loadout] {:08X} left the party -- restored {} item(s)", a_actorID, n);
         }
@@ -407,7 +482,10 @@ namespace MFO::Loadout {
         if (fixed == 0) spdlog::info("[loadout] reconcile: nothing to undo");
     }
 
-    void ClearTransientState() { g_debt.clear(); g_lastStow.clear(); g_equipClock.clear(); }
+    void ClearTransientState() {
+        g_debt.clear(); g_lastStow.clear(); g_equipClock.clear();
+        g_coolUntil.clear(); g_mfoSpell.clear();
+    }
 
     int PendingRestores() {
         int n = 0;

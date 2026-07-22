@@ -85,6 +85,23 @@ namespace MFO::Config {
     // OWN AI to cast it before casting silently instead. Zero would recreate
     // the confound this exists to prevent.
     inline std::atomic<float> g_aiCastGrace{ 3.0f };
+    // Fraction of magicka a gambit will not spend below. OFF by default, and
+    // that default is deliberate: a follower healing to stay alive is EXACTLY
+    // the case where a floor gets them killed, holding a spell they are not
+    // allowed to cast. It exists for players who want casters to keep something
+    // in reserve for utility, not as a rate limiter.
+    inline std::atomic<float> g_magickaReserve{ 0.0f };
+
+    // Minimum seconds between gambit casts for one follower. THE RATE LIMITER.
+    //
+    // MFO cannot tell a combat AI to cast less often -- but it decides what is
+    // in the follower's hand, and they can only cast what they hold. So a cast
+    // takes the spell back and the cooldown decides when it returns. Paces the
+    // AI and MFO's own fallback with one number.
+    //
+    // Not a resource cap: a weak heal SHOULD be cast many times over a long
+    // fight. What looked wrong in the field was the interval, not the total.
+    inline std::atomic<float> g_castCooldown{ 4.0f };
     // Seconds a two-handed wielder must go between weapon swaps. The off-hand
     // swap is free and ungated; stowing a greatsword is not.
     inline std::atomic<float> g_twoHandedDebounce{ 6.0f };

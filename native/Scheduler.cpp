@@ -4,6 +4,8 @@
 #include "Actuation.h"
 #include "Followers.h"
 #include "Config.h"
+#include "Loadout.h"
+#include "Vocabulary.h"
 #include "State.h"
 
 namespace MFO::Scheduler {
@@ -121,6 +123,19 @@ namespace MFO::Scheduler {
         if (it->second.combat().empty()) return;      // no rules -> nothing to run
 
         const auto choice = Eval::Evaluate(f, it->second);
+
+        // THE FREQUENCY LIMITER. A gambit spell stays in the follower's hand
+        // only while a cast rule still wants it -- because their AI casts what
+        // they are holding, and MFO controls what they hold. Leaving a heal
+        // equipped after the follower is healed is what let one drain ~1000
+        // magicka: the condition had gone false and the spell was still there.
+        //
+        // This is the honest lever. MFO cannot tell the combat AI "cast less";
+        // it can decide what is available to cast.
+        const bool wantsCast = choice.ruleIndex >= 0 &&
+                               (choice.actionOpcode == Vocab::kActCastSelf ||
+                                choice.actionOpcode == Vocab::kActCastTarget);
+        if (!wantsCast) Loadout::ReleaseSpell(id);
 
         // §4.4: no match means NO ENGINE CALL. Not a neutral command -- nothing.
         if (choice.ruleIndex < 0) {
