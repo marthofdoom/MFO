@@ -36,6 +36,8 @@ namespace MFO::Probe {
         CastHealRightHand,
         CastHealLeftHand,
         CastHealOther,
+        CommandTargetAtCrosshair,   // THE trigger for the §0.14 hook
+        ClearCommandedTarget,
         EvaluatePackage,
         DrawWeapon,
         SheatheWeapon,
@@ -85,6 +87,11 @@ namespace MFO::Probe {
         bool  valid = false;
     };
     Retention GetRetention();
+
+    // What the player is looking at. The commanded-target probe needs a way to
+    // say WHO, and the crosshair is the one the player already uses.
+    void RegisterCrosshairSink();
+    RE::FormID CrosshairTarget();
 
     void Tick();      // from the pump; cheap no-op when idle
     void Stop();      // ends the watch and releases anything the probe rooted

@@ -304,6 +304,8 @@ namespace MFO::Board {
                         fire(Probe::Action::StopCombat);
 
                         ImGui::SeparatorText("Casting");
+                        fire(Probe::Action::CommandTargetAtCrosshair);
+                        fire(Probe::Action::ClearCommandedTarget);
                         fire(Probe::Action::CastHealInstant);
                         fire(Probe::Action::CastHealRightHand);
                         fire(Probe::Action::CastHealLeftHand);

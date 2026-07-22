@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Probe.h"
+#include "Targeting.h"
 
 namespace MFO::Probe {
 
@@ -128,6 +129,10 @@ namespace MFO::Probe {
             return "Same question, other hand.";
         case Action::CastHealOther:
             return "The remaining source. Try it if neither hand animates.";
+        case Action::CommandTargetAtCrosshair:
+            return "LOOK AT AN ENEMY, then fire. Latches this follower onto it (ENGINE_NOTES 0.14).";
+        case Action::ClearCommandedTarget:
+            return "Release the latch -- the follower returns to the engine's own choice.";
         case Action::EvaluatePackage:
             return "Does it no-op when the same package would be chosen again?";
         default:
@@ -218,6 +223,31 @@ namespace MFO::Probe {
             return;
         }
 
+        case Action::CommandTargetAtCrosshair: {
+            const auto id = CrosshairTarget();
+            if (id == 0) {
+                Record(Name(a_action), f, false, "nothing under the crosshair -- look AT an enemy");
+                return;
+            }
+            auto* victim = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!victim) { Record(Name(a_action), f, false, "crosshair ref is not an actor"); return; }
+            if (victim == f) { Record(Name(a_action), f, false, "that is the follower"); return; }
+
+            Targeting::Command(f->GetFormID(), victim->GetHandle());
+            const bool hooked = Targeting::IsHooked();
+            Record(Name(a_action), f, hooked,
+                   std::format("latched onto {} ({:08X}){}", victim->GetName(), id,
+                               hooked ? " -- watch whether they switch"
+                                      : " -- BUT HOOK IS NOT INSTALLED (bCommandTarget=0)"));
+            return;
+        }
+
+        case Action::ClearCommandedTarget: {
+            Targeting::Clear(f->GetFormID());
+            Record(Name(a_action), f, true, "latch released");
+            return;
+        }
+
         case Action::EvaluatePackage: {
             auto* before = f->GetCurrentPackage();
             f->EvaluatePackage();
@@ -244,6 +274,29 @@ namespace MFO::Probe {
             return;
         }
     }
+
+    namespace {
+        std::atomic<RE::FormID> g_crosshair{ 0 };
+
+        class CrosshairSink final : public RE::BSTEventSink<SKSE::CrosshairRefEvent> {
+        public:
+            static CrosshairSink* GetSingleton() { static CrosshairSink s; return &s; }
+            RE::BSEventNotifyControl ProcessEvent(const SKSE::CrosshairRefEvent* a_event,
+                                                  RE::BSTEventSource<SKSE::CrosshairRefEvent>*) override {
+                // Store the ID only -- never a pointer across frames (#2).
+                if (a_event && a_event->crosshairRef) g_crosshair = a_event->crosshairRef->GetFormID();
+                else                                  g_crosshair = 0;
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+    }
+
+    void RegisterCrosshairSink() {
+        SKSE::GetCrosshairRefEventSource()->AddEventSink(CrosshairSink::GetSingleton());
+        spdlog::info("[probe] crosshair sink registered (commanded-target picker)");
+    }
+
+    RE::FormID CrosshairTarget() { return g_crosshair.load(); }
 
     void Tick() {
         std::string logLine;

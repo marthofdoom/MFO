@@ -232,6 +232,7 @@ namespace MFO::Diagnostics {
         if (holder) {
             holder->AddEventSink<RE::TESSpellCastEvent>(SpellSink::GetSingleton());
             holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
+            Probe::RegisterCrosshairSink();
             spdlog::info("[loadout] hit sink registered (shield restore)");
             spdlog::info("[diag] Field Orders power will dump a state report");
         } else {

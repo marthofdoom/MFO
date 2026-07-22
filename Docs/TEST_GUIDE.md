@@ -289,6 +289,20 @@ mod known to contend with it.
 with one hostile present the test is inconclusive by construction, which is
 exactly the mistake that wasted the §0.6 session.
 
+### How you actually command a target
+
+The gambit vocabulary has no attack action yet (that needs foe enumeration —
+see below), so the hook is driven manually from the Field Kit:
+
+1. Open the Field Kit, **Probe** tab, select the follower.
+2. **Look at the enemy you want them on** — the crosshair is the picker.
+3. Fire **`Command target (crosshair)`**.
+4. **`Clear commanded target`** releases the latch and hands them back to the
+   engine's own choice.
+
+The log names who you latched: `latched onto Bandit (000ABCDE)`. If the hook is
+not installed it says so on the same line rather than silently doing nothing.
+
 | # | Step | Expect | Failure means |
 |---|---|---|---|
 | 1 | Load, check the log | `[target] UpdateCombat vfunc hook installed (Character vtbl idx 0xE4)` | The vtable index is wrong for this runtime — stop, nothing below is valid |
@@ -302,6 +316,15 @@ exactly the mistake that wasted the §0.6 session.
 **Definition of done:** step 1 (hook installs), step 3 (redirect takes), and
 steps 4+7 together (a drift number WITH a baseline). 5 and 6 are safety checks —
 if either fails, the mechanism is not ready regardless of how well 3 worked.
+
+### Where a real gambit's target will come from
+
+Not from a world scan. The reference implementation enumerates candidates from
+`combatGroup->targets` under a read lock — the actors already in the fight,
+which is both cheaper than sweeping `highActorHandles` and more correct, since
+it cannot pick something the follower is not actually engaged with. That list is
+what "lowest HP foe" / "foe weak to fire" will select over, and the hook is
+already positioned to read it.
 
 **The number that matters:** drift with the hook on should be *corrected* every
 combat update. If drift climbs and the follower still visibly fights the wrong
