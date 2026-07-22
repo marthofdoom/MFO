@@ -188,6 +188,77 @@ namespace MFO::Actuation {
                 default: src = CS::kInstant;   break;
                 }
             }
+            // DRIVE THE CASTER (probe, bDriveCaster, default off).
+            //
+            // Every path that APPLIES a spell is silent, proven three times.
+            // The animation comes from the caster's own state machine
+            // advancing, which the combat AI normally kicks off. The animation
+            // events cannot do it -- ten modlists use BeginCastLeft and its
+            // siblings ONLY with RegisterForAnimationEvent, so the graph EMITS
+            // them. That leaves the caster itself.
+            //
+            // EXPECTATION, stated so the result is falsifiable: this should
+            // start the request and charge, and then WEDGE, because the release
+            // step comes from the animation graph (MRh_SpellFire_Event ->
+            // StartCastImpl) and nothing will play that animation. If so, the
+            // shipped answer is a forced casting package instead (§0.17).
+            //
+            // The follower goes unhealed while this runs. That is deliberate:
+            // a same-tick silent fallback would rebuild the §0.6 confound and
+            // we could not tell which path produced the effect.
+            if (Config::g_driveCaster.load() && equipped) {
+                auto* hand = a_follower->GetMagicCaster(src);
+                if (hand) {
+                    // VERIFY, DO NOT FORCE. There is no SetCurrentSpell at the
+                    // pinned CommonLib rev -- only SetCurrentSpellImpl, a no-op
+                    // on ActorMagicCaster. Writing `currentSpell` by hand would
+                    // desync the engine's own select/deselect bookkeeping, and
+                    // the equip is queued so it may not have landed yet.
+                    if (hand->currentSpell != spell) {
+                        return { Result::NoOp, "caster has not selected the spell yet" };
+                    }
+
+                    // ONLY FROM REST. MSCO's shipped hook exists specifically to
+                    // DENY RequestCastImpl once the caster is past its early
+                    // states; re-requesting mid-sequence is how a follower ends
+                    // up with charge-glow hands for a whole fight and a caster
+                    // that accepts nothing further.
+                    const auto st = hand->state.get();
+                    if (st != RE::MagicCaster::State::kNone) {
+                        hand->InterruptCast(true);      // refunds magicka
+                        return { Result::NoOp,
+                                 std::format("caster busy (state {}) -- interrupted",
+                                             static_cast<std::uint32_t>(st)) };
+                    }
+
+                    // Ask FIRST why it might refuse. This line is most of the
+                    // probe's evidentiary value: it separates "the engine
+                    // rejected the cast" from "the engine accepted it and the
+                    // graph never released".
+                    float strength = 1.0f;
+                    RE::MagicSystem::CannotCastReason reason{};
+                    const bool ok = hand->CheckCast(spell, false, &strength, &reason, false);
+
+                    if (a_target) hand->desiredTarget = a_target->CreateRefHandle();
+                    hand->RequestCastImpl();
+
+                    // ORDER IS LOAD-BEARING: ArmGrace before StartCooldown, so
+                    // the minimum hold stops the cooldown yanking the spell out
+                    // of their hand mid-cast.
+                    Loadout::ArmGrace(a_follower->GetFormID());
+                    Loadout::StartCooldown(a_follower->GetFormID());
+
+                    spdlog::info("[drive] {:08X} {} -- CheckCast={} reason={} state {} -> {}",
+                                 a_follower->GetFormID(),
+                                 spell->GetName() ? spell->GetName() : "?",
+                                 ok ? "OK" : "REFUSED",
+                                 static_cast<std::uint32_t>(reason),
+                                 static_cast<std::uint32_t>(st),
+                                 static_cast<std::uint32_t>(hand->state.get()));
+                    return { Result::Fired, "caster driven" };
+                }
+            }
+
             auto* caster = a_follower->GetMagicCaster(src);
             if (!caster) {
                 caster = a_follower->GetMagicCaster(CS::kInstant);

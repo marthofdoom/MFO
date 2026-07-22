@@ -103,6 +103,7 @@ namespace MFO::Config {
             else if (a_key == "fAiCastGrace")       setF(g_aiCastGrace, 0.0f, 30.0f);
             else if (a_key == "fMagickaReserve")    setF(g_magickaReserve, 0.0f, 0.9f);
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
+            else if (a_key == "bDriveCaster")       setB(g_driveCaster);
             else if (a_key == "bCommandCast")       setB(g_commandCast);
             else if (a_key == "bCommandTarget")     setB(g_commandTarget);
             else if (a_key == "iFocusKey")          setI(g_focusKey, 0, 255);
@@ -163,6 +164,7 @@ namespace MFO::Config {
             g_aiCastGrace        = 3.0f;
             g_magickaReserve     = 0.0f;
             g_castCooldown       = 4.0f;
+            g_driveCaster        = false;
             g_commandCast        = false;
             g_commandTarget      = false;
             g_focusKey           = 0x2B;

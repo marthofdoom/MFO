@@ -102,6 +102,12 @@ namespace MFO::Config {
     // Not a resource cap: a weak heal SHOULD be cast many times over a long
     // fight. What looked wrong in the field was the interval, not the total.
     inline std::atomic<float> g_castCooldown{ 4.0f };
+
+    // PROBE, default off. Drive the MagicCaster state machine by hand instead
+    // of applying the effect: SetCurrentSpell + desiredTarget + RequestCastImpl,
+    // then let the engine advance it. marth's principle -- if the game code can
+    // trigger a real cast, so can we; the question is which call the AI makes.
+    inline std::atomic<bool>  g_driveCaster{ false };
     // Seconds a two-handed wielder must go between weapon swaps. The off-hand
     // swap is free and ungated; stowing a greatsword is not.
     inline std::atomic<float> g_twoHandedDebounce{ 6.0f };

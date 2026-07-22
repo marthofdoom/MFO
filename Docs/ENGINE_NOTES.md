@@ -396,6 +396,50 @@ value -- an offensive spell at a foe -- when MFO equips it. That would tell us
 whether the animated path is broadly available or narrow. It needs a follower
 who knows such a spell, not a change to MFO.
 
+### 0.17 THE FORCED CASTING PACKAGE — the mechanism with shipped precedent (2026-07-22)
+
+Found while reviewing the caster-drive probe, and it is probably the answer.
+
+**[ALYSLC](https://github.com/Joessarian/Adventurers-Like-You-Skyrim-Local-Co-op)
+(Skyrim local co-op) solves exactly MFO's problem** — making a companion NPC
+body perform a full ANIMATED cast on demand — and it does **not** drive the
+caster. For NPC players it pushes a **ranged casting package** onto the package
+stack and evaluates (`SetUpCastingPackage`,
+`src/PlayerActionFunctionsHolder.cpp:6219`). Only for the real player does it
+synthesise button events.
+
+That is consistent with everything MFO has proven: the release step is
+graph-gated (`MRh_SpellFire_Event` -> `StartCastImpl`), and a package makes the
+AI itself run the cast, which plays the animation, which fires the release.
+It is the same shape as §0.15's confirmed path (arrange the conditions, let the
+AI act) but with the AI's judgement REMOVED from the loop -- which is exactly
+what §0.16 says is missing when the AI declines a spell it does not rate.
+
+**Caveat MFO already owns:** §0.7 proved `EvaluatePackage()` NO-OPS when the
+chosen package is unchanged, so a package approach needs the condition flicker
+(§4.5a rule 3). And package overrides are §4.5a's "last resort" for good reason
+-- they are the loudest thing MFO could do to another mod's follower.
+
+**Status: RESEARCHED, not built.** The caster-drive probe (§0.13 mechanism 2)
+still ships first because it is cheap and it DISCRIMINATES: `CheckCast` refusing
+means the engine rejected the cast outright; accepted-then-wedged means the
+graph gating is real and the package is the way.
+
+#### What the probe already taught, from the review rather than the field
+
+* `RequestCastImpl` IS the engine's real entry point -- three shipped SKSE mods
+  hook it at `ActorMagicCaster` vtable index 0x3. Calling it is not a category
+  error the way sending `BeginCastLeft` would have been.
+* But **no shipped mod calls it to trigger a cast.** Every public use is a hook.
+* Its preconditions: `state == kNone`, `currentSpell` already selected by the
+  equip, and `CheckCast` passing. MSCO's hook exists specifically to DENY the
+  request once the caster is past its early states.
+* `MagicCaster::SetCurrentSpell` **does not exist at the pinned rev** -- that is
+  a current-master name, and §0.13 cited it from modern docs. Only
+  `SetCurrentSpellImpl` (a no-op on `ActorMagicCaster`) and the public
+  `currentSpell` member. Verify it; never write it by hand, or the engine's
+  select/deselect bookkeeping desyncs.
+
 ### 0.15a (historical) the path as designed, before it was observed
 
 Three cast VERBS have now been refuted: `CastSpellImmediate` (all four casting
