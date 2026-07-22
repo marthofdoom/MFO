@@ -212,25 +212,44 @@ def make_mcm_quest():
 def make_command_quest():
     """The delivery route for a package onto a follower MFO does not own.
 
-    A PACK cannot name an arbitrary actor at author time, so the target is a
-    REFERENCE ALIAS (PTDA type 4) that the DLL fills at runtime with
-    ForceRefTo. One alias, reused: MFO acts on one follower per tick (§4.1a),
-    so a pool is not needed until parallel actions are.
+    Structure copied from vanilla `CRTwinsPostQuest` (0010FE25), whose alias
+    "OldQG" attaches two packages via `ALPC`. That is the mechanism: **an alias
+    carries packages, and they apply to whoever fills it.**
+
+    ALIAS 0 IS THE FOLLOWER, not the target. The package is delivered BY being
+    on the actor's alias, so the actor must be the one in it. For a self-cast
+    the package also TARGETS alias 0, which is why the first proof is a self
+    heal -- one alias does both jobs.
+
+    ALIAS 1 is the foe, reserved for `act.cast_target` and `act.attack`. It
+    carries no packages; it exists to be pointed at.
     """
     body  = subrec('EDID', zstr("MFO_CommandQuest"))
     body += subrec('FULL', zstr("MFO Command"))
-    # Start Game Enabled, NOT run-once: it must survive to be filled repeatedly.
+    # Start Game Enabled, NOT run-once: it must survive to be refilled.
     body += subrec('DNAM', qust_dnam(0x0001))
     body += subrec('NEXT', b'')
-    # Alias 0 — the actor a package is being pushed onto.
+
+    # ── alias 0: the actor MFO is commanding, and the package it carries ──
+    # Flags: Optional (0x02) so the quest starts unfilled, Allow Reuse In Quest
+    # (0x08) because MFO refills it every action, Allow Reserved (0x200) so a
+    # follower another quest has reserved -- which is EVERY framework follower --
+    # can still be taken.
     body += subrec('ALST', struct.pack('<I', 0))
-    body += subrec('ALID', zstr("MFO_CommandTarget"))
-    # 0x00000004 Allow Reserved, 0x00000010 Quest Object -- neither wanted.
-    # Flags 0: a plain forced reference, filled and cleared by the DLL.
-    body += subrec('FNAM', struct.pack('<I', 0))
+    body += subrec('ALID', zstr("MFO_CommandActor"))
+    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE))
     body += subrec('VTCK', struct.pack('<I', 0))
     body += subrec('ALED', b'')
-    body += subrec('ANAM', struct.pack('<I', 1))   # next alias id
+
+    # ── alias 1: the foe, for targeted verbs. No packages. ──
+    body += subrec('ALST', struct.pack('<I', 1))
+    body += subrec('ALID', zstr("MFO_CommandTarget"))
+    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    body += subrec('VTCK', struct.pack('<I', 0))
+    body += subrec('ALED', b'')
+
+    body += subrec('ANAM', struct.pack('<I', 2))   # next alias id
     return record('QUST', FID_COMMAND_QUEST, 0, body)
 
 
@@ -268,7 +287,9 @@ def make_cast_package():
     body += pack_input("Location", 'PLDT', struct.pack('<IiI', 0, 0, 0x1F4))
     # Spell.
     body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, FREF_HEAL_SELF, 0))
-    # Target -- ALIAS 0 of the command quest, filled at runtime.
+    # Target -- ALIAS 0, i.e. the follower THEMSELVES. A self heal, so the one
+    # alias serves as both carrier and target. Alias 1 exists for the foe-
+    # targeted verbs and is pointed at by a separate package.
     body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 4, 0, 0))
     body += pack_input("Bool",  'CNAM', struct.pack('<B', 0))          # HoldWhenBlocked
     body += pack_input("Float", 'CNAM', struct.pack('<f', 1.0))        # CastTimeMin

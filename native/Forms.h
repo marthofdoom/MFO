@@ -26,9 +26,19 @@ namespace MFO::Forms {
     inline constexpr RE::FormID kGrantedKeyword   = 0x802;   // RESERVED, unused
     inline constexpr RE::FormID kStartupQuest     = 0x804;
     inline constexpr RE::FormID kMCMQuest         = 0x808;
+    // M9 (DESIGN §4.5c): the actuation records.
+    inline constexpr RE::FormID kCommandQuest     = 0x80A;
+    inline constexpr RE::FormID kCastPackage      = 0x820;
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
+
+    // M9. Resolved so the first questions about these records are answered at
+    // LOAD, in the log, before any behaviour depends on them: do they exist,
+    // did the quest start, and does the package still ride a vanilla template
+    // after the ESP round-trip?
+    inline RE::TESQuest*   g_commandQuest = nullptr;
+    inline RE::TESPackage* g_castPackage  = nullptr;
 
     // Resolve at kDataLoaded. Returns false if anything required is missing.
     // A missing form disables ONE feature with a named log line -- never a

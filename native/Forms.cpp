@@ -28,6 +28,42 @@ namespace MFO::Forms {
         g_fieldOrders = Look<RE::SpellItem>(kFieldOrdersSpell, "MFO_FieldOrdersPower");
         g_grantedKywd = Look<RE::BGSKeyword>(kGrantedKeyword, "MFO_GrantedSpell");
 
+        // ── M9 records ──────────────────────────────────────────────────
+        g_commandQuest = Look<RE::TESQuest>(kCommandQuest, "MFO_CommandQuest");
+        g_castPackage  = Look<RE::TESPackage>(kCastPackage, "MFO_CastPackage");
+
+        // ANSWER THE RECORD QUESTIONS AT LOAD, not when behaviour depends on
+        // them. Three things can be wrong with a hand-authored PACK and each
+        // fails silently in game: the record does not load, the alias package
+        // list did not attach, or the template pointer did not survive the
+        // round-trip. All three are readable right here.
+        if (g_castPackage) {
+            spdlog::info("[m9] MFO_CastPackage resolved -> {:08X}, procedureType={}, hasData={}",
+                         g_castPackage->GetFormID(),
+                         static_cast<std::uint32_t>(g_castPackage->procedureType.get()),
+                         g_castPackage->data ? "Y" : "n");
+        } else {
+            spdlog::error("[m9] MFO_CastPackage did NOT resolve -- the PACK record is malformed "
+                          "or the ESP is stale. M9 cannot work.");
+        }
+
+        if (g_commandQuest) {
+            spdlog::info("[m9] MFO_CommandQuest resolved -> {:08X}, {} alias(es)",
+                         g_commandQuest->GetFormID(),
+                         static_cast<int>(g_commandQuest->aliases.size()));
+            for (auto* a : g_commandQuest->aliases) {
+                if (!a) continue;
+                auto* ra = skyrim_cast<RE::BGSRefAlias*>(a);
+                spdlog::info("[m9]   alias {} '{}' fillType={} isRefAlias={}",
+                             a->aliasID,
+                             a->aliasName.empty() ? "?" : a->aliasName.c_str(),
+                             ra ? static_cast<std::uint32_t>(ra->fillType.get()) : 0u,
+                             ra ? "Y" : "n");
+            }
+        } else {
+            spdlog::error("[m9] MFO_CommandQuest did NOT resolve -- no alias to deliver a package.");
+        }
+
         const bool ok = g_fieldOrders != nullptr;
         if (!ok) {
             spdlog::error("[forms] Field Orders power did not resolve -- the board cannot be opened. "
