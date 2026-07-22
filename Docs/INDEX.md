@@ -25,8 +25,11 @@ always fires and the effect always lands, but the ANIMATION only happens when
 the follower's AI independently judges the spell worth casting. For a weak heal
 it never did.
 
-**Next, and it is the last unknown in the core loop: M9, the forced casting
-package.** It is the only mechanism that gives an uninterruptible commanded
+**Next: M9, the ACTUATION LAYER** (DESIGN §4.5c, ruled 2026-07-22). A package
+*is* the action — for casting, attacking, moving, holding position, using items.
+Taking over the actor for an action's duration enforces that action's validity;
+it does not replace the follower's AI, which is what vanilla does when it casts.
+MFO owns the action, never the follower. It is the only mechanism that gives an uninterruptible commanded
 cast. Fully researched from ALYSLC's shipped ESP; §0.17 has the byte-level
 record layout. **One question decides its size and is not yet answered:** can a
 PACK instance point `PKCU.template` at a VANILLA template, or must one be

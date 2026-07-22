@@ -221,7 +221,11 @@ remaining surface in MFO that could damage another mod's state.
 
 ---
 
-## M9 — The forced casting package *(the animated-cast endgame)*
+## M9 — The actuation layer: a package IS the action *(RULED 2026-07-22)*
+
+**Scope changed.** This is no longer the casting fix — it is how EVERY
+single-action gambit executes: cast, attack, move, hold position, use item.
+See DESIGN.md §4.5c for the ruling and the doctrine reasoning.
 
 **Fully researched, not started.** ENGINE_NOTES §0.17 records the mechanism read
 from ALYSLC's source. This is the thing that makes a follower cast **on

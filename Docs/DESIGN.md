@@ -1025,6 +1025,69 @@ how often MFO is willing to pay that, independent of the rule's own suppression.
   rule FAILS with a reason (§5.3 — competence is not permission). MFO does not
   grant spells; that is out of scope (§5.4).
 
+### 4.5c THE ACTUATION ARCHITECTURE — a package IS the action (RULED — marth, 2026-07-22)
+
+**Every single-action gambit is executed as a package.** Not casting only —
+casting, attacking, moving, holding position, using an item. One mechanism.
+
+#### The doctrine question, and its answer
+
+§4.4 says *layer on top of vanilla AI, never replace it*, and a package **takes
+over the actor for its duration**. That looks like a violation. It is not, and
+the distinction is exact:
+
+> **Taking over for the duration of an action enforces the VALIDITY of that
+> action. It does not replace the follower's AI.** — marth
+
+Vanilla AI does precisely this. When the engine's combat controller decides to
+cast, it owns the actor until that cast completes; nothing else interrupts it.
+MFO issuing an action the player's list chose, and owning the actor exactly as
+long, is **symmetric with the engine's own behaviour** — not an escalation of it.
+
+**What still layers, and this is what keeps the doctrine intact:**
+
+* The **choice** of what to do is MFO's rules sitting on top of vanilla — it
+  never replaces the follower's own decision-making, it preempts it for one
+  action.
+* **Between actions the follower is entirely their own.** The package pops the
+  moment the action completes or the rule stops winning.
+* MFO owns **the action**, never **the follower**.
+
+#### Why this and not the alternatives
+
+An action vanilla AI can interrupt mid-flight is not an action, it is a
+suggestion — and a gambit is a commitment. Every non-package mechanism MFO tried
+is exactly that suggestion:
+
+| Mechanism | Refuted because |
+|---|---|
+| `CastSpellImmediate` (all 4 sources) | applies an effect, no animation, AI never involved |
+| `Projectile::LaunchSpell` | no projectile on a self-delivery spell; bypasses the caster |
+| `DoCombatSpellApply` | the Papyrus twin of the first — instant, silent |
+| Animation events | the graph EMITS them; nothing can send them |
+| Equip + let the AI cast | works, but **AI-discretionary** (§0.16) — it declined a weak heal every time |
+| Driving `MagicCaster` directly | wedges at state 1 without a package to run it |
+
+The package is what remains, and it is the only one that makes the action
+*happen* rather than *hoping* it happens.
+
+#### Consequences
+
+* **§4.5a's "package overrides are a last resort" is superseded for actuation.**
+  The caution stands for anything persistent; a per-action package that pops
+  immediately is a different thing from a standing override.
+* **Framework contention (§4.6) becomes the primary compatibility risk**, not a
+  footnote. MFO pushes packages onto followers managed by NFF, Inigo and others.
+  It must restore exactly what it displaced, and announce contention in the log.
+* **The action must be bounded.** A package that does not pop is MFO owning the
+  follower, which IS the violation. Every action gets a completion condition and
+  a hard timeout.
+
+#### What this does to the roadmap
+
+M9 stops being "the casting fix" and becomes **the actuation layer** — the
+foundation the rest of the vocabulary is built on, not a patch beside it.
+
 ### 4.6 Framework contention
 
 `GetRunningPackage` / `GetCurrentPackage` tell MFO what is actually driving
