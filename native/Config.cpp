@@ -101,6 +101,7 @@ namespace MFO::Config {
             else if (a_key == "iCastSource")        setI(g_castSource, 0, 3);
             else if (a_key == "bEquipToCast")       setB(g_equipToCast);
             else if (a_key == "fAiCastGrace")       setF(g_aiCastGrace, 0.0f, 30.0f);
+            else if (a_key == "bScreenNotify")      setB(g_screenNotify);
             else if (a_key == "bCommandCast")       setB(g_commandCast);
             else if (a_key == "bCommandTarget")     setB(g_commandTarget);
             else if (a_key == "iFocusKey")          setI(g_focusKey, 0, 255);
@@ -159,6 +160,7 @@ namespace MFO::Config {
             g_castSource         = 3;
             g_equipToCast        = false;
             g_aiCastGrace        = 3.0f;
+            g_screenNotify       = false;
             g_commandCast        = false;
             g_commandTarget      = false;
             g_focusKey           = 0x2B;

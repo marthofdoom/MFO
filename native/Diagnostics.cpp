@@ -91,6 +91,12 @@ namespace MFO::Diagnostics {
                         spdlog::info("[cast] {:08X} {} CAST {} ({:08X}) -- AI-fired: did it animate?",
                                      caster->GetFormID(), caster->GetName(),
                                      sp && sp->GetName() ? sp->GetName() : "?", a_event->spell);
+                        if (Config::g_screenNotify.load()) {
+                            RE::DebugNotification(
+                                std::format("MFO: {} CAST {} (their AI)",
+                                            caster->GetName() ? caster->GetName() : "?",
+                                            sp && sp->GetName() ? sp->GetName() : "?").c_str());
+                        }
                     }
                     return RE::BSEventNotifyControl::kContinue;
                 }

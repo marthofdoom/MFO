@@ -215,6 +215,18 @@ namespace MFO::Loadout {
         mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
         a_actor->DrawWeaponMagicHands(true);
 
+        // "WATCH HIM NOW." The animation question needs a human eye at the
+        // right instant, and the log cannot deliver that mid-fight. The equip
+        // is the earliest possible warning -- everything interesting happens
+        // in the seconds after it.
+        if (Config::g_screenNotify.load()) {
+            const char* nm = a_actor->GetName();
+            const char* sp = a_spell->GetName();
+            RE::DebugNotification(std::format("MFO: {} readying {} -- WATCH",
+                                              nm ? nm : "follower",
+                                              sp ? sp : "a spell").c_str());
+        }
+
         auto& debt = g_debt[id];
         debt.displacedLeft = willDisplaceLeft;
         debt.stowedWeapon  = willStowWeapon;

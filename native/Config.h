@@ -85,6 +85,10 @@ namespace MFO::Config {
     // OWN AI to cast it before casting silently instead. Zero would recreate
     // the confound this exists to prevent.
     inline std::atomic<float> g_aiCastGrace{ 3.0f };
+    // On-screen corner messages for the probe. The animation question can ONLY
+    // be answered by a human watching the follower at the right moment, and a
+    // log line cannot tell them when that moment is.
+    inline std::atomic<bool>  g_screenNotify{ false };
     // Seconds a two-handed wielder must go between weapon swaps. The off-hand
     // swap is free and ungated; stowing a greatsword is not.
     inline std::atomic<float> g_twoHandedDebounce{ 6.0f };
