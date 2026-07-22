@@ -516,7 +516,15 @@ def build_usemagic(fid, edid, spell, target, bounds, ctda=b'', qnam=None, waiver
     # PLDT type=12 ("no location"), radius 10000 -- the template default is
     # 12/0/500; TG08B's combat override uses 12/0/10000. Type 0 REQUIRES a
     # reference: 0 of 4,048 vanilla type-0 PLDTs have a null target.
-    body += pack_input("Location", 'PLDT', struct.pack('<IiI', 12, 0, 10000))
+    # PLDT: type 12 (no location) roots the actor -- field-confirmed, he stops
+    # even in combat. MFO_PLDT_PLAYER=1 swaps in Ancano's shape instead:
+    # type 0 "near reference", the PLAYER, radius 500. 20 vanilla UseMagic
+    # instances use type 0 with a radius; whether that frees movement or merely
+    # means "walk there first" is the open question (§0.27).
+    if os.environ.get("MFO_PLDT_PLAYER") == "1":
+        body += pack_input("Location", 'PLDT', struct.pack('<IiI', 0, FREF_PLAYER, 500))
+    else:
+        body += pack_input("Location", 'PLDT', struct.pack('<IiI', 12, 0, 10000))
     body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, spell, 0))
     if tkind == 't0':
         body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 0, tval, 0))

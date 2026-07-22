@@ -1140,19 +1140,50 @@ while the package supplied casting. marth: *"He does still stop in combat."*
 **A `UseMagic` package roots the actor even mid-fight**, with the same
 `PKDT 0x00100000` / `PLDT type 12` that Mercer's combat override carries.
 
-So movement is a real problem with no free answer, and the candidates are now:
+#### And "vanilla casters plant themselves too" is FALSE
 
-1. **Accept a SHORT stop.** Vanilla casters plant themselves to cast too. With
-   `CastTime` 1-3 s and the alias cleared immediately after, a follower pausing
-   ~2 s per cast is normal-looking. **This is the cheapest and probably right
-   answer** — the fault may be duration, not stopping at all.
-2. **`Place to Travel` (`PLDT`), currently type 12 = no destination.** Pointing
-   it at the player would make him travel while casting — but that is MFO
-   managing movement, which is what marth ruled out.
-3. **A different template**, if one combines travel with casting. Unsurveyed.
+marth: *"Vanilla casters certainly do not stand still."* Correct -- enemy mages
+strafe, back off and close distance while casting. That kills the cheap answer.
 
-**Do (1) first**: it needs no new mechanism, and if a 2-second pause per cast
-reads as normal then there is nothing to build.
+**The reason is structural: vanilla combat casters are not running packages at
+all.** They are running combat AI, which casts AND moves. A `UseMagic` package
+is a "stand and cast" behaviour used by quest and scene NPCs -- Colette
+practising, Ancano at the Eye, Mercer in a set-piece.
+
+The `PLDT` "Place to Travel" data says the same thing:
+
+| PLDT type | count | meaning |
+|---|---|---|
+| 0 near reference (radius 500/128/50/32) | 20 | walk to the marker, then cast |
+| 12 NO LOCATION | 20 | cast where you stand -- **MFO's current value** |
+| 6 object type / 2 near pkg start / 8 alias | 6 | |
+
+Every one of those is *go there and stand*, or *stand*. **None is "cast while
+moving freely".**
+
+#### So this is a real architectural limit, and the choice is a design one
+
+| | animated? | mobile? | deterministic? |
+|---|---|---|---|
+| Package (`UseMagic`) | yes | **NO** | yes -- MFO picks spell and target |
+| Equip + let their AI cast | yes | yes | **NO** -- AI declines what it does not rate (§0.16) |
+
+**MFO cannot currently have all three.** The honest options:
+
+1. **Minimise the root.** Short `CastTime`, clear the alias the instant the cast
+   fires. The follower stops for about a second per cast rather than standing
+   through a whole exchange. Cheap, and worth measuring before anything else.
+2. **`PLDT type 0` with a radius**, matching Ancano's shape (`radius 500`)
+   instead of type 12. UNTESTED and it may only mean "walk there first", but it
+   is a one-line change and 20 vanilla records use it.
+3. **Hybrid:** equip-and-let-the-AI-cast as the normal path (mobile), and the
+   package only when a rule must fire and the AI will not. Two actuators, and
+   the board would have to say which one ran.
+4. **Accept it** for casting specifically, and note that `act.attack` does not
+   have this problem -- the targeting hook steers combat AI, which keeps moving.
+
+**Not yet known:** whether option 2 changes anything. That is the next cheap
+experiment and it needs no new mechanism.
 
 #### The 10-second delay was ours, not the engine's
 
