@@ -1029,6 +1029,60 @@ supplies nothing" or something narrower. Cheap test: drop the quest priority
 below 50 and see whether he follows normally while still in the alias. That
 also tells us whether priority 60 is even needed.
 
+### 0.25 ARBITRATION IS BY QUEST PRIORITY, NOT PACKAGE VALIDITY — and that
+resolves #69 (2026-07-22)
+
+Two field results, same build, one byte apart:
+
+| Quest priority | Probe selected | Probe at 0 |
+|---|---|---|
+| **60** (above `DialogueFollower`'s 50) | **casts** | **follower ROOTED** |
+| **25** (below it) | **nothing happens** | — |
+
+**So the engine does not pick "the highest-priority quest that HAS a valid
+package". It picks the highest-priority quest whose ALIAS CLAIMS THE ACTOR, and
+then asks that quest for a package.** MFO at 60 claims the follower; if no alias
+package is valid, MFO supplies nothing and the actor idles. MFO at 25 never
+claims him, so its packages are never consulted even when their conditions pass.
+
+That is the mechanism behind §0.24, and it means the two facts are not in
+tension — they are the same fact.
+
+#### The resolution: ALIAS MEMBERSHIP IS THE GATE
+
+MFO must be high-priority to act at all. It must therefore hold a follower in
+the alias **only while it wants an action**, which is exactly what §4.5c and #69
+already require — now with the mechanism understood rather than inferred.
+
+**And the CTDA gates are a testing artefact.** The probe ladder needs them
+because it force-fills the alias permanently via `ALFR` and switches probes with
+a global. Production does the opposite:
+
+```
+fill alias  ->  package is UNGATED, so it is valid immediately  ->  action runs
+clear alias ->  MFO no longer claims the follower               ->  normal AI
+```
+
+No condition, no global, and **no freeze window**: the package is valid the
+instant the alias fills, because MFO fills the alias precisely when it wants
+that package to run. There is never a moment where MFO claims a follower and
+offers nothing.
+
+| | Probe ladder | Production |
+|---|---|---|
+| Alias fill | permanent (`ALFR`) | per-action, cleared on completion |
+| Package | gated on a GLOB | **ungated** |
+| What selects | the global | **alias membership** |
+
+#### Consequences
+
+* **Priority 60 stays**, and it is not the cause of anything — it is the
+  requirement.
+* A follower is either mid-action-and-claimed, or free. There is no third state,
+  and any code path that can produce one is a bug (#69).
+* §4.6 contention gets simpler than feared: MFO does not permanently outrank
+  another framework, it outranks it for the seconds an action takes.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

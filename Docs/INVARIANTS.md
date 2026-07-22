@@ -877,3 +877,19 @@ framework manages that follower.
 and never park a follower there.** Clearing is correctness, not tidiness — a
 missed clear is a frozen follower. The watchdog timeout, the `kPreLoadGame`
 release and the post-load reconcile are all load-bearing, not defensive.
+
+### 70. Alias membership is the gate; production packages carry no conditions
+
+Measured (§0.25): the engine picks the highest-priority quest whose alias CLAIMS
+the actor, then asks it for a package. It does not skip a claiming quest that has
+nothing valid. So MFO at priority 60 with an empty alias freezes the follower,
+and MFO at 25 never gets asked at all.
+
+**Therefore production packages are UNGATED.** MFO fills the alias exactly when
+it wants that action, so the package is valid the instant it arrives and MFO
+never claims a follower while offering nothing. Fill = act, clear = release.
+
+The probe ladder's `GetGlobalValue` conditions exist only because it force-fills
+the alias permanently for testing convenience. **Do not carry that pattern into
+production** — a gated package on a permanently-filled alias is precisely the
+frozen-follower bug of #69.
