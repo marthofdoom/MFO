@@ -955,6 +955,76 @@ precedent: "removed rather than shipped half-accurate").
 reason string when the DLL reports its mechanism unavailable. A 1.0 shipping
 Tier A only is a *complete* mod with a smaller verb list, not a broken one.
 
+### 4.5b The equip policy — how a gambit spell actually gets cast (DECIDED — marth, 2026-07-21)
+
+**The problem.** `CastSpellImmediate` applies an effect with NO animation, from
+ANY casting source (ENGINE_NOTES §0.8, §0.10 — tested, refuted). The reason is
+structural: `ActorMagicCaster` inherits `SimpleAnimationGraphManagerHolder` and
+sinks `BSAnimationGraphEvent`, so a real cast is *driven by the animation
+graph*. `CastSpellImmediate` is the trap/script path and bypasses it (§0.13).
+
+**Therefore MFO must make the follower cast, not cast on the follower's
+behalf** — which is what §4.4's layering doctrine said all along. The vanilla
+flow is already fully animated; every enemy mage in the game uses it.
+
+**The cost, and the whole design problem:** equipping a spell consumes a hand.
+
+#### The ruling
+
+**The off-hand is the pivot. A spell swapped into the off hand is essentially
+free** — the follower keeps their weapon, keeps fighting, and the animation is
+the real one.
+
+| Follower is holding | Policy |
+|---|---|
+| Spell already equipped, or is a caster | **Nothing to do.** Free — vanilla AI casts it animated |
+| **One-handed weapon** (right hand) | **Equip the spell to the OFF HAND.** Free; the weapon is untouched |
+| One-handed + **shield** | Equip to off hand, displacing the shield. **The shield is restored when the follower TAKES A HIT** — not immediately |
+| **Two-handed** weapon (incl. bow/crossbow) | Equip/restore, **with a debounce.** The weapon must leave both hands, so swapping is expensive and must not thrash |
+| Empty hands | Equip to off hand |
+
+#### The backstop (AMENDED after review, 2026-07-21)
+
+Hit-only restore has a hole: a follower who is never hit again — the fight
+ends, the player tanks, the follower is ranged — keeps the shield benched
+forever. **§4.5b's first invariant outranks its own optimization**, so the
+shield also comes back when COMBAT ENDS, and on dismissal. A shield is deferred,
+never abandoned.
+
+#### Why the shield restores on a hit, not on a timer
+
+A shield's only job is to matter when something hits you. Restoring it
+immediately after every cast produces a swap-storm — equip, cast, unequip,
+re-equip — for a benefit nobody experiences until they are attacked. Deferring
+the restore to the moment the follower actually takes damage means the shield
+is back exactly when it starts mattering, and costs nothing the rest of the
+time. This needs a `TESHitEvent` sink.
+
+#### Why two-handed gets a debounce and one-handed does not
+
+The off-hand swap leaves the follower armed and fighting, so it can happen as
+often as the rules want. A two-handed wielder must *stow their weapon entirely*
+to cast: it is visible, it interrupts their attack, and a rule that fires often
+would leave them permanently sheathing and drawing. The debounce is a floor on
+how often MFO is willing to pay that, independent of the rule's own suppression.
+
+#### Invariants this creates
+
+- **MFO restores what it displaced.** A follower who loses a shield to a gambit
+  gets it back. Anything else is "the mod ate my follower's gear".
+- **The ledger is transient, never persisted.** It records a live loadout, and a
+  loadout is engine state; see INVARIANTS #16.
+- **One unpaid debt at a time.** If MFO already owes a follower gear, it takes
+  nothing else from them. Overwriting a ledger entry orphans the first item
+  permanently — and the second entry can be a *spell*, which would then be
+  "restored" with the wrong engine call entirely.
+- **A follower already holding a spell is left alone.** Their hands are their
+  own (or MFO's from last tick); rearranging them is how the orphan above
+  happens.
+- **Never `AddBaseSpell`** (#20). If a follower does not know the spell, the
+  rule FAILS with a reason (§5.3 — competence is not permission). MFO does not
+  grant spells; that is out of scope (§5.4).
+
 ### 4.6 Framework contention
 
 `GetRunningPackage` / `GetCurrentPackage` tell MFO what is actually driving
@@ -1099,6 +1169,67 @@ the thing §8.5's clean-uninstall promise is most exposed to. Consequently:
   would be a bug wearing a principle's clothes.
 - On load, MFO **clears any commanded-target alias it owns** before the first
   tick, so a save made mid-order does not resume pointing at something stale.
+
+### 4.7a THE MECHANISM (SUPERSEDES §4.7's mechanism list — 2026-07-21)
+
+§4.7 designed target commitment around an alias + global + package override +
+`StartCombat`. **That whole stack is wrong**, and the field proved each piece:
+
+* `StartCombat` via a sourced relocation returned OK and **did not take**
+  (ENGINE_NOTES §0.12).
+* `EvaluatePackage` **no-ops** when the chosen package is unchanged (§0.7), so
+  package-driven retargeting needs a condition flicker to do anything at all.
+* And the premise was unreachable regardless: **Papyrus has no combat-target
+  setter.** None. Not in `Actor.psc`, SKSE, po3, or PapyrusUtil — only
+  `StartCombat`/`StopCombat` and a *getter* (§0.14).
+
+**The actual mechanism is a vfunc hook on `Character::UpdateCombat`** (vtable
+index `0xE4`), writing the latched target into `currentCombatTarget` and
+`combatController->targetHandle` after the original runs. Reference
+implementation: `SmartNPCTargetSelector.dll`, open source, shipped, and
+installed in LoreRim on this machine.
+
+#### What this changes about commitment
+
+**Retention is a property of the MECHANISM, not of the target.** §4.7 asked
+"does our commanded target stick?" and two field sessions failed to answer it.
+The question was malformed. The engine re-picks continuously — that is the
+premise the reference implementation is built on — so:
+
+* A write from MFO's 7.5 Hz tick **would** drift, in the gaps between ticks.
+* Re-asserting inside the hook runs at the ENGINE's cadence, so it cannot drift.
+* Re-asserting is a handle compare-and-write, **not** a `StopCombat`/`StartCombat`
+  reset — so #22a's "no combat-state churn" survives intact.
+
+The three action lifecycles, now that the mechanism is known:
+
+| Action | Lifecycle |
+|---|---|
+| Attack target | **Continuous** — latch holds it, hook re-asserts at engine cadence |
+| Cast at target | **Transient** — suppression window governs it |
+| Formation / hold | **State-set** — issued once, re-assert on cell attach |
+
+#### Two rules the mechanism imposes
+
+1. **ONLY REDIRECT WHEN THE ENGINE ALREADY HAS A TARGET.** If vanilla cleared
+   it — foe fled, died, went undetected, combat ended — it did so for reasons
+   MFO cannot see. Commanding WHICH foe is ours; commanding THAT there is a foe
+   is fighting the engine's own validity logic, and that is how a mod ends up
+   with followers swinging at things they cannot perceive.
+2. **Write only for followers under an active gambit latch.** Every other actor
+   passes through untouched. This is what keeps the blast radius to "followers
+   under player orders" — the only defensible half of the split when a
+   target-selection mod is also installed.
+
+### 4.7b MFO SHIPS NO PAPYRUS SCRIPT (RULED — 2026-07-21)
+
+Previously an unexamined preference. Now a finding: **a companion `.psc` could
+not deliver the attack verb at all**, because the capability does not exist in
+the script language. And everything a script *could* deliver
+(`KeepOffsetFromActor`, `SetDontMove`, `EquipSpell`) is reachable from the DLL
+by VM dispatch with identical semantics and no shipped script, no VMAD, no
+quest, and no compile step. The no-script architecture is confirmed, not
+indulged.
 
 ### 4.8 The logistics table — non-combat rules (DECIDED — marth)
 

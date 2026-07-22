@@ -276,3 +276,33 @@ fails** — they are cheap and they unblock the next build.
 
 **Read the log regardless of what the HUD shows.** Every fired rule and every
 fall-through-with-reason logs at info.
+
+---
+
+## Session 6 — the attack verb (ENGINE_NOTES §0.14)
+
+**Written before the code.** This is the decisive probe: one session answers
+whether the redirect takes, whether it sticks, and how badly it fights the one
+mod known to contend with it.
+
+**Setup:** `bCommandTarget = 1` in `MFO.ini`. **Requires a MULTI-ENEMY fight** —
+with one hostile present the test is inconclusive by construction, which is
+exactly the mistake that wasted the §0.6 session.
+
+| # | Step | Expect | Failure means |
+|---|---|---|---|
+| 1 | Load, check the log | `[target] UpdateCombat vfunc hook installed (Character vtbl idx 0xE4)` | The vtable index is wrong for this runtime — stop, nothing below is valid |
+| 2 | Same line, if on LoreRim | `SmartNPCTargetSelector.dll IS LOADED` warning | Conflict detection failed; results are unattributable |
+| 3 | Multi-enemy fight, latch a follower onto a foe they are **not** already fighting | Follower switches to that foe | **The redirect does not take** — the whole mechanism is wrong |
+| 4 | Watch `assert / drift / pass` counts in the state report | `drift` counts the engine re-picking away from our choice | This is §4.7's real measurement — record the number either way |
+| 5 | Kill the commanded foe | Follower moves on normally, no stuck state | The latch outlives its target |
+| 6 | Let the foe flee / lose detection | Follower does **not** chase something it cannot perceive | The "engine already has a target" guard (#59) is not working |
+| 7 | Run once with `bCommandTarget = 0` in the same fight | Baseline drift for comparison | Without this, step 4's number means nothing |
+
+**Definition of done:** step 1 (hook installs), step 3 (redirect takes), and
+steps 4+7 together (a drift number WITH a baseline). 5 and 6 are safety checks —
+if either fails, the mechanism is not ready regardless of how well 3 worked.
+
+**The number that matters:** drift with the hook on should be *corrected* every
+combat update. If drift climbs and the follower still visibly fights the wrong
+foe, the write is landing somewhere the engine does not read.

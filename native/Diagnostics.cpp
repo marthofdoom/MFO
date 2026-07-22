@@ -8,6 +8,9 @@
 #include "Board.h"
 #include "Probe.h"
 #include "Scheduler.h"
+#include "Loadout.h"
+#include "Papyrus.h"
+#include "Targeting.h"
 
 // The M3 test instrument.
 //
@@ -39,6 +42,27 @@ namespace MFO::Diagnostics {
         // mid-sleep across a revert->load exits instead of running alongside
         // its own replacement.
         std::atomic<std::uint64_t> g_pumpEpoch{ 0 };
+
+        // The shield restore trigger (DESIGN §4.5b). A shield only matters when
+        // something is hitting you, so that is exactly when MFO gives it back
+        // -- instead of churning equip/unequip after every cast.
+        class HitSink final : public RE::BSTEventSink<RE::TESHitEvent> {
+        public:
+            static HitSink* GetSingleton() { static HitSink s; return &s; }
+
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* a_event,
+                                                  RE::BSTEventSource<RE::TESHitEvent>*) override {
+                if (!a_event || !a_event->target) return RE::BSEventNotifyControl::kContinue;
+                auto* actor = a_event->target->As<RE::Actor>();
+                if (!actor) return RE::BSEventNotifyControl::kContinue;
+                const auto id = actor->GetFormID();
+                if (!Followers::IsTracked(id)) return RE::BSEventNotifyControl::kContinue;
+
+                // Sinks QUEUE; equipping is engine work (INVARIANTS #1).
+                SKSE::GetTaskInterface()->AddTask([id]() { Loadout::OnFollowerHit(id); });
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
 
         class SpellSink final : public RE::BSTEventSink<RE::TESSpellCastEvent> {
         public:
@@ -97,6 +121,7 @@ namespace MFO::Diagnostics {
                         if (diagTurn) Followers::Refresh();
 
                         Scheduler::Tick();
+                        Loadout::Tick();   // hand back stowed two-handers
 
                         if (diagTurn) {
                             Probe::Tick();
@@ -129,6 +154,27 @@ namespace MFO::Diagnostics {
         // -- TEST_GUIDE 2C: the dispatch-volume question -----------------
         const double mins = Rapport::SessionMinutes();
         const auto   ce   = Rapport::CombatEventCount();
+        // EVALUATOR HEARTBEAT. Without this, "no rule fired" and "the evaluator
+        // never ran" produce an IDENTICAL log -- which is exactly what the
+        // 0.5.1 session hit: seeds landed, no [eval] line appeared, and nothing
+        // could distinguish correct silence from a dead loop. Tick counters
+        // existed since 0.5.0 and were surfaced nowhere (#53).
+        spdlog::info("  evaluator: {} tick(s) this session, last {:.3f} ms  [{}]",
+                     Scheduler::TicksThisSession(), Scheduler::LastTickMs(),
+                     Scheduler::TicksThisSession() == 0
+                         ? "NEVER RAN -- pump or gating problem"
+                         : "running");
+        spdlog::info("  loadout: {} follower(s) owed displaced gear", Loadout::PendingRestores());
+        {
+            const auto t = Targeting::GetStats();
+            spdlog::info("  targeting: hook {} | {} latched | {} assert(s), {} drift(s), {} pass(es){}",
+                         Targeting::IsHooked() ? "INSTALLED" : "off",
+                         t.latched, t.asserts, t.drifts, t.passes,
+                         t.conflictMod ? "  [SmartNPCTargetSelector ALSO LOADED]" : "");
+        }
+        spdlog::info("  papyrus VM: {} (dispatched {}, failed {})",
+                     Papyrus::Available() ? "reachable" : "UNREACHABLE -- commanded casts disabled",
+                     Papyrus::Dispatches(), Papyrus::Failures());
         spdlog::info("  combat events (teammate-filtered): {} in {:.1f} min ({:.1f}/min)",
                      ce, mins, mins > 0.01 ? ce / mins : 0.0);
 
@@ -185,6 +231,8 @@ namespace MFO::Diagnostics {
         auto* holder = RE::ScriptEventSourceHolder::GetSingleton();
         if (holder) {
             holder->AddEventSink<RE::TESSpellCastEvent>(SpellSink::GetSingleton());
+            holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
+            spdlog::info("[loadout] hit sink registered (shield restore)");
             spdlog::info("[diag] Field Orders power will dump a state report");
         } else {
             spdlog::error("[diag] no event holder -- power dump unavailable");

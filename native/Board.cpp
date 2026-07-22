@@ -21,6 +21,7 @@
 #include "State.h"
 #include "Probe.h"
 #include "Vocabulary.h"
+#include "Scheduler.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -416,6 +417,15 @@ namespace MFO::Board {
                 // it sits one line above each follower's LIFETIME rapport. Read
                 // as "0 rap" next to a follower showing 5, it looks like the
                 // mod lost the save (marth, 2026-07-21 -- exactly that report).
+                // "0 eval" is the single most diagnostic number on screen: it
+                // separates "no rule matched" from "the evaluator is dead".
+                if (snap.evalTicks == 0) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "[eval: NEVER RAN]");
+                } else {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("[eval %u tk %.2fms]", snap.evalTicks, snap.evalMs);
+                }
                 ImGui::TextDisabled("| session %u kill  %u rap  %.0f/hr", snap.kills, snap.rapport,
                                     snap.minutes > 0.01 ? snap.rapport * 60.0 / snap.minutes : 0.0);
                 ImGui::Separator();
@@ -695,6 +705,8 @@ namespace MFO::Board {
         s.minutes      = Rapport::SessionMinutes();
         s.kills        = Rapport::SessionKills();
         s.rapport      = Rapport::SessionRapport();
+        s.evalTicks    = Scheduler::TicksThisSession();
+        s.evalMs       = Scheduler::LastTickMs();
 
         s.rate         = Config::g_rapportRate.load();
         s.killVal      = Config::g_rapportKill.load();

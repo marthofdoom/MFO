@@ -49,6 +49,8 @@ namespace MFO::Board {
         bool  allowSummons = false;
         int   quirksActive = 0, quirksInactive = 0;
         std::uint64_t frame = 0;
+        std::uint32_t evalTicks = 0;
+        double        evalMs = 0.0;
         // last credited kill, for explaining a boss/standard classification
         std::string lastKillName, lastKillKind;
         std::uint16_t lastVictimLevel = 0, lastPlayerLevel = 0;

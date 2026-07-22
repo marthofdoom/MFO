@@ -179,6 +179,136 @@ the engine rejected the target at 2792u.
 **§4.7 standing orders rest on nothing.** Not building the target latch was the
 right call.
 
+### 0.13 THE CAST FLOW — why nothing animates, from the engine side (2026-07-21)
+
+Researched from primary sources after marth asked why this had not been done.
+It had not, and that was a process failure: the animation problem was declared
+"the biggest open problem in the mod" on the strength of guessing, without
+reading the engine surface or looking at mods that already solved it.
+
+**`MagicCaster` is a state machine, and `CastSpellImmediate` skips it.**
+
+```
+RequestCastImpl -> StartChargeImpl -> StartReadyImpl -> StartCastImpl -> FinishCastImpl
+```
+
+with `SetCurrentSpell(MagicItem*)`, `desiredTarget` (an ObjectRefHandle),
+`castingTimer`, `currentSpellCost` and a `state` enum as members.
+
+**And `ActorMagicCaster` inherits `SimpleAnimationGraphManagerHolder` AND sinks
+`BSAnimationGraphEvent`.** That is the whole answer: an actor's caster is
+*driven by the animation graph*. The animation is not a decoration on the cast
+— the animation IS what advances the cast. `CastSpellImmediate` is the "apply
+this now, from anywhere, no actor required" path (traps, scripts, enchantments)
+and it necessarily bypasses the graph, which is why no `CastingSource` argument
+could ever have made it animate. §0.10's refutation was predictable from the
+class declaration.
+
+**Prior art, and it points the other way.** [Dynamic Animation
+Casting](https://github.com/LXIV-CXXVIII/DynamicAnimationCasting) and [Payload
+Interpreter](https://github.com/D7ry/PayloadInterpreter) both cast from
+animation events. DAC's call is *the same one MFO makes* -- 
+`GetMagicCaster(kInstant)->Cast(spell, false, target, 1.0f, false, 0.0f, cause)`
+-- deliberately using kInstant, because in DAC **the animation is already
+playing** and the spell is applied to sync with it. Nobody tries to make
+`CastSpellImmediate` animate. The pattern is: *animation first, effect second.*
+
+(DAC also deducts its own costs via
+`RestoreActorValue(kDamage, kMagicka, -cost)`, which is worth remembering
+against §0.9.)
+
+**What this means for MFO, and it is a design correction.** MFO was casting
+*instead of* the follower. The doctrine in DESIGN §4.4 is to layer on top of
+vanilla AI and never replace it -- and the vanilla flow is fully animated
+already, because every enemy mage in the game casts with animation. The right
+shape is to make the follower **want** to cast (equip/select the spell and let
+combat AI drive it) rather than to reach in and apply the effect ourselves.
+That is both the animated path and the one consistent with the mod's own rules.
+
+Two candidate mechanisms, neither yet tested:
+1. **Equip + let the AI cast.** `ActorEquipManager::EquipSpell` into a hand,
+   `DrawWeaponMagicHands`, and let the combat controller fire it. Fully
+   animated because it *is* the vanilla path. Less deterministic -- the AI
+   chooses when, which is a feature under §4.4's layering doctrine and a
+   problem under §4.3's one-rule-per-tick contract.
+2. **Drive the caster state machine directly.** `SetCurrentSpell` + set
+   `desiredTarget` + the `*Impl` sequence. More control, entirely unproven,
+   and the `Impl` methods are virtuals whose preconditions are unknown.
+
+**M4-style probe first, both mechanisms, before any design commitment.**
+
+### 0.14 THE ATTACK VERB — found, with a shipped reference implementation (2026-07-21)
+
+**`DoCombatSpellApply` is NOT a commanded animated cast.** It is the Papyrus
+twin of `CastSpellImmediate`: an instant, silent effect apply. Three primary
+sources, all local:
+
+* Skyrim's own `Actor.psc`: `; Apply a spell to a target in combat`
+* The Papyrus index positions it as the alternative to `Actor.AddSpell` — a
+  *proc/apply* verb, not a cast verb
+* Every shipped call site in ten modlists uses it that way, including
+  **Bethesda's own Dawnguard** `DLC1dunHarkonShieldEffectScript` (instantly
+  ejecting the player from a shield sphere) and a bow-draw self-stagger script
+  that runs OUT of combat, where no animation is possible
+
+**Papyrus cannot express commanded targeting AT ALL.** There is no combat-target
+setter anywhere in `Actor.psc`, SKSE's additions, po3, or PapyrusUtil — only
+`StartCombat`/`StopCombat` (entry/exit) and `GetCombatTarget` (a getter). The
+target lives in `CombatController::targetHandle` and the actor's
+`currentCombatTarget`: engine-internal data with no script binding.
+
+That is why a survey of ten modlists found ZERO Papyrus attack commands, and
+why "Swiftly Order Squad — Follower Commands UI" ships only Wait / Follow /
+Inventory / Teleport. **Not convention — impossibility.** It also settles the
+"should MFO grow a companion .psc?" question permanently: no. A script cannot
+deliver the attack verb, and everything a script *could* deliver is reachable
+from the DLL by VM dispatch with identical semantics.
+
+#### The mechanism, and it is already installed on this machine
+
+`Aggro Management in Skyrim` ships `SmartNPCTargetSelector.dll`, open source at
+<https://github.com/RedyellowUnit/SmartTargetingNPC>, **running in LoreRim right
+now**, tested by its author on 1.5.97 and 1.6.1170. It does exactly what MFO's
+attack verb needs, for every NPC in the load order:
+
+1. `write_vfunc` on `RE::VTABLE_Character[0]` index **`0xE4` (`UpdateCombat`)** —
+   a VTABLE INDEX, not an AddressLib offset, so it does not drift across game
+   versions.
+2. Inside the hook, after calling the original: enumerate candidates from
+   `combatGroup->targets` under `RE::BSReadLockGuard(combatGroup->lock)`, then
+   write **both** `GetActorRuntimeData().currentCombatTarget` **and**
+   `combatController->targetHandle` (plus `previousTargetHandle`).
+3. **Only redirect when the engine already HAS a target.** If vanilla cleared it
+   (target fled, undetected), respect that — this guard is what keeps the mod
+   from fighting the engine's own validity logic.
+4. Optional reinforcement: a call-hook on detection forcing the focus target's
+   detection high and others low, which stops the AI drifting back via
+   detection re-picks.
+
+`actor->GetActorRuntimeData().combatController` reaches the controller directly;
+`targetHandle` is at 0x2C, `previousTargetHandle` at 0x30, `combatGroup` at 0x00.
+
+#### Consequences for MFO
+
+* **Retention (§4.7) is a property of the MECHANISM, not the target.** The
+  engine re-picks constantly — that is SmartTargetingNPC's whole premise — so a
+  bare write from MFO's 7.5 Hz tick would drift in the gaps. The correct cadence
+  is the engine's own: re-assert inside the hook, which is a handle
+  compare-and-write, not a `StopCombat`/`StartCombat` reset (#22a preserved).
+* **Do NOT hook the target selector.** `CombatTargetSelectorStandard` exists in
+  NG only as a forward declaration — no vtable, no members. The post-`UpdateCombat`
+  write achieves the same result with a published precedent.
+* **KNOWN CONFLICT: SmartTargetingNPC itself.** LoreRim ships it, and it also
+  steers follower targets via a hate table; its detection hook can suppress a
+  follower's perception of MFO's chosen target. MFO must write only for
+  followers under an active gambit latch, detect the DLL at startup, and say so
+  in the log. TDM / SCAR / Valhalla / Precision / NPCsLearnToAim are all
+  DOWNSTREAM consumers of the target and will simply act on MFO's choice.
+* **Threading:** the hook body runs inside the engine's per-actor combat update,
+  so writing there is safe by construction — but it READS MFO's latch, which is
+  main-thread actuation state. That needs an atomics snapshot or a lock
+  (INVARIANTS #4), designed before the probe, not after.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

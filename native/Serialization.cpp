@@ -5,6 +5,8 @@
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Scheduler.h"
+#include "Loadout.h"
+#include "Targeting.h"
 #include "Board.h"
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
@@ -345,6 +347,12 @@ namespace MFO {
         Followers::g_active.clear();
         Followers::ClearTransientState();   // streak map is save-scoped (F1)
         Scheduler::ClearTransientState();   // suppression + round-robin cursor likewise
+        // The equip ledger describes a LIVE loadout. On revert the world is
+        // about to be replaced, so there is nothing to give back -- but the
+        // ledger must not survive to re-equip gear into the next save (#16).
+        Loadout::ClearTransientState();
+        // The latch is a live commanded target; it cannot outlive the world.
+        Targeting::ClearAll();
         Rapport::ResetSessionCounters();
         Diagnostics::StopPump();   // restarted on the next kPostLoadGame/kNewGame
         Board::SetHud(false);      // else it lingers over the main menu with stale rows

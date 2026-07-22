@@ -26,6 +26,9 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Evaluator.cpp
     Actuation.cpp
     Scheduler.cpp
+    Loadout.cpp
+    Papyrus.cpp
+    Targeting.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)

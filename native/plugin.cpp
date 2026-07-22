@@ -9,6 +9,8 @@
 #include "Board.h"
 #include "Probe.h"
 #include "Vocabulary.h"
+#include "Loadout.h"
+#include "Targeting.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -157,6 +159,7 @@ namespace {
             MFO::Config::Read();            // config first -- everything else reads it
             MFO::Forms::Resolve();          // then forms
             MFO::Followers::ResolveQuirks();
+            MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
             MFO::Diagnostics::Install();
             break;
@@ -186,6 +189,7 @@ namespace {
             MFO::Followers::Refresh();
             SeedTestData();
             SeedEvaluatorRules();   // after Refresh(): it iterates g_active
+            MFO::Loadout::Reconcile();  // undo a save taken mid-cast
             MFO::Board::SetHud(MFO::Config::g_showHud.load());
             MFO::Diagnostics::StartPump();
             MFO::Diagnostics::DumpReport("load");

@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Followers.h"
+#include "Loadout.h"
 #include "Forms.h"
 #include "Config.h"
 
@@ -233,6 +234,10 @@ namespace MFO::Followers {
                     continue;
                 }
                 g_missStreak.erase(id);
+                // Give back anything MFO put in their hands BEFORE we stop
+                // tracking them -- the hit sink is gated on IsTracked, so after
+                // this point nothing would ever restore it (#55).
+                Loadout::Restore(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport
                 // (DESIGN.md §3.1, the emotional core of the progression).
                 spdlog::info("[follower] - {:08X} (record and Rapport retained)", id);

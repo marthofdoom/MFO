@@ -61,6 +61,24 @@ namespace MFO::Config {
     // the fight is already over by the time a death event is processed (#51).
     inline std::atomic<float> g_sharedCombatGrace{ 15.0f };
 
+    // Make the FOLLOWER cast (equip the spell, real animation) instead of
+    // applying the effect silently. DESIGN §4.5b.
+    // PROBE ONLY, DEFAULT OFF. DoCombatSpellApply turned out NOT to be a
+    // commanded animated cast -- Actor.psc's own comment is "Apply a spell to a
+    // target in combat", and every shipped call site uses it as an instant
+    // silent apply (Bethesda's own Dawnguard shield script among them). It is
+    // the Papyrus twin of CastSpellImmediate. Kept behind a flag only to
+    // measure whether it deducts magicka; it is NOT the animation answer.
+    inline std::atomic<bool>  g_commandCast{ false };
+    // THE ATTACK VERB (ENGINE_NOTES §0.14). Installs a vfunc hook, so it is
+    // OFF until measured -- #45: one new engine mechanism per release, proven
+    // before it is trusted.
+    inline std::atomic<bool>  g_commandTarget{ false };
+    inline std::atomic<bool>  g_equipToCast{ true };
+    // Seconds a two-handed wielder must go between weapon swaps. The off-hand
+    // swap is free and ungated; stowing a greatsword is not.
+    inline std::atomic<float> g_twoHandedDebounce{ 6.0f };
+
     // -- evaluator (M5) ------------------------------------------------------
     inline std::atomic<bool>  g_seedEvaluatorRules{ false };
     inline std::atomic<bool>  g_profileEvaluator{ false };

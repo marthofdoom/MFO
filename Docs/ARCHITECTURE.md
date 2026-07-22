@@ -340,3 +340,25 @@ before any reconcile, or the ledger looks empty and MFO revokes nothing.
 - **No leveled-list edits, no record overrides.** `MFO.esp` adds; it never
   overwrites.
 - **No dedicated threads.** The pump is a self-requeuing main-thread task.
+
+## 12. The first cross-thread lock (2026-07-21)
+
+Until the targeting hook, MFO's threading rule was uniform and simple: **every
+map is main-thread-only and unlocked**, because sinks queue and the pump queues
+(§3). `Targeting`'s latch breaks that, and it is the only thing in the project
+that does.
+
+The hook body runs **inside the engine's per-actor combat update**, on the
+engine's thread, while `Command()`/`Clear()` are called from the evaluator tick
+on the main thread. That is a genuine cross-thread reader (INVARIANTS #4), so
+the latch gets a real `std::shared_mutex` — read-locked in the hook,
+write-locked from the tick.
+
+**The fast path matters more than the lock.** The hook fires for every
+`Character` in combat in the world, not just followers. So it opens with a
+relaxed atomic read of the latch count, and when nothing is latched — which is
+almost always — that read is the entire cost and the mutex is never touched.
+
+Anything else added to this module inherits the same obligation: state read by
+the hook is cross-thread state, and the "no lock" rule that governs
+`g_followers`, `g_debt`, `g_recent` and the rest does not apply to it.

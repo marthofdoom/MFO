@@ -2,6 +2,8 @@
 #include "Actuation.h"
 #include "Vocabulary.h"
 #include "Config.h"
+#include "Loadout.h"
+#include "Papyrus.h"
 
 namespace MFO::Actuation {
 
@@ -38,31 +40,96 @@ namespace MFO::Actuation {
                 }
             }
 
-            // CASTING SOURCE IS CONFIGURABLE, and that is not fussiness.
-            // kInstant applies the effect with NO ANIMATION (proven in-game,
-            // ENGINE_NOTES §0.8) -- a follower silently healing looks broken.
-            // kInstant is literally the no-animation caster, so a HAND source
-            // is the obvious candidate for a visible cast, but that is a
-            // hypothesis: the M4 probe now fires one variant per source so it
-            // can be settled by observation. `iCastSource` selects the winner
-            // without a rebuild.
-            using CS = RE::MagicSystem::CastingSource;
-            CS src = CS::kInstant;
-            switch (Config::g_castSource.load()) {
-            case 0:  src = CS::kLeftHand;  break;
-            case 1:  src = CS::kRightHand; break;
-            case 2:  src = CS::kOther;     break;
-            default: src = CS::kInstant;   break;
+            // THE FOLLOWER CASTS IT -- MFO does not cast on their behalf.
+            //
+            // ActorMagicCaster is driven by the ANIMATION GRAPH (it inherits
+            // SimpleAnimationGraphManagerHolder and sinks BSAnimationGraphEvent),
+            // so CastSpellImmediate can never animate no matter which casting
+            // source issues it -- tested across all four, ENGINE_NOTES §0.13.
+            // The only animated path is the vanilla one every enemy mage uses:
+            // put the spell in a hand and let the actor cast.
+            //
+            // The off hand is what makes this affordable (DESIGN §4.5b).
+            // ONE new mechanism this release (#45): equipping. The cast
+            // itself still goes through CastSpellImmediate, deliberately.
+            //
+            // `Projectile::LaunchSpell` was the obvious partner and is WRONG
+            // here: it launches a projectile, and a Self-delivery spell -- the
+            // flagship `Self HP < 40% -> Cast Healing` gambit -- has no
+            // projectile to launch. That path would have equipped the spell and
+            // applied NOTHING, strictly worse than the silent heal it replaced.
+            // It also bypasses MagicCaster entirely, so it spends no magicka,
+            // which would make §5.3's gate a tautology (ENGINE_NOTES §0.9).
+            //
+            // So: put the spell in their hand, then cast through THAT HAND's
+            // caster. Whether holding the spell is enough to make the graph
+            // animate is the open question this build exists to answer -- and
+            // if the answer is no, behaviour is exactly what it is today rather
+            // than a regression.
+            bool equipped = false;
+            if (Config::g_equipToCast.load()) {
+                std::string why;
+                switch (Loadout::Prepare(a_follower, spell, why)) {
+                case Loadout::Ready::AlreadyReady:
+                case Loadout::Ready::Equipped:
+                    equipped = true;
+                    break;
+                case Loadout::Ready::Debounced:
+                    // NOT a rule failure -- the follower is willing and able,
+                    // MFO is declining to thrash their gear. Falls through on
+                    // the next tick.
+                    return { Result::NoOp, why };
+                case Loadout::Ready::Failed:
+                default:
+                    return { Result::FailedSkill, why };
+                }
             }
 
+            // PROBE ONLY, DEFAULT OFF (bCommandCast).
+            //
+            // This was built believing Actor.DoCombatSpellApply was Bethesda's
+            // "cast this spell at THIS target, as a combat action" verb. IT IS
+            // NOT. Actor.psc's own comment reads "Apply a spell to a target in
+            // combat"; the Papyrus index positions it as the alternative to
+            // AddSpell; and every shipped call site in ten modlists uses it as
+            // an INSTANT SILENT APPLY -- including Bethesda's own Dawnguard
+            // shield script, which uses it to eject the player. It is the
+            // Papyrus twin of CastSpellImmediate.
+            //
+            // It stays behind a default-off flag for ONE measurement: whether a
+            // proc-apply verb deducts magicka (if it does not, §0.9's finding
+            // that our pre-check is the only gate stands unchanged). It is not
+            // the animation answer, and the animation answer is not a spell
+            // verb at all -- see ENGINE_NOTES §0.14.
+            if (Config::g_commandCast.load() && Papyrus::Available()) {
+                if (Papyrus::DoCombatSpellApply(a_follower, spell, a_target)) {
+                    return { Result::Fired, "dispatched" };
+                }
+                // Fall through to the silent path rather than dropping the
+                // rule: an unanimated heal beats no heal.
+            }
+
+            // Cast from the hand the spell is actually in when we equipped it;
+            // otherwise honour iCastSource. CastSpellImmediate is PROVEN to
+            // deduct magicka (§0.9) and to work for self-delivery spells, which
+            // is why it stays the verb.
+            using CS = RE::MagicSystem::CastingSource;
+            CS src = CS::kInstant;
+            if (equipped) {
+                src = CS::kLeftHand;
+            } else {
+                switch (Config::g_castSource.load()) {
+                case 0:  src = CS::kLeftHand;  break;
+                case 1:  src = CS::kRightHand; break;
+                case 2:  src = CS::kOther;     break;
+                default: src = CS::kInstant;   break;
+                }
+            }
             auto* caster = a_follower->GetMagicCaster(src);
             if (!caster) {
-                // Fall back rather than silently doing nothing -- an unanimated
-                // heal beats no heal.
                 caster = a_follower->GetMagicCaster(CS::kInstant);
                 if (!caster) return { Result::FailedOther, "no magic caster" };
             }
-
             caster->CastSpellImmediate(spell, false, a_target, 1.0f, false, 0.0f, a_follower);
             return { Result::Fired, {} };
         }

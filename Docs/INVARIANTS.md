@@ -574,3 +574,92 @@ The overlay showed `0 rap` directly above a follower reading `5`. Both were
 correct — the header is session-earned, the row is lifetime — but read together
 they say "the mod lost your save". A number with no scope label is a bug report
 waiting to happen, and this one arrived within a day.
+
+### 53. Silence must be distinguishable from death
+
+The 0.5.1 session seeded rules correctly and produced not one `[eval]` line.
+That is CORRECT behaviour if no condition matched -- and it is also exactly what
+a dead evaluator looks like. The log could not tell them apart, and the tick
+counters that would have (`TicksThisSession`, `LastTickMs`) had existed since
+0.5.0 and were surfaced nowhere. A review flagged them as unused; the finding
+was recorded and not acted on.
+
+Any subsystem whose correct behaviour is *doing nothing* must publish a
+heartbeat. Otherwise the first field report is unanswerable without a rebuild.
+
+### 54. Read the class declaration before naming something an open problem
+
+The missing cast animation was called "the biggest open problem in the mod" and
+answered with a list of guesses. One fetch of `ActorMagicCaster.h` showed it
+inherits `SimpleAnimationGraphManagerHolder` and sinks `BSAnimationGraphEvent`
+-- the caster is driven by the animation graph, so `CastSpellImmediate` could
+never animate regardless of casting source. Two shipped mods already solve the
+general problem and point at a different architecture entirely.
+
+The research method exists and is documented. It was skipped twice in one
+project: once on actor AI, once here.
+
+### 55. Restore before you stop tracking
+
+The shield-restore sink is gated on `Followers::IsTracked`. A dismissed
+follower therefore falls out of tracking *while still holding MFO's spell*, and
+nothing afterwards can ever give their gear back. Hand back what is owed in the
+dismissal path itself, BEFORE the record leaves the active set.
+
+The general rule: any obligation keyed on "is this actor ours?" must be settled
+at the moment they stop being ours, not after.
+
+### 56. A projectile call cannot cast a self-targeted spell
+
+`Projectile::LaunchSpell` looked like the animated cast MFO needed. It launches
+a **projectile** — and a Self-delivery spell has none. The flagship gambit
+(`Self HP < 40% -> Cast Healing`) would have equipped the spell, played nothing,
+and applied NO EFFECT: strictly worse than the silent heal it replaced. It also
+bypasses `MagicCaster`, so it spends no magicka, which would have made §5.3's
+competence gate a tautology.
+
+Before swapping the verb that performs an action, check it against the
+*delivery types* the action actually uses — not just the one being demoed.
+
+### 57. Do not ship the mechanism you told yourself to probe
+
+ENGINE_NOTES §0.13 was written this session and ended: *"M4-style probe first,
+both mechanisms, before any design commitment."* The very next change shipped an
+unprobed third hybrid. The instruction was correct and one hour old.
+
+Pressure to deliver a complete build is exactly when the probe gets skipped, and
+exactly when it is worth most.
+
+### 58. Read the function's own doc comment before building on its name
+
+`DoCombatSpellApply` sounds like "make this actor cast this spell at that target
+as a combat action". It is not. Skyrim's own `Actor.psc` says, one line above
+the declaration: `; Apply a spell to a target in combat`. The Papyrus index
+positions it as the alternative to `AddSpell`. Bethesda's Dawnguard uses it to
+*instantly eject the player from a shield sphere*, and one shipped mod calls it
+out of combat entirely, where no animation is possible.
+
+It is the Papyrus twin of `CastSpellImmediate`. An entire mechanism was designed
+and shipped default-ON around a verb whose own documentation, present on disk in
+the installed SKSE scripts, refuted it in one line.
+
+### 59. Only redirect when the engine already has a target
+
+The combat-target hook writes MFO's choice ONLY when vanilla has already picked
+someone. If the engine cleared the target — the foe fled, died, went undetected,
+combat ended — it did so for reasons MFO cannot see, and forcing a target back
+in means fighting the engine's own validity logic. That is how followers end up
+swinging at things they cannot perceive.
+
+**Commanding WHICH foe is ours. Commanding THAT there is a foe is not.**
+
+### 60. Name the conflicting mod in the log, at install time
+
+`Aggro Management in Skyrim` steers follower targets through its own hate table
+and hooks detection. It is installed in LoreRim, and MFO writes the same two
+fields. Two writers is a fact of the terrain, not a reason to avoid the
+mechanism — but it must be VISIBLE at startup, or the resulting weirdness gets
+blamed on whichever mod the user installed most recently.
+
+Any hook that shares state with a known third-party plugin announces that plugin
+by name when it detects it.
