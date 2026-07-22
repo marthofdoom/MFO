@@ -381,11 +381,13 @@ def make_command_quest():
     body += subrec('ALID', zstr("MFO_CommandActor"))
     body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
     if POC_ENABLED:
-        # GATE THE FILL, not just the packages. At MFO_ProbeSelect = 0 the
-        # alias stays EMPTY, MFO never claims the follower, and he follows and
-        # fights normally -- which is the only way the movement test is
-        # runnable at all.
-        body += alias_fill_ctda()
+        # NO FILL CONDITION. It was GetGlobalValue(MFO_ProbeSelect) > 0, and
+        # it was a ZERO-precedent shape: of the 42 vanilla conditioned forced
+        # fills, all 42 live in 6 stage-bearing quests and NONE reads a global
+        # (GetGlobalValue appears 0 times in that population, and 28 times
+        # across all 9,414 alias conditions). It also cannot work: alias fill is
+        # bound to quest PROMOTION, so nothing cheap re-evaluates it -- which is
+        # exactly what the field showed.
         # SPECIFIC REFERENCE fill. No conditions, no runtime, no DLL: the quest
         # starts, the alias already holds this actor, and ALPC hands them the
         # packages. Which ONE is valid is chosen by MFO_ProbeSelect -- every

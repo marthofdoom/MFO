@@ -193,20 +193,42 @@ namespace MFO::Packages {
             return nullptr;
         }
 
-        // Dispatch ReferenceAlias.ForceRefTo / .Clear.
+        // FILL AND CLEAR THE ALIAS.
         //
-        // WHY THE VM AND NOT A NATIVE CALL: SKSE's own PapyrusReferenceAlias
-        // reaches this through CALL_MEMBER_FN(alias->owner, ForceRefTo), i.e.
-        // TESQuest::ForceRefTo(aliasID, refr) -- which would be synchronous and
-        // strictly nicer. But that function is NOT WRAPPED IN COMMONLIB AT THE
-        // PINNED REV (grep: zero hits across include/ and src/), so using it
-        // means inventing a REL::Relocation id. This project's standing rule is
-        // "prefer 'I could not verify this at the pinned rev' over a plausible
-        // API name" -- names taken from current-master docs have failed CI here
-        // repeatedly, and StartCombat's hand-sourced offset ALREADY DID NOT
-        // WORK IN THE FIELD (ENGINE_NOTES §0.12). So: the VM, whose only cost
-        // is asynchrony, and asynchrony is something the state machine below
-        // already has to handle anyway.
+        // NATIVE FIRST, VM as fallback. The native is `TESQuest::ForceRefTo
+        // (aliasID, refr)` -- SKSE's own PapyrusReferenceAlias reaches it as
+        // CALL_MEMBER_FN(alias->owner, ForceRefTo), and SKSE64 2.2.6 (whose
+        // CURRENT_RELEASE_RUNTIME is 1.6.1170, this runtime) declares it at
+        // GameForms.h:1704 as offset 0x003CDEE0. Decoding versionlib for
+        // 1.6.1170 maps that offset to ID 25052, which lands exactly among the
+        // other TESQuest members: 25003 EnsureQuestStarted, 25014 ResetQuest,
+        // 25052 ForceRefTo, 25066 CreateRefHandleByAliasID.
+        //
+        // This is NOT a hand-guessed offset of the kind that burned StartCombat
+        // (§0.12): it comes from SKSE's own source for this exact runtime and
+        // was cross-checked against the address library.
+        //
+        // WHY IT MATTERS: the native is SYNCHRONOUS. The alias is filled when
+        // the call returns, which deletes the fill->valid window §0.24 calls
+        // load-bearing and demotes the watchdog from mandatory to defensive.
+        //
+        // AE ONLY. The SE (1.5.97) id could not be verified -- no SE-era SKSE
+        // source is on disk and the SE/AE id windows are not index-aligned. On
+        // anything but AE this returns false and the VM path runs.
+        bool ForceRefToNative(RE::TESQuest* a_quest, std::uint32_t a_aliasID,
+                              RE::TESObjectREFR* a_ref) {
+            if (!a_quest) return false;
+            if (!REL::Module::IsAE()) return false;   // id unverified off AE
+
+            using func_t = std::uint32_t (*)(RE::TESQuest*, std::uint32_t, RE::TESObjectREFR*);
+            static const REL::Relocation<func_t> func{ REL::ID(25052) };
+            func(a_quest, a_aliasID, a_ref);
+            return true;
+        }
+
+        // Dispatch ReferenceAlias.ForceRefTo / .Clear through the VM.
+        // The fallback when the native is unavailable (SE), and the route for
+        // Clear, which has no verified native id.
         bool DispatchAlias(const char* a_fn, RE::TESObjectREFR* a_arg) {
             auto* vm = VM();
             auto* alias = CommandAlias();
@@ -543,8 +565,17 @@ namespace MFO::Packages {
 
             if (!SetInputs(a_spell, a_target)) return Decline::BadInputs;
 
-            if (!DispatchAlias("ForceRefTo", a_follower)) {
-                spdlog::error("[pkg] {:08X}: ForceRefTo dispatch failed", id);
+            // Native first -- synchronous, so the alias is filled when this
+            // returns. VM only if the native is unavailable (SE).
+            bool filled = ForceRefToNative(Forms::g_commandQuest, kAliasCommandActor, a_follower);
+            if (filled) {
+                spdlog::info("[pkg] {:08X}: alias {} filled NATIVELY (synchronous)",
+                             id, kAliasCommandActor);
+            } else if (DispatchAlias("ForceRefTo", a_follower)) {
+                spdlog::info("[pkg] {:08X}: alias {} fill DISPATCHED via VM (async)",
+                             id, kAliasCommandActor);
+            } else {
+                spdlog::error("[pkg] {:08X}: ForceRefTo failed on BOTH routes", id);
                 return Decline::NoVM;
             }
 
