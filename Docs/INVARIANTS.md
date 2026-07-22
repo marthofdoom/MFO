@@ -757,21 +757,25 @@ nothing and spends nothing means the procedure's inputs are unresolvable. It
 does not mean delivery failed -- delivery visibly succeeded, or the actor would
 not be rooted.
 
-### 66. A gambit spell must be fire-and-forget, and the FormID is not the spell
+### 66. Author only record SHAPES that occur in vanilla — and a FormID is not a spell
 
-`UseMagic` crashed the game outright when handed a CONCENTRATION spell: it
-models a discrete cast (`CastTimeMin/Max`, `NumToCastMin/Max`), a channel has no
-discrete cast to complete, and the procedure dereferences null inside
-`TESPackage`. No MFO frames in the stack -- the engine did it.
+MFO authored a package that was alias-delivered, self-targeting, and carried
+`QNAM`. The engine CTD'd evaluating it — a null deref inside `TESPackage`, no
+MFO frames in the stack. That combination occurs **zero times** in Skyrim.esm:
+all 9 alias-delivered `UseMagic` packages use a specific-reference target and no
+`QNAM`, and none of the 7 self-casting ones is alias-delivered.
 
-Two rules fall out:
+**Before authoring a record shape, ask whether vanilla ships it.** With
+`tools/esp_inspect.py` that is one command. A shape with no precedent is not
+necessarily illegal, but it is unexplored, and the engine's error handling for
+unexplored combinations is a crash.
 
-1. **Check `SpellItem::GetCastingType()` before a spell reaches a package.** A
-   concentration spell must be refused with a reason, not passed through. This
-   is §5.3's competence gate extended: a rule MFO cannot run safely fails
-   loudly rather than crashing the game.
-2. **A vanilla FormID does not identify a vanilla spell.** `00012FCC` is
-   `Healing` in Skyrim.esm and `REQ_Restoration2_HealSelf` -- concentration,
-   40/sec -- in a Requiem load order. Anything MFO hardcodes must be validated
-   against what the LOAD ORDER actually resolved, never against what the wiki
-   says the FormID is.
+*(The first version of this rule blamed concentration spells. It was wrong —
+12 of 46 vanilla `UseMagic` packages cast them, two with Flames. The wrong
+conclusion came from parsing `SPIT` at the wrong offset and not sanity-checking
+a result that called vanilla `Healing` a constant effect.)*
+
+**Second rule, still standing:** a vanilla FormID does not identify a vanilla
+spell. `00012FCC` is `Healing` in Skyrim.esm and `REQ_Restoration2_HealSelf` in
+a Requiem load order. Validate what the LOAD ORDER resolved, never what the wiki
+says the FormID is.

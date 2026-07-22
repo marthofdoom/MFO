@@ -57,17 +57,10 @@ FREF_TMPL_ACTIVATE     = 0x00019B2D
 # The first proof rides the SEEDED heal. Runtime-varying the spell is the next
 # step (§0.17): either mutate the live TESPackage's inputs, or fabricate the
 # record on the fly, which is where this is heading.
-# FastHealing, NOT Healing (0x00012FCC).
-#
-# CTD, field-caught: an ACCESS_VIOLATION inside TESPackage with our package in
-# R15 and Cosnach in RDX. 0x00012FCC is overridden by Requiem to
-# REQ_Restoration2_HealSelf, a CONCENTRATION spell -- and UseMagic models a
-# DISCRETE cast (CastTimeMin/Max, NumToCastMin/Max). A channel has no discrete
-# cast to complete and the procedure dereferences null.
-#
-# Vanilla's own self-heal package settles it: WCollegeColettePracticeHeal13x2,
-# literally "practice healing on self", uses FastHealing. All seven vanilla
-# UseMagic packages that target self (targType 6) use non-concentration spells.
+# FastHealing. Fire-and-forget, and it is what vanilla's own self-heal package
+# uses -- but NOT because concentration is forbidden. That was a wrong call:
+# 12 of the 46 vanilla UseMagic packages cast CONCENTRATION spells, including
+# two with Flames. Concentration was never the crash.
 FREF_HEAL_SELF = 0x0002F3B8
 
 # ── M9 PROOF OF CONCEPT ────────────────────────────────────────────────────
@@ -363,7 +356,11 @@ def make_cast_package():
     # (MG07AncanoCastAtEye) omits it precisely BECAUSE its target is a specific
     # reference, not an alias -- the target type changed here and the
     # consequence did not follow.
-    body += subrec('QNAM', struct.pack('<I', FID_COMMAND_QUEST))
+    # QNAM ONLY when an input names an alias. With a targType-0 specific
+    # reference nothing indexes into a quest, and all nine vanilla
+    # alias-delivered UseMagic packages carry no QNAM at all.
+    if not POC_ENABLED:
+        body += subrec('QNAM', struct.pack('<I', FID_COMMAND_QUEST))
 
     # 11 inputs, in the template's declared order.
     # PLDT type=12 ("near self"), target 0, generous radius -- the UseMagic
@@ -374,7 +371,21 @@ def make_cast_package():
     body += pack_input("Location", 'PLDT', struct.pack('<IiI', 12, 0, 10000))
     # Spell.
     body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, FREF_HEAL_SELF, 0))
-    # Target -- targType 6 is SELF, with a zero operand.
+    # Target -- MATCH VANILLA'S ALIAS-DELIVERED SHAPE EXACTLY.
+    #
+    # All NINE vanilla UseMagic packages that are delivered by an alias (ALPC)
+    # use targType 0, a SPECIFIC REFERENCE, and carry NO QNAM. Vanilla's
+    # self-casting packages (targType 6) are never alias-delivered. MFO's crash
+    # came from a combination with ZERO vanilla precedent: alias-delivered PLUS
+    # self target PLUS QNAM.
+    #
+    # For the PoC, which already hardcodes the actor, targType 0 is available
+    # and is the most conservative possible record: byte-shaped like
+    # MG07AncanoCastAtEye, a package that ships and works.
+    #
+    # Generalising to an arbitrary follower is the NEXT problem, and it is why
+    # the target-selection question is not settled by this PoC.
+    # (previous, crashed: targType 6 self)
     #
     # This was `targType 4 -> alias 0`, reasoning that since the alias holds the
     # follower, alias 0 IS himself. FIELD-REFUTED: the package took ownership of
@@ -387,7 +398,10 @@ def make_cast_package():
     # seven that cast on themselves all use targType 6 with value 0 --
     # WCollegeColettePracticeHeal13x2 is literally "practice healing on self",
     # alongside DA16ErandurCastSpell and SprigganCallOverride.
-    body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 6, 0, 0))
+    if POC_ENABLED:
+        body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 0, POC_ACTOR_REF, 0))
+    else:
+        body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 6, 0, 0))
     body += pack_input("Bool",  'CNAM', struct.pack('<B', 0))          # HoldWhenBlocked
     body += pack_input("Float", 'CNAM', struct.pack('<f', 1.0))        # CastTimeMin
     body += pack_input("Float", 'CNAM', struct.pack('<f', 3.0))        # CastTimeMax

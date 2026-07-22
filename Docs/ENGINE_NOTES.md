@@ -770,52 +770,60 @@ the procedure resolves nothing and stalls silently, holding the actor.
 actor does nothing, no resource is consumed. It means the procedure's INPUTS
 are unresolvable, not that delivery failed.
 
-### 0.20 `UseMagic` + a CONCENTRATION spell = CTD (2026-07-22)
+### 0.20 THE CTD — a package shape with no vanilla precedent (2026-07-22)
 
-**Crash log, MFO 0.6.0, game 1.6.1170:**
+**CORRECTED. The first version of this section blamed CONCENTRATION spells and
+was WRONG** -- marth caught it: *"we know concentration spells work, its
+scripted several times with flames in various vanilla locations."* He is right.
+**12 of the 46 vanilla `UseMagic` packages cast concentration spells**,
+including `DA16ErandurDoorCastPackage` and `WCollegeOnmundPracticeFlames12x4`,
+both Flames. The wrong conclusion came from reading `SPIT` offset 0x0C
+(`chargeTime`) instead of 0x10 (`castingType`) -- which also reported vanilla
+`Healing` as ConstantEffect, a result that should have been caught as absurd
+on sight.
+
+#### The crash
 
 ```
 EXCEPTION_ACCESS_VIOLATION at TESPackage::sub_49595F
-  cmp byte ptr [rbx+0x1A], 0x3E     rbx = 0x0
-  R15: (TESPackage*) [0xFE08F820] ("MFO.esp")     <- our package
-  RDX: (Character*) "Cosnach" [0x000198FA]        <- our follower
+  cmp byte ptr [rbx+0x1A], 0x3E     rbx = 0x0      (0x1A is TESForm::formType)
+  R15: (TESPackage*) [0xFE08F820] ("MFO.esp")
+  RDX: (Character*) "Cosnach" [0x000198FA]
   [ 3] BGSRefAlias::sub_398FB9
 ```
 
-**No MFO.dll frames anywhere in the stack.** This is the ENGINE crashing while
-evaluating our package, not our code.
+**No MFO.dll frames.** The engine crashed evaluating our package.
 
-**Cause: the Spell input was a concentration spell.** `00012FCC` is vanilla
-`Healing`, but in a Requiem load order it is overridden to
-`REQ_Restoration2_HealSelf` -- **concentration**, 40 magicka/second. `UseMagic`
-models a DISCRETE cast: its inputs are `CastTimeMin/Max` and
-`NumToCastMin/Max`. A channel has no discrete cast to complete, and the
-procedure walks into a null.
+#### The actual finding: MFO built a shape vanilla never ships
 
-**Vanilla settles it.** All SEVEN `UseMagic` packages that target self
-(`targType 6`) use non-concentration spells, and the closest analogue is
-decisive: `WCollegeColettePracticeHeal13x2` -- literally "practice healing on
-self" -- uses **`FastHealing` (`0002F3B8`)**, not `Healing`.
-
-#### The progression is the lesson
-
-| rev | Target input | Spell | Result |
+| Vanilla population | Count | Target type | QNAM |
 |---|---|---|---|
-| 3 | `targType 4` -> alias 0 | Healing | **owned but inert** -- inputs unresolvable |
-| 4 | `targType 6` self | Healing (concentration) | **CTD** -- got further, hit the null |
-| 5 | `targType 6` self | FastHealing (FF) | ? |
+| `UseMagic` delivered by an alias (`ALPC`) | **9** | **ALL targType 0** (specific ref) | **ALL none** |
+| `UseMagic` casting on self | 7 | targType 6 | — |
+| ...that are ALSO alias-delivered | **0** | — | — |
 
-Each fix let the procedure run further. **A package that owns an actor and does
-nothing is an input problem; a package that CRASHES is an input problem the
-engine got further into.** Neither is a delivery problem -- delivery was proven
-at rev 3 (§0.19).
+MFO's crashing record was **alias-delivered + `targType 6` self + `QNAM`** —
+a combination with **zero occurrences in Skyrim.esm**. Vanilla self-casting
+packages are never alias-delivered, and alias-delivered packages never
+self-target.
 
-#### Rule
+#### What the PoC does now
 
-**A package's Spell input must be FIRE-AND-FORGET.** MFO cannot let a player
-point a gambit at a concentration spell without checking
-`SpellItem::GetCastingType()`, or the game crashes -- and in a Requiem-class
-load order, familiar vanilla FormIDs are silently different spells.
+Matches the nine exactly: `targType 0` naming CosnachREF, and **no `QNAM`** --
+with a specific reference nothing indexes into a quest, and none of the nine
+carry one.
+
+**This narrows the PoC's claim.** It can prove that an alias-delivered package
+casts. It CANNOT prove how to target an arbitrary follower, because the only
+alias-delivered shape vanilla evidences requires naming the actor at author
+time. Generalising is the next problem, not a solved one.
+
+#### The lesson, which is #64 again
+
+Three of the last four defects were found by asking Skyrim.esm what shapes
+actually occur, and this one was CAUSED by not asking. "Does this record shape
+exist in vanilla?" is a one-command query with `esp_inspect.py`, and it should
+precede authoring, not follow a crash.
 
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
