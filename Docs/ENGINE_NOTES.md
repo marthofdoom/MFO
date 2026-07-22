@@ -812,7 +812,107 @@ with QNAM, stage-gated: **follower-in-alias-A attacks actor-in-alias-B.** That
 is exactly MFO's generalized shape, shipped. The WERoad quests are the same
 architecture for movement (`Travel` + `PLDT t8 -> alias`, 263 instances).
 
-### NOT yet proven, despite the session### NOT yet proven, despite the session
+### 0.21 M9 PROVEN — packages produce ANIMATED casts, at a CHOSEN target (2026-07-22)
+
+**Field result, probe ladder, marth:** *"They all work except for 4... also 5,
+cast on player... spells and animations are cast."*
+
+| # | Spell | castingType | delivery | Target input | Result |
+|---|---|---|---|---|---|
+| 1 | Magelight | FireAndForget | Aimed | `t0` -> PlayerRef | **CASTS** |
+| 2 | FastHealing | FireAndForget | Self | `t0` -> PlayerRef | **CASTS** |
+| 3 | FastHealing | FireAndForget | Self | `t0` -> CosnachREF (himself) | **CASTS** |
+| 4 | CollegePracticeWard | **Concentration** | Self | `t0` -> PlayerRef | **fails** |
+| 5 | Magelight | FireAndForget | Aimed | **`t4` -> alias 1** | **CASTS** |
+
+#### What this settles
+
+**1. The architecture works.** A package MFO authored, delivered through a quest
+alias, makes a follower cast **with a real animation**. That is DESIGN §4.5c's
+premise and the end of the search that refuted `CastSpellImmediate`,
+`LaunchSpell`, `DoCombatSpellApply`, animation events and driving `MagicCaster`.
+
+**2. Probe 5 is the important one.** `PTDA t4 -> alias 1` + `QNAM`, with the
+follower in alias 0 and the victim in alias 1, **casts at the aliased target**.
+That is the `CWFinaleLeaderExecuteEnemyLeader` shape, and it means MFO can aim a
+gambit at an actor chosen at runtime by filling an alias. Targeting is solved.
+
+**3. Probe 3 REFUTES the stall hypothesis, and refines #65.** Both #65 and the
+synthesis algorithm predicted "target == the runner" goes inert. It does not:
+`t0` naming the caster's own reference casts fine. The rev-3 stall was
+specifically **`t4` pointing at the DELIVERING alias** -- an alias indirection
+back to itself -- not self-targeting in general. So `cast_self` HAS a proven
+shape: **`t0` -> the follower's own reference.**
+
+**4. Concentration is the one axis that failed.** Probe 4 is the only
+concentration spell in the ladder and the only failure; all four fire-and-forget
+probes cast. Note vanilla DOES ship 12 concentration `UseMagic` packages -- but
+its concentration+Self records use `targType 6`, which probe 4 did not. So the
+honest claim is narrow: **concentration + Self delivery via a `t0` anchor does
+not fire.** Whether concentration works under `ALPC` at all is untested.
+
+#### Still open
+
+* **Magicka consumption unverified** -- marth could not tell. It decides whether
+  §5.3's competence gate is real for package casts or decorative.
+* **A cast takes a few seconds to start.** Package evaluation is nowhere near
+  §4.1's 133 ms budget. Gambits will respond on a package cadence, not a tick
+  cadence, and BALANCE/DESIGN must say so rather than implying otherwise.
+* **The actor stays ROOTED.** The package owns him, which §4.5c sanctions for an
+  action's duration -- but the action must then END and hand him back. Nothing
+  currently pops the package.
+
+### NOT yet proven, despite the session### 0.21 M9 PROVEN — packages produce ANIMATED casts, at a CHOSEN target (2026-07-22)
+
+**Field result, probe ladder, marth:** *"They all work except for 4... also 5,
+cast on player... spells and animations are cast."*
+
+| # | Spell | castingType | delivery | Target input | Result |
+|---|---|---|---|---|---|
+| 1 | Magelight | FireAndForget | Aimed | `t0` -> PlayerRef | **CASTS** |
+| 2 | FastHealing | FireAndForget | Self | `t0` -> PlayerRef | **CASTS** |
+| 3 | FastHealing | FireAndForget | Self | `t0` -> CosnachREF (himself) | **CASTS** |
+| 4 | CollegePracticeWard | **Concentration** | Self | `t0` -> PlayerRef | **fails** |
+| 5 | Magelight | FireAndForget | Aimed | **`t4` -> alias 1** | **CASTS** |
+
+#### What this settles
+
+**1. The architecture works.** A package MFO authored, delivered through a quest
+alias, makes a follower cast **with a real animation**. That is DESIGN §4.5c's
+premise and the end of the search that refuted `CastSpellImmediate`,
+`LaunchSpell`, `DoCombatSpellApply`, animation events and driving `MagicCaster`.
+
+**2. Probe 5 is the important one.** `PTDA t4 -> alias 1` + `QNAM`, with the
+follower in alias 0 and the victim in alias 1, **casts at the aliased target**.
+That is the `CWFinaleLeaderExecuteEnemyLeader` shape, and it means MFO can aim a
+gambit at an actor chosen at runtime by filling an alias. Targeting is solved.
+
+**3. Probe 3 REFUTES the stall hypothesis, and refines #65.** Both #65 and the
+synthesis algorithm predicted "target == the runner" goes inert. It does not:
+`t0` naming the caster's own reference casts fine. The rev-3 stall was
+specifically **`t4` pointing at the DELIVERING alias** -- an alias indirection
+back to itself -- not self-targeting in general. So `cast_self` HAS a proven
+shape: **`t0` -> the follower's own reference.**
+
+**4. Concentration is the one axis that failed.** Probe 4 is the only
+concentration spell in the ladder and the only failure; all four fire-and-forget
+probes cast. Note vanilla DOES ship 12 concentration `UseMagic` packages -- but
+its concentration+Self records use `targType 6`, which probe 4 did not. So the
+honest claim is narrow: **concentration + Self delivery via a `t0` anchor does
+not fire.** Whether concentration works under `ALPC` at all is untested.
+
+#### Still open
+
+* **Magicka consumption unverified** -- marth could not tell. It decides whether
+  §5.3's competence gate is real for package casts or decorative.
+* **A cast takes a few seconds to start.** Package evaluation is nowhere near
+  §4.1's 133 ms budget. Gambits will respond on a package cadence, not a tick
+  cadence, and BALANCE/DESIGN must say so rather than implying otherwise.
+* **The actor stays ROOTED.** The package owns him, which §4.5c sanctions for an
+  action's duration -- but the action must then END and hand him back. Nothing
+  currently pops the package.
+
+### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice
   (`saved 1 follower record(s), schema v2`) and *loaded* empty saves cleanly,

@@ -741,16 +741,24 @@ the answer is far more often a record than a function.
 way, dump the relevant vanilla records and ask whether the game already models
 it. `Skyrim.esm` is on disk. Reading it costs minutes.
 
-### 65. An alias targets someone ELSE; self has its own target type
+### 65. Never point a package's target at its OWN delivering alias  *(revised)*
 
 MFO's first cast package pointed its Target input at `PTDA targType 4 -> alias 0`
 -- the same alias that delivers the package -- reasoning that since the alias
 holds the follower, alias 0 is himself. The package took ownership of the actor
 and never cast: no animation, no effect, no magicka spent.
 
-Vanilla is unanimous. Of 46 `UseMagic` instances, the 8 that target a reference
-alias every one name a DIFFERENT actor, and the 7 that cast on themselves all
-use **`targType 6`, value 0**.
+**REVISED by the probe ladder (§0.21).** The original rule said "an alias
+targets someone else; self has its own target type". Half right. Probe 3 --
+`targType 0` naming the caster's OWN reference -- casts fine. So self-targeting
+is not the problem.
+
+The problem is the **indirection back to the delivering alias**: `t4 -> alias 0`
+where alias 0 is what delivered the package. That resolves to the runner through
+the very alias being evaluated, and the procedure goes inert.
+
+**Proven shapes:** `cast_self` = `t0` -> the follower's own reference.
+`cast_target` = `t4` -> a DIFFERENT alias, with `QNAM` (probe 5).
 
 **Diagnostic worth keeping:** a package that OWNS an actor while the actor does
 nothing and spends nothing means the procedure's inputs are unresolvable. It
