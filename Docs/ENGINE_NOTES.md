@@ -456,6 +456,58 @@ command QUST + alias pool + globals; `0x820+` MFO's own conditioned PACKAGEs,
 both tagged *Tier B, M9*). **This is M9, and it is the largest single mechanism
 in the project** — not a patch on M5.
 
+#### THE ACTUAL RECORD, read from their shipped ESP (2026-07-22)
+
+Downloaded `Data/ALYSLC.esp` and dumped it. 18 PACK records. The relevant pair:
+
+```
+01000894  type=19  __CoopPlayerRangedAttackPackageTemplate
+01000866  type=18  __CoopPlayerRangedAttackPackage1   -> PKCU template=01000894
+```
+
+The instance is **2606 bytes**: `PKCU inputs=65 template=01000894`, 65
+`ANAM`/`UNAM` data-input pairs, 35 `PTDA` target-data entries, 30 `CNAM`,
+`PLDT`, `POBA`/`POEA`/`POCA` blocks, 3 `PDTO`. The template itself declares the
+same 65 inputs including **20 TargetSelectors**.
+
+**And there is NOT ONE `CTDA` on either record.** So the globals do NOT gate the
+package by condition, which is what the earlier reading assumed. ALYSLC selects
+the package by **swapping it into the stack** — the package IS the selection,
+and the globals are their own bookkeeping. That simplifies MFO's runtime and
+complicates the record.
+
+#### What this means for MFO — honest assessment
+
+**In favour:** the mechanism demonstrably produces uninterruptible animated
+casts on an NPC body, it is the only mechanism not yet refuted, and we can now
+read the exact byte layout rather than guess it.
+
+**Against, and these are not small:**
+
+1. **Size.** A working instance is ~2.6 KB with 65 data inputs, riding a custom
+   template that is another large record. This would be by far the biggest
+   record MFO has authored, and the ESP generator has only ever emitted MGEF /
+   SPEL / KYWD / QUST — all trivial by comparison.
+2. **ALYSLC owns its actors; MFO does not.** Their FormLists are attached to
+   co-op bodies they configured. MFO must force an arbitrary follower — one
+   already managed by NFF, Inigo, or another framework — into its own alias and
+   override the package stack. §4.6 contention, a problem they never had.
+3. **Their own code admits fragility:** the stacks *"seem to clear when going
+   through load doors at times"*, so they re-assert defensively.
+4. **Most of those 65 inputs are for things MFO does not want** — co-op aiming,
+   dual-cast, shouts, 20 target selectors.
+
+#### The question that decides the cost, and it is NOT yet answered
+
+**Can a PACK instance point `PKCU.template` at a VANILLA Skyrim template
+instead of a hand-authored one?** If yes, MFO supplies only the data inputs it
+cares about and inherits the machinery — M9 shrinks from "author a package
+system" to "author one instance". If no, the template must be built from
+scratch and M9 is genuinely the largest thing in the project.
+
+**Answer that before committing.** It is a read of `Skyrim.esm`'s PACK records,
+costs no play time, and swings the estimate by an order of magnitude.
+
 **Status: RESEARCHED, not built.** The caster-drive probe (§0.13 mechanism 2)
 still ships first because it is cheap and it DISCRIMINATES: `CheckCast` refusing
 means the engine rejected the cast outright; accepted-then-wedged means the
