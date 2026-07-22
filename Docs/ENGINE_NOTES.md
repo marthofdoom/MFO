@@ -980,6 +980,55 @@ latency is a separate, looser number, and DESIGN currently conflates them.
 The package's own `CastTimeMin/Max` and `CooldownTimeMin/Max` are the knobs,
 and they are already per-record.
 
+### 0.24 AN ALIAS FILL IS NOT FREE — an empty alias ROOTS the actor (2026-07-22)
+
+marth: *"hes been rooted to the exact same spot for several iterations, on
+load"* — with `MFO_ProbeSelect = 0`, i.e. **before selecting any probe.**
+
+Verified: every probe carries a correct gate (`GetGlobalValue(MFO_ProbeSelect)
+== N`, func 74), and at 0 none is valid. Alias 0 carries probes only. So the
+actor is in MFO's alias, MFO's quest outranks his own at priority 60, and the
+alias supplies **nothing** — and he stands still.
+
+**This is the first thing found that breaks a follower without MFO doing
+anything.** The PoC's `ALFR` force-fill makes it permanent and therefore
+visible; the real runtime would produce the same freeze in every window between
+filling the alias and a package becoming valid.
+
+#### Vanilla's fix, and why MFO must NOT copy it
+
+Of 740 vanilla aliases carrying ≥2 packages, **299 end in an UNGATED package** —
+Travel (123), Sandbox (63), Patrol (41), Follow (4). Gated on top, always-valid
+at the bottom. That is the shape that keeps an actor sane when every gate fails.
+
+**MFO must not do this.** An always-valid fallback on MFO's alias means MFO's
+priority-60 quest ALWAYS supplies the winning package, which is precisely
+"MFO owns the FOLLOWER" — the violation DESIGN §4.5c exists to forbid. It would
+permanently override whatever framework actually manages that follower (§4.6).
+
+#### The rule this creates
+
+**Never leave a follower in MFO's alias without a valid package.** The alias is
+filled for the duration of ONE action and cleared the moment it completes.
+Between actions the follower is not in the alias at all — which is what §4.5c
+already says, now with a mechanical reason rather than a doctrinal one.
+
+Consequences for the runtime:
+
+* **Clearing is not cleanup, it is correctness.** A missed or delayed clear is a
+  frozen follower, not an untidy one.
+* Fill and clear are async VM dispatches, so the fill→valid and
+  complete→cleared windows are real. They must be measured, and the watchdog
+  that clears on timeout is mandatory, not defensive.
+* A crash or a save/load between fill and clear strands a rooted follower.
+  `kPreLoadGame` release and post-load reconcile already exist for this and are
+  now load-bearing.
+
+**Not yet distinguished:** whether the freeze is "high-priority quest wins and
+supplies nothing" or something narrower. Cheap test: drop the quest priority
+below 50 and see whether he follows normally while still in the alias. That
+also tells us whether priority 60 is even needed.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

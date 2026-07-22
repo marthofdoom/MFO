@@ -859,3 +859,21 @@ the following header and corrupted the tail.
 This is the code lesson in prose form: **assert the anchor is unique before
 replacing, and re-read the result.** `grep -c` on the header afterwards is one
 command and catches it immediately.
+
+### 69. Never leave a follower in MFO's alias without a valid package
+
+An actor sitting in MFO's alias while every alias package's condition is false
+**stands still** — verified in the field with `MFO_ProbeSelect = 0`, before any
+probe was chosen. MFO's quest outranks the follower's own at priority 60, wins
+the arbitration, and then supplies nothing.
+
+Vanilla's answer is an ungated fallback at the bottom of the package list (299
+of 740 multi-package aliases do this). **MFO must not copy it:** an always-valid
+fallback means MFO permanently supplies the winning package, which is "MFO owns
+the FOLLOWER" — the §4.5c violation, and a permanent override of whatever
+framework manages that follower.
+
+**So: fill the alias for one action, clear it the moment the action completes,
+and never park a follower there.** Clearing is correctness, not tidiness — a
+missed clear is a frozen follower. The watchdog timeout, the `kPreLoadGame`
+release and the post-load reconcile are all load-bearing, not defensive.
