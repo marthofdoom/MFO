@@ -138,6 +138,27 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_seedEvaluatorRules{ false };
     inline std::atomic<bool>  g_profileEvaluator{ false };
     inline std::atomic<float> g_suppressWindow{ 1.5f };
+    // -- logistics (DESIGN §4.8) ---------------------------------------------
+    // The whole non-combat table is GATED OFF by default, like every new
+    // subsystem (#45): a follower who loots and drinks changes player-visible
+    // inventory and world state, so it does not run until asked. With this off,
+    // Scheduler evaluates only the combat table and MFO is byte-identical to
+    // today out of combat.
+    inline std::atomic<bool>  g_logistics{ false };
+    // FIRST DIBS BY DELAY (#22h). A corpse/container is not eligible for
+    // follower looting until it has been in the follower's consideration radius
+    // this many seconds -- long enough that a player who wants the good sword
+    // has walked over and taken it. (DESIGN §4.8.3 names this fLootDelaySeconds;
+    // the key is fFirstDibsDelay per the M6 brief -- a NEW key, so no #37
+    // rename hazard.)
+    inline std::atomic<float> g_firstDibsDelay{ 25.0f };
+    // THE WAIVER, collapsed but NEVER zeroed (#22h). Once the player takes from
+    // a ref its delay drops to this -- not to 0, because QuickLoot IE (Nexus
+    // 181813, in 4 of 5 lists here) takes items ONE AT A TIME over several
+    // seconds, and the waiver timer RESETS on every take, so the follower moves
+    // in this many seconds after the player's LAST take, not their first.
+    inline std::atomic<float> g_quickLootWaiver{ 4.0f };
+
     // Which caster a gambit spell goes through. PROVEN 2026-07-21: NO source
     // animates -- kLeftHand/kRightHand/kOther were all tried in the field and
     // behave like kInstant (ENGINE_NOTES §0.10). Kept configurable because it

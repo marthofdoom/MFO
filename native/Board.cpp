@@ -99,6 +99,50 @@ namespace MFO::Board {
         }
 
         // ── the panel ───────────────────────────────────────────────────────
+    // ── EDIT COMMAND QUEUE ──────────────────────────────────────────────────
+    // The board draws on the RENDER thread; the tables live on the main thread.
+    // So an edit is enqueued from the draw and APPLIED in PublishSnapshot,
+    // which runs on the main thread (#2, the same rule as everything touching
+    // g_followers). Never write a rule table from a draw call.
+    enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
+                                         CycleCond, CycleAct, SetParam };
+    struct EditCmd {
+        EditKind kind; RE::FormID fid; int table; int idx; float param;
+    };
+    std::mutex          g_editMx;
+    std::vector<EditCmd> g_edits;
+
+    void QueueEdit(EditCmd c) { std::scoped_lock lk(g_editMx); g_edits.push_back(c); }
+
+    // The vocabulary the editor cycles through, opcode + human label. Frozen
+    // opcode strings (#10); labels are UI only.
+    struct VocabEntry { const char* op; const char* label; };
+    inline constexpr VocabEntry kConds[] = {
+        { Vocab::kCondAlways,        "Always" },
+        { Vocab::kCondSelfHpBelow,   "Self HP % below" },
+        { Vocab::kCondSelfMpBelow,   "Self Magicka % below" },
+        { Vocab::kCondSelfSpBelow,   "Self Stamina % below" },
+        { Vocab::kCondPlayerHpBelow, "Player HP % below" },
+        { Vocab::kCondFoeLowestHp,   "Foe: lowest HP" },
+        { Vocab::kCondFoeHpBelow,    "Foe: HP % below" },
+        { Vocab::kCondFoeAny,        "Foe: nearest" },
+    };
+    inline constexpr VocabEntry kActs[] = {
+        { Vocab::kActWait,       "Wait" },
+        { Vocab::kActCastSelf,   "Cast on self" },
+        { Vocab::kActCastTarget, "Cast at foe" },
+        { Vocab::kActAttack,     "Attack" },
+    };
+    int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
+        int cur = 0;
+        for (int i = 0; i < n; ++i) if (op == tab[i].op) { cur = i; break; }
+        return ((cur + dir) % n + n) % n;
+    }
+    const char* labelFor(const std::string& op, const VocabEntry* tab, int n) {
+        for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].label;
+        return op.empty() ? "(unset)" : op.c_str();
+    }
+
         // ── SKINS (DESIGN §6.7a, standing family rule) ──────────────────────
         // Four named skins, palettes copied VERBATIM from MEO's kSkins so MFO
         // is the same brand, not merely similar. Square corners, flat fills --
@@ -939,50 +983,6 @@ namespace MFO::Board {
             }
             a_out.push_back(std::move(v));
         }
-    }
-
-    // ── EDIT COMMAND QUEUE ──────────────────────────────────────────────────
-    // The board draws on the RENDER thread; the tables live on the main thread.
-    // So an edit is enqueued from the draw and APPLIED in PublishSnapshot,
-    // which runs on the main thread (#2, the same rule as everything touching
-    // g_followers). Never write a rule table from a draw call.
-    enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
-                                         CycleCond, CycleAct, SetParam };
-    struct EditCmd {
-        EditKind kind; RE::FormID fid; int table; int idx; float param;
-    };
-    std::mutex          g_editMx;
-    std::vector<EditCmd> g_edits;
-
-    void QueueEdit(EditCmd c) { std::scoped_lock lk(g_editMx); g_edits.push_back(c); }
-
-    // The vocabulary the editor cycles through, opcode + human label. Frozen
-    // opcode strings (#10); labels are UI only.
-    struct VocabEntry { const char* op; const char* label; };
-    inline constexpr VocabEntry kConds[] = {
-        { Vocab::kCondAlways,        "Always" },
-        { Vocab::kCondSelfHpBelow,   "Self HP % below" },
-        { Vocab::kCondSelfMpBelow,   "Self Magicka % below" },
-        { Vocab::kCondSelfSpBelow,   "Self Stamina % below" },
-        { Vocab::kCondPlayerHpBelow, "Player HP % below" },
-        { Vocab::kCondFoeLowestHp,   "Foe: lowest HP" },
-        { Vocab::kCondFoeHpBelow,    "Foe: HP % below" },
-        { Vocab::kCondFoeAny,        "Foe: nearest" },
-    };
-    inline constexpr VocabEntry kActs[] = {
-        { Vocab::kActWait,       "Wait" },
-        { Vocab::kActCastSelf,   "Cast on self" },
-        { Vocab::kActCastTarget, "Cast at foe" },
-        { Vocab::kActAttack,     "Attack" },
-    };
-    int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
-        int cur = 0;
-        for (int i = 0; i < n; ++i) if (op == tab[i].op) { cur = i; break; }
-        return ((cur + dir) % n + n) % n;
-    }
-    const char* labelFor(const std::string& op, const VocabEntry* tab, int n) {
-        for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].label;
-        return op.empty() ? "(unset)" : op.c_str();
     }
 
     // Apply queued edits. MAIN THREAD ONLY (called from PublishSnapshot).

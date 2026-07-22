@@ -113,6 +113,9 @@ namespace MFO::Config {
             else if (a_key == "iFocusKey")          setI(g_focusKey, 0, 255);
             else if (a_key == "fTwoHandedDebounce") setF(g_twoHandedDebounce, 0.0f, 60.0f);
             else if (a_key == "fSharedCombatGrace") setF(g_sharedCombatGrace, 0.0f, 300.0f);
+            else if (a_key == "bLogistics")         setB(g_logistics);
+            else if (a_key == "fFirstDibsDelay")    setF(g_firstDibsDelay,   0.0f, 600.0f);
+            else if (a_key == "fQuickLootWaiver")   setF(g_quickLootWaiver,  0.0f, 600.0f);
             // Unknown keys are ignored in silence: MCM Helper writes keys we
             // may not know yet, and warning on them would cry wolf every load.
         }
@@ -174,6 +177,9 @@ namespace MFO::Config {
             g_focusKey           = 0x2B;
             g_twoHandedDebounce  = 6.0f;
             g_sharedCombatGrace  = 15.0f;
+            g_logistics          = false;
+            g_firstDibsDelay     = 25.0f;
+            g_quickLootWaiver    = 4.0f;
         }
 
     }

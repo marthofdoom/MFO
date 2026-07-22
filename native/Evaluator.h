@@ -20,12 +20,19 @@ namespace MFO::Eval {
         RE::ActorHandle target;
     };
 
-    // Scan a_follower's combat table top-down; first true condition wins.
+    // Scan ONE of a_follower's tables top-down; first true condition wins.
     // Reads a_follower's and (for player conditions) the player's state -- both
     // named explicitly, neither defaulted (INVARIANTS #14).
     //
+    // a_table selects combat() or logistics() -- the two never interleave
+    // (§4.8), so the caller decides which by the follower's combat state, and a
+    // single scan function serves both because first-match-wins is identical.
+    // Foe selectors only ever appear in the combat table; out of combat they
+    // find no combat group and fall through harmlessly, so no special-casing.
+    //
     // Returns ruleIndex == -1 when nothing matched: the caller then makes NO
     // engine call at all (§4.4's do-nothing guarantee).
-    Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state);
+    Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state,
+                    Table a_table = Table::Combat);
 
 }

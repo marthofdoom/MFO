@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Evaluator.h"
 #include "Vocabulary.h"
+#include "Logistics.h"   // supply-condition reads (counts of potions / arrows)
 
 namespace MFO::Eval {
 
@@ -82,6 +83,26 @@ namespace MFO::Eval {
             if (op == Vocab::kCondSelfSpBelow)   return Vocab::StaminaPct(a_self) < p;
             if (op == Vocab::kCondPlayerHpBelow) return Vocab::HealthPct(a_player) < p;
 
+            // LOGISTICS SUPPLY CONDITIONS (§4.8.1). Pure reads of the NAMED
+            // follower's own inventory/ammo (#14). p is a COUNT threshold, not a
+            // percentage. These walk the inventory, so they belong only in the
+            // logistics table's ~1 s tick (see Vocabulary.h) -- but ConditionTrue
+            // does not know which table it is in, so it just answers the read;
+            // #28 forbids second-guessing where the player put a rule.
+            if (op == Vocab::kCondSelfLowHealthPotion)
+                return Logistics::CountPotions(a_self, RE::ActorValue::kHealth)  < static_cast<int>(p);
+            if (op == Vocab::kCondSelfLowStaminaPotion)
+                return Logistics::CountPotions(a_self, RE::ActorValue::kStamina) < static_cast<int>(p);
+            if (op == Vocab::kCondSelfLowMagickaPotion)
+                return Logistics::CountPotions(a_self, RE::ActorValue::kMagicka) < static_cast<int>(p);
+            if (op == Vocab::kCondSelfOutOfArrows) {
+                // -1 means "no bow/crossbow equipped": the rule is N/A, not true.
+                // Vanilla grants infinite ammo of any type owned, so this rule is
+                // harmlessly idle on vanilla and load-bearing on Requiem (§4.8.2).
+                const int n = Logistics::ArrowCount(a_self);
+                return n >= 0 && n < static_cast<int>(p);
+            }
+
             // Foe selectors are resolved by the caller, which needs the chosen
             // handle. Reaching here means the caller did not ask -- say false
             // rather than silently claiming a target-less foe rule is true.
@@ -95,13 +116,14 @@ namespace MFO::Eval {
 
     }
 
-    Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state) {
+    Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state, Table a_table) {
         Choice out;
         if (!a_follower) return out;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
 
-        const auto& list = a_state.combat();
+        const auto& list = a_table == Table::Combat ? a_state.combat()
+                                                     : a_state.logistics();
         for (int i = 0; i < static_cast<int>(list.size()); ++i) {
             const auto& g = list[i];
             if (!g.enabled) continue;

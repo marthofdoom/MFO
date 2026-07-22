@@ -45,6 +45,51 @@ namespace MFO::Vocab {
     inline constexpr const char* kActCastTarget= "act.cast_target";  // param = SpellItem, subject = target
     inline constexpr const char* kActAttack    = "act.attack";       // target = the chosen foe
 
+    // ── LOGISTICS TABLE (DESIGN §4.8) ───────────────────────────────────────
+    // A SEPARATE non-combat table (State::logistics() == tables[1]). It runs on
+    // the out-of-combat idle tick and NEVER interleaves with the combat table
+    // (§4.8). These opcode strings are the same frozen serialization contract
+    // (#10) as the combat ones -- once shipped in a co-save they are permanent.
+    //
+    // NAMING: cond.self_* mirrors the existing self-vitals conditions; the
+    // supply conditions read the follower's OWN inventory/ammo (INVARIANTS #14
+    // -- the subject is always the named follower, never the player). act.drink_*
+    // and act.loot_* mirror the act.cast_* shape.
+
+    // Supply conditions. conditionParam is a COUNT (a whole number carried in the
+    // float), not a percentage -- "fewer than N of this potion", "fewer than N
+    // arrows". Cheap in isolation but each walks the follower's inventory, so
+    // they are ONLY legible in the logistics table, which ticks at ~1 s out of
+    // combat (§4.8.1) where an inventory walk is affordable -- unlike the 133 ms
+    // combat tick, whose #23 no-allocation rule these would violate.
+    inline constexpr const char* kCondSelfLowHealthPotion  = "cond.self_low_health_potion";
+    inline constexpr const char* kCondSelfLowStaminaPotion = "cond.self_low_stamina_potion";
+    inline constexpr const char* kCondSelfLowMagickaPotion = "cond.self_low_magicka_potion";
+    inline constexpr const char* kCondSelfOutOfArrows      = "cond.self_out_of_arrows";  // param = count; false if no bow/crossbow equipped
+
+    // The "hurt / low-magicka / low-stamina out of combat" drink triggers reuse
+    // the existing self-vitals conditions (kCondSelfHpBelow / kCondSelfMpBelow /
+    // kCondSelfSpBelow) rather than duplicating them -- a percentage read of the
+    // named follower is identical whether the rule sits in the combat or the
+    // logistics table, and #28 says MFO does not second-guess which table the
+    // player put a rule in.
+
+    // Logistics actions.
+    //   drink_*  -- consume the BEST (highest-magnitude) restore potion of that
+    //               resource the follower already carries, via the AlchemyItem
+    //               equip path (DESIGN §4.5 Tier A). Health/Stamina/Magicka only
+    //               (§4.8.2), classified by MGEF archetype, never by name.
+    //   loot_*   -- take from a nearby corpse/container, gated by the first-dibs
+    //               delay + player-looted waiver (§4.8.3, INVARIANTS #22e/#22g/
+    //               #22h). Arrows and the three potions are self-contained;
+    //               loot_equipment is generalized by category, never by item.
+    inline constexpr const char* kActDrinkHealthPotion  = "act.drink_health_potion";
+    inline constexpr const char* kActDrinkStaminaPotion = "act.drink_stamina_potion";
+    inline constexpr const char* kActDrinkMagickaPotion = "act.drink_magicka_potion";
+    inline constexpr const char* kActLootArrows         = "act.loot_arrows";
+    inline constexpr const char* kActLootPotions        = "act.loot_potions";
+    inline constexpr const char* kActLootEquipment      = "act.loot_equipment";
+
     // A cheap actor-value-percentage read. Reads THE NAMED actor's state
     // (INVARIANTS #15 -- say whose).
     //
