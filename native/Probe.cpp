@@ -307,19 +307,43 @@ namespace MFO::Probe {
     RE::FormID CrosshairTarget() { return g_crosshair.load(); }
 
     void FocusOnCrosshair() {
-        const auto id = CrosshairTarget();
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
 
-        // Looking at nothing = stand down. One key, both directions -- there is
-        // no second key to remember mid-fight.
-        if (id == 0) {
-            Targeting::ClearAll();
-            spdlog::info("[focus] released -- all follower latches cleared");
-            return;
+        RE::Actor* victim = nullptr;
+        const char* how = "";
+
+        // 1. THE CROSSHAIR, but only when it actually resolves to an actor.
+        //
+        // CrosshairRefEvent fires for ACTIVATABLE refs -- doors, containers,
+        // people you can talk to. A hostile mid-swing generally does NOT
+        // register, which is exactly the case this key exists for. The field
+        // log showed it plainly: repeated "released" (crosshair was 0) and one
+        // "not an actor" for a static. So the crosshair is the precise picker
+        // when it works, and it is not the one we rely on.
+        if (const auto id = CrosshairTarget(); id != 0) {
+            if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id)) {
+                if (a != player && !Followers::IsTracked(a->GetFormID())) {
+                    victim = a;
+                    how = "crosshair";
+                }
+            }
         }
 
-        auto* victim = RE::TESForm::LookupByID<RE::Actor>(id);
+        // 2. WHO THE PLAYER IS FIGHTING. This is the real answer for a focus-fire
+        //    key: "everyone attack the thing I am attacking". No raycast, and it
+        //    works in combat, which is the only time it matters.
         if (!victim) {
-            spdlog::info("[focus] crosshair ref {:08X} is not an actor -- ignored", id);
+            if (auto* pt = player->GetActorRuntimeData().currentCombatTarget.get().get()) {
+                victim = pt;
+                how = "your combat target";
+            }
+        }
+
+        if (!victim) {
+            Targeting::ClearAll();
+            spdlog::info("[focus] no target (not aiming at an actor, and you are not in combat) "
+                         "-- all latches released");
             return;
         }
 
@@ -332,7 +356,12 @@ namespace MFO::Probe {
         }
 
         const char* name = victim->GetName();
-        spdlog::info("[focus] {} follower(s) -> {} ({:08X}){}", n, name ? name : "?", id,
+        if (n == 0) {
+            spdlog::info("[focus] no followers to command (target was {})", name ? name : "?");
+            return;
+        }
+        spdlog::info("[focus] {} follower(s) -> {} ({:08X}) via {}{}", n, name ? name : "?",
+                     victim->GetFormID(), how,
                      Targeting::IsHooked() ? "" : "  -- BUT HOOK NOT INSTALLED (bCommandTarget=0)");
     }
 

@@ -14,6 +14,19 @@ First line of `MFO.log`:
 === MFO 0.5.1 loading — game 1-6-1170-0 ===
 ```
 
+### Cosnach cannot cast anything
+
+The last session's log said it outright:
+
+```
+[eval] 000198FA Cosnach knows no castable spell -- seeding Wait only
+```
+
+He is a Markarth brawler. **The animation half of this test needs a follower who
+actually knows a spell** — a court wizard, a Companions mage, anyone whose load
+line names a spell. If the seed line says "knows no castable spell", the
+targeting half still works, but nothing will ever cast.
+
 **The test build reports `0.5.1` too** — it is unreleased, so it carries the
 last released version number. Use these lines instead, which only the new build
 can print:
@@ -87,8 +100,13 @@ anyway, and we already wasted a session learning that. Bandit camps are ideal.
 **Do this:**
 
 1. Get into a multi-enemy fight.
-2. **Look directly at an enemy they are NOT currently fighting.**
+2. **Attack an enemy yourself**, or look directly at one.
 3. Press **`\`** (backslash) — the focus key. No menu, no pausing.
+
+It picks a target in this order: whatever your crosshair resolves to, and
+failing that **whoever you are currently fighting**. The crosshair only reports
+things you could *activate* — doors, containers, people you can talk to — so in
+a real fight the second one is what usually answers.
 
 Every active follower latches onto whatever you are looking at. Press it again
 while looking at **nothing** to release them.
