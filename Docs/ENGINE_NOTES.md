@@ -420,6 +420,42 @@ chosen package is unchanged, so a package approach needs the condition flicker
 (§4.5a rule 3). And package overrides are §4.5a's "last resort" for good reason
 -- they are the loudest thing MFO could do to another mod's follower.
 
+#### The mechanism in full, read from ALYSLC's source
+
+1. **A conditioned PACKAGE** — a ranged-attack/cast package whose conditions
+   test a **global variable**.
+2. **Arm it**: set the global (`lhCasting->value = 1.0f`).
+3. **Attach it**: write the package into the actor's package stacks —
+   `packageStackMap[kDefault]->forms[0]` and `[kCombatOverride]->forms[0]`.
+   ALYSLC also clears the current scene, because scene packages override both
+   run-once and package-stack packages.
+4. **`EvaluatePackage()`**, and only when the package actually differs (§0.7's
+   no-op finding, independently confirmed by their `a_evaluateOnlyIfDifferent`).
+5. **`RequestCastImpl` is a RESTART NUDGE, not the trigger.** Their own comment:
+   *"if a caster is stuck at state 1 for multiple frames, the casting package is
+   either not being executed or has stalled... Request to cast again if this
+   happens."* They call it only when `state == kUnk01`.
+
+That last point is the review's prediction confirmed from their source before
+MFO ever ran the probe: **state 1 IS the wedge.** The package drives the cast;
+`RequestCastImpl` only unsticks it.
+
+**Cost of applying this to MFO, stated honestly.** ALYSLC owns its actors and
+ships per-player package FormLists. MFO attaches to *arbitrary* followers it
+does not own, so it needs its own authored records:
+
+| Piece | Status |
+|---|---|
+| GLOB — the casting condition variable | New record type for the generator |
+| PACK — a conditioned cast package | **New, and the hardest record MFO would emit** (PKDT/PSDT/PLDT, conditions, package data) |
+| QUST + alias pool — how a package reaches a follower MFO does not own | New |
+| Runtime: arm global, set stack, evaluate, nudge | Straightforward once the records exist |
+
+The FormID band was reserved for exactly this at project start (`0x80A-0x80F`
+command QUST + alias pool + globals; `0x820+` MFO's own conditioned PACKAGEs,
+both tagged *Tier B, M9*). **This is M9, and it is the largest single mechanism
+in the project** — not a patch on M5.
+
 **Status: RESEARCHED, not built.** The caster-drive probe (§0.13 mechanism 2)
 still ships first because it is cheap and it DISCRIMINATES: `CheckCast` refusing
 means the engine rejected the cast outright; accepted-then-wedged means the
