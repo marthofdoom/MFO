@@ -3,6 +3,78 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.6.0 — followers cast, with animations, at targets you choose
+
+**The headline: MFO does not cast. It arranges the conditions and the
+follower's own AI casts** — animated, magicka-arbitrated, correctly aimed,
+because it is the vanilla path. Confirmed in the field: with a spell MFO put in
+his hand, Cosnach cast it himself, repeatedly, with the normal casting
+animation and real magicka cost.
+
+Three cast *verbs* were refuted getting here — `CastSpellImmediate` (all four
+casting sources), `Projectile::LaunchSpell` (no projectile on a self-heal), and
+`DoCombatSpellApply` (the Papyrus twin of the first). The verb was never the
+missing piece. `ActorMagicCaster` is driven by the animation graph, and the
+graph is driven by the follower's combat AI, so the real question was what
+*state* an NPC needs before its AI casts: a spell in hand, and a target.
+
+### New — the attack verb
+
+`act.attack`, with foe selectors that also choose the target, the way FFXII
+gambits do:
+
+```
+Foe: lowest HP   ->  Attack
+Self HP < 60%    ->  Cast <spell>
+Always           ->  Wait
+```
+
+Candidates come from the follower's own combat group, not a world sweep — the
+engine already knows who is in the fight, and a swept list could name someone
+they are not engaged with.
+
+**Papyrus cannot express commanded targeting at all.** There is no
+combat-target setter in `Actor.psc`, SKSE, po3 or PapyrusUtil — only
+`StartCombat`/`StopCombat` and a *getter*. A survey of ten installed modlists
+found zero Papyrus attack commands. So MFO hooks `Character::UpdateCombat` and
+writes the latched target after the engine's own re-pick, the technique the
+open-source SmartTargetingNPC uses. This also settles a question two field
+sessions failed to answer: **targets are not sticky** — the engine re-picks
+continuously, which is why the hook re-asserts rather than writing once.
+
+Off by default (`bCommandTarget`), because it installs a vfunc hook. VR is
+refused outright: the vtable index is verified for SE/AE only.
+
+### New — the equip policy
+
+A gambit spell goes in the follower's **off hand**, which costs a one-handed
+fighter nothing. A displaced shield returns when they take a hit, when combat
+ends, or on dismissal — deferred, never abandoned. A two-hander must be stowed,
+so that swap is debounced.
+
+### New — cast rate limiting
+
+`fCastCooldown` (4s). MFO cannot tell a combat AI to cast less often, but it
+decides what is in the follower's hand and they can only cast what they hold.
+A cast takes the spell back; the cooldown decides when it returns. Applies to
+the follower's own casts as well as MFO's.
+
+`fMagickaReserve` exists but defaults to **0**, deliberately: a follower
+healing to stay alive is exactly who a floor gets killed.
+
+### Also
+
+- The evaluator's cadence is its own constant, not the diagnostics pump's — a
+  HUD refresh rate was silently setting how fast gambits fire.
+- Suppression is positional: a higher-priority rule always preempts.
+- The combat table runs only in combat.
+- HP% is computed over true maximum, including fortify effects, so heals no
+  longer fire late on buffed followers.
+- Rapport no longer loses a follower's kill when the fight ends before the
+  death event is processed.
+- The co-save round-trip is proven in the field: a save carrying rapport
+  reloaded intact.
+
 ## v0.5.1 — first field session. M1 closed, one hypothesis dead.
 
 ### M1 is closed
