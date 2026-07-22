@@ -65,7 +65,28 @@ has executed.** Still untested: the boss/dragon multipliers landing on the
 right actors (see the boss-detection correction, §0.7), and rank-threshold
 crossings.
 
-### 0.6 The §4.7 retention question is STILL OPEN — the first test was confounded
+### 0.6 RETENTION — CLOSED BY READING THE SOURCE, not by testing (2026-07-22)
+
+**ANSWER: commanded targets are NOT sticky. The engine re-picks every combat
+update.**
+
+This is stated outright by the reference implementation: SmartTargetingNPC hooks
+`Character::UpdateCombat` and rewrites `currentCombatTarget` /
+`targetHandle` **after every single call**, because a one-shot write is
+overwritten by the engine's own re-pick. That is its entire design premise.
+
+**Nothing needed to be measured.** MFO's hook is correct *because* targeting is
+not sticky — re-asserting at the engine's cadence is the mechanism, not a
+workaround for it. §4.7's "does our target stick?" was answered in a public
+source file the whole time.
+
+**Cost of not looking: ~90 minutes of marth's play time**, across two sessions,
+plus a probe, a crosshair sink, a hotkey and three builds — all to re-derive one
+sentence. INVARIANTS #61.
+
+The historical detail, kept because the confound is instructive:
+
+### 0.6a (historical) the first retention test was confounded
 **Same session, probe.** `StartCombat` held the commanded Boethiah Cultist for
 7.0s with no defection — but **the cultist was the ONLY hostile present**
 (marth's observation). Vanilla AI would have stuck to the only target

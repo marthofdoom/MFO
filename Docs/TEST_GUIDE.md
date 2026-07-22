@@ -174,11 +174,13 @@ Everything else is detail.
 
 ---
 
-### Also useful, if you have the patience
+### Not needed any more — retention is answered
 
-Run the same fight once with `bCommandTarget = 0`. The state report prints
-`targeting: ... N assert(s), N drift(s)` — without a baseline those numbers
-don't mean anything.
+An earlier version of this guide asked for a drift count with a baseline run.
+**Skip it.** The engine re-picks its target every combat update — that is stated
+outright in SmartTargetingNPC's source, and it is why MFO's hook re-asserts
+rather than writing once. The counters still print, but nothing hinges on them
+(ENGINE_NOTES §0.6, INVARIANTS #61).
 
 ---
 

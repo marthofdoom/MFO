@@ -663,3 +663,21 @@ blamed on whichever mod the user installed most recently.
 
 Any hook that shares state with a known third-party plugin announces that plugin
 by name when it detects it.
+
+### 61. If a shipped mod already solves it, read its source before building a probe
+
+The §4.7 retention question — "does a commanded combat target stick?" — cost
+roughly 90 minutes of the maintainer's play time across two sessions, plus a
+probe harness, a crosshair sink, a hotkey, and three builds. The answer was one
+sentence in an open-source plugin already installed on the machine:
+SmartTargetingNPC rewrites the target after every `UpdateCombat` **because the
+engine re-picks**.
+
+The research method already says installed modlists are primary sources. It does
+not say "after you have built the instrument". **Reading costs minutes and the
+maintainer's time is the scarcest resource in this project** — a probe is for
+questions no existing code answers, and that has to be checked FIRST, not after
+the harness is written.
+
+Applies with double force to anything requiring a human to play the game to
+observe it.
