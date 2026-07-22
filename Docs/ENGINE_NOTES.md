@@ -727,6 +727,49 @@ contender — so the log can say *which mod*.
 3. `TESForm::CreateDuplicateForm` on `FormType::Package`.
 4. Whether `ExtraAliasInstanceArray` survives a 3D unload / load door.
 
+### 0.19 THE PACKAGE ROUTE IS PROVEN — an alias DOES instance its packages (2026-07-22)
+
+**FIELD RESULT, and it settles §0.18's load-bearing assumption.**
+
+marth, ESP-only PoC, no DLL code running: *"Its running and he is locked in
+place and unresponsive."*
+
+That single observation proves the entire delivery chain, every link of which
+was unverified an hour earlier:
+
+| Link | Proven by |
+|---|---|
+| A start-game-enabled quest starts on an EXISTING save via SEQ | `sqv` reported Running |
+| `ALFR` fills the alias with a specific reference | alias 0 held CosnachREF |
+| **Filling an alias INSTANCES its `ALPC` packages onto the reference** | **he was OWNED by the package** |
+| Quest priority arbitrates against a follower framework | MFO at 60 beat Requiem's `DialogueFollower` at 50 |
+| `kIgnoreCombat` runs the package out of combat | he was rooted while idle |
+
+**MFO can take ownership of an arbitrary follower's behaviour for the duration
+of an action.** That is DESIGN §4.5c's whole premise, and it is now a field
+fact rather than a plan.
+
+#### And the same test refuted the target model
+
+He never cast. **No animation, no effect, and no magicka spent** -- the
+procedure never attempted it. The Target input was `targType 4 -> alias 0`,
+reasoning that since the alias holds the follower, alias 0 *is* himself.
+
+**Vanilla never self-targets that way.** Of the 46 `UseMagic` instances:
+
+* **8 use `targType 4` (reference alias) -- and every one names a DIFFERENT actor.**
+* **7 use `targType 6`, value 0. That is SELF.** `WCollegeColettePracticeHeal13x2`
+  is literally "practice healing on self"; also `DA16ErandurCastSpell`,
+  `SprigganCallOverride`, and Colette's other practice packages.
+
+So an alias is for pointing at SOMEONE ELSE. Self has its own target type, and
+using an alias that happens to contain the caster is not a substitute --
+the procedure resolves nothing and stalls silently, holding the actor.
+
+**That silent stall is the signature to remember:** package owns the actor,
+actor does nothing, no resource is consumed. It means the procedure's INPUTS
+are unresolvable, not that delivery failed.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

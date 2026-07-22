@@ -740,3 +740,19 @@ the answer is far more often a record than a function.
 **Practical rule:** before reaching for an API to make an actor behave a certain
 way, dump the relevant vanilla records and ask whether the game already models
 it. `Skyrim.esm` is on disk. Reading it costs minutes.
+
+### 65. An alias targets someone ELSE; self has its own target type
+
+MFO's first cast package pointed its Target input at `PTDA targType 4 -> alias 0`
+-- the same alias that delivers the package -- reasoning that since the alias
+holds the follower, alias 0 is himself. The package took ownership of the actor
+and never cast: no animation, no effect, no magicka spent.
+
+Vanilla is unanimous. Of 46 `UseMagic` instances, the 8 that target a reference
+alias every one name a DIFFERENT actor, and the 7 that cast on themselves all
+use **`targType 6`, value 0**.
+
+**Diagnostic worth keeping:** a package that OWNS an actor while the actor does
+nothing and spends nothing means the procedure's inputs are unresolvable. It
+does not mean delivery failed -- delivery visibly succeeded, or the actor would
+not be rooted.

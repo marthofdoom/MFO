@@ -363,10 +363,20 @@ def make_cast_package():
     body += pack_input("Location", 'PLDT', struct.pack('<IiI', 12, 0, 10000))
     # Spell.
     body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, FREF_HEAL_SELF, 0))
-    # Target -- ALIAS 0, i.e. the follower THEMSELVES. A self heal, so the one
-    # alias serves as both carrier and target. Alias 1 exists for the foe-
-    # targeted verbs and is pointed at by a separate package.
-    body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 4, 0, 0))
+    # Target -- targType 6 is SELF, with a zero operand.
+    #
+    # This was `targType 4 -> alias 0`, reasoning that since the alias holds the
+    # follower, alias 0 IS himself. FIELD-REFUTED: the package took ownership of
+    # Cosnach -- he rooted in place, unresponsive -- and never cast, with no
+    # animation, no effect and NO MAGICKA SPENT, i.e. the procedure never even
+    # attempted it.
+    #
+    # Vanilla never self-targets that way. Of the 46 UseMagic instances, 8 point
+    # at a reference alias and every one of them names a DIFFERENT actor; the
+    # seven that cast on themselves all use targType 6 with value 0 --
+    # WCollegeColettePracticeHeal13x2 is literally "practice healing on self",
+    # alongside DA16ErandurCastSpell and SprigganCallOverride.
+    body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 6, 0, 0))
     body += pack_input("Bool",  'CNAM', struct.pack('<B', 0))          # HoldWhenBlocked
     body += pack_input("Float", 'CNAM', struct.pack('<f', 1.0))        # CastTimeMin
     body += pack_input("Float", 'CNAM', struct.pack('<f', 3.0))        # CastTimeMax
