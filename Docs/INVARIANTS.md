@@ -681,3 +681,20 @@ the harness is written.
 
 Applies with double force to anything requiring a human to play the game to
 observe it.
+
+### 62. A commit message is a claim about the code, not about the intent
+
+Commit `7e10ca1` described an upgrade to the `[cast]` evidence line -- resolving
+the form properly, flagging MFO gambit spells -- **that was never written.** The
+edit was clobbered while removing an unrelated feature from the same file, and
+the message was composed from what was meant to land rather than from the diff.
+The history now permanently describes code that did not exist.
+
+Two sibling failures the same hour: a feature reported as "reverted" when its
+commit had already pushed (the working tree was clean, which proved nothing),
+and a push to CI with no Fable review (#45a, the recorded pattern: it happens
+when something else is the headline).
+
+**Read the diff before writing the message.** `git show --stat` at minimum, and
+grep for the specific thing being claimed. A status report that was not verified
+is worse than no report, because it stops anyone else from checking.

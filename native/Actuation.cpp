@@ -127,6 +127,9 @@ namespace MFO::Actuation {
             // verb at all -- see ENGINE_NOTES §0.14.
             if (Config::g_commandCast.load() && Papyrus::Available()) {
                 if (Papyrus::DoCombatSpellApply(a_follower, spell, a_target)) {
+                    // Re-arm here too, or the one-shot bug simply survives on
+                    // the bCommandCast + bEquipToCast combination.
+                    if (equipped) Loadout::ArmGrace(a_follower->GetFormID());
                     return { Result::Fired, "dispatched" };
                 }
                 // Fall through to the silent path rather than dropping the
@@ -160,15 +163,6 @@ namespace MFO::Actuation {
             if (!caster) {
                 caster = a_follower->GetMagicCaster(CS::kInstant);
                 if (!caster) return { Result::FailedOther, "no magic caster" };
-            }
-            if (Config::g_screenNotify.load()) {
-                // Say WHICH cast this was. An MFO cast is silent by proof; only
-                // the AI-fired one can animate, and confusing them would make
-                // the whole session unreadable.
-                RE::DebugNotification(
-                    std::format("MFO: cast {} FOR {} (silent, no animation)",
-                                spell->GetName() ? spell->GetName() : "?",
-                                a_follower->GetName() ? a_follower->GetName() : "?").c_str());
             }
             caster->CastSpellImmediate(spell, false, a_target, 1.0f, false, 0.0f, a_follower);
 

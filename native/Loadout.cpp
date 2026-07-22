@@ -215,18 +215,6 @@ namespace MFO::Loadout {
         mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
         a_actor->DrawWeaponMagicHands(true);
 
-        // "WATCH HIM NOW." The animation question needs a human eye at the
-        // right instant, and the log cannot deliver that mid-fight. The equip
-        // is the earliest possible warning -- everything interesting happens
-        // in the seconds after it.
-        if (Config::g_screenNotify.load()) {
-            const char* nm = a_actor->GetName();
-            const char* sp = a_spell->GetName();
-            RE::DebugNotification(std::format("MFO: {} readying {} -- WATCH",
-                                              nm ? nm : "follower",
-                                              sp ? sp : "a spell").c_str());
-        }
-
         auto& debt = g_debt[id];
         debt.displacedLeft = willDisplaceLeft;
         debt.stowedWeapon  = willStowWeapon;
@@ -272,6 +260,21 @@ namespace MFO::Loadout {
     }
 
     void Tick() {
+        // The clock outlives the debt. A follower who displaced nothing settles
+        // immediately, so without this their clock keeps its last timestamp into
+        // the NEXT fight -- Prepare returns AlreadyReady, try_emplace no-ops on
+        // the stale entry, held is already past the grace, and MFO casts with
+        // ZERO window for their AI. That is the one-shot bug again, per episode
+        // instead of per session. Combat ending is the honest scope.
+        if (!g_equipClock.empty()) {
+            std::vector<RE::FormID> expired;
+            for (const auto& [id, t] : g_equipClock) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+                if (!a || !a->IsInCombat()) expired.push_back(id);
+            }
+            for (const auto id : expired) g_equipClock.erase(id);
+        }
+
         if (g_debt.empty()) return;
         const auto now  = std::chrono::steady_clock::now();
         const float hold = Config::g_twoHandedDebounce.load();

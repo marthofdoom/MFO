@@ -87,16 +87,47 @@ namespace MFO::Diagnostics {
                 if (!a_event->object->IsPlayerRef()) {
                     auto* caster = a_event->object->As<RE::Actor>();
                     if (caster && Followers::IsTracked(caster->GetFormID())) {
-                        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_event->spell);
-                        spdlog::info("[cast] {:08X} {} CAST {} ({:08X}) -- AI-fired: did it animate?",
-                                     caster->GetFormID(), caster->GetName(),
-                                     sp && sp->GetName() ? sp->GetName() : "?", a_event->spell);
-                        if (Config::g_screenNotify.load()) {
-                            RE::DebugNotification(
-                                std::format("MFO: {} CAST {} (their AI)",
-                                            caster->GetName() ? caster->GetName() : "?",
-                                            sp && sp->GetName() ? sp->GetName() : "?").c_str());
-                        }
+                        // QUEUE. This reads g_followers, which is main-thread-only
+                        // like every other MFO map, and the sink runs on the
+                        // event thread (#1). Cost of getting this wrong is a
+                        // torn read of the very table the evaluator is using.
+                        const auto casterID = caster->GetFormID();
+                        const auto spellID  = a_event->spell;
+                        SKSE::GetTaskInterface()->AddTask([casterID, spellID]() {
+                            auto* actor = RE::TESForm::LookupByID<RE::Actor>(casterID);
+
+                            // Resolve as TESForm, not SpellItem: the field log
+                            // printed "?" for the one cast it caught, and "?"
+                            // could mean a non-spell form, a nameless spell, or
+                            // a failed lookup -- three different stories, and
+                            // this is the single most important line in the
+                            // session.
+                            auto* form = RE::TESForm::LookupByID(spellID);
+                            const char* nm = form ? form->GetName() : nullptr;
+
+                            // Was it OURS -- a spell one of their gambits named?
+                            // find(), never operator[]: that inserts (#9).
+                            bool ours = false;
+                            if (const auto rec = g_followers.find(casterID);
+                                rec != g_followers.end()) {
+                                for (const auto& g : rec->second.combat()) {
+                                    if (g.actionParamForm == spellID) { ours = true; break; }
+                                }
+                            }
+
+                            spdlog::info("[cast] {:08X} {} CAST {} ({:08X}) formType={} -- AI-fired{}",
+                                         casterID,
+                                         actor && actor->GetName() ? actor->GetName() : "?",
+                                         nm && *nm ? nm : "(unnamed)", spellID,
+                                         form ? static_cast<int>(form->GetFormType()) : -1,
+                                         ours ? "  *** MFO GAMBIT SPELL -- THE ANIMATED PATH ***"
+                                              : "  (their own spell, not ours)");
+
+                            // Their AI just cast. Restart the window so MFO does
+                            // not double-cast on top of an animation still
+                            // playing -- an animated heal takes about a second.
+                            if (ours) Loadout::ArmGrace(casterID);
+                        });
                     }
                     return RE::BSEventNotifyControl::kContinue;
                 }
