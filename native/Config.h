@@ -44,6 +44,9 @@ namespace MFO::Config {
     // -- diagnostics ---------------------------------------------------------
     inline std::atomic<bool>  g_enableLogging{ true };
     inline std::atomic<bool>  g_profileRapport{ false };
+    // Board skin 0..3 (DESIGN §6.7a): Ebony & Brass / Dwemer Parchment /
+    // Soul Cairn / Quicksilver. Live, MCM dropdown.
+    inline std::atomic<int>   g_menuStyle{ 0 };
     inline std::atomic<bool>  g_showHud{ true };
 
     // Writes test gambits onto a player-keyed record so the co-save round-trip

@@ -93,6 +93,7 @@ namespace MFO::Config {
             else if (a_key == "iRapportRank5")      setI(g_rank5, 1, 100000000);
             else if (a_key == "bEnableLogging")     setB(g_enableLogging);
             else if (a_key == "bProfileRapport")    setB(g_profileRapport);
+            else if (a_key == "iMenuStyle")         setI(g_menuStyle, 0, 3);
             else if (a_key == "bShowHud")           setB(g_showHud);
             else if (a_key == "bSeedTestData")      setB(g_seedTestData);
             else if (a_key == "bSeedEvaluatorRules") setB(g_seedEvaluatorRules);

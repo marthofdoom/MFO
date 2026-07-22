@@ -99,6 +99,88 @@ namespace MFO::Board {
         }
 
         // ── the panel ───────────────────────────────────────────────────────
+        // ── SKINS (DESIGN §6.7a, standing family rule) ──────────────────────
+        // Four named skins, palettes copied VERBATIM from MEO's kSkins so MFO
+        // is the same brand, not merely similar. Square corners, flat fills --
+        // ImGui's honest range, closer to Skyrim than its debug grey.
+        struct MenuSkin {
+            const char* name;
+            ImVec4 winBg, panel, border, text, dim, sel, accent, btn, track, danger;
+            bool   sans;
+            const char* title;
+        };
+        inline constexpr MenuSkin kSkins[4] = {
+            { "Ebony & Brass",
+              { 0.04f,0.04f,0.06f,0.98f }, { 0.07f,0.07f,0.10f,0.98f },
+              { 0.55f,0.48f,0.27f,0.60f }, { 0.91f,0.89f,0.84f,1.00f },
+              { 0.58f,0.55f,0.47f,1.00f }, { 0.34f,0.29f,0.16f,0.85f },
+              { 0.78f,0.70f,0.45f,1.00f }, { 0.13f,0.11f,0.07f,0.90f },
+              { 1.00f,1.00f,1.00f,0.08f }, { 0.76f,0.29f,0.24f,1.00f },
+              false, "FOLLOWER OVERHAUL" },
+            { "Dwemer Parchment",
+              { 0.92f,0.88f,0.80f,0.99f }, { 0.95f,0.92f,0.85f,1.00f },
+              { 0.54f,0.45f,0.25f,0.85f }, { 0.21f,0.17f,0.12f,1.00f },
+              { 0.48f,0.43f,0.34f,1.00f }, { 0.86f,0.81f,0.66f,1.00f },
+              { 0.43f,0.29f,0.16f,1.00f }, { 0.89f,0.84f,0.72f,1.00f },
+              { 0.00f,0.00f,0.00f,0.10f }, { 0.55f,0.23f,0.18f,1.00f },
+              false, "FOLLOWER OVERHAUL" },
+            { "Soul Cairn",
+              { 0.07f,0.06f,0.13f,0.98f }, { 0.10f,0.08f,0.19f,0.98f },
+              { 0.35f,0.31f,0.55f,0.70f }, { 0.85f,0.84f,0.92f,1.00f },
+              { 0.55f,0.52f,0.66f,1.00f }, { 0.16f,0.14f,0.31f,0.90f },
+              { 0.53f,0.85f,0.92f,1.00f }, { 0.13f,0.10f,0.23f,0.90f },
+              { 1.00f,1.00f,1.00f,0.08f }, { 0.76f,0.29f,0.24f,1.00f },
+              false, "FOLLOWER OVERHAUL" },
+            { "Quicksilver",
+              { 0.04f,0.05f,0.06f,0.94f }, { 0.07f,0.08f,0.10f,0.96f },
+              { 0.22f,0.25f,0.29f,1.00f }, { 0.83f,0.85f,0.88f,1.00f },
+              { 0.47f,0.50f,0.54f,1.00f }, { 0.14f,0.19f,0.23f,0.90f },
+              { 0.56f,0.72f,0.80f,1.00f }, { 0.09f,0.11f,0.13f,0.90f },
+              { 1.00f,1.00f,1.00f,0.07f }, { 0.76f,0.29f,0.24f,1.00f },
+              true, "F O L L O W E R   O V E R H A U L" },
+        };
+
+        // Push the selected skin. Returns the count pushed so the caller pops
+        // exactly that many (an unbalanced push/pop corrupts every later frame).
+        int PushSkin() {
+            const int i = std::clamp(Config::g_menuStyle.load(), 0, 3);
+            const auto& sk = kSkins[i];
+            auto& st = ImGui::GetStyle();
+            st.WindowRounding = st.FrameRounding = st.PopupRounding =
+                st.ChildRounding = st.TabRounding = st.GrabRounding =
+                st.ScrollbarRounding = 0.0f;   // square, always
+            int n = 0;
+            auto col = [&](ImGuiCol c, const ImVec4& v){ ImGui::PushStyleColor(c, v); ++n; };
+            col(ImGuiCol_WindowBg,        sk.winBg);
+            col(ImGuiCol_ChildBg,         sk.panel);
+            col(ImGuiCol_PopupBg,         sk.panel);
+            col(ImGuiCol_Border,          sk.border);
+            col(ImGuiCol_Text,            sk.text);
+            col(ImGuiCol_TextDisabled,    sk.dim);
+            col(ImGuiCol_FrameBg,         sk.btn);
+            col(ImGuiCol_FrameBgHovered,  sk.sel);
+            col(ImGuiCol_FrameBgActive,   sk.sel);
+            col(ImGuiCol_Button,          sk.btn);
+            col(ImGuiCol_ButtonHovered,   sk.sel);
+            col(ImGuiCol_ButtonActive,    sk.accent);
+            col(ImGuiCol_Header,          sk.sel);
+            col(ImGuiCol_HeaderHovered,   sk.sel);
+            col(ImGuiCol_HeaderActive,    sk.accent);
+            col(ImGuiCol_TitleBg,         sk.panel);
+            col(ImGuiCol_TitleBgActive,   sk.panel);
+            col(ImGuiCol_Tab,             sk.btn);
+            col(ImGuiCol_TabHovered,      sk.sel);
+            col(ImGuiCol_TabActive,       sk.accent);
+            col(ImGuiCol_TableHeaderBg,   sk.panel);
+            col(ImGuiCol_TableRowBg,      sk.winBg);
+            col(ImGuiCol_TableRowBgAlt,   sk.panel);
+            col(ImGuiCol_CheckMark,       sk.accent);
+            col(ImGuiCol_SliderGrab,      sk.accent);
+            col(ImGuiCol_SeparatorHovered,sk.accent);
+            col(ImGuiCol_NavHighlight,    sk.accent);   // controller focus ring
+            return n;
+        }
+
         void DrawFieldKit(const Snapshot& snap) {
             if (g_wantClose.exchange(false)) { g_open = false; return; }
 
@@ -110,13 +192,21 @@ namespace MFO::Board {
                                      ImGuiCond_Appearing);
             ImGui::SetNextWindowSizeConstraints(ImVec2(620.0f, 400.0f), io.DisplaySize);
 
+            const int skinCols = PushSkin();
+            const auto& skin = kSkins[std::clamp(Config::g_menuStyle.load(), 0, 3)];
+
             if (!ImGui::Begin("MFO Field Kit", nullptr,
                               ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
                 ImGui::End();
+                ImGui::PopStyleColor(skinCols);
                 return;
             }
 
             const auto pv = SKSE::PluginDeclaration::GetSingleton()->GetVersion();
+            ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+            if (skin.sans) ImGui::TextUnformatted(skin.title);
+            else           ImGui::TextUnformatted(skin.title);
+            ImGui::PopStyleColor();
             ImGui::TextDisabled("MFO v%u.%u.%u  |  frame %llu  |  %.1f min",
                                 pv.major(), pv.minor(), pv.patch(),
                                 static_cast<unsigned long long>(snap.frame), snap.minutes);
@@ -197,6 +287,119 @@ namespace MFO::Board {
                             else          ImGui::TextDisabled("--");
                         }
                         ImGui::EndTable();
+                    }
+                    ImGui::EndTabItem();
+                }
+
+                // ── THE GAMBIT EDITOR (M7) ──────────────────────────────
+                if (ImGui::BeginTabItem("Gambits")) {
+                    static RE::FormID sel = 0;
+                    static int selTable = 0;   // 0 combat, 1 logistics
+
+                    // Follower picker.
+                    const FollowerRow* who = nullptr;
+                    for (const auto& r : snap.rows) if (r.active && r.id == sel) { who = &r; break; }
+                    if (!who) for (const auto& r : snap.rows) if (r.active) { who = &r; sel = r.id; break; }
+
+                    if (!who) {
+                        ImGui::TextDisabled("No active follower. Recruit one to edit gambits.");
+                    } else {
+                        if (ImGui::BeginCombo("Follower", who->name.c_str())) {
+                            for (const auto& r : snap.rows) {
+                                if (!r.active) continue;
+                                if (ImGui::Selectable(r.name.c_str(), r.id == sel)) sel = r.id;
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("rank %u", who->rank);
+
+                        const bool combat = (selTable == 0);
+                        const auto& rules = combat ? who->combat : who->logistics;
+                        const int slots = combat ? who->combatSlots : who->logisticsSlots;
+
+                        if (ImGui::RadioButton("Combat", combat)) selTable = 0;
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton("Logistics", !combat)) selTable = 1;
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("%d / %d slots used", (int)rules.size(), slots);
+
+                        // Rules top-down = priority order. First match wins.
+                        if (ImGui::BeginTable("##rules", 6,
+                                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                            ImGui::TableSetupColumn("On",   ImGuiTableColumnFlags_WidthFixed, 34);
+                            ImGui::TableSetupColumn("When (condition)", ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn("%",    ImGuiTableColumnFlags_WidthFixed, 70);
+                            ImGui::TableSetupColumn("Do (action)",      ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn("Spell",ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 118);
+                            ImGui::TableHeadersRow();
+
+                            for (int i = 0; i < (int)rules.size(); ++i) {
+                                const auto& rv = rules[i];
+                                ImGui::TableNextRow();
+                                ImGui::PushID(i);
+
+                                ImGui::TableNextColumn();
+                                bool en = rv.enabled;
+                                if (ImGui::Checkbox("##en", &en))
+                                    QueueEdit({ EditKind::Toggle, sel, selTable, i, 0 });
+
+                                // Condition -- cycle with < >
+                                ImGui::TableNextColumn();
+                                if (ImGui::SmallButton("<")) QueueEdit({ EditKind::CycleCond, sel, selTable, i, -1 });
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton(">")) QueueEdit({ EditKind::CycleCond, sel, selTable, i,  1 });
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(labelFor(rv.condOp, kConds, (int)std::size(kConds)));
+                                if (rv.lastFired) { ImGui::SameLine(); ImGui::TextColored(
+                                    ImVec4(0.4f,0.9f,0.4f,1), "*"); }
+
+                                // Threshold %
+                                ImGui::TableNextColumn();
+                                float pct = rv.param * 100.0f;
+                                ImGui::SetNextItemWidth(-1);
+                                if (ImGui::DragFloat("##p", &pct, 1.0f, 0.0f, 100.0f, "%.0f%%"))
+                                    QueueEdit({ EditKind::SetParam, sel, selTable, i, pct/100.0f });
+
+                                // Action -- cycle
+                                ImGui::TableNextColumn();
+                                if (ImGui::SmallButton("<##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, i, -1 });
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton(">##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, i,  1 });
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(labelFor(rv.actOp, kActs, (int)std::size(kActs)));
+
+                                // Spell (display only for now -- assignment is M7.1)
+                                ImGui::TableNextColumn();
+                                ImGui::TextDisabled("%s", rv.spellName.empty() ? "-" : rv.spellName.c_str());
+                                if (!rv.fail.empty() && ImGui::IsItemHovered())
+                                    ImGui::SetTooltip("last: %s", rv.fail.c_str());
+
+                                // Reorder / delete -- L1/R1 also move on a pad.
+                                ImGui::TableNextColumn();
+                                if (ImGui::SmallButton(" up ")) QueueEdit({ EditKind::MoveUp, sel, selTable, i, 0 });
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton("dn"))  QueueEdit({ EditKind::MoveDown, sel, selTable, i, 0 });
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton("del")) QueueEdit({ EditKind::Del, sel, selTable, i, 0 });
+
+                                ImGui::PopID();
+                            }
+                            ImGui::EndTable();
+                        }
+
+                        const bool full = (int)rules.size() >= slots;
+                        ImGui::BeginDisabled(full);
+                        if (ImGui::Button("+ Add rule"))
+                            QueueEdit({ EditKind::Add, sel, selTable, 0, 0 });
+                        ImGui::EndDisabled();
+                        if (full) { ImGui::SameLine();
+                            ImGui::TextDisabled("all %d slots used -- more unlock with rapport", slots); }
+
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("Top rule wins -- order is priority. A green * fired last tick. "
+                                            "Spell assignment arrives next.");
                     }
                     ImGui::EndTabItem();
                 }
@@ -394,8 +597,9 @@ namespace MFO::Board {
             }
 
             ImGui::Separator();
-            ImGui::TextDisabled("Field Orders / Esc / B closes.  Rule editing arrives at M7.");
+            ImGui::TextDisabled("Field Orders / Esc / B closes.  Skin: %s (Config tab).", skin.name);
             ImGui::End();
+            ImGui::PopStyleColor(skinCols);
         }
 
         // The single-monitor problem: with the full panel open, input is
@@ -719,7 +923,107 @@ namespace MFO::Board {
         spdlog::info("[board] {}", now ? "opened" : "closed");
     }
 
+    // Copy a live rule table into flat views for the render thread.
+    static void FillRuleViews(std::vector<FollowerRow::RuleView>& a_out,
+                              const std::vector<Gambit>& a_rules) {
+        a_out.clear();
+        a_out.reserve(a_rules.size());
+        for (const auto& g : a_rules) {
+            FollowerRow::RuleView v;
+            v.condOp = g.conditionOpcode; v.actOp = g.actionOpcode;
+            v.param  = g.conditionParam;  v.spell = g.actionParamForm;
+            v.enabled = g.enabled;        v.lastFired = g.lastFired; v.fail = g.lastFailReason;
+            if (v.spell) {
+                if (auto* sp = RE::TESForm::LookupByID(v.spell))
+                    v.spellName = sp->GetName() ? sp->GetName() : "?";
+            }
+            a_out.push_back(std::move(v));
+        }
+    }
+
+    // ── EDIT COMMAND QUEUE ──────────────────────────────────────────────────
+    // The board draws on the RENDER thread; the tables live on the main thread.
+    // So an edit is enqueued from the draw and APPLIED in PublishSnapshot,
+    // which runs on the main thread (#2, the same rule as everything touching
+    // g_followers). Never write a rule table from a draw call.
+    enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
+                                         CycleCond, CycleAct, SetParam };
+    struct EditCmd {
+        EditKind kind; RE::FormID fid; int table; int idx; float param;
+    };
+    std::mutex          g_editMx;
+    std::vector<EditCmd> g_edits;
+
+    void QueueEdit(EditCmd c) { std::scoped_lock lk(g_editMx); g_edits.push_back(c); }
+
+    // The vocabulary the editor cycles through, opcode + human label. Frozen
+    // opcode strings (#10); labels are UI only.
+    struct VocabEntry { const char* op; const char* label; };
+    inline constexpr VocabEntry kConds[] = {
+        { Vocab::kCondAlways,        "Always" },
+        { Vocab::kCondSelfHpBelow,   "Self HP % below" },
+        { Vocab::kCondSelfMpBelow,   "Self Magicka % below" },
+        { Vocab::kCondSelfSpBelow,   "Self Stamina % below" },
+        { Vocab::kCondPlayerHpBelow, "Player HP % below" },
+        { Vocab::kCondFoeLowestHp,   "Foe: lowest HP" },
+        { Vocab::kCondFoeHpBelow,    "Foe: HP % below" },
+        { Vocab::kCondFoeAny,        "Foe: nearest" },
+    };
+    inline constexpr VocabEntry kActs[] = {
+        { Vocab::kActWait,       "Wait" },
+        { Vocab::kActCastSelf,   "Cast on self" },
+        { Vocab::kActCastTarget, "Cast at foe" },
+        { Vocab::kActAttack,     "Attack" },
+    };
+    int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
+        int cur = 0;
+        for (int i = 0; i < n; ++i) if (op == tab[i].op) { cur = i; break; }
+        return ((cur + dir) % n + n) % n;
+    }
+    const char* labelFor(const std::string& op, const VocabEntry* tab, int n) {
+        for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].label;
+        return op.empty() ? "(unset)" : op.c_str();
+    }
+
+    // Apply queued edits. MAIN THREAD ONLY (called from PublishSnapshot).
+    void ApplyEdits() {
+        std::vector<EditCmd> todo;
+        { std::scoped_lock lk(g_editMx); todo.swap(g_edits); }
+        if (todo.empty()) return;
+        for (const auto& c : todo) {
+            auto it = g_followers.find(c.fid);
+            if (it == g_followers.end()) continue;
+            auto& tab = it->second.tables[std::clamp(c.table, 0, 1)];
+            switch (c.kind) {
+            case EditKind::Add: {
+                Gambit g; g.conditionOpcode = Vocab::kCondAlways;
+                g.actionOpcode = Vocab::kActWait; tab.push_back(g); break; }
+            case EditKind::Del:
+                if (c.idx >= 0 && c.idx < (int)tab.size()) tab.erase(tab.begin()+c.idx); break;
+            case EditKind::MoveUp:
+                if (c.idx > 0 && c.idx < (int)tab.size()) std::swap(tab[c.idx], tab[c.idx-1]); break;
+            case EditKind::MoveDown:
+                if (c.idx >= 0 && c.idx+1 < (int)tab.size()) std::swap(tab[c.idx], tab[c.idx+1]); break;
+            case EditKind::Toggle:
+                if (c.idx >= 0 && c.idx < (int)tab.size()) tab[c.idx].enabled = !tab[c.idx].enabled; break;
+            case EditKind::CycleCond:
+                if (c.idx >= 0 && c.idx < (int)tab.size()) {
+                    int n = cycleIdx(tab[c.idx].conditionOpcode, kConds, (int)std::size(kConds), (int)c.param);
+                    tab[c.idx].conditionOpcode = kConds[n].op;
+                } break;
+            case EditKind::CycleAct:
+                if (c.idx >= 0 && c.idx < (int)tab.size()) {
+                    int n = cycleIdx(tab[c.idx].actionOpcode, kActs, (int)std::size(kActs), (int)c.param);
+                    tab[c.idx].actionOpcode = kActs[n].op;
+                } break;
+            case EditKind::SetParam:
+                if (c.idx >= 0 && c.idx < (int)tab.size()) tab[c.idx].conditionParam = c.param; break;
+            }
+        }
+    }
+
     void PublishSnapshot() {
+        ApplyEdits();   // main-thread: fold in whatever the editor queued
         Snapshot s;
         s.frame = g_frame.fetch_add(1);
 
@@ -780,6 +1084,10 @@ namespace MFO::Board {
                 r.rank           = it->second.rank;
                 r.combatRules    = static_cast<std::uint8_t>(it->second.combat().size());
                 r.logisticsRules = static_cast<std::uint8_t>(it->second.logistics().size());
+                r.combatSlots    = SlotsForRank(it->second.rank, Table::Combat);
+                r.logisticsSlots = SlotsForRank(it->second.rank, Table::Logistics);
+                FillRuleViews(r.combat,    it->second.combat());
+                FillRuleViews(r.logistics, it->second.logistics());
             }
             r.combatSlots    = SlotsForRank(r.rank, Table::Combat);
             r.logisticsSlots = SlotsForRank(r.rank, Table::Logistics);

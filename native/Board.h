@@ -17,6 +17,19 @@ namespace MFO::Board {
 
     // One row per tracked follower. PLAIN VALUES ONLY -- no engine pointers
     // ever cross to the render thread (ARCHITECTURE.md §3.1).
+    // One rule as the board sees it -- a flat copy, never a pointer into the
+    // live table (the board draws on the render thread; the tables are
+    // main-thread-only).
+    struct RuleView {
+        std::string condOp, actOp;
+        float       param = 0.0f;
+        RE::FormID  spell = 0;
+        std::string spellName;
+        bool        enabled = true;
+        bool        lastFired = false;
+        std::string fail;
+    };
+
     struct FollowerRow {
         RE::FormID    id = 0;
         std::string   name;
@@ -34,6 +47,7 @@ namespace MFO::Board {
         float         magickaPct = 1.0f;
         float         staminaPct = 1.0f;
         float         distance = 0.0f;
+        std::vector<RuleView> combat, logistics;
     };
 
     struct Snapshot {
