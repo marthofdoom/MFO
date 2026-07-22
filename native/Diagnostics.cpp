@@ -11,6 +11,7 @@
 #include "Loadout.h"
 #include "Papyrus.h"
 #include "Targeting.h"
+#include "Packages.h"
 
 // The M3 test instrument.
 //
@@ -180,6 +181,7 @@ namespace MFO::Diagnostics {
                         if (diagTurn) Followers::Refresh();
 
                         Scheduler::Tick();
+                        Packages::DriveProbe();   // probe switchboard -> alias fill
                         Loadout::Tick();   // hand back stowed two-handers
 
                         if (diagTurn) {

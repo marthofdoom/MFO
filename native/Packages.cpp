@@ -780,6 +780,62 @@ namespace MFO::Packages {
         return s;
     }
 
+    void DriveProbe() {
+        auto* glob  = Forms::g_probeSelect;
+        auto* quest = Forms::g_commandQuest;
+        if (!glob || !quest) return;
+
+        const int want = static_cast<int>(glob->value);
+
+        // Only act on a CHANGE. This runs at pump cadence and the engine
+        // charges for a fill; re-filling every tick would be the churn #48
+        // exists to forbid.
+        static int s_last = -1;
+        if (want == s_last) return;
+        s_last = want;
+
+        if (want <= 0) {
+            // RELEASE. An unclaimed follower is entirely their own (#69), and
+            // clearing is correctness rather than tidiness -- a follower left
+            // in the alias with nothing valid just stands there.
+            if (DispatchAlias("Clear", nullptr)) {
+                spdlog::info("[probe] select 0 -- alias CLEAR dispatched; follower released");
+            } else {
+                spdlog::error("[probe] select 0 -- alias Clear FAILED; follower may be stuck. "
+                              "Console: ClearQuestAliases MFO_CommandQuest");
+            }
+            return;
+        }
+
+        // CLAIM. First tracked follower; the ladder only ever has one.
+        RE::Actor* who = nullptr;
+        for (const auto& h : Followers::g_active) {
+            if (auto* a = h.get().get()) { who = a; break; }
+        }
+        if (!who) {
+            spdlog::warn("[probe] select {} -- no tracked follower to put in the alias", want);
+            return;
+        }
+
+        if (ForceRefToNative(quest, kAliasCommandActor, who)) {
+            // SYNCHRONOUS: read it straight back, so the log says what IS
+            // rather than what was requested. The last session could not tell
+            // "never filled" from "filled but idle" and lost a session to it.
+            auto* alias = CommandAlias();
+            auto* now   = alias ? alias->GetActorReference() : nullptr;
+            spdlog::info("[probe] select {} -- alias filled NATIVELY with {:08X} {}; "
+                         "readback: {}", want, who->GetFormID(),
+                         who->GetName() ? who->GetName() : "?",
+                         now ? std::format("{:08X} OK", now->GetFormID())
+                             : std::string("EMPTY -- the native did not take"));
+        } else if (DispatchAlias("ForceRefTo", who)) {
+            spdlog::info("[probe] select {} -- alias fill DISPATCHED via VM (async) for {:08X}",
+                         want, who->GetFormID());
+        } else {
+            spdlog::error("[probe] select {} -- fill FAILED on both routes", want);
+        }
+    }
+
     void ClearTransientState() {
         ResetHolder();
         g_requests    = 0;

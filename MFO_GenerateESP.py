@@ -380,28 +380,16 @@ def make_command_quest():
     body += subrec('ALST', struct.pack('<I', 0))
     body += subrec('ALID', zstr("MFO_CommandActor"))
     body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
-    if POC_ENABLED:
-        # NO FILL CONDITION. It was GetGlobalValue(MFO_ProbeSelect) > 0, and
-        # it was a ZERO-precedent shape: of the 42 vanilla conditioned forced
-        # fills, all 42 live in 6 stage-bearing quests and NONE reads a global
-        # (GetGlobalValue appears 0 times in that population, and 28 times
-        # across all 9,414 alias conditions). It also cannot work: alias fill is
-        # bound to quest PROMOTION, so nothing cheap re-evaluates it -- which is
-        # exactly what the field showed.
-        # SPECIFIC REFERENCE fill. No conditions, no runtime, no DLL: the quest
-        # starts, the alias already holds this actor, and ALPC hands them the
-        # packages. Which ONE is valid is chosen by MFO_ProbeSelect -- every
-        # probe carries a GetGlobalValue CTDA, because the engine runs the
-        # FIRST valid package in ALPC order and unconditioned packages above
-        # others make them dead records (vanilla stacks gated packages above
-        # the unconditioned fallback: CU/CCU/CCCU 169+, the reverse ~2).
-        body += subrec('ALFR', struct.pack('<I', POC_ACTOR_REF))
-        # Probes only. The main package is deliberately NOT attached under
-        # POC: it is ungated, so it would shadow every probe below it.
-        for idx, sp, label, tgt in POC_PROBES:
-            body += subrec('ALPC', struct.pack('<I', FID_POC_PACK_BASE + idx - 1))
-    else:
-        body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE))
+    # NO AUTHORED FILL AT ALL -- this is DialogueFollower's shape (000750BA),
+    # whose Follower/Animal aliases have no ALFR, no ALUA and no conditions:
+    # bare Optional slots with packages on ALPC, filled and cleared from code.
+    # Bethesda's own follower system, running in every playthrough.
+    #
+    # The DLL fills alias 0 with TESQuest::ForceRefTo when it wants an action
+    # and clears it when the action ends. That is the only mechanism that can
+    # claim a follower ON DEMAND -- alias fill is bound to quest promotion, so
+    # nothing authored in the record can do it (§0.26).
+    body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE))
     body += subrec('VTCK', struct.pack('<I', 0))
     body += subrec('ALED', b'')
 
