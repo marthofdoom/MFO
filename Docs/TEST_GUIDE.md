@@ -14,8 +14,21 @@ First line of `MFO.log`:
 === MFO 0.5.1 loading — game 1-6-1170-0 ===
 ```
 
-If that version is not the build you just installed, **stop**. Everything below
-is meaningless. This has bitten the sibling projects twice.
+**The test build reports `0.5.1` too** — it is unreleased, so it carries the
+last released version number. Use these lines instead, which only the new build
+can print:
+
+```
+[target] UpdateCombat vfunc hook installed (Character vtbl idx 0xE4)
+[loadout] hit sink registered (shield restore)
+```
+
+No `[target]` line means you are running the old DLL, or `bCommandTarget = 0`.
+The state report also prints `evaluator:`, `loadout:` and `targeting:` lines
+that v0.5.1 never had.
+
+If the version is older than 0.5.1, **stop** — everything below is meaningless.
+This has bitten the sibling projects twice.
 
 **2. Know where the log is.**
 
