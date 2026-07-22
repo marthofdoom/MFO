@@ -221,7 +221,52 @@ remaining surface in MFO that could damage another mod's state.
 
 ---
 
-## M9+ — Tier B, one mechanism per release
+## M9 — The forced casting package *(the animated-cast endgame)*
+
+**Fully researched, not started.** ENGINE_NOTES §0.17 records the mechanism read
+from ALYSLC's source. This is the thing that makes a follower cast **on
+command** with animation, rather than only when their own AI agrees the spell is
+worth casting (§0.16).
+
+FormIDs were reserved for this at project start: `0x80A-0x80F` (command QUST +
+alias pool + globals), `0x820+` (MFO's own conditioned PACKAGEs).
+
+### The records to generate
+
+Python, no xEdit — the family's standard practice, precedented across every
+sibling project.
+
+| Record | Contents |
+|---|---|
+| **GLOB** | `MFO_CastFlag` — the condition variable the package tests. Short, value 0. |
+| **PACK** | A ranged/cast package: `PKDT` (type + general flags), `PSDT` (schedule), `PLDT` (target = the alias), condition on the GLOB `== 1`, package data for the cast. |
+| **QUST** | Command quest, `Start Game Enabled`, with an **alias pool** — the mechanism by which a package reaches a follower MFO does not own. |
+
+### The runtime, once the records exist
+
+1. Fill an alias with the follower.
+2. Set `MFO_CastFlag = 1`.
+3. Write the package into **both** stacks — `kDefault` and `kCombatOverride` —
+   and clear the current scene (scene packages override both).
+4. `EvaluatePackage()`, **only when the package actually differs** (§0.7 proved
+   it no-ops otherwise; ALYSLC guards the same way).
+5. If the caster wedges at `State::kUnk01`, nudge with `RequestCastImpl()` —
+   their restart trick, not a trigger.
+6. Clear the flag and restore the package when the rule stops wanting it.
+
+### Why it is worth the size
+
+§4.5a calls package overrides a last resort, and that stands — this is the
+loudest thing MFO can do to another mod's follower, so it goes behind a flag and
+gets removed the instant the rule stops firing. But it is the ONLY route to a
+commanded animated cast, and every alternative is now refuted in writing:
+`CastSpellImmediate` (§0.8/§0.10), `LaunchSpell` (#56), `DoCombatSpellApply`
+(§0.14), animation events (§0.17 — the graph emits them, nothing sends them),
+and driving the caster alone (§0.17 — wedges at state 1 without a package).
+
+---
+
+## M10+ — Tier B, one mechanism per release
 
 In reversibility order, per §4.5: reversible state sets → combat-state calls
 → conditioned packages → package overrides last. Each its own release, each
