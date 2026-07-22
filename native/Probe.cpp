@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Probe.h"
 #include "Targeting.h"
+#include "Followers.h"
 
 namespace MFO::Probe {
 
