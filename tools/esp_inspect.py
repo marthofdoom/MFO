@@ -1273,7 +1273,31 @@ def mode_selftest(args):
         ck('MFO masters == [Skyrim.esm]', mfo.masters, ['Skyrim.esm'])
         pk = [r for r in mfo.by_sig.get('PACK', [])]
         # 1 PACK in a release build; 6 under MFO_POC=1 (main + 5 probes).
-        ck('MFO PACK count is 1 (release) or 6 (POC)', len(pk) in (1, 6), True)
+        # 1 in a release build; 1 + however many probes the ladder defines in a
+        # POC build. Pinning an exact count made this FAIL whenever a probe was
+        # ADDED, which trains people to loosen assertions instead of read them.
+        ck('MFO PACK count is 1 (release) or 1+probes (POC)',
+           len(pk) == 1 or len(pk) >= 6, True)
+
+        # THE TWO HARD RULES, ASSERTED OVER MFO'S OWN RECORDS.
+        # They were only ever checked against Skyrim.esm -- i.e. the tool
+        # verified that VANILLA obeys them, which nobody doubted. A probe build
+        # shipped an alias-valued target with no QNAM and this selftest passed
+        # 49/49. Assert them where they can actually be violated.
+        bad_nq = bad_ord = 0
+        for p_ in pk:
+            subs_ = list(p_.subs())
+            names_ = [t for t, _ in subs_]
+            alias_in = any(t == 'PTDA' and len(dd) >= 12
+                           and struct.unpack_from('<i', dd, 0)[0] == 4
+                           for t, dd in subs_)
+            if alias_in and 'QNAM' not in names_:
+                bad_nq += 1
+            if 'QNAM' in names_ and 'PKCU' in names_ \
+               and names_.index('QNAM') > names_.index('PKCU'):
+                bad_ord += 1
+        ck('MFO: alias-valued target without QNAM (626/626 vanilla carry it)', bad_nq, 0)
+        ck('MFO: QNAM after PKCU (0 of 2,109 vanilla)', bad_ord, 0)
         p = mfo.by_fid.get(0x01000820)
         ck('MFO_CastPackage 01000820 exists', p is not None, True)
         if p is not None:
@@ -1341,8 +1365,10 @@ def mode_selftest(args):
                 else:
                     # POC: probes only -- the ungated main package would
                     # shadow every gated probe below it in ALPC order.
-                    ck('alias 0 (POC) carries the 5 probes, NOT 01000820',
-                       alpcs, [f'010008{0x21 + i:02X}' for i in range(5)])
+                    ck('alias 0 (POC) carries probes only, NOT 01000820',
+                       ('01000820' not in alpcs) and len(alpcs) >= 5, True)
+                    ck('alias 0 (POC) probes contiguous from 01000821',
+                       alpcs, [f'010008{0x21 + i:02X}' for i in range(len(alpcs))])
                 fl = _u32.unpack_from(sub['FNAM'], 0)[0] if 'FNAM' in sub else 0
                 ck('alias 0 FNAM = Optional|AllowReuse|AllowReserved',
                    fl, 0x0002 | 0x0008 | 0x0200)

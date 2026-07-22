@@ -107,6 +107,30 @@ POC_PROBES = [
     (3, 0x0002F3B8, "FastHealingSelfRef",  ("t0", None)),   # None -> POC_ACTOR_REF
     (4, 0x000E8449, "WardAnchorPlayer",    ("t0", FREF_PLAYER)),
     (5, 0x00043323, "MagelightAtAlias1",   ("t4", 1)),
+
+    # ── group 2 ────────────────────────────────────────────────────────────
+    # 6. THE WARD, PROPERLY. Concentration + Self is only ever shipped with
+    #    targType 6 (2/2 vanilla), and probe 4 failed because it used t0 -- an
+    #    empty cell. t6 has never had a CLEAN test: rev 4 crashed with t6 AND
+    #    with QNAM emitted after PKCU (0 of 2,109 vanilla), i.e. two novel axes
+    #    at once. The ordering is fixed globally now, so this is t6 alone.
+    #    No QNAM: nothing here names an alias.
+    (6, 0x000E8449, "WardOnSelf_t6",       ("t6", 0)),
+
+    # 7. THE MAGICKA QUESTION. Thunderbolt costs 343 -- expensive enough that
+    #    consumption cannot be ambiguous. Rides probe 5's PROVEN shape (t4 ->
+    #    alias 1) so the only new variable is the price tag. If he casts it
+    #    repeatedly on a warrior's magicka pool, package casts are FREE and
+    #    §5.3's competence gate is decorative for this actuator.
+    (7, 0x0010F7EE, "ThunderboltAtAlias1", ("t4", 1)),
+
+    # 8. CONCENTRATION, THE SAFE WAY. HealingHands is Concentration +
+    #    TargetActor, cost 25, and it HEALS -- so it tests the concentration
+    #    axis at a t0 reference, a cell vanilla DOES ship under ALPC, without
+    #    going anywhere near the t6 cell that crashed. If this casts,
+    #    concentration works under alias delivery and probe 6's outcome only
+    #    decides whether SELF-delivery concentration is separately reachable.
+    (8, 0x0004D3F2, "HealingHandsAtPlayer", ("t0", FREF_PLAYER)),
 ]
 
 # ── M9 PROOF OF CONCEPT ────────────────────────────────────────────────────
@@ -401,15 +425,7 @@ def probe_ctda(index):
                                       FID_PROBE_GLOB, 0, 0, 0, -1))
 
 
-# Concentration + Self delivery has no reachable shape under alias delivery:
-# vanilla only ever ships it with targType 6, and targType 6 in an
-# alias-delivered package's target slot is a zero cell that CTD'd (ENGINE_NOTES
-# §0.20/§0.21, INVARIANTS #67). Refuse rather than emit.
-def refuse_concentration_self(casting_type, delivery):
-    return casting_type == 2 and delivery == 0
-
-
-def build_usemagic(fid, edid, spell, target, bounds, ctda=b'', qnam=None):
+def build_usemagic(fid, edid, spell, target, bounds, ctda=b'', qnam=None, waiver=None):
     """One PACK instance riding vanilla `UseMagic` (000504F5).
 
     Subrecord ORDER is part of the shape: EDID, PKDT, PSDT, [CTDA], [QNAM],
@@ -432,9 +448,16 @@ def build_usemagic(fid, edid, spell, target, bounds, ctda=b'', qnam=None):
     """
     tkind, tval = target
     if tkind == 't6':
-        raise SystemExit(f"REFUSED {edid}: targType 6 in the target slot of an "
+        # A PROBE may waive this deliberately -- that is how precedent gets
+        # made. Production records never can: the waiver has to be written at
+        # the call site, with a reason, and it only ever applies to one record.
+        if waiver == 't6' and not POC_ENABLED:
+            raise SystemExit(f"REFUSED {edid}: a waiver is a PROBE instrument and "
+                             "must never reach a release build.")
+        if waiver != 't6':
+            raise SystemExit(f"REFUSED {edid}: targType 6 in the target slot of an "
                          "alias-delivered package -- 0 vanilla precedents, "
-                         "field CTD (ENGINE_NOTES 0.20 / INVARIANTS 66)")
+                         "field CTD (ENGINE_NOTES 0.20 / INVARIANTS 67)")
     if tkind == 't4' and qnam is None:
         raise SystemExit(f"REFUSED {edid}: alias-valued target without QNAM -- "
                          "626/626 vanilla packages with an alias input carry "
@@ -463,6 +486,13 @@ def build_usemagic(fid, edid, spell, target, bounds, ctda=b'', qnam=None):
     body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, spell, 0))
     if tkind == 't0':
         body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 0, tval, 0))
+    elif tkind == 't6':
+        # SELF. Byte shape verified from WCollegePracticeCastWard (00064B17).
+        # This branch did not exist: the waiver removed the REFUSAL while the
+        # emission path was still two-way, so ('t6', 0) silently became
+        # t4 -> alias 0 -- the union of two known-bad shapes. A guard doing
+        # double duty as "no precedent" AND "not implemented" hides the second.
+        body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 6, 0, 0))
     else:
         body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 4, tval, 0))
     cmin, cmax, komin, komax, nmin, nmax = bounds
@@ -526,12 +556,18 @@ def make_poc_packages():
     for idx, sp, label, (tkind, tval) in POC_PROBES:
         if tkind == 't0' and tval is None:
             tval = POC_ACTOR_REF
-        bounds = BOUNDS_CONC if sp == 0x000E8449 else BOUNDS_FF
+        bounds = BOUNDS_CONC if sp in (0x000E8449, 0x0004D3F2) else BOUNDS_FF
+        # t6 names no alias, so no QNAM -- see build_usemagic's guard.
         out += build_usemagic(
             FID_POC_PACK_BASE + idx - 1, f"MFO_PoC{idx}_{label}",
             sp, (tkind, tval), bounds,
             ctda=probe_ctda(idx),
-            qnam=FID_COMMAND_QUEST if tkind == 't4' else None)
+            qnam=FID_COMMAND_QUEST if tkind == 't4' else None,
+            # Probe 6 exists to TEST the refused shape, cleanly, once: rev 4
+            # crashed with t6 AND with QNAM misordered, so t6 alone has never
+            # been tried. If it casts, the guard is wrong and #67 relaxes; if
+            # it crashes, the guard is proven and stays forever.
+            waiver='t6' if tkind == 't6' else None)
     return out
 
 
