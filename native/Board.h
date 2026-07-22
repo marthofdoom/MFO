@@ -49,6 +49,7 @@ namespace MFO::Board {
         float         staminaPct = 1.0f;
         float         distance = 0.0f;
         std::vector<RuleView> combat, logistics;
+        std::vector<std::pair<RE::FormID, std::string>> knownSpells;
     };
 
     struct Snapshot {

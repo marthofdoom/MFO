@@ -211,6 +211,21 @@ namespace {
             wait.actionOpcode    = MFO::Vocab::kActWait;
             rec->combat().push_back(wait);
 
+            // DEFAULT LOGISTICS TABLE -- the base gambits a follower should have
+            // out of the box. Drink a health potion when hurt, keep arrows and
+            // potions topped up, grab a better piece of gear. These do nothing
+            // unless bLogistics is on, but they should EXIST so the board is not
+            // empty and the behaviour is available.
+            auto logi = [&](const char* cond, float p, const char* act) {
+                MFO::Gambit g{};
+                g.conditionOpcode = cond; g.conditionParam = p; g.actionOpcode = act;
+                rec->logistics().push_back(g);
+            };
+            logi(MFO::Vocab::kCondSelfHpBelow,          0.50f, MFO::Vocab::kActDrinkHealthPotion);
+            logi(MFO::Vocab::kCondSelfOutOfArrows,      10.0f, MFO::Vocab::kActLootArrows);
+            logi(MFO::Vocab::kCondSelfLowHealthPotion,   2.0f, MFO::Vocab::kActLootPotions);
+            logi(MFO::Vocab::kCondAlways,               0.0f,  MFO::Vocab::kActLootEquipment);
+
             ++seeded;
             spdlog::info("[eval] seeded default rules on {:08X} {}", a->GetFormID(), a->GetName());
         }

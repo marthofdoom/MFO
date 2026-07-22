@@ -38,6 +38,7 @@ cp out/SEQ/MFO.seq    "$STAGE/pkg/SEQ/"
 cp "$STAGE/dll/MFO.dll" "$STAGE/pkg/SKSE/Plugins/"
 [ -f out/SKSE/Plugins/MFO.ini ] && cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
 cp THIRD-PARTY-NOTICES.md "$STAGE/pkg/"   # ships with every build (INVARIANTS #42a)
+[ -d out/MCM ] && cp -r out/MCM "$STAGE/pkg/"   # MCM Helper config.json
 
 OUT="$PWD/MFO-test-v${VER}.zip"
 rm -f "$OUT"

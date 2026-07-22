@@ -66,6 +66,24 @@ namespace MFO::Diagnostics {
             }
         };
 
+        // MCM WRITES, then closes the Journal Menu; re-read config so settings
+        // apply LIVE instead of at next load. MCM Helper persists to
+        // Data/MCM/Settings/MFO.ini, which Config::Read ingests last.
+        class MenuSink final : public RE::BSTEventSink<RE::MenuOpenCloseEvent> {
+        public:
+            static MenuSink* GetSingleton() { static MenuSink s; return &s; }
+            RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_e,
+                                                  RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override {
+                if (a_e && !a_e->opening && a_e->menuName == RE::JournalMenu::MENU_NAME) {
+                    SKSE::GetTaskInterface()->AddTask([]() {
+                        Config::Read();
+                        spdlog::info("[config] re-read after Journal/MCM close");
+                    });
+                }
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
         class SpellSink final : public RE::BSTEventSink<RE::TESSpellCastEvent> {
         public:
             static SpellSink* GetSingleton() {
@@ -323,6 +341,8 @@ namespace MFO::Diagnostics {
         if (holder) {
             holder->AddEventSink<RE::TESSpellCastEvent>(SpellSink::GetSingleton());
             holder->AddEventSink<RE::TESHitEvent>(HitSink::GetSingleton());
+            if (auto* ui = RE::UI::GetSingleton())
+                ui->AddEventSink<RE::MenuOpenCloseEvent>(MenuSink::GetSingleton());
             Probe::RegisterCrosshairSink();
             spdlog::info("[loadout] hit sink registered (shield restore)");
             spdlog::info("[diag] Field Orders power will dump a state report");

@@ -105,9 +105,10 @@ namespace MFO::Board {
     // which runs on the main thread (#2, the same rule as everything touching
     // g_followers). Never write a rule table from a draw call.
     enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
-                                         CycleCond, CycleAct, SetParam };
+                                         CycleCond, CycleAct, SetParam, SetSpell };
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
+        RE::FormID spell = 0;
     };
     std::mutex          g_editMx;
     std::vector<EditCmd> g_edits;
@@ -416,11 +417,30 @@ namespace MFO::Board {
                                 ImGui::SameLine();
                                 ImGui::TextUnformatted(labelFor(rv.actOp, kActs, (int)std::size(kActs)));
 
-                                // Spell (display only for now -- assignment is M7.1)
+                                // Spell picker -- only meaningful for cast
+                                // actions. Lists the follower's own known spells.
                                 ImGui::TableNextColumn();
-                                ImGui::TextDisabled("%s", rv.spellName.empty() ? "-" : rv.spellName.c_str());
-                                if (!rv.fail.empty() && ImGui::IsItemHovered())
-                                    ImGui::SetTooltip("last: %s", rv.fail.c_str());
+                                const bool isCast = (rv.actOp == Vocab::kActCastSelf ||
+                                                     rv.actOp == Vocab::kActCastTarget);
+                                if (!isCast) {
+                                    ImGui::TextDisabled("-");
+                                } else {
+                                    const char* cur = rv.spellName.empty() ? "(pick)" : rv.spellName.c_str();
+                                    ImGui::SetNextItemWidth(-1);
+                                    if (ImGui::BeginCombo("##sp", cur)) {
+                                        for (const auto& [sid, sname] : who->knownSpells) {
+                                            if (ImGui::Selectable(sname.c_str(), sid == rv.spell)) {
+                                                EditCmd e{ EditKind::SetSpell, sel, selTable, rv.uid, 0 };
+                                                e.spell = sid; QueueEdit(e);
+                                            }
+                                        }
+                                        if (who->knownSpells.empty())
+                                            ImGui::TextDisabled("follower knows no spells");
+                                        ImGui::EndCombo();
+                                    }
+                                    if (!rv.fail.empty() && ImGui::IsItemHovered())
+                                        ImGui::SetTooltip("last: %s", rv.fail.c_str());
+                                }
 
                                 // Reorder / delete. The up/dn buttons are
                                 // nav-focusable, so reorder is pad-reachable
@@ -1066,6 +1086,7 @@ namespace MFO::Board {
                 int n = cycleIdx(tab[i].actionOpcode, kActs, (int)std::size(kActs), (int)c.param);
                 tab[i].actionOpcode = kActs[n].op; break; }
             case EditKind::SetParam: tab[i].conditionParam = c.param; break;
+            case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
             default: break;
             }
         }
@@ -1138,6 +1159,18 @@ namespace MFO::Board {
                 r.logisticsSlots = SlotsForRank(it->second.rank, Table::Logistics);
                 FillRuleViews(r.combat,    it->second.combat());
                 FillRuleViews(r.logistics, it->second.logistics());
+                // The follower's castable spells, for the board's picker. Same
+                // VisitSpells pattern the seed uses.
+                struct SpellList : RE::Actor::ForEachSpellVisitor {
+                    std::vector<std::pair<RE::FormID, std::string>>* out;
+                    RE::BSContainer::ForEachResult Visit(RE::SpellItem* sp) override {
+                        if (sp && sp->GetSpellType() == RE::MagicSystem::SpellType::kSpell)
+                            out->emplace_back(sp->GetFormID(),
+                                              sp->GetName() ? sp->GetName() : "?");
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
+                } vis; vis.out = &r.knownSpells;
+                a->VisitSpells(vis);
             }
             r.combatSlots    = SlotsForRank(r.rank, Table::Combat);
             r.logisticsSlots = SlotsForRank(r.rank, Table::Logistics);
