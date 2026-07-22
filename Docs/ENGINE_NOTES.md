@@ -844,12 +844,33 @@ specifically **`t4` pointing at the DELIVERING alias** -- an alias indirection
 back to itself -- not self-targeting in general. So `cast_self` HAS a proven
 shape: **`t0` -> the follower's own reference.**
 
-**4. Concentration is the one axis that failed.** Probe 4 is the only
-concentration spell in the ladder and the only failure; all four fire-and-forget
-probes cast. Note vanilla DOES ship 12 concentration `UseMagic` packages -- but
-its concentration+Self records use `targType 6`, which probe 4 did not. So the
-honest claim is narrow: **concentration + Self delivery via a `t0` anchor does
-not fire.** Whether concentration works under `ALPC` at all is untested.
+**4. Probe 4 was another ZERO-PRECEDENT cell, and it may be unreachable.**
+
+marth's read -- *"how could Cosnach cast a ward on the player, no wonder it
+failed"* -- points at the right area. The exact rule is sharper. For
+SELF-delivery spells in vanilla `UseMagic`:
+
+| castingType | targType | count |
+|---|---|---|
+| Concentration | **6 (self)** | 2 |
+| FireForget | 6 (self) | 4 |
+| FireForget | 0 (a ref) | **1** <- probe 2's precedent (`dunReachwaterRockGauldurReforgeAmulet`) |
+| FireForget | 4 (alias) | 1 |
+| **Concentration** | **0 (a ref)** | **0** <- probe 4 |
+
+Probe 2 works because exactly one vanilla record does that. Probe 4 sits in an
+empty cell. It is not "concentration is broken" -- it is *this combination* is
+unshipped.
+
+**AND THE OBVIOUS FIX IS BLOCKED.** Concentration+Self is only ever shipped with
+`targType 6` (2 of 2) -- but `targType 6` in the TARGET slot of an
+**alias-delivered** package is itself a zero cell, and is what CTD'd in rev 4
+(§0.20). Vanilla's two concentration-self records are not alias-delivered.
+
+**So concentration self-casts may be UNREACHABLE through alias delivery**, and
+MFO must refuse them with a reason (§5.3's shape: the rule fails legibly) rather
+than crash or stall. A cheap probe could still settle it: concentration + AIMED
+at `t0`/`t4`, which vanilla does ship under `ALPC`.
 
 #### Still open
 
@@ -894,12 +915,33 @@ specifically **`t4` pointing at the DELIVERING alias** -- an alias indirection
 back to itself -- not self-targeting in general. So `cast_self` HAS a proven
 shape: **`t0` -> the follower's own reference.**
 
-**4. Concentration is the one axis that failed.** Probe 4 is the only
-concentration spell in the ladder and the only failure; all four fire-and-forget
-probes cast. Note vanilla DOES ship 12 concentration `UseMagic` packages -- but
-its concentration+Self records use `targType 6`, which probe 4 did not. So the
-honest claim is narrow: **concentration + Self delivery via a `t0` anchor does
-not fire.** Whether concentration works under `ALPC` at all is untested.
+**4. Probe 4 was another ZERO-PRECEDENT cell, and it may be unreachable.**
+
+marth's read -- *"how could Cosnach cast a ward on the player, no wonder it
+failed"* -- points at the right area. The exact rule is sharper. For
+SELF-delivery spells in vanilla `UseMagic`:
+
+| castingType | targType | count |
+|---|---|---|
+| Concentration | **6 (self)** | 2 |
+| FireForget | 6 (self) | 4 |
+| FireForget | 0 (a ref) | **1** <- probe 2's precedent (`dunReachwaterRockGauldurReforgeAmulet`) |
+| FireForget | 4 (alias) | 1 |
+| **Concentration** | **0 (a ref)** | **0** <- probe 4 |
+
+Probe 2 works because exactly one vanilla record does that. Probe 4 sits in an
+empty cell. It is not "concentration is broken" -- it is *this combination* is
+unshipped.
+
+**AND THE OBVIOUS FIX IS BLOCKED.** Concentration+Self is only ever shipped with
+`targType 6` (2 of 2) -- but `targType 6` in the TARGET slot of an
+**alias-delivered** package is itself a zero cell, and is what CTD'd in rev 4
+(§0.20). Vanilla's two concentration-self records are not alias-delivered.
+
+**So concentration self-casts may be UNREACHABLE through alias delivery**, and
+MFO must refuse them with a reason (§5.3's shape: the rule fails legibly) rather
+than crash or stall. A cheap probe could still settle it: concentration + AIMED
+at `t0`/`t4`, which vanilla does ship under `ALPC`.
 
 #### Still open
 

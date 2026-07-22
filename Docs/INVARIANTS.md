@@ -815,3 +815,18 @@ them.
 **Corollary:** a query answered over a subpopulation you chose for convenience
 is not evidence about the population you care about. Both wrong versions of
 §0.20 were confidently derived from real data.
+
+### 67. Refuse concentration self-casts through a package; they have no reachable shape
+
+Vanilla ships concentration + Self-delivery spells in `UseMagic` **only** with
+`targType 6` (2 of 2), and `targType 6` in the target slot of an
+**alias-delivered** package is a zero cell that CTD'd the game (§0.20). The two
+vanilla concentration-self records are not alias-delivered, so the shapes do not
+compose.
+
+Until a probe proves otherwise, a gambit naming a concentration spell with Self
+delivery **fails with a reason** -- the §5.3 pattern, legible on the board --
+rather than being synthesised into a record with no precedent.
+
+Fire-and-forget Self spells are fine: `targType 0` at a reference works
+(probes 2 and 3, and `dunReachwaterRockGauldurReforgeAmulet`).

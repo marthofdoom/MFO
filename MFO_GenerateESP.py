@@ -401,6 +401,14 @@ def probe_ctda(index):
                                       FID_PROBE_GLOB, 0, 0, 0, -1))
 
 
+# Concentration + Self delivery has no reachable shape under alias delivery:
+# vanilla only ever ships it with targType 6, and targType 6 in an
+# alias-delivered package's target slot is a zero cell that CTD'd (ENGINE_NOTES
+# §0.20/§0.21, INVARIANTS #67). Refuse rather than emit.
+def refuse_concentration_self(casting_type, delivery):
+    return casting_type == 2 and delivery == 0
+
+
 def build_usemagic(fid, edid, spell, target, bounds, ctda=b'', qnam=None):
     """One PACK instance riding vanilla `UseMagic` (000504F5).
 
