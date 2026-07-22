@@ -57,7 +57,18 @@ FREF_TMPL_ACTIVATE     = 0x00019B2D
 # The first proof rides the SEEDED heal. Runtime-varying the spell is the next
 # step (§0.17): either mutate the live TESPackage's inputs, or fabricate the
 # record on the fly, which is where this is heading.
-FREF_HEAL_SELF = 0x00012FCC
+# FastHealing, NOT Healing (0x00012FCC).
+#
+# CTD, field-caught: an ACCESS_VIOLATION inside TESPackage with our package in
+# R15 and Cosnach in RDX. 0x00012FCC is overridden by Requiem to
+# REQ_Restoration2_HealSelf, a CONCENTRATION spell -- and UseMagic models a
+# DISCRETE cast (CastTimeMin/Max, NumToCastMin/Max). A channel has no discrete
+# cast to complete and the procedure dereferences null.
+#
+# Vanilla's own self-heal package settles it: WCollegeColettePracticeHeal13x2,
+# literally "practice healing on self", uses FastHealing. All seven vanilla
+# UseMagic packages that target self (targType 6) use non-concentration spells.
+FREF_HEAL_SELF = 0x0002F3B8
 
 # ── M9 PROOF OF CONCEPT ────────────────────────────────────────────────────
 # CosnachREF, an ACHR (placed reference) -- verified by dumping Skyrim.esm.

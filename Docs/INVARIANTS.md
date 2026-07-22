@@ -756,3 +756,22 @@ use **`targType 6`, value 0**.
 nothing and spends nothing means the procedure's inputs are unresolvable. It
 does not mean delivery failed -- delivery visibly succeeded, or the actor would
 not be rooted.
+
+### 66. A gambit spell must be fire-and-forget, and the FormID is not the spell
+
+`UseMagic` crashed the game outright when handed a CONCENTRATION spell: it
+models a discrete cast (`CastTimeMin/Max`, `NumToCastMin/Max`), a channel has no
+discrete cast to complete, and the procedure dereferences null inside
+`TESPackage`. No MFO frames in the stack -- the engine did it.
+
+Two rules fall out:
+
+1. **Check `SpellItem::GetCastingType()` before a spell reaches a package.** A
+   concentration spell must be refused with a reason, not passed through. This
+   is §5.3's competence gate extended: a rule MFO cannot run safely fails
+   loudly rather than crashing the game.
+2. **A vanilla FormID does not identify a vanilla spell.** `00012FCC` is
+   `Healing` in Skyrim.esm and `REQ_Restoration2_HealSelf` -- concentration,
+   40/sec -- in a Requiem load order. Anything MFO hardcodes must be validated
+   against what the LOAD ORDER actually resolved, never against what the wiki
+   says the FormID is.
