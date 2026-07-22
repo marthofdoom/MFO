@@ -15,7 +15,17 @@ namespace MFO {
     // Serialized as a stable STRING opcode, never an enum ordinal
     // (INVARIANTS.md #10). These strings land in co-saves; renaming one is a
     // schema migration, not an edit.
+    // Monotonic runtime id for the board. Assigned when a rule is created or
+    // loaded, NEVER serialized (#10 -- the co-save schema is unchanged). The
+    // board keys edits on this, not on row index, so a reordered or shrunk
+    // table cannot misapply a command to the wrong rule (#31).
+    inline std::uint32_t NextRuleUID() {
+        static std::atomic<std::uint32_t> g{ 1 };
+        return g.fetch_add(1, std::memory_order_relaxed);
+    }
+
     struct Gambit {
+        std::uint32_t uid = 0;   // runtime-only; 0 = unassigned
         std::string conditionOpcode;   // e.g. "cond.ally_hp_below"
         std::string actionOpcode;      // e.g. "act.cast_spell"
         float       conditionParam = 0.0f;

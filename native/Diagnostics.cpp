@@ -185,10 +185,12 @@ namespace MFO::Diagnostics {
                         Packages::DriveProbe();   // probe switchboard -> alias fill
                         Loadout::Tick();   // hand back stowed two-handers
 
-                        if (diagTurn) {
-                            Probe::Tick();
-                            Board::PublishSnapshot();
-                        }
+                        if (diagTurn) Probe::Tick();
+                        // The board echoes edits back through the snapshot, so
+                        // while it is OPEN publish every tick (133ms) instead of
+                        // every 4th -- a half-second echo made DragFloat crawl
+                        // and hid whether a click registered (board review M2).
+                        if (diagTurn || Board::IsOpen()) Board::PublishSnapshot();
                     });
                 }
             }

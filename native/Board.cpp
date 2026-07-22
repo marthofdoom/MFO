@@ -107,7 +107,7 @@ namespace MFO::Board {
     enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
                                          CycleCond, CycleAct, SetParam };
     struct EditCmd {
-        EditKind kind; RE::FormID fid; int table; int idx; float param;
+        EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
     };
     std::mutex          g_editMx;
     std::vector<EditCmd> g_edits;
@@ -351,7 +351,9 @@ namespace MFO::Board {
                         if (ImGui::BeginCombo("Follower", who->name.c_str())) {
                             for (const auto& r : snap.rows) {
                                 if (!r.active) continue;
+                                ImGui::PushID((int)r.id);
                                 if (ImGui::Selectable(r.name.c_str(), r.id == sel)) sel = r.id;
+                                ImGui::PopID();
                             }
                             ImGui::EndCombo();
                         }
@@ -382,18 +384,18 @@ namespace MFO::Board {
                             for (int i = 0; i < (int)rules.size(); ++i) {
                                 const auto& rv = rules[i];
                                 ImGui::TableNextRow();
-                                ImGui::PushID(i);
+                                ImGui::PushID((int)rv.uid);
 
                                 ImGui::TableNextColumn();
                                 bool en = rv.enabled;
                                 if (ImGui::Checkbox("##en", &en))
-                                    QueueEdit({ EditKind::Toggle, sel, selTable, i, 0 });
+                                    QueueEdit({ EditKind::Toggle, sel, selTable, rv.uid, 0 });
 
                                 // Condition -- cycle with < >
                                 ImGui::TableNextColumn();
-                                if (ImGui::SmallButton("<")) QueueEdit({ EditKind::CycleCond, sel, selTable, i, -1 });
+                                if (ImGui::SmallButton("<")) QueueEdit({ EditKind::CycleCond, sel, selTable, rv.uid, -1 });
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton(">")) QueueEdit({ EditKind::CycleCond, sel, selTable, i,  1 });
+                                if (ImGui::SmallButton(">")) QueueEdit({ EditKind::CycleCond, sel, selTable, rv.uid,  1 });
                                 ImGui::SameLine();
                                 ImGui::TextUnformatted(labelFor(rv.condOp, kConds, (int)std::size(kConds)));
                                 if (rv.lastFired) { ImGui::SameLine(); ImGui::TextColored(
@@ -404,13 +406,13 @@ namespace MFO::Board {
                                 float pct = rv.param * 100.0f;
                                 ImGui::SetNextItemWidth(-1);
                                 if (ImGui::DragFloat("##p", &pct, 1.0f, 0.0f, 100.0f, "%.0f%%"))
-                                    QueueEdit({ EditKind::SetParam, sel, selTable, i, pct/100.0f });
+                                    QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid, pct/100.0f });
 
                                 // Action -- cycle
                                 ImGui::TableNextColumn();
-                                if (ImGui::SmallButton("<##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, i, -1 });
+                                if (ImGui::SmallButton("<##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, rv.uid, -1 });
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton(">##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, i,  1 });
+                                if (ImGui::SmallButton(">##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, rv.uid,  1 });
                                 ImGui::SameLine();
                                 ImGui::TextUnformatted(labelFor(rv.actOp, kActs, (int)std::size(kActs)));
 
@@ -420,13 +422,26 @@ namespace MFO::Board {
                                 if (!rv.fail.empty() && ImGui::IsItemHovered())
                                     ImGui::SetTooltip("last: %s", rv.fail.c_str());
 
-                                // Reorder / delete -- L1/R1 also move on a pad.
+                                // Reorder / delete. The up/dn buttons are
+                                // nav-focusable, so reorder is pad-reachable
+                                // (the §6.5 floor); a dedicated L1/R1 binding is
+                                // a later refinement.
                                 ImGui::TableNextColumn();
-                                if (ImGui::SmallButton(" up ")) QueueEdit({ EditKind::MoveUp, sel, selTable, i, 0 });
+                                if (ImGui::SmallButton(" up ")) QueueEdit({ EditKind::MoveUp, sel, selTable, rv.uid, 0 });
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton("dn"))  QueueEdit({ EditKind::MoveDown, sel, selTable, i, 0 });
+                                if (ImGui::SmallButton("dn"))  QueueEdit({ EditKind::MoveDown, sel, selTable, rv.uid, 0 });
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton("del")) QueueEdit({ EditKind::Del, sel, selTable, i, 0 });
+                                // Destructive -> two-click arm (§6.6). First click
+                                // arms this rule (danger colour); a second within the
+                                // window deletes; any other rule disarms it.
+                                static std::uint32_t s_armed = 0;
+                                const bool armed = (s_armed == rv.uid);
+                                if (armed) ImGui::PushStyleColor(ImGuiCol_Button, skin.danger);
+                                if (ImGui::SmallButton(armed ? "sure?" : "del")) {
+                                    if (armed) { QueueEdit({ EditKind::Del, sel, selTable, rv.uid, 0 }); s_armed = 0; }
+                                    else s_armed = rv.uid;
+                                }
+                                if (armed) ImGui::PopStyleColor();
 
                                 ImGui::PopID();
                             }
@@ -436,7 +451,7 @@ namespace MFO::Board {
                         const bool full = (int)rules.size() >= slots;
                         ImGui::BeginDisabled(full);
                         if (ImGui::Button("+ Add rule"))
-                            QueueEdit({ EditKind::Add, sel, selTable, 0, 0 });
+                            QueueEdit({ EditKind::Add, sel, selTable, 0u, 0 });
                         ImGui::EndDisabled();
                         if (full) { ImGui::SameLine();
                             ImGui::TextDisabled("all %d slots used -- more unlock with rapport", slots); }
@@ -620,6 +635,17 @@ namespace MFO::Board {
                 }
 
                 if (ImGui::BeginTabItem("Config")) {
+                    // SKIN -- live, no reload (§6.7a). g_menuStyle is an atomic,
+                    // so a render-thread store is fine; PushSkin reads it next
+                    // frame.
+                    ImGui::TextUnformatted("Skin");
+                    int cur = std::clamp(Config::g_menuStyle.load(), 0, 3);
+                    for (int k = 0; k < 4; ++k) {
+                        if (ImGui::RadioButton(kSkins[k].name, cur == k))
+                            Config::g_menuStyle.store(k);
+                        if (k < 3) ImGui::SameLine();
+                    }
+                    ImGui::Separator();
                     ImGui::Text("rate         %.2f", snap.rate);
                     ImGui::Text("per kill     %.2f", snap.killVal);
                     ImGui::Text("boss mult    %.1fx", snap.bossMult);
@@ -641,7 +667,7 @@ namespace MFO::Board {
             }
 
             ImGui::Separator();
-            ImGui::TextDisabled("Field Orders / Esc / B closes.  Skin: %s (Config tab).", skin.name);
+            ImGui::TextDisabled("Field Orders / Esc / B closes.  Skin: %s -- change it in Config.", skin.name);
             ImGui::End();
             ImGui::PopStyleColor(skinCols);
         }
@@ -945,6 +971,7 @@ namespace MFO::Board {
 
     bool IsAvailable() { return g_ready.load(); }
     bool IsOpen()      { return g_open.load(); }
+    void ClearPendingEdits() { std::scoped_lock lk(g_editMx); g_edits.clear(); }
 
     void ToggleHud() {
         const bool now = !g_hud.load();
@@ -974,6 +1001,7 @@ namespace MFO::Board {
         a_out.reserve(a_rules.size());
         for (const auto& g : a_rules) {
             RuleView v;
+            v.uid = g.uid;
             v.condOp = g.conditionOpcode; v.actOp = g.actionOpcode;
             v.param  = g.conditionParam;  v.spell = g.actionParamForm;
             v.enabled = g.enabled;        v.lastFired = g.lastFired; v.fail = g.lastFailReason;
@@ -986,6 +1014,16 @@ namespace MFO::Board {
     }
 
     // Apply queued edits. MAIN THREAD ONLY (called from PublishSnapshot).
+    // Give every rule a uid (main thread). Covers seeds, co-save loads and
+    // adds -- the board resolves edits by uid, so an unassigned rule must never
+    // reach the snapshot.
+    void EnsureRuleUIDs() {
+        for (auto& [fid, st] : g_followers)
+            for (auto& tab : st.tables)
+                for (auto& g : tab)
+                    if (g.uid == 0) g.uid = NextRuleUID();
+    }
+
     void ApplyEdits() {
         std::vector<EditCmd> todo;
         { std::scoped_lock lk(g_editMx); todo.swap(g_edits); }
@@ -993,37 +1031,49 @@ namespace MFO::Board {
         for (const auto& c : todo) {
             auto it = g_followers.find(c.fid);
             if (it == g_followers.end()) continue;
-            auto& tab = it->second.tables[std::clamp(c.table, 0, 1)];
+            const int table = std::clamp(c.table, 0, 1);
+            auto& tab = it->second.tables[table];
+
+            if (c.kind == EditKind::Add) {
+                // Re-check the slot cap on the MAIN thread -- the draw's gate
+                // read a stale snapshot, so two Adds in one window could both
+                // pass it and overflow the rank's slots (silently truncated at
+                // next load, #11).
+                const int slots = SlotsForRank(it->second.rank, static_cast<Table>(table));
+                if ((int)tab.size() < slots) {
+                    Gambit g; g.uid = NextRuleUID();
+                    g.conditionOpcode = Vocab::kCondAlways; g.actionOpcode = Vocab::kActWait;
+                    tab.push_back(g);
+                }
+                continue;
+            }
+
+            // Resolve by IDENTITY, not index (#31). A command whose rule is
+            // gone -- deleted, reseeded -- is dropped, never misapplied.
+            int i = -1;
+            for (int k = 0; k < (int)tab.size(); ++k) if (tab[k].uid == c.uid) { i = k; break; }
+            if (i < 0) continue;
+
             switch (c.kind) {
-            case EditKind::Add: {
-                Gambit g; g.conditionOpcode = Vocab::kCondAlways;
-                g.actionOpcode = Vocab::kActWait; tab.push_back(g); break; }
-            case EditKind::Del:
-                if (c.idx >= 0 && c.idx < (int)tab.size()) tab.erase(tab.begin()+c.idx); break;
-            case EditKind::MoveUp:
-                if (c.idx > 0 && c.idx < (int)tab.size()) std::swap(tab[c.idx], tab[c.idx-1]); break;
-            case EditKind::MoveDown:
-                if (c.idx >= 0 && c.idx+1 < (int)tab.size()) std::swap(tab[c.idx], tab[c.idx+1]); break;
-            case EditKind::Toggle:
-                if (c.idx >= 0 && c.idx < (int)tab.size()) tab[c.idx].enabled = !tab[c.idx].enabled; break;
-            case EditKind::CycleCond:
-                if (c.idx >= 0 && c.idx < (int)tab.size()) {
-                    int n = cycleIdx(tab[c.idx].conditionOpcode, kConds, (int)std::size(kConds), (int)c.param);
-                    tab[c.idx].conditionOpcode = kConds[n].op;
-                } break;
-            case EditKind::CycleAct:
-                if (c.idx >= 0 && c.idx < (int)tab.size()) {
-                    int n = cycleIdx(tab[c.idx].actionOpcode, kActs, (int)std::size(kActs), (int)c.param);
-                    tab[c.idx].actionOpcode = kActs[n].op;
-                } break;
-            case EditKind::SetParam:
-                if (c.idx >= 0 && c.idx < (int)tab.size()) tab[c.idx].conditionParam = c.param; break;
+            case EditKind::Del:    tab.erase(tab.begin()+i); break;
+            case EditKind::MoveUp: if (i > 0) std::swap(tab[i], tab[i-1]); break;
+            case EditKind::MoveDown: if (i+1 < (int)tab.size()) std::swap(tab[i], tab[i+1]); break;
+            case EditKind::Toggle: tab[i].enabled = !tab[i].enabled; break;
+            case EditKind::CycleCond: {
+                int n = cycleIdx(tab[i].conditionOpcode, kConds, (int)std::size(kConds), (int)c.param);
+                tab[i].conditionOpcode = kConds[n].op; break; }
+            case EditKind::CycleAct: {
+                int n = cycleIdx(tab[i].actionOpcode, kActs, (int)std::size(kActs), (int)c.param);
+                tab[i].actionOpcode = kActs[n].op; break; }
+            case EditKind::SetParam: tab[i].conditionParam = c.param; break;
+            default: break;
             }
         }
     }
 
     void PublishSnapshot() {
-        ApplyEdits();   // main-thread: fold in whatever the editor queued
+        ApplyEdits();       // main-thread: fold in whatever the editor queued
+        EnsureRuleUIDs();   // every rule has a stable id before it is snapshotted
         Snapshot s;
         s.frame = g_frame.fetch_add(1);
 

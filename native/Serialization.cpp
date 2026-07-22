@@ -359,6 +359,7 @@ namespace MFO {
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
         CasterConsent::ClearTransientState();
+        Board::ClearPendingEdits();
         // The alias fill is the one piece of MFO state the ENGINE persists for
         // us whether we want it or not, so revert cannot just forget it the way
         // it forgets the ledgers above -- forgetting is exactly how a follower

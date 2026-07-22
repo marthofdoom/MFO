@@ -21,6 +21,7 @@ namespace MFO::Board {
     // live table (the board draws on the render thread; the tables are
     // main-thread-only).
     struct RuleView {
+        std::uint32_t uid = 0;
         std::string condOp, actOp;
         float       param = 0.0f;
         RE::FormID  spell = 0;
@@ -85,6 +86,9 @@ namespace MFO::Board {
     // combat -- that is what the HUD is for.
     void Toggle();
     bool IsOpen();
+    // Drop queued edits on revert -- a command from the old save must never
+    // apply to a freshly loaded one for the same FormID.
+    void ClearPendingEdits();
 
     // Compact passive readout. Draws every frame, takes NO input, so it stays
     // legible while fighting. On a single-monitor setup this is the primary
