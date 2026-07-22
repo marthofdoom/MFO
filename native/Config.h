@@ -74,7 +74,14 @@ namespace MFO::Config {
     // OFF until measured -- #45: one new engine mechanism per release, proven
     // before it is trusted.
     inline std::atomic<bool>  g_commandTarget{ false };
-    inline std::atomic<bool>  g_equipToCast{ true };
+    // OFF by default: it mutates player-visible equipment for a payoff that is
+    // still unproven, and #57 says do not ship what you told yourself to probe.
+    // The test guide turns it on for the session that measures it.
+    inline std::atomic<bool>  g_equipToCast{ false };
+    // How long MFO waits, after putting a spell in a follower's hand, for their
+    // OWN AI to cast it before casting silently instead. Zero would recreate
+    // the confound this exists to prevent.
+    inline std::atomic<float> g_aiCastGrace{ 3.0f };
     // Seconds a two-handed wielder must go between weapon swaps. The off-hand
     // swap is free and ungated; stowing a greatsword is not.
     inline std::atomic<float> g_twoHandedDebounce{ 6.0f };

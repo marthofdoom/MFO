@@ -43,7 +43,11 @@ namespace MFO::Targeting {
                     wanted = it->second;
                 }
 
-                auto* target = wanted.get().get();
+                // Hold the NiPointer. `wanted.get().get()` drops the refcount at
+                // the end of the statement and leaves a raw pointer behind. The
+                // reference implementation has this flaw; no reason to copy it.
+                auto targetPtr = wanted.get();
+                auto* target = targetPtr.get();
                 if (!target || target->IsDead() || target->IsDisabled()) return;
 
                 auto& rt = a_this->GetActorRuntimeData();
@@ -58,7 +62,8 @@ namespace MFO::Targeting {
                 // a mod ends up with followers swinging at things they cannot
                 // perceive. Commanding WHICH foe is ours; commanding THAT there
                 // is a foe is not.
-                auto* current = rt.currentCombatTarget.get().get();
+                auto currentPtr = rt.currentCombatTarget.get();
+                auto* current = currentPtr.get();
                 if (!current) { ++g_passes; return; }
 
                 if (current == target) { ++g_passes; return; }   // already right
@@ -86,6 +91,16 @@ namespace MFO::Targeting {
             spdlog::info("[target] bCommandTarget=0 -- hook NOT installed");
             return;
         }
+        // 0xE4 IS THE SE/AE INDEX. UpdateCombat is SKYRIM_REL_VR_VIRTUAL, so on
+        // VR that slot holds a different function and hooking it would call an
+        // arbitrary virtual on every actor in combat -- an instant CTD that
+        // would not point anywhere near MFO. The reference implementation does
+        // not support VR either.
+        if (REL::Module::IsVR()) {
+            spdlog::warn("[target] VR runtime detected -- UpdateCombat vtable index is not "
+                         "verified for VR; hook NOT installed.");
+            return;
+        }
         if (g_hooked.exchange(true)) return;
 
         // A VTABLE INDEX, not an AddressLib offset. That is why this is
@@ -100,7 +115,10 @@ namespace MFO::Targeting {
         // detection. Two writers to the same fields is a fact of the terrain,
         // not a reason to avoid the mechanism -- but it must be VISIBLE, or the
         // resulting weirdness gets blamed on whichever mod was installed last.
-        if (GetModuleHandleA("SmartNPCTargetSelector.dll")) {
+        // REX::W32, NOT <windows.h> -- that header #defines GetObject and
+        // hijacks a CommonLib template (see Board.cpp's banner). NG ships the
+        // declaration we need without dragging in the rest.
+        if (REX::W32::GetModuleHandleA("SmartNPCTargetSelector.dll")) {
             g_conflict = true;
             spdlog::warn("[target] SmartNPCTargetSelector.dll IS LOADED -- it also steers "
                          "follower targets and hooks detection. Expect contention; MFO only "

@@ -7,6 +7,7 @@
 #include "Scheduler.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "Papyrus.h"
 #include "Board.h"
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
@@ -353,6 +354,7 @@ namespace MFO {
         Loadout::ClearTransientState();
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
+        Papyrus::ClearTransientState();   // counters are session-scoped like every sibling
         Rapport::ResetSessionCounters();
         Diagnostics::StopPump();   // restarted on the next kPostLoadGame/kNewGame
         Board::SetHud(false);      // else it lingers over the main menu with stale rows

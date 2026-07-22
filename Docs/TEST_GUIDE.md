@@ -53,7 +53,14 @@ animation**.
 bCommandTarget      = 1     ; installs the targeting hook
 bSeedEvaluatorRules = 1     ; gives the follower a heal gambit
 bEquipToCast        = 1     ; puts that spell in their hand
+fAiCastGrace        = 3.0   ; seconds their AI gets before MFO casts for them
 ```
+
+**`bCommandTarget` needs a game restart to turn ON** (the hook installs once at
+load). Turning it off works live.
+
+**Change these one at a time across sessions.** If two new mechanisms are on and
+something misbehaves, you can't tell which one did it.
 
 ### You need a fight with MORE THAN ONE enemy
 

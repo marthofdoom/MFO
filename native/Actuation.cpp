@@ -71,9 +71,32 @@ namespace MFO::Actuation {
                 std::string why;
                 switch (Loadout::Prepare(a_follower, spell, why)) {
                 case Loadout::Ready::AlreadyReady:
-                case Loadout::Ready::Equipped:
+                case Loadout::Ready::Equipped: {
                     equipped = true;
+
+                    // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
+                    //
+                    // This is the whole point and it is easy to destroy. The
+                    // animated cast comes from the follower's combat AI firing
+                    // a spell we put in their hand -- but if MFO silent-casts
+                    // in the same tick it equips, the heal lands instantly, the
+                    // low-HP condition disappears, and the AI never has a
+                    // reason to cast. The evidence we are trying to collect is
+                    // destroyed by the act of collecting it: exactly the §0.6
+                    // confound, rebuilt.
+                    //
+                    // So: hold off for fAiCastGrace. If a [cast] line appears in
+                    // that window, the AI did it and it animated. If the window
+                    // passes and the condition is still true, fall through to
+                    // the silent cast -- an unanimated heal beats no heal.
+                    const float held = Loadout::SecondsSinceEquip(a_follower->GetFormID());
+                    if (held < Config::g_aiCastGrace.load()) {
+                        return { Result::NoOp,
+                                 std::format("equipped {:.1f}s ago -- giving their AI a chance",
+                                             held) };
+                    }
                     break;
+                }
                 case Loadout::Ready::Debounced:
                     // NOT a rule failure -- the follower is willing and able,
                     // MFO is declining to thrash their gear. Falls through on

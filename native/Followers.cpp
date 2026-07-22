@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Followers.h"
 #include "Loadout.h"
+#include "Targeting.h"
 #include "Forms.h"
 #include "Config.h"
 
@@ -238,6 +239,11 @@ namespace MFO::Followers {
                 // tracking them -- the hit sink is gated on IsTracked, so after
                 // this point nothing would ever restore it (#55).
                 Loadout::Restore(id);
+                // And the commanded-target latch -- same obligation, same
+                // moment (#55). The hook does not check IsTracked, so a latch
+                // left behind keeps redirecting an ex-follower AND keeps every
+                // Character in combat worldwide off the fast path.
+                Targeting::Clear(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport
                 // (DESIGN.md §3.1, the emotional core of the progression).
                 spdlog::info("[follower] - {:08X} (record and Rapport retained)", id);

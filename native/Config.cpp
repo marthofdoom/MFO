@@ -100,6 +100,7 @@ namespace MFO::Config {
             else if (a_key == "fSuppressWindow")    setF(g_suppressWindow, 0.0f, 60.0f);
             else if (a_key == "iCastSource")        setI(g_castSource, 0, 3);
             else if (a_key == "bEquipToCast")       setB(g_equipToCast);
+            else if (a_key == "fAiCastGrace")       setF(g_aiCastGrace, 0.0f, 30.0f);
             else if (a_key == "bCommandCast")       setB(g_commandCast);
             else if (a_key == "bCommandTarget")     setB(g_commandTarget);
             else if (a_key == "fTwoHandedDebounce") setF(g_twoHandedDebounce, 0.0f, 60.0f);
@@ -155,7 +156,8 @@ namespace MFO::Config {
             g_profileEvaluator   = false;
             g_suppressWindow     = 1.5f;
             g_castSource         = 3;
-            g_equipToCast        = true;
+            g_equipToCast        = false;
+            g_aiCastGrace        = 3.0f;
             g_commandCast        = false;
             g_commandTarget      = false;
             g_twoHandedDebounce  = 6.0f;

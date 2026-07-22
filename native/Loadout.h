@@ -59,6 +59,11 @@ namespace MFO::Loadout {
     // looking at what the follower is actually holding.
     void Reconcile();
 
+    // Seconds since MFO put a spell in this follower's hand, or a huge value if
+    // it did not. The AI needs a WINDOW to cast before MFO overrides it -- see
+    // Actuation's note on the measurement confound.
+    float SecondsSinceEquip(RE::FormID a_actorID);
+
     // Restore a displaced SHIELD. Called from the hit sink -- a shield is worth
     // giving back at the instant something hits them, and not before.
     void OnFollowerHit(RE::FormID a_actorID);

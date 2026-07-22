@@ -22,6 +22,7 @@ namespace MFO::Loadout {
             RE::TESBoundObject* stowedWeapon  = nullptr;   // two-hander taken away
             bool  leftWasShield = false;
             std::chrono::steady_clock::time_point stowedAt{};
+            std::chrono::steady_clock::time_point equippedAt{};
             std::chrono::steady_clock::time_point lastSwap{};
         };
         std::unordered_map<RE::FormID, Debt> g_debt;
@@ -77,7 +78,17 @@ namespace MFO::Loadout {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_id);
             int n = 0;
             if (actor) {
-                if (it->second.stowedWeapon)  { EquipBack(actor, it->second.stowedWeapon);  ++n; }
+                if (it->second.stowedWeapon)  {
+                    EquipBack(actor, it->second.stowedWeapon);  ++n;
+                    // ARM THE DEBOUNCE HERE, NOT AT STOW TIME. Both used to read
+                    // the same clock, so the weapon was handed back at exactly
+                    // the moment a re-stow became legal again -- a still-true
+                    // rule re-stowed on the very next tick, and the follower
+                    // held their greatsword for one tick in every six seconds.
+                    // The debounce is a floor on how often we TAKE it, so it
+                    // starts when they get it back.
+                    g_lastStow[a_id] = std::chrono::steady_clock::now();
+                }
                 if (it->second.displacedLeft) { EquipBack(actor, it->second.displacedLeft); ++n; }
             }
             g_debt.erase(it);
@@ -189,12 +200,22 @@ namespace MFO::Loadout {
         debt.stowedWeapon  = willStowWeapon;
         debt.leftWasShield = hands.leftIsShield;
         debt.stowedAt      = now;
+        debt.equippedAt    = now;
         // Only a TWO-HANDED stow arms the debounce. The off-hand swap is free
         // by design, and letting it set the clock would spuriously block a real
         // stow for the next 6 s.
         if (willStowWeapon) g_lastStow[id] = now;
 
         return Ready::Equipped;
+    }
+
+    float SecondsSinceEquip(RE::FormID a_actorID) {
+        const auto it = g_debt.find(a_actorID);
+        if (it == g_debt.end() || it->second.equippedAt.time_since_epoch().count() == 0) {
+            return 1.0e9f;
+        }
+        return std::chrono::duration<float>(
+                   std::chrono::steady_clock::now() - it->second.equippedAt).count();
     }
 
     void OnFollowerHit(RE::FormID a_actorID) {

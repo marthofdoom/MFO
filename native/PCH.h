@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <format>
 #include <mutex>
+#include <shared_mutex>   // Targeting's latch is the one cross-thread map (#4)
 #include <string>
 #include <string_view>
 #include <thread>

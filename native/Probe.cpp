@@ -376,6 +376,7 @@ namespace MFO::Probe {
     }
 
     void ReleaseAll() {
+        Targeting::ClearAll();   // the probe's own promise, kept locally
         // Nothing the probe does currently outlives a session -- the primitives
         // that WOULD have (SetDontMove, KeepOffset) are the ones the library
         // does not bind. This exists so that when they arrive, the release path
