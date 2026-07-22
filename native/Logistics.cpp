@@ -194,7 +194,7 @@ namespace MFO::Logistics {
                 if (!(mask & static_cast<std::uint32_t>(slot))) continue;
                 overlapsAny = true;
                 auto* worn = a_follower->GetWornArmor(slot);
-                if (worn && worn != a_armo && worn->GetArmorRating() >= cand) {
+                if (worn && worn->GetArmorRating() >= cand) {
                     return false;   // beaten on a slot it would replace
                 }
             }
@@ -223,7 +223,12 @@ namespace MFO::Logistics {
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
                     if (ArmorIsBetter(a_follower, armo)) { best = obj; bestCt = 1; break; }
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
-                    if (weap->GetAttackDamage() > myDmg) { best = obj; bestCt = 1; break; }
+                    // Same category only, and only if the follower HAS a weapon
+                    // to beat. With nothing equipped myDmg is 0 and every weapon
+                    // would "upgrade" -- an arbitrary-weapon vacuum. A bow must
+                    // not beat a sword (§4.8.2 compares within category).
+                    if (myWeap && weap->GetWeaponType() == myWeap->GetWeaponType() &&
+                        weap->GetAttackDamage() > myDmg) { best = obj; bestCt = 1; break; }
                 }
             }
             if (!best) return false;
@@ -239,7 +244,19 @@ namespace MFO::Logistics {
         // follower already carries. The AlchemyItem equip path IS the vanilla
         // "drink" for an actor (DESIGN §4.5 Tier A). Reads/mutates the named
         // follower only.
+        std::uint64_t drinkKey(RE::FormID a_fid, RE::ActorValue a_av) {
+            return (static_cast<std::uint64_t>(a_fid) << 8) | static_cast<std::uint8_t>(a_av);
+        }
+
         bool DrinkBest(RE::Actor* a_follower, RE::ActorValue a_which) {
+            // COOLDOWN: a restore potion works over its duration; do not chain-
+            // drink the stack while the first is still active (M5).
+            const auto key = drinkKey(a_follower->GetFormID(), a_which);
+            if (auto it = g_drinkUntil.find(key);
+                it != g_drinkUntil.end() && std::chrono::steady_clock::now() < it->second) {
+                return false;
+            }
+
             RE::AlchemyItem* best = nullptr;
             float bestMag = -1.0f;
 
@@ -262,6 +279,13 @@ namespace MFO::Logistics {
             // Equipping a potion on an actor consumes it -- the documented Tier A
             // path. One unit; the engine removes it from the pack.
             mgr->EquipObject(a_follower, best, nullptr, 1);
+            // Gate this AV for the potion's own duration (min one logistics
+            // interval), so the next tick does not drink the rest of the stack.
+            float dur = 1.0f;
+            if (const auto* eff = best->GetCostliestEffectItem())
+                dur = std::max<float>(1.0f, static_cast<float>(eff->GetDuration()));
+            g_drinkUntil[key] = std::chrono::steady_clock::now() +
+                                std::chrono::milliseconds(static_cast<int>(dur * 1000.0f));
             return true;
         }
 
@@ -306,11 +330,18 @@ namespace MFO::Logistics {
                     }
                     if (!lootable) return RE::BSContainer::ForEachResult::kContinue;
 
-                    // OWNERSHIP IS ABSOLUTE (#22e). IsOffLimits() is true for
-                    // owned containers/corpses -- houses, shops, player-owned
-                    // chests -- and taking from them makes the player a thief by
-                    // proxy. Skip them entirely, no delay or waiver overrides this.
+                    // OWNERSHIP IS ABSOLUTE (#22e). IsOffLimits() is ONLY a crime
+                    // check (IsCrimeToActivate) -- and taking from a PLAYER-owned
+                    // chest is not a crime, so it would sail through and let a
+                    // follower drain the player's own storage. Check GetOwner()
+                    // first (any explicit owner, including the player), then keep
+                    // IsOffLimits() as the second bar for cell-owned/no-owner
+                    // crime cases. No delay or waiver overrides this.
+                    if (ref->GetOwner()) return RE::BSContainer::ForEachResult::kContinue;
                     if (ref->IsOffLimits()) return RE::BSContainer::ForEachResult::kContinue;
+                    // Locked is locked -- RemoveItem ignores the lock, so the
+                    // filter must not.
+                    if (ref->IsLocked()) return RE::BSContainer::ForEachResult::kContinue;
 
                     // Start (or keep) this ref's first-dibs clock. Recording here,
                     // for every candidate whether eligible yet or not, is what
@@ -349,6 +380,8 @@ namespace MFO::Logistics {
             RE::BSEventNotifyControl ProcessEvent(const RE::TESContainerChangedEvent* a_event,
                                                   RE::BSTEventSource<RE::TESContainerChangedEvent>*) override {
                 if (!a_event) return RE::BSEventNotifyControl::kContinue;
+                // Logistics off -> the waiver map is never read, so do no work.
+                if (!Config::g_logistics.load()) return RE::BSEventNotifyControl::kContinue;
 
                 // DIRECTION FILTER IS MANDATORY (#22h): only items ENTERING the
                 // player count as a "take". Without it the sink re-triggers on
@@ -377,6 +410,11 @@ namespace MFO::Logistics {
 
     RE::ActorValue PotionRestores(RE::AlchemyItem* a_potion) {
         if (!a_potion || a_potion->IsPoison()) return RE::ActorValue::kNone;
+        // FOOD is an AlchemyItem with a Restore-Health/Stamina effect, so the
+        // archetype gate below would pass it. §4.8.2 is potions ONLY -- exclude
+        // food or the follower vacuums city food barrels and counts apples as
+        // health potions.
+        if (a_potion->IsFood()) return RE::ActorValue::kNone;
 
         // The COSTLIEST effect is the potion's dominant purpose. Classify by
         // ARCHETYPE, not by name and not by the effect's AV alone: only
@@ -485,6 +523,7 @@ namespace MFO::Logistics {
     void ClearTransientState() {
         g_nextTick.clear();
         g_seen.clear();
+        g_drinkUntil.clear();
         g_playerLooted.clear();
     }
 
