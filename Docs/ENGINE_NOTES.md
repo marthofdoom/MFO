@@ -928,6 +928,58 @@ Cosnach cast it and the pool read **1000 afterwards**.
 competence gate ("a follower who cannot afford a spell fails the rule") is
 **decorative for package casts** unless MFO deducts. See §0.23.
 
+### 0.23 THE THREE GAPS, and what the data already says about them (2026-07-22)
+
+marth: *"they actually need to move during casting. And we know thats possible
+because of vanilla. Deduct on fired is correct, but it needs to represent what
+the spell would cost for them under their current skills and perks. cadence can
+be flexible with casts."*
+
+#### (a) Movement — the record is probably NOT the cause
+
+**MFO's package already matches Mercer's combat override byte-for-byte:**
+`PKDT flags = 0x00100000` (bit 20) and `PLDT type 12, radius 10000`. Mercer
+moves while casting in that fight. Same flags, same location input.
+
+Flag frequency across the 46 vanilla `UseMagic` packages, for the record:
+
+```
+bit 13 (0x00002000)  7      bit 20 (0x00100000)  6   <- MFO and Mercer
+bit 10 (0x00000400)  7      bit  2 MustComplete  1
+```
+
+**Hypothesis, and it is cheap to test: the package does not root them — the
+absence of COMBAT does.** In a fight the combat AI drives movement while the
+package drives the casting; `kIgnoreCombat` is what lets the package keep
+running through it. Every probe so far ran with Cosnach idle, which is the
+artificial case — a gambit only ever fires in combat.
+
+**Test:** select a probe, then start a fight. If he moves and casts, there is
+nothing to fix and the rooting was an artefact of testing out of combat. If he
+stays rooted mid-fight, the next candidate is the `Place to Travel` input
+(currently type 12 = no destination) or a travel-capable template.
+
+#### (b) The deduction must be THEIR cost, not the spell's
+
+`SpellItem::CalculateMagickaCost(actor)` — the actor overload, which already
+accounts for skill level and perks. MFO already calls it for §5.3's gate in
+`Actuation::CastOn`; the same value is what gets deducted. A Destruction-perked
+follower pays less for Thunderbolt than a novice, and the gambit must reflect
+that or the "competence" gate is measuring the wrong thing.
+
+**#16 does not block this.** That rule forbids hand-writing state a flow
+produces. The package flow produces NO deduction at all (§0.22, measured), so
+this fills a gap rather than duplicating one. DAC sets the precedent with
+`RestoreActorValue(kDamage, kMagicka, -cost)`.
+
+#### (c) Cadence is flexible — do not over-engineer it
+
+marth's ruling: casts may take a variable few seconds. §4.1's 133 ms is the
+**evaluator** cadence — how fast MFO DECIDES — and that stays. Actuation
+latency is a separate, looser number, and DESIGN currently conflates them.
+The package's own `CastTimeMin/Max` and `CooldownTimeMin/Max` are the knobs,
+and they are already per-record.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

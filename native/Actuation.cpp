@@ -32,8 +32,9 @@ namespace MFO::Actuation {
             // through, and the board says why. This is the whole point: a list
             // you wrote that your follower cannot run is legible, not silent.
             auto* avo = a_follower->AsActorValueOwner();
+            float cost = 0.0f;
             if (avo) {
-                const float cost = spell->CalculateMagickaCost(a_follower);
+                cost = spell->CalculateMagickaCost(a_follower);
                 const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
                 if (cost > have) {
                     // Take it back. The rule keeps winning while the condition
@@ -270,6 +271,26 @@ namespace MFO::Actuation {
                 if (!caster) return { Result::FailedOther, "no magic caster" };
             }
             caster->CastSpellImmediate(spell, false, a_target, 1.0f, false, 0.0f, a_follower);
+
+            // CHARGE THEM. Measured: package casts and CastSpellImmediate both
+            // spend NOTHING (ENGINE_NOTES §0.22), so without this §5.3's
+            // competence gate is decorative -- the pool never falls, so
+            // "insufficient magicka" can only ever trigger on a pool drained by
+            // vanilla AI.
+            //
+            // The cost is CalculateMagickaCost(a_follower), the ACTOR overload,
+            // which accounts for their skill level and perks: a Destruction-
+            // perked follower pays less for the same spell, and a gate that
+            // ignored that would be measuring the wrong thing entirely
+            // (marth, 2026-07-22).
+            //
+            // INVARIANTS #16 forbids hand-writing state a flow PRODUCES. This
+            // flow produces no deduction at all, so this fills a gap rather
+            // than duplicating one -- the same call DAC makes.
+            if (avo) {
+                a_follower->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                              RE::ActorValue::kMagicka, -cost);
+            }
 
             // Restart the AI's window. Without this the grace is a ONE-SHOT:
             // the clock was armed at the first equip and never re-armed, so
