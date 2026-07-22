@@ -33,9 +33,16 @@ namespace MFO::CasterConsent {
             // suppresses a cast the AI wanted, it only permits one it did not.
             const auto vt = *reinterpret_cast<std::uintptr_t*>(a_this);
             const auto it = g_orig.find(vt);
-            const bool aiSaysYes = (it != g_orig.end())
-                ? reinterpret_cast<CheckStartCast_t>(it->second)(a_this, a_cc)
-                : false;
+            if (it == g_orig.end()) {
+                // Not a vtable we hooked -- we must not be here, and a_this is
+                // not a CombatMagicCaster. Never read its members. (This is the
+                // guard that would have turned the CombatMagicCasterArmor
+                // mis-hook into a no-op instead of a CTD: that symbol is a
+                // vtable with no class, its index 6 is a different function.)
+                return false;
+            }
+            const bool aiSaysYes =
+                reinterpret_cast<CheckStartCast_t>(it->second)(a_this, a_cc);
 
             if (g_wantCount.load(std::memory_order_relaxed) == 0) return aiSaysYes;
             if (!a_cc || !a_this->magicItem) return aiSaysYes;
@@ -96,7 +103,7 @@ namespace MFO::CasterConsent {
             RE::VTABLE_CombatMagicCasterStagger[0],    RE::VTABLE_CombatMagicCasterDisarm[0],
             RE::VTABLE_CombatMagicCasterCloak[0],      RE::VTABLE_CombatMagicCasterLight[0],
             RE::VTABLE_CombatMagicCasterInvisibility[0],RE::VTABLE_CombatMagicCasterBoundItem[0],
-            RE::VTABLE_CombatMagicCasterArmor[0],      RE::VTABLE_CombatMagicCasterTargetEffect[0],
+            RE::VTABLE_CombatMagicCasterTargetEffect[0],
             RE::VTABLE_CombatMagicCasterParalyze[0],   RE::VTABLE_CombatMagicCasterScript[0],
             RE::VTABLE_CombatMagicCasterReanimate[0],
         };

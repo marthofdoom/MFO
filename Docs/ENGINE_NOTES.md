@@ -1195,6 +1195,49 @@ so the engine got round to it on its own schedule.
 combat group and the next hit does zero damage, and this fires in combat by
 definition.
 
+### 0.28 THE INFLUENCE HOOK WORKS — and one caster symbol is not a caster (2026-07-22)
+
+Hooked `CombatMagicCaster::CheckStartCast` (vtable 0x06) across the concrete
+caster vtables. marth, force mode, in a fight: *"looked pretty good."* The
+follower cast his own spell, mobile -- the mechanism the whole M9 arc was for.
+MFO removes the AI's veto (§0.16) and the AI does the rest: movement, aim,
+animation, magicka. Influence, not insertion.
+
+**CTD, and it was a bad vtable in my list.** `mov ebx, [rsi+0x14]` with rsi = 1
+is `magicItem->GetFormID()` on a garbage pointer -- `this+0x18` was not
+magicItem because `this` was not a `CombatMagicCaster`. Cause:
+**`VTABLE_CombatMagicCasterArmor` is a vtable symbol with NO class** in the
+pinned headers; it does not derive `CombatMagicCaster`, so its index 6 is a
+different function. The 14 that DO derive it all have headers. I added Armor
+from a `grep VTABLE_CombatMagicCaster` on a guess -- #66a in C++: a symbol that
+matches the name pattern is not proof it is the same kind of thing.
+
+Removed, plus a guard: the thunk now returns immediately if the runtime vtable
+is not one it recorded at install, so a future mis-hook is a no-op, not a crash.
+
+#### The real finding: melee bias
+
+marth: *"He didnt want to stop attacking with melee long enough to cast."* The
+veto is removed, but a follower committed to melee does not ENTER the magic
+branch often enough to notice the open permission. `CheckStartCast` only fires
+when the AI is already considering a cast, and a sword-swinging combat style
+rarely is.
+
+This is the combat-style lever the §0.28 research flagged as a fallback,
+promoted: a follower needs a magic-inclined disposition for the consent hook to
+get frequent chances. Options, cheapest first:
+1. Only expect reliable casting from followers whose style already favours magic
+   (a court wizard, a Companions mage) -- the base case, and honest.
+2. Nudge the combat style while a cast rule is latched -- surgically (clone,
+   raise only `magicScoreMult`, restore on unlatch), accepting that it also
+   shifts movement.
+3. A stronger consent: also override the AVOID/attack decision so the follower
+   breaks off melee to cast. Unexplored, and closest to "insertion".
+
+**(1) is the right default.** A melee follower casting constantly would itself
+look wrong; the gambit firing when the follower is disposed to cast is the
+believable behaviour.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice
