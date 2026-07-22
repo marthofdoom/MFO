@@ -149,6 +149,9 @@ POC_ACTOR_REF = 0x000198FA
 # main was not. Test builds set MFO_POC=1.
 POC_ENABLED   = os.environ.get("MFO_POC") == "1"
 
+# Command-quest priority. See make_command_quest() -- this is the #69 dial.
+QUEST_PRIORITY = int(os.environ.get("MFO_QUEST_PRIORITY", "60"))
+
 # ── binary helpers (forked from MEO/MRO — byte-for-byte valid) ──
 FORM_VERSION = 44
 
@@ -353,7 +356,15 @@ def make_command_quest():
     # Priority 60: above vanilla's default 30 and above DialogueFollower's 50,
     # below the scene quests at 80-96. Chosen ONCE and deliberately -- §4.6
     # forbids escalating it in a fight with another mod.
-    body += subrec('DNAM', qust_dnam(0x0011, priority=60))
+    # PRIORITY LIVES HERE -- QUST DNAM byte 2, authored into the record. Not
+    # load order, not the DLL. Vanilla spreads it deliberately: default 30,
+    # DialogueFollower 50, scene quests 80-96.
+    #
+    # 60 was chosen to outrank DialogueFollower. It may also be what CAUSES
+    # #69: MFO's quest wins arbitration and then supplies nothing when no alias
+    # package is valid, so the follower stands still. Overridable for exactly
+    # that test -- MFO_QUEST_PRIORITY=25 puts MFO below the follower quest.
+    body += subrec('DNAM', qust_dnam(0x0011, priority=QUEST_PRIORITY))
     body += subrec('NEXT', b'')
     # ANAM (next alias id) goes BEFORE the alias blocks. All 1,607 vanilla
     # quests that have aliases do it that way -- 1607 before, 0 after. The

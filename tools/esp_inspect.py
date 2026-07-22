@@ -1376,8 +1376,11 @@ def mode_selftest(args):
             if dn:
                 f2, pri = struct.unpack_from('<HB', dn[0], 0)
                 ck('MFO_CommandQuest DNAM flags', f'0x{f2:04X}', '0x0011')
-                ck('MFO_CommandQuest priority == 60', pri, 60)
-
+                # Pin the INVARIANT, not the value: priority is a deliberate dial
+                # (MFO_QUEST_PRIORITY) and the bug worth catching is the ORIGINAL one --
+                # a misencoded DNAM that made every quest priority 0.
+                ck('MFO_CommandQuest priority is set (0 < p <= 100)',
+                   0 < pri <= 100, True)
     width = max(len(c[1]) for c in checks)
     for ok, name, got, want in checks:
         mark = 'ok  ' if ok else 'FAIL'
