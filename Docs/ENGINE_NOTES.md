@@ -508,6 +508,66 @@ scratch and M9 is genuinely the largest thing in the project.
 **Answer that before committing.** It is a read of `Skyrim.esm`'s PACK records,
 costs no play time, and swings the estimate by an order of magnitude.
 
+#### THE ANSWER: vanilla ships the templates. M9 is one record per action. (2026-07-22)
+
+Dumped `Skyrim.esm`. **104 package templates (PACK type 19)**, and every action
+MFO needs already exists:
+
+| Vanilla template | FormID | MFO action |
+|---|---|---|
+| **UseMagic** | `000504F5` | `act.cast_self` / `act.cast_target` |
+| UseMagicRepeat | `000F5842` | sustained casting |
+| **UseWeapon** | `0001C338` | `act.attack` |
+| **HoldPosition** | `000503D0` | hold position |
+| **Travel** | `00016FAA` | move / formation |
+| **Activate** | `00019B2D` | loot / use |
+
+**So MFO does NOT author a template.** ALYSLC built their own 65-input monster
+because a co-op body needs 20 target selectors and dual-cast and shouts. MFO
+points `PKCU.template` at a vanilla one and supplies only the inputs it cares
+about. This is the order-of-magnitude question, answered: **M9 is one PACK
+instance per action, not a package system.**
+
+##### `UseMagic` (`000504F5`) — 11 inputs, named
+
+```
+PKDT flags=0x00000000 type=19 interrupt=0
+PKCU inputs=11 template=00000000 ver=1
+  0  Place to Travel   (Location)
+  1  Destination
+  2  Location
+  3  Spell             <- ours
+  4  Target            <- ours
+  5  HoldWhenBlocked   (Bool)
+  6  CastTimeMin       (Float)
+  7  CastTimeMax       (Float)
+  8  CooldownTimeMin   (Float)
+  9  CooldownTimeMax   (Float)
+ 10  NumToCastMin      (Int)
+ 11  NumToCastMax      (Int)
+ 12  DualCast          (Bool)
+  +  Procedure "UseMagic"
+```
+
+**Vanilla already provides the rate limiting** MFO hand-rolled as
+`fCastCooldown`: `CooldownTimeMin/Max` and `NumToCastMin/Max` are package
+inputs. And `CastTimeMin/Max` bounds the action, which §4.5c requires
+("every action gets a completion condition and a hard timeout").
+
+##### The one design problem left
+
+Data inputs are baked into the record, but MFO needs a DIFFERENT spell and
+target per rule. Two routes:
+
+1. **Mutate the package's inputs at runtime.** One PACK record; write the Spell
+   and Target inputs in memory before pushing it. `TESPackage` is a live form.
+2. **Alias for the target, one record per spell.** The Target slot can reference
+   a quest alias MFO fills; the Spell cannot, so this needs a record per spell —
+   unbounded, and therefore wrong.
+
+**Route 1 is the design.** Verify `TESPackage`'s runtime data-input surface in
+CommonLibSSE-NG before building.
+
 **Status: RESEARCHED, not built.** The caster-drive probe (§0.13 mechanism 2)
 still ships first because it is cheap and it DISCRIMINATES: `CheckCast` refusing
 means the engine rejected the cast outright; accepted-then-wedged means the
