@@ -30,10 +30,20 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondSelfSpBelow   = "cond.self_sp_pct_below";
     inline constexpr const char* kCondPlayerHpBelow = "cond.player_hp_pct_below";
 
+    // FOE SELECTORS. These are conditions that also CHOOSE A TARGET -- the FFXII
+    // shape, where "Foe: lowest HP" is one clause, not two. Candidates come from
+    // the follower's own combat group, never a world sweep: the engine already
+    // knows who is in this fight, and a swept list could name someone the
+    // follower is not engaged with.
+    inline constexpr const char* kCondFoeAny      = "cond.foe_any";            // nearest
+    inline constexpr const char* kCondFoeHpBelow  = "cond.foe_hp_pct_below";   // lowest under X%
+    inline constexpr const char* kCondFoeLowestHp = "cond.foe_lowest_hp";      // lowest, any %
+
     // ── actions ─────────────────────────────────────────────────────────────
     inline constexpr const char* kActWait      = "act.wait";
     inline constexpr const char* kActCastSelf  = "act.cast_self";    // param = SpellItem
     inline constexpr const char* kActCastTarget= "act.cast_target";  // param = SpellItem, subject = target
+    inline constexpr const char* kActAttack    = "act.attack";       // target = the chosen foe
 
     // A cheap actor-value-percentage read. Reads THE NAMED actor's state
     // (INVARIANTS #15 -- say whose).

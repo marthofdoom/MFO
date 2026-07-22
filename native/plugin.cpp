@@ -129,29 +129,20 @@ namespace {
             auto* rec = MFO::Followers::TryEnsureRecord(a->GetFormID());
             if (!rec) continue;
 
+            // ALWAYS RESEED WHEN THE FLAG IS ON.
+            //
+            // This used to try to be clever -- keep existing rules unless every
+            // cast rule named an unknown spell -- and the cleverness kept
+            // fighting the test it exists to serve: a stale Healing rule
+            // survived in the co-save and blocked a session, and adding the
+            // attack rule would have made a record reseed on every single load.
+            //
+            // The flag IS the guard. It defaults off and never runs in normal
+            // play, so "authored rules are safe" is enforced by not turning it
+            // on, not by a heuristic that has to guess which rules were mine.
             if (!rec->combat().empty()) {
-                // Rules already present. Normally we leave them ALONE -- they may
-                // be authored. But a seeded rule naming a spell the follower does
-                // not know is dead weight that cannot ever fire, and it survives
-                // in the co-save: the field session lost its animation test to
-                // exactly this, because a persisted rule kept pointing at Healing
-                // on a brawler who neither knew it nor could afford it.
-                //
-                // So: if EVERY cast rule references an unknown spell, this record
-                // is stale seed data, and re-seeding is the repair. This is a test
-                // seam behind bSeedEvaluatorRules; it never runs in normal play.
-                bool anyRunnable = false;
-                for (const auto& g : rec->combat()) {
-                    if (g.actionOpcode != MFO::Vocab::kActCastSelf &&
-                        g.actionOpcode != MFO::Vocab::kActCastTarget) continue;
-                    auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm);
-                    if (sp && a->HasSpell(sp)) { anyRunnable = true; break; }
-                }
-                if (anyRunnable) continue;
-
-                spdlog::info("[eval] {:08X} {} has {} stale rule(s) naming spell(s) it does not "
-                             "know -- reseeding", a->GetFormID(), a->GetName(),
-                             rec->combat().size());
+                spdlog::info("[eval] {:08X} {} -- replacing {} existing rule(s) (bSeedEvaluatorRules)",
+                             a->GetFormID(), a->GetName(), rec->combat().size());
                 rec->combat().clear();
             }
 
@@ -203,6 +194,15 @@ namespace {
                              chosen->GetFormID(), bestCost);
             }
 
+            // rule 1: Foe: lowest HP -> Attack. The FFXII opener, and the
+            // reason the whole targeting mechanism exists. Costs nothing when
+            // out of combat: no combat group means no candidate means the rule
+            // is simply false and the tick falls through.
+            MFO::Gambit attack{};
+            attack.conditionOpcode = MFO::Vocab::kCondFoeLowestHp;
+            attack.actionOpcode    = MFO::Vocab::kActAttack;
+            rec->combat().push_back(attack);
+
             MFO::Gambit wait{};
             wait.conditionOpcode = MFO::Vocab::kCondAlways;
             wait.actionOpcode    = MFO::Vocab::kActWait;
@@ -212,7 +212,7 @@ namespace {
             spdlog::info("[eval] seeded default rules on {:08X} {}", a->GetFormID(), a->GetName());
         }
         if (seeded == 0) {
-            spdlog::info("[eval] seed pass: nothing to seed (no followers, or rules already present)");
+            spdlog::info("[eval] seed pass: no followers to seed");
         }
     }
 

@@ -13,6 +13,11 @@ namespace MFO::Eval {
         std::string actionOpcode;
         RE::FormID  actionParam = 0;
         std::uint8_t subject = 0;
+
+        // The foe a selector condition chose. Only set by foe selectors; empty
+        // for self/player rules. Carried as a HANDLE, never a pointer -- the
+        // scheduler acts on it after the evaluator returns (#2).
+        RE::ActorHandle target;
     };
 
     // Scan a_follower's combat table top-down; first true condition wins.

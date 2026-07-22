@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Rapport.h"
+#include "Targeting.h"
 #include "Followers.h"
 #include "Config.h"
 #include "State.h"
@@ -266,6 +267,22 @@ namespace MFO::Rapport {
                 }
 
                 ++g_combatEvents;
+
+                // COMBAT ENDED -> RELEASE THE LATCH.
+                //
+                // A commanded target that outlives its fight is not just stale,
+                // it is WRONG: in the follower's next fight the hook sees a live
+                // `wanted` and a live current target that differ, and steers
+                // them at last fight's foe. #59's guard does not cover "that foe
+                // is not in THIS fight".
+                //
+                // It also silently defeats the hook's fast path -- g_latchCount
+                // never returns to zero, so every Character in combat in the
+                // world pays the lock-and-lookup for the rest of the session.
+                if (a_event->newState == RE::ACTOR_COMBAT_STATE::kNone) {
+                    const auto id = actor->GetFormID();
+                    SKSE::GetTaskInterface()->AddTask([id]() { Targeting::Clear(id); });
+                }
                 return RE::BSEventNotifyControl::kContinue;
             }
         };

@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "Loadout.h"
 #include "Papyrus.h"
+#include "Targeting.h"
 
 namespace MFO::Actuation {
 
@@ -189,10 +190,40 @@ namespace MFO::Actuation {
             // below it (DESIGN.md §3.3).
             return { Result::NoOp, {} };
         }
+        if (op == Vocab::kActAttack) {
+            // THE ATTACK VERB (DESIGN §4.7a). There is no engine call that says
+            // "swing at this one" -- the combat controller owns that entirely
+            // and exposes nothing. What MFO can do is decide WHO, by latching
+            // the choice; the hook then re-asserts it after every combat update,
+            // because the engine re-picks continuously (ENGINE_NOTES §0.6).
+            //
+            // So this is cheap and idempotent by design: a rule that keeps
+            // winning simply keeps naming the same foe.
+            auto ptr = a_choice.target.get();
+            auto* foe = ptr.get();
+            if (!foe) return { Result::FailedOther, "chosen foe no longer resolves" };
+
+            // Ask the HOOK, not the config. They disagree whenever install was
+            // refused with the flag on -- VR, today. Reporting Fired there would
+            // buy a suppression window for a latch nothing reads.
+            if (!Targeting::IsHooked()) {
+                return { Result::FailedOther, "targeting hook not installed" };
+            }
+
+            Targeting::Command(a_follower->GetFormID(), a_choice.target);
+            return { Result::Fired,
+                     std::format("target {}", foe->GetName() ? foe->GetName() : "?") };
+        }
         if (op == Vocab::kActCastSelf) {
             return CastOn(a_follower, a_choice.actionParam, a_follower);
         }
         if (op == Vocab::kActCastTarget) {
+            // A foe selector already named someone; prefer that over the static
+            // self/player subject, or "Foe: lowest HP -> Cast Firebolt" would
+            // cast at the follower.
+            if (auto ptr = a_choice.target.get(); ptr.get()) {
+                return CastOn(a_follower, a_choice.actionParam, ptr.get());
+            }
             return CastOn(a_follower, a_choice.actionParam,
                           ResolveTarget(a_follower, a_choice.subject));
         }
