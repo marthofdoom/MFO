@@ -74,7 +74,26 @@ namespace MFO::Diagnostics {
             RE::BSEventNotifyControl ProcessEvent(const RE::TESSpellCastEvent* a_event,
                                                   RE::BSTEventSource<RE::TESSpellCastEvent>*) override {
                 if (!a_event || !a_event->object) return RE::BSEventNotifyControl::kContinue;
-                if (!a_event->object->IsPlayerRef())  return RE::BSEventNotifyControl::kContinue;
+
+                // A FOLLOWER CASTING IS THE ANIMATION EVIDENCE.
+                //
+                // The cast path is: spell in hand (Loadout) + a target they are
+                // locked onto (Targeting) + the follower's own combat AI firing
+                // it -- which is the vanilla path, and therefore animated, with
+                // real magicka arbitration. This sink is the only way to tell
+                // an AI-fired cast from one MFO issued, and without it Session 6
+                // would throw that evidence away (§0.4 proved the sink works;
+                // it was simply filtered to the player).
+                if (!a_event->object->IsPlayerRef()) {
+                    auto* caster = a_event->object->As<RE::Actor>();
+                    if (caster && Followers::IsTracked(caster->GetFormID())) {
+                        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_event->spell);
+                        spdlog::info("[cast] {:08X} {} CAST {} ({:08X}) -- AI-fired: did it animate?",
+                                     caster->GetFormID(), caster->GetName(),
+                                     sp && sp->GetName() ? sp->GetName() : "?", a_event->spell);
+                    }
+                    return RE::BSEventNotifyControl::kContinue;
+                }
                 if (!Forms::g_fieldOrders)            return RE::BSEventNotifyControl::kContinue;
                 if (a_event->spell != Forms::g_fieldOrders->GetFormID())
                     return RE::BSEventNotifyControl::kContinue;

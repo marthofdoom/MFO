@@ -309,6 +309,46 @@ attack verb needs, for every NPC in the load order:
   main-thread actuation state. That needs an atomics snapshot or a lock
   (INVARIANTS #4), designed before the probe, not after.
 
+### 0.15 THE ANIMATION PATH — assembled, not yet observed (2026-07-21)
+
+Three cast VERBS have now been refuted: `CastSpellImmediate` (all four casting
+sources, §0.8/§0.10), `Projectile::LaunchSpell` (no projectile on a
+Self-delivery spell, #56), and `DoCombatSpellApply` (the Papyrus twin of
+CastSpellImmediate, §0.14).
+
+**The verb was never the missing piece.** `ActorMagicCaster` is driven by the
+animation graph, and the graph is driven by the follower's own combat AI. So the
+question is not "which call animates" but "what state does an NPC need to be in
+before its AI casts?" — and the answer is the state every enemy mage in the game
+is already in:
+
+| Precondition | Provided by | Status |
+|---|---|---|
+| The spell is in their hand | `Loadout::Prepare` | Built |
+| They have a target | `Targeting` (`UpdateCombat` hook) | Built |
+| Something fires it | **their own combat AI** | Vanilla |
+
+Both preconditions land in the same batch. When the AI fires an equipped spell
+at a latched target, the cast is animated, magicka-arbitrated and correctly
+aimed **because it is the vanilla path** — MFO is not casting at all, it is
+arranging the conditions and letting the engine cast.
+
+**What this costs:** the AI chooses the INSTANT. MFO commands the what and the
+who, not the exact frame. That is consistent with §4.4's layering doctrine, and
+the suppression window already absorbs the timing slop.
+
+**NOT YET OBSERVED, and the distinction matters.** The `TESSpellCastEvent` sink
+now logs follower casts (`[cast] ... AI-fired`), which is the only way to tell
+an AI-fired cast from one MFO issued. Until a `[cast]` line appears for a
+follower holding an MFO-equipped spell, this is an assembled hypothesis, not a
+result — see #57, twice violated already.
+
+**Fallback if the AI will not fire on a useful timescale:** drive the
+`MagicCaster` state machine directly — `SetCurrentSpell` + `desiredTarget` +
+`RequestCastImpl`/`StartChargeImpl`/`StartReadyImpl`/`StartCastImpl`/`FinishCastImpl`
+(§0.13 option 2). Deterministic and animated IF the vfunc preconditions
+cooperate; entirely unproven; one INI-gated probe.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

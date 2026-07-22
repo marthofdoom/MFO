@@ -317,6 +317,24 @@ not installed it says so on the same line rather than silently doing nothing.
 steps 4+7 together (a drift number WITH a baseline). 5 and 6 are safety checks —
 if either fails, the mechanism is not ready regardless of how well 3 worked.
 
+### 6b — the animation question, answered by the SAME session (free)
+
+Session 6 tests targeting, but it also answers animation at no extra cost,
+because the two preconditions are both in this build.
+
+**Setup:** `bSeedEvaluatorRules = 1` (so the follower has a heal gambit and
+`bEquipToCast` puts it in their hand) **and** latch them onto a foe.
+
+| # | Watch for | Meaning |
+|---|---|---|
+| A | `[cast] <id> <name> CAST Healing -- AI-fired` in the log | **The follower's own AI fired an MFO-equipped spell.** This is the animation answer (§0.15) — go look at whether it animated |
+| B | No `[cast]` line at all across a long fight | The AI will not fire what MFO equips on a useful timescale — fall back to driving the `MagicCaster` state machine (§0.13 option 2) |
+| C | `[cast]` line but still no visible animation | The premise is wrong at a deeper level than expected; report it, it changes the design |
+
+**Do not confuse an AI-fired cast with an MFO-issued one.** `[eval] ... fired
+rule` is MFO acting; `[cast] ... AI-fired` is the follower acting. Only the
+second one can animate.
+
 ### Where a real gambit's target will come from
 
 Not from a world scan. The reference implementation enumerates candidates from
