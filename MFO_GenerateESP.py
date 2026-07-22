@@ -389,7 +389,13 @@ def make_command_quest():
     # and clears it when the action ends. That is the only mechanism that can
     # claim a follower ON DEMAND -- alias fill is bound to quest promotion, so
     # nothing authored in the record can do it (§0.26).
-    body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE))
+    if POC_ENABLED:
+        # PROBES ONLY. The ungated production package would sit at the top of
+        # the ALPC priority stack and shadow every gated probe below it.
+        for idx, sp, label, tgt in POC_PROBES:
+            body += subrec('ALPC', struct.pack('<I', FID_POC_PACK_BASE + idx - 1))
+    else:
+        body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE))
     body += subrec('VTCK', struct.pack('<I', 0))
     body += subrec('ALED', b'')
 
