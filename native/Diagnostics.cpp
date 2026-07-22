@@ -12,6 +12,7 @@
 #include "Papyrus.h"
 #include "Targeting.h"
 #include "Packages.h"
+#include "CasterConsent.h"
 
 // The M3 test instrument.
 //
@@ -130,7 +131,7 @@ namespace MFO::Diagnostics {
                             // Their AI cast it. That is a real cast -- pace it
                             // exactly like MFO's own, or the limiter only
                             // governs the half of the casting MFO does.
-                            if (ours) Loadout::StartCooldown(casterID);
+                            if (ours) { Loadout::StartCooldown(casterID); CasterConsent::Clear(casterID); }
                         });
                     }
                     return RE::BSEventNotifyControl::kContinue;
@@ -226,6 +227,12 @@ namespace MFO::Diagnostics {
                          ? "NEVER RAN -- pump or gating problem"
                          : "running");
         spdlog::info("  loadout: {} follower(s) owed displaced gear", Loadout::PendingRestores());
+        {
+            const auto c = CasterConsent::GetStats();
+            spdlog::info("  consent hook: {} | {} latched | seen {}, AI-vetoed {}, forced {}",
+                         CasterConsent::IsHooked() ? "INSTALLED" : "off",
+                         c.latched, c.seen, c.vetoed, c.forced);
+        }
         {
             const auto t = Targeting::GetStats();
             spdlog::info("  targeting: hook {} | {} latched | {} assert(s), {} drift(s), {} pass(es){}",

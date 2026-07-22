@@ -114,6 +114,14 @@ namespace MFO::Config {
     // outlives the session rather than ending with it.
     inline std::atomic<bool>  g_usePackages{ false };
 
+    // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
+    // combat AI casts the gambit spell while staying mobile. Installs a vfunc
+    // hook, so OFF by default (#45).
+    inline std::atomic<bool>  g_casterHook{ false };
+    // 0 = LOG only (observe the AI's answer, change nothing -- the read-only
+    // experiment). 1 = FORCE (override a veto to YES when latched).
+    inline std::atomic<int>   g_casterMode{ 0 };
+
     // PROBE, default off. Drive the MagicCaster state machine by hand instead
     // of applying the effect: SetCurrentSpell + desiredTarget + RequestCastImpl,
     // then let the engine advance it. marth's principle -- if the game code can

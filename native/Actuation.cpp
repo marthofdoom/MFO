@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "Loadout.h"
 #include "Papyrus.h"
+#include "CasterConsent.h"
 #include "Targeting.h"
 
 namespace MFO::Actuation {
@@ -105,6 +106,15 @@ namespace MFO::Actuation {
                 case Loadout::Ready::AlreadyReady:
                 case Loadout::Ready::Equipped: {
                     equipped = true;
+
+                    // INFLUENCE (§0.28). The spell is now in their hand; latch
+                    // CONSENT so their own combat AI's CheckStartCast returns
+                    // true for it. The AI then casts it AS a combat action --
+                    // mobile, animated, correctly timed -- rather than vetoing
+                    // it (§0.16). This is why the grace wait below now usually
+                    // succeeds: MFO removed the veto that made it fail. No-op
+                    // if bCasterHook is off; observe-only in log mode.
+                    CasterConsent::Want(a_follower->GetFormID(), spell->GetFormID());
 
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
                     //

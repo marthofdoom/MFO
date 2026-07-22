@@ -7,6 +7,7 @@
 #include "Scheduler.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "CasterConsent.h"
 #include "Packages.h"
 #include "Papyrus.h"
 #include "Board.h"
@@ -355,6 +356,7 @@ namespace MFO {
         Loadout::ClearTransientState();
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
+        CasterConsent::ClearTransientState();
         // The alias fill is the one piece of MFO state the ENGINE persists for
         // us whether we want it or not, so revert cannot just forget it the way
         // it forgets the ledgers above -- forgetting is exactly how a follower

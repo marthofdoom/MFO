@@ -105,6 +105,8 @@ namespace MFO::Config {
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
             else if (a_key == "bDriveCaster")       setB(g_driveCaster);
             else if (a_key == "bUsePackages")       setB(g_usePackages);
+            else if (a_key == "bCasterHook")        setB(g_casterHook);
+            else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "bCommandCast")       setB(g_commandCast);
             else if (a_key == "bCommandTarget")     setB(g_commandTarget);
             else if (a_key == "iFocusKey")          setI(g_focusKey, 0, 255);

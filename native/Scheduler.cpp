@@ -5,6 +5,7 @@
 #include "Followers.h"
 #include "Config.h"
 #include "Loadout.h"
+#include "CasterConsent.h"
 #include "Packages.h"
 #include "Vocabulary.h"
 #include "State.h"
@@ -148,7 +149,7 @@ namespace MFO::Scheduler {
         const bool wantsCast = choice.ruleIndex >= 0 &&
                                (choice.actionOpcode == Vocab::kActCastSelf ||
                                 choice.actionOpcode == Vocab::kActCastTarget);
-        if (!wantsCast) Loadout::ReleaseSpell(id);
+        if (!wantsCast) { Loadout::ReleaseSpell(id); CasterConsent::Clear(id); }
 
         // §4.4: no match means NO ENGINE CALL. Not a neutral command -- nothing.
         if (choice.ruleIndex < 0) {

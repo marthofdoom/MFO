@@ -11,6 +11,7 @@
 #include "Vocabulary.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "CasterConsent.h"
 #include "Packages.h"
 
 // MFO — marth's Follower Overhaul.
@@ -228,6 +229,7 @@ namespace {
             MFO::Forms::Resolve();          // then forms
             MFO::Followers::ResolveQuirks();
             MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
+            MFO::CasterConsent::InstallHook();   // the influence hook, likewise
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
             MFO::Diagnostics::Install();
             break;

@@ -30,6 +30,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Papyrus.cpp
     Targeting.cpp
     Packages.cpp
+    CasterConsent.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
