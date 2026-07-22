@@ -3,18 +3,43 @@
 This project is designed so any capable model or person can continue it from
 these docs alone. Load documents on demand, not all at once.
 
-**CURRENT STATE (v0.1.0, first testable build):** the DLL loads, resolves forms, grants the Field Orders power, detects followers, accrues Rapport, and draws an in-game Field Kit overlay. **No gambit execution yet** — the evaluator is M5. Detection and form resolution are VALIDATED in-game (`ENGINE_NOTES.md` §0); the co-save is reviewed but deliberately unexercised (no saving with MFO active yet).
-`DESIGN.md`, `BALANCE.md` and `ARCHITECTURE.md` remain **specs**, not
-reconciliations to a shipped build — everything from the evaluator onward is
-designed, not written. `ENGINE_NOTES.md` §0 is the short list of what has
-actually been observed working.
+**CURRENT STATE (v0.6.0, 2026-07-22).** Gambits execute. A follower with a rule
+list evaluates it ~7.5x/sec, one action per tick, first match wins, and acts.
 
-**Next: M4** in `ROADMAP.md` — the stick-poking harness. Two of its questions
-can invalidate design already on paper (whether a commanded target sticks;
-whether an alias `ForceRefTo` from native drives a conditioned package), and
-both are cheaper to answer now than after M5's evaluator is built on them.
+**Proven in-game** (`ENGINE_NOTES.md` §0 carries dates and observed symptoms):
+follower detection and un-detection, form resolution, the **populated co-save
+round-trip** (M1, closed), Rapport crediting including boss multipliers, the
+evaluator firing and correctly refusing a spell the follower cannot afford
+(§5.3's competence gate), the `UpdateCombat` targeting hook installing, and
+`act.attack` latching a chosen foe.
 
-Still owed: `MANUAL_MOD_CREATION_GUIDE.md` (copy MEO's), `DYNAMIC_OR_DROP.md`.
+**The headline finding: MFO does not cast.** It puts a spell in the follower's
+hand and their own AI casts it — animated, magicka-charged, correctly aimed,
+because it is the vanilla path (§0.15). Three cast *verbs* were refuted getting
+there: `CastSpellImmediate` (§0.8/§0.10), `Projectile::LaunchSpell` (#56), and
+`DoCombatSpellApply` (§0.14). Animation events cannot drive it either — the
+graph emits them (§0.17).
+
+**The live constraint (§0.16):** that path is **AI-discretionary**. The RULE
+always fires and the effect always lands, but the ANIMATION only happens when
+the follower's AI independently judges the spell worth casting. For a weak heal
+it never did.
+
+**Next, and it is the last unknown in the core loop: M9, the forced casting
+package.** It is the only mechanism that gives an uninterruptible commanded
+cast. Fully researched from ALYSLC's shipped ESP; §0.17 has the byte-level
+record layout. **One question decides its size and is not yet answered:** can a
+PACK instance point `PKCU.template` at a VANILLA template, or must one be
+authored? That is a read of `Skyrim.esm` and costs no play time.
+
+**Deferred:** M6 (logistics) — nobody can author those rules until the board
+exists. **M7 the board** is *first shareable*. MCM after it, because the board
+defines what is configurable.
+
+**Sequencing rule learned the hard way (#61):** if a shipped mod already solves
+it, read its source before building a probe. The §4.7 retention question cost
+~90 minutes of play time and three builds; the answer was one sentence in an
+open-source plugin already installed on this machine.
 
 **Knowledge routing — where a finding goes when you learn it:**
 

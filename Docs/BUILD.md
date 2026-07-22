@@ -140,3 +140,37 @@ without its cost is not in the house style:
 | Four builds pushed without a Fable review | Two save-corruption paths, a cursor over gameplay, and a schema bump shipped in the same session as "safe to start saving" |
 | Five releases on one in-game test | Defects accumulated across builds instead of bisecting to one |
 | No `BUILD.md` until now | Every rule above was already written down in MAO/MRO and went unread |
+
+## Session of 2026-07-21/22 — three accuracy failures, one root cause
+
+All three were the same mistake: **reporting state I had not checked.**
+
+1. **A feature reported as "reverted" that was not.** Its commit had already
+   pushed, so `git checkout --` reverted nothing. I read "working tree clean"
+   as "the change is gone" — it only ever meant the tree matched HEAD.
+2. **A commit message describing code that was never written.** The edit was
+   clobbered while removing an unrelated feature from the same file, and the
+   message was composed from intent rather than from the diff. The history now
+   permanently claims code that did not exist (INVARIANTS #62).
+3. **A shipped INI flag that existed only in a comment.** The banner text I
+   prepended contained the flag name, so my own `if "flag" not in s` guard
+   matched itself and skipped adding the real key. The probe would have
+   defaulted off and the test session would have produced nothing.
+
+**The rule, now standing:** before claiming a change is present, absent, or
+shipped, run the check that would fail if it were not — `git show --stat`, a
+grep of the committed diff, `unzip -p` on the artifact. A status report that was
+not verified is worse than no report, because it stops anyone else looking.
+
+**Also standing (#45a, violated again this session):** a commit touching
+`native/**` is not pushed until a Fable review of that change has reported. The
+violation happened, as recorded, when something else was the headline — that
+time it was "the animation path is confirmed".
+
+## What the docs cost when they drift
+
+`INDEX.md` sat 8 hours stale while every finding went into files it does not
+point at. It said *"CURRENT STATE (v0.1.0)"* and *"Next: M4"* while the project
+shipped v0.6.0 and scoped M9. INDEX is the front door of a doc set whose stated
+premise is that anyone can continue from the docs alone — **update it in the
+same commit as the finding, not in a sweep afterwards.**
