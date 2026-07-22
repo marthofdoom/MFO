@@ -1126,6 +1126,44 @@ command quest — which §4.7b ruled out on the grounds that a script could not
 deliver the ATTACK verb, a judgement that does not apply to a one-line alias
 filler.
 
+### 0.27 THE DLL FILL WORKS — and the package DOES root them in combat (2026-07-22)
+
+Native `TESQuest::ForceRefTo` (id 25052), no authored fill, no conditions.
+
+**WORKS:** `MFO_ProbeSelect = 0` **returns control.** The claim/release cycle is
+the production mechanism and it functions — MFO can take a follower, act, and
+give them back.
+
+**REFUTED — §0.23(a) was wrong.** The hypothesis was that the package does not
+root them, the absence of combat does, and that combat AI would supply movement
+while the package supplied casting. marth: *"He does still stop in combat."*
+**A `UseMagic` package roots the actor even mid-fight**, with the same
+`PKDT 0x00100000` / `PLDT type 12` that Mercer's combat override carries.
+
+So movement is a real problem with no free answer, and the candidates are now:
+
+1. **Accept a SHORT stop.** Vanilla casters plant themselves to cast too. With
+   `CastTime` 1-3 s and the alias cleared immediately after, a follower pausing
+   ~2 s per cast is normal-looking. **This is the cheapest and probably right
+   answer** — the fault may be duration, not stopping at all.
+2. **`Place to Travel` (`PLDT`), currently type 12 = no destination.** Pointing
+   it at the player would make him travel while casting — but that is MFO
+   managing movement, which is what marth ruled out.
+3. **A different template**, if one combines travel with casting. Unsurveyed.
+
+**Do (1) first**: it needs no new mechanism, and if a 2-second pause per cast
+reads as normal then there is nothing to build.
+
+#### The 10-second delay was ours, not the engine's
+
+marth measured ~10 s between releasing the follower and getting control back.
+The driver filled and cleared the alias and **never told the ACTOR to re-pick**,
+so the engine got round to it on its own schedule.
+`Actor::EvaluatePackage(true, false)` now runs immediately after both, with
+`a_resetAI` FALSE always -- ALYSLC field-proved that resetting AI clears the
+combat group and the next hit does zero damage, and this fires in combat by
+definition.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice
