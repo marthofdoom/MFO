@@ -59,6 +59,18 @@ FREF_TMPL_ACTIVATE     = 0x00019B2D
 # record on the fly, which is where this is heading.
 FREF_HEAL_SELF = 0x00012FCC
 
+# ── M9 PROOF OF CONCEPT ────────────────────────────────────────────────────
+# CosnachREF, an ACHR (placed reference) -- verified by dumping Skyrim.esm.
+# A Specific Reference alias fill (ALFR) takes exactly this, which is the same
+# subrecord vanilla uses to put the player in an alias (MQGreybeardCall).
+#
+# HARDCODED ON PURPOSE, and only while the architecture is unproven: it removes
+# every runtime variable so a failure means the RECORDS are wrong, not the
+# code. The moment a follower casts from this package, the fill becomes
+# targeted and this constant goes away.
+POC_ACTOR_REF = 0x000198FA
+POC_ENABLED   = True
+
 # ── binary helpers (forked from MEO/MRO — byte-for-byte valid) ──
 FORM_VERSION = 44
 
@@ -238,6 +250,12 @@ def make_command_quest():
     body += subrec('ALST', struct.pack('<I', 0))
     body += subrec('ALID', zstr("MFO_CommandActor"))
     body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    if POC_ENABLED:
+        # SPECIFIC REFERENCE fill. No conditions, no runtime, no DLL: the quest
+        # starts, the alias already holds this actor, and ALPC hands them the
+        # package. If they cast, the architecture is proven end to end and
+        # everything after it is plumbing.
+        body += subrec('ALFR', struct.pack('<I', POC_ACTOR_REF))
     body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE))
     body += subrec('VTCK', struct.pack('<I', 0))
     body += subrec('ALED', b'')
@@ -278,7 +296,10 @@ def make_cast_package():
     """
     body  = subrec('EDID', zstr("MFO_CastPackage"))
     # PKDT: flags=0, type=18 (package), then vanilla's trailing bytes.
-    body += subrec('PKDT', struct.pack('<IBB', 0, 18, 0x00) + bytes.fromhex('024700000000'))
+    # PKDT flags: 0x00000001 Offers Services, 0x00000004 Must Complete,
+    # 0x00000008 Maintain Speed... MFO wants MUST COMPLETE (0x04), which is
+    # exactly §4.5c's "an action runs start to finish uninterrupted".
+    body += subrec('PKDT', struct.pack('<IBB', 0x00000004, 18, 0x00) + bytes.fromhex('024700000000'))
     # PSDT: any time, any day -- the DLL decides when, not the schedule.
     body += subrec('PSDT', bytes.fromhex('ffff00ffff30302900000000'))
     body += subrec('PKCU', struct.pack('<III', 11, FREF_TMPL_USEMAGIC, 1))
