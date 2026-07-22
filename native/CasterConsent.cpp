@@ -22,9 +22,32 @@ namespace MFO::CasterConsent {
         // originals are keyed by the vtable pointer we read off `this`.
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_orig;
 
-        // The 16 concrete CombatMagicCaster vtables. All share the
+        // The 14 concrete CombatMagicCaster vtables. All share the
         // CheckStartCast(CombatController*) signature at index 0x06.
+        // (VTABLE_CombatMagicCasterArmor is a symbol with NO class -- excluded,
+        // ENGINE_NOTES §0.28.)
         constexpr std::size_t kCheckStartCast = 0x06;
+
+        // LAYOUT GUARD -- ENGINE_NOTES §0.29. CommonLibSSE-NG's
+        // CombatController.h gates its AE-only member (BSSpinLock at 0x68) on
+        // SKYRIM_SUPPORT_AE, a macro NG NEVER defines (NG uses
+        // ENABLE_SKYRIM_AE). So this struct ALWAYS compiles with the SE
+        // layout, and on an AE runtime every member past 0x68 sits +8 from
+        // where the header says. Reading cachedAttacker (header 0xC8) on AE
+        // actually reads handleCount -- an int that is 1 in a one-enemy fight;
+        // it passed a null check and formID at 1+0x14 faulted. That was BOTH
+        // recurring CTDs.
+        //
+        // THE RULE: this hook may only touch CombatController members BELOW
+        // 0x68, which are layout-identical on SE and AE. attackerHandle (0x28)
+        // is the only member we read; these asserts break the build if that
+        // ever stops being true -- an intentional fix, not an accidental one.
+        static_assert(offsetof(RE::CombatController, attackerHandle) == 0x28,
+                      "CombatController::attackerHandle moved -- re-verify the "
+                      "SE/AE layout split (ENGINE_NOTES §0.29) before shipping");
+        static_assert(offsetof(RE::CombatController, attackerHandle) < 0x68,
+                      "attackerHandle is past the AE layout divergence point "
+                      "(0x68) -- its compiled offset is WRONG on AE runtimes");
 
         using CheckStartCast_t = bool (*)(RE::CombatMagicCaster*, RE::CombatController*);
 
@@ -106,9 +129,12 @@ namespace MFO::CasterConsent {
         }
         if (g_hooked.exchange(true)) return;
 
-        // VTABLE INDICES, not sourced offsets -- version-resilient. All 16
+        // VTABLE INDICES, not sourced offsets -- version-resilient. All 14
         // concrete casters, because a follower's spell could land in any
         // category (Restore for a heal, Offensive for a bolt, Ward, ...).
+        // NOTE (ENGINE_NOTES §0.29): CombatMagicCasterRestore is ALSO the
+        // caster for combat potion-drinking, so this hook fires on potion
+        // deliberation too -- expected, and layout-safe since the fix above.
         const REL::VariantID kVtables[] = {
             RE::VTABLE_CombatMagicCasterOffensive[0],  RE::VTABLE_CombatMagicCasterRestore[0],
             RE::VTABLE_CombatMagicCasterWard[0],       RE::VTABLE_CombatMagicCasterSummon[0],
