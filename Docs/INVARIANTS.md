@@ -816,7 +816,25 @@ them.
 is not evidence about the population you care about. Both wrong versions of
 §0.20 were confidently derived from real data.
 
-### 67. Refuse concentration self-casts through a package; they have no reachable shape
+### 67. ~~Refuse concentration self-casts~~ — REVOKED 2026-07-22
+
+**This rule was wrong and is revoked.** It forbade concentration self-casts on
+the theory that `targType 6` in an alias-delivered package was the rev-4 crash
+axis. Probe 6 is precisely that shape — CollegePracticeWard, Concentration,
+Self, `t6`, alias-delivered — **and it casts.**
+
+The crash was the `QNAM`, not the `t6`: rev 4 carried one (misordered, after
+`PKCU`) on a record whose inputs named no alias. The surviving rule is the one
+already in the generator — **emit `QNAM` only when an input names an alias, and
+always immediately before `PKCU`.**
+
+Kept as a numbered entry rather than deleted, because the reasoning that
+produced it was sound given the evidence at the time, and the correction is the
+useful part: a rule derived from a crash with TWO novel axes cannot attribute
+the crash to either one. Change one axis at a time (#66a) or the postmortem is a
+guess.
+
+### 67a. (superseded content below, retained for the reasoning trail)
 
 Vanilla ships concentration + Self-delivery spells in `UseMagic` **only** with
 `targType 6` (2 of 2), and `targType 6` in the target slot of an
@@ -830,3 +848,14 @@ rather than being synthesised into a record with no precedent.
 
 Fire-and-forget Self spells are fine: `targType 0` at a reference works
 (probes 2 and 3, and `dunReachwaterRockGauldurReforgeAmulet`).
+
+### 68. A doc edit anchored on a non-unique string duplicates the document
+
+Twice in one session an ENGINE_NOTES section was pasted twice because the
+anchor text ("### NOT yet proven, despite the session") occurs more than once in
+the file, and a blind replace hit every occurrence. The second copy fused into
+the following header and corrupted the tail.
+
+This is the code lesson in prose form: **assert the anchor is unique before
+replacing, and re-read the result.** `grep -c` on the header afterwards is one
+command and catches it immediately.

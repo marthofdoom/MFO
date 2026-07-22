@@ -883,7 +883,52 @@ at `t0`/`t4`, which vanilla does ship under `ALPC`.
   action's duration -- but the action must then END and hand him back. Nothing
   currently pops the package.
 
-### NOT yet proven, despite the session### NOT yet proven, despite the session
+### 0.22 EVERY SHAPE WORKS — and package casts are FREE (2026-07-22)
+
+**Probe group 2, field:** *"Magick is not being used, all 3 work."*
+
+| # | Spell | castingType | delivery | Target | Result |
+|---|---|---|---|---|---|
+| 6 | CollegePracticeWard | Concentration | Self | **`t6` self** | **CASTS** |
+| 7 | Thunderbolt (cost 343) | FireForget | Aimed | `t4` alias 1 | **CASTS** |
+| 8 | HealingHands | Concentration | TargetActor | `t0` PlayerRef | **CASTS** |
+
+Combined with group 1, **every axis MFO needs is now proven**:
+
+| Axis | Proven values |
+|---|---|
+| Target | `t0` specific ref · `t4` reference alias · **`t6` self** |
+| castingType | FireAndForget · **Concentration** |
+| delivery | Self · Aimed · TargetActor |
+
+**The synthesis algorithm has no unreachable cells left.** Any (verb, spell,
+target) a gambit can name is expressible.
+
+#### #67 IS REVOKED, and the rev-4 crash is re-explained
+
+§0.20 concluded `targType 6` in an alias-delivered package was the crash axis,
+and #67 forbade concentration self-casts on that basis. **Probe 6 is exactly
+that shape and it casts.** So `t6` was never the problem.
+
+Rev 4 had `t6` **and a QNAM** (misordered, after `PKCU`). Probe 6 has `t6` and
+**no QNAM** — correct, because a `t6` target names no alias. So the crash was
+the QNAM: either its position (0 of 2,109 vanilla put it after `PKCU`) or its
+mere presence on a record whose inputs reference no alias. The generator now
+gets both right, which is why this shape is safe today and was not then.
+
+**Standing rule, unchanged and now load-bearing:** emit `QNAM` **only** when an
+input names an alias, and **always immediately before `PKCU`**.
+
+#### PACKAGE CASTS DO NOT COST MAGICKA — measured
+
+Thunderbolt costs **343**. With regen frozen and the pool forced to 1000,
+Cosnach cast it and the pool read **1000 afterwards**.
+
+**This is the third actuator to spend nothing**, and it decides §5.3. The
+competence gate ("a follower who cannot afford a spell fails the rule") is
+**decorative for package casts** unless MFO deducts. See §0.23.
+
+### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice
   (`saved 1 follower record(s), schema v2`) and *loaded* empty saves cleanly,
