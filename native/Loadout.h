@@ -65,6 +65,11 @@ namespace MFO::Loadout {
     // Actuation's note on the measurement confound.
     float SecondsSinceEquip(RE::FormID a_actorID);
 
+    // Restart the AI's window. Called after MFO casts for a follower, so the
+    // NEXT time that rule wants to fire, their own AI gets another chance --
+    // otherwise the grace applies once per session and never again.
+    void ArmGrace(RE::FormID a_actorID);
+
     // Restore a displaced SHIELD. Called from the hit sink -- a shield is worth
     // giving back at the instant something hits them, and not before.
     void OnFollowerHit(RE::FormID a_actorID);

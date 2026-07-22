@@ -330,7 +330,36 @@ attack verb needs, for every NPC in the load order:
   main-thread actuation state. That needs an atomics snapshot or a lock
   (INVARIANTS #4), designed before the probe, not after.
 
-### 0.15 THE ANIMATION PATH — assembled, not yet observed (2026-07-21)
+### 0.15 THE ANIMATION PATH — CONFIRMED IN THE FIELD (2026-07-22)
+
+**marth, watching Cosnach with an MFO-equipped Heal Self:** *"he did actually
+equip it and it seemed to instant cast and regular cast multiple times, he
+managed to use 1000 magicka."*
+
+**"Regular cast" is the animated one.** Both paths were visible in the same
+fight and they look different:
+
+| What was seen | Which path |
+|---|---|
+| **Regular cast** — the follower plays the casting animation | Their OWN AI firing a spell MFO put in their hand |
+| **Instant cast** — the effect just happens | MFO's `CastSpellImmediate` fallback after the grace expired |
+
+~1000 magicka spent confirms these were real casts arbitrated by the engine,
+not free applies.
+
+**So the architecture is right: MFO does not cast. It arranges the conditions
+and the follower's own AI casts** — animated, magicka-arbitrated, correctly
+aimed, because it IS the vanilla path. Three cast VERBS were refuted before
+this (§0.8, §0.10, #56); the verb was never the missing piece. The
+preconditions were: spell in hand (`Loadout`) plus a target.
+
+**Still to settle:** the `[cast]` sink caught only ONE of those casts and
+printed `?` for the spell, so the log cannot yet distinguish an AI-fired gambit
+spell from the follower's own. Fixed by resolving as `TESForm` and flagging MFO
+gambit spells explicitly. And the AI is ENTHUSIASTIC -- 1000 magicka is a lot of
+casting, which is a balance question §5 will have to answer.
+
+### 0.15a (historical) the path as designed, before it was observed
 
 Three cast VERBS have now been refuted: `CastSpellImmediate` (all four casting
 sources, §0.8/§0.10), `Projectile::LaunchSpell` (no projectile on a

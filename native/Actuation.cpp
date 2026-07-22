@@ -171,7 +171,16 @@ namespace MFO::Actuation {
                                 a_follower->GetName() ? a_follower->GetName() : "?").c_str());
             }
             caster->CastSpellImmediate(spell, false, a_target, 1.0f, false, 0.0f, a_follower);
-            return { Result::Fired, {} };
+
+            // Restart the AI's window. Without this the grace is a ONE-SHOT:
+            // the clock was armed at the first equip and never re-armed, so
+            // after MFO's first cast every later one fired instantly and the
+            // follower's own AI was never given another opening. The field log
+            // showed it as rule 0 firing every 1.6s -- the suppression window,
+            // not the 3s grace.
+            if (equipped) Loadout::ArmGrace(a_follower->GetFormID());
+
+            return { Result::Fired, equipped ? "silent (their AI declined)" : "" };
         }
 
     }

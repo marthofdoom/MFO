@@ -243,6 +243,14 @@ namespace MFO::Loadout {
         return Ready::Equipped;
     }
 
+    void ArmGrace(RE::FormID a_actorID) {
+        // Deliberately an overwrite, not try_emplace. The clock is armed at
+        // equip with try_emplace so that re-querying cannot reset it mid-window
+        // -- but once MFO has actually cast, the window is spent and the next
+        // one must start fresh.
+        g_equipClock[a_actorID] = std::chrono::steady_clock::now();
+    }
+
     float SecondsSinceEquip(RE::FormID a_actorID) {
         const auto it = g_equipClock.find(a_actorID);
         if (it == g_equipClock.end()) return 1.0e9f;
@@ -313,7 +321,11 @@ namespace MFO::Loadout {
             }
         }
 
-        for (const auto id : settled) g_debt.erase(id);
+        // Erase the clock alongside the debt. Leaving it behind is what made
+        // the AI's window a one-shot: a follower who displaced nothing settles
+        // immediately, the clock survives with its original timestamp, and
+        // every later cast sees a huge elapsed time and skips the grace.
+        for (const auto id : settled) { g_debt.erase(id); g_equipClock.erase(id); }
 
         for (const auto id : restoreAll) {
             if (const int n = RestoreOne(id); n > 0) {
