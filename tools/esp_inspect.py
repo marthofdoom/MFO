@@ -17,6 +17,10 @@ MODES
   --dump FORMID|EDID      full ordered subrecord dump, hex + decoded
   --templates             every PACK type-19 template + its public inputs
   --find-template FORMID  every PACK instance whose PKCU points at a template
+  --pack-shapes FID|all   the #66 precedent query: contingency table of
+                          (ALPC-delivered, alias-valued input, QNAM) over all
+                          PACKs + QNAM-order census; a template FormID adds
+                          per-instance rows with target-slot types
   --selftest              assert known-good facts
 
 OPTIONS
@@ -624,14 +628,32 @@ def d_pack_cnam(d, plug, res):
     return []
 
 
+# SPIT.castType / delivery. Names CONFIRMED by matching decoded values
+# against spells whose behaviour is known in-game: FastHealing 0002F3B8
+# (FireAndForget/Self, cost 73), Oakflesh 0005AD5C (FF/Self, 103), Flames
+# 00012FCD (Concentration/Aimed, 14), CollegePracticeWard 000E8449
+# (Concentration/Self, 0). Values not in the confirmed set print with '?'.
+SPIT_CAST_TYPES = {0: 'ConstantEffect', 1: 'FireAndForget', 2: 'Concentration'}
+SPIT_CAST_CONFIRMED = {1, 2}
+SPIT_DELIVERY = {0: 'Self', 1: 'Touch', 2: 'Aimed', 3: 'TargetLocation',
+                 4: 'TargetActor'}
+SPIT_DELIVERY_CONFIRMED = {0, 2}
+
+
 def d_spit(d, plug, res):
     if len(d) < 36:
         return [f'len {len(d)} (expected 36)']
-    cost, fl, ty, chg, cast, deliv, dur, rng, perk = struct.unpack_from('<fIIfIIffI', d, 0)
+    # cost is a UINT32, not a float. Confirmed against the load order:
+    # decoding '<I' yields 73/103/14/0 for the four spells above, matching
+    # their in-game magicka costs; decoding '<f' yields denormals like
+    # 1.02295e-43, which is how a wrong layout survives a glance (#66).
+    cost, fl, ty, chg, cast, deliv, dur, rng, perk = struct.unpack_from('<IIIfIIffI', d, 0)
     return [
-        f'cost {cost:g}  flags 0x{fl:08X}',
+        f'cost {cost}  flags 0x{fl:08X}',
         f'type      {_enum(ty, SPEL_TYPES)}',
-        f'chargeTime {chg:g}  castType {cast}  delivery {deliv}',
+        f'chargeTime {chg:g}'
+        f'  castType {_enum(cast, SPIT_CAST_TYPES, SPIT_CAST_CONFIRMED)}'
+        f'  delivery {_enum(deliv, SPIT_DELIVERY, SPIT_DELIVERY_CONFIRMED)}',
         f'castDuration {dur:g}  range {rng:g}  castingPerk {perk:08X}',
     ]
 
@@ -1039,6 +1061,101 @@ def mode_find_template(plug, res, target, limit):
     print(f'\n  {hits} instance(s)')
 
 
+def _alpc_delivery_map(plug):
+    """pack FormID -> [(quest EDID, alias id)] for every ALPC in the plugin."""
+    out = {}
+    for q in plug.by_sig.get('QUST', []):
+        for b in alias_blocks(q):
+            for t, d in b['subs']:
+                if t == 'ALPC' and len(d) >= 4:
+                    fid = _u32.unpack_from(d, 0)[0]
+                    out.setdefault(fid, []).append((q.edid(), b['id']))
+    return out
+
+
+def mode_pack_shapes(plug, res, target, limit):
+    """The precedent query INVARIANTS #66 requires BEFORE authoring a PACK.
+
+    A record shape is a VECTOR of axes, and the crash of 2026-07-22 came from
+    counting only one axis over one template's 46 instances. This mode counts
+    the axes that decided that crash — delivery route (ALPC), alias-valued
+    inputs, QNAM, target-slot PTDA type, QNAM subrecord position — over EVERY
+    PACK in the plugin, then prints per-instance rows for one template.
+
+    `--pack-shapes all` prints only the whole-population contingency table.
+    The zero cells are the point: a combination this table has never seen is
+    exactly what #66 forbids authoring without a probe.
+    """
+    alpc = _alpc_delivery_map(plug)
+    tri = {}
+    qnam_order_bad = []
+    rows = []
+    for r in plug.by_sig.get('PACK', []):
+        if pack_type_of(r) != 18:
+            continue
+        tfid = pack_template_of(r)
+        trec = plug.by_fid.get(tfid) if tfid else None
+        dmap = {}
+        if trec is not None:
+            decl, _, _, _ = pack_inputs(trec)
+            dmap = {i: n for i, n, _ in decl}
+        _, values, slots, _ = pack_inputs(r)
+        ua, qn, targ_slots = False, None, []
+        for k, (anam, vsub, d) in enumerate(values):
+            sname = dmap.get(slots[k] if k < len(slots) else None,
+                             f'slot{slots[k] if k < len(slots) else "?"}')
+            if vsub == 'PTDA' and len(d) >= 4:
+                ty = _u32.unpack_from(d, 0)[0]
+                if ty == PTDA_ALIAS_TYPE:
+                    ua = True
+                targ_slots.append((sname, f'PTDA t{ty}'))
+            elif vsub == 'PLDT' and len(d) >= 4:
+                ty = _u32.unpack_from(d, 0)[0]
+                if ty == 8:
+                    ua = True
+                targ_slots.append((sname, f'PLDT t{ty}'))
+        seq = [t for t, _ in r.subs()]
+        if 'QNAM' in seq:
+            qn = True
+            if 'PKCU' in seq and seq.index('QNAM') > seq.index('PKCU'):
+                qnam_order_bad.append(r)
+        ad = r.fid in alpc
+        key = (ad, ua, bool(qn))
+        tri[key] = tri.get(key, 0) + 1
+        if target is not None and tfid == target:
+            rows.append((r, ad, ua, qn, targ_slots))
+
+    print(f'PACK shape contingency over {plug.name} '
+          f'(aliasDelivered=ALPC, aliasInput=PTDA t4|PLDT t8, QNAM):')
+    for k in sorted(tri, key=lambda k: -tri[k]):
+        ad, ua, qn = k
+        note = ''
+        if ua and not qn:
+            note = '   <-- alias input without QNAM: THIS CELL MUST STAY 0'
+        print(f'  delivered={"Y" if ad else "-"}  aliasInput={"Y" if ua else "-"}'
+              f'  QNAM={"Y" if qn else "-"}   {tri[k]:>5}{note}')
+    print(f'  QNAM after PKCU (vanilla order is QNAM immediately BEFORE '
+          f'PKCU): {len(qnam_order_bad)}')
+    for r in qnam_order_bad[:10]:
+        print(f'    {r.fid:08X}  {r.edid() or "<no EDID>"}')
+
+    if target is None:
+        return
+    print(f'\ninstances of template {fmt_fid(target, plug, res)}:')
+    hits = 0
+    for r, ad, ua, qn, targ_slots in rows:
+        who = alpc.get(r.fid)
+        print(f'  {r.fid:08X}  {r.edid() or "<no EDID>":<42} '
+              f'ALPC={"Y" if ad else "-"}  QNAM={"Y" if qn else "-"}  '
+              + '  '.join(f'{n}={v}' for n, v in targ_slots)
+              + (f'   deliveredBy={who[0][0]} alias {who[0][1]}' if who else ''))
+        hits += 1
+        if limit and hits >= limit:
+            print(f'  ... (--limit {limit} reached)')
+            break
+    print(f'  {hits} instance(s)')
+
+
 # ══ selftest ═══════════════════════════════════════════════════════════════
 
 SKYRIM_DEFAULT = '/mnt/gaming/modlists/custom-modlist/Stock Game/Data/Skyrim.esm'
@@ -1110,6 +1227,44 @@ def mode_selftest(args):
     ck('HealSelf 00012FCC is a SPEL',
        sky.by_fid[0x00012FCC].sig if 0x00012FCC in sky.by_fid else None, 'SPEL')
 
+    # SPIT.cost is a uint32 -- FastHealing's in-game cost is 73, and the old
+    # float decode printed 1.02295e-43 for it.
+    fh = sky.by_fid.get(0x0002F3B8)
+    fh_cost = None
+    if fh is not None:
+        for st, sd in fh.subs():
+            if st == 'SPIT' and len(sd) >= 36:
+                fh_cost = _u32.unpack_from(sd, 0)[0]
+    ck('FastHealing SPIT.cost (u32) == 73', fh_cost, 73)
+
+    # The whole-population shape facts the 2026-07-22 review established.
+    # These are the ground for the synthesis algorithm's QNAM rules; if a
+    # parser change moves these numbers, the algorithm's citations are stale.
+    alpc = _alpc_delivery_map(sky)
+    tri = {}
+    order_bad = 0
+    for r in sky.by_sig.get('PACK', []):
+        if pack_type_of(r) != 18:
+            continue
+        _, values, _, _ = pack_inputs(r)
+        ua = False
+        for _a, vsub, d in values:
+            if vsub == 'PTDA' and len(d) >= 4 and _u32.unpack_from(d, 0)[0] == PTDA_ALIAS_TYPE:
+                ua = True
+            if vsub == 'PLDT' and len(d) >= 4 and _u32.unpack_from(d, 0)[0] == 8:
+                ua = True
+        seq = [t for t, _ in r.subs()]
+        qn = 'QNAM' in seq
+        if qn and 'PKCU' in seq and seq.index('QNAM') > seq.index('PKCU'):
+            order_bad += 1
+        key = (r.fid in alpc, ua, qn)
+        tri[key] = tri.get(key, 0) + 1
+    ck('alias-delivered + alias-input + QNAM count == 356',
+       tri.get((True, True, True), 0), 356)
+    ck('alias input WITHOUT QNAM occurs 0 times',
+       tri.get((True, True, False), 0) + tri.get((False, True, False), 0), 0)
+    ck('QNAM after PKCU occurs 0 times in vanilla', order_bad, 0)
+
     # ── MFO.esp ──
     mfo_path = args.plugin
     if mfo_path and os.path.exists(mfo_path) and mfo_path != sky_path:
@@ -1117,9 +1272,11 @@ def mode_selftest(args):
         res.add(mfo)
         ck('MFO masters == [Skyrim.esm]', mfo.masters, ['Skyrim.esm'])
         pk = [r for r in mfo.by_sig.get('PACK', [])]
-        ck('MFO has exactly 1 PACK', len(pk), 1)
-        if pk:
-            p = pk[0]
+        # 1 PACK in a release build; 6 under MFO_POC=1 (main + 5 probes).
+        ck('MFO PACK count is 1 (release) or 6 (POC)', len(pk) in (1, 6), True)
+        p = mfo.by_fid.get(0x01000820)
+        ck('MFO_CastPackage 01000820 exists', p is not None, True)
+        if p is not None:
             names = [t for t, _ in p.subs()]
             ck('MFO PACK carries QNAM', 'QNAM' in names, True)
             ck('MFO PACK type == 18 (instance)', pack_type_of(p), 18)
@@ -1145,14 +1302,28 @@ def mode_selftest(args):
             targ_val = vals[2] if len(vals) > 2 else None
             ck('MFO value 1 lands on template slot "Spell"',
                byidx.get(slots[1]) if len(slots) > 1 else None, 'Spell')
-            ck('MFO "Spell" slot holds PTDA type 1 -> HealSelf 00012FCC',
+            # Seed spell is Magelight (FF/Aimed): the record's shape is
+            # "Aimed spell at the foe alias", and seeding a Self spell into
+            # it would pair delivery and target in a way vanilla never does.
+            ck('MFO "Spell" slot holds PTDA type 1 -> Magelight 00043323',
                (spell_val[1], struct.unpack_from('<iI', spell_val[2], 0))
-               if spell_val else None, ('PTDA', (1, 0x00012FCC)))
+               if spell_val else None, ('PTDA', (1, 0x00043323)))
             ck('MFO value 2 lands on template slot "Target"',
                byidx.get(slots[2]) if len(slots) > 2 else None, 'Target')
-            ck('MFO "Target" slot holds PTDA type 4 -> alias 0',
+            # Alias 1 (the FOE), never alias 0 (the deliverer): targeting the
+            # delivering alias stalled in the field (INVARIANTS 65), and
+            # targType 6 self CTD'd (INVARIANTS 66). The one alias-targeted
+            # shape vanilla ships is "target a DIFFERENT alias, with QNAM"
+            # (356 instances; CWFinaleLeaderExecuteEnemyLeader).
+            ck('MFO "Target" slot holds PTDA type 4 -> alias 1 (the foe)',
                (targ_val[1], struct.unpack_from('<iI', targ_val[2], 0))
-               if targ_val else None, ('PTDA', (4, 0)))
+               if targ_val else None, ('PTDA', (4, 1)))
+            # Subrecord order: QNAM immediately before PKCU, like all 2,109
+            # vanilla QNAM-carrying packages and unlike the record that
+            # crashed.
+            ck('MFO PACK puts QNAM immediately before PKCU',
+               names.index('PKCU') - names.index('QNAM')
+               if 'QNAM' in names and 'PKCU' in names else None, 1)
         q = mfo.by_fid.get(0x0100080A)
         ck('MFO_CommandQuest 0100080A is a QUST', q.sig if q else None, 'QUST')
         if q:
@@ -1162,9 +1333,16 @@ def mode_selftest(args):
                 sub = dict(blocks[0]['subs'])
                 ck('alias 0 is MFO_CommandActor',
                    _zstr(sub.get('ALID', b'')), 'MFO_CommandActor')
-                ck('alias 0 carries ALPC -> the cast package',
-                   f'{_u32.unpack_from(sub["ALPC"], 0)[0]:08X}'
-                   if 'ALPC' in sub else None, '01000820')
+                alpcs = [f'{_u32.unpack_from(d, 0)[0]:08X}'
+                         for t, d in blocks[0]['subs'] if t == 'ALPC']
+                if len(pk) == 1:
+                    ck('alias 0 carries ALPC -> the cast package',
+                       alpcs, ['01000820'])
+                else:
+                    # POC: probes only -- the ungated main package would
+                    # shadow every gated probe below it in ALPC order.
+                    ck('alias 0 (POC) carries the 5 probes, NOT 01000820',
+                       alpcs, [f'010008{0x21 + i:02X}' for i in range(5)])
                 fl = _u32.unpack_from(sub['FNAM'], 0)[0] if 'FNAM' in sub else 0
                 ck('alias 0 FNAM = Optional|AllowReuse|AllowReserved',
                    fl, 0x0002 | 0x0008 | 0x0200)
@@ -1215,6 +1393,9 @@ def main():
     ap.add_argument('--dump', metavar='FORMID|EDID', help='full subrecord dump')
     ap.add_argument('--templates', action='store_true',
                     help='list PACK type-19 templates + their public inputs')
+    ap.add_argument('--pack-shapes', metavar='FORMID|all',
+                    help='PACK shape contingency table (the #66 precedent '
+                         'query); a template FormID adds per-instance rows')
     ap.add_argument('--find-template', metavar='FORMID',
                     help='PACK instances whose PKCU points at this template')
     ap.add_argument('--master', action='append', default=[], metavar='PATH',
@@ -1267,6 +1448,15 @@ def main():
         mode_dump(rec.plugin, res, rec, args.raw)
     elif args.templates:
         mode_templates(plug, res, args.filter, limit)
+    elif args.pack_shapes:
+        if args.pack_shapes.lower() == 'all':
+            mode_pack_shapes(plug, res, None, limit)
+        else:
+            t = parse_fid(args.pack_shapes)
+            if t is None:
+                print(f'not a FormID: {args.pack_shapes}', file=sys.stderr)
+                return 2
+            mode_pack_shapes(plug, res, t, limit)
     elif args.find_template:
         t = parse_fid(args.find_template)
         if t is None:

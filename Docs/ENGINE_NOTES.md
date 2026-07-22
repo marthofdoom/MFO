@@ -770,62 +770,49 @@ the procedure resolves nothing and stalls silently, holding the actor.
 actor does nothing, no resource is consumed. It means the procedure's INPUTS
 are unresolvable, not that delivery failed.
 
-### 0.20 THE CTD — a package shape with no vanilla precedent (2026-07-22)
+### 0.20 THE CTD — two unprecedented axes, not three (2026-07-22, CORRECTED TWICE)
 
-**CORRECTED. The first version of this section blamed CONCENTRATION spells and
-was WRONG** -- marth caught it: *"we know concentration spells work, its
-scripted several times with flames in various vanilla locations."* He is right.
-**12 of the 46 vanilla `UseMagic` packages cast concentration spells**,
-including `DA16ErandurDoorCastPackage` and `WCollegeOnmundPracticeFlames12x4`,
-both Flames. The wrong conclusion came from reading `SPIT` offset 0x0C
-(`chargeTime`) instead of 0x10 (`castingType`) -- which also reported vanilla
-`Healing` as ConstantEffect, a result that should have been caught as absurd
-on sight.
+This section has been wrong twice. Both errors came from extracting a rule from
+too NARROW a population, which is the same mistake in two costumes.
 
-#### The crash
+* **v1 blamed concentration spells.** Refuted: 12 of the 46 vanilla `UseMagic`
+  packages cast them, two with Flames. Cause: read `SPIT` offset 0x0C
+  (`chargeTime`) as `castingType`.
+* **v2 said "all 9 alias-delivered packages carry no QNAM, so QNAM must be
+  absent".** True of those 9 and MISLEADING. Counted over all **5,857 PACK
+  instances**:
 
 ```
-EXCEPTION_ACCESS_VIOLATION at TESPackage::sub_49595F
-  cmp byte ptr [rbx+0x1A], 0x3E     rbx = 0x0      (0x1A is TESForm::formType)
-  R15: (TESPackage*) [0xFE08F820] ("MFO.esp")
-  RDX: (Character*) "Cosnach" [0x000198FA]
-  [ 3] BGSRefAlias::sub_398FB9
+delivered=Y  aliasInput=Y  QNAM=Y    356   <- MFO's generalized shape, SHIPPED by Bethesda
+delivered=Y  aliasInput=-  QNAM=Y    611   <- QNAM on alias-delivered: NORMAL
+delivered=*  aliasInput=Y  QNAM=-      0   <- the actual hard rule (626/626)
 ```
 
-**No MFO.dll frames.** The engine crashed evaluating our package.
+**QNAM is not forbidden. It is REQUIRED whenever any input names an alias, and
+harmless otherwise.**
 
-#### The actual finding: MFO built a shape vanilla never ships
+#### The crash's actually-unprecedented axes
 
-| Vanilla population | Count | Target type | QNAM |
-|---|---|---|---|
-| `UseMagic` delivered by an alias (`ALPC`) | **9** | **ALL targType 0** (specific ref) | **ALL none** |
-| `UseMagic` casting on self | 7 | targType 6 | — |
-| ...that are ALSO alias-delivered | **0** | — | — |
+1. **`targType 6` in the PROCEDURE TARGET slot of an alias-delivered package** —
+   0 instances. (`t6` under `ALPC` in *auxiliary* slots ships 14 times, so the
+   rule is slot-specific, not type-specific.)
+2. **`QNAM` emitted AFTER `PKCU`** — 0 of 2,109; every vanilla record puts it
+   immediately before.
 
-MFO's crashing record was **alias-delivered + `targType 6` self + `QNAM`** —
-a combination with **zero occurrences in Skyrim.esm**. Vanilla self-casting
-packages are never alias-delivered, and alias-delivered packages never
-self-target.
+The crash asm (`cmp [rbx+0x1A], 0x3E` with rbx null; 0x1A is `TESForm::formType`)
+reads as *"is the resolved target an ACHR"* against a null resolution —
+consistent with (1), and not statically verifiable.
 
-#### What the PoC does now
+#### And the "next problem" was already solved by Bethesda
 
-Matches the nine exactly: `targType 0` naming CosnachREF, and **no `QNAM`** --
-with a specific reference nothing indexes into a quest, and none of the nine
-carry one.
+§0.20 v2 said generalising to an arbitrary follower was unsolved. **Wrong the
+day it was written.** `CWFinaleLeaderExecuteEnemyLeader` (`000D1E21`) is an
+alias-delivered `UseWeapon` whose `Target to Attack` is `PTDA t4 -> alias 14`,
+with QNAM, stage-gated: **follower-in-alias-A attacks actor-in-alias-B.** That
+is exactly MFO's generalized shape, shipped. The WERoad quests are the same
+architecture for movement (`Travel` + `PLDT t8 -> alias`, 263 instances).
 
-**This narrows the PoC's claim.** It can prove that an alias-delivered package
-casts. It CANNOT prove how to target an arbitrary follower, because the only
-alias-delivered shape vanilla evidences requires naming the actor at author
-time. Generalising is the next problem, not a solved one.
-
-#### The lesson, which is #64 again
-
-Three of the last four defects were found by asking Skyrim.esm what shapes
-actually occur, and this one was CAUSED by not asking. "Does this record shape
-exist in vanilla?" is a one-command query with `esp_inspect.py`, and it should
-precede authoring, not follow a crash.
-
-### NOT yet proven, despite the session
+### NOT yet proven, despite the session### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice
   (`saved 1 follower record(s), schema v2`) and *loaded* empty saves cleanly,

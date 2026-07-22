@@ -36,14 +36,17 @@ FID_GRANTED_KYWD   = OWN | 0x802   # tags spells MFO tutored, for the revoke bac
 FID_STARTUP_QUEST  = OWN | 0x804   # reserved; the DLL does the granting
 FID_MCM_QUEST      = OWN | 0x808   # carries the MCM Helper config script
 FID_COMMAND_QUEST  = OWN | 0x80A   # M9: carries the alias MFO fills with a target
-# 0x80B-0x80F  reserved: more command aliases / globals
+FID_PROBE_GLOB     = OWN | 0x80B   # M9 PoC: GetGlobalValue switchboard for the probes
+# 0x80C-0x80F  reserved: more command aliases / globals
 # 0x810+       reserved: player-side perks, if that is ever ruled in
 FID_CAST_PACKAGE   = OWN | 0x820   # M9: PACK instance riding vanilla UseMagic
+FID_POC_PACK_BASE  = OWN | 0x821   # M9 PoC: one PACK per probe, 0x821+
 # 0x821+       reserved: one PACK per action verb (attack, travel, hold, activate)
 NEXT_OBJECT_ID     = 0x900         # first never-used local id
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
+FREF_PLAYER     = 0x00000014       # PlayerRef — always loaded, near the follower
 
 # ── M9: vanilla PACKAGE TEMPLATES (PACK type 19) ───────────────────────────
 # Skyrim ships a template for every action MFO needs, so MFO authors NONE.
@@ -54,14 +57,57 @@ FREF_TMPL_HOLDPOSITION = 0x000503D0
 FREF_TMPL_TRAVEL       = 0x00016FAA
 FREF_TMPL_ACTIVATE     = 0x00019B2D
 
-# The first proof rides the SEEDED heal. Runtime-varying the spell is the next
-# step (§0.17): either mutate the live TESPackage's inputs, or fabricate the
-# record on the fly, which is where this is heading.
-# FastHealing. Fire-and-forget, and it is what vanilla's own self-heal package
-# uses -- but NOT because concentration is forbidden. That was a wrong call:
-# 12 of the 46 vanilla UseMagic packages cast CONCENTRATION spells, including
-# two with Flames. Concentration was never the crash.
-FREF_HEAL_SELF = 0x0002F3B8
+# The seeded spell for the main package. Magelight, NOT a heal: the main
+# package's shipped shape is now "Aimed spell at the foe alias" (the only
+# alias-targeted shape with vanilla precedent -- see make_cast_package), and
+# seeding a Self-delivery spell into an alias-targeted package would be a
+# delivery/target mismatch vanilla never ships (0 of 46 UseMagic instances
+# pair a Self spell with an alias target aimed at someone else... the one
+# TG08BMercerStatueSceneCast exception is a scene shockwave). The DLL will
+# vary the Spell input per action; the RECORD ships the max-precedent pairing.
+FREF_SEED_SPELL = 0x00043323       # Magelight -- FF/Aimed, harmless, visible
+
+# ── M9 PoC: the probe LADDER -- one axis of novelty per probe ──────────────
+# Spell properties read from Skyrim.esm, NOT from a wiki -- and the load order
+# can redefine any of them (#66).
+#
+# Every probe is gated by CTDA `GetGlobalValue(MFO_ProbeSelect) == index`, so
+# exactly ONE is valid at a time. Without gates the engine runs the FIRST
+# valid package in ALPC order and the rest are dead records: of vanilla's 740
+# aliases carrying >=2 packages, the unconditioned fallback sits at the BOTTOM
+# of the list in 169+ (CU/CCU/CCCU...) against ~2 the other way round, and
+# MG08's alias 0 orders its stage-gated package above its unconditioned one.
+# In game:  set MFO_ProbeSelect to N   then  prid 198FA / evp
+#
+# The ladder, and what each step's failure would mean:
+#   1  Magelight -> PlayerRef.   Byte-shape of the nine vanilla alias-
+#      delivered UseMagic packages (targType 0 + Aimed spell; 9/9), target
+#      swapped from an XMarker to the player (t0->player: 6 in-template).
+#      If THIS one does not cast, alias-delivered casting itself is broken.
+#   2  FastHealing -> PlayerRef. Self-delivery spell, target as an anchor on
+#      ANOTHER ref -- the dunReachwaterRock Gauldur shape (1 instance). If 1
+#      casts and 2 does not, Self-delivery under ALPC is the blocker.
+#   3  FastHealing -> CosnachREF. Target resolves to the RUNNER -- zero
+#      vanilla precedent, and the t4->alias0 probe already stalled silently
+#      on the same resolved object. PREDICTION: owned-but-inert (#65). This
+#      probe exists to confirm or refute that prediction cheaply, because
+#      cast_self NEEDS some shape and vanilla ships none under ALPC.
+#   4  CollegePracticeWard -> PlayerRef. Concentration axis, cost 0.
+#   5  Magelight -> alias 1 (t4 + QNAM), alias 1 force-filled with the
+#      player. THE GENERALIZED SHAPE -- alias-delivered package targeting a
+#      different alias, which is how cast_target must work for an arbitrary
+#      foe. Mechanism precedent: 356 alias-delivered packages with an
+#      alias-valued input, all with QNAM (CWFinaleLeaderExecuteEnemyLeader is
+#      the attack-verb exemplar); within UseMagic the t4 target has 7
+#      non-delivered instances, so this is the one-axis novelty to prove.
+POC_PROBES = [
+    # (index, spell FormID, label,               target)
+    (1, 0x00043323, "MagelightAtPlayer",   ("t0", FREF_PLAYER)),
+    (2, 0x0002F3B8, "FastHealingAnchorPlayer", ("t0", FREF_PLAYER)),
+    (3, 0x0002F3B8, "FastHealingSelfRef",  ("t0", None)),   # None -> POC_ACTOR_REF
+    (4, 0x000E8449, "WardAnchorPlayer",    ("t0", FREF_PLAYER)),
+    (5, 0x00043323, "MagelightAtAlias1",   ("t4", 1)),
+]
 
 # ── M9 PROOF OF CONCEPT ────────────────────────────────────────────────────
 # CosnachREF, an ACHR (placed reference) -- verified by dumping Skyrim.esm.
@@ -188,6 +234,18 @@ def make_spel():
     return group('SPEL', record('SPEL', FID_ORDERS_SPELL, 0, body))
 
 
+# ── GLOB ────────────────────────────────────────────────────────────────────
+def make_glob():
+    # The probe switchboard. Layout mirrored from vanilla DA16ErandurCheckpoint
+    # (00017418-style quest-control global): EDID + FNAM 's' (short) + FLTV
+    # float. Default 0.0 = NO probe package valid, follower behaves normally.
+    # In game: `set MFO_ProbeSelect to N`, then re-evaluate with `prid 198FA`
+    # + `evp` (or wait for the engine's own package re-evaluation).
+    body = subrec('EDID', zstr("MFO_ProbeSelect")) + subrec('FNAM', b's')
+    body += subrec('FLTV', struct.pack('<f', 0.0))
+    return group('GLOB', record('GLOB', FID_PROBE_GLOB, 0, body))
+
+
 # ── KYWD ────────────────────────────────────────────────────────────────────
 def make_kywd():
     # Tags spells MFO tutored, so PO3.RemoveAddedSpells(actor, "MFO.esp", [kw])
@@ -290,10 +348,18 @@ def make_command_quest():
     if POC_ENABLED:
         # SPECIFIC REFERENCE fill. No conditions, no runtime, no DLL: the quest
         # starts, the alias already holds this actor, and ALPC hands them the
-        # package. If they cast, the architecture is proven end to end and
-        # everything after it is plumbing.
+        # packages. Which ONE is valid is chosen by MFO_ProbeSelect -- every
+        # probe carries a GetGlobalValue CTDA, because the engine runs the
+        # FIRST valid package in ALPC order and unconditioned packages above
+        # others make them dead records (vanilla stacks gated packages above
+        # the unconditioned fallback: CU/CCU/CCCU 169+, the reverse ~2).
         body += subrec('ALFR', struct.pack('<I', POC_ACTOR_REF))
-    body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE))
+        # Probes only. The main package is deliberately NOT attached under
+        # POC: it is ungated, so it would shadow every probe below it.
+        for idx, sp, label, tgt in POC_PROBES:
+            body += subrec('ALPC', struct.pack('<I', FID_POC_PACK_BASE + idx - 1))
+    else:
+        body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE))
     body += subrec('VTCK', struct.pack('<I', 0))
     body += subrec('ALED', b'')
 
@@ -301,6 +367,11 @@ def make_command_quest():
     body += subrec('ALST', struct.pack('<I', 1))
     body += subrec('ALID', zstr("MFO_CommandTarget"))
     body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    if POC_ENABLED:
+        # Probe 5 targets alias 1 (PTDA t4), so the alias must hold someone.
+        # The player: always loaded, always near the follower, and a vanilla
+        # ALFR precedent (72 vanilla aliases force-fill PlayerRef).
+        body += subrec('ALFR', struct.pack('<I', FREF_PLAYER))
     body += subrec('VTCK', struct.pack('<I', 0))
     body += subrec('ALED', b'')
     return record('QUST', FID_COMMAND_QUEST, 0, body)
@@ -312,106 +383,92 @@ def pack_input(kind, payload_type, payload):
     return subrec('ANAM', zstr(kind)) + subrec(payload_type, payload)
 
 
-def make_cast_package():
-    """A PACK INSTANCE riding vanilla `UseMagic` (000504F5).
+def probe_ctda(index):
+    """CTDA: GetGlobalValue(MFO_ProbeSelect) == index.
 
-    Byte layout copied from a shipped vanilla instance, `MG07AncanoCastAtEye`
-    (0010F819), rather than invented -- that record is 524 bytes and proven in
-    the base game. MFO substitutes two slots:
-
-        PTDA type=1  -> the SPELL   (vanilla put MG08AncanoEyeSpell here)
-        PTDA type=4  -> the TARGET, a REFERENCE ALIAS instead of vanilla's
-                        type=0 specific reference, because MFO cannot name the
-                        actor at author time.
-
-    The remaining inputs are the vanilla values, deliberately: they are a
-    known-good configuration and every one MFO changes is a variable it then
-    has to defend. CastTime/Cooldown/NumToCast are exactly the bounds §4.5c
-    requires an action to carry.
+    Byte layout mirrored from a shipped func-74 package condition,
+    KodrirCarryBucket11x2 (0010F5DB):
+        op u8 (0x00 = Equal, no flags; vanilla's 0x60 is GreaterOrEqual),
+        pad3, comparison f32, function u16 (74 = GetGlobalValue -- 232
+        occurrences on vanilla PACK conditions), pad2, param1 = the GLOB,
+        param2 = 0, runOn = 0 (subject), reference = 0, unknown = -1.
+    Position in the record: after PSDT, before QNAM/PKCU -- where all 2,109
+    vanilla QNAM-carrying packages and the Nirya/GetShield/CWFinale
+    alias-delivered exemplars put their conditions.
     """
-    body  = subrec('EDID', zstr("MFO_CastPackage"))
-    # PKDT: flags=0, type=18 (package), then vanilla's trailing bytes.
-    # PKDT: kIgnoreCombat (0x00100000), NOT kMustComplete.
-    #
-    # This was 0x04 (kMustComplete) on the reasoning that §4.5c wants an action
-    # that runs start to finish. The record survey says otherwise, decisively:
-    # of the 46 vanilla UseMagic instances, kMustComplete appears on exactly ONE
-    # -- a stationary non-combat channeling thrall -- while ALL SIX records
-    # whose intent is to cast DURING A FIGHT set kIgnoreCombat. A gambit fires
-    # in combat by definition, so MFO is in the six, not the one.
-    #
-    # Byte tail copied from TG08BMercerCombatOverrideCastAtBrynjolf, which is
-    # MFO's exact shape (see below), not from MG07AncanoCastAtEye.
-    body += subrec('PKDT', struct.pack('<IBB', 0x00100000, 18, 0x04) + bytes.fromhex('038800000000'))
-    # PSDT: any time, any day -- the DLL decides when, not the schedule.
-    body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
-    body += subrec('PKCU', struct.pack('<III', 11, FREF_TMPL_USEMAGIC, 1))
-    # QNAM -- TESPackage::ownerQuest. NON-NEGOTIABLE when any input uses
-    # PTDA targType=4: the alias VALUE is an index, and this is the quest it
-    # indexes into. A survey of Skyrim.esm found 627 packages targeting a
-    # reference alias (PTDA targType=4) and all of them carry QNAM; widening to
-    # "targets an alias EITHER by PTDA type 4 or PLDT type 8" gives 626/626.
-    # Both queries agree: an alias reference of any kind demands QNAM. The
-    # record this was copied from
-    # (MG07AncanoCastAtEye) omits it precisely BECAUSE its target is a specific
-    # reference, not an alias -- the target type changed here and the
-    # consequence did not follow.
-    # QNAM ONLY when an input names an alias. With a targType-0 specific
-    # reference nothing indexes into a quest, and all nine vanilla
-    # alias-delivered UseMagic packages carry no QNAM at all.
-    if not POC_ENABLED:
-        body += subrec('QNAM', struct.pack('<I', FID_COMMAND_QUEST))
+    return subrec('CTDA', struct.pack('<B3xfHHIIIIi',
+                                      0x00, float(index), 74, 0,
+                                      FID_PROBE_GLOB, 0, 0, 0, -1))
 
-    # 11 inputs, in the template's declared order.
-    # PLDT type=12 ("near self"), target 0, generous radius -- the UseMagic
-    # TEMPLATE's own default is type=12/0/500, and TG08B's cast package uses
-    # type=12/0/10000. Type 0 means "near reference" and REQUIRES a reference:
-    # zero of the 4,048 type-0 PLDTs in Skyrim.esm have a null target, which is
-    # exactly what MFO was emitting.
+
+def build_usemagic(fid, edid, spell, target, bounds, ctda=b'', qnam=None):
+    """One PACK instance riding vanilla `UseMagic` (000504F5).
+
+    Subrecord ORDER is part of the shape: EDID, PKDT, PSDT, [CTDA], [QNAM],
+    PKCU, values, UNAM run, XNAM, POBA/POEA/POCA. All 2,109 vanilla packages
+    that carry QNAM put it immediately BEFORE PKCU -- zero put it after. The
+    crashed record of 2026-07-22 had it AFTER, one of its three unprecedented
+    axes.
+
+    target: ('t0', refFormID)  -- specific reference, the nine vanilla
+                                  alias-delivered UseMagic packages' shape
+            ('t4', aliasIdx)   -- reference alias; QNAM becomes MANDATORY
+                                  (626/626 vanilla packages with an
+                                  alias-valued input carry it; 0 do not)
+            ('t6', 0) is REFUSED here: zero vanilla precedent in the target
+            slot of an alias-delivered package, and it is the shape that
+            CTD'd in the field (ENGINE_NOTES 0.20).
+    bounds: (castMin, castMax, coolMin, coolMax, numMin, numMax) -- 4.5c's
+            completion bound. FF default (0, 1, 1, 3, 1, 1); Concentration
+            carries its channel seconds in CastTime.
+    """
+    tkind, tval = target
+    if tkind == 't6':
+        raise SystemExit(f"REFUSED {edid}: targType 6 in the target slot of an "
+                         "alias-delivered package -- 0 vanilla precedents, "
+                         "field CTD (ENGINE_NOTES 0.20 / INVARIANTS 66)")
+    if tkind == 't4' and qnam is None:
+        raise SystemExit(f"REFUSED {edid}: alias-valued target without QNAM -- "
+                         "626/626 vanilla packages with an alias input carry "
+                         "QNAM, 0 omit it")
+    body  = subrec('EDID', zstr(edid))
+    # PKDT: kIgnoreCombat (0x00100000), NOT kMustComplete -- all six vanilla
+    # UseMagic instances meant to fire during a fight set kIgnoreCombat;
+    # kMustComplete appears once, on a stationary channeling thrall. Byte
+    # tail verbatim from TG08BMercerCombatOverrideCastAtBrynjolf (000FCC26).
+    body += subrec('PKDT', struct.pack('<IBB', 0x00100000, 18, 0x04) + bytes.fromhex('038800000000'))
+    # PSDT: any time, any day. 3,855 of Skyrim.esm's 5,961 PACKs ship exactly
+    # these bytes.
+    body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
+    body += ctda
+    if qnam is not None:
+        body += subrec('QNAM', struct.pack('<I', qnam))
+    body += subrec('PKCU', struct.pack('<III', 11, FREF_TMPL_USEMAGIC, 1))
+
+    # 11 values, in the template's SETTABLE order (2..12) -- the mapping is
+    # not the identity: value 1 is declared slot 3 "Spell", value 2 is slot 4
+    # "Target" (esp_inspect --selftest pins this).
+    # PLDT type=12 ("no location"), radius 10000 -- the template default is
+    # 12/0/500; TG08B's combat override uses 12/0/10000. Type 0 REQUIRES a
+    # reference: 0 of 4,048 vanilla type-0 PLDTs have a null target.
     body += pack_input("Location", 'PLDT', struct.pack('<IiI', 12, 0, 10000))
-    # Spell.
-    body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, FREF_HEAL_SELF, 0))
-    # Target -- MATCH VANILLA'S ALIAS-DELIVERED SHAPE EXACTLY.
-    #
-    # All NINE vanilla UseMagic packages that are delivered by an alias (ALPC)
-    # use targType 0, a SPECIFIC REFERENCE, and carry NO QNAM. Vanilla's
-    # self-casting packages (targType 6) are never alias-delivered. MFO's crash
-    # came from a combination with ZERO vanilla precedent: alias-delivered PLUS
-    # self target PLUS QNAM.
-    #
-    # For the PoC, which already hardcodes the actor, targType 0 is available
-    # and is the most conservative possible record: byte-shaped like
-    # MG07AncanoCastAtEye, a package that ships and works.
-    #
-    # Generalising to an arbitrary follower is the NEXT problem, and it is why
-    # the target-selection question is not settled by this PoC.
-    # (previous, crashed: targType 6 self)
-    #
-    # This was `targType 4 -> alias 0`, reasoning that since the alias holds the
-    # follower, alias 0 IS himself. FIELD-REFUTED: the package took ownership of
-    # Cosnach -- he rooted in place, unresponsive -- and never cast, with no
-    # animation, no effect and NO MAGICKA SPENT, i.e. the procedure never even
-    # attempted it.
-    #
-    # Vanilla never self-targets that way. Of the 46 UseMagic instances, 8 point
-    # at a reference alias and every one of them names a DIFFERENT actor; the
-    # seven that cast on themselves all use targType 6 with value 0 --
-    # WCollegeColettePracticeHeal13x2 is literally "practice healing on self",
-    # alongside DA16ErandurCastSpell and SprigganCallOverride.
-    if POC_ENABLED:
-        body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 0, POC_ACTOR_REF, 0))
+    body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, spell, 0))
+    if tkind == 't0':
+        body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 0, tval, 0))
     else:
-        body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 6, 0, 0))
+        body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 4, tval, 0))
+    cmin, cmax, komin, komax, nmin, nmax = bounds
     body += pack_input("Bool",  'CNAM', struct.pack('<B', 0))          # HoldWhenBlocked
-    body += pack_input("Float", 'CNAM', struct.pack('<f', 1.0))        # CastTimeMin
-    body += pack_input("Float", 'CNAM', struct.pack('<f', 3.0))        # CastTimeMax
-    body += pack_input("Float", 'CNAM', struct.pack('<f', 1.0))        # CooldownTimeMin
-    body += pack_input("Float", 'CNAM', struct.pack('<f', 3.0))        # CooldownTimeMax
-    body += pack_input("Int",   'CNAM', struct.pack('<i', 1))          # NumToCastMin
-    body += pack_input("Int",   'CNAM', struct.pack('<i', 1))          # NumToCastMax
+    body += pack_input("Float", 'CNAM', struct.pack('<f', cmin))       # CastTimeMin
+    body += pack_input("Float", 'CNAM', struct.pack('<f', cmax))       # CastTimeMax
+    body += pack_input("Float", 'CNAM', struct.pack('<f', komin))      # CooldownTimeMin
+    body += pack_input("Float", 'CNAM', struct.pack('<f', komax))      # CooldownTimeMax
+    body += pack_input("Int",   'CNAM', struct.pack('<i', nmin))       # NumToCastMin
+    body += pack_input("Int",   'CNAM', struct.pack('<i', nmax))       # NumToCastMax
     body += pack_input("Bool",  'CNAM', struct.pack('<B', 0))          # DualCast
 
-    # Inherited-input markers, verbatim from the vanilla instance.
+    # Bare-UNAM run naming the settable slots, then XNAM -- verbatim from the
+    # vanilla instances.
     for i in range(0x02, 0x0d):
         body += subrec('UNAM', struct.pack('<B', i))
     body += subrec('XNAM', struct.pack('<B', 0x0d))
@@ -421,11 +478,60 @@ def make_cast_package():
         body += subrec(blk, b'')
         body += subrec('INAM', struct.pack('<I', 0))
         body += subrec('PDTO', struct.pack('<II', 0, 0))
-    return record('PACK', FID_CAST_PACKAGE, 0, body)
+    return record('PACK', fid, 0, body)
+
+
+# FF-spell bounds: CastTime 0/1 (24 of 33 vanilla FF instances use min 0; max
+# is 0 or 1), Cooldown 1/3 (22/33), NumToCast 1/1 (14/33 -- the other common
+# value, (1,0), has unmeasured semantics and 4.5c wants a bounded action).
+BOUNDS_FF = (0.0, 1.0, 1.0, 3.0, 1, 1)
+# Concentration: CastTime IS the channel duration (vanilla practice packages
+# use 2/3 and 2/5 seconds; the "forever" thralls use 1e5..1e8, which 4.5c
+# forbids MFO to ship).
+BOUNDS_CONC = (2.0, 5.0, 1.0, 3.0, 1, 1)
+
+
+def make_cast_package():
+    """The main (DLL-era) package: cast at the foe in alias 1.
+
+    This is the CWFinaleLeaderExecuteEnemyLeader shape -- the one alias-
+    targeted delivery pattern Bethesda ships (alias-delivered package, alias-
+    valued target, QNAM): 356 instances across Skyrim.esm, 0 without QNAM.
+    Within UseMagic specifically the t4 target has 7 instances, none of them
+    alias-DELIVERED, so probe 5 must prove the in-template combination before
+    the DLL relies on it.
+
+    The previous shape here -- targType 6 self under alias delivery -- is the
+    exact record that CTD'd in the field, and build_usemagic now refuses it.
+    cast_self has NO proven package shape yet; until a probe passes, the DLL
+    must keep degrading cast_self to the silent path and say so (0.16).
+    """
+    return build_usemagic(FID_CAST_PACKAGE, "MFO_CastPackage",
+                          FREF_SEED_SPELL, ('t4', 1), BOUNDS_FF,
+                          qnam=FID_COMMAND_QUEST)
+
+
+def make_poc_packages():
+    """The probe ladder -- see POC_PROBES. One axis of novelty per probe,
+    exactly one valid at a time via the MFO_ProbeSelect gate."""
+    out = b''
+    for idx, sp, label, (tkind, tval) in POC_PROBES:
+        if tkind == 't0' and tval is None:
+            tval = POC_ACTOR_REF
+        bounds = BOUNDS_CONC if sp == 0x000E8449 else BOUNDS_FF
+        out += build_usemagic(
+            FID_POC_PACK_BASE + idx - 1, f"MFO_PoC{idx}_{label}",
+            sp, (tkind, tval), bounds,
+            ctda=probe_ctda(idx),
+            qnam=FID_COMMAND_QUEST if tkind == 't4' else None)
+    return out
 
 
 def make_pack():
-    return group('PACK', make_cast_package())
+    body = make_cast_package()
+    if POC_ENABLED:
+        body += make_poc_packages()
+    return group('PACK', body)
 
 
 def make_qust():
@@ -438,6 +544,10 @@ def main():
 
     data = make_tes4(NEXT_OBJECT_ID)
     data += make_kywd()
+    # GLOB between KYWD and MGEF -- vanilla top-group order (KYWD .. GLOB ..
+    # MGEF), and only emitted when something references it.
+    if POC_ENABLED:
+        data += make_glob()
     data += make_mgef()
     data += make_spel()
     data += make_qust()
@@ -470,8 +580,13 @@ def main():
     print(f"  SPEL  0x{FID_ORDERS_SPELL & 0xFFF:03X}        MFO_FieldOrdersPower (lesser power)")
     print(f"  QUST  0x{FID_STARTUP_QUEST & 0xFFF:03X}        MFO_StartupQuest (run once, no VMAD)")
     print(f"  QUST  0x{FID_MCM_QUEST & 0xFFF:03X}        MFO_MCMQuest (MFO_MCM script)")
-    print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (1 alias, DLL-filled)")
-    print(f"  PACK  0x{FID_CAST_PACKAGE & 0xFFF:03X}        MFO_CastPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X}")
+    print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (2 aliases, DLL-filled)")
+    print(f"  PACK  0x{FID_CAST_PACKAGE & 0xFFF:03X}        MFO_CastPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X}"
+          + ("  [NOT attached under POC]" if POC_ENABLED else ""))
+    if POC_ENABLED:
+        print(f"  GLOB  0x{FID_PROBE_GLOB & 0xFFF:03X}        MFO_ProbeSelect (console: set MFO_ProbeSelect to N; 0 = all probes off)")
+        for idx, sp, label, (tkind, tval) in POC_PROBES:
+            print(f"  PACK  0x{(FID_POC_PACK_BASE + idx - 1) & 0xFFF:03X}        MFO_PoC{idx}_{label} (gate =={idx}, target {tkind})")
 
 
 if __name__ == "__main__":

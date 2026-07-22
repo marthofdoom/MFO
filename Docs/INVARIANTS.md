@@ -779,3 +779,31 @@ a result that called vanilla `Healing` a constant effect.)*
 spell. `00012FCC` is `Healing` in Skyrim.esm and `REQ_Restoration2_HealSelf` in
 a Requiem load order. Validate what the LOAD ORDER resolved, never what the wiki
 says the FormID is.
+
+### 66a. A record shape is a VECTOR of axes; precedent is a contingency table
+
+#66 said "ask whether vanilla ships this shape". **That rule, as written, would
+not have prevented the crash — because the postmortem ran the query and drew the
+wrong conclusion from it.** Counting "alias-delivered UseMagic packages" gave 9
+records and the false rule *"QNAM must be absent"*. Counting the same question
+over all 5,857 PACK instances gives 356 records that ship exactly MFO's intended
+shape.
+
+**The sharper rule:**
+
+1. **Decompose the record into AXES** (delivered-by-alias? input-names-alias?
+   QNAM present? target targType? subrecord order?), not into a single "shape".
+2. **Count over the widest population sharing the MECHANISM** — all PACK
+   instances, not one template's — and **enumerate the cells, including the
+   zeros.** A zero cell is the finding; a small non-zero cell is permission.
+3. **Change ONE axis at a time from a NAMED exemplar.** The crash record changed
+   three at once, so its failure identified none of them.
+4. **Subrecord ORDER is part of the shape.** `QNAM` after `PKCU` is 0 of 2,109.
+
+`tools/esp_inspect.py --pack-shapes` produces this table directly, and its
+selftest pins the population facts so a future refactor cannot silently move
+them.
+
+**Corollary:** a query answered over a subpopulation you chose for convenience
+is not evidence about the population you care about. Both wrong versions of
+§0.20 were confidently derived from real data.
