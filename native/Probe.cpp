@@ -292,8 +292,15 @@ namespace MFO::Probe {
     }
 
     void RegisterCrosshairSink() {
-        SKSE::GetCrosshairRefEventSource()->AddEventSink(CrosshairSink::GetSingleton());
-        spdlog::info("[probe] crosshair sink registered (commanded-target picker)");
+        // Same null discipline as the ScriptEventSourceHolder three lines up in
+        // Diagnostics -- the source is SKSE's, not the engine's, but "cannot be
+        // null in practice" is how MEO earned two of its postmortems.
+        if (auto* src = SKSE::GetCrosshairRefEventSource()) {
+            src->AddEventSink(CrosshairSink::GetSingleton());
+            spdlog::info("[probe] crosshair sink registered (commanded-target picker)");
+        } else {
+            spdlog::error("[probe] no crosshair event source -- commanded-target picker unavailable");
+        }
     }
 
     RE::FormID CrosshairTarget() { return g_crosshair.load(); }

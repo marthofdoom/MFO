@@ -33,7 +33,6 @@ namespace MFO::Loadout {
         RE::TESForm* left  = nullptr;
         bool leftIsShield  = false;
         bool alreadyHolding = false;   // the very spell we want to cast
-        bool holdingInLeft  = false;   // ...and in which hand, so the cast matches
     };
 
     // Read what the follower is holding. Pure reads.

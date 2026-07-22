@@ -2,6 +2,15 @@
 #include "Targeting.h"
 #include "Config.h"
 
+// ONE Win32 symbol, declared by hand.
+//
+// <windows.h> is banned outside Board.cpp -- it #defines GetObject and hijacks
+// BGSDefaultObjectManager::GetObject<T> (ENGINE_NOTES §9). REX::W32 would be the
+// tidy alternative but does not exist in the pinned CommonLibSSE-NG, which CI
+// proved rather than the docs. A direct declaration depends on neither: it
+// cannot drift with the library and it drags in nothing.
+extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleA(const char* a_name);
+
 namespace MFO::Targeting {
 
     namespace {
@@ -115,10 +124,7 @@ namespace MFO::Targeting {
         // detection. Two writers to the same fields is a fact of the terrain,
         // not a reason to avoid the mechanism -- but it must be VISIBLE, or the
         // resulting weirdness gets blamed on whichever mod was installed last.
-        // REX::W32, NOT <windows.h> -- that header #defines GetObject and
-        // hijacks a CommonLib template (see Board.cpp's banner). NG ships the
-        // declaration we need without dragging in the rest.
-        if (REX::W32::GetModuleHandleA("SmartNPCTargetSelector.dll")) {
+        if (::GetModuleHandleA("SmartNPCTargetSelector.dll")) {
             g_conflict = true;
             spdlog::warn("[target] SmartNPCTargetSelector.dll IS LOADED -- it also steers "
                          "follower targets and hooks detection. Expect contention; MFO only "

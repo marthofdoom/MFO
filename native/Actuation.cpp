@@ -139,7 +139,14 @@ namespace MFO::Actuation {
             using CS = RE::MagicSystem::CastingSource;
             CS src = CS::kInstant;
             if (equipped) {
-                src = CS::kLeftHand;
+                // AlreadyReady can mean the spell was in the RIGHT hand all
+                // along (a caster follower's own choice) -- match the hand the
+                // spell is actually in. A freshly-queued equip may not read
+                // back yet, so the left hand stays the default.
+                src = (a_follower->GetEquippedObject(false) == spell &&
+                       a_follower->GetEquippedObject(true)  != spell)
+                          ? CS::kRightHand
+                          : CS::kLeftHand;
             } else {
                 switch (Config::g_castSource.load()) {
                 case 0:  src = CS::kLeftHand;  break;

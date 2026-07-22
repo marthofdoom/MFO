@@ -22,8 +22,6 @@ namespace MFO::Loadout {
             RE::TESBoundObject* stowedWeapon  = nullptr;   // two-hander taken away
             bool  leftWasShield = false;
             std::chrono::steady_clock::time_point stowedAt{};
-            std::chrono::steady_clock::time_point equippedAt{};
-            std::chrono::steady_clock::time_point lastSwap{};
         };
         std::unordered_map<RE::FormID, Debt> g_debt;
 
@@ -33,6 +31,17 @@ namespace MFO::Loadout {
         // immediately, the AI re-equips, and the two of us thrash at tick
         // cadence. Exactly the churn fTwoHandedDebounce exists to prevent.
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_lastStow;
+
+        // The AI-grace clock -- ALSO separate from the debt, and for the same
+        // reason. The first version stored equippedAt inside the Debt, but a
+        // debt entry only survives while gear is owed: an empty-handed or
+        // sword-only follower's entry is all-null and Tick() settle-erases it
+        // within one pump cycle, and a Grip::Caster / alreadyHolding follower
+        // never gets an entry at all. SecondsSinceEquip then returned "forever"
+        // and the silent cast fired instantly -- the confound rebuilt for
+        // exactly the most common grips. The window MFO promises the follower's
+        // AI must not be keyed to whether MFO happens to owe them gear.
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_equipClock;
 
         const RE::BGSEquipSlot* LeftHandSlot() {
             // NOTE: <d3d11.h> elsewhere in this project #defines GetObject ->
@@ -92,6 +101,9 @@ namespace MFO::Loadout {
                 if (it->second.displacedLeft) { EquipBack(actor, it->second.displacedLeft); ++n; }
             }
             g_debt.erase(it);
+            // The restore displaced MFO's spell, so the AI window it measured is
+            // over; the next equip arms a fresh one.
+            g_equipClock.erase(a_id);
             return n;
         }
 
@@ -139,18 +151,26 @@ namespace MFO::Loadout {
             return Ready::Failed;
         }
 
-        const auto hands = Read(a_actor, a_spell);
-        if (hands.alreadyHolding) return Ready::AlreadyReady;
-
         const auto id  = a_actor->GetFormID();
         const auto now = std::chrono::steady_clock::now();
-        auto existing  = g_debt.find(id);
+
+        const auto hands = Read(a_actor, a_spell);
+        if (hands.alreadyHolding) {
+            // Spell already in hand: the AI window starts the first time a rule
+            // WANTS this cast, not before. try_emplace -- re-arming every tick
+            // would mean the window never elapses.
+            g_equipClock.try_emplace(id, now);
+            return Ready::AlreadyReady;
+        }
+
+        auto existing = g_debt.find(id);
 
         // A follower already holding a spell is left alone. Swapping one spell
         // for another would ORPHAN the first ledger entry -- the shield we owe
         // would be overwritten by a SpellItem and then "restored" as an item,
         // which is not even the right engine call.
         if (hands.grip == Grip::Caster) {
+            g_equipClock.try_emplace(id, now);   // their own spell -- same window
             a_why = "already holding a spell -- not rearranging their hands";
             return Ready::AlreadyReady;
         }
@@ -200,7 +220,9 @@ namespace MFO::Loadout {
         debt.stowedWeapon  = willStowWeapon;
         debt.leftWasShield = hands.leftIsShield;
         debt.stowedAt      = now;
-        debt.equippedAt    = now;
+        // A FRESH equip gets a FRESH window -- plain assignment, unlike the
+        // AlreadyReady try_emplace above.
+        g_equipClock[id] = now;
         // Only a TWO-HANDED stow arms the debounce. The off-hand swap is free
         // by design, and letting it set the clock would spuriously block a real
         // stow for the next 6 s.
@@ -210,12 +232,10 @@ namespace MFO::Loadout {
     }
 
     float SecondsSinceEquip(RE::FormID a_actorID) {
-        const auto it = g_debt.find(a_actorID);
-        if (it == g_debt.end() || it->second.equippedAt.time_since_epoch().count() == 0) {
-            return 1.0e9f;
-        }
+        const auto it = g_equipClock.find(a_actorID);
+        if (it == g_equipClock.end()) return 1.0e9f;
         return std::chrono::duration<float>(
-                   std::chrono::steady_clock::now() - it->second.equippedAt).count();
+                   std::chrono::steady_clock::now() - it->second).count();
     }
 
     void OnFollowerHit(RE::FormID a_actorID) {
@@ -360,7 +380,7 @@ namespace MFO::Loadout {
         if (fixed == 0) spdlog::info("[loadout] reconcile: nothing to undo");
     }
 
-    void ClearTransientState() { g_debt.clear(); g_lastStow.clear(); }
+    void ClearTransientState() { g_debt.clear(); g_lastStow.clear(); g_equipClock.clear(); }
 
     int PendingRestores() {
         int n = 0;
