@@ -1,41 +1,182 @@
 # MFO — Test Guide
 
-In-game verification. **Before claiming anything works, work the matrix.**
-
-**Rule zero, inherited and non-negotiable: a stale binary voids every test.**
-The first line of `MFO.log` prints the version and the game version. Check it
-before believing any result. MEO was bitten by this twice.
-
-**Rule one:** keep a read-only baseline save that has never seen this plugin.
-Reload it for every test of a build whose *records* changed. When in doubt,
-clean reload — persisted state lies.
+This is the document you read **while the game is running**, so the thing you
+need next is at the top and the history is at the bottom.
 
 ---
 
-## ⚠ DEFERRED: everything that requires SAVING (marth, 2026-07-21)
+## Before you start — 30 seconds, skip it and the results are worthless
 
-**No saving with MFO active until further along.** That is the right call this
-early, and it is cheap because the co-save callbacks only fire on save/load —
-with `bSeedTestData = 0` and no saving, **MFO writes nothing anywhere.** It
-reads state and draws it.
+**1. Check the binary is the one you think it is.**
+First line of `MFO.log`:
 
-**What it costs, stated plainly so it does not get forgotten:**
+```
+=== MFO 0.5.1 loading — game 1-6-1170-0 ===
+```
 
-- **The co-save stays UNPROVEN.** It is the highest-blast-radius subsystem in
-  the mod — a schema bug there is the "mod ate my save" class — and it has
-  been reviewed but never executed. Every session below that says "save, quit,
-  reload" is deferred, not passed.
-- Specifically deferred: session 1 step 9, tests A (load-order remap) and B
-  (downgrade guard), and 2A steps 4/5 in their persistent form (dismissal
-  *retention* is still observable live in the Field Kit, just not across a
-  reload).
+If that version is not the build you just installed, **stop**. Everything below
+is meaningless. This has bitten the sibling projects twice.
 
-**Un-defer it with a dedicated throwaway save**, not the real playthrough —
-one save file created solely to be destroyed. Do it before M5, because the
-evaluator will start writing per-follower state that matters and a schema
-defect gets more expensive every milestone.
+**2. Know where the log is.**
+
+| | |
+|---|---|
+| MFO's log | `custom-modlist/overwrite/SKSE/Plugins/MFO.log` |
+| SKSE's log | `~/Games/umu/489830/drive_c/.../My Games/Skyrim Special Edition/SKSE/skse64.log` |
+
+Those are on **different filesystems** — SKSE's lives inside the wine prefix.
+If `MFO.log` is missing, search for it before concluding the DLL never ran.
+
+**3. Use a throwaway save.** Not your real playthrough. Keep one save that has
+never seen MFO and reload it whenever records change — persisted state lies.
 
 ---
+
+## ⚠ One standing caution
+
+Anything that mutates a follower's **equipment** (the equip policy) can strand
+gear if it misbehaves. Nothing is destroyed — the failure mode is "my follower
+stopped using her shield". If you see that, say so; it is a real bug, not a
+quirk.
+
+---
+
+## THE NEXT SESSION — targeting, and animation for free
+
+This one session answers the two questions the whole mod is waiting on:
+**can we tell a follower who to fight**, and **does a follower ever cast with an
+animation**.
+
+### Set this in `MFO.ini`
+
+```ini
+bCommandTarget      = 1     ; installs the targeting hook
+bSeedEvaluatorRules = 1     ; gives the follower a heal gambit
+bEquipToCast        = 1     ; puts that spell in their hand
+```
+
+### You need a fight with MORE THAN ONE enemy
+
+With a single enemy this test proves nothing — the follower would attack it
+anyway, and we already wasted a session learning that. Bandit camps are ideal.
+
+---
+
+### Part 1 — can we command a target?
+
+**Do this:**
+
+1. Get into a multi-enemy fight.
+2. Open the Field Kit, go to the **Probe** tab, pick your follower.
+3. **Look directly at an enemy they are NOT currently fighting.** Your crosshair
+   is the picker.
+4. Hit **`Command target (crosshair)`**.
+
+**What success looks like:** the follower breaks off and goes for the enemy you
+were looking at. The log says who:
+
+```
+[probe] Command target (crosshair) -> OK (latched onto Bandit Archer (000ABCDE))
+```
+
+**What failure looks like:**
+
+- *"nothing under the crosshair"* — you weren't actually looking at an enemy.
+- *"BUT HOOK IS NOT INSTALLED"* — `bCommandTarget` is still 0.
+- Log says latched, follower ignores it — **the mechanism is wrong.** This is the
+  important failure; tell me and stop here.
+
+**Then hit `Clear commanded target`** and check they go back to choosing for
+themselves.
+
+---
+
+### Part 2 — two things worth breaking on purpose
+
+**Kill the enemy you commanded.** The follower should just move on normally. If
+they freeze or keep swinging at a corpse, the latch is outliving its target.
+
+**Let an enemy flee or break line of sight.** The follower should **not** chase
+something they can't see. If they do, a safety guard isn't working — that's the
+failure that makes a mod feel haunted rather than broken, and it's worth
+reporting even if everything else works.
+
+---
+
+### Part 3 — the animation question (free, same fight)
+
+Just watch the log during that same fight. Two very different lines:
+
+| Line | Who acted | Can it animate? |
+|---|---|---|
+| `[eval] ... fired rule 0 (act.cast_self)` | **MFO** cast it | No — proven, three times |
+| `[cast] ... CAST Healing -- AI-fired` | **The follower** cast it | **Yes — this is the one that matters** |
+
+A `[cast]` line means the follower's own AI fired a spell MFO put in their hand.
+**Go look at them when it happens.** If that cast has an animation, the animation
+problem is solved and the mod works.
+
+If you get through a long fight with no `[cast]` line at all, the AI won't fire
+what we equip on a useful timescale, and we go to the fallback plan.
+
+---
+
+### What I need back from you
+
+- Did the follower switch targets? (Part 1)
+- Did they chase anything they couldn't see? (Part 2)
+- Any `[cast]` line — and if so, **did it animate**? (Part 3)
+- The log.
+
+Everything else is detail.
+
+---
+
+### Also useful, if you have the patience
+
+Run the same fight once with `bCommandTarget = 0`. The state report prints
+`targeting: ... N assert(s), N drift(s)` — without a baseline those numbers
+don't mean anything.
+
+---
+
+## Reference — where a real gambit's target will come from
+
+Not the crosshair, and not a world scan. The engine keeps a list of who is
+actually in the fight (`combatGroup->targets`), and that is what "lowest HP foe"
+or "foe weak to fire" will sort over once the vocabulary has an attack action.
+Cheaper than sweeping every loaded actor, and it can't pick something the
+follower isn't even engaged with.
+
+---
+
+## Previous session — the evaluator (still worth re-checking)
+
+**Set:** `bSeedEvaluatorRules = 1`. Each follower gets `Self HP < 40% → Cast
+Healing`, then `Always → Wait`.
+
+**The evaluator only runs IN COMBAT.** A hurt follower standing in town doing
+nothing is behaving correctly, not broken.
+
+The three that matter:
+
+1. **Follower drops below 40% in a fight** → they heal. Log: `[eval] ... fired
+   rule 0`.
+2. **Follower at full health** → nothing happens. If they heal anyway, conditions
+   aren't being read.
+3. **`bSeedEvaluatorRules = 0`** → *zero* `[eval]` action lines. MFO must be
+   invisible when it has no rules to run. If anything fires here, the mod is
+   acting without being told to, which breaks its compatibility promise.
+
+Worth a glance: a follower with no magicka should log `insufficient magicka` and
+**not** cast. And `bProfileEvaluator = 1` prints per-tick timing if you want to
+see the cost.
+
+---
+
+# Archive — completed sessions
+
+Kept for the gotchas, not the steps.
 
 ## Session 1 — M1 + M2: the DLL loads, forms resolve, the co-save round-trips
 
@@ -232,118 +373,3 @@ logistics, M7 the board.
 
 ---
 
-## Session 5 — M5: the evaluator (first playable)
-
-**Written before the code.** This is the milestone that makes gambits execute.
-The slice is deliberately narrow: cheap conditions, cast/wait actions, no
-standing orders (§4.7 is unproven), no drink/equip (own build).
-
-**Setup:** `bSeedEvaluatorRules = 1` in `MFO.ini` seeds a default combat rule
-onto each detected follower — `Self HP < 40% → Cast Healing`, plus
-`Always → Wait`. No board needed. Turn it off for anything but this test.
-
-> **The evaluator only runs IN COMBAT.** The combat table is combat-only
-> (§4.8); a wounded follower standing in town is *supposed* to do nothing.
-> Testing out of combat will read as "it's broken" when it is behaving.
-
-| # | Step | Expect | Failure means |
-|---|---|---|---|
-| 1 | Follower takes damage **in combat**, HP drops below 40% | **Follower casts Healing on itself** — `[eval] <id> fired rule 0 (act.cast_self)` in the log | The evaluator does not fire, or the condition does not read follower HP — **the entire thesis is unproven** |
-| 2 | Follower at full HP, in combat | **Does NOT cast** (rule 0 false; `Always→Wait` consumes the tick) | Conditions read as always-true, or the evaluator acts unconditionally |
-| 3 | `bSeedEvaluatorRules = 0` (empty tables) | **Behaves exactly as vanilla — zero `[eval]` action lines** | MFO is acting without a matching rule; the §4.4 do-nothing guarantee is broken |
-| 4 | Follower wounded **out of combat** (town, after a fight) | **Nothing. No cast, no `[eval]` line** | The combat gate is missing — the combat table is running the logistics table's shift |
-| 5 | Follower whose magicka is below the spell cost | **Does NOT cast; log shows `insufficient magicka`** and the tick falls through | Competence-is-not-permission (§5.3) not enforced |
-| 6 | Same heal fires, then 1.5 s passes | **One cast, then quiet for the window** — not a cast every tick | Suppression not applied; follower spam-heals |
-| 7 | `bProfileEvaluator = 1`, watch the log in a fight | **Per-tick wall time logged, well under a frame** | Perf problem — the hot path is too heavy |
-| 8 | Two followers, both seeded | **Both heal when hurt; log shows round-robin, one serviced per tick** | O(N) tick — party size scales cost |
-
-### 5b — the two open engine questions (Probe tab, ~2 minutes)
-
-These are measurements, not pass/fail. Both change the design.
-
-| # | Step | What to record |
-|---|---|---|
-| A | Fire **Cast Healing — kInstant**, then **kRightHand**, **kLeftHand**, **kOther**, watching the follower each time | **Which one plays a cast animation?** `kInstant` is known not to — it is the control. Whichever animates becomes `iCastSource` in the INI, no rebuild needed (ENGINE_NOTES §0.10) |
-| B | ~~Does a cast spend magicka?~~ | **ANSWERED 2026-07-21: yes, it deducts** (ENGINE_NOTES §0.9). §5.3's gate is load-bearing; MFO must not deduct manually. Nothing to retest |
-| C | Drain a follower to *below* a spell's cost, then let the heal rule win | **Log shows `insufficient magicka (X < Y)` and no cast.** MFO's own gate should refuse before the engine is ever asked — this tests OUR check, not the engine's |
-
-**Definition of done:** steps 1–3 green (fire / don't-fire-when-false /
-don't-fire-when-absent — the three that prove the evaluator is a program and
-not a spammer), 4 green (the combat gate), 5 green (the competence gate), and
-7 showing a sane number. 6 and 8 are refinements; note them if they misbehave
-but they do not block. **A and B should be answered even if everything else
-fails** — they are cheap and they unblock the next build.
-
-**Read the log regardless of what the HUD shows.** Every fired rule and every
-fall-through-with-reason logs at info.
-
----
-
-## Session 6 — the attack verb (ENGINE_NOTES §0.14)
-
-**Written before the code.** This is the decisive probe: one session answers
-whether the redirect takes, whether it sticks, and how badly it fights the one
-mod known to contend with it.
-
-**Setup:** `bCommandTarget = 1` in `MFO.ini`. **Requires a MULTI-ENEMY fight** —
-with one hostile present the test is inconclusive by construction, which is
-exactly the mistake that wasted the §0.6 session.
-
-### How you actually command a target
-
-The gambit vocabulary has no attack action yet (that needs foe enumeration —
-see below), so the hook is driven manually from the Field Kit:
-
-1. Open the Field Kit, **Probe** tab, select the follower.
-2. **Look at the enemy you want them on** — the crosshair is the picker.
-3. Fire **`Command target (crosshair)`**.
-4. **`Clear commanded target`** releases the latch and hands them back to the
-   engine's own choice.
-
-The log names who you latched: `latched onto Bandit (000ABCDE)`. If the hook is
-not installed it says so on the same line rather than silently doing nothing.
-
-| # | Step | Expect | Failure means |
-|---|---|---|---|
-| 1 | Load, check the log | `[target] UpdateCombat vfunc hook installed (Character vtbl idx 0xE4)` | The vtable index is wrong for this runtime — stop, nothing below is valid |
-| 2 | Same line, if on LoreRim | `SmartNPCTargetSelector.dll IS LOADED` warning | Conflict detection failed; results are unattributable |
-| 3 | Multi-enemy fight, latch a follower onto a foe they are **not** already fighting | Follower switches to that foe | **The redirect does not take** — the whole mechanism is wrong |
-| 4 | Watch `assert / drift / pass` counts in the state report | `drift` counts the engine re-picking away from our choice | This is §4.7's real measurement — record the number either way |
-| 5 | Kill the commanded foe | Follower moves on normally, no stuck state | The latch outlives its target |
-| 6 | Let the foe flee / lose detection | Follower does **not** chase something it cannot perceive | The "engine already has a target" guard (#59) is not working |
-| 7 | Run once with `bCommandTarget = 0` in the same fight | Baseline drift for comparison | Without this, step 4's number means nothing |
-
-**Definition of done:** step 1 (hook installs), step 3 (redirect takes), and
-steps 4+7 together (a drift number WITH a baseline). 5 and 6 are safety checks —
-if either fails, the mechanism is not ready regardless of how well 3 worked.
-
-### 6b — the animation question, answered by the SAME session (free)
-
-Session 6 tests targeting, but it also answers animation at no extra cost,
-because the two preconditions are both in this build.
-
-**Setup:** `bSeedEvaluatorRules = 1` (so the follower has a heal gambit and
-`bEquipToCast` puts it in their hand) **and** latch them onto a foe.
-
-| # | Watch for | Meaning |
-|---|---|---|
-| A | `[cast] <id> <name> CAST Healing -- AI-fired` in the log | **The follower's own AI fired an MFO-equipped spell.** This is the animation answer (§0.15) — go look at whether it animated |
-| B | No `[cast]` line at all across a long fight | The AI will not fire what MFO equips on a useful timescale — fall back to driving the `MagicCaster` state machine (§0.13 option 2) |
-| C | `[cast]` line but still no visible animation | The premise is wrong at a deeper level than expected; report it, it changes the design |
-
-**Do not confuse an AI-fired cast with an MFO-issued one.** `[eval] ... fired
-rule` is MFO acting; `[cast] ... AI-fired` is the follower acting. Only the
-second one can animate.
-
-### Where a real gambit's target will come from
-
-Not from a world scan. The reference implementation enumerates candidates from
-`combatGroup->targets` under a read lock — the actors already in the fight,
-which is both cheaper than sweeping `highActorHandles` and more correct, since
-it cannot pick something the follower is not actually engaged with. That list is
-what "lowest HP foe" / "foe weak to fire" will select over, and the hook is
-already positioned to read it.
-
-**The number that matters:** drift with the hook on should be *corrected* every
-combat update. If drift climbs and the follower still visibly fights the wrong
-foe, the write is landing somewhere the engine does not read.
