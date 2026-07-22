@@ -1083,6 +1083,49 @@ offers nothing.
 * §4.6 contention gets simpler than feared: MFO does not permanently outrank
   another framework, it outranks it for the seconds an action takes.
 
+### 0.26 CONDITIONAL ALIAS FILLS: half the answer, and the end of the ESP-only route (2026-07-22)
+
+Gated the `ALFR` fill itself with `GetGlobalValue(MFO_ProbeSelect) > 0`.
+
+**WORKS — the release half.** At `MFO_ProbeSelect = 0` the alias stays empty,
+MFO never claims Cosnach, and he **followed and fought normally**: the log
+credits three kills (Wolf, Bandit) while the quest was running at priority 60.
+That is #69 answered at the ESP level — an unclaimed follower is genuinely free,
+and the freeze is not inherent to MFO's quest existing.
+
+**FAILS — the claim half.** Setting the global (with `resetquest`) produced **no
+cast at all**, plus **performance problems**. MFO's own log is 49 lines with
+nothing repeating, so the cost is in the ENGINE, not the DLL.
+
+**Conclusion: alias fill conditions are evaluated when the quest starts, not
+continuously** — the suspicion marth raised before the test. A conditional fill
+can decide whether a follower is claimed AT LOAD; it cannot claim one on demand,
+which is exactly what a gambit needs. And something about repeatedly
+re-evaluating or re-filling is expensive.
+
+#### This ends the ESP-only route, and that is fine
+
+The ESP-only PoC has now delivered everything it can:
+
+* alias delivery instances packages (§0.19)
+* every target/casting/delivery shape works (§0.22)
+* arbitration is by quest priority (§0.25)
+* an unclaimed follower is free; a claimed one with nothing valid freezes
+  (§0.24, and the release half here)
+
+**The remaining piece requires the DLL: fill the alias on demand, clear it when
+the action completes.** That was always the production design (#69, #70); the
+conditional fill was an attempt to test without it, and it has now shown its
+ceiling.
+
+**The load-bearing unknown is therefore promoted to the critical path:** can
+`ForceRefTo` be dispatched to a `BGSRefAlias` handle
+(`GetHandleForObject(BGSRefAlias::VMTYPEID, alias)`)? Nothing else in the design
+is blocked. If that route does not work, the fallback is a shipped `.psc` on the
+command quest — which §4.7b ruled out on the grounds that a script could not
+deliver the ATTACK verb, a judgement that does not apply to a one-line alias
+filler.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice
