@@ -41,8 +41,10 @@ namespace MFO::Actuation {
                     // never runs -- leaving a spell they cannot afford in their
                     // hand for their AI to keep trying.
                     Loadout::ReleaseSpell(a_follower->GetFormID());
+                    spdlog::debug("[eval] {:08X} has {:.0f} magicka, needs {:.0f}",
+                                  a_follower->GetFormID(), have, cost);
                     return { Result::FailedSkill,
-                             std::format("insufficient magicka ({:.0f} < {:.0f})", have, cost) };
+                             std::format("insufficient magicka (needs {:.0f})", cost) };
                 }
 
                 // THE RESERVE. §5.3 says the follower's competence decides what
@@ -64,8 +66,7 @@ namespace MFO::Actuation {
                     if (mx > 0.0f && (have - cost) < reserve * mx) {
                         Loadout::ReleaseSpell(a_follower->GetFormID());
                         return { Result::FailedSkill,
-                                 std::format("magicka reserve (would leave {:.0f}, floor {:.0f})",
-                                             have - cost, reserve * mx) };
+                                 std::format("magicka reserve (floor {:.0f})", reserve * mx) };
                     }
                 }
             }
@@ -121,9 +122,10 @@ namespace MFO::Actuation {
                     // the silent cast -- an unanimated heal beats no heal.
                     const float held = Loadout::SecondsSinceEquip(a_follower->GetFormID());
                     if (held < Config::g_aiCastGrace.load()) {
-                        return { Result::NoOp,
-                                 std::format("equipped {:.1f}s ago -- giving their AI a chance",
-                                             held) };
+                        // A STABLE reason string. The transition logger compares
+                        // reasons, so embedding the elapsed time here would make
+                        // every tick a "new" reason and log at 7.5 Hz.
+                        return { Result::NoOp, "waiting for their AI to cast it" };
                     }
                     break;
                 }
@@ -226,9 +228,12 @@ namespace MFO::Actuation {
                     const auto st = hand->state.get();
                     if (st != RE::MagicCaster::State::kNone) {
                         hand->InterruptCast(true);      // refunds magicka
-                        return { Result::NoOp,
-                                 std::format("caster busy (state {}) -- interrupted",
-                                             static_cast<std::uint32_t>(st)) };
+                        // The state number belongs in its OWN line, not in the
+                        // reason: the reason is the dedup key, and a number that
+                        // moves makes every tick a new message.
+                        spdlog::info("[drive] {:08X} caster busy at state {} -- interrupted",
+                                     a_follower->GetFormID(), static_cast<std::uint32_t>(st));
+                        return { Result::NoOp, "caster busy -- interrupted" };
                     }
 
                     // Ask FIRST why it might refuse. This line is most of the

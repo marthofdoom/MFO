@@ -9,7 +9,9 @@ namespace MFO::Actuation {
 
     enum class Result : std::uint8_t {
         Fired,          // the action executed
-        NoOp,           // act.wait, or ruleIndex == -1 -- deliberately nothing
+        NoOp,           // deliberately nothing. A BLANK reason means truly nothing
+                        // (act.wait, no rule matched); a non-blank reason is a
+                        // decision MFO made and IS logged on transition.
         FailedSkill,    // the follower could not afford/execute it -> fall through
         FailedOther,
     };

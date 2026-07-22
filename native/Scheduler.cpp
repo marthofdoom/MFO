@@ -202,6 +202,27 @@ namespace MFO::Scheduler {
             break;
 
         case Actuation::Result::NoOp:
+            // LOG THE SILENT PATH TOO, on transition.
+            //
+            // A NoOp with a reason is a decision MFO made -- "giving their AI a
+            // chance", "caster has not selected the spell yet", "already on that
+            // target". Every one of those was invisible, and a whole field
+            // session was spent on a probe whose most likely outcome was a
+            // silent NoOp: the log showed no [drive] line and no rule 0, which
+            // read as "nothing happened" when it may have been happening every
+            // tick. That is #53 in the one place it costs a test.
+            //
+            // Reasonless NoOps (act.wait, no rule matched) stay quiet -- those
+            // really are nothing.
+            if (!outcome.reason.empty() &&
+                (recent.failRule != choice.ruleIndex || recent.failReason != outcome.reason)) {
+                recent.failRule   = choice.ruleIndex;
+                recent.failReason = outcome.reason;
+                spdlog::info("[eval] {:08X} rule {} ({}) held off: {}",
+                             id, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+            }
+            break;
+
         default:
             break;
         }

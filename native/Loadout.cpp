@@ -197,7 +197,7 @@ namespace MFO::Loadout {
                                   ? std::chrono::duration<float>(now - stow->second).count()
                                   : 1.0e9f;
             if (since < Config::g_twoHandedDebounce.load()) {
-                a_why = std::format("two-handed debounce ({:.1f}s since last swap)", since);
+                a_why = "two-handed debounce";   // stable: the transition logger compares reasons
                 return Ready::Debounced;
             }
         }
