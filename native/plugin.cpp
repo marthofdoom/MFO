@@ -11,6 +11,7 @@
 #include "Vocabulary.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "Packages.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -231,6 +232,23 @@ namespace {
             MFO::Diagnostics::Install();
             break;
 
+        case SKSE::MessagingInterface::kPreLoadGame:
+            // THE ONE EDGE WHERE MFO STILL OWNS THE OUTGOING WORLD.
+            //
+            // Every other piece of MFO state is session-scoped and dies with a
+            // revert. An alias fill does not: the engine SERIALIZES IT INTO THE
+            // .ess, so a follower who is in MFO's alias when the player loads a
+            // different save is written into that transition and comes back
+            // latched -- carrying a package MFO has no memory of handing out.
+            //
+            // This is #22d's shape ("the latch is never serialized, and is
+            // cleared on load") inverted, and the inversion is what makes it
+            // dangerous: the engine persists this one FOR us, so the bug
+            // outlives the session instead of ending with it.
+            spdlog::info("[startup] kPreLoadGame — releasing package alias before the world swaps");
+            MFO::Packages::ReleaseAll("kPreLoadGame");
+            break;
+
         case SKSE::MessagingInterface::kPostLoadGame:
         case SKSE::MessagingInterface::kNewGame:
             // MUST run AFTER the co-save has loaded, or ledgers look empty and
@@ -252,6 +270,12 @@ namespace {
                     "Load an older save, or reinstall the newer MFO before saving.");
             }
             MFO::Probe::ReleaseAll();   // nothing the probe did outlives a session
+            // Sweep an alias fill restored FROM the save we just loaded. The
+            // kPreLoadGame release above only covers saves this session wrote;
+            // a save from an earlier session, or from a build before the
+            // release paths existed, arrives already latched. Reconciling on
+            // the way IN is the only thing that can clean those up.
+            MFO::Packages::ReleaseAll("post-load reconcile");
             MFO::Forms::EnsurePlayerSetup();
             MFO::Followers::Refresh();
             SeedTestData();

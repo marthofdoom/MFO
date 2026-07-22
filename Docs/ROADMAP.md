@@ -239,6 +239,12 @@ worth casting (§0.16).
 FormIDs were reserved for this at project start: `0x80A-0x80F` (command QUST +
 alias pool + globals), `0x820+` (MFO's own conditioned PACKAGEs).
 
+> **SUPERSEDED IN PART — read ENGINE_NOTES §0.18 first.** The steps below
+> predate the record survey. There is **no GLOB**: the alias carries the package
+> via `ALPC` and filling it changes the candidate set, so no condition flicker
+> is needed. And `packageStackMap` / `kCombatOverride` do not exist at the
+> pinned CommonLib rev — that was ALYSLC's own map into FormLists they ship.
+
 ### The records to generate
 
 Python, no xEdit — the family's standard practice, precedented across every

@@ -7,6 +7,7 @@
 #include "Scheduler.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "Packages.h"
 #include "Papyrus.h"
 #include "Board.h"
 
@@ -354,6 +355,13 @@ namespace MFO {
         Loadout::ClearTransientState();
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
+        // The alias fill is the one piece of MFO state the ENGINE persists for
+        // us whether we want it or not, so revert cannot just forget it the way
+        // it forgets the ledgers above -- forgetting is exactly how a follower
+        // comes back latched. ReleaseAll re-reads the alias from the quest and
+        // clears it even when this module believes it holds nothing, because
+        // after a revert that belief is worth nothing (#16).
+        Packages::ReleaseAll("revert");
         Papyrus::ClearTransientState();   // counters are session-scoped like every sibling
         Rapport::ResetSessionCounters();
         Diagnostics::StopPump();   // restarted on the next kPostLoadGame/kNewGame

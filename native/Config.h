@@ -103,6 +103,17 @@ namespace MFO::Config {
     // fight. What looked wrong in the field was the interval, not the total.
     inline std::atomic<float> g_castCooldown{ 4.0f };
 
+    // PACKAGE ACTUATION (M9, DESIGN §4.5c). Fill MFO_CommandQuest's alias 0
+    // with a follower so the engine instances MFO_CastPackage onto them --
+    // vanilla's own follower mechanism, pointed at one action.
+    //
+    // DEFAULT OFF, and #45 is the reason: this is one new engine mechanism,
+    // and it is not trusted until it is measured. It also writes state the
+    // engine SERIALIZES INTO THE SAVE (an alias fill), which is a strictly
+    // higher class of risk than anything else behind these flags -- a bug here
+    // outlives the session rather than ending with it.
+    inline std::atomic<bool>  g_usePackages{ false };
+
     // PROBE, default off. Drive the MagicCaster state machine by hand instead
     // of applying the effect: SetCurrentSpell + desiredTarget + RequestCastImpl,
     // then let the engine advance it. marth's principle -- if the game code can

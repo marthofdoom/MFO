@@ -565,7 +565,7 @@ target per rule. Two routes:
    a quest alias MFO fills; the Spell cannot, so this needs a record per spell —
    unbounded, and therefore wrong.
 
-**Route 1 is the design.** Verify `TESPackage`'s runtime data-input surface in
+**Route 1 was WRONG — superseded by §0.18.** Verify `TESPackage`'s runtime data-input surface in
 CommonLibSSE-NG before building.
 
 **Status: RESEARCHED, not built.** The caster-drive probe (§0.13 mechanism 2)
@@ -635,6 +635,97 @@ engine calls.
 `RequestCastImpl`/`StartChargeImpl`/`StartReadyImpl`/`StartCastImpl`/`FinishCastImpl`
 (§0.13 option 2). Deterministic and animated IF the vfunc preconditions
 cooperate; entirely unproven; one INI-gated probe.
+
+### 0.18 THE PACKAGE ROUTE, AS SHIPPED — supersedes §0.17's conclusion (2026-07-22)
+
+§0.17 concluded "Route 1 is the design" (mutate a package's inputs) and dismissed
+the alias route as "unbounded, and therefore wrong". **Both judgements were
+wrong, and the shipped records use the alias route.** §0.17 remains accurate on
+everything it OBSERVED — the templates, the input names, ALYSLC's technique —
+and wrong only in what it concluded. This section is the authority.
+
+#### How a package reaches a follower MFO does not own
+
+**A quest ALIAS carries packages via `ALPC`, and they apply to whoever fills
+it.** 4,125 `ALPC` entries across 365 vanilla quests reference 2,070 distinct
+packages: this is the mainline vanilla mechanism, not a corner of one.
+
+The runtime carrier is **`ExtraAliasInstanceArray`** on the *reference*:
+
+```cpp
+struct BGSRefAliasInstanceData {
+    TESQuest*                    quest;
+    const BGSBaseAlias*          alias;
+    const BSTArray<TESPackage*>* instancedPackages;
+};
+```
+
+read by `Actor::CheckForCurrentAliasPackage()` (vfunc `0x049`).
+
+**Two consequences that decide the architecture:**
+
+1. **It is per-REFERENCE.** NFF's copy of the base NPC, other instances, the base
+   record — untouched.
+2. **It is ADDITIVE.** `BSTArray<BGSRefAliasInstanceData*>` — NFF's alias entries
+   and MFO's coexist on the same actor. **MFO structurally cannot stomp another
+   framework**, which is stronger than §4.6 dared assume.
+
+#### Ruled out, with reasons
+
+* **`AIProcess::currentPackage`** — `ActorPackageData` is opaque at the pinned
+  rev; writing it desyncs `data` and `currentProcedureIndex`.
+* **The base record's package lists** (`TESNPC::defaultPackList` DPLT,
+  `TESAIForm::aiPackages` PKID) — **shared by every instance of that NPC.**
+  This is what ALYSLC does, and they can only do it because they own their
+  bodies.
+* **ALYSLC's `packageStackMap` / `kCombatOverride`** — those symbols **do not
+  exist at the pinned CommonLib rev at all.** They are ALYSLC's own map into
+  FormLists they ship.
+
+#### The target does NOT need an alias
+
+`PackageTarget::targType == 0` takes an `ObjectRefHandle` at runtime, so an
+arbitrary foe is named directly. The alias only ever DELIVERS the package.
+**This deletes the alias-pool design and the `GLOB` record M9 was budgeted for.**
+
+#### `EvaluatePackage`'s no-op finding does not apply here
+
+§0.7 proved `EvaluatePackage()` no-ops when the chosen package is unchanged.
+Filling or clearing an alias **changes the candidate set**, so no condition
+flicker and no global are needed.
+
+#### Record requirements, verified against Skyrim.esm
+
+| Requirement | Evidence |
+|---|---|
+| `QNAM` (owner quest) whenever any input names an alias | 159 packages use `PTDA` targType 4; widened to include `PLDT` type 8 it is 626 — **all carry `QNAM`** |
+| `kIgnoreCombat` (`0x00100000`), **not** `kMustComplete` | all 6 vanilla `UseMagic` instances meant to fire in a fight set it; `kMustComplete` appears on exactly 1, a stationary channeling thrall |
+| `PLDT` type 12, not type 0 | type 0 means "near reference" and needs one — **0 of 4,048** vanilla type-0 entries have a null target |
+| `ANAM` before the alias blocks | **1,607 of 1,607** vanilla quests with aliases |
+| `DNAM` = flags u16, priority u8, pad, delay f32, type u32 | decoded across all 1,811 vanilla quests; delay is 0.0 in every one |
+
+**The reference record to copy is `TG08BMercerCombatOverrideCastAtBrynjolf`
+(`000FCC26`)** — `UseMagic` + `QNAM` + `PTDA` type 4, i.e. MFO's exact shape.
+`MG07AncanoCastAtEye`, copied first, targets a *specific reference* and
+therefore has no `QNAM` at all.
+
+#### Priority is the contention lever
+
+`QUEST_DATA::priority`. Vanilla spreads it deliberately: default 30,
+`DialogueFollower` 50, scene quests 80–96. **MFO takes 60**, set once. §4.6
+forbids escalating it in a fight with another mod. Detect contention with
+`CheckForCurrentAliasPackage()` and `TESPackage::ownerQuest` names the
+contender — so the log can say *which mod*.
+
+#### Still unverified, and the first is load-bearing
+
+1. **That filling an alias INSTANCES its `ALPC` packages onto the reference.**
+   Structurally implied and matched by vanilla behaviour; the fill function's
+   body was not read.
+2. `GetHandleForObject(BGSRefAlias::VMTYPEID=140, alias)` yielding a usable VM
+   handle for `ForceRefTo`.
+3. `TESForm::CreateDuplicateForm` on `FormType::Package`.
+4. Whether `ExtraAliasInstanceArray` survives a 3D unload / load door.
 
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**

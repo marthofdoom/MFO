@@ -69,7 +69,11 @@ FREF_HEAL_SELF = 0x00012FCC
 # code. The moment a follower casts from this package, the fill becomes
 # targeted and this constant goes away.
 POC_ACTOR_REF = 0x000198FA
-POC_ENABLED   = True
+# OFF unless explicitly asked for. It was True in the tracked generator, which
+# means the next RELEASE would have force-filled Cosnach into a priority-60
+# package for EVERY PLAYER at quest start. v0.6.0 predates it and is clean;
+# main was not. Test builds set MFO_POC=1.
+POC_ENABLED   = os.environ.get("MFO_POC") == "1"
 
 # ── binary helpers (forked from MEO/MRO — byte-for-byte valid) ──
 FORM_VERSION = 44
@@ -265,6 +269,11 @@ def make_command_quest():
     # forbids escalating it in a fight with another mod.
     body += subrec('DNAM', qust_dnam(0x0011, priority=60))
     body += subrec('NEXT', b'')
+    # ANAM (next alias id) goes BEFORE the alias blocks. All 1,607 vanilla
+    # quests that have aliases do it that way -- 1607 before, 0 after. The
+    # generator's own doctrine is to mirror vanilla order exactly rather than
+    # rely on the engine's Load() tolerating a reordering.
+    body += subrec('ANAM', struct.pack('<I', 2))
 
     # ── alias 0: the actor MFO is commanding, and the package it carries ──
     # Flags: Optional (0x02) so the quest starts unfilled, Allow Reuse In Quest
@@ -290,8 +299,6 @@ def make_command_quest():
     body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
     body += subrec('VTCK', struct.pack('<I', 0))
     body += subrec('ALED', b'')
-
-    body += subrec('ANAM', struct.pack('<I', 2))   # next alias id
     return record('QUST', FID_COMMAND_QUEST, 0, body)
 
 
@@ -320,24 +327,40 @@ def make_cast_package():
     """
     body  = subrec('EDID', zstr("MFO_CastPackage"))
     # PKDT: flags=0, type=18 (package), then vanilla's trailing bytes.
-    # PKDT flags: 0x00000001 Offers Services, 0x00000004 Must Complete,
-    # 0x00000008 Maintain Speed... MFO wants MUST COMPLETE (0x04), which is
-    # exactly §4.5c's "an action runs start to finish uninterrupted".
-    body += subrec('PKDT', struct.pack('<IBB', 0x00000004, 18, 0x00) + bytes.fromhex('024700000000'))
+    # PKDT: kIgnoreCombat (0x00100000), NOT kMustComplete.
+    #
+    # This was 0x04 (kMustComplete) on the reasoning that §4.5c wants an action
+    # that runs start to finish. The record survey says otherwise, decisively:
+    # of the 46 vanilla UseMagic instances, kMustComplete appears on exactly ONE
+    # -- a stationary non-combat channeling thrall -- while ALL SIX records
+    # whose intent is to cast DURING A FIGHT set kIgnoreCombat. A gambit fires
+    # in combat by definition, so MFO is in the six, not the one.
+    #
+    # Byte tail copied from TG08BMercerCombatOverrideCastAtBrynjolf, which is
+    # MFO's exact shape (see below), not from MG07AncanoCastAtEye.
+    body += subrec('PKDT', struct.pack('<IBB', 0x00100000, 18, 0x04) + bytes.fromhex('038800000000'))
     # PSDT: any time, any day -- the DLL decides when, not the schedule.
-    body += subrec('PSDT', bytes.fromhex('ffff00ffff30302900000000'))
+    body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
     body += subrec('PKCU', struct.pack('<III', 11, FREF_TMPL_USEMAGIC, 1))
     # QNAM -- TESPackage::ownerQuest. NON-NEGOTIABLE when any input uses
     # PTDA targType=4: the alias VALUE is an index, and this is the quest it
     # indexes into. A survey of Skyrim.esm found 627 packages targeting a
-    # reference alias and ALL 627 carry QNAM. The record this was copied from
+    # reference alias (PTDA targType=4) and all of them carry QNAM; widening to
+    # "targets an alias EITHER by PTDA type 4 or PLDT type 8" gives 626/626.
+    # Both queries agree: an alias reference of any kind demands QNAM. The
+    # record this was copied from
     # (MG07AncanoCastAtEye) omits it precisely BECAUSE its target is a specific
     # reference, not an alias -- the target type changed here and the
     # consequence did not follow.
     body += subrec('QNAM', struct.pack('<I', FID_COMMAND_QUEST))
 
     # 11 inputs, in the template's declared order.
-    body += pack_input("Location", 'PLDT', struct.pack('<IiI', 0, 0, 0x1F4))
+    # PLDT type=12 ("near self"), target 0, generous radius -- the UseMagic
+    # TEMPLATE's own default is type=12/0/500, and TG08B's cast package uses
+    # type=12/0/10000. Type 0 means "near reference" and REQUIRES a reference:
+    # zero of the 4,048 type-0 PLDTs in Skyrim.esm have a null target, which is
+    # exactly what MFO was emitting.
+    body += pack_input("Location", 'PLDT', struct.pack('<IiI', 12, 0, 10000))
     # Spell.
     body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, FREF_HEAL_SELF, 0))
     # Target -- ALIAS 0, i.e. the follower THEMSELVES. A self heal, so the one

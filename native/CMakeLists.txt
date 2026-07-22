@@ -29,6 +29,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Loadout.cpp
     Papyrus.cpp
     Targeting.cpp
+    Packages.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)

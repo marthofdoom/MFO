@@ -1,0 +1,188 @@
+#pragma once
+#include "PCH.h"
+
+// PACKAGE ACTUATION. DESIGN.md §4.5c -- THE RULING: a PACKAGE *is* the action.
+//
+// Every mechanism that merely APPLIES an effect was refuted in the field and
+// is recorded as such (ENGINE_NOTES §0.10-§0.13): CastSpellImmediate on all
+// four casting sources, Projectile::LaunchSpell, DoCombatSpellApply, sending
+// animation events, and driving MagicCaster by hand (wedges at state 1). All
+// silent. Equipping a spell and letting the follower's own AI cast DOES
+// animate -- but it is AI-DISCRETIONARY, and it declined a weak heal every
+// time it was measured.
+//
+// What is left is the thing vanilla itself does: put a PACKAGE on the actor
+// for the duration of the action. MFO owns the ACTION, never the FOLLOWER.
+//
+// ── THE ROUTE, and why it is the only one ────────────────────────────────
+//
+//   MFO_CommandQuest (0x80A, priority 60, start-game-enabled, in the SEQ)
+//     -> alias 0 "MFO_CommandActor", flags Optional|AllowReuse|AllowReserved
+//        -> ALPC = MFO_CastPackage (0x820), riding vanilla UseMagic 000504F5
+//     -> the follower is FILLED INTO alias 0
+//        -> the engine builds ExtraAliasInstanceArray on the actor
+//        -> Actor::CheckForCurrentAliasPackage() (vfunc 0x049) finds it
+//        -> the package runs
+//
+// This is not a clever trick -- it is vanilla's own follower system. Verified
+// against the shipped data rather than assumed: DialogueFollower (000750BA)
+// alias 0 "Follower" carries ALPC PlayerFollowerPackage (0005C84B), its fill
+// type is Conditions (empty until runtime), and Simple Follower Framework's
+// DialogueFollowerScript.psc does `pFollowerAlias.ForceRefTo(FollowerActor)`
+// on recruit and `.Clear()` on dismiss AND NOTHING ELSE. Filling instances
+// the packages; clearing removes them. That is the whole mechanism.
+//
+// ── WHY NOT THE ALTERNATIVES ─────────────────────────────────────────────
+//
+// The ALYSLC package-stack route (`packageStackMap`, `kCombatOverride`) that
+// ROADMAP M9 step 3 still describes DOES NOT EXIST at the pinned rev
+// c4ab853d -- zero hits across the whole include/ and src/ tree. It is not
+// merely inadvisable, it is unreachable through this library. That is
+// INVARIANTS #64 landing on our own roadmap text, and it means the ALPC route
+// and the stack route were never two options; there is one.
+//
+// PapyrusUtil AddPackageOverride is banned by INVARIANTS #18/#19: overrides
+// persist through saves and ClearPackageOverride removes OTHER MODS' entries.
+//
+// ── WHY THIS IS ADDITIVE, at three layers (DESIGN §4.6) ──────────────────
+//
+//   1. DELIVERY.    MFO adds its OWN alias instance to the actor's
+//                   ExtraAliasInstanceArray. NFF, Inigo and DialogueFollower
+//                   keep theirs untouched. There is no shared list to stomp.
+//   2. ARBITRATION. Which alias package wins is decided by QUEST PRIORITY, an
+//                   engine-arbitrated number. MFO is 60; vanilla's mode is 30
+//                   and DialogueFollower is 50. We never raise our own number
+//                   to win an argument -- see DeclineReason::Contention.
+//   3. RELEASE.     Clearing MFO's alias removes exactly MFO's package. The
+//                   #18 hazard (a call whose contract is wider than the
+//                   caller's intent) cannot arise here.
+//
+// kAllowReserved (0x200) on the alias is what makes this work at all on
+// framework followers: they are already reserved by their own mod's quest
+// alias, and without that flag our fill would silently no-op.
+//
+// ── THE HARD CONSTRAINTS THIS MODULE OBEYS ───────────────────────────────
+//
+//   * NEVER write TESQuest::refAliasMap. It is the RESULT of a fill, not the
+//     fill. Hand-writing state a flow owns is exactly INVARIANTS #16.
+//   * NEVER write AIProcess::currentPackage. ActorPackageData is opaque at
+//     the pin -- there is no bound way to build one.
+//   * NEVER touch TESNPC::defaultPackList or TESAIForm::aiPackages. Those are
+//     BASE RECORDS, shared by every instance of that NPC. That is the stomp
+//     this whole architecture exists to avoid.
+//   * NEVER EvaluatePackage(_, a_resetAI = true) in combat. ALYSLC
+//     field-proved that clears the combat group and the next hit does ZERO
+//     damage. We pass (true, false), always.
+//
+// ── ASYNCHRONY IS THE SHAPE OF THIS MODULE ───────────────────────────────
+//
+// The fill goes through the VM, and VM dispatch is ASYNCHRONOUS -- the alias
+// is NOT filled when the call returns. So there is no success/failure to read
+// from a dispatch. The state machine below is therefore driven entirely off
+// OBSERVATIONS of engine state, never off a return value:
+//
+//     Idle -> Requested -> Filled -> Running -> Done -> Idle
+//              (dispatched)  (fill    (package  (package
+//                             seen)    seen)     gone)
+//
+// Pump() makes those observations. Nothing else advances the phase.
+//
+// ── ONE HOLDER AT A TIME, and that is forced, not chosen ─────────────────
+//
+// There is ONE MFO_CastPackage record and ONE alias 0. TESPackage carries a
+// refCount and instances are SHARED -- mutating the Spell input while another
+// follower is mid-cast changes the spell under them. Both facts point the
+// same way, so this module tracks a single holder. Per-follower actuation
+// needs the per-verb records at 0x821+ and is not this commit.
+
+namespace MFO::Packages {
+
+    // The observed lifecycle of one commanded action. Advanced ONLY by Pump()
+    // reading engine state -- see the asynchrony note above.
+    enum class Phase : std::uint8_t {
+        Idle,        // nothing outstanding
+        Requested,   // ForceRefTo dispatched; fill NOT yet observed
+        Filled,      // alias fill observed; package not yet running
+        Running,     // MFO's package observed as the actor's current package
+        Done,        // package ended; awaiting release
+    };
+
+    const char* PhaseName(Phase a_phase);
+
+    // Why a request was refused. Every one of these is a DECISION MFO made and
+    // is logged with the actor named -- §5.3, a rule that could not run says
+    // why, it is never silent.
+    enum class Decline : std::uint8_t {
+        None,
+        Disabled,      // bUsePackages is off (the default)
+        NoRecord,      // MFO_CommandQuest / MFO_CastPackage did not resolve
+        NoVM,          // the VM is unreachable, so no fill is possible
+        QuestStopped,  // the command quest is not running -- SEQ missing?
+        Busy,          // another follower already holds the single alias slot
+        Contention,    // a higher-or-equal-priority quest owns the alias layer
+        BadInputs,     // the package's data inputs could not be located by name
+    };
+
+    const char* DeclineName(Decline a_reason);
+
+    struct Status {
+        Phase         phase        = Phase::Idle;
+        RE::FormID    holder       = 0;      // whose action this is, 0 when idle
+        RE::FormID    spell        = 0;      // what we asked them to cast
+        float         phaseSeconds = 0.0f;   // time in the CURRENT phase
+        float         totalSeconds = 0.0f;   // time since the request
+        bool          fillObserved = false;  // alias 0 currently resolves to holder
+        bool          packageLive  = false;  // MFO's package is their current one
+        std::uint32_t requests     = 0;      // session counters, for the #53
+        std::uint32_t completions  = 0;      // heartbeat -- a subsystem whose
+        std::uint32_t declines     = 0;      // correct behaviour is invisible
+        std::uint32_t timeouts     = 0;      // MUST publish one
+    };
+
+    // Is the mechanism usable at all right now? False means every request
+    // below declines, and the caller must fall back rather than assume.
+    bool Available();
+
+    // Command a follower to cast a spell ON THEMSELVES (the alias-0 self
+    // route). This is the PROVEN shape: the follower is in alias 0, and the
+    // package's Target input is PTDA targType=4 -> alias 0, so the carrier and
+    // the target are the same alias. That is why the first proof is a
+    // self-heal.
+    //
+    // Returns Decline::None when the fill was DISPATCHED -- NOT when the spell
+    // fired, and NOT when the alias was filled. Watch Status().phase for that.
+    Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell);
+
+    // Command a follower to cast at another reference.
+    //
+    // UNVERIFIED (open question Q8): this writes PTDA targType=0 with a live
+    // ObjectRefHandle. CommonLib models `ObjectRefHandle handle` as a member of
+    // PackageTarget::Target at the pin, and targType 0 is the only union member
+    // it can correspond to -- but ON DISK targType 0 stores a FormID, so the
+    // engine must convert form->handle at load, and that conversion has never
+    // been observed. Treat a null result here as "the route is wrong", not as
+    // "the follower refused".
+    Decline CastAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                   RE::TESObjectREFR* a_target);
+
+    // Observe engine state and advance the phase. MAIN THREAD, once per tick.
+    // This is the ONLY function that moves the state machine.
+    void Pump();
+
+    // Release the alias if this actor holds it. Idempotent.
+    //
+    // #55 ("restore before you stop tracking") binds harder here than it does
+    // for spells: alias fills are SERIALIZED INTO THE .ess by the engine, so a
+    // follower left latched comes back latched on the next load, forever. The
+    // dismissal path must call this BEFORE the record leaves the active set.
+    void Release(RE::FormID a_actorID);
+
+    // Unconditional release. Revert, kPreLoadGame, and shutdown.
+    void ReleaseAll(const char* a_why);
+
+    Status Get();
+
+    // Session-scoped counters, cleared on revert like every sibling module.
+    void ClearTransientState();
+
+}

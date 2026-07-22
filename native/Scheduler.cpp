@@ -5,6 +5,7 @@
 #include "Followers.h"
 #include "Config.h"
 #include "Loadout.h"
+#include "Packages.h"
 #include "Vocabulary.h"
 #include "State.h"
 
@@ -69,6 +70,18 @@ namespace MFO::Scheduler {
         constexpr auto kSlack = std::chrono::milliseconds(10);
         if (g_lastTick.time_since_epoch().count() != 0 && (now - g_lastTick) < (kTickInterval - kSlack)) return;
         g_lastTick = now;
+
+        // OBSERVE THE PACKAGE STATE MACHINE FIRST, and unconditionally.
+        //
+        // It must run BEFORE every early return below, because the conditions
+        // those returns test are exactly the conditions under which a
+        // commanded action needs releasing: the party emptied, the follower
+        // left combat, the game paused, the record vanished. Pump() is the only
+        // thing that advances Requested -> Filled -> Running -> Done, and the
+        // fill it is watching is engine state that OUTLIVES the session -- so a
+        // tick that returns early without pumping is a tick that can strand a
+        // latch in the save.
+        Packages::Pump();
 
         auto& active = Followers::g_active;
         if (active.empty()) return;

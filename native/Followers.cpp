@@ -2,6 +2,7 @@
 #include "Followers.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "Packages.h"
 #include "Forms.h"
 #include "Config.h"
 
@@ -244,6 +245,15 @@ namespace MFO::Followers {
                 // left behind keeps redirecting an ex-follower AND keeps every
                 // Character in combat worldwide off the fast path.
                 Targeting::Clear(id);
+                // And the package alias -- the SAME obligation as the two
+                // above, but with a longer tail. #55 says restore before you
+                // stop tracking; here the thing to restore is an alias fill
+                // that the ENGINE SERIALIZES INTO THE .ess. A latch left on a
+                // dismissed follower does not merely linger for the session,
+                // it comes back on every future load of every save descended
+                // from this one, and nothing in MFO will ever look at them
+                // again to notice.
+                Packages::Release(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport
                 // (DESIGN.md §3.1, the emotional core of the progression).
                 spdlog::info("[follower] - {:08X} (record and Rapport retained)", id);
