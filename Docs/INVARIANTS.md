@@ -713,3 +713,30 @@ player needs to see, and hiding it behind a heuristic makes the board a liar.
 
 The mod's job is to make the list run and to say plainly what happened
 (§5.3, §4.3a). Judging the list is the player's.
+
+### 64. Match the source to the QUESTION TYPE, not to habit
+
+Two different questions, two different primary sources, and confusing them cost
+this project most of a session:
+
+| Question shape | Primary source |
+|---|---|
+| *"Can I call X?"* | CommonLibSSE-NG headers |
+| **"How does the game already DO X?"** | **`Skyrim.esm` records, and shipped mods' ESPs** |
+
+MFO's questions were almost all the second kind — it is the first mod in this
+family that drives ACTOR BEHAVIOUR rather than menus or crafting. Headers were
+read constantly; game data was barely touched until ten hours in.
+
+**One dump of `Skyrim.esm` would have shown `UseMagic`, `UseWeapon`,
+`HoldPosition`, `Travel` and `Activate` — the entire actuation architecture,
+already in vanilla — in the first hour.** Instead three cast verbs were refuted
+by guessing, ~90 minutes of the maintainer's play time went on a question
+answered in an installed plugin's source, and the architecture was found last.
+
+The engine is a DATA-DRIVEN game. When the question is what an actor should do,
+the answer is far more often a record than a function.
+
+**Practical rule:** before reaching for an API to make an actor behave a certain
+way, dump the relevant vanilla records and ask whether the game already models
+it. `Skyrim.esm` is on disk. Reading it costs minutes.

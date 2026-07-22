@@ -39,6 +39,13 @@ authored? That is a read of `Skyrim.esm` and costs no play time.
 exists. **M7 the board** is *first shareable*. MCM after it, because the board
 defines what is configurable.
 
+**Source-selection rule (#64), the biggest lesson of the M5/M9 stretch:**
+*"Can I call X?"* is answered by CommonLibSSE headers. **"How does the game
+already do X?" is answered by `Skyrim.esm` and shipped mods' ESPs.** MFO is the
+first mod in this family that drives actor behaviour rather than menus, and its
+questions are nearly all the second kind. One dump of `Skyrim.esm` shows every
+package template vanilla ships. Read the data before reaching for an API.
+
 **Sequencing rule learned the hard way (#61):** if a shipped mod already solves
 it, read its source before building a probe. The §4.7 retention question cost
 ~90 minutes of play time and three builds; the answer was one sentence in an
