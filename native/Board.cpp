@@ -968,12 +968,12 @@ namespace MFO::Board {
     }
 
     // Copy a live rule table into flat views for the render thread.
-    static void FillRuleViews(std::vector<FollowerRow::RuleView>& a_out,
+    static void FillRuleViews(std::vector<RuleView>& a_out,
                               const std::vector<Gambit>& a_rules) {
         a_out.clear();
         a_out.reserve(a_rules.size());
         for (const auto& g : a_rules) {
-            FollowerRow::RuleView v;
+            RuleView v;
             v.condOp = g.conditionOpcode; v.actOp = g.actionOpcode;
             v.param  = g.conditionParam;  v.spell = g.actionParamForm;
             v.enabled = g.enabled;        v.lastFired = g.lastFired; v.fail = g.lastFailReason;
