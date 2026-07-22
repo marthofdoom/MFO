@@ -5,6 +5,7 @@
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Scheduler.h"
+#include "Logistics.h"
 #include "Loadout.h"
 #include "Targeting.h"
 #include "CasterConsent.h"
@@ -350,6 +351,7 @@ namespace MFO {
         Followers::g_active.clear();
         Followers::ClearTransientState();   // streak map is save-scoped (F1)
         Scheduler::ClearTransientState();   // suppression + round-robin cursor likewise
+        Logistics::ClearTransientState();   // logistics cadence clocks + loot LRUs (#22h)
         // The equip ledger describes a LIVE loadout. On revert the world is
         // about to be replaced, so there is nothing to give back -- but the
         // ledger must not survive to re-equip gear into the next save (#16).

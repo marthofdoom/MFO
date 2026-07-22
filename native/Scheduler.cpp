@@ -8,6 +8,7 @@
 #include "CasterConsent.h"
 #include "Packages.h"
 #include "Vocabulary.h"
+#include "Logistics.h"
 #include "State.h"
 
 namespace MFO::Scheduler {
@@ -123,17 +124,26 @@ namespace MFO::Scheduler {
         // Cheap disqualifiers before any evaluation.
         if (f->IsDead() || f->IsDisabled()) return;
 
-        // THE COMBAT TABLE RUNS IN COMBAT (§4.8: "the two tables never
-        // interleave"). Without this a seeded heal rule fires while shopping in
-        // Whiterun. Logistics -- the out-of-combat table -- is its own slice.
-        if (!f->IsInCombat()) return;
-
-        // A cast issued into a paused game resolves strangely on unpause, and
-        // menus are exactly when the player is editing the list that drives it.
+        // A cast/drink/loot issued into a paused game resolves strangely on
+        // unpause, and menus are exactly when the player is editing the list
+        // that drives it. Applies to BOTH tables, so it gates before the branch.
         if (auto* ui = RE::UI::GetSingleton(); ui && ui->GameIsPaused()) return;
 
         const auto it = g_followers.find(id);
         if (it == g_followers.end()) return;          // no record -> nothing to run
+
+        // THE TWO TABLES NEVER INTERLEAVE (§4.8). Combat runs in combat;
+        // logistics -- upkeep -- runs out of it. Without the split a seeded heal
+        // rule fires while shopping in Whiterun. Logistics is cadence-gated to
+        // the ~1 s idle rate INSIDE ServiceFollower, so calling it every service
+        // is cheap; it acts at most once per idle tick and is off by default.
+        if (!f->IsInCombat()) {
+            Logistics::ServiceFollower(f, it->second);
+            g_lastTickMs = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - t0).count();
+            return;
+        }
+
         if (it->second.combat().empty()) return;      // no rules -> nothing to run
 
         const auto choice = Eval::Evaluate(f, it->second);

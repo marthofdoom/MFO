@@ -29,29 +29,33 @@ namespace MFO::CasterConsent {
         using CheckStartCast_t = bool (*)(RE::CombatMagicCaster*, RE::CombatController*);
 
         bool thunk(RE::CombatMagicCaster* a_this, RE::CombatController* a_cc) {
-            // Recover the original for THIS vtable and call it -- MFO never
-            // suppresses a cast the AI wanted, it only permits one it did not.
+            // Recover the original for THIS vtable. If the vtable is not one we
+            // hooked, this thunk was reached on a foreign object -- do NOT read
+            // its members. Return a benign false.
             const auto vt = *reinterpret_cast<std::uintptr_t*>(a_this);
-            const auto it = g_orig.find(vt);
-            if (it == g_orig.end()) {
-                // Not a vtable we hooked -- we must not be here, and a_this is
-                // not a CombatMagicCaster. Never read its members. (This is the
-                // guard that would have turned the CombatMagicCasterArmor
-                // mis-hook into a no-op instead of a CTD: that symbol is a
-                // vtable with no class, its index 6 is a different function.)
-                return false;
-            }
-            const bool aiSaysYes =
-                reinterpret_cast<CheckStartCast_t>(it->second)(a_this, a_cc);
+            const auto oit = g_orig.find(vt);
+            if (oit == g_orig.end()) return false;
+            const auto original = reinterpret_cast<CheckStartCast_t>(oit->second);
+            const bool aiSaysYes = original(a_this, a_cc);
 
+            // FAST OUT: nothing latched -> we only ever observe, so leave now
+            // and never touch a member. This is the common case (every NPC's
+            // every caster tick) and it must be cheap and safe.
             if (g_wantCount.load(std::memory_order_relaxed) == 0) return aiSaysYes;
-            if (!a_cc || !a_this->magicItem) return aiSaysYes;
+            if (!a_cc) return aiSaysYes;
 
-            // Whose caster is this? The combat controller's own actor.
-            auto* actor = a_cc->cachedAttacker.get();
+            // RESOLVE THE ACTOR VIA THE HANDLE, not cachedAttacker. The handle
+            // (.get()) validates and returns null for a stale entry; the cache
+            // pointer does not, and a stale cache is the likeliest source of the
+            // AV that crashed here twice (a small non-null garbage value passes
+            // a null check, then formID at +0x14 faults).
+            auto attPtr = a_cc->attackerHandle.get();   // NiPointer<Actor>
+            auto* actor = attPtr.get();
             if (!actor) return aiSaysYes;
             const auto fid = actor->GetFormID();
 
+            // Is this follower latched? Decide BEFORE touching the caster's
+            // spell -- for every non-latched actor we never read magicItem.
             RE::FormID wantSpell = 0;
             {
                 std::shared_lock lk(g_mx);
@@ -59,27 +63,23 @@ namespace MFO::CasterConsent {
                 if (w == g_want.end()) return aiSaysYes;
                 wantSpell = w->second;
             }
-            if (a_this->magicItem->GetFormID() != wantSpell) return aiSaysYes;
+
+            // Only now, for the one latched follower, read the spell.
+            auto* mi = a_this->magicItem;
+            if (!mi || mi->GetFormID() != wantSpell) return aiSaysYes;
 
             ++g_seen;
             if (!aiSaysYes) ++g_vetoed;
 
-            // LOG MODE (iCasterMode 0): observe only, never change the answer.
-            // This is the read-only experiment that proves the veto is here
-            // before a single bool is flipped.
             if (Config::g_casterMode.load() == 0) {
                 spdlog::info("[consent] {:08X} {} CheckStartCast for {:08X} -> AI says {} "
-                             "(mode=log, not overriding)",
-                             fid, actor->GetName() ? actor->GetName() : "?",
+                             "(mode=log)", fid, actor->GetName() ? actor->GetName() : "?",
                              wantSpell, aiSaysYes ? "YES" : "NO");
                 return aiSaysYes;
             }
-
-            // FORCE MODE: permit the cast the rule demands. The AI still owns
-            // when-exactly, aim and movement -- this only removes its veto.
             if (!aiSaysYes) {
                 ++g_forced;
-                spdlog::info("[consent] {:08X} {} -> FORCED cast of {:08X} (AI said no)",
+                spdlog::info("[consent] {:08X} {} -> FORCED cast of {:08X}",
                              fid, actor->GetName() ? actor->GetName() : "?", wantSpell);
             }
             return true;

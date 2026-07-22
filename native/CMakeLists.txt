@@ -26,6 +26,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Evaluator.cpp
     Actuation.cpp
     Scheduler.cpp
+    Logistics.cpp
     Loadout.cpp
     Papyrus.cpp
     Targeting.cpp

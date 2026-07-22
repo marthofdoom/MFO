@@ -13,6 +13,7 @@
 #include "Targeting.h"
 #include "CasterConsent.h"
 #include "Packages.h"
+#include "Logistics.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -103,9 +104,9 @@ namespace {
         // Logistics table (DESIGN.md 4.8) -- proves both tables round-trip
         // independently, which is the point of P0.
         MFO::Gambit g3{};
-        g3.conditionOpcode = "cond.potions_below";
-        g3.conditionParam  = 3.0f;
-        g3.actionOpcode    = "act.loot_potion_health";
+        g3.conditionOpcode = MFO::Vocab::kCondSelfLowHealthPotion;
+        g3.conditionParam  = 3.0f;   // "fewer than 3 health potions"
+        g3.actionOpcode    = MFO::Vocab::kActLootPotions;
         st.logistics().push_back(g3);
 
         spdlog::info("[p0] seeded {} combat + {} logistics gambit(s) on {:08X}",
@@ -231,6 +232,7 @@ namespace {
             MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
             MFO::CasterConsent::InstallHook();   // the influence hook, likewise
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
+            MFO::Logistics::RegisterSinks();   // the player-looted waiver sink (§4.8.3)
             MFO::Diagnostics::Install();
             break;
 
