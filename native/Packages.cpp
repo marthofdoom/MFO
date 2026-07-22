@@ -799,8 +799,22 @@ namespace MFO::Packages {
             // RELEASE. An unclaimed follower is entirely their own (#69), and
             // clearing is correctness rather than tidiness -- a follower left
             // in the alias with nothing valid just stands there.
+            RE::Actor* was = nullptr;
+            if (auto* al = CommandAlias()) was = al->GetActorReference();
             if (DispatchAlias("Clear", nullptr)) {
-                spdlog::info("[probe] select 0 -- alias CLEAR dispatched; follower released");
+                // TELL THE ACTOR TO RE-PICK. Without this the engine gets round
+                // to it on its own schedule -- marth measured about TEN SECONDS
+                // of the follower standing there after being released.
+                //
+                // a_resetAI = FALSE, always: ALYSLC field-proved that resetting
+                // AI clears the combat group and the next hit does zero damage.
+                if (was) {
+                    was->EvaluatePackage(true, false);
+                    spdlog::info("[probe] select 0 -- alias CLEARED and {:08X} re-evaluated",
+                                 was->GetFormID());
+                } else {
+                    spdlog::info("[probe] select 0 -- alias CLEAR dispatched (nobody was in it)");
+                }
             } else {
                 spdlog::error("[probe] select 0 -- alias Clear FAILED; follower may be stuck. "
                               "Console: ClearQuestAliases MFO_CommandQuest");
@@ -824,8 +838,11 @@ namespace MFO::Packages {
             // "never filled" from "filled but idle" and lost a session to it.
             auto* alias = CommandAlias();
             auto* now   = alias ? alias->GetActorReference() : nullptr;
+            // Same nudge on the way IN, or the package waits for the engine's
+            // own re-evaluation before it starts.
+            who->EvaluatePackage(true, false);
             spdlog::info("[probe] select {} -- alias filled NATIVELY with {:08X} {}; "
-                         "readback: {}", want, who->GetFormID(),
+                         "readback: {}; EvaluatePackage issued", want, who->GetFormID(),
                          who->GetName() ? who->GetName() : "?",
                          now ? std::format("{:08X} OK", now->GetFormID())
                              : std::string("EMPTY -- the native did not take"));
