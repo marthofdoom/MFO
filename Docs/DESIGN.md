@@ -1762,6 +1762,50 @@ and silently missed. The cursor itself is integrated from raw
 
 ---
 
+### 6.7a THE FOUR SKINS — branding, not decoration (RULED — marth, 2026-07-22)
+
+**The board ships MEO's four skins, by name, selectable live.** This is a
+STANDING FAMILY RULE in the same class as controller support: every marth
+Skyrim mod carries it, and it is never scoped out of a milestone.
+
+| # | Skin | Character |
+|---|---|---|
+| 0 | **Ebony & Brass** | near-black, warm brass border and accent |
+| 1 | **Dwemer Parchment** | light parchment, dark umber text — the only bright skin |
+| 2 | **Soul Cairn** | deep violet, pale cyan accent |
+| 3 | **Quicksilver** | cool slate, sans face, spaced HUD title |
+
+Selected by `iMenuStyle` 0..3, an MCM dropdown, applied at runtime — the
+player picks live, no reload. MEO's `MenuSkin` struct is the shape to copy:
+
+```cpp
+struct MenuSkin {
+    const char* name;
+    ImVec4 winBg, panel, border, text, dim, sel, accent, btn, track, danger;
+    bool   sans;    // Quicksilver only: sans face + spaced title
+    const char* title;
+};
+```
+
+**Copy the palette values verbatim from MEO** (`native/plugin.cpp`, `kSkins[4]`).
+They are the mockup artifact's numbers and they are the brand; re-deriving them
+by eye produces a mod that looks *nearly* like its siblings, which is worse than
+not matching at all.
+
+**Design language, inherited:** square corners, flat fills throughout — ImGui's
+honest range, and closer to Skyrim's own UI than its default debug grey.
+
+**MFO's title string is its own** (MEO's is `GEM SOCKETING`), but everything
+else about the chrome matches.
+
+#### The Field Kit's density is the target, not a problem to solve
+
+marth, on the current overlay: *"I like the complicated design of the current
+one, so it's more theming."* The Field Kit's information density — live vitals,
+per-rule state, counters, probe controls — is the intended character of these
+menus. **M7 skins that design; it does not simplify it.** A sparse board would
+be off-brand for the family even if it were easier to read.
+
 ## 7. MCM / INI surface
 
 The MEO/MAO surface inherited whole: a seed `SKSE/Plugins/MFO.ini` plus MCM

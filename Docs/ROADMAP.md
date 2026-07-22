@@ -205,6 +205,10 @@ namespace is ~900 lines and MFO re-skins it.
 - Reorder via `▲▼` and **L1/R1** (MEO translates them already and doesn't
   use them). No drag.
 - Controller parity in the same milestone, not after.
+- **The four skins in the same milestone, not after** (DESIGN §6.7a) —
+  Ebony & Brass / Dwemer Parchment / Soul Cairn / Quicksilver, `iMenuStyle`
+  0..3, palettes copied VERBATIM from MEO. Branding, same standing rule as
+  controller support.
 - Both tables reachable; cost tier and failure reason shown per rule.
 
 **Gate:** every action including reorder reachable on a pad with no keyboard;
