@@ -127,14 +127,81 @@ namespace {
             auto* a = h.get().get();
             if (!a) continue;
             auto* rec = MFO::Followers::TryEnsureRecord(a->GetFormID());
-            if (!rec || !rec->combat().empty()) continue;   // never overwrite authored rules
+            if (!rec) continue;
 
-            MFO::Gambit heal{};
-            heal.conditionOpcode = MFO::Vocab::kCondSelfHpBelow;
-            heal.conditionParam  = 0.40f;
-            heal.actionOpcode    = MFO::Vocab::kActCastSelf;
-            heal.actionParamForm = 0x00012FCC;   // Healing. NOT 0x12FCD -- that is Flames.
-            rec->combat().push_back(heal);
+            if (!rec->combat().empty()) {
+                // Rules already present. Normally we leave them ALONE -- they may
+                // be authored. But a seeded rule naming a spell the follower does
+                // not know is dead weight that cannot ever fire, and it survives
+                // in the co-save: the field session lost its animation test to
+                // exactly this, because a persisted rule kept pointing at Healing
+                // on a brawler who neither knew it nor could afford it.
+                //
+                // So: if EVERY cast rule references an unknown spell, this record
+                // is stale seed data, and re-seeding is the repair. This is a test
+                // seam behind bSeedEvaluatorRules; it never runs in normal play.
+                bool anyRunnable = false;
+                for (const auto& g : rec->combat()) {
+                    if (g.actionOpcode != MFO::Vocab::kActCastSelf &&
+                        g.actionOpcode != MFO::Vocab::kActCastTarget) continue;
+                    auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm);
+                    if (sp && a->HasSpell(sp)) { anyRunnable = true; break; }
+                }
+                if (anyRunnable) continue;
+
+                spdlog::info("[eval] {:08X} {} has {} stale rule(s) naming spell(s) it does not "
+                             "know -- reseeding", a->GetFormID(), a->GetName(),
+                             rec->combat().size());
+                rec->combat().clear();
+            }
+
+            // SEED A SPELL THEY ACTUALLY KNOW.
+            //
+            // The first seed hardcoded Healing (0x12FCC), and the field proved
+            // why that is useless: Cosnach is a Markarth brawler who neither
+            // knows it nor could afford it (29 magicka against a cost of 78).
+            // The competence gate correctly refused every tick -- and the
+            // animation test it was blocking never got to run. A rule the
+            // follower CANNOT run is a fine thing to test once; it is a
+            // terrible default.
+            //
+            // So: pick the cheapest spell from their OWN list. That also makes
+            // the seed honest about §5.3 -- what a follower can do is a property
+            // of the follower, not of MFO's hardcoded FormID.
+            RE::SpellItem* chosen = nullptr;
+            float bestCost = std::numeric_limits<float>::max();
+
+            class Cheapest : public RE::Actor::ForEachSpellVisitor {
+            public:
+                Cheapest(RE::Actor* a_actor, RE::SpellItem*& a_out, float& a_best)
+                    : actor(a_actor), out(a_out), best(a_best) {}
+                RE::BSContainer::ForEachResult Visit(RE::SpellItem* a_spell) override {
+                    if (!a_spell) return RE::BSContainer::ForEachResult::kContinue;
+                    if (a_spell->GetSpellType() != RE::MagicSystem::SpellType::kSpell)
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    const float cost = a_spell->CalculateMagickaCost(actor);
+                    if (cost < best) { best = cost; out = a_spell; }
+                    return RE::BSContainer::ForEachResult::kContinue;
+                }
+                RE::Actor* actor; RE::SpellItem*& out; float& best;
+            } visitor(a, chosen, bestCost);
+            a->VisitSpells(visitor);
+
+            if (!chosen) {
+                spdlog::info("[eval] {:08X} {} knows no castable spell -- seeding Wait only",
+                             a->GetFormID(), a->GetName());
+            } else {
+                MFO::Gambit heal{};
+                heal.conditionOpcode = MFO::Vocab::kCondSelfHpBelow;
+                heal.conditionParam  = 0.60f;   // generous: this is a test seam
+                heal.actionOpcode    = MFO::Vocab::kActCastSelf;
+                heal.actionParamForm = chosen->GetFormID();
+                rec->combat().push_back(heal);
+                spdlog::info("[eval] {:08X} {} -> rule 0 casts {} ({:08X}, {:.0f} magicka)",
+                             a->GetFormID(), a->GetName(),
+                             chosen->GetName() ? chosen->GetName() : "?",
+                             chosen->GetFormID(), bestCost);
+            }
 
             MFO::Gambit wait{};
             wait.conditionOpcode = MFO::Vocab::kCondAlways;

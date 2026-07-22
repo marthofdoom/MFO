@@ -87,27 +87,31 @@ anyway, and we already wasted a session learning that. Bandit camps are ideal.
 **Do this:**
 
 1. Get into a multi-enemy fight.
-2. Open the Field Kit, go to the **Probe** tab, pick your follower.
-3. **Look directly at an enemy they are NOT currently fighting.** Your crosshair
-   is the picker.
-4. Hit **`Command target (crosshair)`**.
+2. **Look directly at an enemy they are NOT currently fighting.**
+3. Press **`\`** (backslash) — the focus key. No menu, no pausing.
+
+Every active follower latches onto whatever you are looking at. Press it again
+while looking at **nothing** to release them.
+
+The key is `iFocusKey` in the INI (DIK code; backslash is `0x2B`, unbound in
+vanilla Skyrim so it will not fight an existing control).
 
 **What success looks like:** the follower breaks off and goes for the enemy you
 were looking at. The log says who:
 
 ```
-[probe] Command target (crosshair) -> OK (latched onto Bandit Archer (000ABCDE))
+[focus] 1 follower(s) -> Bandit Archer (000ABCDE)
 ```
 
 **What failure looks like:**
 
-- *"nothing under the crosshair"* — you weren't actually looking at an enemy.
-- *"BUT HOOK IS NOT INSTALLED"* — `bCommandTarget` is still 0.
+- No `[focus]` line at all — the key never reached MFO. Check `iFocusKey`.
+- *"BUT HOOK NOT INSTALLED"* — `bCommandTarget` is 0, or you didn't restart.
 - Log says latched, follower ignores it — **the mechanism is wrong.** This is the
   important failure; tell me and stop here.
 
-**Then hit `Clear commanded target`** and check they go back to choosing for
-themselves.
+**Then press `\` while looking at nothing** and check they go back to choosing
+for themselves.
 
 ---
 

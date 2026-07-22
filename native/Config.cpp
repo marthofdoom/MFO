@@ -103,6 +103,7 @@ namespace MFO::Config {
             else if (a_key == "fAiCastGrace")       setF(g_aiCastGrace, 0.0f, 30.0f);
             else if (a_key == "bCommandCast")       setB(g_commandCast);
             else if (a_key == "bCommandTarget")     setB(g_commandTarget);
+            else if (a_key == "iFocusKey")          setI(g_focusKey, 0, 255);
             else if (a_key == "fTwoHandedDebounce") setF(g_twoHandedDebounce, 0.0f, 60.0f);
             else if (a_key == "fSharedCombatGrace") setF(g_sharedCombatGrace, 0.0f, 300.0f);
             // Unknown keys are ignored in silence: MCM Helper writes keys we
@@ -160,6 +161,7 @@ namespace MFO::Config {
             g_aiCastGrace        = 3.0f;
             g_commandCast        = false;
             g_commandTarget      = false;
+            g_focusKey           = 0x2B;
             g_twoHandedDebounce  = 6.0f;
             g_sharedCombatGrace  = 15.0f;
         }

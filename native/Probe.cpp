@@ -305,6 +305,36 @@ namespace MFO::Probe {
 
     RE::FormID CrosshairTarget() { return g_crosshair.load(); }
 
+    void FocusOnCrosshair() {
+        const auto id = CrosshairTarget();
+
+        // Looking at nothing = stand down. One key, both directions -- there is
+        // no second key to remember mid-fight.
+        if (id == 0) {
+            Targeting::ClearAll();
+            spdlog::info("[focus] released -- all follower latches cleared");
+            return;
+        }
+
+        auto* victim = RE::TESForm::LookupByID<RE::Actor>(id);
+        if (!victim) {
+            spdlog::info("[focus] crosshair ref {:08X} is not an actor -- ignored", id);
+            return;
+        }
+
+        int n = 0;
+        for (const auto& h : Followers::g_active) {
+            auto* f = h.get().get();
+            if (!f || f->GetFormID() == victim->GetFormID()) continue;
+            Targeting::Command(f->GetFormID(), victim->GetHandle());
+            ++n;
+        }
+
+        const char* name = victim->GetName();
+        spdlog::info("[focus] {} follower(s) -> {} ({:08X}){}", n, name ? name : "?", id,
+                     Targeting::IsHooked() ? "" : "  -- BUT HOOK NOT INSTALLED (bCommandTarget=0)");
+    }
+
     void Tick() {
         std::string logLine;
         {

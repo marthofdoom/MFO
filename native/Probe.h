@@ -91,6 +91,13 @@ namespace MFO::Probe {
     // What the player is looking at. The commanded-target probe needs a way to
     // say WHO, and the crosshair is the one the player already uses.
     void RegisterCrosshairSink();
+
+    // THE HOTKEY. You cannot aim a crosshair while an ImGui panel owns the
+    // mouse, so a menu button was never a usable target picker (marth, and he
+    // was right). Point at a foe and press the key: every active follower is
+    // latched onto it. Press it looking at nothing: all latches released.
+    // Called from the input hook, on the main thread via a queued task.
+    void FocusOnCrosshair();
     RE::FormID CrosshairTarget();
 
     void Tick();      // from the pump; cheap no-op when idle

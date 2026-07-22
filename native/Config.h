@@ -74,6 +74,9 @@ namespace MFO::Config {
     // OFF until measured -- #45: one new engine mechanism per release, proven
     // before it is trusted.
     inline std::atomic<bool>  g_commandTarget{ false };
+    // DIK code for the focus hotkey. 0x2B is backslash -- unbound in vanilla
+    // Skyrim, so it will not fight an existing control. 0 disables.
+    inline std::atomic<int>   g_focusKey{ 0x2B };
     // OFF by default: it mutates player-visible equipment for a payoff that is
     // still unproven, and #57 says do not ship what you told yourself to probe.
     // The test guide turns it on for the session that measures it.

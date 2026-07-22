@@ -573,6 +573,26 @@ namespace MFO::Board {
 
         struct InputDispatchHook {
             static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_source, RE::InputEvent** a_events) {
+                // THE FOCUS HOTKEY IS HANDLED BEFORE THE PANEL CHECK, and that
+                // is the entire point: a menu button cannot be a target picker,
+                // because opening the menu takes the mouse and freezes the
+                // crosshair you were supposed to be aiming. This runs while the
+                // panel is CLOSED, and deliberately does not swallow the event --
+                // the default key is unbound in vanilla, so the game can have it.
+                if (a_events && !g_open.load()) {
+                    const int fk = Config::g_focusKey.load();
+                    if (fk != 0) {
+                        for (auto* e = *a_events; e; e = e->next) {
+                            if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) continue;
+                            auto* b = static_cast<RE::ButtonEvent*>(e);
+                            if (!b->IsDown()) continue;                 // edge only
+                            if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
+                            if (static_cast<int>(b->GetIDCode()) != fk) continue;
+                            SKSE::GetTaskInterface()->AddTask([]() { Probe::FocusOnCrosshair(); });
+                        }
+                    }
+                }
+
                 if (!g_ready.load() || !g_open.load() || !a_events) {
                     func(a_source, a_events);
                     return;
