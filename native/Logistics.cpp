@@ -47,6 +47,11 @@ namespace MFO::Logistics {
         // first-dibs clock counts from here (#22h). Bounded LRU.
         std::unordered_map<RE::FormID, Clock::time_point> g_seen;
 
+        // Per-follower per-AV drink cooldown (M5): a duration restore potion
+        // must not be chain-drunk while its effect is still active. Key is
+        // (follower FormID << 8 | av-index).
+        std::unordered_map<std::uint64_t, Clock::time_point> g_drinkUntil;
+
         // Refs the PLAYER has taken from -- the waiver (#22h). Presence collapses
         // the delay to fQuickLootWaiver, and the timestamp RESETS on every take
         // so the follower moves in that many seconds after the player's LAST
