@@ -58,8 +58,10 @@ namespace MFO::Loadout {
     // looking at what the follower is actually holding.
     void Reconcile();
 
-    // Seconds since MFO put a spell in this follower's hand, or a huge value if
-    // it did not. The AI needs a WINDOW to cast before MFO overrides it -- see
+    // Seconds since the gambit spell became castable by the follower's own AI
+    // -- armed when MFO equips it, AND when a rule first wants a cast the
+    // follower could already make (their own spell in hand counts; the AI
+    // deserves the same window either way). Huge value when never armed. See
     // Actuation's note on the measurement confound.
     float SecondsSinceEquip(RE::FormID a_actorID);
 

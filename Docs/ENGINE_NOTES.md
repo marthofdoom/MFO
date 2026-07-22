@@ -343,6 +343,14 @@ an AI-fired cast from one MFO issued. Until a `[cast]` line appears for a
 follower holding an MFO-equipped spell, this is an assembled hypothesis, not a
 result — see #57, twice violated already.
 
+**The governing principle (marth):** *if the game code can trigger it, we can
+too.* The engine's combat AI makes actors cast with animation many times a
+second. That code path is IN THE BINARY and is reachable — MFO has been hunting
+for a *published verb* when the real question is which internal call the AI
+makes. `MagicCaster`'s state machine is that call, and its members are public
+virtuals. So the fallback below is not speculation; it is calling what the
+engine calls.
+
 **Fallback if the AI will not fire on a useful timescale:** drive the
 `MagicCaster` state machine directly — `SetCurrentSpell` + `desiredTarget` +
 `RequestCastImpl`/`StartChargeImpl`/`StartReadyImpl`/`StartCastImpl`/`FinishCastImpl`
