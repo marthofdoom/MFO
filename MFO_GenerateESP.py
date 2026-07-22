@@ -381,6 +381,11 @@ def make_command_quest():
     body += subrec('ALID', zstr("MFO_CommandActor"))
     body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
     if POC_ENABLED:
+        # GATE THE FILL, not just the packages. At MFO_ProbeSelect = 0 the
+        # alias stays EMPTY, MFO never claims the follower, and he follows and
+        # fights normally -- which is the only way the movement test is
+        # runnable at all.
+        body += alias_fill_ctda()
         # SPECIFIC REFERENCE fill. No conditions, no runtime, no DLL: the quest
         # starts, the alias already holds this actor, and ALPC hands them the
         # packages. Which ONE is valid is chosen by MFO_ProbeSelect -- every
@@ -433,6 +438,28 @@ def probe_ctda(index):
     """
     return subrec('CTDA', struct.pack('<B3xfHHIIIIi',
                                       0x00, float(index), 74, 0,
+                                      FID_PROBE_GLOB, 0, 0, 0, -1))
+
+
+def alias_fill_ctda():
+    """CTDA: GetGlobalValue(MFO_ProbeSelect) > 0 -- gates the ALIAS FILL itself.
+
+    THE POINT: with the global at 0 the alias does not fill, so MFO's quest
+    never CLAIMS the follower, so he behaves entirely normally. #69/§0.25 --
+    arbitration is by which quest's alias claims the actor, so an EMPTY alias
+    is the only way to be out of the way.
+
+    Without this the PoC is untestable: a permanently-filled alias at priority
+    60 with no valid package roots the follower, and a rooted follower cannot
+    walk into the fight the movement test needs.
+
+    Precedent: 42 vanilla aliases gate an ALFR specific-reference fill with
+    conditions (JailQuest's prison chests among them).
+
+    op 0x40 = Greater than. Same byte layout as probe_ctda.
+    """
+    return subrec('CTDA', struct.pack('<B3xfHHIIIIi',
+                                      0x40, 0.0, 74, 0,
                                       FID_PROBE_GLOB, 0, 0, 0, -1))
 
 
