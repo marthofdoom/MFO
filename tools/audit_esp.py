@@ -41,7 +41,7 @@ REQUIRED = {
 
 # Quests that are start-game-enabled but NOT run-once must appear in the SEQ or
 # they never start on an existing save.
-SEQ_EXPECTED = {0x808}
+SEQ_EXPECTED = {0x808, 0x80A}
 
 GRUP_HDR = 24
 REC_HDR = 24

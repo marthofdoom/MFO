@@ -190,10 +190,26 @@ def make_kywd():
 
 
 # ── QUST ────────────────────────────────────────────────────────────────────
-def qust_dnam(flags=0x0001 | 0x0004):
-    # 0x0001 Start Game Enabled, 0x0004 Run Once. Layout verified against MRO's
-    # shipped, in-game-proven MCM quest — flags live at offset 4.
-    return struct.pack('<B', 20) + b'\x01\x00\xff' + struct.pack('<HHI', flags, 0, 0)
+def qust_dnam(flags=0x0011, priority=30, qtype=0):
+    """QUEST_DATA. Layout DECODED from all 1811 vanilla QUSTs, not inferred.
+
+        0..1  flags     uint16   0x0011 = kEnabled | kStartsEnabled
+        2     priority  uint8    the CK 0-100 scale; 30 is vanilla's default
+        3     unused    uint8    zero in 1697/1811
+        4..7  delay     float    0.0 in ALL 1811
+        8..11 type      uint32   0 = None/Misc
+
+    The previous version wrote `<B 20> + b'\x01\x00\xff' + <HHI>`, which put a
+    literal 20 in flags-low, 0xFF garbage in the unused byte, and the caller's
+    flags into the DELAY FLOAT where they were inert. Every MFO quest shipped
+    flags=0x0114 and priority=0; they started only because kStartsEnabled
+    happened to land on a set bit.
+
+    Priority is not cosmetic for M9: it is the lever that decides whose alias
+    package wins when another follower framework also offers one. Vanilla
+    spreads it deliberately -- DialogueFollower 50, scene quests 80-96.
+    """
+    return struct.pack('<HBBfI', flags, priority, 0, 0.0, qtype)
 
 
 def make_startup_quest():
@@ -203,7 +219,10 @@ def make_startup_quest():
     # every 1.0.x zip (INVARIANTS #43). The record exists to reserve its
     # FormID, which is frozen.
     body = subrec('EDID', zstr("MFO_StartupQuest")) + subrec('FULL', zstr("MFO Startup"))
-    body += subrec('DNAM', qust_dnam()) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
+    # kEnabled | kStartsEnabled | kRunOnce. RUN ONCE IS 0x0100, not 0x0004 --
+    # the old code's 0x0004 was never the run-once bit, it just happened to sit
+    # in a field the game ignored.
+    body += subrec('DNAM', qust_dnam(0x0011 | 0x0100)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
     return record('QUST', FID_STARTUP_QUEST, 0, body)
 
 
@@ -215,7 +234,9 @@ def make_mcm_quest():
     vmad = VMADBuilder()
     vmad.add_script("MFO_MCM", [])
     body = subrec('EDID', zstr("MFO_MCMQuest")) + subrec('FULL', zstr("MFO MCM")) + subrec('VMAD', vmad.build())
-    body += subrec('DNAM', qust_dnam(0x0001)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
+    # kEnabled | kStartsEnabled, deliberately NOT run-once: SkyUI cannot
+    # re-register a run-once quest.
+    body += subrec('DNAM', qust_dnam(0x0011)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
     return record('QUST', FID_MCM_QUEST, 0, body)
 
 
@@ -239,7 +260,10 @@ def make_command_quest():
     body  = subrec('EDID', zstr("MFO_CommandQuest"))
     body += subrec('FULL', zstr("MFO Command"))
     # Start Game Enabled, NOT run-once: it must survive to be refilled.
-    body += subrec('DNAM', qust_dnam(0x0001))
+    # Priority 60: above vanilla's default 30 and above DialogueFollower's 50,
+    # below the scene quests at 80-96. Chosen ONCE and deliberately -- §4.6
+    # forbids escalating it in a fight with another mod.
+    body += subrec('DNAM', qust_dnam(0x0011, priority=60))
     body += subrec('NEXT', b'')
 
     # ── alias 0: the actor MFO is commanding, and the package it carries ──
@@ -303,6 +327,14 @@ def make_cast_package():
     # PSDT: any time, any day -- the DLL decides when, not the schedule.
     body += subrec('PSDT', bytes.fromhex('ffff00ffff30302900000000'))
     body += subrec('PKCU', struct.pack('<III', 11, FREF_TMPL_USEMAGIC, 1))
+    # QNAM -- TESPackage::ownerQuest. NON-NEGOTIABLE when any input uses
+    # PTDA targType=4: the alias VALUE is an index, and this is the quest it
+    # indexes into. A survey of Skyrim.esm found 627 packages targeting a
+    # reference alias and ALL 627 carry QNAM. The record this was copied from
+    # (MG07AncanoCastAtEye) omits it precisely BECAUSE its target is a specific
+    # reference, not an alias -- the target type changed here and the
+    # consequence did not follow.
+    body += subrec('QNAM', struct.pack('<I', FID_COMMAND_QUEST))
 
     # 11 inputs, in the template's declared order.
     body += pack_input("Location", 'PLDT', struct.pack('<IiI', 0, 0, 0x1F4))
