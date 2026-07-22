@@ -35,13 +35,29 @@ FID_ORDERS_SPELL   = OWN | 0x801   # Field Orders lesser power (the board opener
 FID_GRANTED_KYWD   = OWN | 0x802   # tags spells MFO tutored, for the revoke backstop
 FID_STARTUP_QUEST  = OWN | 0x804   # reserved; the DLL does the granting
 FID_MCM_QUEST      = OWN | 0x808   # carries the MCM Helper config script
-# 0x80A-0x80F  reserved: command QUST + alias pool + command globals (Tier B, M9)
+FID_COMMAND_QUEST  = OWN | 0x80A   # M9: carries the alias MFO fills with a target
+# 0x80B-0x80F  reserved: more command aliases / globals
 # 0x810+       reserved: player-side perks, if that is ever ruled in
-# 0x820+       reserved: MFO's own conditioned PACKAGEs (Tier B, M9)
+FID_CAST_PACKAGE   = OWN | 0x820   # M9: PACK instance riding vanilla UseMagic
+# 0x821+       reserved: one PACK per action verb (attack, travel, hold, activate)
 NEXT_OBJECT_ID     = 0x900         # first never-used local id
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
+
+# ── M9: vanilla PACKAGE TEMPLATES (PACK type 19) ───────────────────────────
+# Skyrim ships a template for every action MFO needs, so MFO authors NONE.
+# Verified by dumping Skyrim.esm (ENGINE_NOTES §0.17): 104 templates exist.
+FREF_TMPL_USEMAGIC     = 0x000504F5   # Spell, Target, CastTime, Cooldown, NumToCast
+FREF_TMPL_USEWEAPON    = 0x0001C338
+FREF_TMPL_HOLDPOSITION = 0x000503D0
+FREF_TMPL_TRAVEL       = 0x00016FAA
+FREF_TMPL_ACTIVATE     = 0x00019B2D
+
+# The first proof rides the SEEDED heal. Runtime-varying the spell is the next
+# step (§0.17): either mutate the live TESPackage's inputs, or fabricate the
+# record on the fly, which is where this is heading.
+FREF_HEAL_SELF = 0x00012FCC
 
 # ── binary helpers (forked from MEO/MRO — byte-for-byte valid) ──
 FORM_VERSION = 44
@@ -191,8 +207,97 @@ def make_mcm_quest():
     return record('QUST', FID_MCM_QUEST, 0, body)
 
 
+
+# ── M9: the command quest + its alias ───────────────────────────────────────
+def make_command_quest():
+    """The delivery route for a package onto a follower MFO does not own.
+
+    A PACK cannot name an arbitrary actor at author time, so the target is a
+    REFERENCE ALIAS (PTDA type 4) that the DLL fills at runtime with
+    ForceRefTo. One alias, reused: MFO acts on one follower per tick (§4.1a),
+    so a pool is not needed until parallel actions are.
+    """
+    body  = subrec('EDID', zstr("MFO_CommandQuest"))
+    body += subrec('FULL', zstr("MFO Command"))
+    # Start Game Enabled, NOT run-once: it must survive to be filled repeatedly.
+    body += subrec('DNAM', qust_dnam(0x0001))
+    body += subrec('NEXT', b'')
+    # Alias 0 — the actor a package is being pushed onto.
+    body += subrec('ALST', struct.pack('<I', 0))
+    body += subrec('ALID', zstr("MFO_CommandTarget"))
+    # 0x00000004 Allow Reserved, 0x00000010 Quest Object -- neither wanted.
+    # Flags 0: a plain forced reference, filled and cleared by the DLL.
+    body += subrec('FNAM', struct.pack('<I', 0))
+    body += subrec('VTCK', struct.pack('<I', 0))
+    body += subrec('ALED', b'')
+    body += subrec('ANAM', struct.pack('<I', 1))   # next alias id
+    return record('QUST', FID_COMMAND_QUEST, 0, body)
+
+
+# ── M9: the cast package ────────────────────────────────────────────────────
+def pack_input(kind, payload_type, payload):
+    """One templated-package data input: ANAM names the type, then its value."""
+    return subrec('ANAM', zstr(kind)) + subrec(payload_type, payload)
+
+
+def make_cast_package():
+    """A PACK INSTANCE riding vanilla `UseMagic` (000504F5).
+
+    Byte layout copied from a shipped vanilla instance, `MG07AncanoCastAtEye`
+    (0010F819), rather than invented -- that record is 524 bytes and proven in
+    the base game. MFO substitutes two slots:
+
+        PTDA type=1  -> the SPELL   (vanilla put MG08AncanoEyeSpell here)
+        PTDA type=4  -> the TARGET, a REFERENCE ALIAS instead of vanilla's
+                        type=0 specific reference, because MFO cannot name the
+                        actor at author time.
+
+    The remaining inputs are the vanilla values, deliberately: they are a
+    known-good configuration and every one MFO changes is a variable it then
+    has to defend. CastTime/Cooldown/NumToCast are exactly the bounds §4.5c
+    requires an action to carry.
+    """
+    body  = subrec('EDID', zstr("MFO_CastPackage"))
+    # PKDT: flags=0, type=18 (package), then vanilla's trailing bytes.
+    body += subrec('PKDT', struct.pack('<IBB', 0, 18, 0x00) + bytes.fromhex('024700000000'))
+    # PSDT: any time, any day -- the DLL decides when, not the schedule.
+    body += subrec('PSDT', bytes.fromhex('ffff00ffff30302900000000'))
+    body += subrec('PKCU', struct.pack('<III', 11, FREF_TMPL_USEMAGIC, 1))
+
+    # 11 inputs, in the template's declared order.
+    body += pack_input("Location", 'PLDT', struct.pack('<IiI', 0, 0, 0x1F4))
+    # Spell.
+    body += pack_input("TargetSelector", 'PTDA', struct.pack('<IIi', 1, FREF_HEAL_SELF, 0))
+    # Target -- ALIAS 0 of the command quest, filled at runtime.
+    body += pack_input("SingleRef", 'PTDA', struct.pack('<IIi', 4, 0, 0))
+    body += pack_input("Bool",  'CNAM', struct.pack('<B', 0))          # HoldWhenBlocked
+    body += pack_input("Float", 'CNAM', struct.pack('<f', 1.0))        # CastTimeMin
+    body += pack_input("Float", 'CNAM', struct.pack('<f', 3.0))        # CastTimeMax
+    body += pack_input("Float", 'CNAM', struct.pack('<f', 1.0))        # CooldownTimeMin
+    body += pack_input("Float", 'CNAM', struct.pack('<f', 3.0))        # CooldownTimeMax
+    body += pack_input("Int",   'CNAM', struct.pack('<i', 1))          # NumToCastMin
+    body += pack_input("Int",   'CNAM', struct.pack('<i', 1))          # NumToCastMax
+    body += pack_input("Bool",  'CNAM', struct.pack('<B', 0))          # DualCast
+
+    # Inherited-input markers, verbatim from the vanilla instance.
+    for i in range(0x02, 0x0d):
+        body += subrec('UNAM', struct.pack('<B', i))
+    body += subrec('XNAM', struct.pack('<B', 0x0d))
+
+    # Empty on-begin/end/change blocks, as vanilla ships them.
+    for blk in ('POBA', 'POEA', 'POCA'):
+        body += subrec(blk, b'')
+        body += subrec('INAM', struct.pack('<I', 0))
+        body += subrec('PDTO', struct.pack('<II', 0, 0))
+    return record('PACK', FID_CAST_PACKAGE, 0, body)
+
+
+def make_pack():
+    return group('PACK', make_cast_package())
+
+
 def make_qust():
-    return group('QUST', make_startup_quest() + make_mcm_quest())
+    return group('QUST', make_startup_quest() + make_mcm_quest() + make_command_quest())
 
 
 def main():
@@ -204,6 +309,7 @@ def main():
     data += make_mgef()
     data += make_spel()
     data += make_qust()
+    data += make_pack()
 
     out_path = os.path.join(out_dir, "MFO.esp")
     with open(out_path, 'wb') as f:
@@ -219,10 +325,11 @@ def main():
     seq_path = os.path.join(seq_dir, "MFO.seq")
     with open(seq_path, 'wb') as f:
         f.write(struct.pack('<I', FID_MCM_QUEST))
+        f.write(struct.pack('<I', FID_COMMAND_QUEST))
 
     print(f"MFO {VERSION}")
     print(f"Written: {out_path} ({len(data):,} bytes)")
-    print(f"Written: {seq_path} (1 start-game-enabled quest)")
+    print(f"Written: {seq_path} (2 start-game-enabled quests)")
     print()
     print("Records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{NEXT_OBJECT_ID:03X}")
@@ -231,6 +338,8 @@ def main():
     print(f"  SPEL  0x{FID_ORDERS_SPELL & 0xFFF:03X}        MFO_FieldOrdersPower (lesser power)")
     print(f"  QUST  0x{FID_STARTUP_QUEST & 0xFFF:03X}        MFO_StartupQuest (run once, no VMAD)")
     print(f"  QUST  0x{FID_MCM_QUEST & 0xFFF:03X}        MFO_MCMQuest (MFO_MCM script)")
+    print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (1 alias, DLL-filled)")
+    print(f"  PACK  0x{FID_CAST_PACKAGE & 0xFFF:03X}        MFO_CastPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X}")
 
 
 if __name__ == "__main__":
