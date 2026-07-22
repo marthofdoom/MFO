@@ -231,6 +231,27 @@ namespace MFO::Diagnostics {
                          t.latched, t.asserts, t.drifts, t.passes,
                          t.conflictMod ? "  [SmartNPCTargetSelector ALSO LOADED]" : "");
         }
+        // WHO IS ACTUALLY IN THE ALIAS.
+        //
+        // Added because a field test could not distinguish "the alias never
+        // filled" from "the alias filled and the package did not run" -- both
+        // look like "nothing happened", and a session was spent unable to tell
+        // them apart. BGSRefAlias::GetActorReference is a bound reader at the
+        // pinned rev, so this costs nothing and ends the ambiguity.
+        if (auto* q = Forms::g_commandQuest) {
+            spdlog::info("  command quest: {} (priority is a record byte, see 0.25)",
+                         q->IsRunning() ? "RUNNING" : "NOT running");
+            for (auto* a : q->aliases) {
+                auto* ra = a ? skyrim_cast<RE::BGSRefAlias*>(a) : nullptr;
+                if (!ra) continue;
+                auto* who = ra->GetActorReference();
+                spdlog::info("    alias {} '{}': {}", a->aliasID,
+                             a->aliasName.empty() ? "?" : a->aliasName.c_str(),
+                             who ? std::format("HOLDS {:08X} {}", who->GetFormID(),
+                                               who->GetName() ? who->GetName() : "?")
+                                 : std::string("empty"));
+            }
+        }
         spdlog::info("  papyrus VM: {} (dispatched {}, failed {})",
                      Papyrus::Available() ? "reachable" : "UNREACHABLE -- commanded casts disabled",
                      Papyrus::Dispatches(), Papyrus::Failures());
