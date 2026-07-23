@@ -1268,6 +1268,39 @@ POTION drinking (the drink-potion combat behavior uses it), so the CheckStartCas
 consent hook governs a follower's potion use as well as spell casting. Worth
 knowing when logistics and casting interact.
 
+### 0.30 The Scheduler tick runs on a JOB WORKER thread, and TES::ForEachReferenceInRange tears its worldspace pointer (2026-07-22)
+
+crash4: an `EXCEPTION_ACCESS_VIOLATION` inside the engine at
+`TESWorldSpace::sub_30B0B3  mov rdi,[rsi+0xF8]`, with `rsi = 0x450FE000_45242000`
+-- a **torn 64-bit pointer**, two mismatched 32-bit halves. Player in an exterior
+(Wilderness), 9 min in, moving. The MFO frame above the engine was a `std::function`
+inside `Logistics::LootNearby`.
+
+**Two findings, one crash.**
+
+1. **`RE::TES::ForEachReferenceInRange` is not safe in an exterior during a
+   stream.** Its exterior branch walks `gridCells` and then ends with
+   `worldSpace ? worldSpace->GetSkyCell() : nullptr` -- it dereferences
+   `TES::worldSpace`. During a worldspace/cell transition that global was being
+   rewritten, so the read tore and `GetSkyCell()` faulted on garbage. The fix:
+   iterate the follower's OWN parent cell -- `GetParentCell()`, gated on
+   `IsAttached()`, then `cell->ForEachReferenceInRange(pos, r, cb)`. The
+   cell-level method walks only that cell's reference list under the cell's
+   `BSSpinLock` and touches NO worldspace/grid/skycell pointer. Loot radius 600u
+   fits one 4096u cell. Bonus: interiors were also being walked with
+   `TES::interiorCell` (player-centered) at the FOLLOWER's origin -- the parent-cell
+   walk fixes that latent mismatch too.
+
+2. **The SKSE-task tick genuinely runs on a JOB WORKER thread**, not the main
+   thread. crash4's stack is `... -> skse64 task delegate -> Job_Post_process ->
+   BSJobs::JobThread`. So `Scheduler::Tick` and everything it calls
+   (ServiceFollower, logistics, Loadout::Tick, PublishSnapshot) execute off the
+   main thread, overlapping the cell-streaming threads. **The rule this sets:**
+   any world walk must stay READ-ONLY inside the walk and MUTATE AFTER on
+   re-resolved handles (LootNearby already does), and must iterate under an engine
+   lock (an attached cell's list qualifies) -- never chase unlocked globals. See
+   INVARIANTS #72.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

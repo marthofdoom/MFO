@@ -909,3 +909,23 @@ Use only the layout-stable members before 0x68: `combatGroup` (0x00),
 `REL::Module::IsAE()` and use manual offsets. This is the second time a
 plausible-looking pinned header was wrong (StartCombat relocation §0.12 was the
 first) -- a header compiling is not proof its layout matches the runtime.
+
+### 72. The tick is on a JOB thread: walks read-only, mutate after, iterate under a lock
+
+crash4 (§0.30) proved the SKSE-task tick runs on a `BSJobs` worker thread, not
+the main thread -- so `Scheduler::Tick` and everything it calls overlaps the
+engine's cell-streaming threads. Two rules follow, both mandatory for any code
+reached from the tick:
+
+- **Never call `RE::TES::ForEachReferenceInRange` (or otherwise chase
+  `TES::worldSpace`/`gridCells`/the skycell).** Those globals are rewritten
+  mid-transition and tore into a garbage pointer that CTD'd the game. Walk the
+  actor's OWN parent cell instead -- `GetParentCell()`, gated on `IsAttached()`,
+  then `cell->ForEachReferenceInRange(...)`, which iterates only that cell's
+  reference list under the cell's `BSSpinLock`.
+- **A world walk READS ONLY inside the walk and MUTATES AFTER** on re-resolved
+  handles (collect handles, then act). Mutating a container or a ref from inside
+  the walk, off the main thread, races the engine that owns it.
+
+This also retro-justifies the collect-then-act shape (#2) as a threading
+requirement, not just a re-entrancy nicety.

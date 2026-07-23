@@ -309,15 +309,28 @@ namespace MFO::Logistics {
                 ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) {
                 return false;
             }
-            auto* tes = RE::TES::GetSingleton();
-            if (!tes) return false;
+            // WALK THE FOLLOWER'S OWN CELL, NOT TES::ForEachReferenceInRange.
+            // crash4 (2026-07-22, exterior Wilderness): TES::ForEachReferenceInRange
+            // ends its exterior branch with `worldSpace->GetSkyCell()`, and
+            // TES::worldSpace was a TORN pointer (0x450FE000_45242000 -- two
+            // mismatched 32-bit halves) because the engine was mid worldspace/cell
+            // stream. It chases three engine-owned pointers (gridCells, worldSpace,
+            // skycell) that churn during a transition. The follower's parent cell,
+            // when ATTACHED, iterates only its own reference list (no worldspace
+            // deref at all -- see TESObjectCELL::ForEachReferenceInRange), and the
+            // 600u loot radius fits inside one 4096u cell, so nothing real is lost.
+            // The IsAttached gate also skips the walk outright during a transition,
+            // which is exactly when those pointers are unstable.
+            auto* cell = a_follower->GetParentCell();
+            if (!cell || !cell->IsAttached()) return false;
+            const auto origin = a_follower->GetPosition();
 
             // Eligible loot sources, collected inside the walk and acted on after
             // it. Bounded so a room full of corpses cannot make the tick unbounded.
             std::vector<RE::ObjectRefHandle> candidates;
             candidates.reserve(16);
 
-            tes->ForEachReferenceInRange(a_follower, kLootRadius,
+            cell->ForEachReferenceInRange(origin, kLootRadius,
                 [&](RE::TESObjectREFR& a_ref) {
                     if (candidates.size() >= 16) return RE::BSContainer::ForEachResult::kStop;
                     RE::TESObjectREFR* ref = &a_ref;
