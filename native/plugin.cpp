@@ -171,7 +171,7 @@ namespace {
                     : actor(a_actor), out(a_out), best(a_best) {}
                 RE::BSContainer::ForEachResult Visit(RE::SpellItem* a_spell) override {
                     if (!a_spell) return RE::BSContainer::ForEachResult::kContinue;
-                    if (a_spell->GetSpellType() != RE::MagicSystem::SpellType::kSpell)
+                    if (!MFO::Vocab::IsCastableSpell(a_spell))
                         return RE::BSContainer::ForEachResult::kContinue;
                     const float cost = a_spell->CalculateMagickaCost(actor);
                     if (cost < best) { best = cost; out = a_spell; }

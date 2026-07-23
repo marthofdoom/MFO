@@ -1164,7 +1164,7 @@ namespace MFO::Board {
                 struct SpellList : RE::Actor::ForEachSpellVisitor {
                     std::vector<std::pair<RE::FormID, std::string>>* out;
                     RE::BSContainer::ForEachResult Visit(RE::SpellItem* sp) override {
-                        if (sp && sp->GetSpellType() == RE::MagicSystem::SpellType::kSpell)
+                        if (MFO::Vocab::IsCastableSpell(sp))
                             out->emplace_back(sp->GetFormID(),
                                               sp->GetName() ? sp->GetName() : "?");
                         return RE::BSContainer::ForEachResult::kContinue;

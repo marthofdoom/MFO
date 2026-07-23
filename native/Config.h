@@ -47,7 +47,7 @@ namespace MFO::Config {
     // Board skin 0..3 (DESIGN §6.7a): Ebony & Brass / Dwemer Parchment /
     // Soul Cairn / Quicksilver. Live, MCM dropdown.
     inline std::atomic<int>   g_menuStyle{ 0 };
-    inline std::atomic<bool>  g_showHud{ true };
+    inline std::atomic<bool>  g_showHud{ false };
 
     // Writes test gambits onto a player-keyed record so the co-save round-trip
     // is provable without a UI. DEFAULT OFF: it is only meaningful if you
@@ -168,9 +168,11 @@ namespace MFO::Config {
 
 
     // Reset-then-parse both files, seed then MCM. Safe to call repeatedly.
-    // CURRENTLY CALLED ONLY AT kDataLoaded -- there is no MenuOpenCloseEvent
-    // sink yet, so MCM edits need a restart until M7 adds one. ARCHITECTURE
-    // 6 lists that sink as planned, not shipped.
+    // Called at kDataLoaded AND on Journal-Menu (MCM) close -- Diagnostics'
+    // MenuSink re-reads so MCM edits apply on closing the menu, not at next
+    // load. NOTE: settings read live from these atomics take effect
+    // immediately; a setting mirrored into derived UI state (g_showHud ->
+    // Board's g_hud) must be RE-APPLIED after Read() by whoever re-reads.
     void Read();
 
 }

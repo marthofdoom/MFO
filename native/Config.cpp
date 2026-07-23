@@ -161,7 +161,7 @@ namespace MFO::Config {
             g_rank2 = 250;  g_rank3 = 1000;  g_rank4 = 2500;  g_rank5 = 5000;
             g_enableLogging  = true;
             g_profileRapport = false;
-            g_showHud        = true;
+            g_showHud        = false;
             g_seedTestData   = false;
             g_seedEvaluatorRules = false;
             g_profileEvaluator   = false;

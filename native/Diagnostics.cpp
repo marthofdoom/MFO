@@ -77,7 +77,13 @@ namespace MFO::Diagnostics {
                 if (a_e && !a_e->opening && a_e->menuName == RE::JournalMenu::MENU_NAME) {
                     SKSE::GetTaskInterface()->AddTask([]() {
                         Config::Read();
-                        spdlog::info("[config] re-read after Journal/MCM close");
+                        // Re-apply settings mirrored into derived UI state --
+                        // the raw atomics are live, but g_showHud only reaches
+                        // the board's g_hud through SetHud. Without this a HUD
+                        // toggle in the MCM would not take until next load.
+                        Board::SetHud(Config::g_showHud.load());
+                        spdlog::info("[config] re-read after Journal/MCM close (HUD {})",
+                                     Config::g_showHud.load() ? "on" : "off");
                     });
                 }
                 return RE::BSEventNotifyControl::kContinue;

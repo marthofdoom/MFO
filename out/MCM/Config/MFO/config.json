@@ -7,67 +7,247 @@
       "pageDisplayName": "Gameplay",
       "cursorFillMode": "topToBottom",
       "content": [
-        { "text": "Rapport", "type": "header" },
-        { "text": "Rapport rate", "type": "slider", "help": "Multiplier on all rapport earned.",
-          "valueOptions": { "min": 0.0, "max": 5.0, "step": 0.05, "sourceType": "ModSettingFloat", "modSettingName": "fRapportRate:General" } },
-        { "text": "Rapport per kill", "type": "slider",
-          "valueOptions": { "min": 0.0, "max": 10.0, "step": 0.5, "sourceType": "ModSettingFloat", "modSettingName": "fRapportKill:General" } },
-        { "text": "Boss multiplier", "type": "slider", "help": "Rapport multiplier for killing a foe this many levels above you.",
-          "valueOptions": { "min": 1.0, "max": 20.0, "step": 0.5, "sourceType": "ModSettingFloat", "modSettingName": "fRapportBossMult:General" } },
-        { "text": "Dragon multiplier", "type": "slider",
-          "valueOptions": { "min": 1.0, "max": 30.0, "step": 0.5, "sourceType": "ModSettingFloat", "modSettingName": "fRapportDragonMult:General" } },
-        { "text": "Boss level delta", "type": "slider", "help": "A foe at least this many levels above you counts as a boss.",
-          "valueOptions": { "min": 1, "max": 30, "step": 1, "sourceType": "ModSettingInt", "modSettingName": "iBossLevelDelta:General" } },
-        { "text": "Shared-kill radius", "type": "slider", "help": "A follower within this range shares the kill credit.",
-          "valueOptions": { "min": 500.0, "max": 8000.0, "step": 100.0, "sourceType": "ModSettingFloat", "modSettingName": "fSharedRadius:General" } },
-        { "text": "Count summon kills", "type": "toggle",
-          "valueOptions": { "sourceType": "ModSettingBool", "modSettingName": "bAllowSummons:General" } }
+        {
+          "text": "Rapport",
+          "type": "header"
+        },
+        {
+          "text": "Rapport rate",
+          "type": "slider",
+          "help": "Multiplier on all rapport earned.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 5.0,
+            "step": 0.05,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fRapportRate:General"
+          }
+        },
+        {
+          "text": "Rapport per kill",
+          "type": "slider",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 10.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fRapportKill:General"
+          }
+        },
+        {
+          "text": "Boss multiplier",
+          "type": "slider",
+          "help": "Rapport multiplier for killing a foe this many levels above you.",
+          "valueOptions": {
+            "min": 1.0,
+            "max": 20.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fRapportBossMult:General"
+          }
+        },
+        {
+          "text": "Dragon multiplier",
+          "type": "slider",
+          "valueOptions": {
+            "min": 1.0,
+            "max": 30.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fRapportDragonMult:General"
+          }
+        },
+        {
+          "text": "Boss level delta",
+          "type": "slider",
+          "help": "A foe at least this many levels above you counts as a boss.",
+          "valueOptions": {
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "sourceType": "ModSettingInt",
+            "modSettingName": "iBossLevelDelta:General"
+          }
+        },
+        {
+          "text": "Shared-kill radius",
+          "type": "slider",
+          "help": "A follower within this range shares the kill credit.",
+          "valueOptions": {
+            "min": 500.0,
+            "max": 8000.0,
+            "step": 100.0,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fSharedRadius:General"
+          }
+        },
+        {
+          "text": "Count summon kills",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "modSettingName": "bAllowSummons:General"
+          }
+        }
       ]
     },
     {
       "pageDisplayName": "Combat & Casting",
       "cursorFillMode": "topToBottom",
       "content": [
-        { "text": "Gambits", "type": "header" },
-        { "text": "Seed default rules", "type": "toggle", "help": "Give each follower a starting gambit list. Turn off to author your own from scratch.",
-          "valueOptions": { "sourceType": "ModSettingBool", "modSettingName": "bSeedEvaluatorRules:General" } },
-        { "text": "Equip spells to cast", "type": "toggle", "help": "Put a gambit spell in the follower's hand so their own AI casts it.",
-          "valueOptions": { "sourceType": "ModSettingBool", "modSettingName": "bEquipToCast:General" } },
-        { "text": "Influence casting (mobile)", "type": "toggle", "help": "Let a follower cast a gambit spell while still moving and fighting. Installs a hook; needs a game restart.",
-          "valueOptions": { "sourceType": "ModSettingBool", "modSettingName": "bCasterHook:General" } },
-        { "text": "Commanded targeting", "type": "toggle", "help": "Let attack gambits pick which foe a follower fights. Needs a game restart.",
-          "valueOptions": { "sourceType": "ModSettingBool", "modSettingName": "bCommandTarget:General" } },
-        { "text": "Timing", "type": "header" },
-        { "text": "Cast cooldown (s)", "type": "slider", "help": "Minimum seconds between a follower's gambit casts.",
-          "valueOptions": { "min": 0.0, "max": 30.0, "step": 0.5, "sourceType": "ModSettingFloat", "modSettingName": "fCastCooldown:General" } },
-        { "text": "AI cast grace (s)", "type": "slider", "help": "How long to wait for the follower's own AI to cast before MFO does it silently.",
-          "valueOptions": { "min": 0.0, "max": 15.0, "step": 0.5, "sourceType": "ModSettingFloat", "modSettingName": "fAiCastGrace:General" } },
-        { "text": "Magicka reserve", "type": "slider", "help": "Fraction of magicka a gambit will not spend below. 0 = spend freely.",
-          "valueOptions": { "min": 0.0, "max": 0.9, "step": 0.05, "sourceType": "ModSettingFloat", "modSettingName": "fMagickaReserve:General" } }
+        {
+          "text": "Gambits",
+          "type": "header"
+        },
+        {
+          "text": "Seed default rules",
+          "type": "toggle",
+          "help": "Give each follower a starting gambit list. Turn off to author your own from scratch.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "modSettingName": "bSeedEvaluatorRules:General"
+          }
+        },
+        {
+          "text": "Equip spells to cast",
+          "type": "toggle",
+          "help": "Put a gambit spell in the follower's hand so their own AI casts it.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "modSettingName": "bEquipToCast:General"
+          }
+        },
+        {
+          "text": "Influence casting (mobile)",
+          "type": "toggle",
+          "help": "Let a follower cast a gambit spell while still moving and fighting. Installs a hook; needs a game restart.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "modSettingName": "bCasterHook:General"
+          }
+        },
+        {
+          "text": "Commanded targeting",
+          "type": "toggle",
+          "help": "Let attack gambits pick which foe a follower fights. Needs a game restart.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "modSettingName": "bCommandTarget:General"
+          }
+        },
+        {
+          "text": "Timing",
+          "type": "header"
+        },
+        {
+          "text": "Cast cooldown (s)",
+          "type": "slider",
+          "help": "Minimum seconds between a follower's gambit casts.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 30.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fCastCooldown:General"
+          }
+        },
+        {
+          "text": "AI cast grace (s)",
+          "type": "slider",
+          "help": "How long to wait for the follower's own AI to cast before MFO does it silently.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 15.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fAiCastGrace:General"
+          }
+        },
+        {
+          "text": "Magicka reserve",
+          "type": "slider",
+          "help": "Fraction of magicka a gambit will not spend below. 0 = spend freely.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 0.9,
+            "step": 0.05,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fMagickaReserve:General"
+          }
+        }
       ]
     },
     {
       "pageDisplayName": "Logistics",
       "cursorFillMode": "topToBottom",
       "content": [
-        { "text": "Non-combat behaviour", "type": "header" },
-        { "text": "Enable logistics", "type": "toggle", "help": "Let followers drink potions and loot arrows/potions/gear out of combat.",
-          "valueOptions": { "sourceType": "ModSettingBool", "modSettingName": "bLogistics:General" } },
-        { "text": "First-dibs delay (s)", "type": "slider", "help": "How long a follower waits before looting an item, leaving it for you first.",
-          "valueOptions": { "min": 0.0, "max": 120.0, "step": 1.0, "sourceType": "ModSettingFloat", "modSettingName": "fFirstDibsDelay:General" } },
-        { "text": "QuickLoot waiver (s)", "type": "slider", "help": "Once you loot from a source, followers may take the rest after this short delay.",
-          "valueOptions": { "min": 0.5, "max": 30.0, "step": 0.5, "sourceType": "ModSettingFloat", "modSettingName": "fQuickLootWaiver:General" } }
+        {
+          "text": "Non-combat behaviour",
+          "type": "header"
+        },
+        {
+          "text": "Enable logistics",
+          "type": "toggle",
+          "help": "Let followers drink potions and loot arrows/potions/gear out of combat.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "modSettingName": "bLogistics:General"
+          }
+        },
+        {
+          "text": "First-dibs delay (s)",
+          "type": "slider",
+          "help": "How long a follower waits before looting an item, leaving it for you first.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 120.0,
+            "step": 1.0,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fFirstDibsDelay:General"
+          }
+        },
+        {
+          "text": "QuickLoot waiver (s)",
+          "type": "slider",
+          "help": "Once you loot from a source, followers may take the rest after this short delay.",
+          "valueOptions": {
+            "min": 0.5,
+            "max": 30.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "modSettingName": "fQuickLootWaiver:General"
+          }
+        }
       ]
     },
     {
       "pageDisplayName": "Interface",
       "cursorFillMode": "topToBottom",
       "content": [
-        { "text": "Board skin", "type": "enum", "help": "The gambit board's look.",
-          "valueOptions": { "sourceType": "ModSettingInt", "modSettingName": "iMenuStyle:General" },
-          "enumOptions": [ "Ebony & Brass", "Dwemer Parchment", "Soul Cairn", "Quicksilver" ] },
-        { "text": "Show combat HUD", "type": "toggle",
-          "valueOptions": { "sourceType": "ModSettingBool", "modSettingName": "bShowHud:General" } }
+        {
+          "text": "Board skin",
+          "type": "enum",
+          "help": "The gambit board's look.",
+          "valueOptions": {
+            "sourceType": "ModSettingInt",
+            "modSettingName": "iMenuStyle:General"
+          },
+          "enumOptions": [
+            "Ebony & Brass",
+            "Dwemer Parchment",
+            "Soul Cairn",
+            "Quicksilver"
+          ]
+        },
+        {
+          "text": "Show combat HUD",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "modSettingName": "bShowHud:General",
+            "defaultValue": 0
+          }
+        }
       ]
     }
   ]

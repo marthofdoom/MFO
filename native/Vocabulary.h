@@ -16,6 +16,23 @@
 
 namespace MFO::Vocab {
 
+    // WHAT COUNTS AS A REAL, PICKABLE SPELL. marth, 2026-07-22: the picker was
+    // listing "non-spell spells" -- a follower's spell list (VisitSpells) is
+    // full of PASSIVE entries typed as spells: racial/perk constant-effect
+    // abilities, granted always-on effects. They are kSpell by type but a
+    // follower can never volitionally cast them. The distinguishing mark is the
+    // casting type: kConstantEffect is applied-and-held, never a deliberate
+    // cast. A castable spell fires-and-forgets or is concentrated. This is the
+    // one gate for both the board picker and the seed's auto-pick, so they can
+    // never disagree about what a spell is.
+    [[nodiscard]] inline bool IsCastableSpell(const RE::SpellItem* a_sp) {
+        if (!a_sp) return false;
+        if (a_sp->GetSpellType() != RE::MagicSystem::SpellType::kSpell) return false;
+        if (a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConstantEffect) return false;
+        return true;
+    }
+
+
     // Who a condition reads / an action targets.
     enum class Subject : std::uint8_t {
         Self   = 0,
