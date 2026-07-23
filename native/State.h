@@ -72,11 +72,15 @@ namespace MFO {
     inline constexpr std::uint8_t kMaxRank = 5;
 
     // Slots by rank -- DESIGN.md 5.2. Index 0 unused so rank indexes directly.
-    // Logistics is deliberately shallow: 5 slots covers the whole 4.8
-    // vocabulary (3 potions + ammo + equipment), so Rank V is fully
-    // self-sufficient rather than merely closer to it.
+    //
+    // RANK I MUST HOLD THE DEFAULT KIT, or a co-save round-trip truncates it
+    // (#11) and the base gambits a follower ships with silently vanish. The kit
+    // (Followers::ApplyDefaultKit) is 2 combat (Attack, Wait) and 4 logistics
+    // (drink, loot arrows/potions/gear), so both fit Rank I. Logistics starts
+    // LARGER and grows SLOWER than combat (marth): a steady utility track, not a
+    // combat-power curve. Combat starts lean and opens up fast.
     inline constexpr std::uint8_t kCombatSlotsByRank[kMaxRank + 1]    = { 0, 2, 4, 6, 8, 12 };
-    inline constexpr std::uint8_t kLogisticsSlotsByRank[kMaxRank + 1] = { 0, 1, 2, 3, 4, 5 };
+    inline constexpr std::uint8_t kLogisticsSlotsByRank[kMaxRank + 1] = { 0, 4, 5, 6, 7, 8 };
 
     inline std::uint8_t SlotsForRank(std::uint8_t a_rank, Table a_table) {
         const auto r = std::clamp<std::uint8_t>(a_rank, 1, kMaxRank);

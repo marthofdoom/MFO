@@ -148,6 +148,10 @@ namespace {
                              a->GetFormID(), a->GetName(), rec->combat().size());
                 rec->combat().clear();
             }
+            // Clear LOGISTICS too. It was appended unconditionally below, so
+            // every load with the flag on used to DUPLICATE the four defaults
+            // (4, then 8, then 12 ...). Reseed means replace, both tables.
+            rec->logistics().clear();
 
             // SEED A SPELL THEY ACTUALLY KNOW.
             //

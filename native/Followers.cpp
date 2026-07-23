@@ -5,10 +5,32 @@
 #include "Packages.h"
 #include "Forms.h"
 #include "Config.h"
+#include "Vocabulary.h"
 
 namespace MFO::Followers {
 
     namespace {
+
+        // EVERY follower's base gambits, applied ONCE when the record is first
+        // created. NOT seeding-behind-a-test-flag (marth: nothing should be
+        // seeded that can't be manually set) -- every op here is in the board's
+        // pickers, so the player can edit, reorder or delete any of it. Sized to
+        // the Rank I slots (2 combat, 4 logistics) so a co-save round-trip never
+        // truncates it (#11). The co-save LOAD path assigns g_followers[] a
+        // fully-populated record directly, so it never routes through here --
+        // loaded edits are never overwritten.
+        void ApplyDefaultKit(FollowerState& st) {
+            auto add = [](std::vector<Gambit>& tab, const char* cond, float p, const char* act) {
+                Gambit g{}; g.conditionOpcode = cond; g.conditionParam = p; g.actionOpcode = act;
+                tab.push_back(g);
+            };
+            add(st.combat(), Vocab::kCondFoeLowestHp, 0.0f,  Vocab::kActAttack);  // fight the weakest foe
+            add(st.combat(), Vocab::kCondAlways,      0.0f,  Vocab::kActWait);     // otherwise hold
+            add(st.logistics(), Vocab::kCondSelfHpBelow,          0.50f, Vocab::kActDrinkHealthPotion);
+            add(st.logistics(), Vocab::kCondSelfOutOfArrows,      10.0f, Vocab::kActLootArrows);
+            add(st.logistics(), Vocab::kCondSelfLowHealthPotion,   2.0f, Vocab::kActLootPotions);
+            add(st.logistics(), Vocab::kCondAlways,               0.0f,  Vocab::kActLootEquipment);
+        }
 
         // ── quirk table (data/follower_quirks.json, hand-compiled) ──────────
         // Kept as code rather than parsed at runtime: no file paths to break
@@ -166,7 +188,13 @@ namespace MFO::Followers {
                           a_actorID);
             return nullptr;
         }
-        return &g_followers[a_actorID];
+        auto [it, created] = g_followers.try_emplace(a_actorID);
+        if (created) {
+            ApplyDefaultKit(it->second);   // editable base gambits, every follower
+            spdlog::info("[follower] {:08X} new record -- seeded {} combat / {} logistics defaults",
+                         a_actorID, it->second.combat().size(), it->second.logistics().size());
+        }
+        return &it->second;
     }
 
     FollowerState& EnsureRecord(RE::FormID a_actorID) {

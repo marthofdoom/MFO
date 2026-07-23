@@ -85,6 +85,12 @@ namespace MFO::Board {
             case 0xCD: return ImGuiKey_RightArrow;
             case 0x1C: return ImGuiKey_Enter;
             case 0x12: return ImGuiKey_Enter;   // E — Skyrim's activate key
+            // Text-editing keys, so a typed value (double-click a value) is
+            // actually editable and not just fillable.
+            case 0x0E: return ImGuiKey_Backspace;
+            case 0xD3: return ImGuiKey_Delete;
+            case 0xC7: return ImGuiKey_Home;
+            case 0xCF: return ImGuiKey_End;
             default:   return ImGuiKey_None;
             }
         }
@@ -115,24 +121,53 @@ namespace MFO::Board {
 
     void QueueEdit(EditCmd c) { std::scoped_lock lk(g_editMx); g_edits.push_back(c); }
 
-    // The vocabulary the editor cycles through, opcode + human label. Frozen
-    // opcode strings (#10); labels are UI only.
-    struct VocabEntry { const char* op; const char* label; };
-    inline constexpr VocabEntry kConds[] = {
-        { Vocab::kCondAlways,        "Always" },
-        { Vocab::kCondSelfHpBelow,   "Self HP % below" },
-        { Vocab::kCondSelfMpBelow,   "Self Magicka % below" },
-        { Vocab::kCondSelfSpBelow,   "Self Stamina % below" },
-        { Vocab::kCondPlayerHpBelow, "Player HP % below" },
-        { Vocab::kCondFoeLowestHp,   "Foe: lowest HP" },
-        { Vocab::kCondFoeHpBelow,    "Foe: HP % below" },
-        { Vocab::kCondFoeAny,        "Foe: nearest" },
+    // The vocabulary the editor cycles through, opcode + human label + what its
+    // param MEANS. Frozen opcode strings (#10); labels are UI only.
+    //
+    // ParamKind drives the param widget AND fixes the "1000%" bug: a count
+    // condition (arrows < 10) stored 10.0 and was rendered as 10*100 = 1000%.
+    // Percent params are fractions 0..1 shown as a %; Count params are whole
+    // numbers; None conditions take no param at all.
+    enum class ParamKind : std::uint8_t { None, Percent, Count };
+    struct VocabEntry { const char* op; const char* label; ParamKind kind = ParamKind::None; };
+
+    // COMBAT and LOGISTICS have DISTINCT vocabularies. The editor shows the set
+    // that matches the table you are editing -- so a logistics rule can actually
+    // pick "loot potions", which the old single combat-only table made
+    // impossible (marth: "no way to assign" the logistics gambits).
+    inline constexpr VocabEntry kCondsCombat[] = {
+        { Vocab::kCondAlways,        "Always",               ParamKind::None    },
+        { Vocab::kCondSelfHpBelow,   "Self HP % below",      ParamKind::Percent },
+        { Vocab::kCondSelfMpBelow,   "Self Magicka % below", ParamKind::Percent },
+        { Vocab::kCondSelfSpBelow,   "Self Stamina % below", ParamKind::Percent },
+        { Vocab::kCondPlayerHpBelow, "Player HP % below",    ParamKind::Percent },
+        { Vocab::kCondFoeLowestHp,   "Foe: lowest HP",       ParamKind::None    },
+        { Vocab::kCondFoeHpBelow,    "Foe: HP % below",      ParamKind::Percent },
+        { Vocab::kCondFoeAny,        "Foe: nearest",         ParamKind::None    },
     };
-    inline constexpr VocabEntry kActs[] = {
+    inline constexpr VocabEntry kActsCombat[] = {
         { Vocab::kActWait,       "Wait" },
         { Vocab::kActCastSelf,   "Cast on self" },
         { Vocab::kActCastTarget, "Cast at foe" },
         { Vocab::kActAttack,     "Attack" },
+    };
+    inline constexpr VocabEntry kCondsLogi[] = {
+        { Vocab::kCondAlways,              "Always",                ParamKind::None    },
+        { Vocab::kCondSelfHpBelow,         "Self HP % below",       ParamKind::Percent },
+        { Vocab::kCondSelfMpBelow,         "Self Magicka % below",  ParamKind::Percent },
+        { Vocab::kCondSelfSpBelow,         "Self Stamina % below",  ParamKind::Percent },
+        { Vocab::kCondSelfLowHealthPotion, "Health potions below",  ParamKind::Count   },
+        { Vocab::kCondSelfLowStaminaPotion,"Stamina potions below", ParamKind::Count   },
+        { Vocab::kCondSelfLowMagickaPotion,"Magicka potions below", ParamKind::Count   },
+        { Vocab::kCondSelfOutOfArrows,     "Arrows below",          ParamKind::Count   },
+    };
+    inline constexpr VocabEntry kActsLogi[] = {
+        { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
+        { Vocab::kActDrinkStaminaPotion, "Drink stamina potion" },
+        { Vocab::kActDrinkMagickaPotion, "Drink magicka potion" },
+        { Vocab::kActLootArrows,         "Loot arrows" },
+        { Vocab::kActLootPotions,        "Loot potions" },
+        { Vocab::kActLootEquipment,      "Loot equipment" },
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
         int cur = 0;
@@ -142,6 +177,10 @@ namespace MFO::Board {
     const char* labelFor(const std::string& op, const VocabEntry* tab, int n) {
         for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].label;
         return op.empty() ? "(unset)" : op.c_str();
+    }
+    ParamKind kindFor(const std::string& op, const VocabEntry* tab, int n) {
+        for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].kind;
+        return ParamKind::None;
     }
 
         // ── SKINS (DESIGN §6.7a, standing family rule) ──────────────────────
@@ -365,6 +404,14 @@ namespace MFO::Board {
                         const auto& rules = combat ? who->combat : who->logistics;
                         const int slots = combat ? who->combatSlots : who->logisticsSlots;
 
+                        // The vocabulary for the table being edited.
+                        const VocabEntry* condTab = combat ? kCondsCombat : kCondsLogi;
+                        const int condN = combat ? (int)std::size(kCondsCombat)
+                                                 : (int)std::size(kCondsLogi);
+                        const VocabEntry* actTab = combat ? kActsCombat : kActsLogi;
+                        const int actN = combat ? (int)std::size(kActsCombat)
+                                                : (int)std::size(kActsLogi);
+
                         if (ImGui::RadioButton("Combat", combat)) selTable = 0;
                         ImGui::SameLine();
                         if (ImGui::RadioButton("Logistics", !combat)) selTable = 1;
@@ -376,7 +423,7 @@ namespace MFO::Board {
                                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                             ImGui::TableSetupColumn("On",   ImGuiTableColumnFlags_WidthFixed, 34);
                             ImGui::TableSetupColumn("When (condition)", ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn("%",    ImGuiTableColumnFlags_WidthFixed, 70);
+                            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 78);
                             ImGui::TableSetupColumn("Do (action)",      ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("Spell",ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 118);
@@ -398,16 +445,38 @@ namespace MFO::Board {
                                 ImGui::SameLine();
                                 if (ImGui::SmallButton(">")) QueueEdit({ EditKind::CycleCond, sel, selTable, rv.uid,  1 });
                                 ImGui::SameLine();
-                                ImGui::TextUnformatted(labelFor(rv.condOp, kConds, (int)std::size(kConds)));
+                                ImGui::TextUnformatted(labelFor(rv.condOp, condTab, condN));
                                 if (rv.lastFired) { ImGui::SameLine(); ImGui::TextColored(
                                     ImVec4(0.4f,0.9f,0.4f,1), "*"); }
 
-                                // Threshold %
+                                // Param cell -- the widget matches what the
+                                // condition's param MEANS (marth's rule): a
+                                // percentage is a click-drag %-slider; a count is
+                                // a whole-number drag that also types (double- or
+                                // ctrl-click) for keyboard players; a param-less
+                                // condition shows a dash.
                                 ImGui::TableNextColumn();
-                                float pct = rv.param * 100.0f;
                                 ImGui::SetNextItemWidth(-1);
-                                if (ImGui::DragFloat("##p", &pct, 1.0f, 0.0f, 100.0f, "%.0f%%"))
-                                    QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid, pct/100.0f });
+                                switch (kindFor(rv.condOp, condTab, condN)) {
+                                case ParamKind::Percent: {
+                                    float pct = std::clamp(rv.param, 0.0f, 1.0f) * 100.0f;
+                                    if (ImGui::DragFloat("##p", &pct, 0.5f, 0.0f, 100.0f, "%.0f%%"))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    std::clamp(pct, 0.0f, 100.0f) / 100.0f });
+                                    break; }
+                                case ParamKind::Count: {
+                                    int n = (int)(rv.param + 0.5f);   // counts are whole
+                                    // Min 1: "fewer than 0" can never be true -- a
+                                    // dead rule with no hint. 1 is the tightest
+                                    // useful threshold.
+                                    if (ImGui::DragInt("##p", &n, 0.25f, 1, 999))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    (float)std::clamp(n, 1, 999) });
+                                    break; }
+                                default:
+                                    ImGui::TextDisabled("-");
+                                    break;
+                                }
 
                                 // Action -- cycle
                                 ImGui::TableNextColumn();
@@ -415,7 +484,7 @@ namespace MFO::Board {
                                 ImGui::SameLine();
                                 if (ImGui::SmallButton(">##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, rv.uid,  1 });
                                 ImGui::SameLine();
-                                ImGui::TextUnformatted(labelFor(rv.actOp, kActs, (int)std::size(kActs)));
+                                ImGui::TextUnformatted(labelFor(rv.actOp, actTab, actN));
 
                                 // Spell picker -- only meaningful for cast
                                 // actions. Lists the follower's own known spells.
@@ -478,7 +547,7 @@ namespace MFO::Board {
 
                         ImGui::Spacing();
                         ImGui::TextDisabled("Top rule wins -- order is priority. A green * fired last tick. "
-                                            "Spell assignment arrives next.");
+                                            "Drag a value, or double-click to type it.");
                     }
                     ImGui::EndTabItem();
                 }
@@ -764,6 +833,19 @@ namespace MFO::Board {
                     std::scoped_lock lk(g_ioMx);
                     ImGui::GetIO().ClearInputKeys();
                 }
+                // TEXT INPUT. The Skyrim ButtonEvent sink delivers KEY codes, not
+                // characters, so a text box (double-click a value to type it) got
+                // no glyphs. WM_CHAR carries the translated character -- the same
+                // path the game's console and name fields use, so it is always
+                // pumped -- and ImGui wants it via AddInputCharacter. Only while
+                // the panel is open, and only when a widget actually wants text,
+                // so ordinary gameplay keypresses are never captured.
+                else if (uMsg == WM_CHAR && g_open.load() && g_ready.load()) {
+                    std::scoped_lock lk(g_ioMx);
+                    auto& io = ImGui::GetIO();
+                    if (io.WantTextInput && wParam > 0 && wParam < 0x10000)
+                        io.AddInputCharacterUTF16(static_cast<ImWchar16>(wParam));
+                }
                 return func(hWnd, uMsg, wParam, lParam);
             }
             static inline WNDPROC func;
@@ -905,6 +987,18 @@ namespace MFO::Board {
                         const auto code = b->GetIDCode();
                         const bool down = b->IsDown();
 
+                        // Is ImGui itself using the input right now -- a text box
+                        // is active, or a combo/popup is open? Then the BACK key
+                        // (Esc / gamepad B) must CANCEL that widget, not close the
+                        // whole panel. Without this a pad user who opens the spell
+                        // picker or Follower combo can only escape it by closing
+                        // everything -- the §6.5 controller-parity floor. Read
+                        // under the io lock we already hold, so it is race-free
+                        // against the render thread and reflects the last frame.
+                        const bool imguiBusy = io.WantTextInput ||
+                            ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
+                                                        ImGuiPopupFlags_AnyPopupLevel);
+
                         switch (b->device.get()) {
                         case RE::INPUT_DEVICE::kMouse:
                             if (code <= 4) io.AddMouseButtonEvent(static_cast<int>(code), down);
@@ -914,7 +1008,16 @@ namespace MFO::Board {
 
                         case RE::INPUT_DEVICE::kKeyboard:
                             if (code == 0x01 || code == 0x0F) {          // Esc / Tab
-                                if (down) g_wantClose = true;
+                                // A PRESS with nothing open closes the panel;
+                                // every other edge drives ImGui's Escape (cancel
+                                // the popup/text box). Routing ALL releases to
+                                // ImGui -- even when we are no longer busy -- is
+                                // deliberate: the popup often closes between the
+                                // press and the release, and a dropped release
+                                // would leave ImGuiKey_Escape stuck down for the
+                                // session, killing cancel after one use.
+                                if (down && !imguiBusy) g_wantClose = true;
+                                else io.AddKeyEvent(ImGuiKey_Escape, down);
                             } else if (code == ShoutKey(RE::INPUT_DEVICE::kKeyboard)) {
                                 // Close on RELEASE, swallow both edges. Closing on
                                 // the press leaks the release to the game, which
@@ -928,8 +1031,13 @@ namespace MFO::Board {
 
                         case RE::INPUT_DEVICE::kGamepad:
                             if (static_cast<RE::BSWin32GamepadDevice::Key>(code) ==
-                                    RE::BSWin32GamepadDevice::Key::kB && down) {
-                                g_wantClose = true;
+                                    RE::BSWin32GamepadDevice::Key::kB) {
+                                // Same symmetric routing as keyboard Esc -- a
+                                // press with nothing open closes the panel, all
+                                // other edges drive ImGui Escape, and every
+                                // release reaches ImGui so B-cancel never sticks.
+                                if (down && !imguiBusy) g_wantClose = true;
+                                else io.AddKeyEvent(ImGuiKey_Escape, down);
                             } else if (code == ShoutKey(RE::INPUT_DEVICE::kGamepad)) {
                                 if (down) g_shoutDownSeen = true;
                                 else if (g_shoutDownSeen.exchange(false)) g_wantClose = true;
@@ -1062,7 +1170,11 @@ namespace MFO::Board {
                 const int slots = SlotsForRank(it->second.rank, static_cast<Table>(table));
                 if ((int)tab.size() < slots) {
                     Gambit g; g.uid = NextRuleUID();
-                    g.conditionOpcode = Vocab::kCondAlways; g.actionOpcode = Vocab::kActWait;
+                    // Default to a rule that is VALID in this table's vocabulary
+                    // -- a logistics rule seeded with the combat-only kActWait
+                    // would show a raw opcode and cycle from nowhere.
+                    g.conditionOpcode = Vocab::kCondAlways;
+                    g.actionOpcode = (table == 1) ? Vocab::kActLootEquipment : Vocab::kActWait;
                     tab.push_back(g);
                 }
                 continue;
@@ -1080,11 +1192,19 @@ namespace MFO::Board {
             case EditKind::MoveDown: if (i+1 < (int)tab.size()) std::swap(tab[i], tab[i+1]); break;
             case EditKind::Toggle: tab[i].enabled = !tab[i].enabled; break;
             case EditKind::CycleCond: {
-                int n = cycleIdx(tab[i].conditionOpcode, kConds, (int)std::size(kConds), (int)c.param);
-                tab[i].conditionOpcode = kConds[n].op; break; }
+                // Cycle within THIS table's vocabulary, so logistics rules reach
+                // logistics conditions and combat rules reach combat ones.
+                const VocabEntry* t = (table == 1) ? kCondsLogi : kCondsCombat;
+                const int tn = (table == 1) ? (int)std::size(kCondsLogi)
+                                            : (int)std::size(kCondsCombat);
+                int n = cycleIdx(tab[i].conditionOpcode, t, tn, (int)c.param);
+                tab[i].conditionOpcode = t[n].op; break; }
             case EditKind::CycleAct: {
-                int n = cycleIdx(tab[i].actionOpcode, kActs, (int)std::size(kActs), (int)c.param);
-                tab[i].actionOpcode = kActs[n].op; break; }
+                const VocabEntry* t = (table == 1) ? kActsLogi : kActsCombat;
+                const int tn = (table == 1) ? (int)std::size(kActsLogi)
+                                            : (int)std::size(kActsCombat);
+                int n = cycleIdx(tab[i].actionOpcode, t, tn, (int)c.param);
+                tab[i].actionOpcode = t[n].op; break; }
             case EditKind::SetParam: tab[i].conditionParam = c.param; break;
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
             default: break;
