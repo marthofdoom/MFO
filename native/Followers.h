@@ -77,6 +77,11 @@ namespace MFO::Followers {
     FollowerState* TryEnsureRecord(RE::FormID a_actorID);
     FollowerState& EnsureRecord(RE::FormID a_actorID);
 
+    // Lay down the base gambit kit (2 combat, 4 logistics). Called on record
+    // creation and as a load-time backfill for a pre-defaults save whose board
+    // is entirely empty. See the definition for the full contract.
+    void ApplyDefaultKit(FollowerState& st);
+
     // Is this actor currently one of ours? Reads THE SUBJECT's state.
     bool IsTracked(RE::FormID a_actorID);
 

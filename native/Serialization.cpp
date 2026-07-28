@@ -321,6 +321,16 @@ namespace MFO {
                     spdlog::warn("[cosave] {:08X} already loaded; a second record resolved to the "
                                  "same id and OVERWRITES it", resolvedID);
                 }
+                // MIGRATION BACKFILL: a record saved before default gambits
+                // existed loads with both tables empty and, since load assigns
+                // g_followers[] directly (never TryEnsureRecord), would stay
+                // blank forever. A fully-empty board is never a desirable end
+                // state, so give it the base kit. Any record with even one rule
+                // is left exactly as authored.
+                if (st.combat().empty() && st.logistics().empty()) {
+                    Followers::ApplyDefaultKit(st);
+                    spdlog::info("[cosave] {:08X} had an empty board -- backfilled default kit", resolvedID);
+                }
                 g_followers[resolvedID] = std::move(st);
                 ++loaded;
             }

@@ -84,7 +84,6 @@ namespace MFO::Config {
             else if (a_key == "fRapportKill")       setF(g_rapportKill,       0.0f, 1000.0f);
             else if (a_key == "fRapportBossMult")   setF(g_rapportBossMult,   0.0f, 1000.0f);
             else if (a_key == "fRapportDragonMult") setF(g_rapportDragonMult, 0.0f, 1000.0f);
-            else if (a_key == "fRapportSurvival")   setF(g_rapportSurvival,   0.0f, 1000.0f);
             else if (a_key == "fSharedRadius")      setF(g_sharedRadius,      0.0f, 1000000.0f);
             else if (a_key == "iBossLevelDelta")    setI(g_bossLevelDelta, 1, 1000);   // 0 would make every equal-level kill a boss
             else if (a_key == "iRapportRank2")      setI(g_rank2, 1, 100000000);
@@ -155,30 +154,33 @@ namespace MFO::Config {
             g_rapportKill       = 1.0f;
             g_rapportBossMult   = 5.0f;
             g_rapportDragonMult = 10.0f;
-            g_rapportSurvival   = 1.0f;
             g_sharedRadius      = 3000.0f;
             g_bossLevelDelta    = 5;
             g_rank2 = 250;  g_rank3 = 1000;  g_rank4 = 2500;  g_rank5 = 5000;
             g_enableLogging  = true;
             g_profileRapport = false;
             g_showHud        = false;
+            g_menuStyle      = 0;
             g_seedTestData   = false;
             g_seedEvaluatorRules = false;
             g_profileEvaluator   = false;
             g_suppressWindow     = 1.5f;
+            g_casterHook         = true;
+            g_casterMode         = 1;
+            g_usePackages        = false;
             g_castSource         = 3;
-            g_equipToCast        = false;
+            g_equipToCast        = true;
             g_aiCastGrace        = 3.0f;
             g_magickaReserve     = 0.0f;
             g_castCooldown       = 4.0f;
             g_driveCaster        = false;
             g_commandCast        = false;
-            g_commandTarget      = false;
+            g_commandTarget      = true;
             g_focusKey           = 0x2B;
             g_twoHandedDebounce  = 6.0f;
             g_sharedCombatGrace  = 15.0f;
-            g_logistics          = false;
-            g_firstDibsDelay     = 25.0f;
+            g_logistics          = true;
+            g_firstDibsDelay     = 4.0f;
             g_quickLootWaiver    = 4.0f;
         }
 

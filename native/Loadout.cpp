@@ -187,6 +187,18 @@ namespace MFO::Loadout {
             return Ready::AlreadyReady;
         }
 
+        // RATE LIMIT (fCastCooldown). After a cast, StartCooldown stamps
+        // g_coolUntil; until it expires MFO does not put a spell back into an
+        // empty/weapon hand, so casts pace at the configured interval and the
+        // follower fights normally in between. Placed AFTER the already-holding
+        // and own-spell returns above, so a spell currently in hand is left
+        // alone -- this only gates a NEW equip. This is what makes fCastCooldown
+        // an actual knob instead of a timer nothing reads.
+        if (CoolingDown(id)) {
+            a_why = "cast cooling down";
+            return Ready::Debounced;
+        }
+
         if (hands.grip == Grip::TwoHanded) {
             // A two-hander must be STOWED to cast: visible, interrupts the
             // attack, and a frequently-firing rule would leave them endlessly

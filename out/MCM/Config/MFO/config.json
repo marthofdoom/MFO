@@ -100,15 +100,6 @@
           "type": "header"
         },
         {
-          "text": "Seed default rules",
-          "type": "toggle",
-          "help": "Give each follower a starting gambit list. Turn off to author your own from scratch.",
-          "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "modSettingName": "bSeedEvaluatorRules:General"
-          }
-        },
-        {
           "text": "Equip spells to cast",
           "type": "toggle",
           "help": "Put a gambit spell in the follower's hand so their own AI casts it.",

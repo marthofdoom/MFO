@@ -210,11 +210,12 @@ namespace MFO::Logistics {
 
         bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
             // Generalized by CATEGORY, never by item (§4.8.2). One better piece
-            // per tick (one action per tick, §4.3). Transfer only -- "equip what
-            // was looted" is deferred: force-equipping re-enters the equip sinks
-            // (INVARIANTS #3) and collides with Loadout's hand/debt ledger, so it
-            // needs Loadout coordination and its own milestone. The follower's
-            // own AI equips better owned gear in the meantime.
+            // per tick (one action per tick, §4.3). We TRANSFER, then EQUIP -- a
+            // real person who finds a better cuirass puts it on, they do not just
+            // carry it (marth: the follower is a thinking person). Safe here
+            // because logistics runs OUT of combat, where Loadout is not holding
+            // a hand for a cast, and MFO has no equip-event sink to loop on;
+            // armor slots are independent of the (left-hand) spell hand.
             RE::TESBoundObject* best   = nullptr;
             std::int32_t        bestCt = 0;
 
@@ -241,6 +242,13 @@ namespace MFO::Logistics {
 
             a_src->RemoveItem(best, bestCt, RE::ITEM_REMOVE_REASON::kStoreInContainer,
                               nullptr, a_follower);
+
+            // PUT IT ON. EquipObject on a slot-conflicting armor auto-unequips
+            // the worse piece; a weapon takes the right hand. queue=true so the
+            // engine applies it on its own next update rather than synchronously
+            // re-entering here.
+            if (auto* eq = RE::ActorEquipManager::GetSingleton())
+                eq->EquipObject(a_follower, best);
             return true;
         }
 

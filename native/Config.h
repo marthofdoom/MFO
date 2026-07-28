@@ -30,7 +30,6 @@ namespace MFO::Config {
     inline std::atomic<float> g_rapportKill{ 1.0f };
     inline std::atomic<float> g_rapportBossMult{ 5.0f };
     inline std::atomic<float> g_rapportDragonMult{ 10.0f };
-    inline std::atomic<float> g_rapportSurvival{ 1.0f };
     inline std::atomic<float> g_sharedRadius{ 3000.0f };
     // Levels ABOVE the player at which a kill counts as a boss. IsUnique()
     // alone missed generic dungeon bosses (a bandit chief with a boss bar).
@@ -73,17 +72,19 @@ namespace MFO::Config {
     // the Papyrus twin of CastSpellImmediate. Kept behind a flag only to
     // measure whether it deducts magicka; it is NOT the animation answer.
     inline std::atomic<bool>  g_commandCast{ false };
-    // THE ATTACK VERB (ENGINE_NOTES §0.14). Installs a vfunc hook, so it is
-    // OFF until measured -- #45: one new engine mechanism per release, proven
-    // before it is trusted.
-    inline std::atomic<bool>  g_commandTarget{ false };
+    // THE ATTACK VERB (ENGINE_NOTES §0.14). Installs a vfunc hook. Now ON by
+    // default: it has been field-proven (the flagship Attack gambit no-ops
+    // without it -- audit 2026-07-28), so #45's probe gate has been cleared.
+    inline std::atomic<bool>  g_commandTarget{ true };
     // DIK code for the focus hotkey. 0x2B is backslash -- unbound in vanilla
     // Skyrim, so it will not fight an existing control. 0 disables.
     inline std::atomic<int>   g_focusKey{ 0x2B };
-    // OFF by default: it mutates player-visible equipment for a payoff that is
-    // still unproven, and #57 says do not ship what you told yourself to probe.
-    // The test guide turns it on for the session that measures it.
-    inline std::atomic<bool>  g_equipToCast{ false };
+    // Put the gambit spell in the follower's hand so they cast it with a real
+    // animation, and -- crucially -- so Loadout::Prepare's HasSpell/affordability
+    // gate runs (the silent path skips it and would cast an unknown spell). Now
+    // ON by default: this is the honest cast path, and its competence gate is
+    // required by DESIGN §5.4 / INVARIANTS #20 (audit 2026-07-28).
+    inline std::atomic<bool>  g_equipToCast{ true };
     // How long MFO waits, after putting a spell in a follower's hand, for their
     // OWN AI to cast it before casting silently instead. Zero would recreate
     // the confound this exists to prevent.
@@ -119,11 +120,12 @@ namespace MFO::Config {
 
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc
-    // hook, so OFF by default (#45).
-    inline std::atomic<bool>  g_casterHook{ false };
+    // hook. Now ON by default (field-proven; audit 2026-07-28).
+    inline std::atomic<bool>  g_casterHook{ true };
     // 0 = LOG only (observe the AI's answer, change nothing -- the read-only
-    // experiment). 1 = FORCE (override a veto to YES when latched).
-    inline std::atomic<int>   g_casterMode{ 0 };
+    // experiment). 1 = FORCE (override a veto to YES when latched). Ships in
+    // FORCE: LOG changes nothing, so the mod would not cast in LOG mode.
+    inline std::atomic<int>   g_casterMode{ 1 };
 
     // PROBE, default off. Drive the MagicCaster state machine by hand instead
     // of applying the effect: SetCurrentSpell + desiredTarget + RequestCastImpl,
@@ -139,19 +141,20 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_profileEvaluator{ false };
     inline std::atomic<float> g_suppressWindow{ 1.5f };
     // -- logistics (DESIGN §4.8) ---------------------------------------------
-    // The whole non-combat table is GATED OFF by default, like every new
-    // subsystem (#45): a follower who loots and drinks changes player-visible
-    // inventory and world state, so it does not run until asked. With this off,
-    // Scheduler evaluates only the combat table and MFO is byte-identical to
-    // today out of combat.
-    inline std::atomic<bool>  g_logistics{ false };
+    // The non-combat table (drink/loot/restock). Now ON by default: a follower
+    // who tidies up after a fight is core to the mod feeling like a real person,
+    // and every action is gated by ownership, locks and the first-dibs delay
+    // below (audit 2026-07-28).
+    inline std::atomic<bool>  g_logistics{ true };
     // FIRST DIBS BY DELAY (#22h). A corpse/container is not eligible for
     // follower looting until it has been in the follower's consideration radius
     // this many seconds -- long enough that a player who wants the good sword
-    // has walked over and taken it. (DESIGN §4.8.3 names this fLootDelaySeconds;
-    // the key is fFirstDibsDelay per the M6 brief -- a NEW key, so no #37
-    // rename hazard.)
-    inline std::atomic<float> g_firstDibsDelay{ 25.0f };
+    // has walked over and taken it. 4s, not 25: the clock only ticks OUT of
+    // combat (logistics runs post-fight), so 25 meant the player had walked away
+    // and looting looked dead. 4s reads as "the follower tidies up once the
+    // fight is over" while still leaving the player first pick. (DESIGN §4.8.3
+    // names this fLootDelaySeconds; the shipped key is fFirstDibsDelay.)
+    inline std::atomic<float> g_firstDibsDelay{ 4.0f };
     // THE WAIVER, collapsed but NEVER zeroed (#22h). Once the player takes from
     // a ref its delay drops to this -- not to 0, because QuickLoot IE (Nexus
     // 181813, in 4 of 5 lists here) takes items ONE AT A TIME over several

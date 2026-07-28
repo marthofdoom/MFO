@@ -127,6 +127,17 @@ namespace MFO::CasterConsent {
             spdlog::info("[consent] bCasterHook=0 -- CheckStartCast hook NOT installed");
             return;
         }
+        // VR GUARD, mirroring Targeting::InstallHook. These are SE/AE
+        // CombatMagicCaster vtables at a fixed index; on VR the layout is
+        // unverified and slot 0x06 could be an unrelated virtual, so writing it
+        // would call garbage on every combat caster -- an instant CTD nowhere
+        // near MFO. Now that bCasterHook defaults ON, this guard is what keeps a
+        // VR player from that crash out of the box.
+        if (REL::Module::IsVR()) {
+            spdlog::warn("[consent] VR runtime detected -- CheckStartCast vtable indices are not "
+                         "verified for VR; hook NOT installed.");
+            return;
+        }
         if (g_hooked.exchange(true)) return;
 
         // VTABLE INDICES, not sourced offsets -- version-resilient. All 14
