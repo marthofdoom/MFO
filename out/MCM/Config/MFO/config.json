@@ -1,6 +1,7 @@
 {
   "modName": "MFO",
   "displayName": "Follower Overhaul",
+  "minMcmVersion": 9,
   "cursorFillMode": "topToBottom",
   "pages": [
     {
@@ -221,14 +222,14 @@
           "help": "The gambit board's look.",
           "valueOptions": {
             "sourceType": "ModSettingInt",
-            "modSettingName": "iMenuStyle:General"
-          },
-          "enumOptions": [
-            "Ebony & Brass",
-            "Dwemer Parchment",
-            "Soul Cairn",
-            "Quicksilver"
-          ]
+            "modSettingName": "iMenuStyle:General",
+            "options": [
+              "Ebony & Brass",
+              "Dwemer Parchment",
+              "Soul Cairn",
+              "Quicksilver"
+            ]
+          }
         },
         {
           "text": "Show combat HUD",
