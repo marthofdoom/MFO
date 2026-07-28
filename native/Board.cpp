@@ -296,9 +296,35 @@ namespace MFO::Board {
                                 static_cast<unsigned long long>(snap.frame), snap.minutes);
             ImGui::Separator();
 
+            // LB/RB switch tabs on a controller. ImGui does not do this for a
+            // tab bar on its own, so drive it manually: the shoulder edges move
+            // a tab index and each BeginTabItem is told to select itself when
+            // the index points at it. Gated on !IsAnyItemActive so L1/R1 still
+            // serve tweak-fast/slow while a value is being edited. A mouse click
+            // resyncs s_tab inside the opened tab body.
+            static int s_tab = 0;
+            static bool s_tabForce = false;   // apply SetSelected for ONE frame after a shoulder edge
+            constexpr int kTabCount = 5;
+            // Don't steal L1/R1 while an item is being tweaked (they serve
+            // tweak fast/slow) or while a popup is open (a combo would be torn
+            // out from under the user).
+            if (!ImGui::IsAnyItemActive() &&
+                !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+                if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) { s_tab = (s_tab + 1) % kTabCount; s_tabForce = true; }
+                if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) { s_tab = (s_tab + kTabCount - 1) % kTabCount; s_tabForce = true; }
+            }
+            // SetSelected ONLY on the frame after a shoulder press. Forcing it
+            // every frame would re-assert s_tab and revert a mouse click on a
+            // different tab (it flashed then snapped back). Between presses the
+            // opened tab's body syncs s_tab, so mouse selection sticks.
+            auto tabSel = [&](int i) -> ImGuiTabItemFlags {
+                return (s_tabForce && s_tab == i) ? ImGuiTabItemFlags_SetSelected : 0;
+            };
+
             if (ImGui::BeginTabBar("##tabs")) {
 
-                if (ImGui::BeginTabItem("Followers")) {
+                if (ImGui::BeginTabItem("Followers", nullptr, tabSel(0))) {
+                    s_tab = 0;
                     ImGui::TextDisabled("%zu tracked  (active + retained)", snap.rows.size());
                     ImGui::Spacing();
 
@@ -376,7 +402,8 @@ namespace MFO::Board {
                 }
 
                 // ── THE GAMBIT EDITOR (M7) ──────────────────────────────
-                if (ImGui::BeginTabItem("Gambits")) {
+                if (ImGui::BeginTabItem("Gambits", nullptr, tabSel(1))) {
+                    s_tab = 1;
                     static RE::FormID sel = 0;
                     static int selTable = 0;   // 0 combat, 1 logistics
 
@@ -393,6 +420,7 @@ namespace MFO::Board {
                                 if (!r.active) continue;
                                 ImGui::PushID((int)r.id);
                                 if (ImGui::Selectable(r.name.c_str(), r.id == sel)) sel = r.id;
+                                if (r.id == sel) ImGui::SetItemDefaultFocus();   // pad opens onto current
                                 ImGui::PopID();
                             }
                             ImGui::EndCombo();
@@ -423,7 +451,7 @@ namespace MFO::Board {
                                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                             ImGui::TableSetupColumn("On",   ImGuiTableColumnFlags_WidthFixed, 34);
                             ImGui::TableSetupColumn("When (condition)", ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 78);
+                            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 104);
                             ImGui::TableSetupColumn("Do (action)",      ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("Spell",ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 118);
@@ -449,29 +477,46 @@ namespace MFO::Board {
                                 if (rv.lastFired) { ImGui::SameLine(); ImGui::TextColored(
                                     ImVec4(0.4f,0.9f,0.4f,1), "*"); }
 
-                                // Param cell -- the widget matches what the
-                                // condition's param MEANS (marth's rule): a
-                                // percentage is a click-drag %-slider; a count is
-                                // a whole-number drag that also types (double- or
-                                // ctrl-click) for keyboard players; a param-less
-                                // condition shows a dash.
+                                // Param cell. The widget matches what the param
+                                // MEANS (marth's rule): a percentage is a %-slider,
+                                // a count is a whole number, a param-less condition
+                                // shows a dash. FLANKED BY < > STEPPERS so a
+                                // controller sets any value without entering
+                                // tweak mode -- the same nav-focusable SmallButton
+                                // the condition/action cyclers use. Mouse-drag and
+                                // double-click-to-type still work on the middle.
                                 ImGui::TableNextColumn();
-                                ImGui::SetNextItemWidth(-1);
                                 switch (kindFor(rv.condOp, condTab, condN)) {
                                 case ParamKind::Percent: {
+                                    if (ImGui::SmallButton("<##pv"))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    std::clamp(rv.param - 0.05f, 0.0f, 1.0f) });
+                                    ImGui::SameLine(0, 2);
+                                    ImGui::SetNextItemWidth(46);
                                     float pct = std::clamp(rv.param, 0.0f, 1.0f) * 100.0f;
                                     if (ImGui::DragFloat("##p", &pct, 0.5f, 0.0f, 100.0f, "%.0f%%"))
                                         QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
                                                     std::clamp(pct, 0.0f, 100.0f) / 100.0f });
+                                    ImGui::SameLine(0, 2);
+                                    if (ImGui::SmallButton(">##pv"))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    std::clamp(rv.param + 0.05f, 0.0f, 1.0f) });
                                     break; }
                                 case ParamKind::Count: {
+                                    // Min 1: "fewer than 0" can never be true.
                                     int n = (int)(rv.param + 0.5f);   // counts are whole
-                                    // Min 1: "fewer than 0" can never be true -- a
-                                    // dead rule with no hint. 1 is the tightest
-                                    // useful threshold.
+                                    if (ImGui::SmallButton("<##pv"))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    (float)std::clamp(n - 1, 1, 999) });
+                                    ImGui::SameLine(0, 2);
+                                    ImGui::SetNextItemWidth(46);
                                     if (ImGui::DragInt("##p", &n, 0.25f, 1, 999))
                                         QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
                                                     (float)std::clamp(n, 1, 999) });
+                                    ImGui::SameLine(0, 2);
+                                    if (ImGui::SmallButton(">##pv"))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    (float)std::clamp(n + 1, 1, 999) });
                                     break; }
                                 default:
                                     ImGui::TextDisabled("-");
@@ -547,12 +592,13 @@ namespace MFO::Board {
 
                         ImGui::Spacing();
                         ImGui::TextDisabled("Top rule wins -- order is priority. A green * fired last tick. "
-                                            "Drag a value, or double-click to type it.");
+                                            "Set a value with < >, drag, or double-click to type.");
                     }
                     ImGui::EndTabItem();
                 }
 
-                if (ImGui::BeginTabItem("Measurements")) {
+                if (ImGui::BeginTabItem("Measurements", nullptr, tabSel(2))) {
+                    s_tab = 2;
                     ImGui::TextDisabled("The two numbers this build exists to take.");
                     ImGui::Spacing();
 
@@ -602,7 +648,8 @@ namespace MFO::Board {
                     ImGui::EndTabItem();
                 }
 
-                if (ImGui::BeginTabItem("Probe")) {
+                if (ImGui::BeginTabItem("Probe", nullptr, tabSel(3))) {
+                    s_tab = 3;
                     ImGui::TextWrapped("M4: fire one engine primitive at a follower and watch what "
                                        "happens. These answer questions no source states -- they are "
                                        "emergent engine behaviour. Nothing here persists.");
@@ -723,7 +770,8 @@ namespace MFO::Board {
                     ImGui::EndTabItem();
                 }
 
-                if (ImGui::BeginTabItem("Config")) {
+                if (ImGui::BeginTabItem("Config", nullptr, tabSel(4))) {
+                    s_tab = 4;
                     // SKIN -- live, no reload (§6.7a). g_menuStyle is an atomic,
                     // so a render-thread store is fine; PushSkin reads it next
                     // frame.
@@ -754,9 +802,22 @@ namespace MFO::Board {
 
                 ImGui::EndTabBar();
             }
+            s_tabForce = false;   // consumed this frame; mouse clicks own s_tab again
 
             ImGui::Separator();
-            ImGui::TextDisabled("Field Orders / Esc / B closes.  Skin: %s -- change it in Config.", skin.name);
+            // CONTEXTUAL PROMPTS. What the ACCEPT and BACK keys do changes with
+            // state -- editing a value vs a combo open vs plain navigation -- so
+            // the hint follows the state. Text glyphs (no controller font is
+            // loaded) with the keyboard equivalent inline, so one strip serves
+            // pad and keyboard. Drawn on the render thread between NewFrame and
+            // Render, where IsAnyItemActive/IsPopupOpen are valid.
+            if (ImGui::IsAnyItemActive())
+                ImGui::TextDisabled("[A]/E confirm   [B]/Esc cancel   < > adjust   (drag or type too)");
+            else if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+                ImGui::TextDisabled("[A]/E select   [B]/Esc close   d-pad to move");
+            else
+                ImGui::TextDisabled("[A]/E select   [B]/Esc close   [LB]/[RB] tabs   d-pad move   -   Skin: %s (Config)",
+                                    skin.name);
             ImGui::End();
             ImGui::PopStyleColor(skinCols);
         }
@@ -988,14 +1049,17 @@ namespace MFO::Board {
                         const bool down = b->IsDown();
 
                         // Is ImGui itself using the input right now -- a text box
-                        // is active, or a combo/popup is open? Then the BACK key
-                        // (Esc / gamepad B) must CANCEL that widget, not close the
-                        // whole panel. Without this a pad user who opens the spell
-                        // picker or Follower combo can only escape it by closing
-                        // everything -- the §6.5 controller-parity floor. Read
-                        // under the io lock we already hold, so it is race-free
-                        // against the render thread and reflects the last frame.
+                        // is active, a combo/popup is open, OR a widget is in
+                        // tweak mode (a value drag the pad activated with A)?
+                        // Then the BACK key (Esc / gamepad B) must CANCEL that
+                        // widget, not close the whole panel. IsAnyItemActive is
+                        // the one that covers a DragFloat/DragInt being nudged --
+                        // without it, pressing B to back out of a value edit
+                        // closed the entire board (the §6.5 controller-parity
+                        // floor). Read under the io lock we already hold, so it
+                        // is race-free against the render thread.
                         const bool imguiBusy = io.WantTextInput ||
+                            ImGui::IsAnyItemActive() ||
                             ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
                                                         ImGuiPopupFlags_AnyPopupLevel);
 
