@@ -58,6 +58,24 @@ linked set from the vcpkg install tree rather than from memory, and reproduce
 each licence verbatim from its own repository. Assuming a licence is the same
 mistake as assuming an engine mechanism.
 
+## nlohmann/json
+
+Added with the optional Leveling integration to read/write another mod's
+per-follower JSON state. MIT licence. Statically linked; fetched by vcpkg
+(`nlohmann-json`). Include its MIT notice from its repository.
+
+## Optional interop credit — Follower Leveling System Redone (Nexus 181813)
+
+MFO's **Leveling** board tab is an OPTIONAL interoperability feature for
+*Follower Leveling System Redone* / *A Fun Way To Level Followers* by
+**TrumanGIT** (https://www.nexusmods.com/skyrimspecialedition/mods/181813).
+
+MFO is **not affiliated** with that mod, **requires** it for the tab to appear,
+and **includes none of its files** — no DLL, no config, no assets. The tab is
+MFO's own independent implementation that interoperates with that mod's on-disk
+save-state. It is hidden entirely when that mod is not installed. Credit to
+TrumanGIT for the leveling system this tab drives.
+
 ## Planned additions (not yet dependencies)
 
 The ImGui board (roadmap M7) will add **Dear ImGui**. Add its notice in the
