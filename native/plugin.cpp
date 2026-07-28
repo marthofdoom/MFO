@@ -14,7 +14,6 @@
 #include "CasterConsent.h"
 #include "Packages.h"
 #include "Logistics.h"
-#include "Leveling.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -251,7 +250,6 @@ namespace {
             MFO::Followers::ResolveQuirks();
             MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
             MFO::CasterConsent::InstallHook();   // the influence hook, likewise
-            MFO::Leveling::RefreshDetection();   // optional interop: is 181813 loaded?
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
             MFO::Logistics::RegisterSinks();   // the player-looted waiver sink (§4.8.3)
             MFO::Diagnostics::Install();

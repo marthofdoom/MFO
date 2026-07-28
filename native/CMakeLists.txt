@@ -3,16 +3,15 @@
 # sources, never write a build system from memory.
 #
 # imgui carries the dx11-binding/win32-binding features for the in-game Field
-# Kit. nlohmann-json arrived with the optional Leveling integration (Leveling.cpp):
-# it reads/writes another mod's per-follower JSON state, which needs a real,
-# format-preserving parser (the gambit vocabulary is still codegen'd, not parsed).
+# Kit. There is deliberately still NO json dependency: the vocabulary is
+# codegen'd into a header at commit time, so no runtime parser ships in the
+# DLL (ARCHITECTURE.md §8.2).
 cmake_minimum_required(VERSION 3.21)
 
 project(MFO VERSION 0.6.0 LANGUAGES CXX)
 
 find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
 
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     plugin.cpp
@@ -33,10 +32,9 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Targeting.cpp
     Packages.cpp
     CasterConsent.cpp
-    Leveling.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
 target_precompile_headers(${PROJECT_NAME} PRIVATE PCH.h)
-target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui d3d11 nlohmann_json::nlohmann_json)
+target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui d3d11)
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
