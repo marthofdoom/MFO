@@ -96,6 +96,7 @@ namespace MFO::Config {
             else if (a_key == "bShowHud")           setB(g_showHud);
             else if (a_key == "bSeedTestData")      setB(g_seedTestData);
             else if (a_key == "bSeedEvaluatorRules") setB(g_seedEvaluatorRules);
+            else if (a_key == "bDebugUnlockSlots")   setB(g_debugUnlockSlots);
             else if (a_key == "bProfileEvaluator")  setB(g_profileEvaluator);
             else if (a_key == "fSuppressWindow")    setF(g_suppressWindow, 0.0f, 60.0f);
             else if (a_key == "iCastSource")        setI(g_castSource, 0, 3);
@@ -163,6 +164,7 @@ namespace MFO::Config {
             g_menuStyle      = 0;
             g_seedTestData   = false;
             g_seedEvaluatorRules = false;
+            g_debugUnlockSlots   = false;
             g_profileEvaluator   = false;
             g_suppressWindow     = 1.5f;
             g_casterHook         = true;

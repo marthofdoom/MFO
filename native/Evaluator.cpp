@@ -214,7 +214,8 @@ namespace MFO::Eval {
 
     }
 
-    Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state, Table a_table) {
+    Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state, Table a_table,
+                    int a_startIndex) {
         Choice out;
         if (!a_follower) return out;
 
@@ -222,7 +223,7 @@ namespace MFO::Eval {
 
         const auto& list = a_table == Table::Combat ? a_state.combat()
                                                      : a_state.logistics();
-        for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+        for (int i = std::max(0, a_startIndex); i < static_cast<int>(list.size()); ++i) {
             const auto& g = list[i];
             if (!g.enabled) continue;
 

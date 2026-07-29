@@ -139,6 +139,11 @@ namespace MFO::Config {
     // -- evaluator (M5) ------------------------------------------------------
     inline std::atomic<bool>  g_seedEvaluatorRules{ false };
     inline std::atomic<bool>  g_profileEvaluator{ false };
+
+    // DEBUG: unlock every gambit slot regardless of rank/rapport, so all
+    // gambits are assignable without grinding. SlotsForRank returns the Rank V
+    // allowance when set. Default off.
+    inline std::atomic<bool>  g_debugUnlockSlots{ false };
     inline std::atomic<float> g_suppressWindow{ 1.5f };
     // -- logistics (DESIGN §4.8) ---------------------------------------------
     // The non-combat table (drink/loot/restock). Now ON by default: a follower

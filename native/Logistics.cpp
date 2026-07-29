@@ -515,50 +515,68 @@ namespace MFO::Logistics {
 
         if (a_state.logistics().empty()) return;   // no rules -> nothing to run
 
-        // First-match-wins over the LOGISTICS table, same scan as combat (§4.3).
-        const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics);
-        if (choice.ruleIndex < 0) return;           // §4.4: no match -> no engine call
-
-        const auto& op = choice.actionOpcode;
+        // FALL-THROUGH scan. Try matching rules in order until one ACTUALLY
+        // acts. A rule that matches but whose action finds nothing -- "loot
+        // potions" with no potions nearby, "loot better gear" with no upgrade,
+        // a drink on cooldown -- must NOT shadow the useful rules below it. That
+        // shadow was why looting looked dead: the near-always-true low-potions
+        // rule (a Requiem follower rarely carries >=2) won every tick and found
+        // nothing, so "loot equipment" was never reached. Still at most ONE real
+        // action per tick (§4.8.3); the loop only skips PAST non-acting matches.
         bool  acted = false;
-        const char* label = op.c_str();
+        int   fired = -1;
+        std::string label;   // a COPY -- `choice` is loop-scoped; c_str() would dangle
+        for (int start = 0; ; ) {
+            const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
+            if (choice.ruleIndex < 0) break;          // nothing (more) matched
+            const auto& op = choice.actionOpcode;
+            fired = choice.ruleIndex;
+            label = op;
 
-        if      (op == Vocab::kActDrinkHealthPotion)  acted = DrinkBest(a_follower, RE::ActorValue::kHealth);
-        else if (op == Vocab::kActDrinkStaminaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kStamina);
-        else if (op == Vocab::kActDrinkMagickaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kMagicka);
-        else if (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows, now);
-        else if (op == Vocab::kActLootPotions) {
-            // Loot the resource the RULE'S CONDITION names, so "stamina potions
-            // below N -> loot potions" loots stamina. A non-potion condition
-            // (e.g. Always) leaves want = kNone -> any restorative.
-            RE::ActorValue want = RE::ActorValue::kNone;
-            if (choice.ruleIndex >= 0 && choice.ruleIndex < (int)a_state.logistics().size()) {
+            if      (op == Vocab::kActDrinkHealthPotion)  acted = DrinkBest(a_follower, RE::ActorValue::kHealth);
+            else if (op == Vocab::kActDrinkStaminaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kStamina);
+            else if (op == Vocab::kActDrinkMagickaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kMagicka);
+            else if (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows, now);
+            else if (op == Vocab::kActLootPotions) {
+                // Loot the resource the RULE'S CONDITION names, so "stamina
+                // potions below N -> loot potions" loots stamina; a non-potion
+                // condition (Always) leaves want = kNone -> any restorative.
+                RE::ActorValue want = RE::ActorValue::kNone;
                 const auto& cond = a_state.logistics()[choice.ruleIndex].conditionOpcode;
                 if      (cond == Vocab::kCondSelfLowHealthPotion)  want = RE::ActorValue::kHealth;
                 else if (cond == Vocab::kCondSelfLowStaminaPotion) want = RE::ActorValue::kStamina;
                 else if (cond == Vocab::kCondSelfLowMagickaPotion) want = RE::ActorValue::kMagicka;
+                acted = LootNearby(a_follower, Category::Potions, now, want);
             }
-            acted = LootNearby(a_follower, Category::Potions, now, want);
-        }
-        else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, now);
-        else if (op == Vocab::kActWait)               return;   // consume the tick, no log
-        else {
-            // Unknown / non-logistics opcode in the logistics table: fail closed
-            // and say so, never fall through to something else (mirrors Actuation).
-            spdlog::info("[logistics] {:08X} rule {} has non-logistics action '{}' -- ignored",
-                         id, choice.ruleIndex, op);
-            return;
+            else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, now);
+            else if (op == Vocab::kActWait) {
+                return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.
+            }
+            else {
+                // Unknown / non-logistics opcode: skip PAST it so a stray rule
+                // cannot shadow the rest (does not fall through to a real action).
+                spdlog::info("[logistics] {:08X} rule {} has non-logistics action '{}' -- skipped",
+                             id, choice.ruleIndex, op);
+                start = choice.ruleIndex + 1;
+                continue;
+            }
+
+            if (acted) break;                  // did something real -> done this tick
+            start = choice.ruleIndex + 1;      // matched but no-op -> try the next rule
         }
 
         if (acted) {
-            spdlog::info("[logistics] {:08X} rule {} fired: {}", id, choice.ruleIndex, label);
+            spdlog::info("[logistics] {:08X} rule {} fired: {}", id, fired, label);
         } else {
-            // LOG THE ZERO CASE (#46), but only at debug so the ~1 s idle tick of
-            // a follower with nothing to loot/drink does not flood. "ran and
-            // found nothing" must be distinguishable from "never ran" (#53); the
-            // ServiceFollower call itself is the heartbeat.
-            spdlog::debug("[logistics] {:08X} rule {} ({}) found nothing to do",
-                          id, choice.ruleIndex, label);
+            // Heartbeat so "serviced, nothing to do" is distinguishable from
+            // "never ran" (#53) -- promoted from debug (never written at info
+            // level) to a RATE-LIMITED info line, once per follower per ~30 s.
+            static std::unordered_map<RE::FormID, Clock::time_point> s_nextIdleLog;
+            auto& nxt = s_nextIdleLog[id];
+            if (nxt.time_since_epoch().count() == 0 || now >= nxt) {
+                nxt = now + std::chrono::seconds(30);
+                spdlog::info("[logistics] {:08X} serviced -- nothing to loot/drink right now", id);
+            }
         }
     }
 

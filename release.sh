@@ -115,11 +115,19 @@ $GH run download "$RUN_ID" -n MFO-dll -D "$STAGE/dll"
 
 # 4. Stage in Data/ layout — zip root IS the virtual Data folder, so MO2
 #    installs it with zero manual placement.
-mkdir -p "$STAGE/pkg/SKSE/Plugins" "$STAGE/pkg/SEQ"
+mkdir -p "$STAGE/pkg/SKSE/Plugins" "$STAGE/pkg/SEQ" \
+         "$STAGE/pkg/MCM/Config/MFO" "$STAGE/pkg/Scripts"
 cp out/MFO.esp             "$STAGE/pkg/"
 cp out/SEQ/MFO.seq         "$STAGE/pkg/SEQ/"
 cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
 cp "$STAGE/dll/MFO.dll"    "$STAGE/pkg/SKSE/Plugins/"
+# MCM Helper config + its binding script. WITHOUT BOTH the MCM never appears:
+# config.json alone registers the config but renders nothing, and the ESP's
+# MFO_MCMQuest attaches MFO_MCM (an MCM_ConfigBase subclass) whose .pex MUST
+# ship or the quest silently fails to become an MCM (2026-07-28 root cause --
+# every zip before this one shipped neither file).
+cp out/MCM/Config/MFO/config.json "$STAGE/pkg/MCM/Config/MFO/"
+cp out/Scripts/MFO_MCM.pex        "$STAGE/pkg/Scripts/"
 cp THIRD-PARTY-NOTICES.md  "$STAGE/pkg/"    # ships with every build, INVARIANTS #42a
 
 ZIP="MFO-v${VER}.zip"

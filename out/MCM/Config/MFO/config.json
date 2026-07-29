@@ -239,6 +239,20 @@
             "sourceType": "ModSettingBool",
             "defaultValue": 0
           }
+        },
+        {
+          "text": "Debug",
+          "type": "header"
+        },
+        {
+          "id": "bDebugUnlockSlots:General",
+          "text": "Unlock all gambit slots",
+          "type": "toggle",
+          "help": "DEBUG: open every gambit slot on every follower regardless of rank/rapport, so all gambits are assignable for testing.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
         }
       ]
     }

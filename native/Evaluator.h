@@ -32,7 +32,13 @@ namespace MFO::Eval {
     //
     // Returns ruleIndex == -1 when nothing matched: the caller then makes NO
     // engine call at all (§4.4's do-nothing guarantee).
+    //
+    // a_startIndex lets the LOGISTICS caller resume the scan past a rule that
+    // matched but whose action did nothing (e.g. "loot potions" when no potions
+    // are nearby), so a near-always-true rule cannot SHADOW the useful rules
+    // below it. Combat keeps the default 0 -- there, a matched rule consuming
+    // the tick is the intended first-match-wins / Wait-suppress semantics.
     Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state,
-                    Table a_table = Table::Combat);
+                    Table a_table = Table::Combat, int a_startIndex = 0);
 
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include "Config.h"   // g_debugUnlockSlots (one-way; Config.h pulls nothing back)
 
 // MFO authoritative state.
 //
@@ -83,7 +84,10 @@ namespace MFO {
     inline constexpr std::uint8_t kLogisticsSlotsByRank[kMaxRank + 1] = { 0, 4, 5, 6, 7, 8 };
 
     inline std::uint8_t SlotsForRank(std::uint8_t a_rank, Table a_table) {
-        const auto r = std::clamp<std::uint8_t>(a_rank, 1, kMaxRank);
+        // Debug: every slot open regardless of rank -- the Rank V allowance.
+        const auto r = Config::g_debugUnlockSlots.load()
+                           ? kMaxRank
+                           : std::clamp<std::uint8_t>(a_rank, 1, kMaxRank);
         return a_table == Table::Combat ? kCombatSlotsByRank[r] : kLogisticsSlotsByRank[r];
     }
 
