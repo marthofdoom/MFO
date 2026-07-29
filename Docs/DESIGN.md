@@ -5,6 +5,15 @@ ordered list of **Gambits** — `[Condition] -> [Action]` rules, first match
 wins — authored live, in game, per follower. This is Final Fantasy XII's
 gambit system rebuilt on the engine's own actor primitives.
 
+**A gambit has NO name.** Its entire identity is its condition (what determines
+the target/trigger) and its action (what it does) — the board shows exactly
+that and nothing else. There are no named, clever, or special-cased gambits;
+every behaviour the player can express is a *composition* of the primitive
+conditions and actions in the vocabulary. If a wanted behaviour can't be
+written as condition → action, the fix is a new primitive, never a bespoke
+named rule (marth, 2026-07-28). The build list of approved primitives lives in
+`GAMBIT_LIBRARY.md`.
+
 Target: vanilla SE + SKSE core. Built with the toolchain in
 `MANUAL_MOD_CREATION_GUIDE.md` (Python ESP generator, Papyrus via Proton
 wine) plus the native layer (`native/plugin.cpp`, CommonLibSSE-NG, CI-built),
