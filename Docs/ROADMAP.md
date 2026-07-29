@@ -315,27 +315,42 @@ constraints (never write `refAliasMap`/`currentPackage`/`defaultPackList`; never
 reserved for exactly this. Option A is "author one more package record and drive
 it through the machinery that already works," not new infrastructure.
 
-**The records to add (ESP, via the generator):**
-- A **loot/acquire package** at a reserved `0x82x` slot. Two shapes to prototype
-  and pick between (decide in the field, per §4.5's reversibility order):
-  - *Acquire-by-type* (FCL's shape): a Sandbox/Find package with an item-type
-    filter + radius; the engine picks its own nearby target. Simplest; but the
-    ENGINE chooses the ref, so our `GetOwner`/`IsOffLimits`/`IsLocked` legality
-    gate cannot pre-screen it — **must verify the vanilla Acquire procedure
-    honors ownership/crime before trusting it** (open question).
-  - *Travel-to-ref* (gambit-precise): add a second alias `MFO_LootTargetRef`;
-    C++ picks the exact loose ref (the existing read-only cell walk already
-    finds and legality-gates candidates), fills follower→alias0 + ref→alias1,
-    package travels to alias1. Keeps our legality gate authoritative; costs a
-    "then acquire/activate on arrival" step the template may not express cleanly.
-- Reuse `MFO_CommandQuest`; no new quest.
+**CHOSEN SHAPE: Travel-to-ref (gambit-precise).** C++ already finds and
+legality-gates the exact ref in the read-only cell walk, so keep our
+`GetOwner`/`IsOffLimits`/`IsLocked` gate authoritative rather than let a
+Sandbox/Find package pick its own target (the acquire-by-type shape can't be
+pre-screened, and whether vanilla Acquire honors ownership is unverified). The
+proven vanilla precedent is exactly this: `Travel` + `PLDT t8 -> alias`, 263
+shipped instances (the WERoad quests, §0.17/§0.20).
 
-**The runtime:** when a `loot_*` gambit is the winning logistics rule AND a legal
-loose candidate exists, request the fill (category → package/condition, the way
-today's dispatcher maps category → transfer fn); `Pump()` drives it to Running;
-release the alias on pickup, on interrupt, or on combat start (clean release is
-mandatory — a loot package that cannot release is dropped, not shipped). Category
-selection is our GAMBIT, not FCL's faction toggles — finer and conditional.
+**The records to add (ESP, via `build_travel`, mirroring `build_usemagic`):**
+- A **`MFO_TravelPackage`** riding the vanilla **Travel template `0x00016FAA`**
+  (`FREF_TMPL_TRAVEL`, already a constant), with its Location input `PLDT type 8
+  -> alias` = the loot ref, and §4.5c completion + hard-timeout inputs so a
+  follower can never get stuck walking.
+- A **separate `MFO_LootQuest`** with its own two aliases (follower carrier +
+  target-ref) rather than sharing `MFO_CommandQuest`'s alias 0 — alias 0 already
+  carries `MFO_CastPackage`, and a follower is only ever loot-travelling OR
+  cast-commanded, so a dedicated quest keeps the two package stacks from
+  contending. Same priority-60 pattern, its own SEQ entry.
+
+**The native driver** mirrors `Packages::CastAt` almost exactly: a
+`Packages::TravelTo(follower, ref)` fills follower->alias0 + ref->alias1 and lets
+the engine path there. `Pump()` (or a small loot-specific pump) observes arrival
+by DISTANCE (`GetPosition` delta <= arm's reach, ~150u); on arrival it runs the
+EXISTING transfer/`LootGold`/`LootPotions`/`PickUp` path and `Release`s the alias.
+Release also fires on interrupt, combat start, or the §4.5c timeout — a loot
+package that cannot cleanly release is dropped, not shipped.
+
+**The runtime:** when a `loot_*` gambit is the winning logistics rule and its
+legal target is beyond arm's reach but within `fLootRadius`, dispatch `TravelTo`
+INSTEAD of the teleport-grab; the teleport transfer stays only for a target
+already at the follower's feet. Category selection is our GAMBIT, not FCL's
+faction toggles.
+
+**Expect deck iteration.** Like the cast package (which needed field probes 1–5,
+§0.21), the travel/arrival/release loop will want 1–2 hardware cycles to tune —
+it cannot be verified offline.
 
 **Gate:** a follower breaks off, walks to a dropped arrow/potion within radius,
 picks it up with animation, returns to follow — takes nothing owned, does it only
