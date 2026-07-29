@@ -305,6 +305,20 @@ packages — all band-reserved, none built.
 3. **CI never goes green cheaply.** If cold builds keep exceeding ~25 min,
    pin a narrower vcpkg baseline or vendor a prebuilt CommonLibSSE-NG.
 
+## Next build — vocabulary tiering by rank *(marth-approved, deferred 2026-07-28)*
+
+Today gambit TYPES are ungated — the board offers the whole vocabulary at
+every rank; only slot COUNT scales with rapport. **Build the design intent
+(DESIGN §): each condition/action carries a minimum rank, and the board's
+picker (cycleIdx/labelFor over kConds*/kActs*) only offers entries the
+follower has earned.** Tiers are already assigned in `GAMBIT_LIBRARY.md`
+(Basic / Intermediate = Rank II–III / Advanced = Rank IV–V). The existing
+`bDebugUnlockSlots` debug flag should ALSO unlock the full vocabulary when
+set (rename to convey "unlock everything"). Watch: a co-saved rule using a
+now-locked opcode must still LOAD and RUN (don't strip authored rules on a
+rank drop) — the gate is only on ASSIGNING new ones in the picker. Deferred
+so marth can confirm v0.7.7 (MCM/looting/gambits) works in the field first.
+
 ## Compatibility backlog *(not scheduled)*
 
 - **"NPCs use potions" (and kin).** These give followers automatic potion-
