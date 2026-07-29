@@ -159,15 +159,24 @@ namespace MFO::Logistics {
             return a_alc && !a_alc->IsPoison() && !a_alc->IsFood();
         }
 
-        // DUMB (marth): grab ANY potion. No type-matching to the condition -- the
-        // gambit's condition decides WHEN to loot, this just loots.
-        bool LootPotions(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
+        // a_want names WHICH restorative to take; kNone is the catch-all (any
+        // drinkable). The gambit's condition still decides WHEN -- this decides
+        // WHAT: kNone -> any potion (IsDrinkablePotion, incl. fortify/cure);
+        // kHealth/kStamina/kMagicka -> only that restorative (PotionRestores'
+        // MGEF archetype). Type is chosen by the ACTION, never inferred from the
+        // condition (marth: the any-potion action never replaced per-type loot).
+        bool LootPotions(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::ActorValue a_want) {
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (IsDrinkablePotion(obj->As<RE::AlchemyItem>()))
-                    takes.push_back({ obj, data.first });
+                auto* alc = obj->As<RE::AlchemyItem>();
+                if (a_want == RE::ActorValue::kNone) {
+                    if (!IsDrinkablePotion(alc)) continue;         // catch-all: any drinkable
+                } else {
+                    if (!alc || PotionRestores(alc) != a_want) continue;   // only this resource
+                }
+                takes.push_back({ obj, data.first });
             }
             bool moved = false;
             for (const auto& t : takes) {
@@ -313,7 +322,8 @@ namespace MFO::Logistics {
         // something was looted. Collect-then-act (#2): the world walk only reads
         // and records timers; all mutation happens afterwards on re-resolved
         // handles.
-        bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now) {
+        bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
+                        RE::ActorValue a_potionWant = RE::ActorValue::kNone) {
             // §22g ABSOLUTE BAR, ahead of every delay and waiver: never mutate a
             // container while the player has ANY container menu open -- it breaks
             // the vanilla menu building its list from that container (MEO m19e).
@@ -447,7 +457,7 @@ namespace MFO::Logistics {
                 switch (a_cat) {
                 case Category::Arrows:    moved = LootAmmo(a_follower, ref, false); break;
                 case Category::Bolts:     moved = LootAmmo(a_follower, ref, true);  break;
-                case Category::Potions:   moved = LootPotions(a_follower, ref); break;
+                case Category::Potions:   moved = LootPotions(a_follower, ref, a_potionWant); break;
                 case Category::Equipment: moved = LootEquipment(a_follower, ref); break;
                 }
                 if (moved) return true;
@@ -582,7 +592,10 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActDrinkMagickaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kMagicka);
             else if (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows, now);
             else if (op == Vocab::kActLootBolts)          acted = LootNearby(a_follower, Category::Bolts,  now);
-            else if (op == Vocab::kActLootPotions)        acted = LootNearby(a_follower, Category::Potions, now);
+            else if (op == Vocab::kActLootPotions)        acted = LootNearby(a_follower, Category::Potions, now);   // any drinkable
+            else if (op == Vocab::kActLootHealthPotion)   acted = LootNearby(a_follower, Category::Potions, now, RE::ActorValue::kHealth);
+            else if (op == Vocab::kActLootStaminaPotion)  acted = LootNearby(a_follower, Category::Potions, now, RE::ActorValue::kStamina);
+            else if (op == Vocab::kActLootMagickaPotion)  acted = LootNearby(a_follower, Category::Potions, now, RE::ActorValue::kMagicka);
             else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, now);
             else if (op == Vocab::kActWait) {
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.

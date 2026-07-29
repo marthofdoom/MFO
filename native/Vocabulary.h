@@ -137,7 +137,17 @@ namespace MFO::Vocab {
     inline constexpr const char* kActDrinkMagickaPotion = "act.drink_magicka_potion";
     inline constexpr const char* kActLootArrows         = "act.loot_arrows";
     inline constexpr const char* kActLootBolts          = "act.loot_bolts";
+    // Potion looting comes in FOUR flavours. loot_potions is the catch-all --
+    // grab ANY drinkable (health/stamina/magicka/fortify/resist/cure), the
+    // "top up on everything" action. The three per-resource actions loot ONLY
+    // that restorative (classified by PotionRestores' MGEF archetype, never by
+    // name), so a player who wants a healer to hoard only healing potions can
+    // say so EXPLICITLY -- the type is the action, not inferred from the paired
+    // condition (marth: the catch-all never replaced per-type selection).
     inline constexpr const char* kActLootPotions        = "act.loot_potions";
+    inline constexpr const char* kActLootHealthPotion   = "act.loot_health_potion";
+    inline constexpr const char* kActLootStaminaPotion  = "act.loot_stamina_potion";
+    inline constexpr const char* kActLootMagickaPotion  = "act.loot_magicka_potion";
     inline constexpr const char* kActLootEquipment      = "act.loot_equipment";
 
     // A cheap actor-value-percentage read. Reads THE NAMED actor's state

@@ -190,7 +190,10 @@ namespace MFO::Board {
         { Vocab::kActDrinkMagickaPotion, "Drink magicka potion" },
         { Vocab::kActLootArrows,         "Loot arrows" },
         { Vocab::kActLootBolts,          "Loot bolts" },
-        { Vocab::kActLootPotions,        "Loot potions" },
+        { Vocab::kActLootPotions,        "Loot potions (any)" },
+        { Vocab::kActLootHealthPotion,   "Loot health potions" },
+        { Vocab::kActLootStaminaPotion,  "Loot stamina potions" },
+        { Vocab::kActLootMagickaPotion,  "Loot magicka potions" },
         { Vocab::kActLootEquipment,      "Equip better gear only" },
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
@@ -658,6 +661,55 @@ namespace MFO::Board {
                                 ImGui::PopID();
                             }
                             ImGui::EndTable();
+                        }
+
+                        // ── FULL-WIDTH GAMBIT SUMMARY ───────────────────────
+                        // marth: on the Steam Deck the edit table's stretch
+                        // columns are too narrow to read a whole rule -- the
+                        // condition/action labels clip. This read-only list
+                        // restates every rule as one WRAPPING, full-width
+                        // sentence, so the ENTIRE gambit is always legible no
+                        // matter how the table truncates. Purely additive and
+                        // non-focusable: it cannot affect editing or pad nav.
+                        if (!rules.empty()) {
+                            ImGui::Spacing();
+                            ImGui::TextDisabled("Full rules (read-only) -- top wins");
+                            ImGui::Separator();
+                            ImGui::PushTextWrapPos(0.0f);   // wrap at pane's right edge
+                            for (int i = 0; i < (int)rules.size(); ++i) {
+                                const auto& rv = rules[i];
+                                std::string s = std::to_string(i + 1) + ".  When ";
+                                s += labelFor(rv.condOp, condTab, condN);
+                                switch (kindFor(rv.condOp, condTab, condN)) {
+                                case ParamKind::Percent:
+                                    s += " " + std::to_string((int)(std::clamp(rv.param, 0.0f, 1.0f)
+                                                                     * 100.0f + 0.5f)) + "%"; break;
+                                case ParamKind::Count:
+                                    s += " " + std::to_string((int)(rv.param + 0.5f)); break;
+                                case ParamKind::Distance:
+                                    s += " " + std::to_string((int)(rv.param + 0.5f)) + "u"; break;
+                                default: break;
+                                }
+                                s += "   ->   ";
+                                s += labelFor(rv.actOp, actTab, actN);
+                                if ((rv.actOp == Vocab::kActCastSelf ||
+                                     rv.actOp == Vocab::kActCastTarget) && !rv.spellName.empty())
+                                    s += " (" + rv.spellName + ")";
+                                if (!rv.enabled) {
+                                    ImGui::PushStyleColor(ImGuiCol_Text,
+                                        ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                                    ImGui::TextWrapped("%s   [disabled]", s.c_str());
+                                    ImGui::PopStyleColor();
+                                } else {
+                                    ImGui::TextWrapped("%s", s.c_str());
+                                    if (rv.lastFired) {
+                                        ImGui::SameLine();
+                                        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1), "*");
+                                    }
+                                }
+                            }
+                            ImGui::PopTextWrapPos();
+                            ImGui::Spacing();
                         }
 
                         const bool full = (int)rules.size() >= slots;
