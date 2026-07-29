@@ -166,8 +166,8 @@ namespace MFO::Board {
         { Vocab::kActDrinkStaminaPotion, "Drink stamina potion" },
         { Vocab::kActDrinkMagickaPotion, "Drink magicka potion" },
         { Vocab::kActLootArrows,         "Loot arrows" },
-        { Vocab::kActLootPotions,        "Loot potions" },
-        { Vocab::kActLootEquipment,      "Loot equipment" },
+        { Vocab::kActLootPotions,        "Loot potions (by condition)" },
+        { Vocab::kActLootEquipment,      "Equip better gear only" },
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
         int cur = 0;

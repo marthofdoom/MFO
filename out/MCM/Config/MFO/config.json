@@ -13,6 +13,7 @@
           "type": "header"
         },
         {
+          "id": "fRapportRate:General",
           "text": "Rapport rate",
           "type": "slider",
           "help": "Multiplier on all rapport earned.",
@@ -20,22 +21,22 @@
             "min": 0.0,
             "max": 5.0,
             "step": 0.05,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fRapportRate:General"
+            "sourceType": "ModSettingFloat"
           }
         },
         {
+          "id": "fRapportKill:General",
           "text": "Rapport per kill",
           "type": "slider",
           "valueOptions": {
             "min": 0.0,
             "max": 10.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fRapportKill:General"
+            "sourceType": "ModSettingFloat"
           }
         },
         {
+          "id": "fRapportBossMult:General",
           "text": "Boss multiplier",
           "type": "slider",
           "help": "Rapport multiplier for killing a foe this many levels above you.",
@@ -43,22 +44,22 @@
             "min": 1.0,
             "max": 20.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fRapportBossMult:General"
+            "sourceType": "ModSettingFloat"
           }
         },
         {
+          "id": "fRapportDragonMult:General",
           "text": "Dragon multiplier",
           "type": "slider",
           "valueOptions": {
             "min": 1.0,
             "max": 30.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fRapportDragonMult:General"
+            "sourceType": "ModSettingFloat"
           }
         },
         {
+          "id": "iBossLevelDelta:General",
           "text": "Boss level delta",
           "type": "slider",
           "help": "A foe at least this many levels above you counts as a boss.",
@@ -66,11 +67,11 @@
             "min": 1,
             "max": 30,
             "step": 1,
-            "sourceType": "ModSettingInt",
-            "modSettingName": "iBossLevelDelta:General"
+            "sourceType": "ModSettingInt"
           }
         },
         {
+          "id": "fSharedRadius:General",
           "text": "Shared-kill radius",
           "type": "slider",
           "help": "A follower within this range shares the kill credit.",
@@ -78,16 +79,15 @@
             "min": 500.0,
             "max": 8000.0,
             "step": 100.0,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fSharedRadius:General"
+            "sourceType": "ModSettingFloat"
           }
         },
         {
+          "id": "bAllowSummons:General",
           "text": "Count summon kills",
           "type": "toggle",
           "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "modSettingName": "bAllowSummons:General"
+            "sourceType": "ModSettingBool"
           }
         }
       ]
@@ -101,30 +101,30 @@
           "type": "header"
         },
         {
+          "id": "bEquipToCast:General",
           "text": "Equip spells to cast",
           "type": "toggle",
           "help": "Put a gambit spell in the follower's hand so their own AI casts it.",
           "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "modSettingName": "bEquipToCast:General"
+            "sourceType": "ModSettingBool"
           }
         },
         {
+          "id": "bCasterHook:General",
           "text": "Influence casting (mobile)",
           "type": "toggle",
           "help": "Let a follower cast a gambit spell while still moving and fighting. Installs a hook; needs a game restart.",
           "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "modSettingName": "bCasterHook:General"
+            "sourceType": "ModSettingBool"
           }
         },
         {
+          "id": "bCommandTarget:General",
           "text": "Commanded targeting",
           "type": "toggle",
           "help": "Let attack gambits pick which foe a follower fights. Needs a game restart.",
           "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "modSettingName": "bCommandTarget:General"
+            "sourceType": "ModSettingBool"
           }
         },
         {
@@ -132,6 +132,7 @@
           "type": "header"
         },
         {
+          "id": "fCastCooldown:General",
           "text": "Cast cooldown (s)",
           "type": "slider",
           "help": "Minimum seconds between a follower's gambit casts.",
@@ -139,11 +140,11 @@
             "min": 0.0,
             "max": 30.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fCastCooldown:General"
+            "sourceType": "ModSettingFloat"
           }
         },
         {
+          "id": "fAiCastGrace:General",
           "text": "AI cast grace (s)",
           "type": "slider",
           "help": "How long to wait for the follower's own AI to cast before MFO does it silently.",
@@ -151,11 +152,11 @@
             "min": 0.0,
             "max": 15.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fAiCastGrace:General"
+            "sourceType": "ModSettingFloat"
           }
         },
         {
+          "id": "fMagickaReserve:General",
           "text": "Magicka reserve",
           "type": "slider",
           "help": "Fraction of magicka a gambit will not spend below. 0 = spend freely.",
@@ -163,8 +164,7 @@
             "min": 0.0,
             "max": 0.9,
             "step": 0.05,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fMagickaReserve:General"
+            "sourceType": "ModSettingFloat"
           }
         }
       ]
@@ -178,15 +178,16 @@
           "type": "header"
         },
         {
+          "id": "bLogistics:General",
           "text": "Enable logistics",
           "type": "toggle",
           "help": "Let followers drink potions and loot arrows/potions/gear out of combat.",
           "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "modSettingName": "bLogistics:General"
+            "sourceType": "ModSettingBool"
           }
         },
         {
+          "id": "fFirstDibsDelay:General",
           "text": "First-dibs delay (s)",
           "type": "slider",
           "help": "How long a follower waits before looting an item, leaving it for you first.",
@@ -194,11 +195,11 @@
             "min": 0.0,
             "max": 120.0,
             "step": 1.0,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fFirstDibsDelay:General"
+            "sourceType": "ModSettingFloat"
           }
         },
         {
+          "id": "fQuickLootWaiver:General",
           "text": "QuickLoot waiver (s)",
           "type": "slider",
           "help": "Once you loot from a source, followers may take the rest after this short delay.",
@@ -206,8 +207,7 @@
             "min": 0.5,
             "max": 30.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "modSettingName": "fQuickLootWaiver:General"
+            "sourceType": "ModSettingFloat"
           }
         }
       ]
@@ -217,12 +217,12 @@
       "cursorFillMode": "topToBottom",
       "content": [
         {
+          "id": "iMenuStyle:General",
           "text": "Board skin",
           "type": "enum",
           "help": "The gambit board's look.",
           "valueOptions": {
             "sourceType": "ModSettingInt",
-            "modSettingName": "iMenuStyle:General",
             "options": [
               "Ebony & Brass",
               "Dwemer Parchment",
@@ -232,11 +232,11 @@
           }
         },
         {
+          "id": "bShowHud:General",
           "text": "Show combat HUD",
           "type": "toggle",
           "valueOptions": {
             "sourceType": "ModSettingBool",
-            "modSettingName": "bShowHud:General",
             "defaultValue": 0
           }
         }

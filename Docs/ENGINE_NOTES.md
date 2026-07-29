@@ -1301,6 +1301,33 @@ inside `Logistics::LootNearby`.
    lock (an attached cell's list qualifies) -- never chase unlocked globals. See
    INVARIANTS #72.
 
+### 0.31 MCM Helper rejects a whole config for one bad field; bind with `id`, not `modSettingName` (2026-07-28)
+
+The MFO MCM never appeared in-game. MCM Helper's log (`MCMHelper.log` in the
+prefix's `Documents/My Games/.../SKSE/`, NOT the modlist overwrite) showed
+`Registered 9 mod configs` while **10** enabled mods had a `config.json` --
+MFO was the one silently thrown out. A malformed config is not partially
+loaded; the ENTIRE mod is dropped, with no per-mod error line.
+
+Three things a `config.json` must get right, learned by diffing MFO against the
+sibling mods **MEO and MAO** (both marth's, both register fine) in the SAME
+modlist -- installed working mods are the primary source (#64):
+
+1. **Bind each control with a top-level `"id": "key:Section"`, NOT
+   `"modSettingName"` inside `valueOptions`.** `modSettingName` is not a schema
+   field; its presence fails validation and drops the whole config. MEO/MAO use
+   `id` everywhere and `modSettingName` zero times. This was the actual bug --
+   all 18 MFO controls used `modSettingName`.
+2. **`minMcmVersion` is required at root** (MEO/MAO/every LoreRim config declare
+   it; value 9 is safe for basic controls).
+3. **`enum` options go in `valueOptions.options`** (with optional
+   `shortNames`), never a top-level `enumOptions`.
+
+ESP-less config-only mods work fine: `sourceType: ModSettingBool/Int/Float`
+persists to `Data/MCM/Settings/<modName>.ini`, which is also the tell that a mod
+registered -- if that settings file never appears, MCM Helper rejected the
+config. `defaultValue` inside `valueOptions` is valid.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice
