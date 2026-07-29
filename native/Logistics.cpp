@@ -92,20 +92,28 @@ namespace MFO::Logistics {
         // ── the follower's equipped ranged weapon, for ammo matching ────────
         // Returns the equipped bow/crossbow, or nullptr. Reads the NAMED
         // follower only (#14).
-        RE::TESObjectWEAP* EquippedRanged(RE::Actor* a_follower) {
-            auto* right = a_follower ? a_follower->GetEquippedObject(false) : nullptr;
-            auto* weap  = right ? right->As<RE::TESObjectWEAP>() : nullptr;
-            if (weap && (weap->IsBow() || weap->IsCrossbow())) return weap;
-            return nullptr;
+        // What ranged weapons the follower OWNS (carries), not just wields right
+        // now. A follower who fights melee but carries a bow still wants to
+        // restock arrows for when they switch (marth). Pure melee (owns neither)
+        // has no use for ammo, so arrow logic stays N/A for them.
+        struct RangedOwned { bool bow = false, crossbow = false;
+                             bool any() const { return bow || crossbow; } };
+        RangedOwned OwnsRanged(RE::Actor* a_follower) {
+            RangedOwned r;
+            if (!a_follower) return r;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                    if (w->IsBow())            r.bow = true;
+                    else if (w->IsCrossbow())  r.crossbow = true;
+                }
+            }
+            return r;
         }
-
-        // Does this ammo match this ranged weapon's class? A bow fires arrows
-        // (!IsBolt); a crossbow fires bolts. IsBolt() is non-const, hence the
-        // non-const ammo pointer.
-        bool AmmoMatches(RE::TESObjectWEAP* a_weap, RE::TESAmmo* a_ammo) {
-            if (!a_weap || !a_ammo) return false;
-            const bool wantBolt = a_weap->IsCrossbow();
-            return a_ammo->IsBolt() == wantBolt;
+        // Ammo the follower can actually fire from something they carry.
+        bool AmmoUsable(const RangedOwned& a_owned, RE::TESAmmo* a_ammo) {
+            if (!a_ammo) return false;
+            return a_ammo->IsBolt() ? a_owned.crossbow : a_owned.bow;
         }
 
         // ── carry-weight guard (§4.8.3) ─────────────────────────────────────
@@ -127,8 +135,8 @@ namespace MFO::Logistics {
         // mid-iteration of the world's ref list.
 
         bool LootArrows(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
-            auto* weap = EquippedRanged(a_follower);
-            if (!weap) return false;   // no bow/crossbow -> nothing to match
+            const auto owned = OwnsRanged(a_follower);
+            if (!owned.any()) return false;   // pure melee -> no use for ammo
 
             // Collect matching ammo tuples first (object, count), THEN transfer
             // -- RemoveItem dispatches TESContainerChangedEvent synchronously, so
@@ -137,8 +145,7 @@ namespace MFO::Logistics {
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                auto* ammo = obj->As<RE::TESAmmo>();
-                if (AmmoMatches(weap, ammo)) takes.push_back({ obj, data.first });
+                if (AmmoUsable(owned, obj->As<RE::TESAmmo>())) takes.push_back({ obj, data.first });
             }
             bool moved = false;
             for (const auto& t : takes) {
@@ -405,10 +412,20 @@ namespace MFO::Logistics {
                 auto& nxt = s_nextWalkLog[a_follower->GetFormID()];
                 if (nxt.time_since_epoch().count() == 0 || a_now >= nxt) {
                     nxt = a_now + std::chrono::seconds(10);
-                    spdlog::info("[loot] {:08X} walk r={:.0f}: {} refs, {} lootable | dropped owned={} "
-                                 "offlimits={} locked={} first-dibs-waiting={} -> {} eligible",
+                    // Include the follower's OWN state: an eligible corpse still
+                    // yields nothing if the follower can't use what it holds --
+                    // no bow (no arrows), or already stocked on the potion the
+                    // rule wants. This makes the miss unambiguous.
+                    const auto owned = OwnsRanged(a_follower);
+                    spdlog::info("[loot] {:08X} r={:.0f}: {} refs, {} lootable, {} eligible "
+                                 "(dropped owned={} locked={} waiting={}) | self bow={} arrows={} "
+                                 "potH={} potS={} potM={}",
                                  a_follower->GetFormID(), kLootRadius, dRefs, dLootable,
-                                 dOwned, dOffLimits, dLocked, dNotYet, (int)candidates.size());
+                                 (int)candidates.size(), dOwned, dLocked, dNotYet,
+                                 owned.any() ? "Y" : "n", ArrowCount(a_follower),
+                                 CountPotions(a_follower, RE::ActorValue::kHealth),
+                                 CountPotions(a_follower, RE::ActorValue::kStamina),
+                                 CountPotions(a_follower, RE::ActorValue::kMagicka));
                 }
             }
 
@@ -503,13 +520,13 @@ namespace MFO::Logistics {
 
     int ArrowCount(RE::Actor* a_follower) {
         if (!a_follower) return -1;
-        auto* weap = EquippedRanged(a_follower);
-        if (!weap) return -1;   // N/A: not a ranged follower
+        const auto owned = OwnsRanged(a_follower);
+        if (!owned.any()) return -1;   // N/A: pure-melee follower, never "out of arrows"
 
         int n = 0;
         for (auto& [obj, data] : a_follower->GetInventory()) {
             if (!obj || data.first <= 0) continue;
-            if (AmmoMatches(weap, obj->As<RE::TESAmmo>())) n += data.first;
+            if (AmmoUsable(owned, obj->As<RE::TESAmmo>())) n += data.first;
         }
         return n;
     }
