@@ -191,17 +191,6 @@ namespace MFO::Packages {
     Status Get();
 
     // Session-scoped counters, cleared on revert like every sibling module.
-    // PROBE DRIVER. Reads the MFO_ProbeSelect global and fills or clears
-    // alias 0 accordingly, using the NATIVE synchronous ForceRefTo.
-    //
-    // This is the production mechanism under a test harness: alias fill is
-    // bound to quest promotion, so nothing authored in the ESP can claim a
-    // follower on demand (§0.26) -- only code can. Driving it from a console
-    // global lets the probe ladder exercise exactly the path production uses.
-    //   global > 0 -> fill alias 0 with the first tracked follower
-    //   global = 0 -> clear it, and the follower is entirely their own again
-    void DriveProbe();
-
     void ClearTransientState();
 
 }

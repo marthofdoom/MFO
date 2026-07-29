@@ -206,7 +206,6 @@ namespace MFO::Diagnostics {
                         if (diagTurn) Followers::Refresh();
 
                         Scheduler::Tick();
-                        Packages::DriveProbe();   // probe switchboard -> alias fill
                         Loadout::Tick();   // hand back stowed two-handers
 
                         if (diagTurn) Probe::Tick();

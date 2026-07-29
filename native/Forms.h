@@ -29,7 +29,6 @@ namespace MFO::Forms {
     // M9 (DESIGN §4.5c): the actuation records.
     inline constexpr RE::FormID kCommandQuest     = 0x80A;
     inline constexpr RE::FormID kCastPackage      = 0x820;
-    inline constexpr RE::FormID kProbeSelect     = 0x80B;   // GLOB, the probe switchboard
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -40,7 +39,6 @@ namespace MFO::Forms {
     // after the ESP round-trip?
     inline RE::TESQuest*   g_commandQuest = nullptr;
     inline RE::TESPackage* g_castPackage  = nullptr;
-    inline RE::TESGlobal*  g_probeSelect  = nullptr;
 
     // Resolve at kDataLoaded. Returns false if anything required is missing.
     // A missing form disables ONE feature with a named log line -- never a
