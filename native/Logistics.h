@@ -44,6 +44,7 @@ namespace MFO::Logistics {
     // arrows" rule reads as N/A rather than true (a melee follower is never
     // "out of arrows"). Reads the named follower only.
     int ArrowCount(RE::Actor* a_follower);
+    int BoltCount(RE::Actor* a_follower);
 
     // ── actuation ───────────────────────────────────────────────────────────
 

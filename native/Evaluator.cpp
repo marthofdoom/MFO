@@ -193,13 +193,14 @@ namespace MFO::Eval {
                 return Logistics::CountPotions(a_self, RE::ActorValue::kStamina) < static_cast<int>(p);
             if (op == Vocab::kCondSelfLowMagickaPotion)
                 return Logistics::CountPotions(a_self, RE::ActorValue::kMagicka) < static_cast<int>(p);
-            if (op == Vocab::kCondSelfOutOfArrows) {
-                // -1 means "no bow/crossbow equipped": the rule is N/A, not true.
-                // Vanilla grants infinite ammo of any type owned, so this rule is
-                // harmlessly idle on vanilla and load-bearing on Requiem (§4.8.2).
-                const int n = Logistics::ArrowCount(a_self);
-                return n >= 0 && n < static_cast<int>(p);
-            }
+            // ARROWS / BOLTS carried below N. No bow gate (marth): whether a
+            // follower should gather ammo is THIS rule's job to say, not a
+            // hidden precondition. Separate opcodes -- arrows and bolts are
+            // different gambits. p is a COUNT.
+            if (op == Vocab::kCondSelfOutOfArrows)
+                return Logistics::ArrowCount(a_self) < static_cast<int>(p);
+            if (op == Vocab::kCondSelfOutOfBolts)
+                return Logistics::BoltCount(a_self)  < static_cast<int>(p);
 
             // Selectors are resolved by the caller, which needs the chosen
             // handle. Reaching here means the caller did not ask -- say false

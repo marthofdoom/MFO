@@ -92,28 +92,19 @@ namespace MFO::Logistics {
         // ── the follower's equipped ranged weapon, for ammo matching ────────
         // Returns the equipped bow/crossbow, or nullptr. Reads the NAMED
         // follower only (#14).
-        // What ranged weapons the follower OWNS (carries), not just wields right
-        // now. A follower who fights melee but carries a bow still wants to
-        // restock arrows for when they switch (marth). Pure melee (owns neither)
-        // has no use for ammo, so arrow logic stays N/A for them.
-        struct RangedOwned { bool bow = false, crossbow = false;
-                             bool any() const { return bow || crossbow; } };
-        RangedOwned OwnsRanged(RE::Actor* a_follower) {
-            RangedOwned r;
-            if (!a_follower) return r;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+        // Ammo of one class (bolts vs arrows) the actor carries. NO bow gate:
+        // the ACTION is dumb -- whether a follower should gather ammo is the
+        // GAMBIT's condition to decide, not this function's (marth). Arrows and
+        // bolts are counted/looted separately (they are different gambits).
+        int AmmoCount(RE::Actor* a_actor, bool a_wantBolt) {
+            if (!a_actor) return 0;
+            int n = 0;
+            for (auto& [obj, data] : a_actor->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (auto* w = obj->As<RE::TESObjectWEAP>()) {
-                    if (w->IsBow())            r.bow = true;
-                    else if (w->IsCrossbow())  r.crossbow = true;
-                }
+                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && ammo->IsBolt() == a_wantBolt)
+                    n += data.first;
             }
-            return r;
-        }
-        // Ammo the follower can actually fire from something they carry.
-        bool AmmoUsable(const RangedOwned& a_owned, RE::TESAmmo* a_ammo) {
-            if (!a_ammo) return false;
-            return a_ammo->IsBolt() ? a_owned.crossbow : a_owned.bow;
+            return n;
         }
 
         // ── carry-weight guard (§4.8.3) ─────────────────────────────────────
@@ -134,10 +125,9 @@ namespace MFO::Logistics {
         // handle re-resolved at act time, so a container mutation never happens
         // mid-iteration of the world's ref list.
 
-        bool LootArrows(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
-            const auto owned = OwnsRanged(a_follower);
-            if (!owned.any()) return false;   // pure melee -> no use for ammo
-
+        // Take all ammo of one class (arrows OR bolts) from the source. No bow
+        // gate -- the gambit's condition decides whether to gather at all.
+        bool LootAmmo(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt) {
             // Collect matching ammo tuples first (object, count), THEN transfer
             // -- RemoveItem dispatches TESContainerChangedEvent synchronously, so
             // mutating the source inventory mid-walk is the #2 landmine.
@@ -145,7 +135,8 @@ namespace MFO::Logistics {
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (AmmoUsable(owned, obj->As<RE::TESAmmo>())) takes.push_back({ obj, data.first });
+                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && ammo->IsBolt() == a_wantBolt)
+                    takes.push_back({ obj, data.first });
             }
             bool moved = false;
             for (const auto& t : takes) {
@@ -314,7 +305,7 @@ namespace MFO::Logistics {
         }
 
         // ── the looting dispatcher ──────────────────────────────────────────
-        enum class Category { Arrows, Potions, Equipment };
+        enum class Category { Arrows, Bolts, Potions, Equipment };
 
         // Walk nearby refs, gate them, and perform ONE transfer. Returns true if
         // something was looted. Collect-then-act (#2): the world walk only reads
@@ -412,17 +403,16 @@ namespace MFO::Logistics {
                 auto& nxt = s_nextWalkLog[a_follower->GetFormID()];
                 if (nxt.time_since_epoch().count() == 0 || a_now >= nxt) {
                     nxt = a_now + std::chrono::seconds(10);
-                    // Include the follower's OWN state: an eligible corpse still
-                    // yields nothing if the follower can't use what it holds --
-                    // no bow (no arrows), or already stocked on the potion the
-                    // rule wants. This makes the miss unambiguous.
-                    const auto owned = OwnsRanged(a_follower);
+                    // Include the follower's OWN state so a "3 eligible but
+                    // nothing looted" is unambiguous -- an eligible corpse yields
+                    // nothing if it simply does not hold the thing the winning
+                    // rule wants (arrows, or the specific potion).
                     spdlog::info("[loot] {:08X} r={:.0f}: {} refs, {} lootable, {} eligible "
-                                 "(dropped owned={} locked={} waiting={}) | self bow={} arrows={} "
+                                 "(dropped owned={} locked={} waiting={}) | self arrows={} bolts={} "
                                  "potH={} potS={} potM={}",
                                  a_follower->GetFormID(), kLootRadius, dRefs, dLootable,
                                  (int)candidates.size(), dOwned, dLocked, dNotYet,
-                                 owned.any() ? "Y" : "n", ArrowCount(a_follower),
+                                 ArrowCount(a_follower), BoltCount(a_follower),
                                  CountPotions(a_follower, RE::ActorValue::kHealth),
                                  CountPotions(a_follower, RE::ActorValue::kStamina),
                                  CountPotions(a_follower, RE::ActorValue::kMagicka));
@@ -437,7 +427,8 @@ namespace MFO::Logistics {
                 if (!ref) continue;
                 bool moved = false;
                 switch (a_cat) {
-                case Category::Arrows:    moved = LootArrows(a_follower, ref);    break;
+                case Category::Arrows:    moved = LootAmmo(a_follower, ref, false); break;
+                case Category::Bolts:     moved = LootAmmo(a_follower, ref, true);  break;
                 case Category::Potions:   moved = LootPotions(a_follower, ref, a_potionWant); break;
                 case Category::Equipment: moved = LootEquipment(a_follower, ref); break;
                 }
@@ -518,18 +509,10 @@ namespace MFO::Logistics {
         return n;
     }
 
-    int ArrowCount(RE::Actor* a_follower) {
-        if (!a_follower) return -1;
-        const auto owned = OwnsRanged(a_follower);
-        if (!owned.any()) return -1;   // N/A: pure-melee follower, never "out of arrows"
-
-        int n = 0;
-        for (auto& [obj, data] : a_follower->GetInventory()) {
-            if (!obj || data.first <= 0) continue;
-            if (AmmoUsable(owned, obj->As<RE::TESAmmo>())) n += data.first;
-        }
-        return n;
-    }
+    // ARROWS the follower carries -- no bow gate; the "arrows below N" gambit
+    // decides whether that matters. Bolts are a separate count/gambit.
+    int ArrowCount(RE::Actor* a_follower) { return AmmoCount(a_follower, false); }
+    int BoltCount(RE::Actor* a_follower)  { return AmmoCount(a_follower, true);  }
 
     // ── public: actuation ───────────────────────────────────────────────────
 
@@ -580,6 +563,7 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActDrinkStaminaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kStamina);
             else if (op == Vocab::kActDrinkMagickaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kMagicka);
             else if (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows, now);
+            else if (op == Vocab::kActLootBolts)          acted = LootNearby(a_follower, Category::Bolts,  now);
             else if (op == Vocab::kActLootPotions) {
                 // Loot the resource the RULE'S CONDITION names, so "stamina
                 // potions below N -> loot potions" loots stamina; a non-potion

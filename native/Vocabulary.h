@@ -113,7 +113,8 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondSelfLowHealthPotion  = "cond.self_low_health_potion";
     inline constexpr const char* kCondSelfLowStaminaPotion = "cond.self_low_stamina_potion";
     inline constexpr const char* kCondSelfLowMagickaPotion = "cond.self_low_magicka_potion";
-    inline constexpr const char* kCondSelfOutOfArrows      = "cond.self_out_of_arrows";  // param = count; false if no bow/crossbow equipped
+    inline constexpr const char* kCondSelfOutOfArrows      = "cond.self_out_of_arrows";  // param = count of ARROWS carried
+    inline constexpr const char* kCondSelfOutOfBolts       = "cond.self_out_of_bolts";   // param = count of BOLTS carried
 
     // The "hurt / low-magicka / low-stamina out of combat" drink triggers reuse
     // the existing self-vitals conditions (kCondSelfHpBelow / kCondSelfMpBelow /
@@ -135,6 +136,7 @@ namespace MFO::Vocab {
     inline constexpr const char* kActDrinkStaminaPotion = "act.drink_stamina_potion";
     inline constexpr const char* kActDrinkMagickaPotion = "act.drink_magicka_potion";
     inline constexpr const char* kActLootArrows         = "act.loot_arrows";
+    inline constexpr const char* kActLootBolts          = "act.loot_bolts";
     inline constexpr const char* kActLootPotions        = "act.loot_potions";
     inline constexpr const char* kActLootEquipment      = "act.loot_equipment";
 

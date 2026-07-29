@@ -182,12 +182,14 @@ namespace MFO::Board {
         { Vocab::kCondSelfLowStaminaPotion,"Stamina potions below", ParamKind::Count   },
         { Vocab::kCondSelfLowMagickaPotion,"Magicka potions below", ParamKind::Count   },
         { Vocab::kCondSelfOutOfArrows,     "Arrows below",          ParamKind::Count   },
+        { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
     };
     inline constexpr VocabEntry kActsLogi[] = {
         { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
         { Vocab::kActDrinkStaminaPotion, "Drink stamina potion" },
         { Vocab::kActDrinkMagickaPotion, "Drink magicka potion" },
         { Vocab::kActLootArrows,         "Loot arrows" },
+        { Vocab::kActLootBolts,          "Loot bolts" },
         { Vocab::kActLootPotions,        "Loot potions (by condition)" },
         { Vocab::kActLootEquipment,      "Equip better gear only" },
     };
