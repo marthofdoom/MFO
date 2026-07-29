@@ -343,9 +343,14 @@ namespace MFO::Logistics {
             std::vector<RE::ObjectRefHandle> candidates;
             candidates.reserve(16);
 
+            // DIAGNOSTIC counters (marth: "nothing looted" -- find WHICH stage
+            // drops the corpse). Logged rate-limited below.
+            int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0;
+
             cell->ForEachReferenceInRange(origin, kLootRadius,
                 [&](RE::TESObjectREFR& a_ref) {
                     if (candidates.size() >= 16) return RE::BSContainer::ForEachResult::kStop;
+                    ++dRefs;
                     RE::TESObjectREFR* ref = &a_ref;
                     if (ref == a_follower) return RE::BSContainer::ForEachResult::kContinue;
                     if (ref->IsDisabled() || ref->IsMarkedForDeletion())
@@ -360,6 +365,7 @@ namespace MFO::Logistics {
                         lootable = base->Is(RE::FormType::Container);
                     }
                     if (!lootable) return RE::BSContainer::ForEachResult::kContinue;
+                    ++dLootable;
 
                     // OWNERSHIP IS ABSOLUTE (#22e). IsOffLimits() is ONLY a crime
                     // check (IsCrimeToActivate) -- and taking from a PLAYER-owned
@@ -368,11 +374,11 @@ namespace MFO::Logistics {
                     // first (any explicit owner, including the player), then keep
                     // IsOffLimits() as the second bar for cell-owned/no-owner
                     // crime cases. No delay or waiver overrides this.
-                    if (ref->GetOwner()) return RE::BSContainer::ForEachResult::kContinue;
-                    if (ref->IsOffLimits()) return RE::BSContainer::ForEachResult::kContinue;
+                    if (ref->GetOwner())    { ++dOwned;     return RE::BSContainer::ForEachResult::kContinue; }
+                    if (ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
                     // Locked is locked -- RemoveItem ignores the lock, so the
                     // filter must not.
-                    if (ref->IsLocked()) return RE::BSContainer::ForEachResult::kContinue;
+                    if (ref->IsLocked())    { ++dLocked;    return RE::BSContainer::ForEachResult::kContinue; }
 
                     // Start (or keep) this ref's first-dibs clock. Recording here,
                     // for every candidate whether eligible yet or not, is what
@@ -380,11 +386,24 @@ namespace MFO::Logistics {
                     const auto id = ref->GetFormID();
                     if (g_seen.emplace(id, a_now).second) EvictOldest(g_seen);
 
-                    if (LootEligible(id, a_now)) {
-                        candidates.push_back(ref->GetHandle());
-                    }
+                    if (LootEligible(id, a_now)) candidates.push_back(ref->GetHandle());
+                    else ++dNotYet;
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
+
+            // One diagnostic line per follower per ~10 s (any category), so the
+            // walk composition is visible without flooding the ~1 s tick.
+            {
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextWalkLog;
+                auto& nxt = s_nextWalkLog[a_follower->GetFormID()];
+                if (nxt.time_since_epoch().count() == 0 || a_now >= nxt) {
+                    nxt = a_now + std::chrono::seconds(10);
+                    spdlog::info("[loot] {:08X} walk r={:.0f}: {} refs, {} lootable | dropped owned={} "
+                                 "offlimits={} locked={} first-dibs-waiting={} -> {} eligible",
+                                 a_follower->GetFormID(), kLootRadius, dRefs, dLootable,
+                                 dOwned, dOffLimits, dLocked, dNotYet, (int)candidates.size());
+                }
+            }
 
             // Act after the walk. Re-resolve each handle at act time (#2); stop at
             // the first successful transfer -- one loot action per tick (§4.8.3).

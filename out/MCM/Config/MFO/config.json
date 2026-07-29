@@ -21,7 +21,8 @@
             "min": 0.0,
             "max": 5.0,
             "step": 0.05,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 1.0
           }
         },
         {
@@ -32,7 +33,8 @@
             "min": 0.0,
             "max": 10.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 1.0
           }
         },
         {
@@ -44,7 +46,8 @@
             "min": 1.0,
             "max": 20.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 5.0
           }
         },
         {
@@ -55,7 +58,8 @@
             "min": 1.0,
             "max": 30.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 10.0
           }
         },
         {
@@ -67,7 +71,8 @@
             "min": 1,
             "max": 30,
             "step": 1,
-            "sourceType": "ModSettingInt"
+            "sourceType": "ModSettingInt",
+            "defaultValue": 5
           }
         },
         {
@@ -79,7 +84,8 @@
             "min": 500.0,
             "max": 8000.0,
             "step": 100.0,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 3000.0
           }
         },
         {
@@ -87,7 +93,8 @@
           "text": "Count summon kills",
           "type": "toggle",
           "valueOptions": {
-            "sourceType": "ModSettingBool"
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
           }
         }
       ]
@@ -106,7 +113,8 @@
           "type": "toggle",
           "help": "Put a gambit spell in the follower's hand so their own AI casts it.",
           "valueOptions": {
-            "sourceType": "ModSettingBool"
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
           }
         },
         {
@@ -115,7 +123,8 @@
           "type": "toggle",
           "help": "Let a follower cast a gambit spell while still moving and fighting. Installs a hook; needs a game restart.",
           "valueOptions": {
-            "sourceType": "ModSettingBool"
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
           }
         },
         {
@@ -124,7 +133,8 @@
           "type": "toggle",
           "help": "Let attack gambits pick which foe a follower fights. Needs a game restart.",
           "valueOptions": {
-            "sourceType": "ModSettingBool"
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
           }
         },
         {
@@ -140,7 +150,8 @@
             "min": 0.0,
             "max": 30.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 4.0
           }
         },
         {
@@ -152,7 +163,8 @@
             "min": 0.0,
             "max": 15.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 3.0
           }
         },
         {
@@ -164,7 +176,8 @@
             "min": 0.0,
             "max": 0.9,
             "step": 0.05,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 0.0
           }
         }
       ]
@@ -183,7 +196,8 @@
           "type": "toggle",
           "help": "Let followers drink potions and loot arrows/potions/gear out of combat.",
           "valueOptions": {
-            "sourceType": "ModSettingBool"
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
           }
         },
         {
@@ -195,7 +209,8 @@
             "min": 0.0,
             "max": 120.0,
             "step": 1.0,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 4.0
           }
         },
         {
@@ -207,7 +222,8 @@
             "min": 0.5,
             "max": 30.0,
             "step": 0.5,
-            "sourceType": "ModSettingFloat"
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 4.0
           }
         }
       ]
@@ -228,7 +244,8 @@
               "Dwemer Parchment",
               "Soul Cairn",
               "Quicksilver"
-            ]
+            ],
+            "defaultValue": 0
           }
         },
         {

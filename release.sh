@@ -116,7 +116,7 @@ $GH run download "$RUN_ID" -n MFO-dll -D "$STAGE/dll"
 # 4. Stage in Data/ layout — zip root IS the virtual Data folder, so MO2
 #    installs it with zero manual placement.
 mkdir -p "$STAGE/pkg/SKSE/Plugins" "$STAGE/pkg/SEQ" \
-         "$STAGE/pkg/MCM/Config/MFO" "$STAGE/pkg/Scripts"
+         "$STAGE/pkg/MCM/Config/MFO" "$STAGE/pkg/MCM/Settings" "$STAGE/pkg/Scripts"
 cp out/MFO.esp             "$STAGE/pkg/"
 cp out/SEQ/MFO.seq         "$STAGE/pkg/SEQ/"
 cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
@@ -127,6 +127,9 @@ cp "$STAGE/dll/MFO.dll"    "$STAGE/pkg/SKSE/Plugins/"
 # ship or the quest silently fails to become an MCM (2026-07-28 root cause --
 # every zip before this one shipped neither file).
 cp out/MCM/Config/MFO/config.json "$STAGE/pkg/MCM/Config/MFO/"
+# Initial MCM Helper settings store -- WITHOUT it every ModSetting control reads
+# back -1 (no value to bind to), so the whole MCM shows -1 (2026-07-28).
+cp out/MCM/Settings/MFO.ini       "$STAGE/pkg/MCM/Settings/"
 cp out/Scripts/MFO_MCM.pex        "$STAGE/pkg/Scripts/"
 cp THIRD-PARTY-NOTICES.md  "$STAGE/pkg/"    # ships with every build, INVARIANTS #42a
 
