@@ -7,3 +7,6 @@ __pycache__/
 *.log
 .vs/
 compile_commands.json
+
+# Third-party reference mods (method study only, never redistributed)
+Docs/*.7z

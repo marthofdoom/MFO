@@ -26,7 +26,11 @@ namespace MFO::Logistics {
         // reach" (§4.8.4): a follower stands next to the corpses anyway, so this
         // is deliberately close. Going and fetching is Tier B and needs
         // positioning, which is out of scope here.
-        constexpr float kLootRadius = 600.0f;
+        // ARM'S REACH, not a vacuum. The follower loots what it is physically
+        // standing at (the corpse it just killed, an item on its path) -- never
+        // a teleport-transfer from across the room (marth). Actively pathing to
+        // distant loot is the deferred Tier-B movement feature.
+        constexpr float kLootRadius = 200.0f;
 
         // The loot LRUs are bounded and deliberately NOT serialized (#22h):
         // worst case after a load is one more first-dibs wait on an
@@ -148,24 +152,22 @@ namespace MFO::Logistics {
             return moved;
         }
 
-        // a_want names which restorative to take -- kNone means any. The caller
-        // derives it from the RULE'S CONDITION (marth): "stamina potions below N
-        // -> loot potions" loots STAMINA, not whatever is on the corpse.
-        bool LootPotions(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::ActorValue a_want) {
+        // Is this alchemy item a POTION the follower would drink? Any potion --
+        // health, stamina, magicka, fortify, resist, cure -- but NOT a poison
+        // (that is a weapon coating) or food.
+        bool IsDrinkablePotion(RE::AlchemyItem* a_alc) {
+            return a_alc && !a_alc->IsPoison() && !a_alc->IsFood();
+        }
+
+        // DUMB (marth): grab ANY potion. No type-matching to the condition -- the
+        // gambit's condition decides WHEN to loot, this just loots.
+        bool LootPotions(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                auto* alc = obj->As<RE::AlchemyItem>();
-                if (!alc) continue;
-                // Restoratives only -- PotionRestores returns kNone for poisons,
-                // fortify and cure, which are always left for the player.
-                const auto av = PotionRestores(alc);
-                if (av != RE::ActorValue::kHealth && av != RE::ActorValue::kStamina &&
-                    av != RE::ActorValue::kMagicka) continue;
-                // ...and, when the rule asks for a specific resource, only that one.
-                if (a_want != RE::ActorValue::kNone && av != a_want) continue;
-                takes.push_back({ obj, data.first });
+                if (IsDrinkablePotion(obj->As<RE::AlchemyItem>()))
+                    takes.push_back({ obj, data.first });
             }
             bool moved = false;
             for (const auto& t : takes) {
@@ -311,8 +313,7 @@ namespace MFO::Logistics {
         // something was looted. Collect-then-act (#2): the world walk only reads
         // and records timers; all mutation happens afterwards on re-resolved
         // handles.
-        bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
-                        RE::ActorValue a_potionWant = RE::ActorValue::kNone) {
+        bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now) {
             // §22g ABSOLUTE BAR, ahead of every delay and waiver: never mutate a
             // container while the player has ANY container menu open -- it breaks
             // the vanilla menu building its list from that container (MEO m19e).
@@ -329,7 +330,7 @@ namespace MFO::Logistics {
             // skycell) that churn during a transition. The follower's parent cell,
             // when ATTACHED, iterates only its own reference list (no worldspace
             // deref at all -- see TESObjectCELL::ForEachReferenceInRange), and the
-            // 600u loot radius fits inside one 4096u cell, so nothing real is lost.
+            // 200u loot radius fits inside one 4096u cell, so nothing real is lost.
             // The IsAttached gate also skips the walk outright during a transition,
             // which is exactly when those pointers are unstable.
             auto* cell = a_follower->GetParentCell();
@@ -354,8 +355,21 @@ namespace MFO::Logistics {
                     if (ref->IsDisabled() || ref->IsMarkedForDeletion())
                         return RE::BSContainer::ForEachResult::kContinue;
 
-                    // A lootable source is a CORPSE (dead actor) or a CONTAINER.
-                    // Living actors are never looted -- that is pickpocketing.
+                    // A lootable ref is a CORPSE (dead actor) or a CONTAINER --
+                    // things we TRANSFER an inventory out of. Living actors are
+                    // never touched (that is pickpocketing).
+                    //
+                    // LOOSE world items are DELIBERATELY excluded here. Picking a
+                    // loose ref up is PickUpObject, which tears down the ref's 3D
+                    // and mutates the cell -- and this whole tick runs on a BSJobs
+                    // JOB WORKER (§0.30), overlapping the streaming threads, the
+                    // crash4 class. Re-queuing via SKSE AddTask does NOT escape it:
+                    // the task queue itself is drained inside Job_Post_process on a
+                    // worker (§0.30, INVARIANTS #72), so there is no main-thread hop
+                    // to be had from here. Loose-item pickup is the package-
+                    // acquisition feature (ROADMAP "Option A"): the ENGINE walks the
+                    // follower to the item and grabs it natively, no PickUpObject on
+                    // our side at all. Until then, loose items are simply not looted.
                     bool lootable = false;
                     if (auto* actor = ref->As<RE::Actor>()) {
                         lootable = actor->IsDead();
@@ -426,10 +440,14 @@ namespace MFO::Logistics {
                 auto* ref = ptr.get();
                 if (!ref) continue;
                 bool moved = false;
+                // Corpse/container: transfer the wanted category out of its
+                // inventory. (Loose world items are excluded at the walk gate --
+                // see the note there; they belong to the package-acquisition
+                // feature, not this worker-thread transfer path.)
                 switch (a_cat) {
                 case Category::Arrows:    moved = LootAmmo(a_follower, ref, false); break;
                 case Category::Bolts:     moved = LootAmmo(a_follower, ref, true);  break;
-                case Category::Potions:   moved = LootPotions(a_follower, ref, a_potionWant); break;
+                case Category::Potions:   moved = LootPotions(a_follower, ref); break;
                 case Category::Equipment: moved = LootEquipment(a_follower, ref); break;
                 }
                 if (moved) return true;
@@ -564,17 +582,7 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActDrinkMagickaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kMagicka);
             else if (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows, now);
             else if (op == Vocab::kActLootBolts)          acted = LootNearby(a_follower, Category::Bolts,  now);
-            else if (op == Vocab::kActLootPotions) {
-                // Loot the resource the RULE'S CONDITION names, so "stamina
-                // potions below N -> loot potions" loots stamina; a non-potion
-                // condition (Always) leaves want = kNone -> any restorative.
-                RE::ActorValue want = RE::ActorValue::kNone;
-                const auto& cond = a_state.logistics()[choice.ruleIndex].conditionOpcode;
-                if      (cond == Vocab::kCondSelfLowHealthPotion)  want = RE::ActorValue::kHealth;
-                else if (cond == Vocab::kCondSelfLowStaminaPotion) want = RE::ActorValue::kStamina;
-                else if (cond == Vocab::kCondSelfLowMagickaPotion) want = RE::ActorValue::kMagicka;
-                acted = LootNearby(a_follower, Category::Potions, now, want);
-            }
+            else if (op == Vocab::kActLootPotions)        acted = LootNearby(a_follower, Category::Potions, now);
             else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, now);
             else if (op == Vocab::kActWait) {
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.

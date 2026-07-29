@@ -1328,6 +1328,58 @@ persists to `Data/MCM/Settings/<modName>.ini`, which is also the tell that a mod
 registered -- if that settings file never appears, MCM Helper rejected the
 config. `defaultValue` inside `valueOptions` is valid.
 
+### 0.32 How "Followers Can Loot" (Nexus 4744) actually loots, and why loose-item pickup is a PACKAGE feature, not a tick feature (2026-07-28)
+
+marth pointed at FCL (powerofthree) as prior art for follower looting. We use
+the METHOD, not the code. Teardown of the shipped 1.8 archive (ESP + BSA with
+`.psc` sources; 3 `PACK`, 3 `FACT`, 3 `QUST`, 2 `SPEL`, 1 `MGEF`, globals):
+
+* **The looting itself is NOT scripted.** The follower physically walking to an
+  item and picking it up is done by **3 native AI packages** (Sandbox/Find-type
+  "acquire"). That is the whole product. Papyrus does only bookkeeping.
+* **Category filter = faction membership.** ~13 factions (ammo/armour/potion/
+  keys/misc/ingredients/gold/books/…); the MCM adds/removes the follower from
+  them; package CONDITIONS read membership to decide what to grab.
+* **Combat/sneak gate = a global the package conditions read.**
+  `OnCombatStateChanged` and the player's `tailSneakIdle`/`tailSneakLocomotion`
+  anim events flip `CheckForCombatGlobal`/`ManualLootGlobal`; the packages only
+  run when out of combat and the player is not sneaking.
+* **Looted items reroute to a hidden "chest" per follower.** `OnItemAdded` on the
+  follower alias → `RemoveItem` from the actor, `AddItem` to a paired container;
+  the player activates the chest to collect. Followers are pack-mules.
+* **SKSE tune:** `fAIDistanceRadiusMinLocation = 200` — the sandbox acquire
+  radius. Independently the same 200u we chose for `kLootRadius`.
+
+**What we take:** the engine-AI-package acquisition (real navmesh pathing to the
+item, satisfies marth's "the follower must GO to the item") and the don't-loot-
+while-sneaking gate. **What we reject:** the chest stash — MFO followers USE
+loot (equip the better weapon, drink the potion); and the faction/MCM category
+system — our GAMBIT BOARD is the category selector, finer and conditional
+("loot arrows only when out of arrows") where FCL is unconditional.
+
+**The decisive consequence for our own code.** The one thing the package method
+gets for free — walking to a LOOSE world item and grabbing it — we CANNOT do
+from our tick, and this crash4-reinforced fact is why. Picking up a loose ref is
+`PickUpObject`, which tears down the ref's 3D and mutates the cell. Our tick runs
+on a BSJobs JOB WORKER (§0.30). We had written a "marshal to the main thread"
+via `SKSE::GetTaskInterface()->AddTask` — **that does not reach the main thread
+in this runtime.** `Scheduler::Tick` is ITSELF scheduled with that same `AddTask`
+(`Diagnostics.cpp`), and crash4's stack proves the queue drains inside
+`Job_Post_process` on `BSJobs::JobThread`. Re-queuing from inside the tick lands
+right back on a worker, one drain later — a delayed crash4, not a fix. So
+`AddTask` in this plugin is "run soon on a worker," NOT "run on the main thread."
+A real main-thread hop needs a genuine main-thread hook (a `Main::Update`-class
+hook), which we have not built or measured.
+
+Therefore loose-item pickup was CUT from the v0.7.x tick-loot path. It belongs to
+the package-acquisition feature (ROADMAP "Loot Option A"): the engine walks the
+follower and grabs the item — no `PickUpObject` on our side at all, exactly as
+FCL's packages do. The shipping tick-loot path stays on the proven pattern:
+read-only cell walk, then inventory TRANSFER (`RemoveItem`/`AddItem`) from
+corpses/containers after the walk on re-resolved handles (§0.30 / #72). Inventory
+transfer does not tear 3D, so it is worker-safe; `PickUpObject`/`Activate` are
+not, and there is no shortcut around that.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

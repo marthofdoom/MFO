@@ -292,6 +292,63 @@ packages — all band-reserved, none built.
 
 ---
 
+## Loot Option A — engine-pathed acquisition *(spec, 2026-07-28)*
+
+**The method** (prior art: *Followers Can Loot*, Nexus 4744 — teardown in
+`ENGINE_NOTES §0.32`; we use the METHOD, never its code). The follower walking
+to a world item and grabbing it is done by a native **AI package** (Sandbox/
+Find "acquire"), not by script and not by our tick. The engine owns the navmesh
+pathing, the bend-down animation, and the pickup. This is the correct primitive
+for marth's requirement *"the follower should have to GO to the item to loot
+it,"* and it is the ONLY safe way to pick up a loose world ref — `PickUpObject`
+from our BSJobs-worker tick is the crash4 class and `SKSE AddTask` does NOT
+escape the worker (`§0.30`, `§0.32`). This REPLACES both today's arm's-reach
+inventory transfer (v0.7.x, corpses/containers only) for the *loose-item* case
+and the loose-item pickup that was cut from the tick loop.
+
+**Why it is small: the infrastructure already exists.** M9's `native/Packages.*`
+is built and proven — `MFO_CommandQuest` (0x80A, priority 60, in the SEQ), alias
+fill via `ForceRefTo` through the VM, the `Pump()` observe-only lifecycle
+(Idle→Requested→Filled→Running→Done), priority-60 arbitration, and the four hard
+constraints (never write `refAliasMap`/`currentPackage`/`defaultPackList`; never
+`EvaluatePackage(_, true)` in combat). The verb-package band `0x821+` is already
+reserved for exactly this. Option A is "author one more package record and drive
+it through the machinery that already works," not new infrastructure.
+
+**The records to add (ESP, via the generator):**
+- A **loot/acquire package** at a reserved `0x82x` slot. Two shapes to prototype
+  and pick between (decide in the field, per §4.5's reversibility order):
+  - *Acquire-by-type* (FCL's shape): a Sandbox/Find package with an item-type
+    filter + radius; the engine picks its own nearby target. Simplest; but the
+    ENGINE chooses the ref, so our `GetOwner`/`IsOffLimits`/`IsLocked` legality
+    gate cannot pre-screen it — **must verify the vanilla Acquire procedure
+    honors ownership/crime before trusting it** (open question).
+  - *Travel-to-ref* (gambit-precise): add a second alias `MFO_LootTargetRef`;
+    C++ picks the exact loose ref (the existing read-only cell walk already
+    finds and legality-gates candidates), fills follower→alias0 + ref→alias1,
+    package travels to alias1. Keeps our legality gate authoritative; costs a
+    "then acquire/activate on arrival" step the template may not express cleanly.
+- Reuse `MFO_CommandQuest`; no new quest.
+
+**The runtime:** when a `loot_*` gambit is the winning logistics rule AND a legal
+loose candidate exists, request the fill (category → package/condition, the way
+today's dispatcher maps category → transfer fn); `Pump()` drives it to Running;
+release the alias on pickup, on interrupt, or on combat start (clean release is
+mandatory — a loot package that cannot release is dropped, not shipped). Category
+selection is our GAMBIT, not FCL's faction toggles — finer and conditional.
+
+**Gate:** a follower breaks off, walks to a dropped arrow/potion within radius,
+picks it up with animation, returns to follow — takes nothing owned, does it only
+when a loot gambit fires, releases cleanly on a new fight, and never `PickUpObject`s
+from our thread. Corpse/container transfer (today's path) stays as-is for the
+inventory case; Option A adds the loose-world-item case the tick cannot do.
+
+**Also fold in here** (cheap, from §0.32): don't loot while the PLAYER is
+sneaking — a follower sprinting to grab loot blows the player's stealth. Read
+player sneak state in the logistics gate (C++, no package needed).
+
+---
+
 ## The three things most likely to reorder this
 
 1. **M4 says commanded targets don't stick.** §4.7 becomes a refresh model.
