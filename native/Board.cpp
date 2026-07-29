@@ -255,6 +255,19 @@ namespace MFO::Board {
             st.WindowRounding = st.FrameRounding = st.PopupRounding =
                 st.ChildRounding = st.TabRounding = st.GrabRounding =
                 st.ScrollbarRounding = 0.0f;   // square, always
+            // Roominess parity with MEO/MAO. Their ApplyMenuStyle sets these
+            // exact values; MFO left them at ImGui's cramped defaults
+            // (WindowPadding 8,8 / FramePadding 4,3 / ItemSpacing 8,4), which is
+            // most of what read as "less polished". Set on the persistent style
+            // like the rounding above -- MEO mutates GetStyle() directly, not
+            // via push/pop, so there is nothing to balance.
+            st.WindowBorderSize    = 1.0f;
+            st.ChildBorderSize     = 1.0f;
+            st.WindowPadding       = ImVec2(18.0f, 14.0f);
+            st.ItemSpacing         = ImVec2(10.0f, 7.0f);
+            st.FramePadding        = ImVec2(10.0f, 7.0f);
+            st.ScrollbarSize       = 14.0f;
+            st.SelectableTextAlign = ImVec2(0.0f, 0.5f);
             int n = 0;
             auto col = [&](ImGuiCol c, const ImVec4& v){ ImGui::PushStyleColor(c, v); ++n; };
             col(ImGuiCol_WindowBg,        sk.winBg);
@@ -282,6 +295,13 @@ namespace MFO::Board {
             col(ImGuiCol_TableRowBgAlt,   sk.panel);
             col(ImGuiCol_CheckMark,       sk.accent);
             col(ImGuiCol_SliderGrab,      sk.accent);
+            // MEO wires all three of these; MFO left them at ImGui's default
+            // debug-grey, which clashed with every skin. Separator takes the
+            // skin border; the scrollbar uses the skin's `track` field, which
+            // was defined per-skin but never applied until now.
+            col(ImGuiCol_Separator,       sk.border);
+            col(ImGuiCol_ScrollbarBg,     sk.track);
+            col(ImGuiCol_ScrollbarGrab,   ImVec4(sk.dim.x, sk.dim.y, sk.dim.z, 0.60f));
             col(ImGuiCol_SeparatorHovered,sk.accent);
             col(ImGuiCol_NavHighlight,    sk.accent);   // controller focus ring
             return n;
@@ -309,10 +329,28 @@ namespace MFO::Board {
             }
 
             const auto pv = SKSE::PluginDeclaration::GetSingleton()->GetVersion();
-            ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
-            if (skin.sans) ImGui::TextUnformatted(skin.title);
-            else           ImGui::TextUnformatted(skin.title);
-            ImGui::PopStyleColor();
+            // Centered display title flanked by drawn rules -- MEO/MAO's
+            // signature header. Uses the window draw list, so no font dependency;
+            // the Quicksilver skin's spaced-letter title still comes through
+            // verbatim via skin.title (that was the whole point of the old, now
+            // dead, skin.sans branch, which drew the identical string twice).
+            {
+                auto*        dl    = ImGui::GetWindowDrawList();
+                const char*  title = skin.title;
+                const ImVec2 ts    = ImGui::CalcTextSize(title);
+                const float  tx    = (ImGui::GetWindowSize().x - ts.x) * 0.5f;
+                const ImVec2 wp    = ImGui::GetWindowPos();
+                const float  ry    = wp.y + ImGui::GetCursorPosY() + ts.y * 0.5f;
+                const ImU32  rule  = ImGui::GetColorU32(ImGuiCol_Separator);
+                dl->AddLine(ImVec2(wp.x + 26.0f, ry), ImVec2(wp.x + tx - 18.0f, ry), rule);
+                dl->AddLine(ImVec2(wp.x + tx + ts.x + 18.0f, ry),
+                            ImVec2(wp.x + ImGui::GetWindowSize().x - 26.0f, ry), rule);
+                ImGui::SetCursorPosX(tx);
+                ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                ImGui::TextUnformatted(title);
+                ImGui::PopStyleColor();
+            }
+            ImGui::Spacing();
             ImGui::TextDisabled("MFO v%u.%u.%u  |  frame %llu  |  %.1f min",
                                 pv.major(), pv.minor(), pv.patch(),
                                 static_cast<unsigned long long>(snap.frame), snap.minutes);
@@ -1031,6 +1069,15 @@ namespace MFO::Board {
 
                 // MUST sit between the two NewFrame calls (ENGINE_NOTES §9).
                 if (g_bbW > 0.0f) ImGui::GetIO().DisplaySize = ImVec2(g_bbW, g_bbH);
+
+                // No TTF ships with MFO, so the board uses ImGui's built-in
+                // bitmap font, which is ~13px -- roughly 2mm tall on a 4K
+                // backbuffer and the single biggest "less polished" tell next to
+                // MEO/MAO (which bake a 19px face). Scale the default font on
+                // hi-DPI exactly the way MEO's own missing-font fallback does
+                // (io.DisplaySize.y / 1080, never below 1.0).
+                if (g_bbH > 0.0f)
+                    ImGui::GetIO().FontGlobalScale = std::max(1.0f, g_bbH / 1080.0f);
 
                 if (g_cursorInit.exchange(false)) {
                     ImGui::GetIO().AddMousePosEvent(g_cursorX.load(), g_cursorY.load());
