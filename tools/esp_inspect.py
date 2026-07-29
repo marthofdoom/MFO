@@ -1272,12 +1272,19 @@ def mode_selftest(args):
         res.add(mfo)
         ck('MFO masters == [Skyrim.esm]', mfo.masters, ['Skyrim.esm'])
         pk = [r for r in mfo.by_sig.get('PACK', [])]
-        # 1 PACK in a release build; 6 under MFO_POC=1 (main + 5 probes).
-        # 1 in a release build; 1 + however many probes the ladder defines in a
-        # POC build. Pinning an exact count made this FAIL whenever a probe was
-        # ADDED, which trains people to loosen assertions instead of read them.
-        ck('MFO PACK count is 1 (release) or 1+probes (POC)',
-           len(pk) == 1 or len(pk) >= 6, True)
+        # 2 PACKs in a release build (cast 0x820 + travel 0x828, Option A);
+        # 2 + however many probes the ladder defines under MFO_POC=1. Pinning an
+        # exact count trained people to loosen assertions instead of read them,
+        # so this bounds loosely and the EXISTENCE of each production package is
+        # pinned separately below.
+        ck('MFO PACK count is 2 (release) or 2+probes (POC)',
+           len(pk) == 2 or len(pk) >= 7, True)
+        # Option A's travel package exists and rides the vanilla Travel template.
+        tp = mfo.by_fid.get(0x01000828)
+        ck('MFO_TravelPackage 01000828 exists', tp is not None, True)
+        if tp is not None:
+            ck('MFO_TravelPackage rides vanilla Travel 00016FAA',
+               f'{pack_template_of(tp):08X}', '00016FAA')
 
         # THE TWO HARD RULES, ASSERTED OVER MFO'S OWN RECORDS.
         # They were only ever checked against Skyrim.esm -- i.e. the tool
@@ -1359,7 +1366,11 @@ def mode_selftest(args):
                    _zstr(sub.get('ALID', b'')), 'MFO_CommandActor')
                 alpcs = [f'{_u32.unpack_from(d, 0)[0]:08X}'
                          for t, d in blocks[0]['subs'] if t == 'ALPC']
-                if len(pk) == 1:
+                # Key on ALPC CONTENT, not total PACK count: the travel package
+                # (Option A) lives on MFO_LootQuest's alias, never here, so the
+                # command quest's alias 0 still carries exactly the cast package
+                # in release and the probes under POC.
+                if '01000820' in alpcs:
                     ck('alias 0 carries ALPC -> the cast package',
                        alpcs, ['01000820'])
                 else:

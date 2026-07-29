@@ -1380,6 +1380,39 @@ corpses/containers after the walk on re-resolved handles (§0.30 / #72). Invento
 transfer does not tear 3D, so it is worker-safe; `PickUpObject`/`Activate` are
 not, and there is no shortcut around that.
 
+### 0.33 The Travel package for Option A — authored from the vanilla shape, locally verified (2026-07-29)
+
+Option A (walk-to-loot) needs a PACK riding the vanilla **Travel template
+`00016FAA`**. Rather than guess the byte layout (the §0.17-class trap), dumped
+`Skyrim.esm` with `esp_inspect`:
+
+* **Travel template `00016FAA`** — PKCU inputs=3, version=3. Settable inputs:
+  `0` Location (PLDT), `2` RideHorseIfPossible (Bool), `4` PreferPreferredPath
+  (Bool). UNAM run `0/2/4`, XNAM `3`.
+* **Exemplar `VC01FalionAtSummoningCircle` (0010FF16)** — a shipped
+  alias-delivered Travel: `PLDT locType 8 -> ALIAS INDEX n` (radius in units),
+  `QNAM` naming the owner quest, subrecord order EDID/PKDT/PSDT/[CTDA]/QNAM/
+  PKCU/(ANAM+value)*/UNAM*/XNAM/POBA·POEA·POCA. This is the 263-instance WERoad
+  movement pattern (§0.20).
+
+`build_travel()` reproduces that verbatim; `MFO_TravelPackage (0x828)` rides
+`00016FAA` with `PLDT t8 -> alias 1`, radius 128 (~arm's reach so the engine
+stops the follower ON the loot), `QNAM -> MFO_LootQuest (0x80C)`. PKDT flags **0,
+NOT kIgnoreCombat** — a fight must be able to pull the follower off looting.
+
+DELIVERY is a SEPARATE quest, `MFO_LootQuest`, not a second package on
+`MFO_CommandQuest`'s alias 0: a follower is only ever loot-travelling OR
+cast-commanded, so two one-package quests avoid ALPC arbitration (which would
+need conditions and a probe ladder to trust). alias 0 = follower (carries the
+travel package), alias 1 = the DLL-filled loot ref the PLDT points at.
+
+VERIFIED OFFLINE (no game needed): `audit_esp.py` PASS, `esp_inspect --selftest`
+PASS (52 assertions incl. travel-package existence + template), and a
+`--dump 01000828` byte-match to the exemplar. The NATIVE driver
+(`Packages::TravelTo` mirroring `CastAt` + distance-arrival + release) and the
+logistics dispatch are the next step, and like the cast package (§0.21 probes
+1–5) will want 1–2 deck cycles to tune walk/arrival/release.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

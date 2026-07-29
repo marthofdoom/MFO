@@ -37,10 +37,12 @@ FID_STARTUP_QUEST  = OWN | 0x804   # reserved; the DLL does the granting
 FID_MCM_QUEST      = OWN | 0x808   # carries the MCM Helper config script
 FID_COMMAND_QUEST  = OWN | 0x80A   # M9: carries the alias MFO fills with a target
 FID_PROBE_GLOB     = OWN | 0x80B   # M9 PoC: GetGlobalValue switchboard for the probes
-# 0x80C-0x80F  reserved: more command aliases / globals
+FID_LOOT_QUEST     = OWN | 0x80C   # Option A: delivery route for the travel-to-loot package
+# 0x80D-0x80F  reserved: more command aliases / globals
 # 0x810+       reserved: player-side perks, if that is ever ruled in
 FID_CAST_PACKAGE   = OWN | 0x820   # M9: PACK instance riding vanilla UseMagic
 FID_POC_PACK_BASE  = OWN | 0x821   # M9 PoC: one PACK per probe, 0x821+
+FID_TRAVEL_PACKAGE = OWN | 0x828   # Option A: PACK riding vanilla Travel (walk to a loot ref)
 # 0x821+       reserved: one PACK per action verb (attack, travel, hold, activate)
 NEXT_OBJECT_ID     = 0x900         # first never-used local id
 
@@ -413,6 +415,42 @@ def make_command_quest():
     return record('QUST', FID_COMMAND_QUEST, 0, body)
 
 
+def make_loot_quest():
+    """Option A: the delivery route for the TRAVEL package -- walk a follower to
+    a loot ref, so looting means GOING to the item, not teleport-transfer.
+
+    Same DialogueFollower-derived shape as make_command_quest, but a SEPARATE
+    quest so its alias 0 carries ONLY the travel package -- no ALPC arbitration
+    against the cast package (a follower is only ever loot-travelling OR
+    cast-commanded, never both, so two one-package quests beat one two-package
+    alias that needs conditions to disambiguate). alias 0 = the follower;
+    alias 1 = the loot ref the DLL fills, which the travel package's PLDT t8
+    points at. Priority matches the command quest (§4.6: chosen once).
+    """
+    body  = subrec('EDID', zstr("MFO_LootQuest"))
+    body += subrec('FULL', zstr("MFO Loot"))
+    body += subrec('DNAM', qust_dnam(0x0011, priority=QUEST_PRIORITY))
+    body += subrec('NEXT', b'')
+    body += subrec('ANAM', struct.pack('<I', 2))
+
+    # ── alias 0: the follower, carrying the travel package ──
+    body += subrec('ALST', struct.pack('<I', 0))
+    body += subrec('ALID', zstr("MFO_LootActor"))
+    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    body += subrec('ALPC', struct.pack('<I', FID_TRAVEL_PACKAGE))
+    body += subrec('VTCK', struct.pack('<I', 0))
+    body += subrec('ALED', b'')
+
+    # ── alias 1: the loot ref (destination). No packages, no authored fill --
+    # the DLL fills it with the chosen, legality-gated ref at runtime. ──
+    body += subrec('ALST', struct.pack('<I', 1))
+    body += subrec('ALID', zstr("MFO_LootTarget"))
+    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    body += subrec('VTCK', struct.pack('<I', 0))
+    body += subrec('ALED', b'')
+    return record('QUST', FID_LOOT_QUEST, 0, body)
+
+
 # ── M9: the cast package ────────────────────────────────────────────────────
 def pack_input(kind, payload_type, payload):
     """One templated-package data input: ANAM names the type, then its value."""
@@ -591,6 +629,55 @@ def make_cast_package():
                           qnam=FID_COMMAND_QUEST)
 
 
+def build_travel(fid, edid, alias_idx, radius, qnam):
+    """One PACK instance riding vanilla Travel (00016FAA): walk to the ref an
+    alias holds, then stop. Byte shape mirrored VERBATIM from the shipped
+    alias-delivered exemplar VC01FalionAtSummoningCircle (0010FF16) -- PLDT
+    type 8 -> alias, QNAM naming the owner quest -- the 263-instance WERoad
+    movement pattern (ENGINE_NOTES 0.17/0.20).
+
+    The Travel template (00016FAA) has 3 inputs: 0 Location (PLDT), 2/4 the two
+    Bools (RideHorseIfPossible, PreferPreferredPath); the settable UNAM run is
+    0/2/4 and XNAM is 3 (dumped from Skyrim.esm, not guessed).
+    """
+    body  = subrec('EDID', zstr(edid))
+    # PKDT: flags 0 -- NOT kIgnoreCombat. A fight MUST be able to pull the
+    # follower off looting (the whole "no logistics during combat" rule). Byte
+    # tail taken verbatim from the VC01 exemplar with its AlwaysSneak (0x2000)
+    # flag cleared: type 18, preferredSpeed 1 (jog), interruptFlags 0x0054.
+    body += subrec('PKDT', bytes.fromhex('000000001200018054000000'))
+    # PSDT: any time, any day -- the same 3,855-of-5,961 default build_usemagic uses.
+    body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
+    # QNAM (owner quest) is MANDATORY for an alias-valued input (626/626 vanilla).
+    body += subrec('QNAM', struct.pack('<I', qnam))
+    body += subrec('PKCU', struct.pack('<III', 3, FREF_TMPL_TRAVEL, 3))
+    # input 0: Location -> PLDT type 8 (reference alias) / alias index / radius.
+    body += pack_input("Location", 'PLDT', struct.pack('<III', 8, alias_idx, radius))
+    # inputs 2 and 4: the two Bools, both false -- as every WERoad travel ships.
+    body += pack_input("Bool", 'CNAM', struct.pack('<B', 0))
+    body += pack_input("Bool", 'CNAM', struct.pack('<B', 0))
+    # settable-slot run 0/2/4, then XNAM 3 -- verbatim from the exemplar.
+    body += subrec('UNAM', struct.pack('<B', 0))
+    body += subrec('UNAM', struct.pack('<B', 2))
+    body += subrec('UNAM', struct.pack('<B', 4))
+    body += subrec('XNAM', struct.pack('<B', 3))
+    # Empty on-begin/end/change blocks, as vanilla ships them.
+    for blk in ('POBA', 'POEA', 'POCA'):
+        body += subrec(blk, b'')
+        body += subrec('INAM', struct.pack('<I', 0))
+        body += subrec('PDTO', struct.pack('<II', 0, 0))
+    return record('PACK', fid, 0, body)
+
+
+def make_travel_package():
+    """Option A's loot-travel package: walk to the ref in MFO_LootQuest alias 1.
+    Radius 128 (~arm's reach) so the engine stops the follower ON the loot; the
+    DLL then detects arrival by distance and runs the existing inventory transfer.
+    """
+    return build_travel(FID_TRAVEL_PACKAGE, "MFO_TravelPackage",
+                        alias_idx=1, radius=128, qnam=FID_LOOT_QUEST)
+
+
 def make_poc_packages():
     """The probe ladder -- see POC_PROBES. One axis of novelty per probe,
     exactly one valid at a time via the MFO_ProbeSelect gate."""
@@ -617,11 +704,13 @@ def make_pack():
     body = make_cast_package()
     if POC_ENABLED:
         body += make_poc_packages()
+    body += make_travel_package()
     return group('PACK', body)
 
 
 def make_qust():
-    return group('QUST', make_startup_quest() + make_mcm_quest() + make_command_quest())
+    return group('QUST', make_startup_quest() + make_mcm_quest()
+                 + make_command_quest() + make_loot_quest())
 
 
 def main():
@@ -654,6 +743,7 @@ def main():
     with open(seq_path, 'wb') as f:
         f.write(struct.pack('<I', FID_MCM_QUEST))
         f.write(struct.pack('<I', FID_COMMAND_QUEST))
+        f.write(struct.pack('<I', FID_LOOT_QUEST))
 
     print(f"MFO {VERSION}")
     print(f"Written: {out_path} ({len(data):,} bytes)")
