@@ -22,15 +22,14 @@ namespace MFO::Logistics {
         // inventory walk per tick is only affordable at this cadence.
         constexpr auto kLogisticsInterval = std::chrono::milliseconds(1000);
 
-        // The "consideration radius" (§4.8.3). Tier A is "loot what is already in
-        // reach" (§4.8.4): a follower stands next to the corpses anyway, so this
-        // is deliberately close. Going and fetching is Tier B and needs
-        // positioning, which is out of scope here.
-        // ARM'S REACH, not a vacuum. The follower loots what it is physically
-        // standing at (the corpse it just killed, an item on its path) -- never
-        // a teleport-transfer from across the room (marth). Actively pathing to
-        // distant loot is the deferred Tier-B movement feature.
-        constexpr float kLootRadius = 200.0f;
+        // The "consideration radius" (§4.8.3) is now Config::g_lootRadius, tunable
+        // by editing the synced INI (fLootRadius) with no rebuild. Until active
+        // pathing lands (deferred "Option A"), this is a TELEPORT-GRAB radius --
+        // the follower takes from any eligible corpse/container within it without
+        // walking there. Arm's-reach (200u) proved too small on the deck: a corpse
+        // is rarely that close once a fight ends, so looting looked dead (marth,
+        // 2026-07-29). The parent-cell walk (§0.30) still iterates only the
+        // follower's own cell, so a radius past one cell (~4096u) gains nothing.
 
         // The loot LRUs are bounded and deliberately NOT serialized (#22h):
         // worst case after a load is one more first-dibs wait on an
@@ -221,6 +220,40 @@ namespace MFO::Logistics {
             return overlapsAny;
         }
 
+        // ── skill-aware weapon selection ────────────────────────────────────
+        // marth: "loot equipment based on the follower's combat skills." A weapon
+        // upgrade is judged WITHIN the follower's DOMINANT weapon-skill class, and
+        // a better in-class weapon beats an out-of-class one they merely happen to
+        // hold -- so a two-hander specialist stuck with a dagger will take a
+        // greatsword. Classified by the follower's OWN skills and the weapon's
+        // type, never by name (§4.8.2). (Armor's light/heavy steer is still
+        // scoped: ArmorIsBetter compares raw rating on the slot -- the heavy/light
+        // steer wants a CommonLib armor-type call not verified on this offline box.)
+        enum class WepClass : std::uint8_t { OneHand, TwoHand, Ranged, Other };
+
+        WepClass WeaponClassOf(RE::WEAPON_TYPE a_t) {
+            switch (a_t) {
+            case RE::WEAPON_TYPE::kTwoHandSword:
+            case RE::WEAPON_TYPE::kTwoHandAxe:      return WepClass::TwoHand;
+            case RE::WEAPON_TYPE::kBow:
+            case RE::WEAPON_TYPE::kCrossbow:        return WepClass::Ranged;
+            case RE::WEAPON_TYPE::kStaff:
+            case RE::WEAPON_TYPE::kHandToHandMelee: return WepClass::Other;
+            default:                                return WepClass::OneHand;  // 1h sword/dagger/axe/mace
+            }
+        }
+
+        WepClass BestWeaponClass(RE::Actor* a_f) {
+            auto* avo = a_f->AsActorValueOwner();
+            if (!avo) return WepClass::OneHand;
+            const float one = avo->GetActorValue(RE::ActorValue::kOneHanded);
+            const float two = avo->GetActorValue(RE::ActorValue::kTwoHanded);
+            const float arc = avo->GetActorValue(RE::ActorValue::kArchery);
+            if (two >= one && two >= arc) return WepClass::TwoHand;
+            if (arc >= one && arc >= two) return WepClass::Ranged;
+            return WepClass::OneHand;
+        }
+
         bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
             // Generalized by CATEGORY, never by item (§4.8.2). One better piece
             // per tick (one action per tick, §4.3). We TRANSFER, then EQUIP -- a
@@ -229,31 +262,52 @@ namespace MFO::Logistics {
             // because logistics runs OUT of combat, where Loadout is not holding
             // a hand for a cast, and MFO has no equip-event sink to loop on;
             // armor slots are independent of the (left-hand) spell hand.
-            RE::TESBoundObject* best   = nullptr;
-            std::int32_t        bestCt = 0;
-
+            const WepClass myClass = BestWeaponClass(a_follower);
             auto* equippedWeap = a_follower->GetEquippedObject(false);
             auto* myWeap       = equippedWeap ? equippedWeap->As<RE::TESObjectWEAP>() : nullptr;
-            const std::uint16_t myDmg = myWeap ? myWeap->GetAttackDamage() : 0;
+            // ONLY loot weapons for an actual weapon-fighter: someone who already
+            // wields a real melee/ranged weapon (not a staff, not empty-handed).
+            // A staff-wielding healer or a weaponless caster must NOT hoover up
+            // the first sword on a corpse -- that is the "arbitrary-weapon vacuum"
+            // (marth). Their weapon-skill numbers are incidental, so BestWeaponClass
+            // alone is not a licence to arm them.
+            const bool wieldsRealWeapon =
+                myWeap && WeaponClassOf(myWeap->GetWeaponType()) != WepClass::Other;
+            // Baseline to beat: our current weapon's damage ONLY if it is already
+            // in our best class; otherwise 0, so an in-class weapon upgrades over
+            // an off-class one we happen to hold (the two-hander-with-a-dagger case).
+            std::uint16_t baseDmg = (myWeap && WeaponClassOf(myWeap->GetWeaponType()) == myClass)
+                                    ? myWeap->GetAttackDamage() : 0;
+
+            RE::TESBoundObject* bestArmor   = nullptr;
+            RE::TESBoundObject* bestWeap    = nullptr;
+            std::uint16_t       bestWeapDmg = baseDmg;
 
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
 
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
-                    if (ArmorIsBetter(a_follower, armo)) { best = obj; bestCt = 1; break; }
+                    if (!bestArmor && ArmorIsBetter(a_follower, armo)) bestArmor = obj;
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
-                    // Same category only, and only if the follower HAS a weapon
-                    // to beat. With nothing equipped myDmg is 0 and every weapon
-                    // would "upgrade" -- an arbitrary-weapon vacuum. A bow must
-                    // not beat a sword (§4.8.2 compares within category).
-                    if (myWeap && weap->GetWeaponType() == myWeap->GetWeaponType() &&
-                        weap->GetAttackDamage() > myDmg) { best = obj; bestCt = 1; break; }
+                    // In the follower's best class, and strictly harder-hitting
+                    // than what they effectively wield. A bow never beats a sword
+                    // for a swordsman; a greatsword beats a dagger for a 2h user.
+                    if (wieldsRealWeapon &&
+                        WeaponClassOf(weap->GetWeaponType()) == myClass &&
+                        weap->GetAttackDamage() > bestWeapDmg) {
+                        bestWeapDmg = weap->GetAttackDamage();
+                        bestWeap    = obj;
+                    }
                 }
             }
-            if (!best) return false;
-            if (!FitsCarryWeight(a_follower, best->GetWeight() * bestCt)) return false;
 
-            a_src->RemoveItem(best, bestCt, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+            // Prefer the weapon upgrade -- it is what makes the follower hit
+            // harder; else the better armor piece. One item this tick (§4.3).
+            RE::TESBoundObject* best = bestWeap ? bestWeap : bestArmor;
+            if (!best) return false;
+            if (!FitsCarryWeight(a_follower, best->GetWeight())) return false;
+
+            a_src->RemoveItem(best, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer,
                               nullptr, a_follower);
 
             // PUT IT ON. EquipObject on a slot-conflicting armor auto-unequips
@@ -340,12 +394,13 @@ namespace MFO::Logistics {
             // skycell) that churn during a transition. The follower's parent cell,
             // when ATTACHED, iterates only its own reference list (no worldspace
             // deref at all -- see TESObjectCELL::ForEachReferenceInRange), and the
-            // 200u loot radius fits inside one 4096u cell, so nothing real is lost.
+            // loot radius is clamped to one 4096u cell, so nothing real is lost.
             // The IsAttached gate also skips the walk outright during a transition,
             // which is exactly when those pointers are unstable.
             auto* cell = a_follower->GetParentCell();
             if (!cell || !cell->IsAttached()) return false;
             const auto origin = a_follower->GetPosition();
+            const float kLootRadius = Config::g_lootRadius.load();   // tunable, one snapshot per walk
 
             // Eligible loot sources, collected inside the walk and acted on after
             // it. Bounded so a room full of corpses cannot make the tick unbounded.

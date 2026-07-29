@@ -225,6 +225,19 @@
             "sourceType": "ModSettingFloat",
             "defaultValue": 4.0
           }
+        },
+        {
+          "id": "fLootRadius:General",
+          "text": "Loot reach (units)",
+          "type": "slider",
+          "help": "How far a follower reaches for loot. Larger = loots from farther (they teleport-grab until they can walk to items).",
+          "valueOptions": {
+            "min": 200.0,
+            "max": 4096.0,
+            "step": 50.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 1500.0
+          }
         }
       ]
     },

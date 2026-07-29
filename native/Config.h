@@ -167,6 +167,16 @@ namespace MFO::Config {
     // in this many seconds after the player's LAST take, not their first.
     inline std::atomic<float> g_quickLootWaiver{ 4.0f };
 
+    // How far a follower REACHES for loot. Until active pathing lands (the
+    // deferred "Option A"), this is a TELEPORT-GRAB radius: the follower takes
+    // from any eligible corpse/container within it. At arm's-reach (200u)
+    // looting almost never fired -- a corpse is rarely that close once a fight
+    // ends (marth, deck test 2026-07-29). Raised, and made a KEY so it is
+    // tunable by editing the synced INI with no rebuild. The parent-cell walk
+    // (§0.30) still iterates only the follower's OWN cell, so values past one
+    // cell (~4096u) gain nothing real. fLootRadius.
+    inline std::atomic<float> g_lootRadius{ 1500.0f };
+
     // Which caster a gambit spell goes through. PROVEN 2026-07-21: NO source
     // animates -- kLeftHand/kRightHand/kOther were all tried in the field and
     // behave like kInstant (ENGINE_NOTES §0.10). Kept configurable because it

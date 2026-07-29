@@ -194,7 +194,7 @@ namespace MFO::Board {
         { Vocab::kActLootHealthPotion,   "Loot health potions" },
         { Vocab::kActLootStaminaPotion,  "Loot stamina potions" },
         { Vocab::kActLootMagickaPotion,  "Loot magicka potions" },
-        { Vocab::kActLootEquipment,      "Equip better gear only" },
+        { Vocab::kActLootEquipment,      "Loot better equipment" },
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
         int cur = 0;
@@ -326,22 +326,20 @@ namespace MFO::Board {
             const int skinCols = PushSkin();
             const auto& skin = kSkins[std::clamp(Config::g_menuStyle.load(), 0, 3)];
 
-            if (!ImGui::Begin("MFO Field Kit", nullptr,
+            if (!ImGui::Begin("Follower Overhaul", nullptr,
                               ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
                 ImGui::End();
                 ImGui::PopStyleColor(skinCols);
                 return;
             }
 
-            const auto pv = SKSE::PluginDeclaration::GetSingleton()->GetVersion();
-            // Centered display title flanked by drawn rules -- MEO/MAO's
-            // signature header. Uses the window draw list, so no font dependency;
-            // the Quicksilver skin's spaced-letter title still comes through
-            // verbatim via skin.title (that was the whole point of the old, now
-            // dead, skin.sans branch, which drew the identical string twice).
+            // Centered display title flanked by drawn rules -- MEO's signature
+            // header (styled on MEO only now, per marth). The window's own title
+            // bar carries the mod name ("Follower Overhaul"); this drawn header
+            // names the FEATURE, "Field Orders", matching MFO_FieldOrdersPower.
             {
                 auto*        dl    = ImGui::GetWindowDrawList();
-                const char*  title = skin.title;
+                const char*  title = "Field Orders";
                 const ImVec2 ts    = ImGui::CalcTextSize(title);
                 const float  tx    = (ImGui::GetWindowSize().x - ts.x) * 0.5f;
                 const ImVec2 wp    = ImGui::GetWindowPos();
@@ -356,9 +354,6 @@ namespace MFO::Board {
                 ImGui::PopStyleColor();
             }
             ImGui::Spacing();
-            ImGui::TextDisabled("MFO v%u.%u.%u  |  frame %llu  |  %.1f min",
-                                pv.major(), pv.minor(), pv.patch(),
-                                static_cast<unsigned long long>(snap.frame), snap.minutes);
             ImGui::Separator();
 
             // LB/RB switch tabs on a controller. ImGui does not do this for a
@@ -369,7 +364,7 @@ namespace MFO::Board {
             // resyncs s_tab inside the opened tab body.
             static int s_tab = 0;
             static bool s_tabForce = false;   // apply SetSelected for ONE frame after a shoulder edge
-            constexpr int kTabCount = 5;
+            constexpr int kTabCount = 2;   // Followers, Gambits (diagnostics tabs removed, marth)
             // Don't steal L1/R1 while an item is being tweaked (they serve
             // tweak fast/slow) or while a popup is open (a combo would be torn
             // out from under the user).
@@ -727,209 +722,6 @@ namespace MFO::Board {
                     ImGui::EndTabItem();
                 }
 
-                if (ImGui::BeginTabItem("Measurements", nullptr, tabSel(2))) {
-                    s_tab = 2;
-                    ImGui::TextDisabled("The two numbers this build exists to take.");
-                    ImGui::Spacing();
-
-                    const double perMin = snap.minutes > 0.01 ? snap.combatEvents / snap.minutes : 0.0;
-                    ImGui::Text("Combat events (teammate-filtered): %u", snap.combatEvents);
-                    ImGui::SameLine(); ImGui::TextDisabled("(%.1f/min)", perMin);
-                    ImGui::TextWrapped("TESCombatEvent is a global source firing for every actor in the "
-                                       "load order. If this climbs fast in a big fight, the teammate "
-                                       "filter is not enough and combat-exit needs to move off the sink.");
-
-                    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-
-                    const double kph = snap.minutes > 0.01 ? snap.kills   * 60.0 / snap.minutes : 0.0;
-                    const double rph = snap.minutes > 0.01 ? snap.rapport * 60.0 / snap.minutes : 0.0;
-                    ImGui::Text("Kills: %u", snap.kills);
-                    ImGui::SameLine(); ImGui::TextDisabled("(%.1f/hr)", kph);
-                    ImGui::Text("Rapport this session: %u", snap.rapport);
-                    ImGui::SameLine();
-                    if (rph > 0.0 && rph < 30.0) {
-                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "(%.1f/hr)", rph);
-                    } else {
-                        ImGui::TextDisabled("(%.1f/hr)", rph);
-                    }
-                    ImGui::TextWrapped("BALANCE.md assumes ~45 rapport/hr and that number has NEVER been "
-                                       "measured. At half of it, Rank V is ~220 hours and the ladder "
-                                       "needs redoing while it is still free to change.");
-
-                    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-
-                    // Explains a classification without needing the log.
-                    ImGui::TextDisabled("Last credited kill");
-                    if (!snap.lastValid) {
-                        ImGui::TextDisabled("  (none yet)");
-                    } else {
-                        ImGui::Text("  %s  lvl %u  (you: %u)", snap.lastKillName.c_str(),
-                                    snap.lastVictimLevel, snap.lastPlayerLevel);
-                        if (snap.lastKillKind == "boss") {
-                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "  BOSS  x%.0f", snap.bossMult);
-                        } else if (snap.lastKillKind == "dragon") {
-                            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "  DRAGON  x%.0f", snap.dragonMult);
-                        } else {
-                            ImGui::Text("  standard");
-                            ImGui::TextDisabled("  boss needs unique, or level >= yours + %d", snap.bossLevelDelta);
-                        }
-                        ImGui::Text("  awarded %.1f to %d follower(s)", snap.lastAwarded, snap.lastCredited);
-                    }
-                    ImGui::EndTabItem();
-                }
-
-                if (ImGui::BeginTabItem("Probe", nullptr, tabSel(3))) {
-                    s_tab = 3;
-                    ImGui::TextWrapped("M4: fire one engine primitive at a follower and watch what "
-                                       "happens. These answer questions no source states -- they are "
-                                       "emergent engine behaviour. Nothing here persists.");
-                    ImGui::Spacing();
-
-                    // Subject keyed on IDENTITY, never an index (INVARIANTS #31).
-                    // The active list is rebuilt per frame and reorders when the
-                    // roster changes -- an index would silently retarget the
-                    // probe at whoever now occupies that slot.
-                    static RE::FormID selId = 0;
-                    std::vector<const FollowerRow*> active;
-                    for (const auto& r : snap.rows) if (r.active) active.push_back(&r);
-
-                    if (active.empty()) {
-                        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),
-                                           "No active follower. Recruit one first.");
-                    } else {
-                        const FollowerRow* cur = nullptr;
-                        for (const auto* r : active) if (r->id == selId) { cur = r; break; }
-                        if (!cur) { cur = active.front(); selId = cur->id; }
-
-                        if (ImGui::BeginCombo("Subject", cur->name.c_str())) {
-                            for (const auto* r : active) {
-                                const bool chosen = (r->id == selId);
-                                if (ImGui::Selectable(r->name.c_str(), chosen)) selId = r->id;
-                                if (chosen) ImGui::SetItemDefaultFocus();
-                            }
-                            ImGui::EndCombo();
-                        }
-                        const RE::FormID subject = selId;
-
-                        ImGui::Spacing();
-                        // Single-shot via IsItemActivated equivalent: Button
-                        // returns true once per click, which is the safe form.
-                        // ImGui::Button fires once per physical click, on
-                        // release. That is not the Selectable-return ||
-                        // IsItemClicked double-fire shape INVARIANTS #30 bans.
-                        auto fire = [&](Probe::Action a) {
-                            if (ImGui::Button(Probe::Name(a), ImVec2(-1.0f, 0.0f))) {
-                                SKSE::GetTaskInterface()->AddTask([subject, a]() {
-                                    Probe::Fire(subject, a);
-                                });
-                            }
-                            const char* b = Probe::Blurb(a);
-                            if (b && *b) ImGui::TextDisabled("  %s", b);
-                        };
-
-                        ImGui::SeparatorText("Combat targeting");
-                        fire(Probe::Action::StartCombatOnNearestFoe);
-                        fire(Probe::Action::StopCombat);
-
-                        ImGui::SeparatorText("Casting");
-                        fire(Probe::Action::CommandTargetAtCrosshair);
-                        fire(Probe::Action::ClearCommandedTarget);
-                        fire(Probe::Action::CastHealInstant);
-                        fire(Probe::Action::CastHealRightHand);
-                        fire(Probe::Action::CastHealLeftHand);
-                        fire(Probe::Action::CastHealOther);
-
-                        ImGui::SeparatorText("Packages / stance");
-                        fire(Probe::Action::EvaluatePackage);
-                        fire(Probe::Action::DrawWeapon);
-                        fire(Probe::Action::SheatheWeapon);
-
-                        // The gap M4 found before it ever ran. Shown here rather
-                        // than silently omitted -- a probe that hides what it
-                        // cannot reach hides its most important result.
-                        ImGui::SeparatorText("Not reachable from C++");
-                        for (const auto& u : Probe::UnavailableActions()) {
-                            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "  %s", u.name);
-                            ImGui::TextDisabled("    %s", u.why);
-                        }
-                        ImGui::TextWrapped("DESIGN 4.5 lists these as Tier B. The Papyrus surface named "
-                                           "the right flows, but CommonLibSSE-NG does not bind them -- "
-                                           "reaching them needs VM dispatch or a sourced relocation, "
-                                           "which is its own milestone.");
-                    }
-
-                    ImGui::Spacing(); ImGui::Separator();
-                    const auto last = Probe::GetLast();
-                    ImGui::TextDisabled("Last probe");
-                    if (!last.valid) {
-                        ImGui::TextDisabled("  (none yet)");
-                    } else {
-                        ImGui::Text("  %s on %s", last.action.c_str(), last.subject.c_str());
-                        if (last.ok) ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "  %s", last.detail.c_str());
-                        else         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "  %s", last.detail.c_str());
-                    }
-
-                    ImGui::Spacing(); ImGui::Separator();
-                    const auto ret = Probe::GetRetention();
-                    ImGui::TextDisabled("Target retention  <-- THE question for DESIGN 4.7");
-                    if (!ret.valid) {
-                        ImGui::TextDisabled("  not running -- use StartCombat above");
-                    } else {
-                        ImGui::Text("  %s commanded to attack %s", ret.follower.c_str(), ret.commanded.c_str());
-                        ImGui::Text("  now attacking: %s", ret.current.c_str());
-                        ImGui::Text("  watching %.1fs, %d sample(s)", ret.watchSeconds, ret.samples);
-                        if (!ret.everEngaged) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
-                                               "  never entered combat -- StartCombat did not take");
-                        } else if (ret.commandedDied) {
-                            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
-                                               "  commanded target DIED -- invalidation, not a re-pick");
-                        } else if (ret.changes == 0) {
-                            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f),
-                                               "  0 changes -- the order STICKS (4.7's model holds)");
-                        } else {
-                            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
-                                               "  %d change(s), held commanded target %.1fs",
-                                               ret.changes, ret.heldSeconds);
-                            ImGui::TextDisabled("    engine re-picked -- 4.7 needs a refresh cadence");
-                        }
-                        ImGui::TextDisabled("  on commanded target: %s", ret.onCommanded ? "yes" : "NO");
-                        ImGui::TextDisabled("  (500ms sampling cannot see a re-pick-and-return inside one tick)");
-                        if (!ret.active) ImGui::TextDisabled("  (watch ended)");
-                    }
-                    ImGui::EndTabItem();
-                }
-
-                if (ImGui::BeginTabItem("Config", nullptr, tabSel(4))) {
-                    s_tab = 4;
-                    // SKIN -- live, no reload (§6.7a). g_menuStyle is an atomic,
-                    // so a render-thread store is fine; PushSkin reads it next
-                    // frame.
-                    ImGui::TextUnformatted("Skin");
-                    int cur = std::clamp(Config::g_menuStyle.load(), 0, 3);
-                    for (int k = 0; k < 4; ++k) {
-                        if (ImGui::RadioButton(kSkins[k].name, cur == k))
-                            Config::g_menuStyle.store(k);
-                        if (k < 3) ImGui::SameLine();
-                    }
-                    ImGui::Separator();
-                    ImGui::Text("rate         %.2f", snap.rate);
-                    ImGui::Text("per kill     %.2f", snap.killVal);
-                    ImGui::Text("boss mult    %.1fx", snap.bossMult);
-                    ImGui::Text("dragon mult  %.1fx", snap.dragonMult);
-                    ImGui::Text("shared radius %.0f", snap.radius);
-                    ImGui::Text("summons      %s", snap.allowSummons ? "allowed" : "excluded");
-                    ImGui::Spacing();
-                    ImGui::Text("ranks        %d / %d / %d / %d",
-                                snap.rank2, snap.rank3, snap.rank4, snap.rank5);
-                    ImGui::Spacing();
-                    ImGui::Text("quirk table  %d active, %d inactive",
-                                snap.quirksActive, snap.quirksInactive);
-                    ImGui::TextDisabled("Inactive means that follower's plugin is not in this load "
-                                        "order. Normal, not an error.");
-                    ImGui::EndTabItem();
-                }
-
                 ImGui::EndTabBar();
             }
             s_tabForce = false;   // consumed this frame; mouse clicks own s_tab again
@@ -946,8 +738,7 @@ namespace MFO::Board {
             else if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
                 ImGui::TextDisabled("[A]/E select   [B]/Esc close   d-pad to move");
             else
-                ImGui::TextDisabled("[A]/E select   [B]/Esc close   [LB]/[RB] tabs   d-pad move   -   Skin: %s (Config)",
-                                    skin.name);
+                ImGui::TextDisabled("[A]/E select   [B]/Esc close   [LB]/[RB] tabs   d-pad move   -   Skin in MCM");
             ImGui::End();
             ImGui::PopStyleColor(skinCols);
         }

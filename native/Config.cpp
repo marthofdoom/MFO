@@ -116,6 +116,7 @@ namespace MFO::Config {
             else if (a_key == "bLogistics")         setB(g_logistics);
             else if (a_key == "fFirstDibsDelay")    setF(g_firstDibsDelay,   0.0f, 600.0f);
             else if (a_key == "fQuickLootWaiver")   setF(g_quickLootWaiver,  0.0f, 600.0f);
+            else if (a_key == "fLootRadius")        setF(g_lootRadius,     64.0f, 4096.0f);
             // Unknown keys are ignored in silence: MCM Helper writes keys we
             // may not know yet, and warning on them would cry wolf every load.
         }
@@ -184,6 +185,7 @@ namespace MFO::Config {
             g_logistics          = true;
             g_firstDibsDelay     = 4.0f;
             g_quickLootWaiver    = 4.0f;
+            g_lootRadius         = 1500.0f;
         }
 
     }
