@@ -305,6 +305,17 @@ packages — all band-reserved, none built.
 3. **CI never goes green cheaply.** If cold builds keep exceeding ~25 min,
    pin a narrower vcpkg baseline or vendor a prebuilt CommonLibSSE-NG.
 
+## Compatibility backlog *(not scheduled)*
+
+- **"NPCs use potions" (and kin).** These give followers automatic potion-
+  drinking, which hands the player a free gambit — the follower heals without
+  the player ever setting a drink rule, undercutting the point of the gambit
+  board. MFO should SUPPRESS that behaviour for followers it manages (so
+  drinking only happens because a gambit says so), with an **MCM toggle to
+  re-enable** it for players who prefer the mod's own drinking. Mechanism TBD
+  (detect the mod; likely strip/gate whatever perk/package/AI-flag it grants a
+  managed follower). marth, 2026-07-28. Not today.
+
 ## What is deliberately NOT on this roadmap
 
 No installer, no patch plugin, no calibration pass, no leveled-list edits,
