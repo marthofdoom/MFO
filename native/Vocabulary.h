@@ -149,6 +149,7 @@ namespace MFO::Vocab {
     inline constexpr const char* kActLootStaminaPotion  = "act.loot_stamina_potion";
     inline constexpr const char* kActLootMagickaPotion  = "act.loot_magicka_potion";
     inline constexpr const char* kActLootEquipment      = "act.loot_equipment";
+    inline constexpr const char* kActLootGold           = "act.loot_gold";
 
     // A cheap actor-value-percentage read. Reads THE NAMED actor's state
     // (INVARIANTS #15 -- say whose).

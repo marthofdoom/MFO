@@ -319,6 +319,25 @@ namespace MFO::Logistics {
             return true;
         }
 
+        // Take all the gold on a corpse/container. Gold001 is the one hardcoded
+        // FormID in the game (0x0000000F, Skyrim.esm) -- there is no "gold type"
+        // to derive, so this is the sole by-FormID check in the loot code, and
+        // it is stable (a base-game record every load order carries). Weightless,
+        // so no carry-weight gate; nothing to equip. Held for the player, who
+        // gets it back by trading -- which is why gold WAITS out first dibs
+        // (below), same as gear: you want first pick of the coin.
+        bool LootGold(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
+            constexpr RE::FormID kGold001 = 0x0000000F;
+            for (auto& [obj, data] : a_src->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (obj->GetFormID() != kGold001) continue;
+                a_src->RemoveItem(obj, data.first, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                  nullptr, a_follower);
+                return true;
+            }
+            return false;
+        }
+
         // ── DRINK ───────────────────────────────────────────────────────────
         // Consume the BEST (highest-magnitude) restore potion of a_which the
         // follower already carries. The AlchemyItem equip path IS the vanilla
@@ -370,7 +389,7 @@ namespace MFO::Logistics {
         }
 
         // ── the looting dispatcher ──────────────────────────────────────────
-        enum class Category { Arrows, Bolts, Potions, Equipment };
+        enum class Category { Arrows, Bolts, Potions, Equipment, Gold };
 
         // Walk nearby refs, gate them, and perform ONE transfer. Returns true if
         // something was looted. Collect-then-act (#2): the world walk only reads
@@ -462,9 +481,10 @@ namespace MFO::Logistics {
                     // (marth): you don't compete for the arrows/potions on a
                     // corpse, and followers rarely linger the full delay anyway.
                     // So arrows/potions are eligible the moment they're SAFE
-                    // (unowned/unlocked, already checked above); only EQUIPMENT
-                    // waits out the delay so you get first pick of the gear.
-                    if (a_cat != Category::Equipment) {
+                    // (unowned/unlocked, already checked above); EQUIPMENT and
+                    // GOLD wait out the delay so you get first pick of the loot
+                    // that is actually worth competing for.
+                    if (a_cat != Category::Equipment && a_cat != Category::Gold) {
                         candidates.push_back(ref->GetHandle());
                     } else {
                         const auto id = ref->GetFormID();
@@ -514,6 +534,7 @@ namespace MFO::Logistics {
                 case Category::Bolts:     moved = LootAmmo(a_follower, ref, true);  break;
                 case Category::Potions:   moved = LootPotions(a_follower, ref, a_potionWant); break;
                 case Category::Equipment: moved = LootEquipment(a_follower, ref); break;
+                case Category::Gold:      moved = LootGold(a_follower, ref); break;
                 }
                 if (moved) return true;
             }
@@ -652,6 +673,7 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootStaminaPotion)  acted = LootNearby(a_follower, Category::Potions, now, RE::ActorValue::kStamina);
             else if (op == Vocab::kActLootMagickaPotion)  acted = LootNearby(a_follower, Category::Potions, now, RE::ActorValue::kMagicka);
             else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, now);
+            else if (op == Vocab::kActLootGold)           acted = LootNearby(a_follower, Category::Gold, now);
             else if (op == Vocab::kActWait) {
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.
             }
