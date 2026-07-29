@@ -380,14 +380,21 @@ namespace MFO::Logistics {
                     // filter must not.
                     if (ref->IsLocked())    { ++dLocked;    return RE::BSContainer::ForEachResult::kContinue; }
 
-                    // Start (or keep) this ref's first-dibs clock. Recording here,
-                    // for every candidate whether eligible yet or not, is what
-                    // makes the delay measure PRESENCE in radius (#22h).
-                    const auto id = ref->GetFormID();
-                    if (g_seen.emplace(id, a_now).second) EvictOldest(g_seen);
-
-                    if (LootEligible(id, a_now)) candidates.push_back(ref->GetHandle());
-                    else ++dNotYet;
+                    // FIRST DIBS is the PLAYER's pick of VALUABLES (#22h) -- it
+                    // does NOT apply to a follower restocking its own consumables
+                    // (marth): you don't compete for the arrows/potions on a
+                    // corpse, and followers rarely linger the full delay anyway.
+                    // So arrows/potions are eligible the moment they're SAFE
+                    // (unowned/unlocked, already checked above); only EQUIPMENT
+                    // waits out the delay so you get first pick of the gear.
+                    if (a_cat != Category::Equipment) {
+                        candidates.push_back(ref->GetHandle());
+                    } else {
+                        const auto id = ref->GetFormID();
+                        if (g_seen.emplace(id, a_now).second) EvictOldest(g_seen);
+                        if (LootEligible(id, a_now)) candidates.push_back(ref->GetHandle());
+                        else ++dNotYet;
+                    }
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
 
