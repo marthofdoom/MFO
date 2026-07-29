@@ -56,11 +56,42 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeHpBelow  = "cond.foe_hp_pct_below";   // lowest under X%
     inline constexpr const char* kCondFoeLowestHp = "cond.foe_lowest_hp";      // lowest, any %
 
+    // ── COMBAT VOCABULARY EXPANSION (GAMBIT_LIBRARY.md, marth-approved) ──────
+    // Frozen serialization strings (#10), same contract as everything above.
+    // Self-value ABOVE gates -- the mirror of the _below trio; param is pct [0,1].
+    inline constexpr const char* kCondSelfHpAbove = "cond.self_hp_pct_above";
+    inline constexpr const char* kCondSelfMpAbove = "cond.self_mp_pct_above";
+    inline constexpr const char* kCondSelfSpAbove = "cond.self_sp_pct_above";
+    // World gates -- no param.
+    inline constexpr const char* kCondIsInterior  = "cond.is_interior";
+    inline constexpr const char* kCondIsNight     = "cond.is_night";
+    // Foe-COUNT gate -- true when at least `param` live foes are in the group.
+    // Reads the combat group but chooses NO target (not a selector).
+    inline constexpr const char* kCondFoeCountAtLeast = "cond.foe_count_at_least";
+    // Foe SELECTORS -- choose a target AND gate, resolved in PickFoe.
+    inline constexpr const char* kCondFoeHighestHp       = "cond.foe_highest_hp";
+    inline constexpr const char* kCondFoeWithinRange     = "cond.foe_within_range";   // param = units
+    inline constexpr const char* kCondFoeBeyondRange     = "cond.foe_beyond_range";   // param = units
+    inline constexpr const char* kCondFoeAttackingPlayer = "cond.foe_attacking_player";
+    inline constexpr const char* kCondFoeAttackingMe     = "cond.foe_attacking_me";
+    inline constexpr const char* kCondFoeIsUndead        = "cond.foe_is_undead";
+    inline constexpr const char* kCondFoeIsDragon        = "cond.foe_is_dragon";
+    // ALLY SELECTOR -- the lowest-HP teammate under `param` pct; chooses that
+    // ally as the target (for Cast at ally / Heal Other). Walks the maintained
+    // teammate list, not a world sweep.
+    inline constexpr const char* kCondAllyHpBelow = "cond.ally_hp_pct_below";         // param = pct
+
     // ── actions ─────────────────────────────────────────────────────────────
     inline constexpr const char* kActWait      = "act.wait";
     inline constexpr const char* kActCastSelf  = "act.cast_self";    // param = SpellItem
     inline constexpr const char* kActCastTarget= "act.cast_target";  // param = SpellItem, subject = target
     inline constexpr const char* kActAttack    = "act.attack";       // target = the chosen foe
+    // Tier-A equip actions: equip best-in-category from the follower's OWN
+    // inventory (ActorEquipManager, §4.5 Tier A). Idempotent -- no-op if already
+    // holding that category.
+    inline constexpr const char* kActEquipRanged = "act.equip_ranged";
+    inline constexpr const char* kActEquipMelee  = "act.equip_melee";
+    inline constexpr const char* kActEquipTorch  = "act.equip_torch";
 
     // ── LOGISTICS TABLE (DESIGN §4.8) ───────────────────────────────────────
     // A SEPARATE non-combat table (State::logistics() == tables[1]). It runs on

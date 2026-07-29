@@ -318,6 +318,48 @@ namespace MFO::Actuation {
             return { Result::Fired, equipped ? "silent (their AI declined)" : "" };
         }
 
+        // ── Tier-A EQUIP actions (§4.5) ──────────────────────────────────────
+        // Equip the best weapon of a category from the follower's OWN inventory.
+        // IDEMPOTENT: a no-op when already holding that category, so a persistently
+        // winning rule does not re-equip every tick. Direct ActorEquipManager,
+        // the same path LootEquipment uses; runs in combat, so a weapon it equips
+        // can coexist with a left-hand spell but is NOT tracked by Loadout's hand
+        // ledger -- acceptable because equip and cast are alternative gambits
+        // (first-match-wins fires only one per tick).
+        Outcome EquipWeapon(RE::Actor* a_follower, bool a_ranged) {
+            if (auto* cur = a_follower->GetEquippedObject(false)) {
+                if (auto* w = cur->As<RE::TESObjectWEAP>(); w && !w->IsStaff()) {
+                    const bool curRanged = w->IsBow() || w->IsCrossbow();
+                    if (curRanged == a_ranged) return { Result::NoOp, "already holding that category" };
+                }
+            }
+            RE::TESObjectWEAP* best = nullptr; std::uint16_t bestDmg = 0;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* w = obj->As<RE::TESObjectWEAP>();
+                if (!w || w->IsStaff()) continue;
+                if ((w->IsBow() || w->IsCrossbow()) != a_ranged) continue;
+                if (w->GetAttackDamage() >= bestDmg) { bestDmg = w->GetAttackDamage(); best = w; }
+            }
+            if (!best) return { Result::FailedSkill, a_ranged ? "no ranged weapon carried"
+                                                              : "no melee weapon carried" };
+            if (auto* mgr = RE::ActorEquipManager::GetSingleton()) mgr->EquipObject(a_follower, best);
+            return { Result::Fired, a_ranged ? "equipped ranged" : "equipped melee" };
+        }
+
+        Outcome EquipTorch(RE::Actor* a_follower) {
+            if (auto* l = a_follower->GetEquippedObject(true); l && l->As<RE::TESObjectLIGH>())
+                return { Result::NoOp, "already lit" };
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* light = obj->As<RE::TESObjectLIGH>();
+                if (!light || !light->CanBeCarried()) continue;
+                if (auto* mgr = RE::ActorEquipManager::GetSingleton()) mgr->EquipObject(a_follower, light);
+                return { Result::Fired, "lit a torch" };
+            }
+            return { Result::FailedSkill, "no torch carried" };
+        }
+
     }
 
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice) {
@@ -379,6 +421,10 @@ namespace MFO::Actuation {
             return CastOn(a_follower, a_choice.actionParam,
                           ResolveTarget(a_follower, a_choice.subject));
         }
+
+        if (op == Vocab::kActEquipRanged) return EquipWeapon(a_follower, true);
+        if (op == Vocab::kActEquipMelee)  return EquipWeapon(a_follower, false);
+        if (op == Vocab::kActEquipTorch)  return EquipTorch(a_follower);
 
         // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,
         // available here so a survival gambit ("Self HP < 30% -> Drink health

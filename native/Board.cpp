@@ -128,7 +128,9 @@ namespace MFO::Board {
     // condition (arrows < 10) stored 10.0 and was rendered as 10*100 = 1000%.
     // Percent params are fractions 0..1 shown as a %; Count params are whole
     // numbers; None conditions take no param at all.
-    enum class ParamKind : std::uint8_t { None, Percent, Count };
+    // Distance = whole units (a range), edited like a count but on a wider
+    // scale (a bow reaches ~1500u, a cell is 4096u).
+    enum class ParamKind : std::uint8_t { None, Percent, Count, Distance };
     struct VocabEntry { const char* op; const char* label; ParamKind kind = ParamKind::None; };
 
     // COMBAT and LOGISTICS have DISTINCT vocabularies. The editor shows the set
@@ -143,16 +145,33 @@ namespace MFO::Board {
         { Vocab::kCondPlayerHpBelow, "Player HP % below",    ParamKind::Percent },
         { Vocab::kCondFoeLowestHp,   "Foe: lowest HP",       ParamKind::None    },
         { Vocab::kCondFoeHpBelow,    "Foe: HP % below",      ParamKind::Percent },
+        { Vocab::kCondFoeHighestHp,  "Foe: highest HP",      ParamKind::None    },
         { Vocab::kCondFoeAny,        "Foe: nearest",         ParamKind::None    },
+        { Vocab::kCondFoeWithinRange,"Foe within range",     ParamKind::Distance},
+        { Vocab::kCondFoeBeyondRange,"Foe beyond range",     ParamKind::Distance},
+        { Vocab::kCondFoeAttackingPlayer,"Foe attacking player", ParamKind::None },
+        { Vocab::kCondFoeAttackingMe,"Foe attacking me",     ParamKind::None    },
+        { Vocab::kCondFoeIsUndead,   "Foe is undead",        ParamKind::None    },
+        { Vocab::kCondFoeIsDragon,   "Foe is dragon",        ParamKind::None    },
+        { Vocab::kCondFoeCountAtLeast,"Foe count at least",  ParamKind::Count   },
+        { Vocab::kCondSelfHpAbove,   "Self HP % above",      ParamKind::Percent },
+        { Vocab::kCondSelfMpAbove,   "Self Magicka % above", ParamKind::Percent },
+        { Vocab::kCondSelfSpAbove,   "Self Stamina % above", ParamKind::Percent },
+        { Vocab::kCondAllyHpBelow,   "Ally HP % below",      ParamKind::Percent },
+        { Vocab::kCondIsInterior,    "In an interior",       ParamKind::None    },
+        { Vocab::kCondIsNight,       "At night",             ParamKind::None    },
     };
     inline constexpr VocabEntry kActsCombat[] = {
         { Vocab::kActWait,              "Wait" },
         { Vocab::kActCastSelf,          "Cast on self" },
-        { Vocab::kActCastTarget,        "Cast at foe" },
+        { Vocab::kActCastTarget,        "Cast at foe/ally" },
         { Vocab::kActAttack,            "Attack" },
         { Vocab::kActDrinkHealthPotion, "Drink health potion" },
         { Vocab::kActDrinkStaminaPotion,"Drink stamina potion" },
         { Vocab::kActDrinkMagickaPotion,"Drink magicka potion" },
+        { Vocab::kActEquipRanged,       "Equip ranged weapon" },
+        { Vocab::kActEquipMelee,        "Equip melee weapon" },
+        { Vocab::kActEquipTorch,        "Equip torch" },
     };
     inline constexpr VocabEntry kCondsLogi[] = {
         { Vocab::kCondAlways,              "Always",                ParamKind::None    },
@@ -520,6 +539,22 @@ namespace MFO::Board {
                                     if (ImGui::SmallButton(">##pv"))
                                         QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
                                                     (float)std::clamp(n + 1, 1, 999) });
+                                    break; }
+                                case ParamKind::Distance: {
+                                    // Whole units, wider scale (step 50, cap ~5000).
+                                    int u = (int)(rv.param + 0.5f);
+                                    if (ImGui::SmallButton("<##pv"))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    (float)std::clamp(u - 50, 0, 5000) });
+                                    ImGui::SameLine(0, 2);
+                                    ImGui::SetNextItemWidth(46);
+                                    if (ImGui::DragInt("##p", &u, 5.0f, 0, 5000, "%du"))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    (float)std::clamp(u, 0, 5000) });
+                                    ImGui::SameLine(0, 2);
+                                    if (ImGui::SmallButton(">##pv"))
+                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
+                                                    (float)std::clamp(u + 50, 0, 5000) });
                                     break; }
                                 default:
                                     ImGui::TextDisabled("-");
