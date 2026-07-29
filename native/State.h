@@ -75,11 +75,11 @@ namespace MFO {
     //
     // RANK I MUST HOLD THE DEFAULT KIT, or a co-save round-trip truncates it
     // (#11) and the base gambits a follower ships with silently vanish. The kit
-    // (Followers::ApplyDefaultKit) is 2 combat (Attack, Wait) and 4 logistics
-    // (drink, loot arrows/potions/gear), so both fit Rank I. Logistics starts
-    // LARGER and grows SLOWER than combat (marth): a steady utility track, not a
-    // combat-power curve. Combat starts lean and opens up fast.
-    inline constexpr std::uint8_t kCombatSlotsByRank[kMaxRank + 1]    = { 0, 2, 4, 6, 8, 12 };
+    // (Followers::ApplyDefaultKit) is 3 combat (Drink health when hurt, Attack,
+    // Wait) and 4 logistics (drink, loot arrows/potions/gear), so both fit
+    // Rank I. Logistics starts LARGER and grows SLOWER than combat (marth): a
+    // steady utility track, not a combat-power curve.
+    inline constexpr std::uint8_t kCombatSlotsByRank[kMaxRank + 1]    = { 0, 3, 5, 7, 9, 12 };
     inline constexpr std::uint8_t kLogisticsSlotsByRank[kMaxRank + 1] = { 0, 4, 5, 6, 7, 8 };
 
     inline std::uint8_t SlotsForRank(std::uint8_t a_rank, Table a_table) {

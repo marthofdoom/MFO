@@ -6,6 +6,7 @@
 #include "Papyrus.h"
 #include "CasterConsent.h"
 #include "Targeting.h"
+#include "Logistics.h"
 
 namespace MFO::Actuation {
 
@@ -377,6 +378,22 @@ namespace MFO::Actuation {
             }
             return CastOn(a_follower, a_choice.actionParam,
                           ResolveTarget(a_follower, a_choice.subject));
+        }
+
+        // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,
+        // available here so a survival gambit ("Self HP < 30% -> Drink health
+        // potion") can fire mid-fight. Logistics::DrinkPotion is cooldown-gated
+        // per resource (~the potion's own duration), so a persistently-winning
+        // rule cannot chain-drink the whole stack -- and it drinks only what the
+        // follower already carries (§5.3: MFO hands out nothing).
+        if (op == Vocab::kActDrinkHealthPotion || op == Vocab::kActDrinkStaminaPotion ||
+            op == Vocab::kActDrinkMagickaPotion) {
+            const auto av = (op == Vocab::kActDrinkHealthPotion)  ? RE::ActorValue::kHealth  :
+                            (op == Vocab::kActDrinkStaminaPotion) ? RE::ActorValue::kStamina :
+                                                                    RE::ActorValue::kMagicka;
+            if (Logistics::DrinkPotion(a_follower, av))
+                return { Result::Fired, "drank a potion" };
+            return { Result::FailedSkill, "no matching potion, or still on cooldown" };
         }
 
         // Unknown action opcode: fail closed and say so. Likely a rule from a

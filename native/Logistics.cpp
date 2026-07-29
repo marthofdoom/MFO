@@ -490,6 +490,15 @@ namespace MFO::Logistics {
 
     // ── public: actuation ───────────────────────────────────────────────────
 
+    // Public forwarder so Actuation (the combat dispatcher) drinks through the
+    // exact same cooldown-gated path as the logistics table. NOT gated on
+    // bLogistics: that flag governs OUT-OF-COMBAT looting/drinking; an in-combat
+    // drink is a combat gambit, and the gate is that the player assigned it.
+    bool DrinkPotion(RE::Actor* a_follower, RE::ActorValue a_which) {
+        if (!a_follower) return false;
+        return DrinkBest(a_follower, a_which);
+    }
+
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!Config::g_logistics.load()) return;   // whole subsystem off by default (#45)
         if (!a_follower) return;

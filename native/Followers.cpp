@@ -16,14 +16,15 @@ namespace MFO::Followers {
     // blank. NOT seeding-behind-a-test-flag (marth: nothing should be seeded
     // that can't be manually set) -- every op here is in the board's pickers,
     // so the player can edit, reorder or delete any of it. Sized to the Rank I
-    // slots (2 combat, 4 logistics) so a co-save round-trip never truncates it
+    // slots (3 combat, 4 logistics) so a co-save round-trip never truncates it
     // (#11). A record that loads with ANY rule is left exactly as saved.
     void ApplyDefaultKit(FollowerState& st) {
         auto add = [](std::vector<Gambit>& tab, const char* cond, float p, const char* act) {
             Gambit g{}; g.conditionOpcode = cond; g.conditionParam = p; g.actionOpcode = act;
             tab.push_back(g);
         };
-        add(st.combat(), Vocab::kCondFoeLowestHp, 0.0f,  Vocab::kActAttack);  // fight the weakest foe
+        add(st.combat(), Vocab::kCondSelfHpBelow, 0.30f, Vocab::kActDrinkHealthPotion); // survive: drink when hurt
+        add(st.combat(), Vocab::kCondFoeLowestHp, 0.0f,  Vocab::kActAttack);  // else fight the weakest foe
         add(st.combat(), Vocab::kCondAlways,      0.0f,  Vocab::kActWait);     // otherwise hold
         add(st.logistics(), Vocab::kCondSelfHpBelow,          0.50f, Vocab::kActDrinkHealthPotion);
         add(st.logistics(), Vocab::kCondSelfOutOfArrows,      10.0f, Vocab::kActLootArrows);

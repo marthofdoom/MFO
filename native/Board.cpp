@@ -146,10 +146,13 @@ namespace MFO::Board {
         { Vocab::kCondFoeAny,        "Foe: nearest",         ParamKind::None    },
     };
     inline constexpr VocabEntry kActsCombat[] = {
-        { Vocab::kActWait,       "Wait" },
-        { Vocab::kActCastSelf,   "Cast on self" },
-        { Vocab::kActCastTarget, "Cast at foe" },
-        { Vocab::kActAttack,     "Attack" },
+        { Vocab::kActWait,              "Wait" },
+        { Vocab::kActCastSelf,          "Cast on self" },
+        { Vocab::kActCastTarget,        "Cast at foe" },
+        { Vocab::kActAttack,            "Attack" },
+        { Vocab::kActDrinkHealthPotion, "Drink health potion" },
+        { Vocab::kActDrinkStaminaPotion,"Drink stamina potion" },
+        { Vocab::kActDrinkMagickaPotion,"Drink magicka potion" },
     };
     inline constexpr VocabEntry kCondsLogi[] = {
         { Vocab::kCondAlways,              "Always",                ParamKind::None    },

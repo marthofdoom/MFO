@@ -54,6 +54,13 @@ namespace MFO::Logistics {
     // only; a_state is the follower's live record.
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state);
 
+    // Drink the best restore potion of a_which the follower carries, if any and
+    // not on cooldown (~the potion's own duration, per resource). Returns true
+    // if a potion was consumed. Exposed so the COMBAT dispatcher (Actuation) can
+    // run drink gambits in combat, through the exact same cooldown-gated path as
+    // the out-of-combat logistics table. Main thread.
+    bool DrinkPotion(RE::Actor* a_follower, RE::ActorValue a_which);
+
     // The player-looted WAIVER sink (#22h). A TESContainerChangedEvent filtered
     // to items entering the player collapses the first-dibs delay on the ref
     // they came from. Registered once at kDataLoaded, after form resolution.
