@@ -1593,8 +1593,12 @@ The only difference was static-vs-runtime priority.
 static 60. ENGAGE by filling alias 0 with the follower (owner locked at 60 > 50 →
 MFO wins → travels). RELEASE by EVICTING him — `ForceRefTo(alias 0, PlayerRef)`,
 which replaces his instance so the framework reclaims him (dropping the number
-would not un-claim him either — the mirror of the same law). No rooting: he is in
-alias 0 only while alias 1 holds a real corpse. `ReleaseAll` evicts on load.
+would not un-claim him either — the mirror of the same law). Rooting is BOUNDED,
+not impossible: alias 1 (corpse) fills before alias 0 (follower), so there is no
+claim without a destination; the only claimed-with-no-destination state is a
+corpse deleted mid-leg, caught on the next serviced tick (Holding → retarget or
+evict, worst case one `fBatchLinger`) and overridden by combat regardless.
+`ReleaseAll` evicts on load.
 
 TAKEAWAY: to hand an actor between your quest and a framework at runtime, you
 must change ALIAS OCCUPANCY (fill / evict-to-a-throwaway-ref), NOT the quest

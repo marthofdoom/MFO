@@ -155,13 +155,16 @@ POC_ENABLED   = os.environ.get("MFO_POC") == "1"
 # 60 outranks the follower framework (measured 50, ENGINE_NOTES 0.25) so an
 # alias-claimed follower runs MFO's package.
 QUEST_PRIORITY = int(os.environ.get("MFO_QUEST_PRIORITY", "60"))
-# Both the command quest AND the loot quest ship at this STATIC 60. The v0.8.4-
-# v0.8.7 dynamic scheme (ship 25, raise to 60 at runtime) was deck-DISPROVEN: the
-# WALK diagnostic showed prio reads 60 but the follower stays on his
-# PlayerFollowerPackage, because the engine locks an actor's owning quest when the
-# ALIAS IS FILLED and a later priority bump never re-arbitrates (ENGINE_NOTES
-# 0.36). So MFO claims at fill time (static 60) and RELEASES by evicting the
-# follower from the alias, never by touching the number.
+
+# Loot quest STATIC priority -- its OWN dial, NOT the command-quest #69 knob
+# above (an MFO_QUEST_PRIORITY override for a command experiment must not silently
+# break loot travel). Both default 60. The v0.8.4-v0.8.7 dynamic scheme (ship 25,
+# raise to 60 at runtime) was deck-DISPROVEN: the WALK diagnostic showed prio
+# reads 60 but the follower stays on his PlayerFollowerPackage, because the engine
+# locks an actor's owning quest when the ALIAS IS FILLED and a later priority bump
+# never re-arbitrates (ENGINE_NOTES 0.36). So MFO claims at fill time (static 60)
+# and RELEASES by evicting the follower from the alias, never by touching the number.
+LOOT_PRIORITY = int(os.environ.get("MFO_LOOT_PRIORITY", "60"))
 
 # ── binary helpers (forked from MEO/MRO — byte-for-byte valid) ──
 FORM_VERSION = 44
@@ -443,12 +446,15 @@ def make_loot_quest():
     the ALIAS IS FILLED and a later priority bump does NOT re-arbitrate. So we
     fill the alias with priority ALREADY 60 (MFO wins the claim -> travels), and
     RELEASE by evicting the follower from the alias (dropping the number would not
-    un-claim him either). No rooting: he is only in the alias while a real corpse
-    is in alias 1 (0.24/0.25/0.34).
+    un-claim him either). Rooting is BOUNDED, not impossible: alias 1 is filled
+    before alias 0 (no claim without a destination), and the only claimed-with-no-
+    destination state is a corpse deleted mid-leg -- caught on the next serviced
+    tick (Holding -> retarget or evict, worst case one fBatchLinger), and combat
+    overrides it regardless (0.24/0.25/0.34/0.36).
     """
     body  = subrec('EDID', zstr("MFO_LootQuest"))
     body += subrec('FULL', zstr("MFO Loot"))
-    body += subrec('DNAM', qust_dnam(0x0011, priority=QUEST_PRIORITY))
+    body += subrec('DNAM', qust_dnam(0x0011, priority=LOOT_PRIORITY))
     body += subrec('NEXT', b'')
     body += subrec('ANAM', struct.pack('<I', 2))
 

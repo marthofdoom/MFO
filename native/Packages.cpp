@@ -864,12 +864,42 @@ namespace MFO::Packages {
         return true;
     }
 
+    // READBACK for the one unmeasured sub-step of the whole claim model: does the
+    // ex-actor actually LOSE his MFO_LootQuest alias instance when we evict him
+    // (fill alias 0 with the player)? The quest-side "alias holds the player" is
+    // NOT proof the follower detached. Walk his ExtraAliasInstanceArray (same
+    // reader as ForeignOwnerBlocks) -- if an MFO_LootQuest package remains, the
+    // eviction did NOT free him, and "released" is a lie. Run on EVERY release
+    // now (Clear is the hot path), so the first deck run settles it either way.
+    void VerifyDetached(RE::Actor* a_follower, const char* a_why) {
+        auto* quest = Forms::g_lootQuest;
+        if (!a_follower || !quest) return;
+        bool stillClaimed = false;
+        if (auto* arr = a_follower->extraList.GetByType<RE::ExtraAliasInstanceArray>()) {
+            RE::BSReadLockGuard guard(arr->lock);
+            for (auto* inst : arr->aliases) {
+                if (inst && inst->quest == quest &&
+                    inst->instancedPackages && !inst->instancedPackages->empty()) {
+                    stillClaimed = true;
+                    break;
+                }
+            }
+        }
+        if (stillClaimed)
+            spdlog::error("[loot] EVICT INCOMPLETE ({}) -- {:08X} STILL carries an "
+                          "MFO_LootQuest alias package after player-displace", a_why,
+                          a_follower->GetFormID());
+        else
+            spdlog::info("[loot] {:08X} detached from loot alias ({})",
+                         a_follower->GetFormID(), a_why);
+    }
+
     void LootTravelClear(const char* a_why, RE::Actor* a_follower) {
         // RELEASE BY EVICTION. The loot quest is STATIC priority 60 (> the
         // framework's 50), so a filled alias 0 ALWAYS claims the follower -- and
         // dropping the number does NOT un-claim him (the engine locks the owning
         // quest at ALIAS-FILL time; the runtime raise/drop never re-arbitrates --
-        // deck WALK diagnostic, ENGINE_NOTES 0.35b). So to release, EVICT him:
+        // deck WALK diagnostic, ENGINE_NOTES 0.36). So to release, EVICT him:
         // force-fill alias 0 with the PLAYER -- a real ForceRefTo (works; the null
         // clear is a no-op, 0.34) -- which replaces the follower's alias instance
         // so the framework reclaims him and he follows. The player is not AI-
@@ -882,24 +912,22 @@ namespace MFO::Packages {
         // Re-evaluate NOW so the framework reclaims him this tick, not on the
         // engine's slow pass. (true,false) -- never resetAI. Without the follower
         // here the eviction still frees him on the next engine evaluation.
-        if (a_follower) a_follower->EvaluatePackage(true, false);
+        if (a_follower) {
+            a_follower->EvaluatePackage(true, false);
+            VerifyDetached(a_follower, a_why);   // prove the eviction actually freed him
+        }
         spdlog::info("[loot] travel released ({}) -- evicted to player", a_why);
     }
 
     void LootTravelEvictIf(RE::FormID a_id) {
-        // Evict a_id from alias 0 IF he currently occupies it. Keyed to alias
-        // OCCUPANCY, not the live travel intent: the loot alias is NEVER emptied
-        // (priority-release leaves the last traveller in it), so a follower
-        // dismissed at ANY time after his last travel -- not just mid-travel --
-        // is still MFO's SOLE claim once his framework lets go of him, and would
-        // walk to the stale corpse and re-latch on every future load. Dismissal-
-        // AFTER-travel is the common case; mid-travel is the rare one.
-        //
-        // Dropping priority does NOT free such a follower (nothing outranks MFO's
-        // sole claim), so EVICT: force-fill alias 0 with the PLAYER -- a REAL
-        // ForceRefTo (works; only the null clear is a no-op, 0.34) -- which
-        // replaces his alias instance. The player is not AI-package-driven, so
-        // occupying the slot is inert; the next dispatch replaces the player.
+        // Evict a_id from alias 0 IF he currently occupies it, keyed to alias
+        // OCCUPANCY. With release-by-eviction (LootTravelClear) the slot normally
+        // holds the PLAYER between excursions, so this now matters for ONE case:
+        // a follower dismissed DURING an excursion, before Clear ran. If he is
+        // still in alias 0 when he leaves the roster, his framework claim is gone,
+        // so MFO's static-60 claim is his sole one -- he'd walk to the stale
+        // corpse and re-latch on every load. Evict him (fill the player -- a real
+        // ForceRefTo; the null clear is a no-op, 0.34) so he detaches.
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
         RE::ObjectRefHandle h{};
@@ -909,30 +937,8 @@ namespace MFO::Packages {
 
         if (auto* player = RE::PlayerCharacter::GetSingleton())
             ForceRefToNative(quest, kAliasLootActor, player);   // no-op off AE, fine
-
-        // READBACK for the one unmeasured sub-step: does the EX-ACTOR actually
-        // lose his MFO_LootQuest alias instance on replacement? The quest-side
-        // "alias now holds the player" is not proof the actor detached. Walk his
-        // ExtraAliasInstanceArray (same reader as ForeignOwnerBlocks) -- if an
-        // MFO_LootQuest package remains, the eviction did NOT detach him.
-        bool stillClaimed = false;
-        if (auto* actor = held->As<RE::Actor>()) {
-            if (auto* arr = actor->extraList.GetByType<RE::ExtraAliasInstanceArray>()) {
-                RE::BSReadLockGuard guard(arr->lock);
-                for (auto* inst : arr->aliases) {
-                    if (inst && inst->quest == quest &&
-                        inst->instancedPackages && !inst->instancedPackages->empty()) {
-                        stillClaimed = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if (stillClaimed)
-            spdlog::error("[loot] EVICT INCOMPLETE -- {:08X} STILL carries an MFO_LootQuest "
-                          "alias package after player-displace", a_id);
-        else
-            spdlog::info("[loot] evicted {:08X} from loot alias (player-displaced, detached)", a_id);
+        if (auto* actor = held->As<RE::Actor>())
+            VerifyDetached(actor, "dismissed");   // prove the ex-actor detached
     }
 
     Status Get() {

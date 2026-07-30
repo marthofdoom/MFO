@@ -1234,9 +1234,9 @@ namespace MFO::Logistics {
     void ReleaseTravelOnCombat(RE::Actor* a_follower) {
         if (!a_follower) return;
         if (g_travel.active && g_travel.follower == a_follower->GetFormID()) {
-            // Drop the loot quest to idle priority and re-evaluate NOW so the
-            // combat table / his own AI takes over this tick, not on the engine's
-            // slow pass. The corpse is not "failed" -- he can finish it after the
+            // EVICT him from the loot alias and re-evaluate NOW so the combat
+            // table / his own AI takes over this tick, not on the engine's slow
+            // pass. The corpse is not "failed" -- he can finish it after the
             // fight -- so no LRU mark.
             Packages::LootTravelClear("combat", a_follower);
             g_travel = TravelIntent{};
@@ -1244,11 +1244,11 @@ namespace MFO::Logistics {
     }
 
     void OnFollowerRemoved(RE::FormID a_id) {
-        // UNCONDITIONAL: the loot alias is never emptied, so a_id may still hold
-        // alias 0 from a travel that COMPLETED long ago -- not only mid-travel.
-        // The occupancy check lives in LootTravelEvictIf; it no-ops unless a_id
-        // is the current holder. (A dismissed follower can't be freed by
-        // priority -- nothing reclaims him -- and would re-latch every load.)
+        // A follower dismissed DURING an excursion may still hold alias 0 (Clear
+        // hasn't run). With his framework claim gone, MFO's static-60 claim is his
+        // sole one -- he'd walk to the stale corpse and re-latch every load.
+        // LootTravelEvictIf no-ops unless a_id is the current holder; between
+        // excursions the slot holds the player, so this is normally a no-op.
         Packages::LootTravelEvictIf(a_id);
         // Forget the live intent too, if he was the active traveller.
         if (g_travel.active && g_travel.follower == a_id) g_travel = TravelIntent{};
