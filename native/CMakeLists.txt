@@ -8,7 +8,7 @@
 # DLL (ARCHITECTURE.md §8.2).
 cmake_minimum_required(VERSION 3.21)
 
-project(MFO VERSION 0.8.10 LANGUAGES CXX)
+project(MFO VERSION 0.8.11 LANGUAGES CXX)
 
 find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
