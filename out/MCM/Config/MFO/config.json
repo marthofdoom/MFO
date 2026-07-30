@@ -360,6 +360,32 @@
           }
         },
         {
+          "id": "fBatchLinger:General",
+          "text": "Batch: wait for your dibs (s)",
+          "type": "slider",
+          "help": "On a loot run, if nearby loot is still under YOUR dibs, the follower waits this long (re-scanning) before returning. 0 = never wait.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 15.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 4.0
+          }
+        },
+        {
+          "id": "fExcursionMax:General",
+          "text": "Batch: max loot-run length (s)",
+          "type": "slider",
+          "help": "A follower returns to you after a loot run this long, no matter what, so a batch can't run away. The leash still bounds how far he roams.",
+          "valueOptions": {
+            "min": 5.0,
+            "max": 300.0,
+            "step": 5.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 60.0
+          }
+        },
+        {
           "id": "fLeashMin:General",
           "text": "Leash when cautious (units)",
           "type": "slider",

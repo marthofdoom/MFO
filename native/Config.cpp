@@ -125,6 +125,8 @@ namespace MFO::Config {
             else if (a_key == "fLootRadius")        setF(g_lootRadius,     64.0f, 4096.0f);
             else if (a_key == "bLootTravel")        setB(g_lootTravel);
             else if (a_key == "fTravelRadius")       setF(g_travelRadius,   64.0f, 4096.0f);
+            else if (a_key == "fBatchLinger")        setF(g_batchLinger,     0.0f, 15.0f);
+            else if (a_key == "fExcursionMax")       setF(g_excursionMax,    5.0f, 300.0f);
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
             // Unknown keys are ignored in silence: MCM Helper writes keys we
@@ -203,6 +205,8 @@ namespace MFO::Config {
             g_lootRadius         = 3000.0f;
             g_lootTravel         = true;
             g_travelRadius       = 768.0f;
+            g_batchLinger        = 4.0f;
+            g_excursionMax       = 60.0f;
             g_leashMin           = 512.0f;
             g_leashMax           = 4000.0f;
         }

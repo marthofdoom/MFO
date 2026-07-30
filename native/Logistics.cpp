@@ -395,15 +395,35 @@ namespace MFO::Logistics {
         // (#55). kArrivalDist ~= arm's reach: once the engine walks the follower
         // this close, the existing inventory transfer runs.
         constexpr float kArrivalDist = 160.0f;
+        // A BATCH EXCURSION, not a single trip. The follower stays claimed
+        // (priority 60) across corpses: Walking = en route to `target`; Holding =
+        // arrived/leg-failed, seeking the next leg or waiting out a dibs timer.
+        enum class TravelPhase { Walking, Holding };
         struct TravelIntent {
             RE::FormID          follower = 0;
             RE::ObjectRefHandle target;
             Category            cat  = Category::Arrows;
             RE::ActorValue      want = RE::ActorValue::kNone;
-            Clock::time_point   deadline{};
+            Clock::time_point   deadline{};       // per-LEG walk deadline
             bool                active = false;
+            TravelPhase         phase = TravelPhase::Walking;
+            Clock::time_point   startTime{};      // excursion start -> fExcursionMax cap
+            Clock::time_point   lingerUntil{};    // Hold bound -> fBatchLinger
         };
         TravelIntent g_travel;
+
+        // Set by an excursion-mode scan when it found loot it could NOT act on
+        // because the player's dibs have not released yet (dNotYet > 0). The Hold
+        // logic reads it: something still worth waiting for -> linger; else the
+        // batch is exhausted -> return to the player. Worker-tick-only.
+        bool g_scanSawWaiting = false;
+
+        // kNormal: not (yet) on an excursion -- arm's-reach transfer OR START one
+        // by walking to a far corpse (LootTravelFill, claim at 60). kExcursion:
+        // already claimed and driving a batch -- the closest eligible candidate
+        // drives the tick, arm's-reach -> grab, farther-but-walkable -> RETARGET
+        // without releasing (LootTravelRetarget). One action per tick either way.
+        enum class LootMode { kNormal, kExcursion };
 
         // Targets a walk FAILED to reach (navmesh-blocked, or the follower could
         // not close the distance before the deadline). Skipped for a cooldown so
@@ -539,8 +559,23 @@ namespace MFO::Logistics {
         // something was looted. Collect-then-act (#2): the world walk only reads
         // and records timers; all mutation happens afterwards on re-resolved
         // handles.
+        // Transfer the wanted category out of one corpse/container. Shared by the
+        // scan act-loop, the excursion arrival, and the arm's-reach path.
+        bool LootHere(RE::Actor* a_follower, RE::TESObjectREFR* a_ref,
+                      Category a_cat, RE::ActorValue a_want) {
+            switch (a_cat) {
+            case Category::Arrows:    return LootAmmo(a_follower, a_ref, false);
+            case Category::Bolts:     return LootAmmo(a_follower, a_ref, true);
+            case Category::Potions:   return LootPotions(a_follower, a_ref, a_want);
+            case Category::Equipment: return LootEquipment(a_follower, a_ref);
+            case Category::Gold:      return LootGold(a_follower, a_ref);
+            }
+            return false;
+        }
+
         bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
-                        RE::ActorValue a_potionWant = RE::ActorValue::kNone) {
+                        RE::ActorValue a_potionWant = RE::ActorValue::kNone,
+                        LootMode a_mode = LootMode::kNormal) {
             // §22g ABSOLUTE BAR, ahead of every delay and waiver: never mutate a
             // container while the player has ANY container menu open -- it breaks
             // the vanilla menu building its list from that container (MEO m19e).
@@ -744,7 +779,7 @@ namespace MFO::Logistics {
                 });
 
             // Act after the walk. Re-resolve each handle at act time (#2); stop at
-            // the first successful transfer -- one loot action per tick (§4.8.3).
+            // the first successful action -- one loot action per tick (§4.8.3).
             for (auto& h : candidates) {
                 auto ptr = h.get();
                 auto* ref = ptr.get();
@@ -757,10 +792,36 @@ namespace MFO::Logistics {
                 // an item out from under the menu/HUD the player is reading.
                 if (PlayerIsConsidering(rid)) continue;
 
-                // OPTION A: loot beyond arm's reach. With walk-to-loot ON the
-                // follower WALKS there (closest-first, since candidates are
-                // distance-sorted) and transfers on ARRIVAL (see ServiceFollower).
                 const float df = origin.GetDistance(ref->GetPosition());
+
+                // ── EXCURSION MODE: the follower is already claimed (priority 60)
+                // and driving a batch. The closest eligible candidate decides the
+                // tick: within arm's reach -> grab it (a mutation); farther but
+                // walkable -> RETARGET the excursion to it (movement, no release,
+                // no turn-around). Do NOT start a new fill and do NOT release.
+                if (a_mode == LootMode::kExcursion) {
+                    if (df <= kArrivalDist) {
+                        if (LootHere(a_follower, ref, a_cat, a_potionWant)) return true;
+                        continue;   // arm's-reach corpse was empty -- try the next
+                    }
+                    if (!Config::g_lootTravel.load())                              continue;
+                    if (df > Config::g_travelRadius.load())                        continue;
+                    if (TravelFailedRecently(rid, a_now))                          continue;
+                    if (playerPos.GetDistance(ref->GetPosition())
+                            <= Config::g_playerBubble.load())                      continue;
+                    if (Packages::LootTravelRetarget(a_follower, ref)) {
+                        g_travel.target   = ref->GetHandle();
+                        g_travel.cat      = a_cat;
+                        g_travel.want     = a_potionWant;
+                        g_travel.deadline = TravelDeadline(df, a_now);
+                        g_travel.phase    = TravelPhase::Walking;
+                        return true;   // new leg -- the excursion continues at 60
+                    }
+                    continue;
+                }
+
+                // ── NORMAL MODE: START an excursion by walking to a far corpse,
+                // or transfer one within arm's reach.
                 if (df > kArrivalDist && Config::g_lootTravel.load()) {
                     // Too far to WALK without abandoning the player -- leave it
                     // (following brings them closer later; also fairer to you).
@@ -774,12 +835,14 @@ namespace MFO::Logistics {
                     // One traveller at a time (single loot alias).
                     if (g_travel.active) continue;
                     if (Packages::LootTravelFill(a_follower, ref)) {
-                        g_travel.active   = true;
-                        g_travel.follower = a_follower->GetFormID();
-                        g_travel.target   = ref->GetHandle();
-                        g_travel.cat      = a_cat;
-                        g_travel.want     = a_potionWant;
-                        g_travel.deadline = TravelDeadline(df, a_now);
+                        g_travel.active    = true;
+                        g_travel.follower  = a_follower->GetFormID();
+                        g_travel.target    = ref->GetHandle();
+                        g_travel.cat       = a_cat;
+                        g_travel.want      = a_potionWant;
+                        g_travel.deadline  = TravelDeadline(df, a_now);
+                        g_travel.phase     = TravelPhase::Walking;
+                        g_travel.startTime = a_now;   // excursion begins now
                         return true;   // committed to the walk; transfer on arrival
                     }
                     // Travel UNAVAILABLE (off AE, records unresolved, quest not
@@ -787,19 +850,40 @@ namespace MFO::Logistics {
                     // rather than never looting this candidate (the SE fallback).
                 }
 
-                bool moved = false;
-                // Corpse/container: transfer the wanted category out of its
-                // inventory. (Loose world items are excluded at the walk gate --
-                // see the note there; they belong to the package-acquisition
-                // feature, not this worker-thread transfer path.)
-                switch (a_cat) {
-                case Category::Arrows:    moved = LootAmmo(a_follower, ref, false); break;
-                case Category::Bolts:     moved = LootAmmo(a_follower, ref, true);  break;
-                case Category::Potions:   moved = LootPotions(a_follower, ref, a_potionWant); break;
-                case Category::Equipment: moved = LootEquipment(a_follower, ref); break;
-                case Category::Gold:      moved = LootGold(a_follower, ref); break;
-                }
-                if (moved) return true;
+                // Corpse/container within reach (or travel unavailable): transfer.
+                if (LootHere(a_follower, ref, a_cat, a_potionWant)) return true;
+            }
+            // Excursion Hold decision needs to know if loot is still WAITING on
+            // the player's dibs (vs genuinely nothing left).
+            if (a_mode == LootMode::kExcursion && dNotYet > 0) g_scanSawWaiting = true;
+            return false;
+        }
+
+        // A LEG BOUNDARY on an active excursion: run ONLY the follower's LOOT
+        // gambits, in excursion mode, to grab an arm's-reach corpse or retarget
+        // to the next walkable one. LOOT-ONLY (no drink/wait) so a leg boundary
+        // never fires a second real action in the tick (the arrival transfer was
+        // this tick's mutation; a retarget is movement). Returns true if it acted
+        // (grabbed or retargeted). Sets g_scanSawWaiting via LootNearby.
+        bool RunExcursionScan(RE::Actor* a_follower, const FollowerState& a_state,
+                              Clock::time_point a_now) {
+            g_scanSawWaiting = false;
+            for (int start = 0; ; ) {
+                const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
+                if (choice.ruleIndex < 0) break;
+                const auto& op = choice.actionOpcode;
+                bool acted = false, isLoot = true;
+                if      (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows,  a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
+                else if (op == Vocab::kActLootBolts)          acted = LootNearby(a_follower, Category::Bolts,   a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
+                else if (op == Vocab::kActLootPotions)        acted = LootNearby(a_follower, Category::Potions, a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
+                else if (op == Vocab::kActLootHealthPotion)   acted = LootNearby(a_follower, Category::Potions, a_now, RE::ActorValue::kHealth,  LootMode::kExcursion);
+                else if (op == Vocab::kActLootStaminaPotion)  acted = LootNearby(a_follower, Category::Potions, a_now, RE::ActorValue::kStamina, LootMode::kExcursion);
+                else if (op == Vocab::kActLootMagickaPotion)  acted = LootNearby(a_follower, Category::Potions, a_now, RE::ActorValue::kMagicka, LootMode::kExcursion);
+                else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);
+                else if (op == Vocab::kActLootGold)           acted = LootNearby(a_follower, Category::Gold,    a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
+                else isLoot = false;
+                if (isLoot && acted) return true;
+                start = choice.ruleIndex + 1;   // skip non-loot / no-op, try next
             }
             return false;
         }
@@ -919,16 +1003,21 @@ namespace MFO::Logistics {
         // revert the raised priority -- form data keeps the runtime value -- so
         // ReleaseAll's kPreLoadGame write is the real reset, not this; this is
         // the LIVE release. See ReleaseAll.)
+        // Keyed to the whole-EXCURSION cap, not the per-leg deadline: during a
+        // Hold the leg deadline is stale and would wrongly fire this. The cap
+        // catches an excursion whose traveller is no longer being serviced.
         const bool off = !Config::g_logistics.load() || !Config::g_lootTravel.load();
-        if (g_travel.active && (now > g_travel.deadline || off)) {
-            // On a genuine DEADLINE miss, blacklist the target so closest-first
-            // does not re-pick it and churn (the v0.8.1 loop). NOT on toggle-off
-            // -- that corpse never "failed" and should stay eligible later.
+        const bool capped = g_travel.active &&
+            now > g_travel.startTime + std::chrono::seconds(
+                      static_cast<int>(Config::g_excursionMax.load()));
+        if (g_travel.active && (capped || off)) {
+            // On a cap hit blacklist the current target so it isn't re-picked
+            // immediately. NOT on toggle-off (that corpse never "failed").
             if (!off) {
                 if (auto tp = g_travel.target.get()) MarkTravelFailed(tp->GetFormID(), now);
             }
-            Packages::LootTravelClear(off ? "subsystem off" : "stale");
-            g_travel.active = false;
+            Packages::LootTravelClear(off ? "subsystem off" : "excursion cap");
+            g_travel = TravelIntent{};
         }
 
         if (!Config::g_logistics.load()) return;   // whole subsystem off by default (#45)
@@ -940,56 +1029,74 @@ namespace MFO::Logistics {
         if (due.time_since_epoch().count() != 0 && now < due) return;
         due = now + kLogisticsInterval;
 
-        // OPTION A: if THIS follower is mid-travel to loot, drive that instead of
-        // a fresh eval. Arrive-by-distance -> run the transfer; interrupt on
-        // combat / timeout / vanished target; ALWAYS release the alias (it is
-        // save-serialized, #55). A different follower travelling just means the
-        // single loot alias is busy -- handled in LootNearby.
+        // ── BATCH EXCURSION driver. While THIS follower is on a loot excursion
+        // (claimed at priority 60), drive it: walk to the current target, grab it
+        // on arrival, then seek the NEXT target and retarget WITHOUT releasing --
+        // he hoovers a batch instead of returning to the player after each corpse.
+        // Release only on combat, the excursion cap, leaving the leash, or the
+        // batch running dry (after a short dibs linger).
         if (g_travel.active && g_travel.follower == id) {
-            auto tptr  = g_travel.target.get();
-            auto* tref = tptr.get();
-            // Re-validate the target: it was gated up to 12 s ago and may since
-            // have been disabled/deleted (the player looted and the engine
-            // cleaned it up).
-            const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
-            if (gone || a_follower->IsInCombat() || now > g_travel.deadline) {
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            // HARD interrupts -> END the excursion.
+            const bool overCap = now > g_travel.startTime + std::chrono::seconds(
+                                          static_cast<int>(Config::g_excursionMax.load()));
+            const bool outOfLeash = pc &&
+                a_follower->GetPosition().GetDistance(pc->GetPosition())
+                    > Confidence::LeashRadius(a_follower);
+            if (a_follower->IsInCombat() || overCap || outOfLeash) {
                 Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
-                                          : (gone ? "target gone" : "timeout"),
+                                          : (overCap ? "excursion cap" : "left leash"),
                                           a_follower);
-                g_travel.active = false;
-                // fall through to a normal eval this tick.
-            } else if (a_follower->GetPosition().GetDistance(tref->GetPosition()) <= kArrivalDist) {
-                // MUTATION BAR at arrival: the follower reached the SAME corpse
-                // the player may now be considering (vanilla menu or QuickLoot
-                // HUD) -- never mutate under it (#22g / #22g-QL). Also hold if the
-                // player just crouched (the sneak courtesy). The deadline bounds
-                // the wait, so this is a hold, not a statue.
-                auto* pc = RE::PlayerCharacter::GetSingleton();
-                if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking())) {
-                    return;   // still "arrived", just holding -- retry next tick
+                g_travel = TravelIntent{};
+                // fall through to a normal eval this tick (combat table / follow).
+            } else if (g_travel.phase == TravelPhase::Walking) {
+                auto tptr  = g_travel.target.get();
+                auto* tref = tptr.get();
+                const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
+                if (gone || now > g_travel.deadline) {
+                    // This LEG failed (target vanished, or not reached in time).
+                    // Do NOT release -- blacklist it and seek another leg THIS
+                    // tick via the Holding block below.
+                    if (tref) MarkTravelFailed(tref->GetFormID(), now);
+                    g_travel.phase = TravelPhase::Holding;
+                    g_travel.lingerUntil = now + std::chrono::seconds(
+                                              static_cast<int>(Config::g_batchLinger.load()));
+                    // no return -- fall into Holding
+                } else if (a_follower->GetPosition().GetDistance(tref->GetPosition()) <= kArrivalDist) {
+                    // ARRIVAL. MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
+                    if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking()))
+                        return;   // arrived, just holding under the bar -- retry next tick
+                    const bool moved = LootHere(a_follower, tref, g_travel.cat, g_travel.want);
+                    MarkTravelFailed(tref->GetFormID(), now);   // this corpse is DONE
+                    g_travel.phase = TravelPhase::Holding;
+                    g_travel.lingerUntil = now + std::chrono::seconds(
+                                              static_cast<int>(Config::g_batchLinger.load()));
+                    spdlog::info("[loot] {:08X}: arrived -- {} (batch continues)", id,
+                                 moved ? "looted" : "nothing to take");
+                    return;   // the transfer IS this tick's action; seek next tick
+                } else {
+                    return;   // still walking to the current target
                 }
-                bool moved = false;
-                switch (g_travel.cat) {
-                case Category::Arrows:    moved = LootAmmo(a_follower, tref, false); break;
-                case Category::Bolts:     moved = LootAmmo(a_follower, tref, true);  break;
-                case Category::Potions:   moved = LootPotions(a_follower, tref, g_travel.want); break;
-                case Category::Equipment: moved = LootEquipment(a_follower, tref); break;
-                case Category::Gold:      moved = LootGold(a_follower, tref); break;
+            }
+
+            // ── HOLDING: seek the next leg (retarget to a walkable corpse) or
+            // grab one within arm's reach. If nothing is actionable but loot is
+            // still under the player's dibs, linger and re-scan; else the batch is
+            // exhausted -> release and return to the player.
+            if (g_travel.active && g_travel.phase == TravelPhase::Holding) {
+                if (RunExcursionScan(a_follower, a_state, now)) {
+                    // Retargeted (phase now Walking) or grabbed a cluster corpse
+                    // (still Holding) -- productive, so extend the linger.
+                    if (g_travel.phase == TravelPhase::Holding)
+                        g_travel.lingerUntil = now + std::chrono::seconds(
+                                                  static_cast<int>(Config::g_batchLinger.load()));
+                    return;
                 }
-                // This source is DONE for a cooldown -- whether we took something
-                // or found nothing. Without this, closest-first re-picks the same
-                // corpse next tick and the follower shuttles between a few empty
-                // bodies forever (the deck churn: dispatched to 7E, 7C, 80, 7B...
-                // every few seconds, "nothing to take" each time). MarkTravelFailed
-                // is the same LRU the deadline uses; the name is "failed" but the
-                // effect we want here is just "don't re-target this yet".
-                MarkTravelFailed(tref->GetFormID(), now);
-                Packages::LootTravelClear("arrived", a_follower);
-                g_travel.active = false;
-                spdlog::info("[loot] {:08X}: arrived -- {}", id, moved ? "looted" : "nothing to take");
-                return;   // the arrival transfer IS this tick's action
-            } else {
-                return;   // still walking -- do not start a fresh loot eval
+                if (g_scanSawWaiting && now <= g_travel.lingerUntil)
+                    return;   // loot still under your dibs -- hold, re-scan next tick
+                Packages::LootTravelClear("batch done", a_follower);
+                g_travel = TravelIntent{};
+                return;
             }
         }
 

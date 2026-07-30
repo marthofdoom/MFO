@@ -209,6 +209,20 @@ namespace MFO::Config {
     // movement"), which is also fairer to the player. fTravelRadius.
     inline std::atomic<float> g_travelRadius{ 768.0f };
 
+    // BATCH EXCURSION (walk-to-loot batching). A follower stays CLAIMED (loot
+    // quest at priority 60) across multiple corpses instead of returning to the
+    // player between each, retargeting closest-first. Two bounds:
+    //  - fBatchLinger: when no walkable loot remains but some is still under the
+    //    player's dibs, HOLD in place this long (re-scanning) before giving up
+    //    and returning -- lets a just-released corpse extend the batch. 0 = no
+    //    hold (pure exhaust-and-return). fBatchLinger.
+    //  - fExcursionMax: whole-excursion hard cap (seconds). The follower returns
+    //    to the player after this no matter what, so a batch can't run away.
+    // (No batch-size/leg count and no separate "zone" radius: the confidence
+    // leash IS the zone, and a time cap subsumes a leg cap -- fewer knobs.)
+    inline std::atomic<float> g_batchLinger{ 4.0f };
+    inline std::atomic<float> g_excursionMax{ 60.0f };
+
     // THE CONFIDENCE LEASH (DESIGN core tenet). How far from the PLAYER a
     // follower will range to engage/loot is not fixed -- it scales with the
     // follower's confidence to survive alone (Confidence::Of). Bold in an easy

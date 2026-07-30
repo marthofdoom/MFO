@@ -841,6 +841,28 @@ namespace MFO::Packages {
         return true;
     }
 
+    bool LootTravelRetarget(RE::Actor* a_follower, RE::TESObjectREFR* a_ref) {
+        // A LEG BOUNDARY inside an ongoing excursion: point the follower at the
+        // NEXT loot ref WITHOUT releasing. Only alias 1 (the destination) is
+        // refilled; alias 0 (the follower) and the raised priority (60) are left
+        // ALONE, so the engine never hands him back to the framework between
+        // corpses -- no turn-around. This is the batch's whole point. Replacement-
+        // while-filled is deck-proven (the v0.8.2/3 churn logs re-targeted alias 1
+        // corpse-to-corpse); EvaluatePackage re-plans the running Travel package
+        // to the new destination. A movement change, not a loot mutation.
+        if (!Config::g_lootTravel.load())          return false;
+        auto* quest = Forms::g_lootQuest;
+        if (!a_follower || !a_ref || !quest)       return false;
+        if (!REL::Module::IsAE())                  return false;
+        if (!quest->IsRunning())                   return false;
+        if (!ForceRefToNative(quest, kAliasLootTarget, a_ref)) return false;
+        a_follower->EvaluatePackage(true, false);
+        spdlog::info("[loot] {:08X}: leg -> {:08X} (excursion, prio={})",
+                     a_follower->GetFormID(), a_ref->GetFormID(),
+                     static_cast<int>(quest->data.priority));
+        return true;
+    }
+
     void LootTravelClear(const char* a_why, RE::Actor* a_follower) {
         // RELEASE BY DROPPING PRIORITY below the follower framework (measured 50,
         // ENGINE_NOTES 0.25). The alias stays FILLED -- it is unclearable from

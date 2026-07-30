@@ -201,6 +201,11 @@ namespace MFO::Packages {
     // arrival, interrupt (combat), or timeout. ReleaseAll clears it on
     // load/revert/shutdown, so even a missed clear self-heals on the next load.
     bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
+    // A LEG BOUNDARY inside an ongoing batch excursion: retarget the follower to
+    // the next loot ref (refill alias 1 only) WITHOUT releasing -- priority and
+    // alias 0 are untouched, so no framework hand-back / turn-around. See .cpp.
+    bool LootTravelRetarget(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
+
     // a_follower is optional: pass it to re-evaluate that follower immediately
     // (drops travel this tick); omit and the priority drop still frees them on
     // the engine's next evaluation. Release is by QUEST PRIORITY (drop MFO below
