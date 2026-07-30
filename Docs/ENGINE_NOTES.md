@@ -1557,6 +1557,49 @@ flag *label* — a mislabelled flag silently disabled a whole feature (the gait)
 To make a package obey a preferredSpeed, SET `0x2000`. The Jog/Run MCM toggle
 (task 16) picks byte 6; the flag must stay on for it to matter.
 
+### 0.36 A RUNTIME priority change does NOT re-arbitrate an actor's owning quest — the claim is locked at ALIAS-FILL time (2026-07-30)
+
+**The four-day walk-to-loot ghost, finally measured.** v0.8.4 released the loot
+follower by "dynamic priority": ship the loot quest at 25, `quest->data.priority
+= 60` at dispatch, drop to 25 to release (Fable's #3, chosen for its "fail-safe"
+property over an alias-script + VM Clear). It never moved the follower. A WALK
+diagnostic (log `GetCurrentPackage()` each travel tick) settled it:
+
+```
+WALK->000E5FC1: onTravelPkg=false curPkg=0005C84B prio=60 dist=633
+```
+
+`prio=60` (the field write took) but `onTravelPkg=false`, `curPkg=0005C84B` =
+**PlayerFollowerPackage** — the follower stayed on his vanilla follow package and
+`dist` never shrank. So MFO set priority 60 yet did NOT win the follower, even
+though §0.25 says 60 > the framework's 50.
+
+**The mechanism.** The engine locks in an actor's OWNING QUEST for package
+arbitration when the ALIAS INSTANCE IS CREATED (the `ForceRefTo` fill), using the
+quest's priority AT THAT MOMENT. A later write to `quest->data.priority` updates
+the field but does NOT re-run owning-quest arbitration — `EvaluatePackage`
+re-selects the package *within* the current owner, not *which quest owns* the
+actor. The loot alias was filled while the quest was still 25 (< 50), so the
+follower's owner stayed the framework; bumping to 60 afterwards changed nothing.
+This directly contradicts the "arbitration reads priority live, no cache"
+structural guess that made dynamic-priority look safe — the number IS read live
+for *package* selection, but the *ownership* claim is snapshotted at fill.
+
+Corroboration: the COMMAND quest, which ships at STATIC 60 and DOES make
+followers cast (§0.25), proves the same fill under a fill-time-60 priority wins.
+The only difference was static-vs-runtime priority.
+
+**Fix (v0.8.8) — STATIC 60 + release by EVICTION.** Ship the loot quest at a
+static 60. ENGAGE by filling alias 0 with the follower (owner locked at 60 > 50 →
+MFO wins → travels). RELEASE by EVICTING him — `ForceRefTo(alias 0, PlayerRef)`,
+which replaces his instance so the framework reclaims him (dropping the number
+would not un-claim him either — the mirror of the same law). No rooting: he is in
+alias 0 only while alias 1 holds a real corpse. `ReleaseAll` evicts on load.
+
+TAKEAWAY: to hand an actor between your quest and a framework at runtime, you
+must change ALIAS OCCUPANCY (fill / evict-to-a-throwaway-ref), NOT the quest
+priority number. Priority is a build-time dial; the alias is the runtime switch.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

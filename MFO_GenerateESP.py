@@ -155,17 +155,13 @@ POC_ENABLED   = os.environ.get("MFO_POC") == "1"
 # 60 outranks the follower framework (measured 50, ENGINE_NOTES 0.25) so an
 # alias-claimed follower runs MFO's package.
 QUEST_PRIORITY = int(os.environ.get("MFO_QUEST_PRIORITY", "60"))
-
-# Loot-quest SHIPPED priority = 25, deliberately BELOW the follower framework's
-# 50 (ENGINE_NOTES 0.25 measured 25 -> "his own follow package keeps control").
-# The DLL RAISES it to 60 for the duration of a walk-to-loot and drops it back
-# to 25 to release -- release is by priority, not by clearing the (unclearable)
-# alias (ENGINE_NOTES 0.24/0.25/0.34). Shipping 25 makes the release FAIL SAFE:
-# if a runtime priority write is ever NOT honored, MFO never outranks the
-# framework and the follower simply never travels -- a quiet no-op, not a latch.
-# Priority is form data (not save-serialized), so every load reverts to 25 and
-# any stranded save self-heals for free.
-LOOT_IDLE_PRIORITY = int(os.environ.get("MFO_LOOT_IDLE_PRIORITY", "25"))
+# Both the command quest AND the loot quest ship at this STATIC 60. The v0.8.4-
+# v0.8.7 dynamic scheme (ship 25, raise to 60 at runtime) was deck-DISPROVEN: the
+# WALK diagnostic showed prio reads 60 but the follower stays on his
+# PlayerFollowerPackage, because the engine locks an actor's owning quest when the
+# ALIAS IS FILLED and a later priority bump never re-arbitrates (ENGINE_NOTES
+# 0.36). So MFO claims at fill time (static 60) and RELEASES by evicting the
+# follower from the alias, never by touching the number.
 
 # ── binary helpers (forked from MEO/MRO — byte-for-byte valid) ──
 FORM_VERSION = 44
@@ -438,14 +434,21 @@ def make_loot_quest():
     cast-commanded, never both, so two one-package quests beat one two-package
     alias that needs conditions to disambiguate). alias 0 = the follower;
     alias 1 = the loot ref the DLL fills, which the travel package's PLDT t8
-    points at. Ships at LOOT_IDLE_PRIORITY (25, BELOW the follower framework's
-    50) -- the DLL raises it to 60 only while a follower walks to loot and drops
-    it back to release. Release-by-priority, NOT by clearing the alias (0.24/
-    0.25/0.34). See LOOT_IDLE_PRIORITY.
+    points at.
+
+    STATIC priority 60 (matches the working command quest). v0.8.4-v0.8.7 shipped
+    this at 25 and RAISED it to 60 at runtime -- the deck WALK diagnostic proved
+    that fails: prio reads 60 but the follower stays on his PlayerFollowerPackage
+    (onTravelPkg=false), because the engine locks in an actor's owning quest when
+    the ALIAS IS FILLED and a later priority bump does NOT re-arbitrate. So we
+    fill the alias with priority ALREADY 60 (MFO wins the claim -> travels), and
+    RELEASE by evicting the follower from the alias (dropping the number would not
+    un-claim him either). No rooting: he is only in the alias while a real corpse
+    is in alias 1 (0.24/0.25/0.34).
     """
     body  = subrec('EDID', zstr("MFO_LootQuest"))
     body += subrec('FULL', zstr("MFO Loot"))
-    body += subrec('DNAM', qust_dnam(0x0011, priority=LOOT_IDLE_PRIORITY))
+    body += subrec('DNAM', qust_dnam(0x0011, priority=QUEST_PRIORITY))
     body += subrec('NEXT', b'')
     body += subrec('ANAM', struct.pack('<I', 2))
 

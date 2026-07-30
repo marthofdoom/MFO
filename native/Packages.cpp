@@ -598,13 +598,12 @@ namespace MFO::Packages {
         constexpr std::uint32_t kAliasLootActor  = 0;   // the follower (carries the travel package)
         constexpr std::uint32_t kAliasLootTarget = 1;   // the loot ref the PLDT t8 points at
 
-        // Release-by-priority (ENGINE_NOTES 0.25). The ESP ships the loot quest
-        // at kLootPrioIdle (25, BELOW the framework's 50 -> follower follows);
-        // dispatch RAISES it to kLootPrioActive (60, ABOVE 50 -> MFO claims and
-        // travels); release drops it back. MUST match MFO_GenerateESP.py
-        // (LOOT_IDLE_PRIORITY / QUEST_PRIORITY). std::int8_t: the field's type.
-        constexpr std::int8_t kLootPrioActive = 60;
-        constexpr std::int8_t kLootPrioIdle   = 25;
+        // CLAIM MODEL: the loot quest ships at STATIC priority 60 (MFO_GenerateESP
+        // .py QUEST_PRIORITY, above the follower framework's ~50). Engage = fill
+        // alias 0 with the follower (claims him at 60 -> travels). Release = EVICT
+        // him from alias 0 by force-filling the player. A runtime priority flip
+        // does NOT re-arbitrate the claim (deck-proven, ENGINE_NOTES 0.35b), so
+        // the number is never touched at runtime -- the alias occupancy is.
 
         RE::BGSRefAlias* LootAlias(std::uint32_t a_id) {
             auto* quest = Forms::g_lootQuest;
@@ -766,23 +765,24 @@ namespace MFO::Packages {
     }
 
     void ReleaseAll(const char* a_why) {
-        // OPTION A first, and unconditionally. This priority write is LOAD-
-        // BEARING, not defensive: an in-session load does NOT re-read the ESP, so
-        // form data keeps whatever the DLL last wrote. If we raised the quest to
-        // 60 for a travel and the player loads an earlier save WITHOUT quitting,
-        // the quest is still 60 -- and a follower filled into the (serialized,
-        // never-emptied) alias would be claimed at 60 with a valid Travel package
-        // and stranded. ReleaseAll runs on kPreLoadGame / post-load reconcile /
-        // kNewGame / revert, so forcing idle priority here is what actually
-        // resets the raised value across every in-session load. A filled alias is
-        // the DESIGNED steady state now (info, not a warning).
-        if (Forms::g_lootQuest) {
-            Forms::g_lootQuest->data.priority = kLootPrioIdle;
+        // OPTION A first, and unconditionally, and LOAD-BEARING. The loot quest is
+        // STATIC priority 60 and the alias is engine-SERIALIZED, so a save made
+        // mid-travel loads with the follower still filled into alias 0 -> claimed
+        // at 60 -> stranded (walks to a stale corpse). Priority is static, so we
+        // cannot "lower" our way out; EVICT -- force-fill alias 0 with the player
+        // -- to hand him back. Runs on kPreLoadGame / post-load reconcile /
+        // kNewGame / revert, so this is the reset for every in-session load.
+        if (auto* quest = Forms::g_lootQuest) {
             RE::ObjectRefHandle h{};
-            Forms::g_lootQuest->CreateRefHandleByAliasID(h, kAliasLootActor);
-            if (h.get())
-                spdlog::info("[loot] {} -- loot alias holds {:08X}; quest forced to idle prio {}",
-                             a_why, h.get()->GetFormID(), static_cast<int>(kLootPrioIdle));
+            quest->CreateRefHandleByAliasID(h, kAliasLootActor);
+            auto* held = h.get() ? h.get().get() : nullptr;
+            // Only evict if a FOLLOWER (not already the player) sits in the slot.
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (held && player && held != player) {
+                ForceRefToNative(quest, kAliasLootActor, player);
+                spdlog::info("[loot] {} -- loot alias held {:08X}; evicted to player", a_why,
+                             held->GetFormID());
+            }
         }
 
         if (g_holder.phase == Phase::Idle) {
@@ -820,18 +820,19 @@ namespace MFO::Packages {
         // Fill the TARGET first, then the ACTOR: when the follower's alias
         // instances the travel package, its PLDT destination (alias 1) is
         // already resolved. Both are synchronous native fills.
+        // The loot quest ships at STATIC priority 60 (> the follower framework's
+        // 50). Filling alias 0 with the follower NOW, while priority is already
+        // 60, is what claims him: the engine locks in an actor's owning quest at
+        // ALIAS-FILL time (deck WALK diagnostic: a RUNTIME raise to 60 read
+        // prio=60 but left him on PlayerFollowerPackage -- the raise never
+        // re-arbitrated). TARGET (alias 1) first so the destination is resolved
+        // when alias 0 instances the package -- no claimed-with-no-destination
+        // (rooting) window.
         if (!ForceRefToNative(quest, kAliasLootTarget, a_ref)) return false;
         if (!ForceRefToNative(quest, kAliasLootActor, a_follower)) {
             LootTravelClear("actor fill failed");
             return false;
         }
-        // CLAIM the follower by RAISING the loot quest above the follower
-        // framework. The engine arbitrates on the PRIORITY of the quest whose
-        // alias claims the actor (ENGINE_NOTES 0.25), NOT on package validity --
-        // so we do not gate the package, we outrank the framework (measured 50).
-        // quest->data.priority is the live field arbitration reads (the claim
-        // structs cache no priority), so set it BEFORE EvaluatePackage.
-        quest->data.priority = kLootPrioActive;
         // Nudge the follower to evaluate now rather than wait for the engine's
         // own pass. (true, false): NEVER resetAI -- it clears the combat group.
         a_follower->EvaluatePackage(true, false);
@@ -844,8 +845,8 @@ namespace MFO::Packages {
     bool LootTravelRetarget(RE::Actor* a_follower, RE::TESObjectREFR* a_ref) {
         // A LEG BOUNDARY inside an ongoing excursion: point the follower at the
         // NEXT loot ref WITHOUT releasing. Only alias 1 (the destination) is
-        // refilled; alias 0 (the follower) and the raised priority (60) are left
-        // ALONE, so the engine never hands him back to the framework between
+        // refilled; alias 0 (the follower) is left ALONE -- so he stays claimed
+        // (the quest's static 60) and the engine never hands him back between
         // corpses -- no turn-around. This is the batch's whole point. Replacement-
         // while-filled is deck-proven (the v0.8.2/3 churn logs re-targeted alias 1
         // corpse-to-corpse); EvaluatePackage re-plans the running Travel package
@@ -864,23 +865,25 @@ namespace MFO::Packages {
     }
 
     void LootTravelClear(const char* a_why, RE::Actor* a_follower) {
-        // RELEASE BY DROPPING PRIORITY below the follower framework (measured 50,
-        // ENGINE_NOTES 0.25). The alias stays FILLED -- it is unclearable from
-        // native code (ForceRefTo(None) v0.8.2 and ResetQuest v0.8.3 were BOTH
-        // deck-proven no-ops, 0.34) -- but at priority 25 MFO loses arbitration
-        // and the framework reclaims the follower, who follows normally. This is
-        // the ONLY release that works: a package-level gate that merely
-        // invalidates the package leaves the follower claimed-with-nothing and
-        // ROOTS him (0.24/0.25). Priority is the live arbitration field.
+        // RELEASE BY EVICTION. The loot quest is STATIC priority 60 (> the
+        // framework's 50), so a filled alias 0 ALWAYS claims the follower -- and
+        // dropping the number does NOT un-claim him (the engine locks the owning
+        // quest at ALIAS-FILL time; the runtime raise/drop never re-arbitrates --
+        // deck WALK diagnostic, ENGINE_NOTES 0.35b). So to release, EVICT him:
+        // force-fill alias 0 with the PLAYER -- a real ForceRefTo (works; the null
+        // clear is a no-op, 0.34) -- which replaces the follower's alias instance
+        // so the framework reclaims him and he follows. The player is not AI-
+        // package-driven, so occupying the slot is inert; the next dispatch
+        // replaces the player.
         auto* quest = Forms::g_lootQuest;
-        if (quest) quest->data.priority = kLootPrioIdle;
+        if (!quest) return;
+        if (auto* player = RE::PlayerCharacter::GetSingleton())
+            ForceRefToNative(quest, kAliasLootActor, player);   // no-op off AE, fine
         // Re-evaluate NOW so the framework reclaims him this tick, not on the
-        // engine's slow pass. Same (true,false) discipline as the fill -- never
-        // resetAI. Without the follower here the priority drop still frees him on
-        // the next engine evaluation; passing him just makes it immediate.
+        // engine's slow pass. (true,false) -- never resetAI. Without the follower
+        // here the eviction still frees him on the next engine evaluation.
         if (a_follower) a_follower->EvaluatePackage(true, false);
-        spdlog::info("[loot] travel released ({}) -- quest prio={}", a_why,
-                     quest ? static_cast<int>(quest->data.priority) : -1);
+        spdlog::info("[loot] travel released ({}) -- evicted to player", a_why);
     }
 
     void LootTravelEvictIf(RE::FormID a_id) {
@@ -906,7 +909,6 @@ namespace MFO::Packages {
 
         if (auto* player = RE::PlayerCharacter::GetSingleton())
             ForceRefToNative(quest, kAliasLootActor, player);   // no-op off AE, fine
-        quest->data.priority = kLootPrioIdle;
 
         // READBACK for the one unmeasured sub-step: does the EX-ACTOR actually
         // lose his MFO_LootQuest alias instance on replacement? The quest-side

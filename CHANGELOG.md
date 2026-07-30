@@ -3,6 +3,22 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.8 — walk-to-loot: the actual root cause fixed
+
+The diagnostic from v0.8.6/0.8.7 finally caught it: the follower was never
+receiving MFO's travel package at all — he stayed on his normal follow package
+even though MFO's priority read 60. The reason: the engine decides which quest
+"owns" a follower at the moment his alias is filled, and MFO was raising its
+priority to 60 *after* that, which the engine ignores for ownership. So he never
+walked to loot; he only ever grabbed what he ended a fight next to.
+
+Fix: MFO now claims the follower at the correct priority from the start (the same
+way the combat-casting system — which works — always has), and releases him by
+handing the slot back rather than lowering a number that doesn't un-claim him.
+This is the fix the whole walk-to-loot saga was circling; the built-in diagnostic
+will confirm it on the next run (the follower should finally close the distance to
+bodies).
+
 ## v0.8.7 — combat no longer interrupted by loot runs (+ carries the v0.8.6 diagnostic)
 
 Fixed a real regression from batching: a loot run could last up to 60s and ran
