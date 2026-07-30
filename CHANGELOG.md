@@ -3,6 +3,15 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.7 — combat no longer interrupted by loot runs (+ carries the v0.8.6 diagnostic)
+
+Fixed a real regression from batching: a loot run could last up to 60s and ran
+**right through a fight** — the follower stayed committed to looting at high
+priority instead of fighting, which read as "less aggressive in combat." Now the
+instant a follower is in combat, any loot run he's on ends immediately and he
+fights. (Includes the v0.8.6 walk diagnostic and the leash-based walk range, so a
+single relaunch gets everything.)
+
 ## v0.8.6 — walk-to-loot diagnostic + wider walk range
 
 Walk-to-loot still isn't working — the follower doesn't head for bodies a short

@@ -72,6 +72,13 @@ namespace MFO::Logistics {
     // FormID would apply the previous save's timers to this one.
     void ClearTransientState();
 
+    // Called from the Scheduler's COMBAT branch, per in-combat follower. If this
+    // follower is the active loot traveller, END the excursion immediately so he
+    // fights instead of looting -- ServiceFollower (which holds the other combat
+    // check) is skipped for in-combat followers, so a long batch would otherwise
+    // keep him claimed at priority 60 straight through the fight. No-op otherwise.
+    void ReleaseTravelOnCombat(RE::Actor* a_follower);
+
     // Called from the roster-removal (dismissal) path. If a_id was mid travel-
     // to-loot, EVICT them from the loot alias: a dismissed follower can't be
     // freed by dropping quest priority (nothing reclaims him) and the alias fill

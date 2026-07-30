@@ -144,6 +144,13 @@ namespace MFO::Scheduler {
             return;
         }
 
+        // IN COMBAT: end any loot excursion for this follower FIRST, so he fights
+        // instead of staying claimed by the loot quest at priority 60 (batches
+        // last up to 60 s and would otherwise run right through the fight, making
+        // him look passive). Must be before the combat-rules early-out below, so
+        // it yields even for a follower with no combat gambits.
+        Logistics::ReleaseTravelOnCombat(f);
+
         if (it->second.combat().empty()) return;      // no rules -> nothing to run
 
         const auto choice = Eval::Evaluate(f, it->second);

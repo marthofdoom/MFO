@@ -1019,6 +1019,9 @@ namespace MFO::Logistics {
         // Keyed to the whole-EXCURSION cap, not the per-leg deadline: during a
         // Hold the leg deadline is stale and would wrongly fire this. The cap
         // catches an excursion whose traveller is no longer being serviced.
+        // (Combat yield is NOT here -- ServiceFollower is skipped for in-combat
+        // followers, so this backstop never runs for the one who matters. The
+        // yield lives in the Scheduler's combat branch, ReleaseTravelOnCombat.)
         const bool off = !Config::g_logistics.load() || !Config::g_lootTravel.load();
         const bool capped = g_travel.active &&
             now > g_travel.startTime + std::chrono::seconds(
@@ -1226,6 +1229,18 @@ namespace MFO::Logistics {
         if (g_travel.active) Packages::LootTravelClear("revert");
         g_travel = TravelIntent{};
         g_travelFailed.clear();
+    }
+
+    void ReleaseTravelOnCombat(RE::Actor* a_follower) {
+        if (!a_follower) return;
+        if (g_travel.active && g_travel.follower == a_follower->GetFormID()) {
+            // Drop the loot quest to idle priority and re-evaluate NOW so the
+            // combat table / his own AI takes over this tick, not on the engine's
+            // slow pass. The corpse is not "failed" -- he can finish it after the
+            // fight -- so no LRU mark.
+            Packages::LootTravelClear("combat", a_follower);
+            g_travel = TravelIntent{};
+        }
     }
 
     void OnFollowerRemoved(RE::FormID a_id) {
