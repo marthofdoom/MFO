@@ -129,7 +129,11 @@ namespace MFO::Logistics {
 
         // Take all ammo of one class (arrows OR bolts) from the source. No bow
         // gate -- the gambit's condition decides whether to gather at all.
-        bool LootAmmo(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt) {
+        // a_peek: read-only "does this source hold anything I'd take?" -- return
+        // true on the first match WITHOUT transferring. Used to skip walking to a
+        // body that hasn't got what the gambit wants (marth).
+        bool LootAmmo(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
+                      bool a_peek = false) {
             // Collect matching ammo tuples first (object, count), THEN transfer
             // -- RemoveItem dispatches TESContainerChangedEvent synchronously, so
             // mutating the source inventory mid-walk is the #2 landmine.
@@ -137,9 +141,12 @@ namespace MFO::Logistics {
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && ammo->IsBolt() == a_wantBolt)
+                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && ammo->IsBolt() == a_wantBolt) {
+                    if (a_peek) return true;
                     takes.push_back({ obj, data.first });
+                }
             }
+            if (a_peek) return false;
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
@@ -163,7 +170,8 @@ namespace MFO::Logistics {
         // kHealth/kStamina/kMagicka -> only that restorative (PotionRestores'
         // MGEF archetype). Type is chosen by the ACTION, never inferred from the
         // condition (marth: the any-potion action never replaced per-type loot).
-        bool LootPotions(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::ActorValue a_want) {
+        bool LootPotions(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::ActorValue a_want,
+                         bool a_peek = false) {
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
@@ -174,8 +182,10 @@ namespace MFO::Logistics {
                 } else {
                     if (!alc || PotionRestores(alc) != a_want) continue;   // only this resource
                 }
+                if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
+            if (a_peek) return false;
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
@@ -253,7 +263,7 @@ namespace MFO::Logistics {
             return WepClass::OneHand;
         }
 
-        bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
+        bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             // Generalized by CATEGORY, never by item (§4.8.2). One better piece
             // per tick (one action per tick, §4.3). We TRANSFER, then EQUIP -- a
             // real person who finds a better cuirass puts it on, they do not just
@@ -303,6 +313,7 @@ namespace MFO::Logistics {
             // Prefer the weapon upgrade -- it is what makes the follower hit
             // harder; else the better armor piece. One item this tick (§4.3).
             RE::TESBoundObject* best = bestWeap ? bestWeap : bestArmor;
+            if (a_peek) return best != nullptr;   // just checking for an upgrade
             if (!best) return false;
             if (!FitsCarryWeight(a_follower, best->GetWeight())) return false;
 
@@ -325,11 +336,12 @@ namespace MFO::Logistics {
         // so no carry-weight gate; nothing to equip. Held for the player, who
         // gets it back by trading -- which is why gold WAITS out first dibs
         // (below), same as gear: you want first pick of the coin.
-        bool LootGold(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {
+        bool LootGold(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             constexpr RE::FormID kGold001 = 0x0000000F;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() != kGold001) continue;
+                if (a_peek) return true;
                 a_src->RemoveItem(obj, data.first, RE::ITEM_REMOVE_REASON::kStoreInContainer,
                                   nullptr, a_follower);
                 return true;
@@ -586,6 +598,21 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // Read-only: does a_ref hold anything the a_cat gambit would take? The
+        // peek path of each LootX, no transfer. Lets the scan skip a body that
+        // hasn't got what the follower is after -- he never walks to an empty one.
+        bool HasLoot(RE::Actor* a_follower, RE::TESObjectREFR* a_ref,
+                     Category a_cat, RE::ActorValue a_want) {
+            switch (a_cat) {
+            case Category::Arrows:    return LootAmmo(a_follower, a_ref, false, true);
+            case Category::Bolts:     return LootAmmo(a_follower, a_ref, true, true);
+            case Category::Potions:   return LootPotions(a_follower, a_ref, a_want, true);
+            case Category::Equipment: return LootEquipment(a_follower, a_ref, true);
+            case Category::Gold:      return LootGold(a_follower, a_ref, true);
+            }
+            return false;
+        }
+
         bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                         RE::ActorValue a_potionWant = RE::ActorValue::kNone,
                         LootMode a_mode = LootMode::kNormal) {
@@ -644,7 +671,7 @@ namespace MFO::Logistics {
 
             // DIAGNOSTIC counters (marth: "nothing looted" -- find WHICH stage
             // drops the corpse). Logged rate-limited below.
-            int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0, dLeash = 0;
+            int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0, dLeash = 0, dEmpty = 0;
 
             cell->ForEachReferenceInRange(origin, kLootRadius,
                 [&](RE::TESObjectREFR& a_ref) {
@@ -701,6 +728,14 @@ namespace MFO::Logistics {
                     // out-of-reach when they do not.
                     if (playerPos.GetDistance(ref->GetPosition()) > leash) {
                         ++dLeash; return RE::BSContainer::ForEachResult::kContinue;
+                    }
+                    // MUST HOLD WHAT WE WANT. A read-only peek: never make him walk
+                    // to a body that hasn't got the category this gambit is looting
+                    // (marth). This is the biggest cut -- a fight leaves many
+                    // corpses, few with the one thing (e.g. arrows) he's after --
+                    // and it kills the "walk to an empty barrel and stall" trips.
+                    if (!HasLoot(a_follower, ref, a_cat, a_potionWant)) {
+                        ++dEmpty; return RE::BSContainer::ForEachResult::kContinue;
                     }
 
                     // CLAIM-AND-RELEASE (dibs redesign). Eligibility is per
@@ -776,10 +811,10 @@ namespace MFO::Logistics {
                     // nothing if it simply does not hold the thing the winning
                     // rule wants (arrows, or the specific potion).
                     spdlog::info("[loot] {:08X} r={:.0f} leash={:.0f}: {} refs, {} lootable, {} eligible "
-                                 "(dropped owned={} locked={} waiting={} farleash={}) | self arrows={} bolts={} "
+                                 "(dropped owned={} locked={} waiting={} farleash={} empty={}) | self arrows={} bolts={} "
                                  "potH={} potS={} potM={}",
                                  a_follower->GetFormID(), kLootRadius, leash, dRefs, dLootable,
-                                 (int)candidates.size(), dOwned, dLocked, dNotYet, dLeash,
+                                 (int)candidates.size(), dOwned, dLocked, dNotYet, dLeash, dEmpty,
                                  ArrowCount(a_follower), BoltCount(a_follower),
                                  CountPotions(a_follower, RE::ActorValue::kHealth),
                                  CountPotions(a_follower, RE::ActorValue::kStamina),

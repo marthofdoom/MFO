@@ -3,6 +3,16 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.10 — only walk to a body that actually has what he wants
+
+A follower no longer walks over to a corpse or barrel that doesn't hold the thing
+his gambit is looting for. Before, he'd trek to every nearby body, arrive, find no
+arrows (or whatever he was after), and move on — wasting the trip and, when the
+next candidate was unreachable, stalling. Now the check happens before he sets
+out: bodies without the wanted category are skipped outright, so he only makes
+trips that pay off. This also sharply cuts the unreachable-body problem, since a
+far body with nothing he wants is never a target in the first place.
+
 ## v0.8.9 — walk-to-loot works; stop over-committing to unreachable bodies
 
 v0.8.8 landed the real fix — the follower now genuinely walks to and loots
