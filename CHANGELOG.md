@@ -3,6 +3,26 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.11 — audit hardening (crash-safety, the freeze softened, cleanups)
+
+A multi-agent audit of the whole loot system produced these fixes:
+- **Crash-safety:** on save-revert/load the background worker could write to state
+  the main thread was clearing at the same moment (undefined behavior). The worker
+  is now stopped and drained before any of that happens.
+- **The "stares at a body across a wall" freeze is softened:** if he can't reach a
+  target, he now gives it up quickly instead of committing to it, and only ever
+  heads for a body that actually holds what he wants — so far fewer bad trips. (A
+  proper "don't even pick unreachable bodies" pass is next — see below.)
+- Fixed a regression where he'd abandon a corpse you were browsing via QuickLoot.
+- He no longer drops a *near* body in favor of a far one when many are around.
+- Config/MCM cleanups (slider range, a stray default, tooling coverage).
+
+Next: the routing research found there's no native "walk here" call — every mod
+uses the package approach MFO already does; the freeze is bodies physics-settled
+OFF the navmesh, which no package can path to. The fix is to detect off-navmesh
+bodies and skip them before he sets out (using the game's navmesh data), landing
+in a follow-up.
+
 ## v0.8.10 — only walk to a body that actually has what he wants
 
 A follower no longer walks over to a corpse or barrel that doesn't hold the thing
