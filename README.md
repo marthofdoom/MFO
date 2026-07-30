@@ -26,7 +26,7 @@ never interleave: combat runs in combat, logistics runs out of it.
 1.  Ally: HP < 40%          ->  Cast Fast Healing
 2.  Foe: weak to fire       ->  Cast Flames
 3.  Self: magicka < 20%     ->  Drink magicka potion
-4.  Always                  ->  Attack lowest-HP foe
+4.  Foe: lowest HP          ->  Attack
 ```
 
 Top-down, first match wins, **one action per tick**. A follower cannot heal
@@ -111,9 +111,9 @@ and next on the roadmap.)
 
 | Rank | Combat slots | Logistics slots | Reactions |
 |---|---|---|---|
-| I | 2 | 1 | visibly hesitant |
-| III | 6 | 3 | ↓ |
-| V | 12 | 5 | anticipates |
+| I | 3 | 4 | visibly hesitant |
+| III | 7 | 6 | ↓ |
+| V | 12 | 8 | anticipates |
 
 What a follower *can* be told to do depends on their own skills and spellbook —
 a battlemage opens cast actions a pure warrior never will, and the board shows
@@ -129,10 +129,10 @@ mod.
 
 - A **passive HUD** that takes no input, so it stays readable while fighting:
   per-follower rank, rapport, live health/magicka/stamina, distance.
-- The **Field Orders board** (titled *Follower Overhaul*): a Followers roster
-  and the Gambits editor — cycle each rule's condition, action, and value, with
-  a full-width plain-language summary of every rule so a whole gambit is legible
-  even on a Steam Deck. Styled after MEO, in four skins.
+- The **Field Orders board**: a Followers roster and the Gambits editor —
+  cycle each rule's condition, action, and value, with a full-width plain-
+  language summary of every rule so a whole gambit is legible even on a Steam
+  Deck. Styled after MEO, in four skins.
 
 Full controller parity throughout — gamepad navigation is a standing
 requirement across these mods, not an afterthought. Settings live in an

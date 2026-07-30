@@ -16,7 +16,16 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeLowestHp   || a_op == Vocab::kCondFoeHighestHp ||
                    a_op == Vocab::kCondFoeWithinRange|| a_op == Vocab::kCondFoeBeyondRange ||
                    a_op == Vocab::kCondFoeAttackingPlayer || a_op == Vocab::kCondFoeAttackingMe ||
-                   a_op == Vocab::kCondFoeIsUndead   || a_op == Vocab::kCondFoeIsDragon;
+                   a_op == Vocab::kCondFoeIsUndead   || a_op == Vocab::kCondFoeIsDragon ||
+                   a_op == Vocab::kCondFoeWeakFire   || a_op == Vocab::kCondFoeWeakFrost ||
+                   a_op == Vocab::kCondFoeWeakShock;
+        }
+
+        // Weak to an element = its resist actor-value is negative (a race trait
+        // or an active -resist effect). Reads the foe's own AV, never a name.
+        bool IsWeakTo(RE::Actor* a_foe, RE::ActorValue a_resist) {
+            auto* avo = a_foe ? a_foe->AsActorValueOwner() : nullptr;
+            return avo && avo->GetActorValue(a_resist) < 0.0f;
         }
         // The ALLY selector chooses a teammate target the same way.
         bool IsAllySelector(const std::string& a_op) {
@@ -116,6 +125,12 @@ namespace MFO::Eval {
                         if (!RaceHasKeyword(foe, "ActorTypeUndead")) continue;
                     } else if (a_op == Vocab::kCondFoeIsDragon) {
                         if (!RaceHasKeyword(foe, "ActorTypeDragon")) continue;
+                    } else if (a_op == Vocab::kCondFoeWeakFire) {
+                        if (!IsWeakTo(foe, RE::ActorValue::kResistFire)) continue;
+                    } else if (a_op == Vocab::kCondFoeWeakFrost) {
+                        if (!IsWeakTo(foe, RE::ActorValue::kResistFrost)) continue;
+                    } else if (a_op == Vocab::kCondFoeWeakShock) {
+                        if (!IsWeakTo(foe, RE::ActorValue::kResistShock)) continue;
                     }
 
                     if (score < bestScore) { bestScore = score; best = t.targetHandle; }

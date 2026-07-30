@@ -37,6 +37,7 @@ cp out/MFO.esp        "$STAGE/pkg/"
 cp out/SEQ/MFO.seq    "$STAGE/pkg/SEQ/"
 cp "$STAGE/dll/MFO.dll" "$STAGE/pkg/SKSE/Plugins/"
 [ -f out/SKSE/Plugins/MFO.ini ] && cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
+[ -d out/SKSE/Plugins/MFO ] && cp -r out/SKSE/Plugins/MFO "$STAGE/pkg/SKSE/Plugins/"   # baked board fonts
 cp THIRD-PARTY-NOTICES.md "$STAGE/pkg/"   # ships with every build (INVARIANTS #42a)
 [ -d out/MCM ] && cp -r out/MCM "$STAGE/pkg/"   # MCM Helper config.json
 [ -d out/Scripts ] && cp -r out/Scripts "$STAGE/pkg/"   # MCM Helper compiled script (MFO_MCM.pex)

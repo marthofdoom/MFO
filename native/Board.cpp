@@ -7,6 +7,8 @@
 // (ENGINE_NOTES §9 -- a compile error that reads like nonsense).
 #include <d3d11.h>
 #include <dxgi.h>
+#include <cmath>
+#include <filesystem>
 #undef GetObject
 
 #include <imgui.h>
@@ -50,6 +52,13 @@ namespace MFO::Board {
         // GetClientRect, which can disagree with the backbuffer. Cache the real
         // size and overwrite every frame (ENGINE_NOTES §9).
         float g_bbW = 0.0f, g_bbH = 0.0f;
+
+        // Baked typefaces (MEO parity). body is added first so it is the DEFAULT
+        // font -- all board text uses it; head is pushed for the drawn title.
+        // Null -> the TTF was missing and ImGui's default bitmap font is used
+        // (with the FontGlobalScale fallback).
+        ImFont* g_fontBody = nullptr;
+        ImFont* g_fontHead = nullptr;
 
         ID3D11Device*        g_device  = nullptr;
         ID3D11DeviceContext* g_context = nullptr;
@@ -153,6 +162,9 @@ namespace MFO::Board {
         { Vocab::kCondFoeAttackingMe,"Foe attacking me",     ParamKind::None    },
         { Vocab::kCondFoeIsUndead,   "Foe is undead",        ParamKind::None    },
         { Vocab::kCondFoeIsDragon,   "Foe is dragon",        ParamKind::None    },
+        { Vocab::kCondFoeWeakFire,   "Foe: weak to fire",    ParamKind::None    },
+        { Vocab::kCondFoeWeakFrost,  "Foe: weak to frost",   ParamKind::None    },
+        { Vocab::kCondFoeWeakShock,  "Foe: weak to shock",   ParamKind::None    },
         { Vocab::kCondFoeCountAtLeast,"Foe count at least",  ParamKind::Count   },
         { Vocab::kCondSelfHpAbove,   "Self HP % above",      ParamKind::Percent },
         { Vocab::kCondSelfMpAbove,   "Self Magicka % above", ParamKind::Percent },
@@ -340,6 +352,7 @@ namespace MFO::Board {
             // names the FEATURE, "Field Orders", matching MFO_FieldOrdersPower.
             {
                 auto*        dl    = ImGui::GetWindowDrawList();
+                ImGui::PushFont(g_fontHead);   // header face (MEO parity); null -> default
                 const char*  title = "Field Orders";
                 const ImVec2 ts    = ImGui::CalcTextSize(title);
                 const float  tx    = (ImGui::GetWindowSize().x - ts.x) * 0.5f;
@@ -353,6 +366,7 @@ namespace MFO::Board {
                 ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
                 ImGui::TextUnformatted(title);
                 ImGui::PopStyleColor();
+                ImGui::PopFont();
             }
             ImGui::Spacing();
             ImGui::Separator();
@@ -865,6 +879,27 @@ namespace MFO::Board {
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
                 io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
 
+                // Bake real typefaces at backbuffer scale -- FontGlobalScale on
+                // ImGui's default bitmap font was blurry above 1080p and the
+                // biggest "less polished vs MEO" tell (§919 note). The faces are
+                // MEO's own (same author). MUST run before the DX11 backend
+                // builds the atlas. Files optional: a missing face falls back to
+                // the default bitmap font + the FontGlobalScale path below.
+                {
+                    const float uiScale = std::max(1.0f,
+                        static_cast<float>(sd.BufferDesc.Height) / 1080.0f);
+                    namespace fs = std::filesystem;
+                    constexpr const char* kBodyTTF = "Data/SKSE/Plugins/MFO/fonts/body.ttf";
+                    constexpr const char* kHeadTTF = "Data/SKSE/Plugins/MFO/fonts/head.ttf";
+                    if (fs::exists(kBodyTTF))
+                        g_fontBody = io.Fonts->AddFontFromFileTTF(kBodyTTF, std::floor(19.0f * uiScale));
+                    if (fs::exists(kHeadTTF))
+                        g_fontHead = io.Fonts->AddFontFromFileTTF(kHeadTTF, std::floor(27.0f * uiScale));
+                    if (!g_fontHead) g_fontHead = g_fontBody;   // head falls back to body, not default
+                    spdlog::info("[board] fonts: body={} head={} (scale {:.2f})",
+                                 g_fontBody ? "ok" : "default", g_fontHead ? "ok" : "default", uiScale);
+                }
+
                 if (!ImGui_ImplWin32_Init(sd.OutputWindow) ||
                     !ImGui_ImplDX11_Init(g_device, g_context)) {
                     spdlog::error("[board] ImGui backend init failed -- Field Kit disabled");
@@ -916,14 +951,13 @@ namespace MFO::Board {
                 // MUST sit between the two NewFrame calls (ENGINE_NOTES §9).
                 if (g_bbW > 0.0f) ImGui::GetIO().DisplaySize = ImVec2(g_bbW, g_bbH);
 
-                // No TTF ships with MFO, so the board uses ImGui's built-in
-                // bitmap font, which is ~13px -- roughly 2mm tall on a 4K
-                // backbuffer and the single biggest "less polished" tell next to
-                // MEO/MAO (which bake a 19px face). Scale the default font on
-                // hi-DPI exactly the way MEO's own missing-font fallback does
-                // (io.DisplaySize.y / 1080, never below 1.0).
+                // With a baked face the pixel size is already correct, so scale
+                // is 1.0 (MEO's own rule). Only the default-bitmap FALLBACK --
+                // when the TTF was missing -- needs FontGlobalScale, the same
+                // io.DisplaySize.y/1080 path MEO uses when its fonts are absent.
                 if (g_bbH > 0.0f)
-                    ImGui::GetIO().FontGlobalScale = std::max(1.0f, g_bbH / 1080.0f);
+                    ImGui::GetIO().FontGlobalScale =
+                        g_fontBody ? 1.0f : std::max(1.0f, g_bbH / 1080.0f);
 
                 if (g_cursorInit.exchange(false)) {
                     ImGui::GetIO().AddMousePosEvent(g_cursorX.load(), g_cursorY.load());

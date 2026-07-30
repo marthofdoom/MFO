@@ -3,6 +3,20 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.1 — board font parity, elemental weakness gambits
+
+- **The board bakes real typefaces** (MEO's, at backbuffer scale) instead of
+  scaling ImGui's default bitmap font — the header uses the display face, the
+  body the text face. This was the last "less polished than MEO" tell. Falls
+  back to the scaled default if the fonts are missing.
+- **`Foe: weak to fire / frost / shock`** — foe-selector conditions that pick
+  the nearest enemy whose resistance to that element is negative (a race trait
+  or active weakness), read from the actor's own resist value. Pair with a
+  matching Cast action for the FFXII "exploit the weakness" play.
+- Docs: README brought current to the shipped feature set (it was stuck at
+  v0.3.0), and its stale figures corrected (real slot counts per rank, the
+  Field Orders board name, first-dibs timing, removed the cut spell-teaching).
+
 ## v0.8.0 — logistics comes alive: followers loot, walk to it, and know their limits
 
 The arc from v0.6.0 (the cast pipeline) through the v0.7.x field builds and into

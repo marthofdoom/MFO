@@ -120,6 +120,7 @@ mkdir -p "$STAGE/pkg/SKSE/Plugins" "$STAGE/pkg/SEQ" \
 cp out/MFO.esp             "$STAGE/pkg/"
 cp out/SEQ/MFO.seq         "$STAGE/pkg/SEQ/"
 cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
+cp -r out/SKSE/Plugins/MFO   "$STAGE/pkg/SKSE/Plugins/"   # baked board fonts (MEO parity)
 cp "$STAGE/dll/MFO.dll"    "$STAGE/pkg/SKSE/Plugins/"
 # MCM Helper config + its binding script. WITHOUT BOTH the MCM never appears:
 # config.json alone registers the config but renders nothing, and the ESP's

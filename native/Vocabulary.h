@@ -76,6 +76,13 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeAttackingMe     = "cond.foe_attacking_me";
     inline constexpr const char* kCondFoeIsUndead        = "cond.foe_is_undead";
     inline constexpr const char* kCondFoeIsDragon        = "cond.foe_is_dragon";
+    // ELEMENTAL WEAKNESS selectors -- choose the nearest foe whose resistance to
+    // this element is NEGATIVE (an active weakness: race trait, ability, or a
+    // -resist effect). Read from the actor's own resist actor-value, never a
+    // name (§4.8.2). "Foe: weak to fire -> Cast Flames" is the FFXII play.
+    inline constexpr const char* kCondFoeWeakFire        = "cond.foe_weak_fire";
+    inline constexpr const char* kCondFoeWeakFrost       = "cond.foe_weak_frost";
+    inline constexpr const char* kCondFoeWeakShock       = "cond.foe_weak_shock";
     // ALLY SELECTOR -- the lowest-HP teammate under `param` pct; chooses that
     // ally as the target (for Cast at ally / Heal Other). Walks the maintained
     // teammate list, not a world sweep.
