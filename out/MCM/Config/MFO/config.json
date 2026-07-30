@@ -253,10 +253,10 @@
           "id": "bLootTravel:General",
           "text": "Walk to loot (Option A)",
           "type": "toggle",
-          "help": "Follower WALKS to loot instead of teleport-grabbing. Experimental; off by default while it is field-tested.",
+          "help": "Follower WALKS to loot instead of teleport-grabbing. On by default; turn off if it misbehaves.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
-            "defaultValue": false
+            "defaultValue": true
           }
         },
         {

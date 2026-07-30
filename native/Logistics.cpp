@@ -409,6 +409,29 @@ namespace MFO::Logistics {
         };
         TravelIntent g_travel;
 
+        // Can this follower open a_ref's lock with their own Lockpicking skill?
+        // marth: a follower does not loot through a lock they could not actually
+        // pick. The CommonLib enum is { kUnlocked=-1, kVeryEasy, kEasy, kAverage,
+        // kHard, kVeryHard, kRequiresKey } and maps kVeryEasy=Novice, kEasy=
+        // Apprentice, kAverage=Adept, kHard=Expert, kVeryHard=MASTER. Vanilla
+        // skill thresholds (0/25/50/75); MASTER (kVeryHard), key-required, and
+        // inaccessible fall to default and are NEVER pickable -- deliberately out
+        // of reach even for a maxed follower. Owned locks never reach here (the
+        // ownership gate bars them first), so this only opens UNOWNED containers.
+        bool LockPickable(RE::Actor* a_follower, RE::TESObjectREFR* a_ref) {
+            float need;
+            switch (a_ref->GetLockLevel()) {
+            case RE::LOCK_LEVEL::kVeryEasy: need = 0.0f;   break;   // Novice
+            case RE::LOCK_LEVEL::kEasy:     need = 25.0f;  break;   // Apprentice
+            case RE::LOCK_LEVEL::kAverage:  need = 50.0f;  break;   // Adept
+            case RE::LOCK_LEVEL::kHard:     need = 75.0f;  break;   // Expert
+            default:                        return false;          // Master / requires key / inaccessible
+            }
+            auto* avo = a_follower->AsActorValueOwner();
+            const float skill = avo ? avo->GetActorValue(RE::ActorValue::kLockpicking) : 0.0f;
+            return skill >= need;
+        }
+
         // Walk nearby refs, gate them, and perform ONE transfer. Returns true if
         // something was looted. Collect-then-act (#2): the world walk only reads
         // and records timers; all mutation happens afterwards on re-resolved
@@ -505,9 +528,13 @@ namespace MFO::Logistics {
                     // crime cases. No delay or waiver overrides this.
                     if (ref->GetOwner())    { ++dOwned;     return RE::BSContainer::ForEachResult::kContinue; }
                     if (ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
-                    // Locked is locked -- RemoveItem ignores the lock, so the
-                    // filter must not.
-                    if (ref->IsLocked())    { ++dLocked;    return RE::BSContainer::ForEachResult::kContinue; }
+                    // Locked -- UNLESS the follower's Lockpicking skill can open
+                    // it. RemoveItem ignores locks, so without this a follower
+                    // would loot through any lock; with it, only locks their
+                    // skill covers (marth). Owned locks are already barred above.
+                    if (ref->IsLocked() && !LockPickable(a_follower, ref)) {
+                        ++dLocked; return RE::BSContainer::ForEachResult::kContinue;
+                    }
                     // Beyond the confidence leash from the player -- too far for
                     // this follower's nerve right now. This is the invisible
                     // string: the same corpse is in-reach when they feel safe and
@@ -573,7 +600,8 @@ namespace MFO::Logistics {
                 // (default) the follower teleport-grabs, as before.
                 if (origin.GetDistance(ref->GetPosition()) > kArrivalDist &&
                     Config::g_lootTravel.load()) {
-                    if (!g_travel.active && Packages::LootTravelFill(a_follower, ref)) {
+                    if (g_travel.active) continue;   // another traveller holds the one alias -- wait
+                    if (Packages::LootTravelFill(a_follower, ref)) {
                         g_travel.active   = true;
                         g_travel.follower = a_follower->GetFormID();
                         g_travel.target   = ref->GetHandle();
@@ -582,7 +610,9 @@ namespace MFO::Logistics {
                         g_travel.deadline = a_now + std::chrono::seconds(12);
                         return true;   // committed to the walk; transfer on arrival
                     }
-                    continue;   // travel busy/unavailable -- wait, don't teleport
+                    // Travel UNAVAILABLE (off AE, records unresolved, quest not
+                    // running) -- fall through to the arm's-reach transfer below
+                    // rather than never looting this candidate (the SE fallback).
                 }
 
                 bool moved = false;

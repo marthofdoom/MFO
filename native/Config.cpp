@@ -189,7 +189,7 @@ namespace MFO::Config {
             g_firstDibsDelay     = 4.0f;
             g_quickLootWaiver    = 4.0f;
             g_lootRadius         = 3000.0f;
-            g_lootTravel         = false;
+            g_lootTravel         = true;
             g_leashMin           = 512.0f;
             g_leashMax           = 4000.0f;
         }

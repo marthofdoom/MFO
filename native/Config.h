@@ -179,11 +179,13 @@ namespace MFO::Config {
 
     // OPTION A -- engine-pathed loot: the follower WALKS to the loot instead of
     // teleport-grabbing it. Fills MFO_LootQuest's alias so the vanilla Travel
-    // package paths them there, then transfers on arrival. DEFAULT OFF and #55
-    // is the reason: an alias fill is SERIALIZED INTO THE SAVE, so a bug that
-    // fails to release leaves a follower latched on every future load. Off until
-    // field-proven on the deck, like every M9 mechanism.
-    inline std::atomic<bool>  g_lootTravel{ false };
+    // package paths them there, then transfers on arrival. DEFAULT ON (marth):
+    // walking to loot is the point, not a toggle. The #55 hazard (an alias fill
+    // is serialized into the save) is contained by bulletproof release -- on
+    // arrival, combat, timeout, vanished target, open container menu, sneak, a
+    // global stale-expiry, AND unconditionally on every load via ReleaseAll, so
+    // a latch self-heals. One MCM toggle turns it off if it misbehaves.
+    inline std::atomic<bool>  g_lootTravel{ true };
 
     // THE CONFIDENCE LEASH (DESIGN core tenet). How far from the PLAYER a
     // follower will range to engage/loot is not fixed -- it scales with the
