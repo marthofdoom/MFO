@@ -202,12 +202,12 @@ namespace MFO::Config {
     // unreachable target is not re-tried into a loop.
     inline std::atomic<bool>  g_lootTravel{ true };
 
-    // How far a follower will WALK to loot (units), separate from the scan
-    // radius. Must be genuinely reachable within the travel deadline -- keep it
-    // near one room, not the whole scan. Loot beyond it is left (the follower
-    // grabs it later when following brings them closer -- "loot with the player's
-    // movement"), which is also fairer to the player. fTravelRadius.
-    inline std::atomic<float> g_travelRadius{ 768.0f };
+    // HARD CEILING on the walk-to-loot distance (units). The real limit is the
+    // confidence LEASH (walkLimit = min(leash, this)); this is only for anyone
+    // who wants to clamp the walk BELOW the leash. Default high so the leash
+    // rules -- the old fixed 768 hid most in-leash bodies (deck: 6 eligible, only
+    // the 2 inside 768 ever attempted). fTravelRadius.
+    inline std::atomic<float> g_travelRadius{ 4096.0f };
 
     // BATCH EXCURSION (walk-to-loot batching). A follower stays CLAIMED (loot
     // quest at priority 60) across multiple corpses instead of returning to the

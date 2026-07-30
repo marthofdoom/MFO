@@ -348,15 +348,15 @@
         },
         {
           "id": "fTravelRadius:General",
-          "text": "Walk-to-loot reach (units)",
+          "text": "Walk-to-loot ceiling (units)",
           "type": "slider",
-          "help": "How far a follower will WALK to loot. Keep near one room (~768); farther loot is left for later.",
+          "help": "Hard cap on walk distance. The real limit is the confidence leash; raise/lower this only to clamp below it. Default high.",
           "valueOptions": {
             "min": 128.0,
-            "max": 4096.0,
+            "max": 8192.0,
             "step": 64.0,
             "sourceType": "ModSettingFloat",
-            "defaultValue": 768.0
+            "defaultValue": 4096.0
           }
         },
         {

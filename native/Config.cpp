@@ -204,7 +204,7 @@ namespace MFO::Config {
             g_playerBubble       = 256.0f;
             g_lootRadius         = 3000.0f;
             g_lootTravel         = true;
-            g_travelRadius       = 768.0f;
+            g_travelRadius       = 4096.0f;
             g_batchLinger        = 4.0f;
             g_excursionMax       = 60.0f;
             g_leashMin           = 512.0f;

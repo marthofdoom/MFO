@@ -615,6 +615,15 @@ namespace MFO::Logistics {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : origin;
 
+            // HOW FAR HE WILL WALK to a body (follower-relative). marth's tenet:
+            // the confidence LEASH is his range, not a fixed room. So the walk
+            // limit IS the leash -- bold when safe (ranges across rooms), cautious
+            // when hurt. fTravelRadius is only a hard ceiling now (default raised
+            // high), for anyone who wants to clamp it below the leash. Previously
+            // the fixed 768 hid most in-leash bodies (deck: 6 eligible, only the 2
+            // inside 768 ever attempted).
+            const float walkLimit = std::min(leash, Config::g_travelRadius.load());
+
             // Eligible loot sources, collected inside the walk and acted on after
             // it. Bounded so a room full of corpses cannot make the tick unbounded.
             std::vector<RE::ObjectRefHandle> candidates;
@@ -805,7 +814,7 @@ namespace MFO::Logistics {
                         continue;   // arm's-reach corpse was empty -- try the next
                     }
                     if (!Config::g_lootTravel.load())                              continue;
-                    if (df > Config::g_travelRadius.load())                        continue;
+                    if (df > walkLimit)                                           continue;
                     if (TravelFailedRecently(rid, a_now))                          continue;
                     if (playerPos.GetDistance(ref->GetPosition())
                             <= Config::g_playerBubble.load())                      continue;
@@ -825,7 +834,7 @@ namespace MFO::Logistics {
                 if (df > kArrivalDist && Config::g_lootTravel.load()) {
                     // Too far to WALK without abandoning the player -- leave it
                     // (following brings them closer later; also fairer to you).
-                    if (df > Config::g_travelRadius.load()) continue;
+                    if (df > walkLimit) continue;
                     // Skip a target a walk already failed to reach (no churn).
                     if (TravelFailedRecently(rid, a_now)) continue;
                     // CONVERGENCE YIELD: never walk to loot the player is right
@@ -1060,6 +1069,21 @@ namespace MFO::Logistics {
             } else if (g_travel.phase == TravelPhase::Walking) {
                 auto tptr  = g_travel.target.get();
                 auto* tref = tptr.get();
+                // DIAGNOSTIC (v0.8.6): is MFO's travel package ACTUALLY driving
+                // him, or is he still on his follow package? marth's report -- he
+                // does not move toward bodies -- points to the runtime priority
+                // raise NOT being honoured (he'd stay on follow, never travel).
+                // GetCurrentPackage() settles it: if it is NOT g_travelPackage
+                // while we think he is Walking, the claim never took.
+                if (tref) {
+                    auto* cur = a_follower->GetCurrentPackage();
+                    spdlog::info("[loot] {:08X} WALK->{:08X}: onTravelPkg={} curPkg={:08X} prio={} dist={:.0f}",
+                                 id, tref->GetFormID(),
+                                 cur == Forms::g_travelPackage,
+                                 cur ? cur->GetFormID() : 0,
+                                 Forms::g_lootQuest ? static_cast<int>(Forms::g_lootQuest->data.priority) : -1,
+                                 a_follower->GetPosition().GetDistance(tref->GetPosition()));
+                }
                 const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
                 if (gone || now > g_travel.deadline) {
                     // This LEG failed (target vanished, or not reached in time).
