@@ -3,6 +3,26 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.17 — probes: why potions and arrows read as "not there"
+
+Two confirmed detection misses to pin down. He carries 5 health potions but the
+log shows `potH=0` and he won't drink; and bodies that visibly hold arrows are
+called empty by the loot scan. Both are classification/read questions that depend
+on the live inventory (this is a Requiem list, which reworks potions), so this
+build adds two temporary probes rather than a blind fix:
+
+- `[potprobe]` — when a wanted drink finds nothing, dumps every alchemy item he
+  carries with its raw MGEF archetype, primary actor value, food/poison flags,
+  and what our classifier decides. This reveals the exact archetype Requiem's
+  restore potions use so `PotionRestores` can be widened to match — precisely,
+  without also swallowing fortify/regen/poison.
+- `[arrowprobe]` — when an arrow scan calls a lootable body empty, if that body
+  actually holds ammo it logs it (name + isBolt + count). Tells us whether
+  `HasLoot(arrows)` is wrong on a body that has them, or the arrow bodies are
+  simply never in the scanned set.
+
+Probes only; no behaviour change. Removed once both causes are pinned.
+
 ## v0.8.16 — supply-state conditions in the combat table (#10)
 
 The combat gambit editor can now gate on what the follower is *carrying*, not

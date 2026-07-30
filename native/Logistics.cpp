@@ -382,7 +382,41 @@ namespace MFO::Logistics {
                 const float mag = eff ? eff->GetMagnitude() : 0.0f;
                 if (mag > bestMag) { bestMag = mag; best = alc; }
             }
-            if (!best) return false;
+            if (!best) {
+                // POTION PROBE (temp, v0.8.17). marth: "he has 5 health potions
+                // but won't drink." PotionRestores classifies by MGEF archetype
+                // (kValueModifier/kDualValueModifier) -- a REQUIREM rework may use
+                // a different archetype, so his health potions read as kNone and
+                // are invisible. Dump every alchemy item he carries with its raw
+                // archetype id + primaryAV + our verdict, so the classifier can be
+                // fixed to the EXACT archetype Requiem uses. Rate-limited per
+                // follower per 15s, only when a wanted drink found nothing.
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextPotProbe;
+                auto& pn = s_nextPotProbe[a_follower->GetFormID()];
+                const auto tnow = std::chrono::steady_clock::now();
+                if (pn.time_since_epoch().count() == 0 || tnow >= pn) {
+                    pn = tnow + std::chrono::seconds(15);
+                    std::string dump;
+                    for (auto& [obj, data] : a_follower->GetInventory()) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* alc = obj->As<RE::AlchemyItem>();
+                        if (!alc) continue;
+                        const auto* eff = alc->GetCostliestEffectItem();
+                        auto* mgef = eff ? eff->baseEffect : nullptr;
+                        dump += std::format(
+                            " [{} x{} arch={} primAV={} food={} poison={} -> restores={}]",
+                            alc->GetFullName() ? alc->GetFullName() : "?", data.first,
+                            mgef ? static_cast<int>(mgef->data.archetype) : -1,
+                            mgef ? static_cast<int>(mgef->data.primaryAV) : -1,
+                            alc->IsFood() ? 1 : 0, alc->IsPoison() ? 1 : 0,
+                            static_cast<int>(PotionRestores(alc)));
+                    }
+                    spdlog::info("[potprobe] {:08X} want={} -- no match. carried alchemy:{}",
+                                 a_follower->GetFormID(), static_cast<int>(a_which),
+                                 dump.empty() ? " (none)" : dump);
+                }
+                return false;
+            }
 
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return false;
@@ -832,6 +866,32 @@ namespace MFO::Logistics {
                     // corpses, few with the one thing (e.g. arrows) he's after --
                     // and it kills the "walk to an empty barrel and stall" trips.
                     if (!HasLoot(a_follower, ref, a_cat, a_potionWant)) {
+                        // ARROW PROBE (temp, v0.8.17). marth: "multiple bodies with
+                        // arrows available" yet the arrow scan calls every corpse
+                        // empty. When an ARROW scan judges a lootable body empty,
+                        // dump the ammo it ACTUALLY holds -- if it shows "Iron Arrow
+                        // xN isBolt=0", HasLoot(arrows) is wrong on a body that has
+                        // them (vs the body genuinely lacking arrows / being an
+                        // adjacent-cell corpse the scan never sees). Per-body 15s.
+                        if (a_cat == Category::Arrows) {
+                            static std::unordered_map<RE::FormID, Clock::time_point> s_nextAP;
+                            auto& an = s_nextAP[ref->GetFormID()];
+                            if (an.time_since_epoch().count() == 0 || a_now >= an) {
+                                an = a_now + std::chrono::seconds(15);
+                                std::string ad; int tot = 0;
+                                for (auto& [obj, data] : ref->GetInventory()) {
+                                    ++tot;
+                                    if (auto* am = obj ? obj->As<RE::TESAmmo>() : nullptr)
+                                        ad += std::format(" [{} x{} isBolt={}]",
+                                            am->GetFullName() ? am->GetFullName() : "?",
+                                            data.first, am->IsBolt() ? 1 : 0);
+                                }
+                                if (!ad.empty())
+                                    spdlog::info("[arrowprobe] {:08X} EMPTY-verdict body {:08X} "
+                                                 "invItems={} but HAS ammo:{}",
+                                                 a_follower->GetFormID(), ref->GetFormID(), tot, ad);
+                            }
+                        }
                         ++dEmpty; return RE::BSContainer::ForEachResult::kContinue;
                     }
 
