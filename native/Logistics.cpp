@@ -6,6 +6,7 @@
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include "Confidence.h"   // the confidence leash (core tenet)
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
+#include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
 #include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
@@ -1080,7 +1081,7 @@ namespace MFO::Logistics {
                     spdlog::info("[loot] {:08X} WALK->{:08X}: onTravelPkg={} curPkg={:08X} prio={} dist={:.0f}",
                                  id, tref->GetFormID(),
                                  cur == Forms::g_travelPackage,
-                                 cur ? cur->GetFormID() : 0,
+                                 cur ? cur->GetFormID() : 0u,
                                  Forms::g_lootQuest ? static_cast<int>(Forms::g_lootQuest->data.priority) : -1,
                                  a_follower->GetPosition().GetDistance(tref->GetPosition()));
                 }
