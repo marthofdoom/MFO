@@ -3,6 +3,19 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.6 — walk-to-loot diagnostic + wider walk range
+
+Walk-to-loot still isn't working — the follower doesn't head for bodies a short
+walk away, only grabs what he ends a fight next to. Everything checkable is
+correct (the travel package matches a vanilla one that works, the wiring, the
+priority), so this build adds a targeted log line to catch the one thing left:
+whether he's actually running MFO's travel package or still just following. That
+tells us exactly what to fix next instead of guessing.
+
+Also: walk range is now the **confidence leash** (was a fixed 768u / one room),
+so bodies anywhere in his leash are fair game — the old cap was hiding most of
+them.
+
 ## v0.8.5 — batched loot runs (no more return-trip per corpse)
 
 A follower now loots in a **batch**: he stays out and visits each valid corpse in
