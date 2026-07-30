@@ -765,6 +765,42 @@ namespace MFO::Logistics {
                     if (ref->IsDisabled() || ref->IsMarkedForDeletion())
                         return RE::BSContainer::ForEachResult::kContinue;
 
+                    // ── ARROW PROBE (temp, v0.8.14) ─────────────────────────────
+                    // marth: "he loots the body's gold but leaves Iron Arrow (9)."
+                    // IsBolt() logic is verified correct, yet HasLoot(arrows) says
+                    // empty -- so dump what LootAmmo actually SEES on nearby bodies:
+                    // FormID, dist, dead/container, and EVERY ammo item with its
+                    // IsBolt flag + count. This settles not-scanned vs GetInventory-
+                    // blind vs flag-mismatch in one look. Arrow scan only, bodies
+                    // within 300u, rate-limited per body (10s) so it can't flood.
+                    if (a_cat == Category::Arrows) {
+                        const float pdist = origin.GetDistance(ref->GetPosition());
+                        if (pdist <= 300.0f) {
+                            static std::unordered_map<RE::FormID, Clock::time_point> s_nextProbe;
+                            auto& pn = s_nextProbe[ref->GetFormID()];
+                            if (pn.time_since_epoch().count() == 0 || a_now >= pn) {
+                                pn = a_now + std::chrono::seconds(10);
+                                auto* pact = ref->As<RE::Actor>();
+                                auto* pbase = ref->GetBaseObject();
+                                std::string ammoDump; int total = 0;
+                                for (auto& [obj, data] : ref->GetInventory()) {
+                                    ++total;
+                                    if (auto* am = obj ? obj->As<RE::TESAmmo>() : nullptr) {
+                                        ammoDump += std::format(" [{} x{} isBolt={}]",
+                                            am->GetFullName() ? am->GetFullName() : "?",
+                                            data.first, am->IsBolt() ? 1 : 0);
+                                    }
+                                }
+                                spdlog::info("[arrowprobe] {:08X} body {:08X} dist={:.0f} "
+                                             "isActor={} isDead={} isContainer={} invItems={} ammo:{}",
+                                             a_follower->GetFormID(), ref->GetFormID(), pdist,
+                                             pact ? 1 : 0, (pact && pact->IsDead()) ? 1 : 0,
+                                             (pbase && pbase->Is(RE::FormType::Container)) ? 1 : 0,
+                                             total, ammoDump.empty() ? " (no ammo)" : ammoDump);
+                            }
+                        }
+                    }
+
                     // A lootable ref is a CORPSE (dead actor) or a CONTAINER --
                     // things we TRANSFER an inventory out of. Living actors are
                     // never touched (that is pickpocketing).

@@ -3,6 +3,19 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.14 — arrow probe: dump what the scan actually sees on a body
+
+v0.8.13 proved the arrow scan runs and finds every nearby corpse "empty" — even
+one that visibly holds "Iron Arrow (9)" and that he already looted the gold from.
+The `IsBolt()` classification is verified correct against the CommonLibSSE-NG
+source, so the miss is in the runtime inventory read, not the logic. This build
+adds a temporary `[arrowprobe]` line: during an arrow scan, for every corpse
+within 300u it logs the body's id, distance, dead/container flags, item count,
+and EVERY ammo item with its `isBolt` flag + count. That distinguishes the three
+possibilities in one look — the body isn't being scanned (cell/range), the
+inventory read comes back without the arrows, or the arrows carry an unexpected
+flag. Probe only; no behaviour change. Removed once the cause is pinned.
+
 ## v0.8.13 — see which loot category he's actually hunting
 
 Chasing "he has zero arrows and ignores the arrows on bodies, but loots potions
