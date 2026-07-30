@@ -881,6 +881,9 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootMagickaPotion)  acted = LootNearby(a_follower, Category::Potions, a_now, RE::ActorValue::kMagicka, LootMode::kExcursion);
                 else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);
                 else if (op == Vocab::kActLootGold)           acted = LootNearby(a_follower, Category::Gold,    a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
+                else if (op == Vocab::kActWait) break;   // Wait is the user's deliberate STOP gambit
+                                                         // (#3.3): end the batch -- returning false with
+                                                         // nothing "waiting" makes Holding release.
                 else isLoot = false;
                 if (isLoot && acted) return true;
                 start = choice.ruleIndex + 1;   // skip non-loot / no-op, try next
@@ -1040,9 +1043,14 @@ namespace MFO::Logistics {
             // HARD interrupts -> END the excursion.
             const bool overCap = now > g_travel.startTime + std::chrono::seconds(
                                           static_cast<int>(Config::g_excursionMax.load()));
+            // HYSTERESIS on the leash (×1.15): a corpse near the leash edge puts
+            // the follower in a thin band (>leash from player, still walking to an
+            // in-leash target) where a bare check would release then instantly
+            // re-fill to the same corpse and oscillate. The margin ends the batch
+            // only once he is clearly past the leash.
             const bool outOfLeash = pc &&
                 a_follower->GetPosition().GetDistance(pc->GetPosition())
-                    > Confidence::LeashRadius(a_follower);
+                    > Confidence::LeashRadius(a_follower) * 1.15f;
             if (a_follower->IsInCombat() || overCap || outOfLeash) {
                 Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
                                           : (overCap ? "excursion cap" : "left leash"),
@@ -1084,6 +1092,16 @@ namespace MFO::Logistics {
             // still under the player's dibs, linger and re-scan; else the batch is
             // exhausted -> release and return to the player.
             if (g_travel.active && g_travel.phase == TravelPhase::Holding) {
+                // The two loot bars (a ContainerMenu open, or the player sneaking)
+                // make LootNearby early-return BEFORE it scans, so the excursion
+                // scan would come back empty with g_scanSawWaiting false and be
+                // misread as "batch exhausted" -> premature release. Treat them as
+                // a HOLD (bounded by the excursion cap), the same courtesy arrival
+                // gives -- don't let a menu/crouch gut the batch.
+                auto* ui = RE::UI::GetSingleton();
+                if ((ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) ||
+                    (pc && pc->IsSneaking()))
+                    return;   // hold, retry next tick
                 if (RunExcursionScan(a_follower, a_state, now)) {
                     // Retargeted (phase now Walking) or grabbed a cluster corpse
                     // (still Holding) -- productive, so extend the linger.

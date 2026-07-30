@@ -3,6 +3,26 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.5 — batched loot runs (no more return-trip per corpse)
+
+A follower now loots in a **batch**: he stays out and visits each valid corpse in
+one trip — closest first — instead of turning back toward you after every single
+pickup. He returns when the loot is exhausted, when you walk away (past his
+confidence leash), after a safety time cap, or when combat starts.
+
+- **Waits for your dibs mid-run.** If nearby loot is still under your first-dibs
+  timer, he holds in place briefly (re-checking) rather than abandoning it — so a
+  corpse you were about to pass on still gets picked up once you clearly move on.
+  Tunable: *Batch: wait for your dibs* (Behaviour Layer, default 4s; 0 = never
+  wait).
+- **Can't run away.** *Batch: max loot-run length* (default 60s) caps any single
+  run, and the confidence leash still bounds how far he'll roam from you.
+- **Respects your gambits.** A "Wait" rule that starts matching mid-run stops the
+  batch immediately, and opening a container or crouching pauses it (he doesn't
+  loot out from under your menu or blow your stealth) without ending the run.
+- No carry-weight cap — MFO only ever takes the item types your gambits name, so
+  there's nothing to hoover; carry weight stays your load order's business.
+
 ## v0.8.4 — walk-to-loot release fixed for real: hand the follower back by priority
 
 v0.8.3's `ResetQuest` clear was disproven on the deck exactly like v0.8.2's
