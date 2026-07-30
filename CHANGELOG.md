@@ -3,6 +3,25 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.15 — strip the whole body, and reassess skipped ones when idle
+
+The arrow probe pinned it: he'd walk to a corpse for its GOLD, take only the
+gold, flag the corpse "done" (blocklisted ~25s), and walk back to you — leaving
+its Iron Arrows behind in a body now out of arm's reach AND on the skip-list, so
+the arrow gambit could never return for them (the 340u/382u arrow bodies in the
+deck test). The trip was single-category.
+
+Now on arrival he **strips the whole body**: everything his gambits currently
+want — gold, arrows, potions, gear — in the one visit he's already standing
+there for, respecting each gambit's condition (arrows only if he's short, etc.).
+Only then is the corpse genuinely done.
+
+And, per your note, a fairness backstop: when a follower finds nothing to do for
+a few idle seconds, he **wipes the travel skip-list and reassesses every nearby
+body fresh** (bounded to once per ~15 s so a truly unreachable body can't spin
+him). A body that was skipped because he couldn't path to it from where he stood,
+or one mistakenly shelved, gets another look once he's moved.
+
 ## v0.8.14 — arrow probe: dump what the scan actually sees on a body
 
 v0.8.13 proved the arrow scan runs and finds every nearby corpse "empty" — even

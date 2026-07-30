@@ -486,6 +486,20 @@ namespace MFO::Logistics {
             if (a_id) { g_travelFailed[a_id] = a_now; EvictOldest(g_travelFailed); }
         }
 
+        // IDLE REASSESS (marth: "to be fair, reassess all nearby bodies if nothing
+        // else matches for a few cycles"). The blocklist is a churn-guard, not a
+        // verdict: a body skipped as unreachable may be reachable once the follower
+        // has moved, and a body marked DONE is (post-StripCorpse) genuinely empty
+        // so re-scanning it is a cheap HasLoot=false, never a wasted trip. When a
+        // follower services NOTHING for a few consecutive idle ticks and no
+        // excursion is running, wipe the blocklist so the next scan looks at every
+        // body fresh. Bounded to once per window so a truly-unreachable body can't
+        // make him re-attempt it every few seconds.
+        std::unordered_map<RE::FormID, int> g_idleCycles;
+        Clock::time_point                   g_lastBlocklistReassess{};
+        constexpr int  kIdleReassessCycles   = 4;                       // ~4 s idle
+        constexpr auto kReassessCooldown      = std::chrono::seconds(15);
+
         // Travel deadline scaled to the distance: enough time to actually walk
         // there at a jog, never so long the follower is stuck if the path is
         // blocked. ~150 u/s effective + 5 s slack, clamped to [6, 20] s.
@@ -765,42 +779,6 @@ namespace MFO::Logistics {
                     if (ref->IsDisabled() || ref->IsMarkedForDeletion())
                         return RE::BSContainer::ForEachResult::kContinue;
 
-                    // ── ARROW PROBE (temp, v0.8.14) ─────────────────────────────
-                    // marth: "he loots the body's gold but leaves Iron Arrow (9)."
-                    // IsBolt() logic is verified correct, yet HasLoot(arrows) says
-                    // empty -- so dump what LootAmmo actually SEES on nearby bodies:
-                    // FormID, dist, dead/container, and EVERY ammo item with its
-                    // IsBolt flag + count. This settles not-scanned vs GetInventory-
-                    // blind vs flag-mismatch in one look. Arrow scan only, bodies
-                    // within 300u, rate-limited per body (10s) so it can't flood.
-                    if (a_cat == Category::Arrows) {
-                        const float pdist = origin.GetDistance(ref->GetPosition());
-                        if (pdist <= 300.0f) {
-                            static std::unordered_map<RE::FormID, Clock::time_point> s_nextProbe;
-                            auto& pn = s_nextProbe[ref->GetFormID()];
-                            if (pn.time_since_epoch().count() == 0 || a_now >= pn) {
-                                pn = a_now + std::chrono::seconds(10);
-                                auto* pact = ref->As<RE::Actor>();
-                                auto* pbase = ref->GetBaseObject();
-                                std::string ammoDump; int total = 0;
-                                for (auto& [obj, data] : ref->GetInventory()) {
-                                    ++total;
-                                    if (auto* am = obj ? obj->As<RE::TESAmmo>() : nullptr) {
-                                        ammoDump += std::format(" [{} x{} isBolt={}]",
-                                            am->GetFullName() ? am->GetFullName() : "?",
-                                            data.first, am->IsBolt() ? 1 : 0);
-                                    }
-                                }
-                                spdlog::info("[arrowprobe] {:08X} body {:08X} dist={:.0f} "
-                                             "isActor={} isDead={} isContainer={} invItems={} ammo:{}",
-                                             a_follower->GetFormID(), ref->GetFormID(), pdist,
-                                             pact ? 1 : 0, (pact && pact->IsDead()) ? 1 : 0,
-                                             (pbase && pbase->Is(RE::FormType::Container)) ? 1 : 0,
-                                             total, ammoDump.empty() ? " (no ammo)" : ammoDump);
-                            }
-                        }
-                    }
-
                     // A lootable ref is a CORPSE (dead actor) or a CONTAINER --
                     // things we TRANSFER an inventory out of. Living actors are
                     // never touched (that is pickpocketing).
@@ -1062,6 +1040,44 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // ARM'S-REACH FULL STRIP (marth: "he takes the body's gold but leaves its
+        // Iron Arrow (9)"). On arrival the follower is standing ON the corpse, so
+        // take EVERYTHING his gambits currently want in this ONE visit -- not just
+        // the category the trip was for. Without this, a gold trip loots the gold,
+        // marks the corpse DONE (blocklisted ~25s), then walks back to the player,
+        // stranding the arrows/potions in a body now past arm's reach AND on the
+        // blocklist -- exactly the 340u/382u arrow bodies in the deck test.
+        //
+        // Transfers straight from the KNOWN corpse (no world scan, no retarget).
+        // The Evaluate walk means a category is taken only if its gambit CONDITION
+        // is true right now (out of arrows, low on potions; gold's Always) -- #28,
+        // never loot a thing the player's rules don't ask for. Wait ends the sweep
+        // (the deliberate STOP gambit). Returns true if anything moved.
+        bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
+                         RE::TESObjectREFR* a_corpse, Clock::time_point /*a_now*/) {
+            bool moved = false;
+            for (int start = 0; ; ) {
+                const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
+                if (choice.ruleIndex < 0) break;
+                const auto& op = choice.actionOpcode;
+                Category cat = Category::Gold; RE::ActorValue want = RE::ActorValue::kNone;
+                bool isLoot = true;
+                if      (op == Vocab::kActLootArrows)         cat = Category::Arrows;
+                else if (op == Vocab::kActLootBolts)          cat = Category::Bolts;
+                else if (op == Vocab::kActLootPotions)      { cat = Category::Potions; }
+                else if (op == Vocab::kActLootHealthPotion) { cat = Category::Potions; want = RE::ActorValue::kHealth;  }
+                else if (op == Vocab::kActLootStaminaPotion){ cat = Category::Potions; want = RE::ActorValue::kStamina; }
+                else if (op == Vocab::kActLootMagickaPotion){ cat = Category::Potions; want = RE::ActorValue::kMagicka; }
+                else if (op == Vocab::kActLootEquipment)      cat = Category::Equipment;
+                else if (op == Vocab::kActLootGold)           cat = Category::Gold;
+                else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
+                else isLoot = false;
+                if (isLoot && LootHere(a_follower, a_corpse, cat, want)) moved = true;
+                start = choice.ruleIndex + 1;
+            }
+            return moved;
+        }
+
         // A LEG BOUNDARY on an active excursion: run ONLY the follower's LOOT
         // gambits, in excursion mode, to grab an arm's-reach corpse or retarget
         // to the next walkable one. LOOT-ONLY (no drink/wait) so a leg boundary
@@ -1315,8 +1331,12 @@ namespace MFO::Logistics {
                     // MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
                     if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking()))
                         return;   // arrived, holding under the bar -- retry next tick
-                    const bool moved = LootHere(a_follower, tref, g_travel.cat, g_travel.want);
-                    MarkTravelFailed(tref->GetFormID(), now);   // this corpse is DONE
+                    // Take EVERYTHING his gambits want in this one visit, not just
+                    // the category the trip was for -- else gold trips strand the
+                    // arrows (marth's 340u/382u bodies). Only THEN is the corpse
+                    // genuinely DONE and safe to blocklist.
+                    const bool moved = StripCorpse(a_follower, a_state, tref, now);
+                    MarkTravelFailed(tref->GetFormID(), now);   // fully stripped -> DONE
                     g_travel.phase = TravelPhase::Holding;
                     g_travel.lingerUntil = now + std::chrono::seconds(
                                               static_cast<int>(Config::g_batchLinger.load()));
@@ -1421,8 +1441,27 @@ namespace MFO::Logistics {
         }
 
         if (acted) {
+            g_idleCycles.erase(id);   // productive -> not idle
             spdlog::info("[logistics] {:08X} rule {} fired: {}", id, fired, label);
         } else {
+            // IDLE this tick. After a few idle ticks with no excursion running,
+            // wipe the travel blocklist so previously-skipped bodies (the 340u/382u
+            // arrow corpses, or ones that were unreachable before he moved) get a
+            // fresh assessment -- bounded to once per kReassessCooldown so a
+            // genuinely-unreachable body can't drive a re-attempt loop.
+            if (!g_travel.active) {
+                const int ic = ++g_idleCycles[id];
+                if (ic >= kIdleReassessCycles && !g_travelFailed.empty() &&
+                    (g_lastBlocklistReassess.time_since_epoch().count() == 0 ||
+                     now - g_lastBlocklistReassess >= kReassessCooldown)) {
+                    const size_t n = g_travelFailed.size();
+                    g_travelFailed.clear();
+                    g_lastBlocklistReassess = now;
+                    g_idleCycles[id] = 0;
+                    spdlog::info("[loot] {:08X} idle {} ticks -- cleared {} blocklisted "
+                                 "bodies to reassess", id, ic, n);
+                }
+            }
             // Heartbeat so "serviced, nothing to do" is distinguishable from
             // "never ran" (#53) -- promoted from debug (never written at info
             // level) to a RATE-LIMITED info line, once per follower per ~30 s.
@@ -1456,6 +1495,8 @@ namespace MFO::Logistics {
         if (g_travel.active) Packages::LootTravelClear("revert");
         g_travel = TravelIntent{};
         g_travelFailed.clear();
+        g_idleCycles.clear();
+        g_lastBlocklistReassess = {};
     }
 
     void ReleaseTravelOnCombat(RE::Actor* a_follower) {
