@@ -386,6 +386,19 @@
           }
         },
         {
+          "id": "fNavmeshGate:General",
+          "text": "Off-navmesh skip (units)",
+          "type": "slider",
+          "help": "Before walking to loot, MFO checks the nearest navmesh point to the body; farther than this = off the navmesh (can't path) -> skip it before he freezes. ~300. Raise if reachable bodies get skipped; 0 disables.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 2048.0,
+            "step": 25.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 300.0
+          }
+        },
+        {
           "id": "fLeashMin:General",
           "text": "Leash when cautious (units)",
           "type": "slider",

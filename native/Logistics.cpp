@@ -613,6 +613,63 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // ── NEAREST-NAVMESH GATE (the freeze pre-filter) ─────────────────────
+        // Distance from a_pos to the nearest navmesh VERTEX in a_cell, or
+        // kNoNavmesh if none. The Travel procedure must map its goal to a navmesh
+        // TRIANGLE before it can plan; a corpse physics-settled OFF the navmesh
+        // (clipped into geometry / on furniture / a disconnected island) yields no
+        // goal triangle, so the planner never starts and the follower stands with
+        // distance flat (the 1449u/13s freeze). Vertex distance is a cheap upper
+        // bound on distance-to-mesh -- good enough to answer "is there mesh near
+        // this ref to path to?". Read-only over the DECODED BSNavmesh data on the
+        // worker: attached-cell gate + the cell's own spinLock (the guard
+        // CommonLib's ForEachReference takes) + smart-pointer mesh elements. po3's
+        // PapyrusExtender ships this exact read (MoveToNearestNavmeshLocation) from
+        // VM worker threads, live in this load order. NG keeps navMeshes in the
+        // RUNTIME_DATA accessor, NOT a flat cell->navMeshes (that is po3's fork).
+        constexpr float kNoNavmesh = 1e9f;
+
+        float NearestNavmeshDist(RE::TESObjectCELL* a_cell, const RE::NiPoint3& a_pos) {
+            if (!a_cell || !a_cell->IsAttached()) return kNoNavmesh;
+            auto& rd = a_cell->GetRuntimeData();
+            RE::BSSpinLockGuard lock(rd.spinLock);
+            auto* arr = rd.navMeshes;
+            if (!arr) return kNoNavmesh;
+
+            constexpr std::size_t kVertexBudget = 32768;             // ~0.1 ms of float math
+            constexpr float       kGoodEnoughSq = 64.0f * 64.0f;     // clearly on-mesh: stop
+            std::size_t visited = 0;
+            float bestSq = kNoNavmesh;
+            for (const auto& meshPtr : arr->navMeshes) {
+                auto* mesh = meshPtr.get();
+                if (!mesh) continue;
+                for (const auto& v : mesh->vertices) {
+                    const float dSq = a_pos.GetSquaredDistance(v.location);
+                    if (dSq < bestSq) {
+                        bestSq = dSq;
+                        if (bestSq <= kGoodEnoughSq) return std::sqrt(bestSq);
+                    }
+                    if (++visited >= kVertexBudget)
+                        return bestSq < kNoNavmesh ? std::sqrt(bestSq) : kNoNavmesh;
+                }
+            }
+            return bestSq < kNoNavmesh ? std::sqrt(bestSq) : kNoNavmesh;
+        }
+
+        // Reachability heuristic for a loot ref: nearest navmesh in the ref's OWN
+        // cell, and -- if that reads off-mesh AND the follower is in a different
+        // cell (exterior grid border: the nearest vertex can be one cell over) --
+        // the follower's cell too. Returns the smaller. Big = "no mesh near it".
+        float NavmeshReach(RE::Actor* a_follower, RE::TESObjectREFR* a_ref) {
+            if (!a_ref) return kNoNavmesh;
+            const RE::NiPoint3 p = a_ref->GetPosition();
+            float d = NearestNavmeshDist(a_ref->GetParentCell(), p);
+            if (d >= kNoNavmesh && a_follower &&
+                a_follower->GetParentCell() != a_ref->GetParentCell())
+                d = std::min(d, NearestNavmeshDist(a_follower->GetParentCell(), p));
+            return d;
+        }
+
         bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                         RE::ActorValue a_potionWant = RE::ActorValue::kNone,
                         LootMode a_mode = LootMode::kNormal) {
@@ -872,6 +929,15 @@ namespace MFO::Logistics {
                     if (TravelFailedRecently(rid, a_now))                          continue;
                     if (playerPos.GetDistance(ref->GetPosition())
                             <= Config::g_playerBubble.load())                      continue;
+                    // OFF-NAVMESH GATE: if no navmesh is near the ref, the Travel
+                    // package can't build a path and he'd freeze -- skip + blocklist
+                    // (25s LRU, so the scan isn't re-run) BEFORE dispatch.
+                    if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
+                        MarkTravelFailed(rid, a_now);
+                        spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
+                                     a_follower->GetFormID(), rid);
+                        continue;
+                    }
                     if (Packages::LootTravelRetarget(a_follower, ref)) {
                         g_travel.target   = ref->GetHandle();
                         g_travel.cat      = a_cat;
@@ -899,6 +965,14 @@ namespace MFO::Logistics {
                         continue;
                     // One traveller at a time (single loot alias).
                     if (g_travel.active) continue;
+                    // OFF-NAVMESH GATE (see the excursion path): no mesh near the
+                    // ref -> no path -> freeze. Skip + blocklist before dispatch.
+                    if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
+                        MarkTravelFailed(rid, a_now);
+                        spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
+                                     a_follower->GetFormID(), rid);
+                        continue;
+                    }
                     if (Packages::LootTravelFill(a_follower, ref)) {
                         g_travel.active    = true;
                         g_travel.follower  = a_follower->GetFormID();
@@ -1137,12 +1211,22 @@ namespace MFO::Logistics {
                 // working; onTravelPkg=true + flat dist = UNREACHABLE (no path).
                 if (tref) {
                     auto* cur = a_follower->GetCurrentPackage();
-                    spdlog::info("[loot] {:08X} WALK->{:08X}: onTravelPkg={} curPkg={:08X} prio={} dist={:.0f}",
+                    // ENGINE READBACK: the movement planner's actual output speed.
+                    // pathSpeed ~0 while onTravelPkg=true and dist flat == NO PATH
+                    // WAS BUILT (goal off-mesh) -- not "walking slowly". navdist =
+                    // nearest navmesh to the target (calibrates the gate: compare
+                    // successful-walk values vs frozen ones). Tear-tolerant reads.
+                    float pathSpeed = -1.0f;
+                    if (auto* proc = a_follower->GetActorRuntimeData().currentProcess)
+                        if (auto* high = proc->high)
+                            pathSpeed = high->pathingCurrentMovementSpeed.Length();
+                    spdlog::info("[loot] {:08X} WALK->{:08X}: onTravelPkg={} curPkg={:08X} prio={} "
+                                 "dist={:.0f} pathSpeed={:.1f} navdist={:.0f}",
                                  id, tref->GetFormID(),
                                  cur == Forms::g_travelPackage,
                                  cur ? cur->GetFormID() : 0u,
                                  Forms::g_lootQuest ? static_cast<int>(Forms::g_lootQuest->data.priority) : -1,
-                                 dist);
+                                 dist, pathSpeed, NavmeshReach(a_follower, tref));
                 }
                 // Track real movement for the no-progress check below (update on
                 // any >kMoveEps world move since the last note).

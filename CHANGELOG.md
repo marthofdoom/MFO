@@ -3,6 +3,21 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.12 — the freeze fixed at the source: skip bodies that are off the navmesh
+
+The research settled why he'd freeze staring at a body: it was physics-settled
+OFF the navmesh (clipped into geometry, on furniture, a disconnected ledge), so
+the game's pathfinder had no ground triangle to aim at and never even started
+walking. No amount of package tuning fixes that — the destination itself is
+unwalkable.
+
+Now MFO checks the game's own navmesh data *before* he sets out: if there's no
+navmesh near a body, it's skipped on the spot (a quick data lookup) instead of
+committing him to a walk he can't complete. So he only heads for bodies he can
+actually reach. Tunable on the Behaviour Layer page ("Off-navmesh skip"); the
+diagnostic now also logs the engine's own path-speed, so if any freeze remains
+we can see instantly whether it's a path that never built.
+
 ## v0.8.11 — audit hardening (crash-safety, the freeze softened, cleanups)
 
 A multi-agent audit of the whole loot system produced these fixes:

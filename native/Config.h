@@ -223,6 +223,14 @@ namespace MFO::Config {
     inline std::atomic<float> g_batchLinger{ 4.0f };
     inline std::atomic<float> g_excursionMax{ 60.0f };
 
+    // NAVMESH GATE (units). Before dispatching a walk, MFO checks the nearest
+    // navmesh vertex to the loot ref; if it's farther than this, the ref is
+    // OFF the navmesh (a corpse clipped into geometry / on furniture) and the
+    // Travel package could never path to it -- skip it before he freezes. 300
+    // ~= kArrivalDist + half a large floor triangle edge, since nearest-VERTEX
+    // overestimates nearest-surface. Raise if reachable bodies get skipped.
+    inline std::atomic<float> g_navmeshGate{ 300.0f };
+
     // THE CONFIDENCE LEASH (DESIGN core tenet). How far from the PLAYER a
     // follower will range to engage/loot is not fixed -- it scales with the
     // follower's confidence to survive alone (Confidence::Of). Bold in an easy
