@@ -405,8 +405,12 @@ namespace MFO::Actuation {
             if (!Targeting::Command(a_follower->GetFormID(), a_choice.target)) {
                 return { Result::NoOp, "already on that target" };
             }
+            // Log the foe's HP% too, so "Foe: lowest HP -> Attack" is legible in
+            // the log -- confirms the SELECTOR actually picked the weakest foe.
             return { Result::Fired,
-                     std::format("target {}", foe->GetName() ? foe->GetName() : "?") };
+                     std::format("target {} ({}% hp)",
+                                 foe->GetName() ? foe->GetName() : "?",
+                                 static_cast<int>(Vocab::HealthPct(foe) * 100.0f)) };
         }
         if (op == Vocab::kActCastSelf) {
             return CastOn(a_follower, a_choice.actionParam, a_follower);

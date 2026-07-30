@@ -402,6 +402,21 @@ namespace MFO::Logistics {
         // ── the looting dispatcher ──────────────────────────────────────────
         enum class Category { Arrows, Bolts, Potions, Equipment, Gold };
 
+        // Category label for the [loot] diagnostic. Naming the scanned category is
+        // the ONLY way to read the composition line: "empty=36" is meaningless
+        // without knowing whether the follower was hunting arrows (rare on bodies)
+        // or gold (common) that tick (marth: "he never loots arrows").
+        const char* CatName(Category a_cat) {
+            switch (a_cat) {
+            case Category::Arrows:    return "arrows";
+            case Category::Bolts:     return "bolts";
+            case Category::Potions:   return "potions";
+            case Category::Equipment: return "equipment";
+            case Category::Gold:      return "gold";
+            default:                  return "?";
+            }
+        }
+
         // OPTION A travel state -- a SINGLE traveller at a time (one loot quest,
         // one alias pair). Worker-tick-only, NOT serialized: this just remembers
         // the intent; the engine-side alias fill is cleared by Packages on load
@@ -435,7 +450,12 @@ namespace MFO::Logistics {
         };
         TravelIntent g_travel;
         constexpr float kMoveEps    = 50.0f;                  // real-movement threshold (units)
-        constexpr auto  kNoProgress = std::chrono::seconds(4); // frozen-this-long -> unreachable
+        // 7s, not 4: the deck showed reachable bodies transiently flagged
+        // "unreachable" at 4s (a momentary stall while repositioning / the player
+        // moving) then reached on the next dispatch. More grace kills the false
+        // positive; the navmesh gate already catches genuinely off-mesh bodies, so
+        // this only needs to catch a follower truly wedged with no path.
+        constexpr auto  kNoProgress = std::chrono::seconds(7);
 
         // Set by an excursion-mode scan when it found loot it could NOT act on
         // because the player's dibs have not released yet (dNotYet > 0). The Hold
@@ -862,21 +882,27 @@ namespace MFO::Logistics {
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
 
-            // One diagnostic line per follower per ~10 s (any category), so the
-            // walk composition is visible without flooding the ~1 s tick.
+            // One diagnostic line per follower PER CATEGORY per ~10 s, so the walk
+            // composition is visible without flooding the ~1 s tick. Keyed by
+            // (follower, category) -- a shared key would hide every category but
+            // the first scanned in the window, which is exactly what made "he
+            // never loots arrows" un-diagnosable (the arrow scan's empty=N never
+            // reached the log). cat= names which scan this line is.
             {
-                static std::unordered_map<RE::FormID, Clock::time_point> s_nextWalkLog;
-                auto& nxt = s_nextWalkLog[a_follower->GetFormID()];
+                static std::unordered_map<std::uint64_t, Clock::time_point> s_nextWalkLog;
+                const auto key = (static_cast<std::uint64_t>(a_follower->GetFormID()) << 8)
+                               | static_cast<std::uint64_t>(a_cat);
+                auto& nxt = s_nextWalkLog[key];
                 if (nxt.time_since_epoch().count() == 0 || a_now >= nxt) {
                     nxt = a_now + std::chrono::seconds(10);
                     // Include the follower's OWN state so a "3 eligible but
                     // nothing looted" is unambiguous -- an eligible corpse yields
                     // nothing if it simply does not hold the thing the winning
                     // rule wants (arrows, or the specific potion).
-                    spdlog::info("[loot] {:08X} r={:.0f} leash={:.0f}: {} refs, {} lootable, {} eligible "
+                    spdlog::info("[loot] {:08X} cat={} r={:.0f} leash={:.0f}: {} refs, {} lootable, {} eligible "
                                  "(dropped owned={} locked={} waiting={} farleash={} empty={}) | self arrows={} bolts={} "
                                  "potH={} potS={} potM={}",
-                                 a_follower->GetFormID(), kLootRadius, leash, dRefs, dLootable,
+                                 a_follower->GetFormID(), CatName(a_cat), kLootRadius, leash, dRefs, dLootable,
                                  (int)candidates.size(), dOwned, dLocked, dNotYet, dLeash, dEmpty,
                                  ArrowCount(a_follower), BoltCount(a_follower),
                                  CountPotions(a_follower, RE::ActorValue::kHealth),
@@ -1209,24 +1235,30 @@ namespace MFO::Logistics {
                 // DIAGNOSTIC (v0.8.6): is MFO's travel package driving him, and is
                 // he closing on the target? onTravelPkg=true + shrinking dist =
                 // working; onTravelPkg=true + flat dist = UNREACHABLE (no path).
+                // WALK diagnostic -- RATE-LIMITED to ~once per 4 s per follower
+                // (was every ~1 s tick: ~60 lines a session). The claim + gate are
+                // proven now; this is kept only as a debugging surface for a future
+                // freeze, so it need not be dense. dist shrinking is the real
+                // signal; pathSpeed is noisy (reads 0 mid-walk) and kept only as a
+                // hint. navdist calibrates the gate.
                 if (tref) {
-                    auto* cur = a_follower->GetCurrentPackage();
-                    // ENGINE READBACK: the movement planner's actual output speed.
-                    // pathSpeed ~0 while onTravelPkg=true and dist flat == NO PATH
-                    // WAS BUILT (goal off-mesh) -- not "walking slowly". navdist =
-                    // nearest navmesh to the target (calibrates the gate: compare
-                    // successful-walk values vs frozen ones). Tear-tolerant reads.
-                    float pathSpeed = -1.0f;
-                    if (auto* proc = a_follower->GetActorRuntimeData().currentProcess)
-                        if (auto* high = proc->high)
-                            pathSpeed = high->pathingCurrentMovementSpeed.Length();
-                    spdlog::info("[loot] {:08X} WALK->{:08X}: onTravelPkg={} curPkg={:08X} prio={} "
-                                 "dist={:.0f} pathSpeed={:.1f} navdist={:.0f}",
-                                 id, tref->GetFormID(),
-                                 cur == Forms::g_travelPackage,
-                                 cur ? cur->GetFormID() : 0u,
-                                 Forms::g_lootQuest ? static_cast<int>(Forms::g_lootQuest->data.priority) : -1,
-                                 dist, pathSpeed, NavmeshReach(a_follower, tref));
+                    static std::unordered_map<RE::FormID, Clock::time_point> s_nextWalkDiag;
+                    auto& nxt = s_nextWalkDiag[id];
+                    if (nxt.time_since_epoch().count() == 0 || now >= nxt) {
+                        nxt = now + std::chrono::seconds(4);
+                        auto* cur = a_follower->GetCurrentPackage();
+                        float pathSpeed = -1.0f;
+                        if (auto* proc = a_follower->GetActorRuntimeData().currentProcess)
+                            if (auto* high = proc->high)
+                                pathSpeed = high->pathingCurrentMovementSpeed.Length();
+                        spdlog::info("[loot] {:08X} WALK->{:08X}: onTravelPkg={} curPkg={:08X} prio={} "
+                                     "dist={:.0f} pathSpeed={:.1f} navdist={:.0f}",
+                                     id, tref->GetFormID(),
+                                     cur == Forms::g_travelPackage,
+                                     cur ? cur->GetFormID() : 0u,
+                                     Forms::g_lootQuest ? static_cast<int>(Forms::g_lootQuest->data.priority) : -1,
+                                     dist, pathSpeed, NavmeshReach(a_follower, tref));
+                    }
                 }
                 // Track real movement for the no-progress check below (update on
                 // any >kMoveEps world move since the last note).
