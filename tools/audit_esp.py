@@ -37,6 +37,12 @@ REQUIRED = {
     0x802: ('KYWD', "MFO_GrantedSpell",     ['EDID']),
     0x804: ('QUST', "MFO_StartupQuest",     ['EDID', 'DNAM']),
     0x808: ('QUST', "MFO_MCMQuest",         ['EDID', 'DNAM', 'VMAD']),
+    # Option A (walk-to-loot): the DLL hard-depends on these. Left unchecked, a
+    # dropped alias/PLDT would silently break travel (audit finding).
+    0x80A: ('QUST', "MFO_CommandQuest",     ['EDID', 'DNAM', 'ALST', 'ALPC']),
+    0x80C: ('QUST', "MFO_LootQuest",        ['EDID', 'DNAM', 'ALST', 'ALPC']),
+    0x820: ('PACK', "MFO_CastPackage",      ['EDID', 'PKDT', 'PKCU']),
+    0x828: ('PACK', "MFO_TravelPackage",    ['EDID', 'PKDT', 'PKCU', 'PLDT']),
 }
 
 # Quests that are start-game-enabled but NOT run-once must appear in the SEQ or

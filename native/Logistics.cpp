@@ -665,9 +665,15 @@ namespace MFO::Logistics {
             const float walkLimit = std::min(leash, Config::g_travelRadius.load());
 
             // Eligible loot sources, collected inside the walk and acted on after
-            // it. Bounded so a room full of corpses cannot make the tick unbounded.
+            // it. Bounded so a room full of corpses cannot make the tick unbounded
+            // -- but the cap is applied in ARBITRARY cell-list order, BEFORE the
+            // closest-first sort, so keep it generous: a low cap could drop a NEAR
+            // source in favour of far ones iterated earlier ("ignores near, walks
+            // far", audit). The HasLoot gate already trims to the few bodies that
+            // hold the wanted category, so hitting even this is uncommon.
+            constexpr size_t kMaxCandidates = 48;
             std::vector<RE::ObjectRefHandle> candidates;
-            candidates.reserve(16);
+            candidates.reserve(kMaxCandidates);
 
             // DIAGNOSTIC counters (marth: "nothing looted" -- find WHICH stage
             // drops the corpse). Logged rate-limited below.
@@ -675,7 +681,7 @@ namespace MFO::Logistics {
 
             cell->ForEachReferenceInRange(origin, kLootRadius,
                 [&](RE::TESObjectREFR& a_ref) {
-                    if (candidates.size() >= 16) return RE::BSContainer::ForEachResult::kStop;
+                    if (candidates.size() >= kMaxCandidates) return RE::BSContainer::ForEachResult::kStop;
                     ++dRefs;
                     RE::TESObjectREFR* ref = &a_ref;
                     if (ref == a_follower) return RE::BSContainer::ForEachResult::kContinue;
@@ -1138,33 +1144,25 @@ namespace MFO::Logistics {
                                  Forms::g_lootQuest ? static_cast<int>(Forms::g_lootQuest->data.priority) : -1,
                                  dist);
                 }
-                // NO-PROGRESS = UNREACHABLE. If he actually MOVED since the last
-                // check, note it; if he has been frozen (< kMoveEps) for
-                // kNoProgress seconds, the target has no path -- give up NOW (well
-                // before the leg deadline) so he stops cycling unreachable bodies.
+                // Track real movement for the no-progress check below (update on
+                // any >kMoveEps world move since the last note).
                 const RE::NiPoint3 fpos = a_follower->GetPosition();
                 if (tref && fpos.GetDistance(g_travel.lastPos) > kMoveEps) {
                     g_travel.lastPos    = fpos;
                     g_travel.progressAt = now;
                 }
-                const bool stalled = tref && now - g_travel.progressAt > kNoProgress;
                 const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
-                if (gone || stalled || now > g_travel.deadline) {
-                    // This LEG failed (target vanished, unreachable, or not reached
-                    // in time). Do NOT release -- blacklist it and seek another leg
-                    // THIS tick via the Holding block below.
-                    if (tref) MarkTravelFailed(tref->GetFormID(), now);
-                    if (stalled && tref)
-                        spdlog::info("[loot] {:08X} unreachable {:08X} (no progress, dist={:.0f}) -- skipping",
-                                     id, tref->GetFormID(), dist);
-                    g_travel.phase = TravelPhase::Holding;
-                    g_travel.lingerUntil = now + std::chrono::seconds(
-                                              static_cast<int>(Config::g_batchLinger.load()));
-                    // no return -- fall into Holding
-                } else if (dist <= kArrivalDist) {
-                    // ARRIVAL. MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
+
+                // ARRIVAL is checked BEFORE the stall/deadline giveup: a follower
+                // standing ON the corpse has ARRIVED, not "stalled walking" -- and
+                // the considering/sneak HOLD below legitimately keeps him stationary
+                // (he's waiting out YOUR QuickLoot). Letting the no-progress timer
+                // fire during that hold would falsely blacklist a corpse he reached
+                // and is politely waiting on (audit).
+                if (!gone && dist <= kArrivalDist) {
+                    // MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
                     if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking()))
-                        return;   // arrived, just holding under the bar -- retry next tick
+                        return;   // arrived, holding under the bar -- retry next tick
                     const bool moved = LootHere(a_follower, tref, g_travel.cat, g_travel.want);
                     MarkTravelFailed(tref->GetFormID(), now);   // this corpse is DONE
                     g_travel.phase = TravelPhase::Holding;
@@ -1173,6 +1171,20 @@ namespace MFO::Logistics {
                     spdlog::info("[loot] {:08X}: arrived -- {} (batch continues)", id,
                                  moved ? "looted" : "nothing to take");
                     return;   // the transfer IS this tick's action; seek next tick
+                }
+
+                // NOT arrived: leg fails on vanished target, no-progress (no path),
+                // or the leg deadline. Blacklist it and seek another leg THIS tick.
+                const bool stalled = tref && now - g_travel.progressAt > kNoProgress;
+                if (gone || stalled || now > g_travel.deadline) {
+                    if (tref) MarkTravelFailed(tref->GetFormID(), now);
+                    if (stalled && tref)
+                        spdlog::info("[loot] {:08X} unreachable {:08X} (no progress, dist={:.0f}) -- skipping",
+                                     id, tref->GetFormID(), dist);
+                    g_travel.phase = TravelPhase::Holding;
+                    g_travel.lingerUntil = now + std::chrono::seconds(
+                                              static_cast<int>(Config::g_batchLinger.load()));
+                    // no return -- fall into Holding
                 } else {
                     return;   // still walking to the current target
                 }

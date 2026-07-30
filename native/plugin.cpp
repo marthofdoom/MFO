@@ -269,6 +269,11 @@ namespace {
             // dangerous: the engine persists this one FOR us, so the bug
             // outlives the session instead of ending with it.
             spdlog::info("[startup] kPreLoadGame — releasing package alias before the world swaps");
+            // Stop + drain the worker pump for the whole load window BEFORE
+            // touching shared state: ReleaseAll here (and the revert's clears
+            // that follow) would otherwise race an in-flight tick on g_holder /
+            // the save-scoped maps (audit). Restarted at kPostLoadGame/kNewGame.
+            MFO::Diagnostics::StopPump();
             MFO::Packages::ReleaseAll("kPreLoadGame");
             break;
 

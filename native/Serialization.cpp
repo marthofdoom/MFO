@@ -352,6 +352,12 @@ namespace MFO {
     }
 
     void ResetAllState() {
+        // STOP + DRAIN THE PUMP FIRST. Every clear below wipes a save-scoped map
+        // that a job-worker tick inserts into; StopPump now waits for any in-flight
+        // tick to finish, so the clears can't race a concurrent insert (audit:
+        // concurrent unordered_map insert+clear is UB). Restarted on the next
+        // kPostLoadGame/kNewGame. (Was called LAST here, after the clears -- the race.)
+        Diagnostics::StopPump();
         g_followers.clear();
         // ARCHITECTURE §7: revert zeroes EVERYTHING save-scoped. The active
         // handle list is save-scoped too -- handle slots get reused, so a
@@ -379,7 +385,7 @@ namespace MFO {
         Packages::ReleaseAll("revert");
         Papyrus::ClearTransientState();   // counters are session-scoped like every sibling
         Rapport::ResetSessionCounters();
-        Diagnostics::StopPump();   // restarted on the next kPostLoadGame/kNewGame
+        // (StopPump moved to the TOP of this function -- it must precede the clears.)
         Board::SetHud(false);      // else it lingers over the main menu with stale rows
     }
 

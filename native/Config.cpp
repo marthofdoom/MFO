@@ -124,7 +124,7 @@ namespace MFO::Config {
             else if (a_key == "fPlayerBubble")      setF(g_playerBubble,     0.0f, 4096.0f);
             else if (a_key == "fLootRadius")        setF(g_lootRadius,     64.0f, 4096.0f);
             else if (a_key == "bLootTravel")        setB(g_lootTravel);
-            else if (a_key == "fTravelRadius")       setF(g_travelRadius,   64.0f, 4096.0f);
+            else if (a_key == "fTravelRadius")       setF(g_travelRadius,   64.0f, 8192.0f);   // match the MCM slider max
             else if (a_key == "fBatchLinger")        setF(g_batchLinger,     0.0f, 15.0f);
             else if (a_key == "fExcursionMax")       setF(g_excursionMax,    5.0f, 300.0f);
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);

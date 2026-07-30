@@ -343,7 +343,7 @@
           "help": "Follower WALKS to loot instead of teleport-grabbing (reworked v0.8.2). On by default; turn off if it misbehaves.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
-            "defaultValue": true
+            "defaultValue": 1
           }
         },
         {

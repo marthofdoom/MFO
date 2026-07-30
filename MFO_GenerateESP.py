@@ -790,7 +790,7 @@ def main():
 
     print(f"MFO {VERSION}")
     print(f"Written: {out_path} ({len(data):,} bytes)")
-    print(f"Written: {seq_path} (2 start-game-enabled quests)")
+    print(f"Written: {seq_path} (3 start-game-enabled quests: MCM, Command, Loot)")
     print()
     print("Records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{NEXT_OBJECT_ID:03X}")
@@ -800,8 +800,10 @@ def main():
     print(f"  QUST  0x{FID_STARTUP_QUEST & 0xFFF:03X}        MFO_StartupQuest (run once, no VMAD)")
     print(f"  QUST  0x{FID_MCM_QUEST & 0xFFF:03X}        MFO_MCMQuest (MFO_MCM script)")
     print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (2 aliases, DLL-filled)")
+    print(f"  QUST  0x{FID_LOOT_QUEST & 0xFFF:03X}        MFO_LootQuest (2 aliases, DLL-filled; static prio {LOOT_PRIORITY})")
     print(f"  PACK  0x{FID_CAST_PACKAGE & 0xFFF:03X}        MFO_CastPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X}"
           + ("  [NOT attached under POC]" if POC_ENABLED else ""))
+    print(f"  PACK  0x{FID_TRAVEL_PACKAGE & 0xFFF:03X}        MFO_TravelPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X}")
     if POC_ENABLED:
         print(f"  GLOB  0x{FID_PROBE_GLOB & 0xFFF:03X}        MFO_ProbeSelect (console: set MFO_ProbeSelect to N; 0 = all probes off)")
         for idx, sp, label, (tkind, tval) in POC_PROBES:

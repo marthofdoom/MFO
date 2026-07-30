@@ -44,6 +44,15 @@ namespace MFO::Diagnostics {
         // mid-sleep across a revert->load exits instead of running alongside
         // its own replacement.
         std::atomic<std::uint64_t> g_pumpEpoch{ 0 };
+        // TRUE while an AddTask tick body is actually executing (set AFTER the
+        // pump-check, so a tick that starts post-StopPump never sets it). StopPump
+        // drains on this so the revert can clear the save-scoped maps without a
+        // worker tick inserting mid-clear (audit: concurrent map insert+clear=UB).
+        std::atomic<bool>          g_tickActive{ false };
+        struct TickActiveGuard {
+            TickActiveGuard()  { g_tickActive.store(true); }
+            ~TickActiveGuard() { g_tickActive.store(false); }
+        };
 
         // The shield restore trigger (DESIGN §4.5b). A shield only matters when
         // something is hitting you, so that is exactly when MFO gives it back
@@ -200,6 +209,7 @@ namespace MFO::Diagnostics {
                 if (auto* task = SKSE::GetTaskInterface()) {
                     task->AddTask([a_epoch, diagTurn]() {
                         if (!g_pumpRunning.load() || g_pumpEpoch.load() != a_epoch) return;
+                        TickActiveGuard _active;   // marks the tick in-flight for StopPump's drain
 
                         // Detection and the HUD stay on the old ~532 ms budget;
                         // only the evaluator runs at the deadline.
@@ -362,6 +372,14 @@ namespace MFO::Diagnostics {
         // therefore fiction. This makes it true.
         g_pumpRunning.store(false);
         g_pumpEpoch.fetch_add(1);   // strand any thread still mid-sleep
+        // DRAIN: a tick already past the pump-check may be mid-execution on the
+        // job worker (ENGINE_NOTES 0.30), inserting into the save-scoped maps the
+        // revert is about to clear. Wait for it to finish so the clear is safe.
+        // A tick started after the store above early-returns without setting the
+        // flag, so this waits only for the one genuinely in-flight tick and can't
+        // deadlock; the cap is a backstop, not an expected path.
+        for (int i = 0; g_tickActive.load() && i < 2000; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     void StartPump() {
