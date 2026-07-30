@@ -3,6 +3,37 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.4 — walk-to-loot release fixed for real: hand the follower back by priority
+
+v0.8.3's `ResetQuest` clear was disproven on the deck exactly like v0.8.2's
+`ForceRefTo(None)` before it — the readback fired again (`CLEAR STILL FAILED`),
+the follower stayed latched and wouldn't follow or come on cell change. Two
+failed clears settle it: **a force-filled alias ref is sticky and can't be
+cleared** from native code with the natives available. A first attempt to work
+around that with a package condition was caught in review before shipping — it
+would have *rooted* the follower (the engine keeps him claimed with nothing to
+do), so it was scrapped.
+
+### The real fix — release by quest priority
+The follower is handed back by making MFO's loot quest **outrank** the follower
+framework while he walks to loot (so MFO drives him) and **drop below** it to
+release (so the framework takes him back and he follows). The alias staying
+filled no longer matters — whoever outranks wins. This has no "stuck" state: he's
+always driven by *someone*, and if anything about the hand-off ever misbehaves it
+fails toward "doesn't bother looting," never toward "frozen." A save stranded by
+an older build heals itself on load.
+
+### Edge cases closed
+- Turning the loot/logistics toggle **off mid-walk** now releases him immediately
+  instead of stranding him.
+- A follower **dismissed mid-walk** is properly let go (otherwise he'd keep
+  wandering off to loot, even across reloads).
+
+### Also fixed — the corpse-shuffle churn
+A follower who arrived at a corpse and found nothing he wanted used to be re-sent
+to the same nearby corpses every few seconds, forever. Arriving at a source
+(looted or not) now puts it on a short cooldown, so he moves on.
+
 ## v0.8.3 — walk-to-loot actually works: reliable clear + real Run gait
 
 The v0.8.2 walk-to-loot fixes were disproven by the deck in one run (the

@@ -152,7 +152,20 @@ POC_ACTOR_REF = 0x000198FA
 POC_ENABLED   = os.environ.get("MFO_POC") == "1"
 
 # Command-quest priority. See make_command_quest() -- this is the #69 dial.
+# 60 outranks the follower framework (measured 50, ENGINE_NOTES 0.25) so an
+# alias-claimed follower runs MFO's package.
 QUEST_PRIORITY = int(os.environ.get("MFO_QUEST_PRIORITY", "60"))
+
+# Loot-quest SHIPPED priority = 25, deliberately BELOW the follower framework's
+# 50 (ENGINE_NOTES 0.25 measured 25 -> "his own follow package keeps control").
+# The DLL RAISES it to 60 for the duration of a walk-to-loot and drops it back
+# to 25 to release -- release is by priority, not by clearing the (unclearable)
+# alias (ENGINE_NOTES 0.24/0.25/0.34). Shipping 25 makes the release FAIL SAFE:
+# if a runtime priority write is ever NOT honored, MFO never outranks the
+# framework and the follower simply never travels -- a quiet no-op, not a latch.
+# Priority is form data (not save-serialized), so every load reverts to 25 and
+# any stranded save self-heals for free.
+LOOT_IDLE_PRIORITY = int(os.environ.get("MFO_LOOT_IDLE_PRIORITY", "25"))
 
 # ── binary helpers (forked from MEO/MRO — byte-for-byte valid) ──
 FORM_VERSION = 44
@@ -425,11 +438,14 @@ def make_loot_quest():
     cast-commanded, never both, so two one-package quests beat one two-package
     alias that needs conditions to disambiguate). alias 0 = the follower;
     alias 1 = the loot ref the DLL fills, which the travel package's PLDT t8
-    points at. Priority matches the command quest (§4.6: chosen once).
+    points at. Ships at LOOT_IDLE_PRIORITY (25, BELOW the follower framework's
+    50) -- the DLL raises it to 60 only while a follower walks to loot and drops
+    it back to release. Release-by-priority, NOT by clearing the alias (0.24/
+    0.25/0.34). See LOOT_IDLE_PRIORITY.
     """
     body  = subrec('EDID', zstr("MFO_LootQuest"))
     body += subrec('FULL', zstr("MFO Loot"))
-    body += subrec('DNAM', qust_dnam(0x0011, priority=QUEST_PRIORITY))
+    body += subrec('DNAM', qust_dnam(0x0011, priority=LOOT_IDLE_PRIORITY))
     body += subrec('NEXT', b'')
     body += subrec('ANAM', struct.pack('<I', 2))
 
@@ -660,6 +676,12 @@ def build_travel(fid, edid, alias_idx, radius, qnam):
     body += subrec('PKDT', bytes.fromhex('002000001200028054000000'))
     # PSDT: any time, any day -- the same 3,855-of-5,961 default build_usemagic uses.
     body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
+    # NO CTDA. The package is unconditional -- it runs whenever the loot quest's
+    # alias claims the follower. RELEASE is done by QUEST PRIORITY, not a package
+    # condition (see make_loot_quest / native LootTravelClear): a gate that only
+    # invalidates the PACKAGE leaves the follower claimed-with-nothing and ROOTS
+    # him (ENGINE_NOTES 0.24/0.25, deck-measured). To release we drop the quest
+    # BELOW the follower framework so the framework reclaims him.
     # QNAM (owner quest) is MANDATORY for an alias-valued input (626/626 vanilla).
     body += subrec('QNAM', struct.pack('<I', qnam))
     body += subrec('PKCU', struct.pack('<III', 3, FREF_TMPL_TRAVEL, 3))
@@ -732,7 +754,7 @@ def main():
     data = make_tes4(NEXT_OBJECT_ID)
     data += make_kywd()
     # GLOB between KYWD and MGEF -- vanilla top-group order (KYWD .. GLOB ..
-    # MGEF), and only emitted when something references it.
+    # MGEF), and only emitted when something references it (PoC probes).
     if POC_ENABLED:
         data += make_glob()
     data += make_mgef()

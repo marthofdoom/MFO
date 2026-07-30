@@ -1413,7 +1413,7 @@ PASS (52 assertions incl. travel-package existence + template), and a
 logistics dispatch are the next step, and like the cast package (§0.21 probes
 1–5) will want 1–2 deck cycles to tune walk/arrival/release.
 
-### 0.34 The alias CLEAR must be NATIVE — ReferenceAlias.Clear via the VM fails on a scriptless alias (2026-07-30)
+### 0.34 A force-filled scriptless alias is UNCLEARABLE from native code — gate the package instead (2026-07-30)
 
 **Failure (v0.8.0/v0.8.1, walk-to-loot shipped default-on).** The follower went
 UNRESPONSIVE — a priority-60 travel loop. The deck log told the whole story:
@@ -1456,21 +1456,79 @@ caller null-guards and never passes null — now we know why). The alias stayed
 latched, follower still stuck. The readback discipline paid off: one deck cycle,
 definitive answer, no guessing.
 
-**Fix (v0.8.3).** Clear via `TESQuest::ResetQuest` (id 25014 — same
-address-library window as ForceRefTo, cross-checked). ResetQuest clears EVERY
-alias fill natively; because MFO_LootQuest is a bare, scriptless,
-start-game-enabled quest with no stages, the reset re-inits it empty and running
-— ready for the next fill. Same readback proves it emptied, plus an `IsRunning`
-readback because `LootTravelFill` refuses a stopped quest (if the reset ever
-leaves it stopped, restart is the next fix). The walkable radius / scaled
-deadline / travel-failed LRU / closest-first from v0.8.2 stand. **Recovery for
-latched saves:** the clear also runs from `ReleaseAll` on every load.
+**Fix attempt (v0.8.3) — ALSO DECK-DISPROVEN.** Cleared via `TESQuest::ResetQuest`
+(id 25014, same address-library window). The same readback FIRED AGAIN:
 
-TAKEAWAY: never route alias Clear through the VM for MFO's scriptless aliases,
-AND `ForceRefTo(None)` does NOT clear on the id-25052 native — it's a keep-current
-no-op. The reliable native release is **ResetQuest** (id 25014). Fill = ForceRefTo
-(a real ref), release = ResetQuest. The command-quest cast path should adopt the
-same clear before it ships.
+```
+[loot] 000656E2: travel dispatched to 000E5F7E
+[error] [loot] CLEAR STILL FAILED (arrived) -- 000656E2 latched after ResetQuest
+[loot] 000656E2: arrived -- nothing to take
+[loot] 000656E2: travel dispatched to 000E5F7C   <- re-dispatched, churn
+```
+
+ResetQuest does NOT drop a force-filled ref either. The lesson across TWO deck
+cycles: **a force-filled alias ref is STICKY.** ForceRefTo is designed to survive
+quest state changes, so neither null-fill nor reset empties it, and the VM Clear
+can't reach a scriptless alias. Stop trying to clear it.
+
+**Rejected design (v0.8.4 pre-ship) — GATE THE PACKAGE.** The plan was: leave the
+alias filled, add a GLOB + a CTDA (`GetGlobalValue(MFO_LootActive) >= 1`) on the
+Travel package, and toggle the global to enable/disable the package. A review
+caught it BEFORE it shipped, against THIS FILE: it is exactly the §0.24/§0.25
+"rooted" configuration. A false CTDA does not un-claim the actor — the priority-60
+quest still CLAIMS him and now supplies no valid package, and §0.25 measured that
+as **follower ROOTED**, not released. Never resurrect the gate as a release
+mechanism; it contradicts the measured arbitration model two sections up.
+
+**Fix (v0.8.4) — RELEASE BY QUEST PRIORITY (the §0.25 escape).** §0.25's own
+table is the answer: at quest priority **25** (below the follower framework's 50)
+the follower **follows normally even while still in MFO's alias** — the sticky
+ref becomes irrelevant because a higher-priority quest reclaims him. So:
+- Ship `MFO_LootQuest` at priority **25** (below the framework).
+- Dispatch: `quest->data.priority = 60` (above the framework) + fill aliases +
+  `EvaluatePackage` → MFO claims, follower travels.
+- Release: `quest->data.priority = 25` + `EvaluatePackage` → framework reclaims,
+  follower follows. No clear needed; the alias stays filled.
+
+`data.priority` is the LIVE arbitration field — the claim structs
+(`ExtraAliasInstanceArray` / `BGSRefAliasInstanceData` = `{quest*, alias*,
+instancedPackages*}`) cache no priority, so there is no stale-read path; MFO
+already reads it live for contention (`Packages.cpp`). Two properties make this
+the right call over an alias-script + VM `Clear` (also viable, but 3 unproven
+build/runtime steps whose failure REPRODUCES the latch): (1) **fail-safe** — if a
+runtime priority write were somehow not honoured, MFO never outranks the
+framework and the follower simply never travels (a quiet no-op, not a latch); (2)
+**no rooted window** — the follower is ALWAYS claimed by SOMEONE (MFO@60
+travelling or framework@50 idle), never claimed-with-nothing.
+
+CAUTION on "self-heals on load": priority is form data, but an IN-SESSION load
+does NOT re-read the ESP — the form keeps whatever the DLL last wrote. Only a
+fresh process start reads the shipped 25. So the reset is NOT automatic: it is
+`ReleaseAll` force-writing idle priority on kPreLoadGame / post-load reconcile /
+kNewGame / revert. That write is LOAD-BEARING for every in-session load (load an
+earlier save mid-travel without quitting and the quest is still 60) — do not
+delete it as "redundant".
+
+**Dismissal is the one case priority can't cover:** a dismissed follower has no
+framework claim to reclaim him, so at priority 25 MFO's alias is his SOLE claim
+and he keeps travelling (and re-latches every load — the alias IS serialized).
+There, EVICT him: force-fill alias 0 with the PLAYER (a REAL `ForceRefTo`, which
+works — only the null clear is a no-op), removing his alias instance; the player
+is not AI-package-driven so the slot is inert. The churn LRU (arrival marks a
+DONE corpse) and walkable radius / scaled deadline / closest-first all stand.
+
+TAKEAWAY: you cannot reliably CLEAR a force-filled scriptless alias from native
+code with the natives we have — `ForceRefTo(None)` (25052) and `ResetQuest`
+(25014) both no-op the drop, and the VM `Clear` can't reach a scriptless alias.
+But you do NOT need to clear it. Per **§0.24/§0.25 (read them — arbitration is by
+the priority of the quest whose alias CLAIMS the actor, NOT by package
+validity)**, the way to release is to drop MFO's quest BELOW the follower
+framework (25 < 50) so the framework reclaims him — the filled alias is then
+harmless. Do NOT gate the package to release: a claimed quest that supplies no
+valid package ROOTS the follower (§0.25, measured). For a DISMISSED follower
+(no framework to reclaim) evict alias 0 with a real `ForceRefTo` to the player.
+The command-quest cast path's `ClearAlias` is latently broken the same way (VM
+Clear on a scriptless alias) — it should adopt priority-release too, not a gate.
 
 ### 0.35 A package's preferredSpeed byte is INERT without the 0x2000 "Preferred Speed" flag (2026-07-30)
 

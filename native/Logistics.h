@@ -72,4 +72,11 @@ namespace MFO::Logistics {
     // FormID would apply the previous save's timers to this one.
     void ClearTransientState();
 
+    // Called from the roster-removal (dismissal) path. If a_id was mid travel-
+    // to-loot, EVICT them from the loot alias: a dismissed follower can't be
+    // freed by dropping quest priority (nothing reclaims him) and the alias fill
+    // is save-serialized, so it would re-latch on every future load. Safe to
+    // call for any id -- a no-op unless a_id is the active traveller.
+    void OnFollowerRemoved(RE::FormID a_id);
+
 }

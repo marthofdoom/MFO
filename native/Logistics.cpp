@@ -902,28 +902,36 @@ namespace MFO::Logistics {
     }
 
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
-        if (!Config::g_logistics.load()) return;   // whole subsystem off by default (#45)
         if (!a_follower) return;
 
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
 
-        // GLOBAL stale-intent expiry, keyed to NO follower in particular. The
-        // per-follower arrival branch below only runs when the TRAVELLER is
-        // serviced out of combat -- but a traveller who died, was dismissed,
-        // dropped off the roster, or got pulled down the combat branch is never
-        // serviced there, so its intent (and the single loot alias) would stick
-        // all session. The deadline is the backstop, checked for every follower
-        // so it fires even when the traveller itself is gone. (#55: the alias
-        // also self-heals on the next load via ReleaseAll.)
-        if (g_travel.active && now > g_travel.deadline) {
-            // Deadline hit -> the follower could not reach it. Blacklist the
-            // target for a cooldown so closest-first does not re-pick it and
-            // churn (the v0.8.1 loop).
-            if (auto tp = g_travel.target.get()) MarkTravelFailed(tp->GetFormID(), now);
-            Packages::LootTravelClear("stale");
+        // GLOBAL travel-intent BACKSTOP, keyed to NO follower in particular, and
+        // run BEFORE the logistics early-return on purpose. The per-follower
+        // arrival branch below only runs when the TRAVELLER is serviced out of
+        // combat -- but a traveller who died, was dismissed, dropped off the
+        // roster, or got pulled down the combat branch is never serviced there,
+        // so its intent (and the loot quest's raised priority) would stick all
+        // session. This fires for EVERY follower, and also when the subsystem is
+        // toggled OFF mid-travel -- otherwise turning bLogistics/bLootTravel off
+        // would strand a traveller at priority 60. (An in-session load does NOT
+        // revert the raised priority -- form data keeps the runtime value -- so
+        // ReleaseAll's kPreLoadGame write is the real reset, not this; this is
+        // the LIVE release. See ReleaseAll.)
+        const bool off = !Config::g_logistics.load() || !Config::g_lootTravel.load();
+        if (g_travel.active && (now > g_travel.deadline || off)) {
+            // On a genuine DEADLINE miss, blacklist the target so closest-first
+            // does not re-pick it and churn (the v0.8.1 loop). NOT on toggle-off
+            // -- that corpse never "failed" and should stay eligible later.
+            if (!off) {
+                if (auto tp = g_travel.target.get()) MarkTravelFailed(tp->GetFormID(), now);
+            }
+            Packages::LootTravelClear(off ? "subsystem off" : "stale");
             g_travel.active = false;
         }
+
+        if (!Config::g_logistics.load()) return;   // whole subsystem off by default (#45)
 
         // CADENCE GATE (~1 s). Cheap early-out on the frames between logistics
         // ticks -- the Scheduler calls this every time it services the follower
@@ -946,7 +954,8 @@ namespace MFO::Logistics {
             const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
             if (gone || a_follower->IsInCombat() || now > g_travel.deadline) {
                 Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
-                                          : (gone ? "target gone" : "timeout"));
+                                          : (gone ? "target gone" : "timeout"),
+                                          a_follower);
                 g_travel.active = false;
                 // fall through to a normal eval this tick.
             } else if (a_follower->GetPosition().GetDistance(tref->GetPosition()) <= kArrivalDist) {
@@ -967,7 +976,15 @@ namespace MFO::Logistics {
                 case Category::Equipment: moved = LootEquipment(a_follower, tref); break;
                 case Category::Gold:      moved = LootGold(a_follower, tref); break;
                 }
-                Packages::LootTravelClear("arrived");
+                // This source is DONE for a cooldown -- whether we took something
+                // or found nothing. Without this, closest-first re-picks the same
+                // corpse next tick and the follower shuttles between a few empty
+                // bodies forever (the deck churn: dispatched to 7E, 7C, 80, 7B...
+                // every few seconds, "nothing to take" each time). MarkTravelFailed
+                // is the same LRU the deadline uses; the name is "failed" but the
+                // effect we want here is just "don't re-target this yet".
+                MarkTravelFailed(tref->GetFormID(), now);
+                Packages::LootTravelClear("arrived", a_follower);
                 g_travel.active = false;
                 spdlog::info("[loot] {:08X}: arrived -- {}", id, moved ? "looted" : "nothing to take");
                 return;   // the arrival transfer IS this tick's action
@@ -1059,6 +1076,17 @@ namespace MFO::Logistics {
         if (g_travel.active) Packages::LootTravelClear("revert");
         g_travel = TravelIntent{};
         g_travelFailed.clear();
+    }
+
+    void OnFollowerRemoved(RE::FormID a_id) {
+        // UNCONDITIONAL: the loot alias is never emptied, so a_id may still hold
+        // alias 0 from a travel that COMPLETED long ago -- not only mid-travel.
+        // The occupancy check lives in LootTravelEvictIf; it no-ops unless a_id
+        // is the current holder. (A dismissed follower can't be freed by
+        // priority -- nothing reclaims him -- and would re-latch every load.)
+        Packages::LootTravelEvictIf(a_id);
+        // Forget the live intent too, if he was the active traveller.
+        if (g_travel.active && g_travel.follower == a_id) g_travel = TravelIntent{};
     }
 
 }

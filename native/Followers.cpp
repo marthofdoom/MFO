@@ -3,6 +3,7 @@
 #include "Loadout.h"
 #include "Targeting.h"
 #include "Packages.h"
+#include "Logistics.h"
 #include "Forms.h"
 #include "Config.h"
 #include "Vocabulary.h"
@@ -284,6 +285,10 @@ namespace MFO::Followers {
                 // from this one, and nothing in MFO will ever look at them
                 // again to notice.
                 Packages::Release(id);
+                // And the loot-travel alias: a follower dismissed mid-walk-to-
+                // loot can't be freed by priority (nothing reclaims him) and the
+                // fill is serialized, so it re-latches every load. Evict him.
+                Logistics::OnFollowerRemoved(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport
                 // (DESIGN.md §3.1, the emotional core of the progression).
                 spdlog::info("[follower] - {:08X} (record and Rapport retained)", id);

@@ -201,7 +201,19 @@ namespace MFO::Packages {
     // arrival, interrupt (combat), or timeout. ReleaseAll clears it on
     // load/revert/shutdown, so even a missed clear self-heals on the next load.
     bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
-    void LootTravelClear(const char* a_why);
+    // a_follower is optional: pass it to re-evaluate that follower immediately
+    // (drops travel this tick); omit and the priority drop still frees them on
+    // the engine's next evaluation. Release is by QUEST PRIORITY (drop MFO below
+    // the follower framework so it reclaims), NOT by clearing the sticky,
+    // unclearable alias -- see the .cpp.
+    void LootTravelClear(const char* a_why, RE::Actor* a_follower = nullptr);
+
+    // Evict a_id from the loot alias IF he currently occupies alias 0 (keyed to
+    // OCCUPANCY, not the live intent -- the alias is never emptied, so a follower
+    // dismissed any time after his last travel still holds it). Priority can't
+    // free a dismissed follower (nothing reclaims him); this force-fills alias 0
+    // with the player. No-op if a_id is not the current holder. See the .cpp.
+    void LootTravelEvictIf(RE::FormID a_id);
 
     // Session-scoped counters, cleared on revert like every sibling module.
     void ClearTransientState();
