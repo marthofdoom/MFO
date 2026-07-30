@@ -5,9 +5,13 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v0.3.0, pre-alpha.** Follower detection, Rapport progression, and an
-in-game Field Kit overlay work and are validated in play. **Gambit execution
-is not built yet** — the evaluator is M5 in [`ROADMAP.md`](Docs/ROADMAP.md).
+**Status: v0.8.0, pre-release.** Gambits execute — both tables. Follower
+detection, Rapport, the in-game board, and combat + logistics actuation are
+built and field-tested; followers cast (their own AI, animated, at chosen
+targets), attack, drink, restock, loot, and now *walk* to loot. Active
+development, so 0.x: newest features want hardware tuning. Build order and
+what's still deferred are in [`ROADMAP.md`](Docs/ROADMAP.md); the per-version
+history is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -35,21 +39,32 @@ recruitment armour isn't something you have to micromanage.
 
 ```
 1.  Health potions < 3      ->  Loot health potions
-2.  Arrows < 20             ->  Loot ammo for my bow
-3.  Better heavy armour near ->  Loot and equip it
+2.  Out of arrows           ->  Loot arrows
+3.  Always                  ->  Loot better equipment
+4.  Always                  ->  Loot gold
 ```
 
-Equipment rules generalise by **category and metric, never by item** — "loot
-better heavy armour" means higher armour rating *weighted by that follower's
-own armour skill*, computed at runtime. Modded gear works with no patch, and a
-light-armour follower isn't upgraded into heavy just because the number is
-bigger. Potions are health/stamina/magicka only; that's what self-sufficiency
-means, and every extra picker entry is a tax on reading the list.
+The vocabulary: drink and loot health/stamina/magicka potions (or **any**
+potion), loot arrows and bolts (separate gambits), loot gold, and **loot
+better equipment**. Equipment generalises by **category and metric, never by
+item** — a weapon upgrade is judged within the follower's dominant weapon-skill
+class (a two-hander takes the greatsword over a dagger, an archer won't swap to
+a mace), armour by rating on the slot. Modded gear works with no patch, and a
+caster won't hoover up a random sword.
 
-**First dibs are yours.** A follower won't touch a corpse or container for 25
-seconds, and never takes owned goods. Once *you've* taken from it the wait
-drops to ~4 seconds — not zero, because QuickLoot takes items one at a time
-and a follower shouldn't grab from a body you're still working through.
+**Followers loot like people, not vacuums:**
+
+- **They walk to it.** A follower paths to the loot and picks it up — they
+  don't teleport-grab from across the room. How far they'll range is the
+  *confidence leash* below.
+- **They can pick locks they're skilled enough for** — a Novice lock at any
+  Lockpicking skill, an Expert lock only near mastery; Master and key-locked
+  are out of reach.
+- **First dibs are yours.** Arrows and potions a follower restocks at once, but
+  it leaves gear and gold on a fresh corpse for a few seconds first — your pick.
+  It never takes owned goods, and holds off entirely while **you're sneaking**
+  so they don't blow your stealth. Once *you've* taken from a source the wait
+  collapses; you've had your look.
 
 ---
 
@@ -58,6 +73,15 @@ and a follower shouldn't grab from a body you're still working through.
 **Gambits layer on top of vanilla AI; they never replace it.** A follower with
 no matching rule behaves byte-identically to one without MFO installed — no
 no-op package, no neutral command, no engine call at all.
+
+**Confidence, on an invisible string.** How far a follower operates *from you*
+isn't a fixed follow distance — it's a live readout of how confident they are
+to survive on their own right now. Healthy in an easy zone, they push ahead and
+range out to loot; hurt, or in a hard fight, they pull back and fight at your
+side. You never see a number. You just feel a companion get bold clearing a
+bandit camp and wary in a dragon's lair. It tunes on the new **Behaviour Layer**
+config page, and it's the model for how MFO adds realism: hidden variables you
+read through behaviour, not sliders.
 
 **Reactions are human, not robotic.** A gambit decision is a *choice*
 reaction, which in people runs 300–600 ms, so responses are drawn from a
@@ -79,10 +103,11 @@ is yours to make.
 
 ## Progression
 
-Slots and vocabulary are earned through **Rapport**, built by fighting
-alongside that specific follower. It's never pooled or transferable, and it
-survives dismissal — leave someone in Breezehome for two hundred hours and
-they're exactly as you left them.
+Rule **slots** are earned through **Rapport**, built by fighting alongside that
+specific follower. It's never pooled or transferable, and it survives dismissal
+— leave someone in Breezehome for two hundred hours and they're exactly as you
+left them. (Gating the *vocabulary* by rank — not just slot count — is designed
+and next on the roadmap.)
 
 | Rank | Combat slots | Logistics slots | Reactions |
 |---|---|---|---|
@@ -90,24 +115,29 @@ they're exactly as you left them.
 | III | 6 | 3 | ↓ |
 | V | 12 | 5 | anticipates |
 
-What unlocks depends on that follower's own skills — a battlemage opens spell
-actions a pure warrior never will. At high Rapport MFO can *teach* spells, and
-un-assigning the rule takes the spell back.
+What a follower *can* be told to do depends on their own skills and spellbook —
+a battlemage opens cast actions a pure warrior never will, and the board shows
+each follower only what they could actually perform.
 
 ---
 
-## The Field Kit
+## The board — Field Orders
 
-There's an in-game overlay, because reading a log after the fact is a hopeless
-way to develop a behaviour mod.
+Rules are authored **in game**, per follower, on the **Field Orders** power —
+because reading a log after the fact is a hopeless way to develop a behaviour
+mod.
 
 - A **passive HUD** that takes no input, so it stays readable while fighting:
   per-follower rank, rapport, live health/magicka/stamina, distance.
-- A **panel** on the Field Orders power with the follower table, live
-  measurements, config in force, and (currently) an engine-probe harness.
+- The **Field Orders board** (titled *Follower Overhaul*): a Followers roster
+  and the Gambits editor — cycle each rule's condition, action, and value, with
+  a full-width plain-language summary of every rule so a whole gambit is legible
+  even on a Steam Deck. Styled after MEO, in four skins.
 
 Full controller parity throughout — gamepad navigation is a standing
-requirement across these mods, not an afterthought.
+requirement across these mods, not an afterthought. Settings live in an
+**MCM** (MCM Helper), including the Behaviour Layer page for the confidence
+leash and walk-to-loot.
 
 ---
 
@@ -123,7 +153,9 @@ which documents are specs versus which record proven behaviour.
 - [`INVARIANTS.md`](Docs/INVARIANTS.md) — read before any code change
 - [`ANTI_PATTERNS.md`](Docs/ANTI_PATTERNS.md) — the portable "never again" list
 - [`ENGINE_NOTES.md`](Docs/ENGINE_NOTES.md) — what is proven vs merely researched
+- [`GAMBIT_LIBRARY.md`](Docs/GAMBIT_LIBRARY.md) — the condition→action vocabulary
 - [`ROADMAP.md`](Docs/ROADMAP.md) — build order to a shippable mod
+- [`CHANGELOG.md`](CHANGELOG.md) — per-version history
 
 ## Building
 
