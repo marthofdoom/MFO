@@ -402,6 +402,41 @@ so marth can confirm v0.7.7 (MCM/looting/gambits) works in the field first.
   (detect the mod; likely strip/gate whatever perk/package/AI-flag it grants a
   managed follower). marth, 2026-07-28. Not today.
 
+## Follower economy — vendor autonomy *(DEFERRED, big; marth 2026-07-29)*
+
+The capstone of the behaviour layer: a follower manages their own gear and purse
+like a person, not an inventory the player micromanages. In town they:
+
+- **Sell the old gear** that a looting upgrade replaced (needs a "displaced by
+  upgrade" ledger — when `LootEquipment` equips a better piece, remember the one
+  it superseded as sellable).
+- **Buy better gear** than they wield if they can afford it; **sell/buy combos**
+  (dump the old sword to fund the better one).
+- **Sell jewelry and loose valuables** they collected for exactly this — money
+  they manage themselves.
+- **Restock** ammo and potions from vendors, not just corpses.
+- **By walking to the vendor themselves** — reuses Option A's Travel primitive
+  (`Packages::LootTravelFill` generalised to a vendor ref), then the barter API.
+
+**Why it's big:** vendor detection (which nearby NPC is a merchant, their
+faction/merchandise container), the barter/gold transfer API, a per-follower
+"sellable" ledger, affordability + upgrade valuation reusing the skill-aware
+`LootEquipment` metric, and travel/return choreography. Its own multi-release
+feature, gated default-off, deck-tuned. Depends on Option A landing first.
+
+**Near-term precursors (do before the system, cheap):**
+- **`act.loot_jewelry`** — a follower collects rings/amulets/circlets (ARMO with
+  zero armor rating, i.e. not wearable protection) to SELL later. Mirrors
+  `loot_gold`. Lets them start banking value now so the wallet is non-empty when
+  the vendor system arrives.
+- **Gold and jewelry get a MUCH longer first-dibs timer** than gear — they are
+  what the player most wants first pick of. The existing waiver already encodes
+  "obvious rejection": the moment the player takes ANYTHING from that source and
+  leaves the coin/ring, the timer collapses to the short waiver and the follower
+  may grab the leftover. So: a long base delay (new `fValuablesDelay`, ~30 s)
+  for `Gold`/`Jewelry`, collapsed by the same player-looted waiver that already
+  serves equipment.
+
 ## What is deliberately NOT on this roadmap
 
 No installer, no patch plugin, no calibration pass, no leveled-list edits,

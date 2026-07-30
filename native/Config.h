@@ -175,7 +175,25 @@ namespace MFO::Config {
     // tunable by editing the synced INI with no rebuild. The parent-cell walk
     // (§0.30) still iterates only the follower's OWN cell, so values past one
     // cell (~4096u) gain nothing real. fLootRadius.
-    inline std::atomic<float> g_lootRadius{ 1500.0f };
+    inline std::atomic<float> g_lootRadius{ 3000.0f };   // ~4-5 rooms (1 unit ~= 1.4cm; cell = 4096)
+
+    // OPTION A -- engine-pathed loot: the follower WALKS to the loot instead of
+    // teleport-grabbing it. Fills MFO_LootQuest's alias so the vanilla Travel
+    // package paths them there, then transfers on arrival. DEFAULT OFF and #55
+    // is the reason: an alias fill is SERIALIZED INTO THE SAVE, so a bug that
+    // fails to release leaves a follower latched on every future load. Off until
+    // field-proven on the deck, like every M9 mechanism.
+    inline std::atomic<bool>  g_lootTravel{ false };
+
+    // THE CONFIDENCE LEASH (DESIGN core tenet). How far from the PLAYER a
+    // follower will range to engage/loot is not fixed -- it scales with the
+    // follower's confidence to survive alone (Confidence::Of). Bold in an easy
+    // fight (leash -> max, pushes ahead), cautious in a hard one (leash -> min,
+    // falls back to the player). These bound that leash, in game units.
+    // Units: 1 ~= 1.4cm, ~70/m; a room ~600-1000, an exterior cell 4096. So the
+    // scared floor is ~one room and the confident ceiling is several rooms.
+    inline std::atomic<float> g_leashMin{ 512.0f };    // scared: ~one room from the player
+    inline std::atomic<float> g_leashMax{ 4000.0f };   // confident: several rooms, near a full cell
 
     // Which caster a gambit spell goes through. PROVEN 2026-07-21: NO source
     // animates -- kLeftHand/kRightHand/kOther were all tried in the field and

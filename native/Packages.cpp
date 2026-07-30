@@ -594,6 +594,35 @@ namespace MFO::Packages {
             return Decline::None;
         }
 
+        // ── OPTION A: loot-travel alias plumbing (DESIGN behaviour layer) ────
+        constexpr std::uint32_t kAliasLootActor  = 0;   // the follower (carries the travel package)
+        constexpr std::uint32_t kAliasLootTarget = 1;   // the loot ref the PLDT t8 points at
+
+        RE::BGSRefAlias* LootAlias(std::uint32_t a_id) {
+            auto* quest = Forms::g_lootQuest;
+            if (!quest) return nullptr;
+            for (auto* base : quest->aliases) {
+                if (!base || base->aliasID != a_id) continue;
+                return skyrim_cast<RE::BGSRefAlias*>(base);
+            }
+            return nullptr;
+        }
+
+        // VM Clear on a loot alias. Fill uses the native ForceRefTo (synchronous,
+        // AE); Clear has no verified native id, so it goes through the VM exactly
+        // like DispatchAlias does for the command quest.
+        bool LootClearAlias(std::uint32_t a_id) {
+            auto* vm = VM();
+            auto* alias = LootAlias(a_id);
+            if (!vm || !alias) return false;
+            RE::VMHandle handle{};
+            if (!HandleForAlias(alias, handle)) return false;
+            std::unique_ptr<RE::BSScript::IFunctionArguments> args{ RE::MakeFunctionArguments() };
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+            return vm->DispatchMethodCall2(handle, "ReferenceAlias", "Clear",
+                                           args.get(), callback);
+        }
+
     }  // namespace
 
     const char* PhaseName(Phase a_phase) {
@@ -743,6 +772,20 @@ namespace MFO::Packages {
     }
 
     void ReleaseAll(const char* a_why) {
+        // OPTION A first, and unconditionally: the loot-travel alias is
+        // save-serialized independently of the cast holder's phase (#55), so a
+        // latch from a previous session must self-heal on load regardless of
+        // what the cast state machine thinks it holds.
+        if (Forms::g_lootQuest && LootAlias(kAliasLootActor) && VM()) {
+            RE::ObjectRefHandle h{};
+            Forms::g_lootQuest->CreateRefHandleByAliasID(h, kAliasLootActor);
+            if (h.get()) {
+                spdlog::warn("[loot] {} -- loot-travel alias latched with {:08X}; clearing",
+                             a_why, h.get()->GetFormID());
+                LootTravelClear(a_why);
+            }
+        }
+
         if (g_holder.phase == Phase::Idle) {
             // Clear anyway on the lifecycle edges: a fill from a PREVIOUS
             // session is in the save and this module has no memory of it, so
@@ -760,6 +803,44 @@ namespace MFO::Packages {
             return;
         }
         ClearAlias(a_why);
+    }
+
+    // ── OPTION A: loot travel ────────────────────────────────────────────────
+    bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref) {
+        if (!Config::g_lootTravel.load())          return false;
+        auto* quest = Forms::g_lootQuest;
+        if (!a_follower || !a_ref || !quest)       return false;
+        // The native ForceRefTo id is AE-only (see ForceRefToNative). Off AE we
+        // simply do not offer travel -- the caller falls back to arm's-reach.
+        if (!REL::Module::IsAE())                  return false;
+        if (!quest->IsRunning()) {
+            spdlog::error("[loot] MFO_LootQuest {:08X} is NOT RUNNING -- Data/SEQ/MFO.seq "
+                          "missing or stale? Travel unavailable.", quest->GetFormID());
+            return false;
+        }
+        // Fill the TARGET first, then the ACTOR: when the follower's alias
+        // instances the travel package, its PLDT destination (alias 1) is
+        // already resolved. Both are synchronous native fills.
+        if (!ForceRefToNative(quest, kAliasLootTarget, a_ref)) return false;
+        if (!ForceRefToNative(quest, kAliasLootActor, a_follower)) {
+            LootTravelClear("actor fill failed");
+            return false;
+        }
+        // Nudge the follower to evaluate now rather than wait for the engine's
+        // own pass. (true, false): NEVER resetAI -- it clears the combat group.
+        a_follower->EvaluatePackage(true, false);
+        spdlog::info("[loot] {:08X}: travel dispatched to {:08X}",
+                     a_follower->GetFormID(), a_ref->GetFormID());
+        return true;
+    }
+
+    void LootTravelClear(const char* a_why) {
+        if (!Forms::g_lootQuest) return;
+        const bool a = LootClearAlias(kAliasLootActor);
+        const bool t = LootClearAlias(kAliasLootTarget);
+        if (!(a && t))
+            spdlog::error("[loot] travel Clear DISPATCH FAILED ({}) -- alias may persist in the "
+                          "save; ReleaseAll on the next load will retry", a_why);
     }
 
     Status Get() {

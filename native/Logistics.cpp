@@ -3,6 +3,8 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
+#include "Confidence.h"   // the confidence leash (core tenet)
+#include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
 
 // The logistics table. DESIGN.md §4.8. Out-of-combat upkeep: drink H/S/M
 // potions, loot arrows / potions / better gear -- one action per idle tick,
@@ -391,6 +393,22 @@ namespace MFO::Logistics {
         // ── the looting dispatcher ──────────────────────────────────────────
         enum class Category { Arrows, Bolts, Potions, Equipment, Gold };
 
+        // OPTION A travel state -- a SINGLE traveller at a time (one loot quest,
+        // one alias pair). Worker-tick-only, NOT serialized: this just remembers
+        // the intent; the engine-side alias fill is cleared by Packages on load
+        // (#55). kArrivalDist ~= arm's reach: once the engine walks the follower
+        // this close, the existing inventory transfer runs.
+        constexpr float kArrivalDist = 160.0f;
+        struct TravelIntent {
+            RE::FormID          follower = 0;
+            RE::ObjectRefHandle target;
+            Category            cat  = Category::Arrows;
+            RE::ActorValue      want = RE::ActorValue::kNone;
+            Clock::time_point   deadline{};
+            bool                active = false;
+        };
+        TravelIntent g_travel;
+
         // Walk nearby refs, gate them, and perform ONE transfer. Returns true if
         // something was looted. Collect-then-act (#2): the world walk only reads
         // and records timers; all mutation happens afterwards on re-resolved
@@ -404,6 +422,12 @@ namespace MFO::Logistics {
                 ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) {
                 return false;
             }
+            // BEHAVIOUR LAYER: don't loot while the PLAYER is sneaking -- a
+            // follower breaking off to grab loot blows your stealth (marth; the
+            // deferred FCL gate, §0.32). An invisible courtesy: crouch and they
+            // hold off.
+            if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && pc->IsSneaking())
+                return false;
             // WALK THE FOLLOWER'S OWN CELL, NOT TES::ForEachReferenceInRange.
             // crash4 (2026-07-22, exterior Wilderness): TES::ForEachReferenceInRange
             // ends its exterior branch with `worldSpace->GetSkyCell()`, and
@@ -421,6 +445,15 @@ namespace MFO::Logistics {
             const auto origin = a_follower->GetPosition();
             const float kLootRadius = Config::g_lootRadius.load();   // tunable, one snapshot per walk
 
+            // THE CONFIDENCE LEASH (core tenet, DESIGN behaviour layer). A
+            // candidate must be within this follower's confidence-scaled distance
+            // FROM THE PLAYER -- bold when safe (leash -> max, ranges out),
+            // cautious when hurt/fighting (leash -> min, stays close). Measured to
+            // the PLAYER, while the scan radius above is measured to the FOLLOWER.
+            const float leash = Confidence::LeashRadius(a_follower);
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : origin;
+
             // Eligible loot sources, collected inside the walk and acted on after
             // it. Bounded so a room full of corpses cannot make the tick unbounded.
             std::vector<RE::ObjectRefHandle> candidates;
@@ -428,7 +461,7 @@ namespace MFO::Logistics {
 
             // DIAGNOSTIC counters (marth: "nothing looted" -- find WHICH stage
             // drops the corpse). Logged rate-limited below.
-            int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0;
+            int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0, dLeash = 0;
 
             cell->ForEachReferenceInRange(origin, kLootRadius,
                 [&](RE::TESObjectREFR& a_ref) {
@@ -475,6 +508,13 @@ namespace MFO::Logistics {
                     // Locked is locked -- RemoveItem ignores the lock, so the
                     // filter must not.
                     if (ref->IsLocked())    { ++dLocked;    return RE::BSContainer::ForEachResult::kContinue; }
+                    // Beyond the confidence leash from the player -- too far for
+                    // this follower's nerve right now. This is the invisible
+                    // string: the same corpse is in-reach when they feel safe and
+                    // out-of-reach when they do not.
+                    if (playerPos.GetDistance(ref->GetPosition()) > leash) {
+                        ++dLeash; return RE::BSContainer::ForEachResult::kContinue;
+                    }
 
                     // FIRST DIBS is the PLAYER's pick of VALUABLES (#22h) -- it
                     // does NOT apply to a follower restocking its own consumables
@@ -506,11 +546,11 @@ namespace MFO::Logistics {
                     // nothing looted" is unambiguous -- an eligible corpse yields
                     // nothing if it simply does not hold the thing the winning
                     // rule wants (arrows, or the specific potion).
-                    spdlog::info("[loot] {:08X} r={:.0f}: {} refs, {} lootable, {} eligible "
-                                 "(dropped owned={} locked={} waiting={}) | self arrows={} bolts={} "
+                    spdlog::info("[loot] {:08X} r={:.0f} leash={:.0f}: {} refs, {} lootable, {} eligible "
+                                 "(dropped owned={} locked={} waiting={} farleash={}) | self arrows={} bolts={} "
                                  "potH={} potS={} potM={}",
-                                 a_follower->GetFormID(), kLootRadius, dRefs, dLootable,
-                                 (int)candidates.size(), dOwned, dLocked, dNotYet,
+                                 a_follower->GetFormID(), kLootRadius, leash, dRefs, dLootable,
+                                 (int)candidates.size(), dOwned, dLocked, dNotYet, dLeash,
                                  ArrowCount(a_follower), BoltCount(a_follower),
                                  CountPotions(a_follower, RE::ActorValue::kHealth),
                                  CountPotions(a_follower, RE::ActorValue::kStamina),
@@ -524,6 +564,27 @@ namespace MFO::Logistics {
                 auto ptr = h.get();
                 auto* ref = ptr.get();
                 if (!ref) continue;
+
+                // OPTION A: if the loot is beyond arm's reach and walk-to-loot is
+                // ON, send the follower to WALK there -- one traveller at a time;
+                // the transfer runs on ARRIVAL (see ServiceFollower). If travel
+                // is busy or unavailable we do NOT teleport it (that would defeat
+                // the point) -- we skip and try again next tick. With travel OFF
+                // (default) the follower teleport-grabs, as before.
+                if (origin.GetDistance(ref->GetPosition()) > kArrivalDist &&
+                    Config::g_lootTravel.load()) {
+                    if (!g_travel.active && Packages::LootTravelFill(a_follower, ref)) {
+                        g_travel.active   = true;
+                        g_travel.follower = a_follower->GetFormID();
+                        g_travel.target   = ref->GetHandle();
+                        g_travel.cat      = a_cat;
+                        g_travel.want     = a_potionWant;
+                        g_travel.deadline = a_now + std::chrono::seconds(12);
+                        return true;   // committed to the walk; transfer on arrival
+                    }
+                    continue;   // travel busy/unavailable -- wait, don't teleport
+                }
+
                 bool moved = false;
                 // Corpse/container: transfer the wanted category out of its
                 // inventory. (Loose world items are excluded at the walk gate --
@@ -636,12 +697,72 @@ namespace MFO::Logistics {
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
 
+        // GLOBAL stale-intent expiry, keyed to NO follower in particular. The
+        // per-follower arrival branch below only runs when the TRAVELLER is
+        // serviced out of combat -- but a traveller who died, was dismissed,
+        // dropped off the roster, or got pulled down the combat branch is never
+        // serviced there, so its intent (and the single loot alias) would stick
+        // all session. The deadline is the backstop, checked for every follower
+        // so it fires even when the traveller itself is gone. (#55: the alias
+        // also self-heals on the next load via ReleaseAll.)
+        if (g_travel.active && now > g_travel.deadline) {
+            Packages::LootTravelClear("stale");
+            g_travel.active = false;
+        }
+
         // CADENCE GATE (~1 s). Cheap early-out on the frames between logistics
         // ticks -- the Scheduler calls this every time it services the follower
         // out of combat (up to ~7.5 Hz), but logistics only acts at the idle rate.
         auto& due = g_nextTick[id];
         if (due.time_since_epoch().count() != 0 && now < due) return;
         due = now + kLogisticsInterval;
+
+        // OPTION A: if THIS follower is mid-travel to loot, drive that instead of
+        // a fresh eval. Arrive-by-distance -> run the transfer; interrupt on
+        // combat / timeout / vanished target; ALWAYS release the alias (it is
+        // save-serialized, #55). A different follower travelling just means the
+        // single loot alias is busy -- handled in LootNearby.
+        if (g_travel.active && g_travel.follower == id) {
+            auto tptr  = g_travel.target.get();
+            auto* tref = tptr.get();
+            // Re-validate the target: it was gated up to 12 s ago and may since
+            // have been disabled/deleted (the player looted and the engine
+            // cleaned it up).
+            const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
+            if (gone || a_follower->IsInCombat() || now > g_travel.deadline) {
+                Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
+                                          : (gone ? "target gone" : "timeout"));
+                g_travel.active = false;
+                // fall through to a normal eval this tick.
+            } else if (a_follower->GetPosition().GetDistance(tref->GetPosition()) <= kArrivalDist) {
+                // §22g ABSOLUTE BAR (the same one LootNearby honours): never
+                // mutate a container while the player has a ContainerMenu open --
+                // arrival lands on the SAME fresh corpse the player may be
+                // looting (arrows/potions/gold skip first-dibs). Wait; the
+                // deadline bounds the intent. Also hold off if the player just
+                // crouched (the sneak courtesy).
+                auto* ui = RE::UI::GetSingleton();
+                auto* pc = RE::PlayerCharacter::GetSingleton();
+                if ((ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) ||
+                    (pc && pc->IsSneaking())) {
+                    return;   // still "arrived", just holding -- retry next tick
+                }
+                bool moved = false;
+                switch (g_travel.cat) {
+                case Category::Arrows:    moved = LootAmmo(a_follower, tref, false); break;
+                case Category::Bolts:     moved = LootAmmo(a_follower, tref, true);  break;
+                case Category::Potions:   moved = LootPotions(a_follower, tref, g_travel.want); break;
+                case Category::Equipment: moved = LootEquipment(a_follower, tref); break;
+                case Category::Gold:      moved = LootGold(a_follower, tref); break;
+                }
+                Packages::LootTravelClear("arrived");
+                g_travel.active = false;
+                spdlog::info("[loot] {:08X}: arrived -- {}", id, moved ? "looted" : "nothing to take");
+                return;   // the arrival transfer IS this tick's action
+            } else {
+                return;   // still walking -- do not start a fresh loot eval
+            }
+        }
 
         if (a_state.logistics().empty()) return;   // no rules -> nothing to run
 
@@ -720,6 +841,10 @@ namespace MFO::Logistics {
         g_seen.clear();
         g_drinkUntil.clear();
         g_playerLooted.clear();
+        // Drop any in-flight travel intent and release the engine alias so a
+        // revert/load never leaves a follower latched (#55).
+        if (g_travel.active) Packages::LootTravelClear("revert");
+        g_travel = TravelIntent{};
     }
 
 }

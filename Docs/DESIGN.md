@@ -103,6 +103,20 @@ see `ANTI_PATTERNS.md` (ported digest) and `INVARIANTS.md`.
   (§5.3).
 - **Nothing MFO gives a follower is unremovable.** Every taught spell, every
   package override, every applied effect has a ledgered reversal (§8.5).
+- **The confidence leash — pull invisible strings, not visible ones** (marth,
+  2026-07-29). How far a follower operates *from the player* is never a fixed
+  number; it is a live readout of how confident that follower is to survive on
+  their own right now. Bold in an easy fight (the leash grows — they push
+  ahead, engage the enemy nearest *them*, range out to loot); cautious in a hard
+  one (the leash shrinks — they fall back and fight at the player's side). The
+  targets ("nearest enemy", "closest loot") are always measured from the
+  FOLLOWER; the string is how far from the player the follower will *be*, and it
+  tightens in danger and loosens in safety. The player never sees a number —
+  they just feel the follower get brave in a bandit camp and wary in a dragon's
+  lair. One primitive (`native/Confidence.h`: `Of()` → `LeashRadius()`), many
+  consumers: the loot leash today (§4.8), combat target-distance next. This is
+  the model for every future "behaviour layer" knob — realism from a hidden
+  variable the player reads through behaviour, not a slider.
 
 ---
 

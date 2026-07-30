@@ -190,6 +190,19 @@ namespace MFO::Packages {
 
     Status Get();
 
+    // ── OPTION A: engine-pathed loot travel (DESIGN behaviour layer) ─────────
+    // Fill MFO_LootQuest's aliases so the engine WALKS a_follower to a_ref via
+    // the vanilla Travel package; the caller (Logistics) transfers on arrival.
+    // SINGLE holder -- one loot quest, one alias pair -- so the caller drives at
+    // most one traveller at a time. Returns false if bLootTravel is off, the
+    // records are unresolved, off AE, or the quest is not running.
+    //
+    // The fill is SAVE-SERIALIZED (#55): the caller MUST LootTravelClear() on
+    // arrival, interrupt (combat), or timeout. ReleaseAll clears it on
+    // load/revert/shutdown, so even a missed clear self-heals on the next load.
+    bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
+    void LootTravelClear(const char* a_why);
+
     // Session-scoped counters, cleared on revert like every sibling module.
     void ClearTransientState();
 

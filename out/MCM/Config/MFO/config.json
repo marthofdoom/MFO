@@ -228,15 +228,61 @@
         },
         {
           "id": "fLootRadius:General",
-          "text": "Loot reach (units)",
+          "text": "Loot scan (units)",
           "type": "slider",
-          "help": "How far a follower reaches for loot. Larger = loots from farther (they teleport-grab until they can walk to items).",
+          "help": "How far a follower scans for loot (~70 units = 1m; a cell = 4096; 3000 ~= 4-5 rooms). Candidates must also be within the confidence leash of you.",
           "valueOptions": {
             "min": 200.0,
             "max": 4096.0,
             "step": 50.0,
             "sourceType": "ModSettingFloat",
-            "defaultValue": 1500.0
+            "defaultValue": 3000.0
+          }
+        }
+      ]
+    },
+    {
+      "pageDisplayName": "Behaviour Layer",
+      "cursorFillMode": "topToBottom",
+      "content": [
+        {
+          "text": "Invisible strings -- how far a follower ranges from you scales with their confidence to survive alone.",
+          "type": "header"
+        },
+        {
+          "id": "bLootTravel:General",
+          "text": "Walk to loot (Option A)",
+          "type": "toggle",
+          "help": "Follower WALKS to loot instead of teleport-grabbing. Experimental; off by default while it is field-tested.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": false
+          }
+        },
+        {
+          "id": "fLeashMin:General",
+          "text": "Leash when cautious (units)",
+          "type": "slider",
+          "help": "How far from you a follower ranges when they feel UNSAFE (hurt, hard fight). ~512 = about one room.",
+          "valueOptions": {
+            "min": 128.0,
+            "max": 4096.0,
+            "step": 64.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 512.0
+          }
+        },
+        {
+          "id": "fLeashMax:General",
+          "text": "Leash when confident (units)",
+          "type": "slider",
+          "help": "How far from you a follower ranges when they feel SAFE (healthy, easy zone). ~4000 = several rooms.",
+          "valueOptions": {
+            "min": 512.0,
+            "max": 8192.0,
+            "step": 64.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 4000.0
           }
         }
       ]
