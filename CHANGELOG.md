@@ -3,6 +3,53 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.0 — logistics comes alive: followers loot, walk to it, and know their limits
+
+The arc from v0.6.0 (the cast pipeline) through the v0.7.x field builds and into
+Option A. The headline: the logistics table is no longer inert — followers
+restock, loot, and equip on their own, they *walk* to loot instead of teleport-
+grabbing it, and how far they'll range is governed by a new core tenet.
+
+### The confidence leash — a core tenet (invisible strings)
+How far a follower operates *from the player* is never a fixed number; it is a
+live readout of how confident they are to survive alone (`native/Confidence.h`:
+`Of()` → `LeashRadius()`, from vitality, dampened in a fight). Bold in an easy
+zone (leash grows, they push ahead and range out to loot), cautious in a hard
+one (leash shrinks, they fall back to the player). The player never sees a
+number — they feel it. One primitive; the loot leash today, combat target-
+distance next. See DESIGN "Core principles".
+
+### Option A — engine-pathed loot acquisition
+Followers now WALK to loot via the vanilla Travel package (`MFO_LootQuest` +
+`MFO_TravelPackage`, authored from Skyrim.esm's own shape — ENGINE_NOTES §0.33),
+transfer on arrival, and release cleanly (arrival / combat / timeout / vanished
+target / open container menu / sneak / a global stale-expiry / unconditional
+release on every load — the #55 alias latch self-heals). On by default; one MCM
+toggle off. Off-AE falls back to arm's-reach transfer.
+
+### Looting, made real
+- **Dumb consumables**: loot arrows, bolts (own gambit), and potions (any, plus
+  per-resource loot health/stamina/magicka). Arrows/potions skip first-dibs.
+- **Loot gold**, and **skill-based "loot better equipment"** — weapon upgrades
+  judged in the follower's dominant weapon-skill class (1H/2H/Archery); armor by
+  rating. Casters don't hoover up random weapons.
+- **Locked containers are Lockpicking-skill-gated** (Novice→Expert; Master and
+  key-required never open). Owned loot stays a crime.
+- **Confidence leash + "don't loot while you're sneaking"** courtesy.
+- Loot reach is a tunable `fLootRadius` (~4–5 rooms); leash bounds and walk-to-
+  loot live on a new **Behaviour Layer** MCM page.
+
+### The board — "Follower Overhaul / Field Orders"
+Retitled, trimmed to the two player-facing tabs (Followers, Gambits), restyled
+on MEO, and given a full-width read-only gambit summary so a whole rule is
+legible on the Steam Deck. Per-rule value steppers for pad control.
+
+### Fixes
+- **MCM finally works**: the missing compiled `MFO_MCM.pex` (the config's
+  binding script) now ships, the settings store seeds every control (no more
+  −1), and controls bind by `id` (ENGINE_NOTES §0.31).
+- Removed the `MFO_ProbeSelect` diagnostic switchboard (no longer needed).
+
 ## v0.6.0 — followers cast, with animations, at targets you choose
 
 **The headline: MFO does not cast. It arranges the conditions and the
