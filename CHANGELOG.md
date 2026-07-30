@@ -3,6 +3,25 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.13 — see which loot category he's actually hunting
+
+Chasing "he has zero arrows and ignores the arrows on bodies, but loots potions
+and gold just fine." Everything in the arrow path checks out on inspection, so
+this build makes the loot diagnostic tell the truth: the `[loot]` line now names
+the category it scanned (`cat=arrows`, `cat=gold`, …) and logs once **per
+category** instead of once per follower — before, only the first category
+scanned in each 10-second window ever reached the log, which is exactly why the
+arrow scan's own counts were invisible. One deck cycle now says whether the
+arrow scan finds nothing (detection / bodies genuinely carry no arrows) or finds
+them but the walk/pickup fails.
+
+Also: the attack log prints the chosen foe's HP% so we can confirm the "fight
+the weakest foe" gambit is picking the lowest-HP target (it fires correctly —
+the "already on that target" lines just mean no visible switch was needed).
+Router polish: the no-progress "unreachable" giveup relaxes 4s→7s to stop
+transient stalls being mistaken for dead ends, and the per-body WALK diagnostic
+is rate-limited so it no longer floods the tick.
+
 ## v0.8.12 — the freeze fixed at the source: skip bodies that are off the navmesh
 
 The research settled why he'd freeze staring at a body: it was physics-settled
