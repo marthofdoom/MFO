@@ -8,6 +8,7 @@
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
 #include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
+#include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -294,6 +295,10 @@ namespace MFO::Logistics {
 
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
+                // NEVER-LOOT: the catalog marks quest items, artifacts/unique
+                // enchantments, and scripted/no-drop gear as off-limits -- leave
+                // them for the player (marth). Fail-open with no patcher run.
+                if (Catalog::IsExcluded(obj->GetFormID())) continue;
 
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
                     if (!bestArmor && ArmorIsBetter(a_follower, armo)) bestArmor = obj;
@@ -1222,6 +1227,15 @@ namespace MFO::Logistics {
         // food or the follower vacuums city food barrels and counts apples as
         // health potions.
         if (a_potion->IsFood()) return RE::ActorValue::kNone;
+
+        // CATALOG FIRST. The MFO.Synthesis patcher already classified this potion
+        // from its real effect record (beneficial, non-recover, on a resource) --
+        // Requiem-proof, where the archetype heuristic below misreads a reworked
+        // potion as kNone (marth: "5 health potions, won't drink"). A catalog hit
+        // is authoritative; a miss falls through to the heuristic so MFO still
+        // works with no patcher run.
+        if (auto av = Catalog::PotionRestores(a_potion->GetFormID()); av != RE::ActorValue::kNone)
+            return av;
 
         // The COSTLIEST effect is the potion's dominant purpose. Classify by
         // ARCHETYPE, not by name and not by the effect's AV alone: only

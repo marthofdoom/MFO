@@ -3,6 +3,26 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.18 — the item catalog: read the load order, stop guessing
+
+The follower kept refusing to drink health potions he was carrying: the runtime
+classifier keys off MGEF archetypes, and Requiem builds its restore potions
+differently, so they read as "not a potion." The fix is architectural, borrowed
+from MAO: a **Synthesis patcher** (`installer/MFO.Synthesis`) reads the ACTUAL
+records of your whole load order and writes `Data/SKSE/Plugins/MFO/mfo_items.json`
+— which potions restore health/stamina/magicka (by effect flags, not archetype,
+so Requiem/CACO work), arrows vs bolts, jewellery, and a "never loot" list of
+quest items, artifacts/unique enchantments, and scripted items.
+
+This build is the DLL half: MFO now loads that catalog at startup and trusts it —
+`PotionRestores` becomes a catalog lookup (falling back to the old heuristic when
+no catalog is present, so the mod still works standalone), and the follower skips
+catalogued "never loot" gear. Run the MFO.Synthesis patcher (added in Synthesis
+from this repo) after installing MFO and after any load-order change.
+
+(Arrows are unaffected — they were never a classification problem; the catalog
+confirms they're seen correctly, so that fix is the separate multi-cell scan.)
+
 ## v0.8.17 — probes: why potions and arrows read as "not there"
 
 Two confirmed detection misses to pin down. He carries 5 health potions but the

@@ -7,6 +7,7 @@
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Board.h"
+#include "ItemCatalog.h"
 #include "Probe.h"
 #include "Vocabulary.h"
 #include "Loadout.h"
@@ -247,6 +248,7 @@ namespace {
             spdlog::info("[startup] kDataLoaded");
             MFO::Config::Read();            // config first -- everything else reads it
             MFO::Forms::Resolve();          // then forms
+            MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
             MFO::Followers::ResolveQuirks();
             MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
             MFO::CasterConsent::InstallHook();   // the influence hook, likewise
