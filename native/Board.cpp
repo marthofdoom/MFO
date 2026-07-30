@@ -170,6 +170,17 @@ namespace MFO::Board {
         { Vocab::kCondSelfMpAbove,   "Self Magicka % above", ParamKind::Percent },
         { Vocab::kCondSelfSpAbove,   "Self Stamina % above", ParamKind::Percent },
         { Vocab::kCondAllyHpBelow,   "Ally HP % below",      ParamKind::Percent },
+        // SUPPLY-STATE conditions (#10). Mirrors kCondsLogi -- lets a combat
+        // gambit react to what the follower is CARRYING, not just health bars:
+        // "Arrows below 5 -> Equip melee weapon", "Health potions below 2 ->
+        // Cast heal on self" (conserve the stack). ConditionTrue answers these
+        // the same in either table (it walks the follower's inventory, table-
+        // agnostic), so no evaluator change is needed -- this is pure UI exposure.
+        { Vocab::kCondSelfLowHealthPotion, "Health potions below",  ParamKind::Count   },
+        { Vocab::kCondSelfLowStaminaPotion,"Stamina potions below", ParamKind::Count   },
+        { Vocab::kCondSelfLowMagickaPotion,"Magicka potions below", ParamKind::Count   },
+        { Vocab::kCondSelfOutOfArrows,     "Arrows below",          ParamKind::Count   },
+        { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
         { Vocab::kCondIsInterior,    "In an interior",       ParamKind::None    },
         { Vocab::kCondIsNight,       "At night",             ParamKind::None    },
     };

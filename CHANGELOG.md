@@ -3,6 +3,20 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.16 — supply-state conditions in the combat table (#10)
+
+The combat gambit editor can now gate on what the follower is *carrying*, not
+just health bars. Five conditions that previously existed only in the logistics
+table are now offered in the combat table too: **Health / Stamina / Magicka
+potions below**, and **Arrows below** / **Bolts below**. So you can finally
+author things like "Arrows below 5 → Equip melee weapon" (the archer who draws
+his sword when the quiver runs low) or "Health potions below 2 → Cast heal on
+self" (conserve the last potions with magic). The engine already evaluated these
+the same in either table — this exposes them in the editor. The drink-potion
+actions were already available in the combat table; this completes the set.
+
+Includes everything in v0.8.15 (full-body loot on arrival + idle reassess).
+
 ## v0.8.15 — strip the whole body, and reassess skipped ones when idle
 
 The arrow probe pinned it: he'd walk to a corpse for its GOLD, take only the
