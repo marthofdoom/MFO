@@ -95,6 +95,19 @@ namespace MFO::Logistics {
         // ── the follower's equipped ranged weapon, for ammo matching ────────
         // Returns the equipped bow/crossbow, or nullptr. Reads the NAMED
         // follower only (#14).
+        // Is this ammo a bolt? The CATALOG decides (read from the real record by
+        // the patcher) -- runtime TESAmmo::IsBolt() proved unreliable: vanilla
+        // Iron/Steel/Ancient Nord arrows report IsBolt()==true here, so the arrow
+        // gambit rejected every arrow on a corpse (deck arrowprobe, 000C5684).
+        // Uncatalogued ammo falls back to IsBolt() (mod still runs with no patcher).
+        bool AmmoIsBolt(RE::TESAmmo* a_ammo) {
+            switch (Catalog::AmmoKind(a_ammo->GetFormID())) {
+            case Catalog::Ammo::kArrow: return false;
+            case Catalog::Ammo::kBolt:  return true;
+            default:                    return a_ammo->IsBolt();
+            }
+        }
+
         // Ammo of one class (bolts vs arrows) the actor carries. NO bow gate:
         // the ACTION is dumb -- whether a follower should gather ammo is the
         // GAMBIT's condition to decide, not this function's (marth). Arrows and
@@ -104,7 +117,7 @@ namespace MFO::Logistics {
             int n = 0;
             for (auto& [obj, data] : a_actor->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && ammo->IsBolt() == a_wantBolt)
+                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && AmmoIsBolt(ammo) == a_wantBolt)
                     n += data.first;
             }
             return n;
@@ -142,7 +155,7 @@ namespace MFO::Logistics {
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && ammo->IsBolt() == a_wantBolt) {
+                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && AmmoIsBolt(ammo) == a_wantBolt) {
                     if (a_peek) return true;
                     takes.push_back({ obj, data.first });
                 }

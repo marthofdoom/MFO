@@ -3,6 +3,22 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.19 — arrows, solved: the catalog fixes them too
+
+The arrow probe finally caught it: a corpse the follower was standing on held
+`Iron Arrow x11, Steel Arrow x2, Ancient Nord Arrow x3` — and every one reported
+`IsBolt()==true`. So it was never adjacent-cell scanning; the engine's own
+`IsBolt()` mislabels vanilla arrows as bolts here, and the follower's "loot
+arrows" gambit (which wants non-bolts) rejected all of them. The `bolts=1` we
+kept seeing was him picking these arrows up *as bolts*.
+
+The catalog already had them right — arrows are `arrow`. So MFO now classifies
+ammo through the catalog (arrow vs bolt from the real record), falling back to
+`IsBolt()` only for uncatalogued ammo. He'll finally strip a body's arrows.
+
+Needs the catalog present (run MFO.Synthesis); with v0.8.18's potion fix in the
+same build, one relaunch should give you both drinking AND arrow looting.
+
 ## v0.8.18 — the item catalog: read the load order, stop guessing
 
 The follower kept refusing to drink health potions he was carrying: the runtime

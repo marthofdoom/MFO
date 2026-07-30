@@ -21,6 +21,13 @@ namespace MFO::Catalog {
     // catalogued restore potion (caller then uses its archetype fallback).
     RE::ActorValue PotionRestores(RE::FormID a_potion);
 
+    // Arrow-vs-bolt from the record's real flag. Runtime TESAmmo::IsBolt() is
+    // unreliable in practice (vanilla arrows report IsBolt()==true here), which
+    // made the follower reject every arrow; the catalog gets it right. kUnknown
+    // when uncatalogued -> caller falls back to IsBolt().
+    enum class Ammo { kUnknown, kArrow, kBolt };
+    Ammo AmmoKind(RE::FormID a_ammo);
+
     // "Special — never auto-loot": quest items, artifacts/unique enchantments,
     // scripted/no-drop items. False when the catalog is absent (fail-open: with
     // no patcher run, MFO loots as it did before).

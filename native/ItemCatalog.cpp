@@ -15,6 +15,7 @@ namespace MFO::Catalog {
         // Keyed by RESOLVED runtime FormID (LookupForm applied the load-order
         // offset), so lookups are a plain hash hit against a live form's GetFormID.
         std::unordered_map<RE::FormID, RE::ActorValue> g_potion;
+        std::unordered_map<RE::FormID, bool>           g_ammoBolt;   // true = bolt, false = arrow
         std::unordered_set<RE::FormID>                 g_jewelry;
         std::unordered_set<RE::FormID>                 g_excluded;
         bool                                           g_loaded = false;
@@ -46,6 +47,7 @@ namespace MFO::Catalog {
 
     void Load() {
         g_potion.clear();
+        g_ammoBolt.clear();
         g_jewelry.clear();
         g_excluded.clear();
         g_loaded = false;
@@ -68,6 +70,12 @@ namespace MFO::Catalog {
                 if (av == RE::ActorValue::kNone) continue;
                 if (auto fid = Resolve(dh, e)) { g_potion[fid] = av; ++np; } else ++miss;
             }
+            int na = 0;
+            for (const auto& e : j.value("ammo", nlohmann::json::array())) {
+                const auto kind = e.value("kind", std::string{});
+                if (kind != "arrow" && kind != "bolt") continue;
+                if (auto fid = Resolve(dh, e)) { g_ammoBolt[fid] = (kind == "bolt"); ++na; } else ++miss;
+            }
             for (const auto& e : j.value("jewelry", nlohmann::json::array())) {
                 if (auto fid = Resolve(dh, e)) { g_jewelry.insert(fid); ++nj; } else ++miss;
             }
@@ -76,8 +84,8 @@ namespace MFO::Catalog {
             }
 
             g_loaded = true;
-            spdlog::info("[catalog] loaded {} potions, {} jewellery, {} excluded "
-                         "({} rows unresolved in this load order)", np, nj, nx, miss);
+            spdlog::info("[catalog] loaded {} potions, {} ammo, {} jewellery, {} excluded "
+                         "({} rows unresolved in this load order)", np, na, nj, nx, miss);
         } catch (const std::exception& ex) {
             spdlog::warn("[catalog] mfo_items.json parse failed: {} -- runtime heuristics only",
                          ex.what());
@@ -87,6 +95,12 @@ namespace MFO::Catalog {
     RE::ActorValue PotionRestores(RE::FormID a_potion) {
         auto it = g_potion.find(a_potion);
         return it == g_potion.end() ? RE::ActorValue::kNone : it->second;
+    }
+
+    Ammo AmmoKind(RE::FormID a_ammo) {
+        auto it = g_ammoBolt.find(a_ammo);
+        if (it == g_ammoBolt.end()) return Ammo::kUnknown;
+        return it->second ? Ammo::kBolt : Ammo::kArrow;
     }
 
     bool IsExcluded(RE::FormID a_item) { return g_excluded.contains(a_item); }
