@@ -3,8 +3,15 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
+#include <cmath>          // std::sin/cos/sqrt for the view cone
 #include "Confidence.h"   // the confidence leash (core tenet)
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
+#include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
+
+// <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
+// BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
+// need by hand, exactly as Targeting.cpp does. Used only for QuickLoot presence.
+extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleA(const char* a_name);
 
 // The logistics table. DESIGN.md §4.8. Out-of-combat upkeep: drink H/S/M
 // potions, loot arrows / potions / better gear -- one action per idle tick,
@@ -48,9 +55,10 @@ namespace MFO::Logistics {
         // gate; also the natural one-action-per-tick rate limit (§4.8.3).
         std::unordered_map<RE::FormID, Clock::time_point> g_nextTick;
 
-        // First time a lootable ref was OBSERVED in a follower's radius. The
-        // first-dibs clock counts from here (#22h). Bounded LRU.
-        std::unordered_map<RE::FormID, Clock::time_point> g_seen;
+        // The last source the PLAYER took from (Claim-and-Release R1). When their
+        // next take is from a DIFFERENT source, the previous one's claim RELEASES
+        // -- they took what they wanted there and left the rest. Set by the sink.
+        RE::FormID g_lastLootSource = 0;
 
         // Per-follower per-AV drink cooldown (M5): a duration restore potion
         // must not be chain-drunk while its effect is still active. Key is
@@ -79,20 +87,8 @@ namespace MFO::Logistics {
             return p ? p->GetFormID() : 0x14;   // 0x14 is the fixed player FormID
         }
 
-        // ── loot eligibility (#22h) ─────────────────────────────────────────
-        // A ref is eligible once it has sat in radius fFirstDibsDelay seconds --
-        // UNLESS the player has taken from it, which collapses the wait to
-        // fQuickLootWaiver (never to zero). Reads only our own timers.
-        bool LootEligible(RE::FormID a_refID, Clock::time_point a_now) {
-            if (const auto w = g_playerLooted.find(a_refID); w != g_playerLooted.end()) {
-                return std::chrono::duration<float>(a_now - w->second).count() >=
-                       Config::g_quickLootWaiver.load();
-            }
-            const auto s = g_seen.find(a_refID);
-            if (s == g_seen.end()) return false;   // never seen -> never eligible
-            return std::chrono::duration<float>(a_now - s->second).count() >=
-                   Config::g_firstDibsDelay.load();
-        }
+        // (Loot eligibility is now Claim-and-Release -- see g_claim / ClaimRejected
+        // / the tier gate in LootNearby. The old flat-delay LootEligible is gone.)
 
         // ── the follower's equipped ranged weapon, for ammo matching ────────
         // Returns the equipped bow/crossbow, or nullptr. Reads the NAMED
@@ -409,6 +405,113 @@ namespace MFO::Logistics {
         };
         TravelIntent g_travel;
 
+        // Targets a walk FAILED to reach (navmesh-blocked, or the follower could
+        // not close the distance before the deadline). Skipped for a cooldown so
+        // closest-first does not re-pick the same unreachable corpse every tick
+        // and churn the follower in place (the v0.8.1 loop). Bounded LRU, not
+        // serialized. Keyed by the target FormID.
+        std::unordered_map<RE::FormID, Clock::time_point> g_travelFailed;
+        constexpr auto kTravelFailCooldown = std::chrono::seconds(25);
+
+        bool TravelFailedRecently(RE::FormID a_id, Clock::time_point a_now) {
+            auto it = g_travelFailed.find(a_id);
+            return it != g_travelFailed.end() && a_now < it->second + kTravelFailCooldown;
+        }
+        void MarkTravelFailed(RE::FormID a_id, Clock::time_point a_now) {
+            if (a_id) { g_travelFailed[a_id] = a_now; EvictOldest(g_travelFailed); }
+        }
+
+        // Travel deadline scaled to the distance: enough time to actually walk
+        // there at a jog, never so long the follower is stuck if the path is
+        // blocked. ~150 u/s effective + 5 s slack, clamped to [6, 20] s.
+        Clock::time_point TravelDeadline(float a_dist, Clock::time_point a_now) {
+            const float secs = std::clamp(a_dist / 150.0f + 5.0f, 6.0f, 20.0f);
+            return a_now + std::chrono::seconds(static_cast<int>(secs));
+        }
+
+        // ── CLAIM-AND-RELEASE: is the player CONSIDERING this source right now? ──
+        // The one live-claim signal, true for BOTH loot UIs (INVARIANTS #22g and
+        // the new #22g-QL). Detected once whether QuickLoot is in the load order:
+        // on a QuickLoot list the crosshair over a corpse means its HUD is up (the
+        // player is deciding); on a vanilla-menu list the crosshair is mere
+        // looking, so it must NOT count there or the follower would yield on every
+        // glance. Cheap module-handle presence check; the precise QuickLoot IE
+        // event API is a later upgrade. All O(1): a UI flag + two atomic reads.
+        bool QuickLootPresent() {
+            static const bool present = [] {
+                for (const char* dll : { "QuickLootIE.dll", "QuickLootRE.dll",
+                                         "QuickLootEE.dll", "QuickLoot.dll" })
+                    if (::GetModuleHandleA(dll)) return true;
+                return false;
+            }();
+            return present;
+        }
+        bool PlayerIsConsidering(RE::FormID a_sourceID) {
+            if (auto* ui = RE::UI::GetSingleton();
+                ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) return true;   // vanilla menu
+            if (QuickLootPresent() && a_sourceID != 0 &&
+                Probe::CrosshairTarget() == a_sourceID) return true;               // QuickLoot HUD
+            return false;
+        }
+
+        // Per-source CLAIM state (Claim-and-Release). The player holds an implicit
+        // claim on a source until evidence RELEASES it; this tracks that evidence.
+        // Worker-tick-only, bounded LRU, not serialized (#22h: worst case after a
+        // load is one more fair-chance wait). Replaces the old bare g_seen map.
+        struct Claim {
+            Clock::time_point seen{};        // when the FOLLOWER first saw it (gear grace, abandon)
+            Clock::time_point lastAccrue{};  // last tick fair-chance was accrued (dedupe, see below)
+            float             nearSecs = 0;  // accrued player near+visible time (fair chance)
+            bool              everNear = false;   // player ever within chanceRadius (abandon backstop)
+            bool              rejected = false;   // player engaged then moved on (R1: to another source)
+        };
+        std::unordered_map<RE::FormID, Claim> g_claim;
+        constexpr float kTickSecs = 1.0f;   // ~kLogisticsInterval, the fair-chance accrual step
+
+        // EvictOldest for the Claim map -- oldest by first-seen. The FormID/time
+        // overload above cannot serve it (Claim has no operator<), so this is its
+        // own bounded-LRU trim, same shape.
+        void EvictOldest(std::unordered_map<RE::FormID, Claim>& a_map) {
+            if (a_map.size() <= kLruCap) return;
+            auto oldest = a_map.begin();
+            for (auto it = a_map.begin(); it != a_map.end(); ++it)
+                if (it->second.seen < oldest->second.seen) oldest = it;
+            a_map.erase(oldest);
+        }
+
+        // Is the player facing a_srcPos (a forward view-cone, ~±60deg, no raycast)?
+        // "Had a chance to SEE it" for fair-chance -- proximity alone is not enough
+        // (a player facing away has not been shown it). Skyrim heading: 0 = +Y,
+        // clockwise, so forward = (sin h, cos h). Cheap: one angle read + a dot.
+        bool PlayerFacing(RE::Actor* a_player, const RE::NiPoint3& a_srcPos) {
+            if (!a_player) return false;
+            const auto p = a_player->GetPosition();
+            float dx = a_srcPos.x - p.x, dy = a_srcPos.y - p.y;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 1.0f) return true;                 // standing on it
+            dx /= len; dy /= len;
+            const float h = a_player->GetAngleZ();       // heading, radians
+            return (std::sin(h) * dx + std::cos(h) * dy) > 0.5f;   // within ~60deg
+        }
+
+        // The player TOOK from this source and has since moved to a DIFFERENT one
+        // (R1) or walked away (R2) or gone quiet past the linger (R3) -> the claim
+        // is released. Reads the waiver map (g_playerLooted, stamped by the sink)
+        // + the per-source rejected flag (R1, set by the sink) + player distance.
+        bool ClaimRejected(RE::FormID a_id, const RE::NiPoint3& a_srcPos,
+                           const RE::NiPoint3& a_playerPos, Clock::time_point a_now) {
+            if (auto it = g_claim.find(a_id); it != g_claim.end() && it->second.rejected)
+                return true;   // R1: player looted this, then looted elsewhere
+            auto lt = g_playerLooted.find(a_id);
+            if (lt == g_playerLooted.end()) return false;   // player never took from it
+            if (a_now - lt->second >= std::chrono::duration_cast<Clock::duration>(
+                    std::chrono::duration<float>(Config::g_quickLootWaiver.load())))
+                return true;   // R3: quiet for the linger since the last take
+            if (a_srcPos.GetDistance(a_playerPos) > Config::g_departRadius.load())
+                return true;   // R2: took from it, then walked away
+            return false;
+        }
+
         // Can this follower open a_ref's lock with their own Lockpicking skill?
         // marth: a follower does not loot through a lock they could not actually
         // pick. The CommonLib enum is { kUnlocked=-1, kVeryEasy, kEasy, kAverage,
@@ -543,22 +646,64 @@ namespace MFO::Logistics {
                         ++dLeash; return RE::BSContainer::ForEachResult::kContinue;
                     }
 
-                    // FIRST DIBS is the PLAYER's pick of VALUABLES (#22h) -- it
-                    // does NOT apply to a follower restocking its own consumables
-                    // (marth): you don't compete for the arrows/potions on a
-                    // corpse, and followers rarely linger the full delay anyway.
-                    // So arrows/potions are eligible the moment they're SAFE
-                    // (unowned/unlocked, already checked above); EQUIPMENT and
-                    // GOLD wait out the delay so you get first pick of the loot
-                    // that is actually worth competing for.
-                    if (a_cat != Category::Equipment && a_cat != Category::Gold) {
+                    // CLAIM-AND-RELEASE (dibs redesign). Eligibility is per
+                    // value-tier, and the player's claim releases on EVIDENCE
+                    // ABOUT THE PLAYER, not a wall clock.
+                    //   Free (arrows/bolts/potions): released at once -- nobody
+                    //     competes for the follower's own restock.
+                    //   Gear (equipment): a short anti-snatch grace, or rejection.
+                    //   Valuables (gold; jewelry later): rejection, fair-chance
+                    //     (player was near AND could see it and left it), or the
+                    //     abandonment backstop (player never came near).
+                    if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
+                        a_cat == Category::Potions) {
                         candidates.push_back(ref->GetHandle());
-                    } else {
-                        const auto id = ref->GetFormID();
-                        if (g_seen.emplace(id, a_now).second) EvictOldest(g_seen);
-                        if (LootEligible(id, a_now)) candidates.push_back(ref->GetHandle());
-                        else ++dNotYet;
+                        return RE::BSContainer::ForEachResult::kContinue;
                     }
+
+                    const RE::FormID    srcId  = ref->GetFormID();
+                    const RE::NiPoint3  srcPos = ref->GetPosition();
+                    auto& cl = g_claim[srcId];
+                    if (cl.seen.time_since_epoch().count() == 0) { cl.seen = a_now; EvictOldest(g_claim); }
+
+                    // Accrue the player's "chance" as REAL elapsed time since this
+                    // source last accrued, capped -- so N followers servicing in
+                    // one ~1 s window cannot multiply the player's clock (a party
+                    // of four must not release valuables 4x faster; L1). The
+                    // within-tick dedupe still holds: a follower's per-category
+                    // re-walks share a_now, so the second sees dt=0. Near AND
+                    // could-see-it: QuickLoot HUD on it (considering) counts x3
+                    // (the UI literally shows them the contents); else facing x1.
+                    // (Vanilla-menu considering never reaches here -- the walk
+                    // returns at the top while a ContainerMenu is open.)
+                    {
+                        const float dt = cl.lastAccrue.time_since_epoch().count() == 0
+                            ? kTickSecs
+                            : std::min(std::chrono::duration<float>(a_now - cl.lastAccrue).count(), 2.0f);
+                        cl.lastAccrue = a_now;
+                        if (dt > 0.0f &&
+                            playerPos.GetDistance(srcPos) <= Config::g_chanceRadius.load()) {
+                            cl.everNear = true;
+                            if (PlayerIsConsidering(srcId))    cl.nearSecs += dt * 3.0f;
+                            else if (PlayerFacing(pc, srcPos)) cl.nearSecs += dt;
+                        }
+                    }
+
+                    const bool rejected = ClaimRejected(srcId, srcPos, playerPos, a_now);
+                    bool released;
+                    if (a_cat == Category::Equipment) {          // Gear tier
+                        released = rejected ||
+                                   std::chrono::duration<float>(a_now - cl.seen).count()
+                                       >= Config::g_firstDibsDelay.load();   // gear grace
+                    } else {                                     // Category::Gold -> Valuables
+                        released = rejected ||
+                                   cl.nearSecs >= Config::g_fairChance.load() ||
+                                   (!cl.everNear &&
+                                    std::chrono::duration<float>(a_now - cl.seen).count()
+                                        >= Config::g_abandonDelay.load());
+                    }
+                    if (released) candidates.push_back(ref->GetHandle());
+                    else ++dNotYet;
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
 
@@ -585,29 +730,56 @@ namespace MFO::Logistics {
                 }
             }
 
+            // CLOSEST FIRST (marth): loot the nearest eligible source before the
+            // farther ones, so a follower grabs what it is standing next to
+            // rather than an arbitrary cell-walk order. Sort the collected
+            // handles by distance to the follower; an unresolvable handle sorts
+            // last. (Bounded at 16, so this is a tiny sort.)
+            std::sort(candidates.begin(), candidates.end(),
+                [&origin](const RE::ObjectRefHandle& a, const RE::ObjectRefHandle& b) {
+                    auto pa = a.get(); auto pb = b.get();
+                    const float da = pa ? origin.GetDistance(pa->GetPosition()) : 1e30f;
+                    const float db = pb ? origin.GetDistance(pb->GetPosition()) : 1e30f;
+                    return da < db;
+                });
+
             // Act after the walk. Re-resolve each handle at act time (#2); stop at
             // the first successful transfer -- one loot action per tick (§4.8.3).
             for (auto& h : candidates) {
                 auto ptr = h.get();
                 auto* ref = ptr.get();
                 if (!ref) continue;
+                const RE::FormID rid = ref->GetFormID();
 
-                // OPTION A: if the loot is beyond arm's reach and walk-to-loot is
-                // ON, send the follower to WALK there -- one traveller at a time;
-                // the transfer runs on ARRIVAL (see ServiceFollower). If travel
-                // is busy or unavailable we do NOT teleport it (that would defeat
-                // the point) -- we skip and try again next tick. With travel OFF
-                // (default) the follower teleport-grabs, as before.
-                if (origin.GetDistance(ref->GetPosition()) > kArrivalDist &&
-                    Config::g_lootTravel.load()) {
-                    if (g_travel.active) continue;   // another traveller holds the one alias -- wait
+                // CLAIM MUTATION BAR (#22g / #22g-QL): never take from a source
+                // the player is CONSIDERING right now -- a vanilla ContainerMenu
+                // OR (QuickLoot list) the crosshair on it. Mutating it would yank
+                // an item out from under the menu/HUD the player is reading.
+                if (PlayerIsConsidering(rid)) continue;
+
+                // OPTION A: loot beyond arm's reach. With walk-to-loot ON the
+                // follower WALKS there (closest-first, since candidates are
+                // distance-sorted) and transfers on ARRIVAL (see ServiceFollower).
+                const float df = origin.GetDistance(ref->GetPosition());
+                if (df > kArrivalDist && Config::g_lootTravel.load()) {
+                    // Too far to WALK without abandoning the player -- leave it
+                    // (following brings them closer later; also fairer to you).
+                    if (df > Config::g_travelRadius.load()) continue;
+                    // Skip a target a walk already failed to reach (no churn).
+                    if (TravelFailedRecently(rid, a_now)) continue;
+                    // CONVERGENCE YIELD: never walk to loot the player is right
+                    // next to -- you win the race for the corpse you're heading to.
+                    if (playerPos.GetDistance(ref->GetPosition()) <= Config::g_playerBubble.load())
+                        continue;
+                    // One traveller at a time (single loot alias).
+                    if (g_travel.active) continue;
                     if (Packages::LootTravelFill(a_follower, ref)) {
                         g_travel.active   = true;
                         g_travel.follower = a_follower->GetFormID();
                         g_travel.target   = ref->GetHandle();
                         g_travel.cat      = a_cat;
                         g_travel.want     = a_potionWant;
-                        g_travel.deadline = a_now + std::chrono::seconds(12);
+                        g_travel.deadline = TravelDeadline(df, a_now);
                         return true;   // committed to the walk; transfer on arrival
                     }
                     // Travel UNAVAILABLE (off AE, records unresolved, quest not
@@ -659,6 +831,15 @@ namespace MFO::Logistics {
                 SKSE::GetTaskInterface()->AddTask([srcID]() {
                     g_playerLooted[srcID] = Clock::now();
                     EvictOldest(g_playerLooted);
+                    // R1: the player's take is from a DIFFERENT source than their
+                    // last -> release the previous one's claim (they finished
+                    // there). Runs on the same worker queue as the loot walk, so
+                    // touching g_claim here is serial with it (no race, §0.30).
+                    if (g_lastLootSource != 0 && g_lastLootSource != srcID) {
+                        if (auto it = g_claim.find(g_lastLootSource); it != g_claim.end())
+                            it->second.rejected = true;
+                    }
+                    g_lastLootSource = srcID;
                 });
                 return RE::BSEventNotifyControl::kContinue;
             }
@@ -736,6 +917,10 @@ namespace MFO::Logistics {
         // so it fires even when the traveller itself is gone. (#55: the alias
         // also self-heals on the next load via ReleaseAll.)
         if (g_travel.active && now > g_travel.deadline) {
+            // Deadline hit -> the follower could not reach it. Blacklist the
+            // target for a cooldown so closest-first does not re-pick it and
+            // churn (the v0.8.1 loop).
+            if (auto tp = g_travel.target.get()) MarkTravelFailed(tp->GetFormID(), now);
             Packages::LootTravelClear("stale");
             g_travel.active = false;
         }
@@ -765,16 +950,13 @@ namespace MFO::Logistics {
                 g_travel.active = false;
                 // fall through to a normal eval this tick.
             } else if (a_follower->GetPosition().GetDistance(tref->GetPosition()) <= kArrivalDist) {
-                // §22g ABSOLUTE BAR (the same one LootNearby honours): never
-                // mutate a container while the player has a ContainerMenu open --
-                // arrival lands on the SAME fresh corpse the player may be
-                // looting (arrows/potions/gold skip first-dibs). Wait; the
-                // deadline bounds the intent. Also hold off if the player just
-                // crouched (the sneak courtesy).
-                auto* ui = RE::UI::GetSingleton();
+                // MUTATION BAR at arrival: the follower reached the SAME corpse
+                // the player may now be considering (vanilla menu or QuickLoot
+                // HUD) -- never mutate under it (#22g / #22g-QL). Also hold if the
+                // player just crouched (the sneak courtesy). The deadline bounds
+                // the wait, so this is a hold, not a statue.
                 auto* pc = RE::PlayerCharacter::GetSingleton();
-                if ((ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) ||
-                    (pc && pc->IsSneaking())) {
+                if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking())) {
                     return;   // still "arrived", just holding -- retry next tick
                 }
                 bool moved = false;
@@ -868,13 +1050,15 @@ namespace MFO::Logistics {
 
     void ClearTransientState() {
         g_nextTick.clear();
-        g_seen.clear();
+        g_claim.clear();
+        g_lastLootSource = 0;
         g_drinkUntil.clear();
         g_playerLooted.clear();
         // Drop any in-flight travel intent and release the engine alias so a
         // revert/load never leaves a follower latched (#55).
         if (g_travel.active) Packages::LootTravelClear("revert");
         g_travel = TravelIntent{};
+        g_travelFailed.clear();
     }
 
 }

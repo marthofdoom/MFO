@@ -642,10 +642,14 @@ def build_travel(fid, edid, alias_idx, radius, qnam):
     """
     body  = subrec('EDID', zstr(edid))
     # PKDT: flags 0 -- NOT kIgnoreCombat. A fight MUST be able to pull the
-    # follower off looting (the whole "no logistics during combat" rule). Byte
-    # tail taken verbatim from the VC01 exemplar with its AlwaysSneak (0x2000)
-    # flag cleared: type 18, preferredSpeed 1 (jog), interruptFlags 0x0054.
-    body += subrec('PKDT', bytes.fromhex('000000001200018054000000'))
+    # follower off looting (the whole "no logistics during combat" rule).
+    #
+    # GAIT is byte 6 = preferredSpeed (enum 0=Walk, 1=Jog, 2=Run, 3=FastWalk).
+    # marth: a follower would never WALK to grab loot -- set 2 = Run so they
+    # hustle over and rejoin, not stroll. ("Walk-to-loot" is a name for the
+    # move, not the gait.) Byte tail otherwise verbatim from the VC01 exemplar
+    # with its AlwaysSneak (0x2000) flag cleared; interruptFlags 0x0054.
+    body += subrec('PKDT', bytes.fromhex('000000001200028054000000'))
     # PSDT: any time, any day -- the same 3,855-of-5,961 default build_usemagic uses.
     body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
     # QNAM (owner quest) is MANDATORY for an alias-valued input (626/626 vanilla).

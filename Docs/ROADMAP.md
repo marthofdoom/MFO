@@ -362,6 +362,45 @@ inventory case; Option A adds the loose-world-item case the tick cannot do.
 sneaking — a follower sprinting to grab loot blows the player's stealth. Read
 player sneak state in the logistics gate (C++, no package needed).
 
+### Loot travel REWORK — v0.8.1 post-mortem + plan *(marth, 2026-07-30)*
+
+Option A shipped default-ON in v0.8.0/v0.8.1 and **stranded the follower** — a
+priority-60 travel loop, unresponsive to the player. **FIXED in v0.8.2** (stays
+default-on per marth); full engine write-up in `ENGINE_NOTES §0.34`. Three bugs,
+all in the field log:
+
+1. **Unreachable targets.** Travel was dispatched to any loot within
+   `fLootRadius` (3000u), but the 12 s deadline can't cover that walk, so the
+   follower never arrived.
+2. **The alias release NEVER WORKS.** `LootTravelClear` (and the command quest's
+   `ClearAlias`) dispatch `ReferenceAlias.Clear` through the **Papyrus VM** — but
+   MFO's aliases carry **no script**, so the VM has no instance to call and the
+   dispatch fails every time. The fill only worked because it uses the *native*
+   `TESQuest::ForceRefTo`. **This is a latent bug in the whole M9 alias layer,**
+   not just loot. Fix: a NATIVE clear — try `ForceRefTo(aliasID, nullptr)`, else
+   wire `ResetQuest` (id 25014) — verified on the deck (a latched save must free
+   on load). This is also the **recovery** for anyone who saved latched.
+3. **Churn.** The stale-expiry flipped `active=false` and the same tick
+   re-dispatched → permanent re-tasking.
+
+**The reworked behaviour (marth's spec):**
+DONE in v0.8.2:
+- **Native release** (`ForceRefTo(None)`) — the precondition for everything; also
+  the latched-save recovery (runs from `ReleaseAll` on load). §0.34.
+- **Closest loot first** — candidates sorted nearest→farthest.
+- **A SHORT, walkable travel radius** (`fTravelRadius`, ~768u), separate from
+  `fLootRadius`; loot beyond it is left (grabbed later as following closes the
+  gap — also fairer to you). Deadline SCALED to distance.
+- **No churn** — a target a walk failed to reach is skipped for a cooldown.
+
+Still to refine (deck-tuned):
+- **Loot WITH the player's movement, not interrupted by it.** The short radius +
+  leash already keep it a brief detour; watch that it never stop-and-strands.
+- **Human-movement-sim speed** — currently a flat jog (package preferredSpeed).
+  A *natural* accel/decel curve within ~20–80% of the range is the polish.
+- **Loose-item fairness** (arrives with loose-item pickup): only within HALF the
+  player's loot radius, preferably unseen — the player keeps first claim.
+
 ---
 
 ## The three things most likely to reorder this

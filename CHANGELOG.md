@@ -3,6 +3,41 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.2 — loot priority redesign (Claim-and-Release) + walk-to-loot fixed
+
+Two big loot changes: the "first dibs" system is redesigned into **Claim-and-
+Release**, and the v0.8.1 walk-to-loot strand is fixed.
+
+### Claim-and-Release — how a follower decides it may take your loot
+The old flat first-dibs timer measured the wrong thing (it counted from when the
+FOLLOWER saw a corpse, so a distant player lost the race). Now every source is
+under an implicit **player claim**, released only by evidence about YOU:
+- **Tiers**: consumables (arrows/potions) are free; ordinary gear waits a short
+  grace; **valuables (gold) release only by rejection, fair-chance, or
+  abandonment** — no timer a distant player can lose to.
+- **Rejection**: you looted the source and moved to another / walked away / went
+  quiet after your last take.
+- **Fair chance**: you were near AND facing a source (3× while you're viewing it)
+  and left it; or you never came near it at all (abandonment cleanup).
+- **Convergence yield**: a follower never walks to loot right next to you — you
+  win the race for the corpse you're heading to.
+- **QuickLoot-aware**: detects QuickLoot in the load order; your crosshair on a
+  corpse (its HUD up) counts as considering it — the follower won't take from a
+  source you're viewing, and yields to it. Falls back to the vanilla menu.
+- Tuned on a new, grouped **Loot Priority** MCM page.
+
+### Walk-to-loot fixed (the v0.8.1 strand)
+A follower went **unresponsive** — a priority-60 loop toward loot it could never
+reach and never release (root cause in ENGINE_NOTES §0.34):
+- **Native alias release** (`ForceRefTo(None)`) — the old Papyrus-VM `Clear`
+  failed every time (MFO's aliases have no script) and left the follower latched.
+  Also **self-heals a latched v0.8.1 save on load**.
+- **Walkable radius** (`fTravelRadius`, ~one room) with a distance-scaled
+  deadline; farther loot is left. **Closest loot first**; a **travel-failed skip**
+  stops the churn.
+- Followers now **run** (not walk) to loot. Off-switch: **Walk to loot** in the
+  Behaviour Layer MCM.
+
 ## v0.8.1 — board font parity, elemental weakness gambits
 
 - **The board bakes real typefaces** (MEO's, at backbuffer scale) instead of

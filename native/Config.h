@@ -167,6 +167,22 @@ namespace MFO::Config {
     // in this many seconds after the player's LAST take, not their first.
     inline std::atomic<float> g_quickLootWaiver{ 4.0f };
 
+    // ── CLAIM-AND-RELEASE loot priority (dibs redesign; Fable + marth 2026-07-30)
+    // The follower may take a value-tier from a source only once the PLAYER's
+    // claim on it RELEASES -- driven by evidence about the player (proximity,
+    // facing, a take, departure), not a wall clock. These are the tuning knobs;
+    // the model that reads them lands with the Logistics rewrite. Defaults are
+    // Fable's. When the model lands, g_firstDibsDelay/g_quickLootWaiver above are
+    // renamed g_gearGrace/g_rejectionLinger (same meaning).
+    // (v1 tiers by CATEGORY: gold = Valuable, equipment = Gear. Treating
+    //  high-VALUE gear as a Valuable too -- an fValuableThreshold with a per-item
+    //  value peek -- is a ROADMAP refinement, not wired here, so no dead knob.)
+    inline std::atomic<float> g_chanceRadius{ 512.0f };       // player "had a chance" within this of the source
+    inline std::atomic<float> g_fairChance{ 6.0f };           // seconds near+facing before valuables release
+    inline std::atomic<float> g_abandonDelay{ 45.0f };        // never-approached backstop before valuables release
+    inline std::atomic<float> g_departRadius{ 700.0f };       // player must leave this far for "moved on"
+    inline std::atomic<float> g_playerBubble{ 256.0f };       // convergence yield: defer within this of a target
+
     // How far a follower REACHES for loot. Until active pathing lands (the
     // deferred "Option A"), this is a TELEPORT-GRAB radius: the follower takes
     // from any eligible corpse/container within it. At arm's-reach (200u)
@@ -178,14 +194,20 @@ namespace MFO::Config {
     inline std::atomic<float> g_lootRadius{ 3000.0f };   // ~4-5 rooms (1 unit ~= 1.4cm; cell = 4096)
 
     // OPTION A -- engine-pathed loot: the follower WALKS to the loot instead of
-    // teleport-grabbing it. Fills MFO_LootQuest's alias so the vanilla Travel
-    // package paths them there, then transfers on arrival. DEFAULT ON (marth):
-    // walking to loot is the point, not a toggle. The #55 hazard (an alias fill
-    // is serialized into the save) is contained by bulletproof release -- on
-    // arrival, combat, timeout, vanished target, open container menu, sneak, a
-    // global stale-expiry, AND unconditionally on every load via ReleaseAll, so
-    // a latch self-heals. One MCM toggle turns it off if it misbehaves.
+    // teleport-grabbing it. DEFAULT ON. The v0.8.1 strand (unreachable targets,
+    // a release that never fired, churn) is fixed in v0.8.2: a NATIVE alias clear
+    // (ForceRefTo None -- the VM Clear failed because MFO's aliases carry no
+    // script), a short WALKABLE radius (g_travelRadius, not fLootRadius) with a
+    // distance-scaled deadline, closest-first, and a travel-failed skip so an
+    // unreachable target is not re-tried into a loop.
     inline std::atomic<bool>  g_lootTravel{ true };
+
+    // How far a follower will WALK to loot (units), separate from the scan
+    // radius. Must be genuinely reachable within the travel deadline -- keep it
+    // near one room, not the whole scan. Loot beyond it is left (the follower
+    // grabs it later when following brings them closer -- "loot with the player's
+    // movement"), which is also fairer to the player. fTravelRadius.
+    inline std::atomic<float> g_travelRadius{ 768.0f };
 
     // THE CONFIDENCE LEASH (DESIGN core tenet). How far from the PLAYER a
     // follower will range to engage/loot is not fixed -- it scales with the

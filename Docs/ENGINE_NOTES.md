@@ -1413,6 +1413,49 @@ PASS (52 assertions incl. travel-package existence + template), and a
 logistics dispatch are the next step, and like the cast package (§0.21 probes
 1–5) will want 1–2 deck cycles to tune walk/arrival/release.
 
+### 0.34 The alias CLEAR must be NATIVE — ReferenceAlias.Clear via the VM fails on a scriptless alias (2026-07-30)
+
+**Failure (v0.8.0/v0.8.1, walk-to-loot shipped default-on).** The follower went
+UNRESPONSIVE — a priority-60 travel loop. The deck log told the whole story:
+
+```
+[loot] 000656E2: travel dispatched to 0008C9D3
+(12s) [error] [loot] travel Clear DISPATCH FAILED (stale) ...
+[loot] 000656E2: travel dispatched to 0008C9D3      <- re-dispatched, forever
+```
+
+Three compounding bugs:
+1. **Unreachable targets.** Travel was dispatched to any loot within `fLootRadius`
+   (3000u); the fixed 12s deadline could not cover that walk, so the follower
+   never arrived.
+2. **The alias release NEVER FIRED.** `LootTravelClear` dispatched
+   `ReferenceAlias.Clear` through the **Papyrus VM**. But MFO's command/loot
+   aliases are DELIBERATELY scriptless (bare alias + ALPC package, filled from
+   code). With no script instance bound, the VM has nothing to dispatch
+   `Clear` to and `DispatchMethodCall2` returns false every time. The FILL only
+   worked because it uses the *native* `TESQuest::ForceRefTo` (id 25052), not
+   the VM. **So this is a latent bug across the whole M9 alias layer** — the
+   command quest's `ClearAlias` has the identical defect; it is just never hit
+   because the cast path is default-off.
+3. **Churn.** The stale-expiry flipped the intent inactive and the same tick
+   re-dispatched, re-tasking the follower every deadline.
+
+**Fix (v0.8.2), EXPECTED — pending deck proof.** ForceRefTo(None) clearing an
+alias is Papyrus lore, not verified for the id-25052 native on this runtime; a
+readback in `LootTravelClear` logs `NATIVE CLEAR DID NOT TAKE` if it no-ops, so
+the first deck cycle settles it. Clear NATIVELY: `ForceRefTo(aliasID, nullptr)` — the
+`ForceRefTo(None)` idiom empties a ref alias, the exact mirror of the native
+fill, synchronous, no VM. Plus a short WALKABLE radius (`fTravelRadius`, ~one
+room) so targets are reachable, a deadline SCALED to distance, a travel-failed
+LRU so an unreachable target is skipped instead of re-tried into a loop, and
+closest-first ordering. **Recovery for latched saves:** the native clear also
+runs from `ReleaseAll` on every load, so a follower latched by a v0.8.1 build
+frees itself on the next load.
+
+TAKEAWAY: never route alias Clear/ForceRefTo through the VM for MFO's aliases —
+they carry no script. Fill AND clear go native (`ForceRefTo`, null to clear).
+The command-quest cast path should adopt the same clear before it ships.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

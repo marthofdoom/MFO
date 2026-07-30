@@ -201,32 +201,6 @@
           }
         },
         {
-          "id": "fFirstDibsDelay:General",
-          "text": "First-dibs delay (s)",
-          "type": "slider",
-          "help": "How long a follower waits before looting an item, leaving it for you first.",
-          "valueOptions": {
-            "min": 0.0,
-            "max": 120.0,
-            "step": 1.0,
-            "sourceType": "ModSettingFloat",
-            "defaultValue": 4.0
-          }
-        },
-        {
-          "id": "fQuickLootWaiver:General",
-          "text": "QuickLoot waiver (s)",
-          "type": "slider",
-          "help": "Once you loot from a source, followers may take the rest after this short delay.",
-          "valueOptions": {
-            "min": 0.5,
-            "max": 30.0,
-            "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "defaultValue": 4.0
-          }
-        },
-        {
           "id": "fLootRadius:General",
           "text": "Loot scan (units)",
           "type": "slider",
@@ -237,6 +211,119 @@
             "step": 50.0,
             "sourceType": "ModSettingFloat",
             "defaultValue": 3000.0
+          }
+        }
+      ]
+    },
+    {
+      "pageDisplayName": "Loot Priority",
+      "cursorFillMode": "topToBottom",
+      "content": [
+        {
+          "text": "Value tiers",
+          "type": "header"
+        },
+        {
+          "id": "fFirstDibsDelay:General",
+          "text": "Gear grace (s)",
+          "type": "slider",
+          "help": "Anti-snatch grace before a follower takes ordinary gear (or a rejection releases it sooner).",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 60.0,
+            "step": 1.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 4.0
+          }
+        },
+        {
+          "text": "Fair chance (Valuables)",
+          "type": "header"
+        },
+        {
+          "id": "fChanceRadius:General",
+          "text": "Chance radius (units)",
+          "type": "slider",
+          "help": "How near you must be for looking at a source to count as 'had your chance' at its valuables.",
+          "valueOptions": {
+            "min": 128.0,
+            "max": 2048.0,
+            "step": 32.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 512.0
+          }
+        },
+        {
+          "id": "fFairChance:General",
+          "text": "Fair-chance time (s)",
+          "type": "slider",
+          "help": "Seconds you spend near AND facing a source (3x while looting it) before its valuables release.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 30.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 6.0
+          }
+        },
+        {
+          "id": "fAbandonDelay:General",
+          "text": "Abandon backstop (s)",
+          "type": "slider",
+          "help": "If you never come near a source, its valuables release after this long (cleanup behind you).",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 120.0,
+            "step": 5.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 45.0
+          }
+        },
+        {
+          "text": "Rejection",
+          "type": "header"
+        },
+        {
+          "id": "fQuickLootWaiver:General",
+          "text": "Rejection linger (s)",
+          "type": "slider",
+          "help": "After your last take from a source, the follower waits this long before taking the rest.",
+          "valueOptions": {
+            "min": 0.5,
+            "max": 30.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 4.0
+          }
+        },
+        {
+          "id": "fDepartRadius:General",
+          "text": "Depart radius (units)",
+          "type": "slider",
+          "help": "After you loot a source, walking this far from it counts as moving on (releases it).",
+          "valueOptions": {
+            "min": 128.0,
+            "max": 4096.0,
+            "step": 64.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 700.0
+          }
+        },
+        {
+          "text": "Deference",
+          "type": "header"
+        },
+        {
+          "id": "fPlayerBubble:General",
+          "text": "Yield bubble (units)",
+          "type": "slider",
+          "help": "A follower never walks to loot within this distance of you -- you win the race for it.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 1024.0,
+            "step": 32.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 256.0
           }
         }
       ]
@@ -253,10 +340,23 @@
           "id": "bLootTravel:General",
           "text": "Walk to loot (Option A)",
           "type": "toggle",
-          "help": "Follower WALKS to loot instead of teleport-grabbing. On by default; turn off if it misbehaves.",
+          "help": "Follower WALKS to loot instead of teleport-grabbing (reworked v0.8.2). On by default; turn off if it misbehaves.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": true
+          }
+        },
+        {
+          "id": "fTravelRadius:General",
+          "text": "Walk-to-loot reach (units)",
+          "type": "slider",
+          "help": "How far a follower will WALK to loot. Keep near one room (~768); farther loot is left for later.",
+          "valueOptions": {
+            "min": 128.0,
+            "max": 4096.0,
+            "step": 64.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 768.0
           }
         },
         {

@@ -608,20 +608,6 @@ namespace MFO::Packages {
             return nullptr;
         }
 
-        // VM Clear on a loot alias. Fill uses the native ForceRefTo (synchronous,
-        // AE); Clear has no verified native id, so it goes through the VM exactly
-        // like DispatchAlias does for the command quest.
-        bool LootClearAlias(std::uint32_t a_id) {
-            auto* vm = VM();
-            auto* alias = LootAlias(a_id);
-            if (!vm || !alias) return false;
-            RE::VMHandle handle{};
-            if (!HandleForAlias(alias, handle)) return false;
-            std::unique_ptr<RE::BSScript::IFunctionArguments> args{ RE::MakeFunctionArguments() };
-            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
-            return vm->DispatchMethodCall2(handle, "ReferenceAlias", "Clear",
-                                           args.get(), callback);
-        }
 
     }  // namespace
 
@@ -776,7 +762,7 @@ namespace MFO::Packages {
         // save-serialized independently of the cast holder's phase (#55), so a
         // latch from a previous session must self-heal on load regardless of
         // what the cast state machine thinks it holds.
-        if (Forms::g_lootQuest && LootAlias(kAliasLootActor) && VM()) {
+        if (Forms::g_lootQuest && LootAlias(kAliasLootActor)) {
             RE::ObjectRefHandle h{};
             Forms::g_lootQuest->CreateRefHandleByAliasID(h, kAliasLootActor);
             if (h.get()) {
@@ -835,12 +821,30 @@ namespace MFO::Packages {
     }
 
     void LootTravelClear(const char* a_why) {
-        if (!Forms::g_lootQuest) return;
-        const bool a = LootClearAlias(kAliasLootActor);
-        const bool t = LootClearAlias(kAliasLootTarget);
-        if (!(a && t))
-            spdlog::error("[loot] travel Clear DISPATCH FAILED ({}) -- alias may persist in the "
-                          "save; ReleaseAll on the next load will retry", a_why);
+        auto* quest = Forms::g_lootQuest;
+        if (!quest) return;
+        // NATIVE clear: ForceRefTo(None) empties a ref alias -- the standard
+        // idiom and the mirror of our native fill. The old VM ReferenceAlias.
+        // Clear failed EVERY time (v0.8.1 strand) because MFO's aliases carry no
+        // script, so the VM had no instance to dispatch to. Off AE the native id
+        // is unverified, so travel is never dispatched there -- nothing to clear.
+        if (!REL::Module::IsAE()) return;
+        ForceRefToNative(quest, kAliasLootActor, nullptr);
+        ForceRefToNative(quest, kAliasLootTarget, nullptr);
+        // READBACK, the same synchronous discipline the FILL uses. ForceRefTo
+        // (None) clearing an alias is Papyrus-level lore, NOT verified for the
+        // id-25052 native backend on this runtime (SKSE's own caller null-guards
+        // and never passes null). So prove it took rather than log a false
+        // "released": if the actor alias still resolves, the clear no-op'd and
+        // the follower is STILL latched -- say so loudly. The first deck run
+        // then settles ForceRefTo(None) definitively either way.
+        RE::ObjectRefHandle h{};
+        quest->CreateRefHandleByAliasID(h, kAliasLootActor);
+        if (h.get())
+            spdlog::error("[loot] NATIVE CLEAR DID NOT TAKE ({}) -- {:08X} still latched in the "
+                          "loot alias; ForceRefTo(None) did not empty it", a_why, h.get()->GetFormID());
+        else
+            spdlog::info("[loot] travel released ({})", a_why);
     }
 
     Status Get() {
