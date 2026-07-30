@@ -410,8 +410,20 @@ namespace MFO::Logistics {
             TravelPhase         phase = TravelPhase::Walking;
             Clock::time_point   startTime{};      // excursion start -> fExcursionMax cap
             Clock::time_point   lingerUntil{};    // Hold bound -> fBatchLinger
+            // NO-PROGRESS detection: an UNREACHABLE target (no navmesh path) sits
+            // at a flat distance -- the follower is on the travel package but
+            // FROZEN in place (deck: dist=1449 unchanged for 13 s). We track his
+            // own WORLD position (not distance-to-target, which plateaus on a
+            // detour around a wall): if he has not MOVED for kNoProgress seconds,
+            // the target is unreachable -- give up NOW, well before the leg
+            // deadline, so he stops cycling unreachable bodies and the excursion
+            // ends -> he follows.
+            RE::NiPoint3        lastPos{};          // his position at progressAt
+            Clock::time_point   progressAt{};       // last time he actually moved
         };
         TravelIntent g_travel;
+        constexpr float kMoveEps    = 50.0f;                  // real-movement threshold (units)
+        constexpr auto  kNoProgress = std::chrono::seconds(4); // frozen-this-long -> unreachable
 
         // Set by an excursion-mode scan when it found loot it could NOT act on
         // because the player's dibs have not released yet (dNotYet > 0). The Hold
@@ -825,6 +837,8 @@ namespace MFO::Logistics {
                         g_travel.want     = a_potionWant;
                         g_travel.deadline = TravelDeadline(df, a_now);
                         g_travel.phase    = TravelPhase::Walking;
+                        g_travel.lastPos    = origin;   // reset no-progress tracker
+                        g_travel.progressAt = a_now;
                         return true;   // new leg -- the excursion continues at 60
                     }
                     continue;
@@ -853,6 +867,8 @@ namespace MFO::Logistics {
                         g_travel.deadline  = TravelDeadline(df, a_now);
                         g_travel.phase     = TravelPhase::Walking;
                         g_travel.startTime = a_now;   // excursion begins now
+                        g_travel.lastPos    = origin;  // reset no-progress tracker
+                        g_travel.progressAt = a_now;
                         return true;   // committed to the walk; transfer on arrival
                     }
                     // Travel UNAVAILABLE (off AE, records unresolved, quest not
@@ -1073,12 +1089,11 @@ namespace MFO::Logistics {
             } else if (g_travel.phase == TravelPhase::Walking) {
                 auto tptr  = g_travel.target.get();
                 auto* tref = tptr.get();
-                // DIAGNOSTIC (v0.8.6): is MFO's travel package ACTUALLY driving
-                // him, or is he still on his follow package? marth's report -- he
-                // does not move toward bodies -- points to the runtime priority
-                // raise NOT being honoured (he'd stay on follow, never travel).
-                // GetCurrentPackage() settles it: if it is NOT g_travelPackage
-                // while we think he is Walking, the claim never took.
+                const float dist = tref ?
+                    a_follower->GetPosition().GetDistance(tref->GetPosition()) : 1e9f;
+                // DIAGNOSTIC (v0.8.6): is MFO's travel package driving him, and is
+                // he closing on the target? onTravelPkg=true + shrinking dist =
+                // working; onTravelPkg=true + flat dist = UNREACHABLE (no path).
                 if (tref) {
                     auto* cur = a_follower->GetCurrentPackage();
                     spdlog::info("[loot] {:08X} WALK->{:08X}: onTravelPkg={} curPkg={:08X} prio={} dist={:.0f}",
@@ -1086,19 +1101,32 @@ namespace MFO::Logistics {
                                  cur == Forms::g_travelPackage,
                                  cur ? cur->GetFormID() : 0u,
                                  Forms::g_lootQuest ? static_cast<int>(Forms::g_lootQuest->data.priority) : -1,
-                                 a_follower->GetPosition().GetDistance(tref->GetPosition()));
+                                 dist);
                 }
+                // NO-PROGRESS = UNREACHABLE. If he actually MOVED since the last
+                // check, note it; if he has been frozen (< kMoveEps) for
+                // kNoProgress seconds, the target has no path -- give up NOW (well
+                // before the leg deadline) so he stops cycling unreachable bodies.
+                const RE::NiPoint3 fpos = a_follower->GetPosition();
+                if (tref && fpos.GetDistance(g_travel.lastPos) > kMoveEps) {
+                    g_travel.lastPos    = fpos;
+                    g_travel.progressAt = now;
+                }
+                const bool stalled = tref && now - g_travel.progressAt > kNoProgress;
                 const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
-                if (gone || now > g_travel.deadline) {
-                    // This LEG failed (target vanished, or not reached in time).
-                    // Do NOT release -- blacklist it and seek another leg THIS
-                    // tick via the Holding block below.
+                if (gone || stalled || now > g_travel.deadline) {
+                    // This LEG failed (target vanished, unreachable, or not reached
+                    // in time). Do NOT release -- blacklist it and seek another leg
+                    // THIS tick via the Holding block below.
                     if (tref) MarkTravelFailed(tref->GetFormID(), now);
+                    if (stalled && tref)
+                        spdlog::info("[loot] {:08X} unreachable {:08X} (no progress, dist={:.0f}) -- skipping",
+                                     id, tref->GetFormID(), dist);
                     g_travel.phase = TravelPhase::Holding;
                     g_travel.lingerUntil = now + std::chrono::seconds(
                                               static_cast<int>(Config::g_batchLinger.load()));
                     // no return -- fall into Holding
-                } else if (a_follower->GetPosition().GetDistance(tref->GetPosition()) <= kArrivalDist) {
+                } else if (dist <= kArrivalDist) {
                     // ARRIVAL. MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
                     if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking()))
                         return;   // arrived, just holding under the bar -- retry next tick

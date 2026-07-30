@@ -3,6 +3,17 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.9 — walk-to-loot works; stop over-committing to unreachable bodies
+
+v0.8.8 landed the real fix — the follower now genuinely walks to and loots
+reachable bodies. This tunes what was left: he'd keep trying to reach bodies with
+no path to them (across a gap, another level) for ~15s each and cycle to the
+next, so a loot run dragged to its 60s cap and he wouldn't come back to you. Now
+if he isn't actually moving toward a body (no path), he gives up in a few seconds
+and moves on — so the run ends and he returns to you promptly. (Distances he'll
+walk are still the full confidence leash; this only drops ones he physically
+can't reach.)
+
 ## v0.8.8 — walk-to-loot: the actual root cause fixed
 
 The diagnostic from v0.8.6/0.8.7 finally caught it: the follower was never
