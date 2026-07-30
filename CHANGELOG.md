@@ -3,6 +3,32 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.3 — walk-to-loot actually works: reliable clear + real Run gait
+
+The v0.8.2 walk-to-loot fixes were disproven by the deck in one run (the
+readback discipline earned its keep). Two blind theories were wrong; both are
+now settled against evidence.
+
+### The follower stopped going unresponsive — the alias clear is fixed for real
+v0.8.2 cleared the loot alias with `ForceRefTo(None)`. The guard readback fired:
+`NATIVE CLEAR DID NOT TAKE` — that native (id 25052) KEEPS the current ref when
+passed null, so the alias stayed latched and the follower stayed stuck. v0.8.3
+clears via **`ResetQuest`** (id 25014), which empties every alias fill natively;
+the bare start-game-enabled loot quest re-inits empty and running for the next
+fill. A second readback confirms the quest is still running after the reset.
+
+### The follower runs to loot now instead of a slow walk
+The travel package's `preferredSpeed = Run` byte was **inert** because the
+"Preferred Speed" general flag (`0x2000`) wasn't set — it had been mislabelled
+"AlwaysSneak" and cleared. Proven by scanning all 5,961 Skyrim.esm packages
+(speed only varies when `0x2000` is set). v0.8.3 sets the flag, so followers
+actually **Run** to loot and rejoin. `0x2000` is not the ignore-combat bit, so
+combat still interrupts looting.
+
+### Recovery
+A follower latched by a v0.8.1/v0.8.2 build frees itself on the next load
+(`ReleaseAll` now runs the working `ResetQuest` clear).
+
 ## v0.8.2 — loot priority redesign (Claim-and-Release) + walk-to-loot fixed
 
 Two big loot changes: the "first dibs" system is redesigned into **Claim-and-

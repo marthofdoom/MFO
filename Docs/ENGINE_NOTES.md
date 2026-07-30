@@ -1440,21 +1440,64 @@ Three compounding bugs:
 3. **Churn.** The stale-expiry flipped the intent inactive and the same tick
    re-dispatched, re-tasking the follower every deadline.
 
-**Fix (v0.8.2), EXPECTED — pending deck proof.** ForceRefTo(None) clearing an
-alias is Papyrus lore, not verified for the id-25052 native on this runtime; a
-readback in `LootTravelClear` logs `NATIVE CLEAR DID NOT TAKE` if it no-ops, so
-the first deck cycle settles it. Clear NATIVELY: `ForceRefTo(aliasID, nullptr)` — the
-`ForceRefTo(None)` idiom empties a ref alias, the exact mirror of the native
-fill, synchronous, no VM. Plus a short WALKABLE radius (`fTravelRadius`, ~one
-room) so targets are reachable, a deadline SCALED to distance, a travel-failed
-LRU so an unreachable target is skipped instead of re-tried into a loop, and
-closest-first ordering. **Recovery for latched saves:** the native clear also
-runs from `ReleaseAll` on every load, so a follower latched by a v0.8.1 build
-frees itself on the next load.
+**Fix attempt (v0.8.2) — DECK-DISPROVEN.** v0.8.2 cleared NATIVELY via
+`ForceRefTo(aliasID, nullptr)` on the theory that the `ForceRefTo(None)` Papyrus
+idiom empties a ref alias. A readback guarded it (log `NATIVE CLEAR DID NOT
+TAKE` on no-op). The deck settled it — the readback FIRED:
 
-TAKEAWAY: never route alias Clear/ForceRefTo through the VM for MFO's aliases —
-they carry no script. Fill AND clear go native (`ForceRefTo`, null to clear).
-The command-quest cast path should adopt the same clear before it ships.
+```
+[loot] 000656E2: travel dispatched to 000E5F7F
+[error] [loot] NATIVE CLEAR DID NOT TAKE (arrived) -- ForceRefTo(None) did not empty it
+[loot] 000656E2: arrived -- nothing to take
+```
+
+So `ForceRefTo` at id 25052 KEEPS the current ref when passed null (SKSE's own
+caller null-guards and never passes null — now we know why). The alias stayed
+latched, follower still stuck. The readback discipline paid off: one deck cycle,
+definitive answer, no guessing.
+
+**Fix (v0.8.3).** Clear via `TESQuest::ResetQuest` (id 25014 — same
+address-library window as ForceRefTo, cross-checked). ResetQuest clears EVERY
+alias fill natively; because MFO_LootQuest is a bare, scriptless,
+start-game-enabled quest with no stages, the reset re-inits it empty and running
+— ready for the next fill. Same readback proves it emptied, plus an `IsRunning`
+readback because `LootTravelFill` refuses a stopped quest (if the reset ever
+leaves it stopped, restart is the next fix). The walkable radius / scaled
+deadline / travel-failed LRU / closest-first from v0.8.2 stand. **Recovery for
+latched saves:** the clear also runs from `ReleaseAll` on every load.
+
+TAKEAWAY: never route alias Clear through the VM for MFO's scriptless aliases,
+AND `ForceRefTo(None)` does NOT clear on the id-25052 native — it's a keep-current
+no-op. The reliable native release is **ResetQuest** (id 25014). Fill = ForceRefTo
+(a real ref), release = ResetQuest. The command-quest cast path should adopt the
+same clear before it ships.
+
+### 0.35 A package's preferredSpeed byte is INERT without the 0x2000 "Preferred Speed" flag (2026-07-30)
+
+**Failure (v0.8.2, same deck run).** The follower reached loot but WALKED —
+dispatch→arrive was ~8.6s for a near-room target (~89 u/s, walk speed) — despite
+the travel package's PKDT byte 6 (preferredSpeed) set to `2 = Run`. Byte 6 alone
+did nothing.
+
+**Root cause.** In SSE's PKDT, `preferredSpeed` is honored ONLY when general
+flag bit `0x00002000` is set. Our travel package shipped `flags=0x00000000`
+because the VC01 exemplar comment had mislabelled `0x2000` as "AlwaysSneak" and
+cleared it — so the Run byte was inert and the actor used its default gait.
+
+**Proof (game data, not lore).** Scanned all 5,961 `PACK` records in Skyrim.esm:
+- WITHOUT `0x2000`: byte 6 is `2` in 4,386 / 4,502 — the inert struct default.
+- WITH `0x2000`: byte 6 spreads 124 / 282 / 703 / 350 across Walk/Jog/Run/FastWalk.
+The speed byte only *means* anything when `0x2000` is set. Enum confirmed:
+`0=Walk, 1=Jog, 2=Run, 3=FastWalk`.
+
+**Fix (v0.8.3).** Travel package PKDT flags = `0x00002000` (Preferred Speed
+enable) + byte 6 = `2` (Run). `0x2000` is NOT the ignore-combat bit, so a fight
+can still pull the follower off travel — the "no logistics in combat" rule holds.
+
+TAKEAWAY: when copying a vanilla package byte tail, do not trust an inherited
+flag *label* — a mislabelled flag silently disabled a whole feature (the gait).
+To make a package obey a preferredSpeed, SET `0x2000`. The Jog/Run MCM toggle
+(task 16) picks byte 6; the flag must stay on for it to matter.
 
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**

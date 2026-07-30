@@ -641,15 +641,23 @@ def build_travel(fid, edid, alias_idx, radius, qnam):
     0/2/4 and XNAM is 3 (dumped from Skyrim.esm, not guessed).
     """
     body  = subrec('EDID', zstr(edid))
-    # PKDT: flags 0 -- NOT kIgnoreCombat. A fight MUST be able to pull the
-    # follower off looting (the whole "no logistics during combat" rule).
+    # PKDT flags = 0x00002000 = PREFERRED SPEED ENABLE. NOT kIgnoreCombat, so a
+    # fight can still pull the follower off looting (the "no logistics during
+    # combat" rule holds -- ignore-combat is a different, higher bit).
     #
-    # GAIT is byte 6 = preferredSpeed (enum 0=Walk, 1=Jog, 2=Run, 3=FastWalk).
-    # marth: a follower would never WALK to grab loot -- set 2 = Run so they
-    # hustle over and rejoin, not stroll. ("Walk-to-loot" is a name for the
-    # move, not the gait.) Byte tail otherwise verbatim from the VC01 exemplar
-    # with its AlwaysSneak (0x2000) flag cleared; interruptFlags 0x0054.
-    body += subrec('PKDT', bytes.fromhex('000000001200028054000000'))
+    # GAIT is byte 6 = preferredSpeed (enum 0=Walk, 1=Jog, 2=Run, 3=FastWalk),
+    # set to 2 = Run so the follower hustles over and rejoins, not strolls.
+    # ("Walk-to-loot" names the move, not the gait.)
+    #
+    # v0.8.2 SHIPPED byte6=2 with flags=0 and the follower still WALKED (deck:
+    # ~89 u/s, walk speed). ROOT CAUSE: preferredSpeed is INERT unless the
+    # 0x2000 flag is set -- and the VC01-exemplar comment had mislabelled 0x2000
+    # as "AlwaysSneak" and deliberately cleared it. Proven by scanning all 5,961
+    # Skyrim.esm PACK records: WITHOUT 0x2000, byte6 is 2 in 4,386/4,502 (the
+    # inert default); WITH 0x2000 it spreads 124/282/703/350 across Walk/Jog/Run/
+    # FastWalk. So 0x2000 is Preferred-Speed-enable, full stop. interruptFlags
+    # 0x0054 and the byte tail otherwise verbatim from the exemplar.
+    body += subrec('PKDT', bytes.fromhex('002000001200028054000000'))
     # PSDT: any time, any day -- the same 3,855-of-5,961 default build_usemagic uses.
     body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
     # QNAM (owner quest) is MANDATORY for an alias-valued input (626/626 vanilla).

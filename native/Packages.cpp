@@ -823,28 +823,32 @@ namespace MFO::Packages {
     void LootTravelClear(const char* a_why) {
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
-        // NATIVE clear: ForceRefTo(None) empties a ref alias -- the standard
-        // idiom and the mirror of our native fill. The old VM ReferenceAlias.
-        // Clear failed EVERY time (v0.8.1 strand) because MFO's aliases carry no
-        // script, so the VM had no instance to dispatch to. Off AE the native id
-        // is unverified, so travel is never dispatched there -- nothing to clear.
-        if (!REL::Module::IsAE()) return;
-        ForceRefToNative(quest, kAliasLootActor, nullptr);
-        ForceRefToNative(quest, kAliasLootTarget, nullptr);
-        // READBACK, the same synchronous discipline the FILL uses. ForceRefTo
-        // (None) clearing an alias is Papyrus-level lore, NOT verified for the
-        // id-25052 native backend on this runtime (SKSE's own caller null-guards
-        // and never passes null). So prove it took rather than log a false
-        // "released": if the actor alias still resolves, the clear no-op'd and
-        // the follower is STILL latched -- say so loudly. The first deck run
-        // then settles ForceRefTo(None) definitively either way.
+        if (!REL::Module::IsAE()) return;   // native ids AE-only; travel never dispatched off AE
+        // RESET the quest to clear its alias fills. ForceRefTo(None) was tried in
+        // v0.8.2 and the readback PROVED it a no-op on this native (id 25052 keeps
+        // the current ref when passed null) -- the follower stayed latched
+        // ("NATIVE CLEAR DID NOT TAKE"). ResetQuest (id 25014) is the reliable
+        // native release: it clears every alias fill and, because MFO_LootQuest is
+        // a bare start-game-enabled quest with no stages/script, the reset simply
+        // re-inits it EMPTY and running -- ready for the next fill. No VM (the VM
+        // Clear also failed -- scriptless aliases), no main-thread hop needed.
+        using reset_t = void (*)(RE::TESQuest*);
+        static const REL::Relocation<reset_t> resetQuest{ REL::ID(25014) };
+        resetQuest(quest);
+        // READBACK -- same discipline; prove the reset actually emptied the alias.
         RE::ObjectRefHandle h{};
         quest->CreateRefHandleByAliasID(h, kAliasLootActor);
         if (h.get())
-            spdlog::error("[loot] NATIVE CLEAR DID NOT TAKE ({}) -- {:08X} still latched in the "
-                          "loot alias; ForceRefTo(None) did not empty it", a_why, h.get()->GetFormID());
+            spdlog::error("[loot] CLEAR STILL FAILED ({}) -- {:08X} latched after ResetQuest; "
+                          "need Stop/Start next", a_why, h.get()->GetFormID());
         else
-            spdlog::info("[loot] travel released ({})", a_why);
+            spdlog::info("[loot] travel released via ResetQuest ({}); running={}",
+                         a_why, quest->IsRunning());
+        // If the reset left the quest stopped, LootTravelFill's IsRunning guard
+        // would refuse every future fill -- travel would silently die after one
+        // loot. Reset of a running start-game-enabled quest restarts it, so this
+        // should read running=true; the readback proves it on the deck rather
+        // than us assuming. If it ever reads false, restart is the next fix.
     }
 
     Status Get() {
