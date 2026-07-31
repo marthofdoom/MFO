@@ -33,6 +33,8 @@ namespace MFO::Forms {
         g_castPackage  = Look<RE::TESPackage>(kCastPackage, "MFO_CastPackage");
         g_lootQuest    = Look<RE::TESQuest>(kLootQuest, "MFO_LootQuest");        // Option A
         g_travelPackage = Look<RE::TESPackage>(kTravelPackage, "MFO_TravelPackage");  // Option A
+        g_retreatQuest   = Look<RE::TESQuest>(kRetreatQuest, "MFO_RetreatQuest");        // RETREAT PROBE
+        g_retreatPackage = Look<RE::TESPackage>(kRetreatPackage, "MFO_RetreatPackage");  // RETREAT PROBE
 
         // ANSWER THE RECORD QUESTIONS AT LOAD, not when behaviour depends on
         // them. Three things can be wrong with a hand-authored PACK and each

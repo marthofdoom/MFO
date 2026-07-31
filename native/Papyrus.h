@@ -48,6 +48,16 @@ namespace MFO::Papyrus {
     bool DoCombatSpellApply(RE::Actor* a_caster, RE::SpellItem* a_spell,
                             RE::TESObjectREFR* a_target);
 
+    // ObjectReference.Activate(akActionRef, abDefaultProcessingOnly=false) --
+    // the loose-item ACQUIRE PROBE (route 2b). Dispatched on the REF's handle
+    // with the follower as the activator: the ENGINE runs the pickup on its own
+    // scheduling, which is the whole point -- no PickUpObject and no SKSE
+    // AddTask from the worker tick (§0.30 / INVARIANTS #72).
+    //
+    // Returns whether the call was DISPATCHED, not whether the item moved; the
+    // caller must observe the ref/inventory on a later tick.
+    bool DispatchActivate(RE::TESObjectREFR* a_ref, RE::TESObjectREFR* a_activator);
+
     // How many dispatches this session, for the heartbeat (#53). A subsystem
     // whose correct behaviour is invisible must publish one.
     std::uint32_t Dispatches();

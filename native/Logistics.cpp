@@ -10,6 +10,7 @@
 #include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
+#include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -723,6 +724,13 @@ namespace MFO::Logistics {
             // ends -> he follows.
             RE::NiPoint3        lastPos{};          // his position at progressAt
             Clock::time_point   progressAt{};       // last time he actually moved
+            // ACQUIRE PROBE (route 2b) readback: after an Activate dispatch at a
+            // LOOSE ref, the NEXT tick observes what the engine actually did
+            // (dispatch is asynchronous -- Papyrus.h -- so same-tick reads lie).
+            bool                acquirePending = false;
+            RE::FormID          acquireRefID = 0;   // the loose ref, for the log (its handle may die)
+            RE::FormID          acquireBase  = 0;   // its base object -- the inventory-delta key
+            std::int32_t        acquirePre   = 0;   // follower's count of base BEFORE dispatch
         };
         TravelIntent g_travel;
         constexpr float kMoveEps    = 50.0f;                  // real-movement threshold (units)
@@ -986,6 +994,18 @@ namespace MFO::Logistics {
             return d;
         }
 
+        // ACQUIRE PROBE (route 2b). A LOOSE ref: neither a dead actor nor a
+        // container base -- the exact INVERSE of LootNearby's lootable test.
+        // Only whitelisted loose refs (ammo/gold, below) ever become candidates,
+        // so at act/arrival time this only ever distinguishes those from the
+        // corpses/containers the transfer path owns.
+        bool LooseRef(RE::TESObjectREFR* a_ref) {
+            if (!a_ref) return false;
+            if (a_ref->As<RE::Actor>()) return false;   // actors are never loose items
+            auto* base = a_ref->GetBaseObject();
+            return base && !base->Is(RE::FormType::Container);
+        }
+
         bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                         RE::ActorValue a_potionWant = RE::ActorValue::kNone,
                         LootMode a_mode = LootMode::kNormal) {
@@ -1075,12 +1095,33 @@ namespace MFO::Logistics {
                     // to be had from here. Loose-item pickup is the package-
                     // acquisition feature (ROADMAP "Option A"): the ENGINE walks the
                     // follower to the item and grabs it natively, no PickUpObject on
-                    // our side at all. Until then, loose items are simply not looted.
+                    // our side at all. Until then, loose items are simply not looted
+                    // -- EXCEPT the route-2b ACQUIRE PROBE whitelist below.
                     bool lootable = false;
+                    bool loose    = false;   // route 2b: a loose WORLD item, not an inventory
                     if (auto* actor = ref->As<RE::Actor>()) {
                         lootable = actor->IsDead();
                     } else if (auto* base = ref->GetBaseObject()) {
                         lootable = base->Is(RE::FormType::Container);
+                        // ACQUIRE PROBE (route 2b) WHITELIST: for the Arrows /
+                        // Bolts / Gold scans ONLY, a loose world ref of exactly
+                        // that thing is a candidate too. It rides the SAME
+                        // excursion machinery (walk to it; every gate below
+                        // still applies) and the acquire happens at ARRIVAL via
+                        // a VM-dispatched ObjectReference.Activate in the
+                        // excursion driver -- NEVER an in-place PickUpObject
+                        // (the worker trap the comment above describes).
+                        if (!lootable) {
+                            if (a_cat == Category::Arrows || a_cat == Category::Bolts) {
+                                if (auto* ammo = base->As<RE::TESAmmo>();
+                                    ammo && AmmoIsBolt(ammo) == (a_cat == Category::Bolts))
+                                    lootable = loose = true;
+                            } else if (a_cat == Category::Gold) {
+                                constexpr RE::FormID kGold001 = 0x0000000F;   // see TakeGold
+                                if (base->GetFormID() == kGold001)
+                                    lootable = loose = true;
+                            }
+                        }
                     }
                     if (!lootable) return RE::BSContainer::ForEachResult::kContinue;
                     ++dLootable;
@@ -1113,7 +1154,9 @@ namespace MFO::Logistics {
                     // (marth). This is the biggest cut -- a fight leaves many
                     // corpses, few with the one thing (e.g. arrows) he's after --
                     // and it kills the "walk to an empty barrel and stall" trips.
-                    if (!HasLoot(a_follower, ref, a_cat, a_potionWant)) {
+                    // A LOOSE ref (route 2b) IS the loot -- it has no inventory
+                    // for HasLoot to peek, so the gate does not apply.
+                    if (!loose && !HasLoot(a_follower, ref, a_cat, a_potionWant)) {
                         // ARROW PROBE (temp, v0.8.17). marth: "multiple bodies with
                         // arrows available" yet the arrow scan calls every corpse
                         // empty. When an ARROW scan judges a lootable body empty,
@@ -1269,10 +1312,13 @@ namespace MFO::Logistics {
                 // walkable -> RETARGET the excursion to it (movement, no release,
                 // no turn-around). Do NOT start a new fill and do NOT release.
                 if (a_mode == LootMode::kExcursion) {
-                    if (df <= kArrivalDist) {
+                    if (df <= kArrivalDist && !LooseRef(ref)) {
                         if (LootHere(a_follower, ref, a_cat, a_potionWant)) return true;
                         continue;   // arm's-reach corpse was empty -- try the next
                     }
+                    // A LOOSE ref (route 2b) falls through to RETARGET even at
+                    // arm's reach: the acquire runs at the driver's ARRIVAL
+                    // (Activate dispatch), never as an in-place transfer here.
                     if (!Config::g_lootTravel.load())                              continue;
                     if (df > walkLimit)                                           continue;
                     if (TravelFailedRecently(rid, a_now))                          continue;
@@ -1301,8 +1347,11 @@ namespace MFO::Logistics {
                 }
 
                 // ── NORMAL MODE: START an excursion by walking to a far corpse,
-                // or transfer one within arm's reach.
-                if (df > kArrivalDist && Config::g_lootTravel.load()) {
+                // or transfer one within arm's reach. A LOOSE ref (route 2b)
+                // takes the excursion path REGARDLESS of distance -- there is no
+                // in-place transfer for it, the acquire is the driver's arrival
+                // Activate -- so it must claim/walk even from arm's reach.
+                if ((df > kArrivalDist || LooseRef(ref)) && Config::g_lootTravel.load()) {
                     // Too far to WALK without abandoning the player -- leave it
                     // (following brings them closer later; also fairer to you).
                     if (df > walkLimit) continue;
@@ -1423,6 +1472,213 @@ namespace MFO::Logistics {
                 start = choice.ruleIndex + 1;   // skip non-loot / no-op, try next
             }
             return false;
+        }
+
+        // ── ECONOMY PROBE (#21, temp) ───────────────────────────────────────
+        // LOG-ONLY dry run of follower<->vendor trading: ZERO transactions, ZERO
+        // mutations -- every call below is a read. Validates, BEFORE any gold
+        // moves: (a) vendor-faction resolution off a living actor, (b) the
+        // merchant-chest read (incl. an UNLOADED chest -- inventory lives in
+        // extra data, not 3D), (c) where the vendor's gold actually is (chest vs
+        // pocket), and (d) the VEND keyword filter on the follower's sellables.
+        //
+        // Faction resolution is Actor::VisitFactions, NOT GetVendorFaction --
+        // that one has an NG bug and MUTATES engine state (caches the resolved
+        // faction back onto the process), which breaks the zero-mutation
+        // contract of a probe. First faction with IsVendor() && OffersServices()
+        // wins, matching the engine's own barter pick closely enough to verify.
+
+        // Does the vendor's VEND list trade this item? The list holds KEYWORDS
+        // (VendorItemWeapon et al.); notBuySell inverts it into an EXCLUSION
+        // list (the engine's own semantics for that flag).
+        bool VendorTrades(RE::BGSListForm* a_vend, bool a_notBuySell,
+                          RE::BGSKeywordForm* a_kwf) {
+            if (!a_vend || !a_kwf) return false;
+            bool match = false;
+            for (auto* f : a_vend->forms) {
+                auto* kw = f ? f->As<RE::BGSKeyword>() : nullptr;
+                if (kw && a_kwf->HasKeyword(kw)) { match = true; break; }
+            }
+            return a_notBuySell ? !match : match;
+        }
+
+        void EconomyProbe(RE::Actor* a_follower, const FollowerState& a_state,
+                          Clock::time_point a_now) {
+            const auto fid = a_follower->GetFormID();
+
+            // Per-follower SCAN cooldown (15 s) -- the cell walk itself is the
+            // cost being limited here, same pattern as the other diagnostics.
+            static std::unordered_map<RE::FormID, Clock::time_point> s_nextEconScan;
+            auto& sn = s_nextEconScan[fid];
+            if (sn.time_since_epoch().count() != 0 && a_now < sn) return;
+            sn = a_now + std::chrono::seconds(15);
+
+            // Same crash4-safe walk as LootNearby: the follower's OWN attached
+            // cell, never TES::ForEachReferenceInRange (§0.30).
+            auto* cell = a_follower->GetParentCell();
+            if (!cell || !cell->IsAttached()) return;
+            const auto  origin      = a_follower->GetPosition();
+            const float kLootRadius = Config::g_lootRadius.load();
+
+            // COLLECT-THEN-ACT (#2): handles only inside the walk; the inventory
+            // reads happen after it. LIVING actors only -- corpses are loot,
+            // not merchants.
+            constexpr size_t kMaxVendorCands = 16;
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            std::vector<RE::ActorHandle> living;
+            living.reserve(kMaxVendorCands);
+            cell->ForEachReferenceInRange(origin, kLootRadius,
+                [&](RE::TESObjectREFR& a_ref) {
+                    if (living.size() >= kMaxVendorCands) return RE::BSContainer::ForEachResult::kStop;
+                    auto* actor = a_ref.As<RE::Actor>();
+                    if (!actor || actor == a_follower || actor == pc || actor->IsDead() ||
+                        actor->IsDisabled() || actor->IsMarkedForDeletion())
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    living.push_back(actor->GetHandle());
+                    return RE::BSContainer::ForEachResult::kContinue;
+                });
+
+            static std::unordered_map<std::uint64_t, Clock::time_point> s_nextEconPair;
+            for (auto& h : living) {
+                auto  ptr    = h.get();
+                auto* vendor = ptr.get();
+                if (!vendor) continue;
+
+                // First vendor faction that actually offers services. rank < 0
+                // is a runtime REMOVAL (ExtraFactionChanges) -- skip it.
+                RE::TESFaction* fac = nullptr;
+                vendor->VisitFactions([&](RE::TESFaction* a_fac, std::int8_t a_rank) {
+                    if (!a_fac || a_rank < 0) return false;
+                    if (a_fac->IsVendor() && a_fac->OffersServices()) { fac = a_fac; return true; }
+                    return false;
+                });
+                if (!fac) continue;
+
+                // Per-(follower,vendor) log cooldown (60 s).
+                const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendor->GetFormID();
+                auto& pn = s_nextEconPair[pairKey];
+                if (pn.time_since_epoch().count() != 0 && a_now < pn) continue;
+                pn = a_now + std::chrono::seconds(60);
+
+                const auto& vv   = fac->vendorData.vendorValues;
+                auto*       vend = fac->vendorData.vendorSellBuyList;
+                spdlog::info("[econprobe] {:08X} '{}': vendor '{}' fac={:08X} (VEND entries={} "
+                             "notBuySell={} buysNonStolen={} hours={}-{} now={:.1f})",
+                             fid, a_follower->GetName(), vendor->GetName(), fac->GetFormID(),
+                             vend ? vend->forms.size() : 0,
+                             vv.notBuySell ? 1 : 0, vv.buysNonStolen ? 1 : 0,
+                             vv.startHour, vv.endHour,
+                             RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetHour() : -1.0f);
+
+                // The vendor's money: the merchant chest's Gold001 plus what the
+                // actor has in pocket -- the probe exists to learn WHICH of the
+                // two the real barter draws on, so log the split, not just the
+                // sum. An unloaded chest (no 3D) must still read: inventory is
+                // container/extra data.
+                auto* chest = fac->vendorData.merchantContainer;
+                constexpr RE::FormID kGold001 = 0x0000000F;
+                int chestGold = 0;
+                if (chest) {
+                    for (auto& [obj, data] : chest->GetInventory()) {
+                        if (obj && obj->GetFormID() == kGold001 && data.first > 0)
+                            chestGold += data.first;
+                    }
+                }
+                const int actorGold  = static_cast<int>(vendor->GetGoldAmount());
+                const int vendorGold = chestGold + actorGold;
+                spdlog::info("[econprobe]   chest={:08X} loaded3D={} gold={} (chest {} + actor {})",
+                             chest ? chest->GetFormID() : 0,
+                             chest ? (chest->Is3DLoaded() ? 1 : 0) : -1,
+                             vendorGold, chestGold, actorGold);
+
+                // WOULD SELL: the follower's UNWORN weapons/armor (jewellery is
+                // ARMO, so IsJewelryPiece rides along) that clear the never-loot
+                // catalog and the VEND keyword filter. Worn is the ENTRY's own
+                // flag (InventoryEntryData::IsWorn) -- GetEquippedObject/
+                // GetWornArmor miss stacked duplicates of a worn base.
+                std::string sellStr, skipStr, buyStr;
+                int sellN = 0, skipN = 0, saleTotal = 0;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* weap = obj->As<RE::TESObjectWEAP>();
+                    auto* armo = obj->As<RE::TESObjectARMO>();
+                    if (!weap && !armo) continue;
+                    RE::BGSKeywordForm* kwf = weap
+                        ? static_cast<RE::BGSKeywordForm*>(weap)
+                        : static_cast<RE::BGSKeywordForm*>(armo);
+                    auto*     entry = data.second.get();
+                    const int val   = entry ? entry->GetValue() : 0;
+                    const char* skip = nullptr;
+                    if (entry && entry->IsWorn())                   skip = "worn";
+                    else if (Catalog::IsExcluded(obj->GetFormID())) skip = "excluded";
+                    else if (!VendorTrades(vend, vv.notBuySell, kwf)) skip = "vendor won't buy";
+                    if (skip) {
+                        if (skipN < 3) skipStr += std::format(" '{}' ({})", obj->GetName(), skip);
+                        ++skipN;
+                        continue;
+                    }
+                    saleTotal += val * data.first;
+                    if (sellN < 8)
+                        sellStr += std::format(" '{}'{} x{} val={}", obj->GetName(),
+                                               (armo && IsJewelryPiece(armo)) ? " [jewelry]" : "",
+                                               data.first, val);
+                    ++sellN;
+                }
+                spdlog::info("[econprobe]   WOULD SELL:{}{} (n={} total={})",
+                             sellStr.empty() ? " (nothing)" : sellStr.c_str(),
+                             sellN > 8 ? " ..." : "", sellN, saleTotal);
+                spdlog::info("[econprobe]   WOULD SKIP:{}{} (n={})",
+                             skipStr.empty() ? " (nothing)" : skipStr.c_str(),
+                             skipN > 3 ? " ..." : "", skipN);
+
+                // WOULD BUY: each supply-below-N loot gambit in the follower's
+                // logistics table -> have vs want, and the best AFFORDABLE
+                // matching item in the vendor's stock (chest + pocket).
+                const int purse = static_cast<int>(a_follower->GetGoldAmount());
+                for (const auto& g : a_state.logistics()) {
+                    if (!g.enabled) continue;
+                    const auto& c    = g.conditionOpcode;
+                    const int   want = static_cast<int>(g.conditionParam);
+                    int have = -1, mode = 0;   // 1=potion 2=arrows 3=bolts
+                    RE::ActorValue av = RE::ActorValue::kNone;
+                    const char* what = nullptr;
+                    if      (c == Vocab::kCondSelfLowHealthPotion)  { mode = 1; av = RE::ActorValue::kHealth;  what = "potH";   have = CountPotions(a_follower, av); }
+                    else if (c == Vocab::kCondSelfLowStaminaPotion) { mode = 1; av = RE::ActorValue::kStamina; what = "potS";   have = CountPotions(a_follower, av); }
+                    else if (c == Vocab::kCondSelfLowMagickaPotion) { mode = 1; av = RE::ActorValue::kMagicka; what = "potM";   have = CountPotions(a_follower, av); }
+                    else if (c == Vocab::kCondSelfOutOfArrows)      { mode = 2;                                what = "arrows"; have = ArrowCount(a_follower); }
+                    else if (c == Vocab::kCondSelfOutOfBolts)       { mode = 3;                                what = "bolts";  have = BoltCount(a_follower); }
+                    else continue;
+
+                    const char* bestNm  = nullptr;
+                    int         bestVal = -1;
+                    auto scanStock = [&](RE::TESObjectREFR* a_src) {
+                        if (!a_src) return;
+                        for (auto& [obj, data] : a_src->GetInventory()) {
+                            if (!obj || data.first <= 0) continue;
+                            bool matches = false;
+                            if (mode == 1) {
+                                auto* alc = obj->As<RE::AlchemyItem>();
+                                matches = alc && PotionRestores(alc) == av;
+                            } else {
+                                auto* am = obj->As<RE::TESAmmo>();
+                                matches = am && AmmoIsBolt(am) == (mode == 3);
+                            }
+                            if (!matches) continue;
+                            const int val = data.second ? data.second->GetValue() : 0;
+                            if (val <= purse && val > bestVal) { bestVal = val; bestNm = obj->GetName(); }
+                        }
+                    };
+                    scanStock(chest);
+                    scanStock(vendor);
+                    buyStr += std::format(" [{}: have={} want={} best={}]", what, have, want,
+                                          bestNm ? std::format("'{}' val={}", bestNm, bestVal)
+                                                 : std::string("none affordable/in stock"));
+                }
+                spdlog::info("[econprobe]   WOULD BUY:{}", buyStr.empty() ? " (no supply gambits)" : buyStr.c_str());
+                spdlog::info("[econprobe]   purse={} | vendor can pay our sales: {} vs {} -> {}",
+                             purse, vendorGold, saleTotal,
+                             saleTotal == 0 ? "n/a" : (vendorGold >= saleTotal ? "yes" : "SHORT"));
+            }
         }
 
         // ── the player-looted waiver sink (#22h) ────────────────────────────
@@ -1604,6 +1860,35 @@ namespace MFO::Logistics {
                                           a_follower);
                 g_travel = TravelIntent{};
                 // fall through to a normal eval this tick (combat table / follow).
+            } else if (g_travel.acquirePending) {
+                // ── ACQUIRE READBACK (route 2b probe). One tick after the
+                // Activate dispatch, observe what the VM call actually did --
+                // dispatch is asynchronous (Papyrus.h), so the previous tick's
+                // call has had its frame(s) by now. Ref gone / inventory up =
+                // the engine took it natively; ref standing with a flat count =
+                // the activation was a no-op.
+                g_travel.acquirePending = false;
+                auto aptr = g_travel.target.get();
+                auto* aref = aptr.get();
+                const bool refGone = !aref || aref->IsDeleted() || aref->IsDisabled();
+                std::int32_t post = 0;
+                for (auto& [obj, n] : a_follower->GetInventoryCounts())
+                    if (obj && obj->GetFormID() == g_travel.acquireBase) { post = n; break; }
+                const std::int32_t delta = post - g_travel.acquirePre;
+                if (refGone || delta != 0)
+                    spdlog::info("[acquire] {:08X}: TOOK {:08X} -- ref {}, inv {:+}",
+                                 id, g_travel.acquireRefID,
+                                 refGone ? "gone" : "persists", delta);
+                else
+                    spdlog::info("[acquire] {:08X}: ACTIVATE NO-OP -- ref persists, inv unchanged",
+                                 id);
+                // Either way this leg is DONE: blocklist the ref (a persisting
+                // no-op must not be re-picked every tick) and continue the batch.
+                MarkTravelFailed(g_travel.acquireRefID, now);
+                g_travel.phase = TravelPhase::Holding;
+                g_travel.lingerUntil = now + std::chrono::seconds(
+                                          static_cast<int>(Config::g_batchLinger.load()));
+                return;
             } else if (g_travel.phase == TravelPhase::Walking) {
                 auto tptr  = g_travel.target.get();
                 auto* tref = tptr.get();
@@ -1656,6 +1941,37 @@ namespace MFO::Logistics {
                     // MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
                     if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking()))
                         return;   // arrived, holding under the bar -- retry next tick
+                    // ── ACQUIRE PROBE (route 2b): a LOOSE ref has no inventory
+                    // to transfer -- StripCorpse/LootHere would no-op on it.
+                    // Dispatch ObjectReference.Activate(follower) through the VM
+                    // instead: the ENGINE runs the pickup on its own scheduling.
+                    // NO PickUpObject and NO SKSE AddTask -- both land on the
+                    // §0.30 worker, the crash4 class. Readback next tick.
+                    if (LooseRef(tref)) {
+                        auto* base = tref->GetBaseObject();
+                        const char* iname = tref->GetDisplayFullName();
+                        const auto icount = tref->extraList.GetCount();
+                        std::int32_t pre = 0;
+                        for (auto& [obj, n] : a_follower->GetInventoryCounts())
+                            if (obj && base && obj->GetFormID() == base->GetFormID()) { pre = n; break; }
+                        if (Papyrus::DispatchActivate(tref, a_follower)) {
+                            spdlog::info("[acquire] {:08X}: ACTIVATE dispatched for ref {:08X} ('{}' x{})",
+                                         id, tref->GetFormID(), iname ? iname : "?", icount);
+                            g_travel.acquirePending = true;
+                            g_travel.acquireRefID   = tref->GetFormID();
+                            g_travel.acquireBase    = base ? base->GetFormID() : 0;
+                            g_travel.acquirePre     = pre;
+                            return;   // the dispatch IS this tick's action; readback next tick
+                        }
+                        // VM unreachable / no handle -- end the leg, batch continues.
+                        spdlog::info("[acquire] {:08X}: ACTIVATE dispatch FAILED for ref {:08X}",
+                                     id, tref->GetFormID());
+                        MarkTravelFailed(tref->GetFormID(), now);
+                        g_travel.phase = TravelPhase::Holding;
+                        g_travel.lingerUntil = now + std::chrono::seconds(
+                                                  static_cast<int>(Config::g_batchLinger.load()));
+                        return;
+                    }
                     // Take EVERYTHING his gambits want in this one visit, not just
                     // the category the trip was for -- else gold trips strand the
                     // arrows (marth's 340u/382u bodies). Only THEN is the corpse
@@ -1799,6 +2115,11 @@ namespace MFO::Logistics {
                 nxt = now + std::chrono::seconds(30);
                 spdlog::info("[logistics] {:08X} serviced -- nothing to loot/drink right now", id);
             }
+            // ECONOMY PROBE (#21, temp): log-only vendor dry run on the idle
+            // tick -- zero mutations; self-rate-limited (15 s scan / 60 s per
+            // vendor pair). Runs only when the tick did nothing real, so it
+            // never competes with an actual loot/drink action.
+            EconomyProbe(a_follower, a_state, now);
         }
     }
 

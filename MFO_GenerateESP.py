@@ -44,6 +44,9 @@ FID_CAST_PACKAGE   = OWN | 0x820   # M9: PACK instance riding vanilla UseMagic
 FID_POC_PACK_BASE  = OWN | 0x821   # M9 PoC: one PACK per probe, 0x821+
 FID_TRAVEL_PACKAGE = OWN | 0x828   # Option A: PACK riding vanilla Travel (walk to a loot ref)
 # 0x821+       reserved: one PACK per action verb (attack, travel, hold, activate)
+# 0x829-0x82F  reserved: probe-ladder headroom (FID_POC_PACK_BASE + idx - 1)
+FID_RETREAT_QUEST   = OWN | 0x830  # RETREAT PROBE: travel-to-player delivery route
+FID_RETREAT_PACKAGE = OWN | 0x831  # RETREAT PROBE: Travel + kIgnoreCombat -> alias 1 (the player)
 NEXT_OBJECT_ID     = 0x900         # first never-used local id
 
 # Vanilla refs
@@ -165,6 +168,13 @@ QUEST_PRIORITY = int(os.environ.get("MFO_QUEST_PRIORITY", "60"))
 # never re-arbitrates (ENGINE_NOTES 0.36). So MFO claims at fill time (static 60)
 # and RELEASES by evicting the follower from the alias, never by touching the number.
 LOOT_PRIORITY = int(os.environ.get("MFO_LOOT_PRIORITY", "60"))
+
+# Retreat-probe quest STATIC priority -- its own dial for the same reason the
+# loot dial is separate. 60, claim-at-fill, release-by-eviction: the 0.36
+# measurement (alias-claim drives arbitration, runtime priority flips never
+# re-arbitrate) applies verbatim, so this quest copies the loot quest's claim
+# model rather than re-deriving one.
+RETREAT_PRIORITY = int(os.environ.get("MFO_RETREAT_PRIORITY", "60"))
 
 # ── binary helpers (forked from MEO/MRO — byte-for-byte valid) ──
 FORM_VERSION = 44
@@ -476,6 +486,48 @@ def make_loot_quest():
     return record('QUST', FID_LOOT_QUEST, 0, body)
 
 
+def make_retreat_quest():
+    """RETREAT PROBE: the delivery route for a travel-to-PLAYER package that
+    carries kIgnoreCombat -- the record half of the question "can an alias
+    Travel package pull a follower AWAY from a live combat controller?".
+
+    Byte-for-byte the make_loot_quest shape (the shipped, deck-proven claim
+    model): STATIC priority 60, claim by filling alias 0 (the follower) while
+    the priority is ALREADY 60, release by EVICTING him from the alias
+    (force-fill the player) -- never a runtime priority flip, never a package
+    condition (ENGINE_NOTES 0.24/0.25/0.36). alias 1 is the destination and the
+    DLL fills it with the PLAYER before alias 0, same no-rooting order as loot.
+
+    ONE package on the alias, its own quest -- same reasoning as loot: a
+    one-package quest needs no ALPC arbitration or conditions.
+
+    START-GAME-ENABLED, NOT run-once, and therefore MUST be in the SEQ -- a
+    missing SEQ entry means the quest never starts on an existing save and
+    every fill declines QuestStopped-style with no other symptom.
+    """
+    body  = subrec('EDID', zstr("MFO_RetreatQuest"))
+    body += subrec('FULL', zstr("MFO Retreat"))
+    body += subrec('DNAM', qust_dnam(0x0011, priority=RETREAT_PRIORITY))
+    body += subrec('NEXT', b'')
+    body += subrec('ANAM', struct.pack('<I', 2))
+
+    # ── alias 0: the follower, carrying the retreat-travel package ──
+    body += subrec('ALST', struct.pack('<I', 0))
+    body += subrec('ALID', zstr("MFO_RetreatActor"))
+    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    body += subrec('ALPC', struct.pack('<I', FID_RETREAT_PACKAGE))
+    body += subrec('VTCK', struct.pack('<I', 0))
+    body += subrec('ALED', b'')
+
+    # ── alias 1: the destination (the DLL fills it with the player). ──
+    body += subrec('ALST', struct.pack('<I', 1))
+    body += subrec('ALID', zstr("MFO_RetreatTarget"))
+    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    body += subrec('VTCK', struct.pack('<I', 0))
+    body += subrec('ALED', b'')
+    return record('QUST', FID_RETREAT_QUEST, 0, body)
+
+
 # ── M9: the cast package ────────────────────────────────────────────────────
 def pack_input(kind, payload_type, payload):
     """One templated-package data input: ANAM names the type, then its value."""
@@ -654,7 +706,7 @@ def make_cast_package():
                           qnam=FID_COMMAND_QUEST)
 
 
-def build_travel(fid, edid, alias_idx, radius, qnam):
+def build_travel(fid, edid, alias_idx, radius, qnam, pkdt_flags=0x00002000):
     """One PACK instance riding vanilla Travel (00016FAA): walk to the ref an
     alias holds, then stop. Byte shape mirrored VERBATIM from the shipped
     alias-delivered exemplar VC01FalionAtSummoningCircle (0010FF16) -- PLDT
@@ -682,7 +734,15 @@ def build_travel(fid, edid, alias_idx, radius, qnam):
     # inert default); WITH 0x2000 it spreads 124/282/703/350 across Walk/Jog/Run/
     # FastWalk. So 0x2000 is Preferred-Speed-enable, full stop. interruptFlags
     # 0x0054 and the byte tail otherwise verbatim from the exemplar.
-    body += subrec('PKDT', bytes.fromhex('002000001200028054000000'))
+    #
+    # pkdt_flags default 0x00002000 keeps the shipped loot-travel record
+    # byte-identical (<I of 0x00002000 == the old literal '00200000'). The
+    # RETREAT PROBE passes 0x00102000 = kIgnoreCombat (0x00100000, the same bit
+    # build_usemagic authors on the combat-capable cast package, verbatim from
+    # TG08BMercerCombatOverrideCastAtBrynjolf 000FCC26) | 0x2000 preferred-speed
+    # enable. Tail '1200028054000000' = type 18, byte6=2 (Run), interruptFlags
+    # 0x0054 -- unchanged in both.
+    body += subrec('PKDT', struct.pack('<I', pkdt_flags) + bytes.fromhex('1200028054000000'))
     # PSDT: any time, any day -- the same 3,855-of-5,961 default build_usemagic uses.
     body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
     # NO CTDA. The package is unconditional -- it runs whenever the loot quest's
@@ -721,6 +781,21 @@ def make_travel_package():
                         alias_idx=1, radius=128, qnam=FID_LOOT_QUEST)
 
 
+def make_retreat_package():
+    """RETREAT PROBE: walk to the ref in MFO_RetreatQuest alias 1 (the player),
+    IGNORING COMBAT. Identical to the shipped loot-travel record except:
+      * PKDT general flags 0x00102000 -- kIgnoreCombat (0x00100000) on top of
+        the preferred-speed enable (0x2000). kIgnoreCombat is the bit all six
+        vanilla fight-during-combat UseMagic instances set and the cast package
+        already ships; this is its first pairing with Travel in MFO.
+      * radius 150 (~at the player's side), not 128 (~on the corpse).
+    Byte 6 stays 2 (Run) -- a retreat at a stroll would be ambiguous data.
+    """
+    return build_travel(FID_RETREAT_PACKAGE, "MFO_RetreatPackage",
+                        alias_idx=1, radius=150, qnam=FID_RETREAT_QUEST,
+                        pkdt_flags=0x00102000)
+
+
 def make_poc_packages():
     """The probe ladder -- see POC_PROBES. One axis of novelty per probe,
     exactly one valid at a time via the MFO_ProbeSelect gate."""
@@ -748,12 +823,13 @@ def make_pack():
     if POC_ENABLED:
         body += make_poc_packages()
     body += make_travel_package()
+    body += make_retreat_package()
     return group('PACK', body)
 
 
 def make_qust():
     return group('QUST', make_startup_quest() + make_mcm_quest()
-                 + make_command_quest() + make_loot_quest())
+                 + make_command_quest() + make_loot_quest() + make_retreat_quest())
 
 
 def main():
@@ -787,10 +863,11 @@ def main():
         f.write(struct.pack('<I', FID_MCM_QUEST))
         f.write(struct.pack('<I', FID_COMMAND_QUEST))
         f.write(struct.pack('<I', FID_LOOT_QUEST))
+        f.write(struct.pack('<I', FID_RETREAT_QUEST))
 
     print(f"MFO {VERSION}")
     print(f"Written: {out_path} ({len(data):,} bytes)")
-    print(f"Written: {seq_path} (3 start-game-enabled quests: MCM, Command, Loot)")
+    print(f"Written: {seq_path} (4 start-game-enabled quests: MCM, Command, Loot, Retreat)")
     print()
     print("Records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{NEXT_OBJECT_ID:03X}")
@@ -801,9 +878,11 @@ def main():
     print(f"  QUST  0x{FID_MCM_QUEST & 0xFFF:03X}        MFO_MCMQuest (MFO_MCM script)")
     print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (2 aliases, DLL-filled)")
     print(f"  QUST  0x{FID_LOOT_QUEST & 0xFFF:03X}        MFO_LootQuest (2 aliases, DLL-filled; static prio {LOOT_PRIORITY})")
+    print(f"  QUST  0x{FID_RETREAT_QUEST & 0xFFF:03X}        MFO_RetreatQuest (2 aliases, DLL-filled; static prio {RETREAT_PRIORITY})")
     print(f"  PACK  0x{FID_CAST_PACKAGE & 0xFFF:03X}        MFO_CastPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X}"
           + ("  [NOT attached under POC]" if POC_ENABLED else ""))
     print(f"  PACK  0x{FID_TRAVEL_PACKAGE & 0xFFF:03X}        MFO_TravelPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X}")
+    print(f"  PACK  0x{FID_RETREAT_PACKAGE & 0xFFF:03X}        MFO_RetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat")
     if POC_ENABLED:
         print(f"  GLOB  0x{FID_PROBE_GLOB & 0xFFF:03X}        MFO_ProbeSelect (console: set MFO_ProbeSelect to N; 0 = all probes off)")
         for idx, sp, label, (tkind, tval) in POC_PROBES:

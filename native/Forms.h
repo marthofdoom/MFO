@@ -31,6 +31,10 @@ namespace MFO::Forms {
     inline constexpr RE::FormID kLootQuest        = 0x80C;   // Option A: travel-to-loot delivery
     inline constexpr RE::FormID kCastPackage      = 0x820;
     inline constexpr RE::FormID kTravelPackage    = 0x828;   // Option A: rides vanilla Travel
+    // RETREAT PROBE: travel-to-player under kIgnoreCombat -- can an alias
+    // Travel package pull a follower away from a live combat controller?
+    inline constexpr RE::FormID kRetreatQuest     = 0x830;
+    inline constexpr RE::FormID kRetreatPackage   = 0x831;
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -43,6 +47,8 @@ namespace MFO::Forms {
     inline RE::TESPackage* g_castPackage  = nullptr;
     inline RE::TESQuest*   g_lootQuest    = nullptr;   // Option A
     inline RE::TESPackage* g_travelPackage = nullptr;  // Option A
+    inline RE::TESQuest*   g_retreatQuest   = nullptr; // RETREAT PROBE
+    inline RE::TESPackage* g_retreatPackage = nullptr; // RETREAT PROBE
 
     // Resolve at kDataLoaded. Returns false if anything required is missing.
     // A missing form disables ONE feature with a named log line -- never a

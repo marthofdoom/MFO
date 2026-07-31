@@ -3,6 +3,22 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.26 — three engine probes (loose-item, retreat, economy) — instrument-only
+
+Log-only builds to reveal three mechanisms in natural play (no deliberate test):
+- [acquire] LOOSE-ITEM: an archer's spent arrows / dropped gold now route through
+  the proven travel walk, then a VM-dispatched ObjectReference.Activate picks them
+  up (engine does it — no PickUpObject on our thread). Logs dispatch + a next-tick
+  ref-gone/inventory-delta readback.
+- [retreat] RETREAT: at low confidence + in combat + >400u from you, a new alias
+  Travel package (kIgnoreCombat, static-60 + eviction) tries to pull the follower
+  back to you. Logs whether the travel package holds DURING combat vs the combat
+  controller keeping locomotion; a [retreat-b] rider logs the vanilla isFleeing state.
+- [econprobe] ECONOMY: near a merchant, logs what MFO WOULD sell (unworn gear +
+  jewellery the vendor buys) and WOULD buy (logistics quotas), plus the vendor's
+  gold. Zero transactions — validates detection/filter before any gold moves.
+No behaviour change beyond the loose-item pickup; probes come out once read.
+
 ## v0.8.25 — new gambit vocabulary + loot depth (big-patch batch 1)
 
 New COMBAT conditions: Foe is a spellcaster / is ranged / is weaker than me / is

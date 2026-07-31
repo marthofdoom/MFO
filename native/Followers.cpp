@@ -289,6 +289,9 @@ namespace MFO::Followers {
                 // loot can't be freed by priority (nothing reclaims him) and the
                 // fill is serialized, so it re-latches every load. Evict him.
                 Logistics::OnFollowerRemoved(id);
+                // And the retreat-probe alias -- identical claim model,
+                // identical serialized tail.
+                Packages::RetreatEvictIf(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport
                 // (DESIGN.md §3.1, the emotional core of the progression).
                 spdlog::info("[follower] - {:08X} (record and Rapport retained)", id);

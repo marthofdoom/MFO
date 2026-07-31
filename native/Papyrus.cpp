@@ -74,6 +74,40 @@ namespace MFO::Papyrus {
         return ok;
     }
 
+    bool DispatchActivate(RE::TESObjectREFR* a_ref, RE::TESObjectREFR* a_activator) {
+        if (!a_ref || !a_activator) {
+            ++g_failures;
+            return false;
+        }
+
+        auto* vm = VM();
+        if (!vm) { ++g_failures; return false; }
+
+        // The handle is the REF's (the thing being activated); the follower
+        // rides along as akActionRef. Same policy mapping as DoCombatSpellApply.
+        RE::VMHandle handle{};
+        if (!HandleFor(a_ref, handle)) {
+            ++g_failures;
+            return false;
+        }
+
+        // abDefaultProcessingOnly=false: run the FULL activation (an ammo/gold
+        // pile's default processing IS the pickup; false also lets any
+        // OnActivate blocks fire exactly as a real activation would).
+        // unique_ptr for the same MakeFunctionArguments leak noted above.
+        std::unique_ptr<RE::BSScript::IFunctionArguments> args{
+            RE::MakeFunctionArguments(std::move(a_activator), false) };
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+
+        // Handle form again: ObjectReference.psc's Activate is native and
+        // reachable by class name against the handle, no bound script needed.
+        const bool ok = vm->DispatchMethodCall2(handle, "ObjectReference", "Activate",
+                                                args.get(), callback);
+        if (ok) ++g_dispatches;
+        else    ++g_failures;
+        return ok;
+    }
+
     std::uint32_t Dispatches() { return g_dispatches.load(); }
     std::uint32_t Failures()   { return g_failures.load(); }
 

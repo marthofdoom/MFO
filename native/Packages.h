@@ -220,6 +220,29 @@ namespace MFO::Packages {
     // with the player. No-op if a_id is not the current holder. See the .cpp.
     void LootTravelEvictIf(RE::FormID a_id);
 
+    // ── RETREAT PROBE: travel-to-PLAYER under kIgnoreCombat ─────────────────
+    // One question, answered in natural play: can an alias Travel package
+    // carrying kIgnoreCombat (0x00100000) pull a follower AWAY from a live
+    // combat controller? MFO_RetreatQuest is the loot quest's exact claim
+    // model -- STATIC priority 60, claim at fill, release by eviction, never a
+    // priority flip (ENGINE_NOTES 0.36) -- with alias 1 filled with the PLAYER
+    // and a Travel package that does NOT yield to combat. The Scheduler drives
+    // it (fill once per combat per low-confidence far follower) and instruments
+    // every tick; this module owns the alias plumbing only.
+    //
+    // The fill is SAVE-SERIALIZED like the loot fill (#55): the Scheduler MUST
+    // RetreatClear on combat end / arrival / timeout, and ReleaseAll evicts the
+    // retreat alias on load so a mid-retreat save self-heals.
+    bool RetreatFill(RE::Actor* a_follower);
+    void RetreatClear(const char* a_why, RE::Actor* a_follower = nullptr);
+    // Who currently holds the retreat alias (0 when nobody), and for how long.
+    RE::FormID RetreatHolder();
+    float      RetreatSeconds();
+    // Evict a_id from the retreat alias if he occupies it -- the dismissal-path
+    // twin of LootTravelEvictIf, same #55 tail: the fill is engine-serialized
+    // and nothing reclaims a dismissed follower.
+    void RetreatEvictIf(RE::FormID a_id);
+
     // Session-scoped counters, cleared on revert like every sibling module.
     void ClearTransientState();
 

@@ -43,11 +43,14 @@ REQUIRED = {
     0x80C: ('QUST', "MFO_LootQuest",        ['EDID', 'DNAM', 'ALST', 'ALPC']),
     0x820: ('PACK', "MFO_CastPackage",      ['EDID', 'PKDT', 'PKCU']),
     0x828: ('PACK', "MFO_TravelPackage",    ['EDID', 'PKDT', 'PKCU', 'PLDT']),
+    # RETREAT PROBE: travel-to-player under kIgnoreCombat.
+    0x830: ('QUST', "MFO_RetreatQuest",     ['EDID', 'DNAM', 'ALST', 'ALPC']),
+    0x831: ('PACK', "MFO_RetreatPackage",   ['EDID', 'PKDT', 'PKCU', 'PLDT']),
 }
 
 # Quests that are start-game-enabled but NOT run-once must appear in the SEQ or
 # they never start on an existing save.
-SEQ_EXPECTED = {0x808, 0x80A, 0x80C}
+SEQ_EXPECTED = {0x808, 0x80A, 0x80C, 0x830}
 
 GRUP_HDR = 24
 REC_HDR = 24
@@ -171,6 +174,19 @@ def main():
             if stype != 3:
                 errors.append(f"SPEL 0x801: SPIT type {stype}, expected 3 (Lesser Power). "
                               f"Type 4 is an Ability and never fires TESSpellCastEvent")
+
+    # RETREAT PROBE sanity: the probe's entire question is whether kIgnoreCombat
+    # (0x00100000) on a Travel package survives a live combat controller. A
+    # record missing the bit measures nothing while looking like a clean run.
+    if 0x831 in by_local:
+        pkdt = by_local[0x831][1].get('PKDT')
+        if pkdt and len(pkdt) >= 7:
+            pflags = struct.unpack('<I', pkdt[:4])[0]
+            if pflags != 0x00102000:
+                errors.append(f"PACK 0x831: PKDT flags {pflags:08X}, expected 00102000 "
+                              f"(kIgnoreCombat 0x00100000 | preferred-speed 0x2000)")
+            if pkdt[6] != 2:
+                errors.append(f"PACK 0x831: PKDT byte6 (preferredSpeed) {pkdt[6]}, expected 2 (Run)")
 
     # 8. SEQ
     seq_path = os.path.join(os.path.dirname(esp), "SEQ", "MFO.seq")

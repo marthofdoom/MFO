@@ -615,6 +615,21 @@ namespace MFO::Packages {
             return nullptr;
         }
 
+        // ── RETREAT PROBE plumbing (see Packages.h) ─────────────────────────
+        // Same aliases-by-convention as the loot quest: 0 = the follower
+        // (carries MFO_RetreatPackage), 1 = the destination (the PLAYER).
+        constexpr std::uint32_t kAliasRetreatActor  = 0;
+        constexpr std::uint32_t kAliasRetreatTarget = 1;
+
+        // Who is currently claimed by the retreat quest, and since when. The
+        // Scheduler reads these to drive per-tick instrumentation; the alias
+        // itself is the engine-authoritative state (this is a mirror, reset on
+        // every clear / ReleaseAll / revert).
+        struct RetreatHold {
+            RE::FormID        actorID = 0;
+            Clock::time_point startAt{};
+        };
+        RetreatHold g_retreatHold;
 
     }  // namespace
 
@@ -785,6 +800,23 @@ namespace MFO::Packages {
             }
         }
 
+        // RETREAT PROBE: same eviction on load, same reason -- the retreat alias
+        // is engine-serialized, so a save made mid-retreat loads with the
+        // follower still claimed at static 60 and marching to the player's
+        // SAVED position through any fight in the way.
+        if (auto* quest = Forms::g_retreatQuest) {
+            RE::ObjectRefHandle h{};
+            quest->CreateRefHandleByAliasID(h, kAliasRetreatActor);
+            auto* held = h.get() ? h.get().get() : nullptr;
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (held && player && held != player) {
+                ForceRefToNative(quest, kAliasRetreatActor, player);
+                spdlog::info("[retreat] {} -- retreat alias held {:08X}; evicted to player",
+                             a_why, held->GetFormID());
+            }
+        }
+        g_retreatHold = RetreatHold{};
+
         if (g_holder.phase == Phase::Idle) {
             // Clear anyway on the lifecycle edges: a fill from a PREVIOUS
             // session is in the save and this module has no memory of it, so
@@ -871,14 +903,17 @@ namespace MFO::Packages {
     // reader as ForeignOwnerBlocks) -- if an MFO_LootQuest package remains, the
     // eviction did NOT free him, and "released" is a lie. Run on EVERY release
     // now (Clear is the hot path), so the first deck run settles it either way.
-    void VerifyDetached(RE::Actor* a_follower, const char* a_why) {
-        auto* quest = Forms::g_lootQuest;
-        if (!a_follower || !quest) return;
+    // Generic over the owning quest so the retreat probe's clear runs the SAME
+    // measured readback as loot's (identical claim model, identical proof).
+    static void VerifyDetachedFrom(RE::TESQuest* a_quest, RE::Actor* a_follower,
+                                   const char* a_tag, const char* a_questName,
+                                   const char* a_why) {
+        if (!a_follower || !a_quest) return;
         bool stillClaimed = false;
         if (auto* arr = a_follower->extraList.GetByType<RE::ExtraAliasInstanceArray>()) {
             RE::BSReadLockGuard guard(arr->lock);
             for (auto* inst : arr->aliases) {
-                if (inst && inst->quest == quest &&
+                if (inst && inst->quest == a_quest &&
                     inst->instancedPackages && !inst->instancedPackages->empty()) {
                     stillClaimed = true;
                     break;
@@ -886,12 +921,16 @@ namespace MFO::Packages {
             }
         }
         if (stillClaimed)
-            spdlog::error("[loot] EVICT INCOMPLETE ({}) -- {:08X} STILL carries an "
-                          "MFO_LootQuest alias package after player-displace", a_why,
-                          a_follower->GetFormID());
+            spdlog::error("[{}] EVICT INCOMPLETE ({}) -- {:08X} STILL carries an "
+                          "{} alias package after player-displace", a_tag, a_why,
+                          a_follower->GetFormID(), a_questName);
         else
-            spdlog::info("[loot] {:08X} detached from loot alias ({})",
-                         a_follower->GetFormID(), a_why);
+            spdlog::info("[{}] {:08X} detached from {} alias ({})",
+                         a_tag, a_follower->GetFormID(), a_tag, a_why);
+    }
+
+    void VerifyDetached(RE::Actor* a_follower, const char* a_why) {
+        VerifyDetachedFrom(Forms::g_lootQuest, a_follower, "loot", "MFO_LootQuest", a_why);
     }
 
     void LootTravelClear(const char* a_why, RE::Actor* a_follower) {
@@ -941,6 +980,89 @@ namespace MFO::Packages {
             VerifyDetached(actor, "dismissed");   // prove the ex-actor detached
     }
 
+    // ── RETREAT PROBE (see Packages.h) ───────────────────────────────────────
+    // Cloned from LootTravelFill: the SAME claim model on the SAME machinery,
+    // differing only in which quest/records and in that alias 1 is the PLAYER.
+    bool RetreatFill(RE::Actor* a_follower) {
+        auto* quest = Forms::g_retreatQuest;
+        if (!a_follower || !quest || !Forms::g_retreatPackage) return false;
+        // The native ForceRefTo id is AE-only (see ForceRefToNative). Off AE
+        // the probe simply never runs -- no VM fallback, no partial data.
+        if (!REL::Module::IsAE())                  return false;
+        if (!quest->IsRunning()) {
+            spdlog::error("[retreat] MFO_RetreatQuest {:08X} is NOT RUNNING -- Data/SEQ/MFO.seq "
+                          "missing or stale? Probe unavailable.", quest->GetFormID());
+            return false;
+        }
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return false;
+        // ONE retreat at a time -- one quest, one alias pair, same single-holder
+        // shape as loot travel. A second fill would silently evict the first
+        // mid-measurement and corrupt both data points.
+        if (g_retreatHold.actorID && g_retreatHold.actorID != a_follower->GetFormID()) {
+            spdlog::debug("[retreat] {:08X}: declined -- alias held by {:08X}",
+                          a_follower->GetFormID(), g_retreatHold.actorID);
+            return false;
+        }
+        // Fill the TARGET first, then the ACTOR -- same no-rooting order as
+        // loot: the destination (the player) is resolved before alias 0
+        // instances the travel package. Both fills synchronous native.
+        if (!ForceRefToNative(quest, kAliasRetreatTarget, player)) return false;
+        if (!ForceRefToNative(quest, kAliasRetreatActor, a_follower)) {
+            RetreatClear("actor fill failed");
+            return false;
+        }
+        // Static 60 is already in the record; the fill IS the claim (0.36).
+        // (true, false): NEVER resetAI -- it clears the combat group, and this
+        // call happens IN COMBAT by design.
+        a_follower->EvaluatePackage(true, false);
+        g_retreatHold.actorID = a_follower->GetFormID();
+        g_retreatHold.startAt = Clock::now();
+        spdlog::info("[retreat] {:08X}: travel-to-player dispatched (quest prio={}, kIgnoreCombat)",
+                     a_follower->GetFormID(), static_cast<int>(quest->data.priority));
+        return true;
+    }
+
+    void RetreatClear(const char* a_why, RE::Actor* a_follower) {
+        // RELEASE BY EVICTION, verbatim from LootTravelClear: force-fill alias 0
+        // with the PLAYER (a real ForceRefTo -- the null clear is a no-op, 0.34;
+        // a priority flip never re-arbitrates, 0.36), then prove the detach with
+        // the same ExtraAliasInstanceArray readback. NEVER a VM Clear.
+        auto* quest = Forms::g_retreatQuest;
+        if (!quest) return;
+        if (auto* player = RE::PlayerCharacter::GetSingleton())
+            ForceRefToNative(quest, kAliasRetreatActor, player);   // no-op off AE, fine
+        if (a_follower) {
+            a_follower->EvaluatePackage(true, false);   // reclaim THIS tick; never resetAI
+            VerifyDetachedFrom(quest, a_follower, "retreat", "MFO_RetreatQuest", a_why);
+        }
+        g_retreatHold = RetreatHold{};
+        spdlog::info("[retreat] travel released ({}) -- evicted to player", a_why);
+    }
+
+    RE::FormID RetreatHolder() { return g_retreatHold.actorID; }
+    float      RetreatSeconds() { return Since(g_retreatHold.startAt); }
+
+    void RetreatEvictIf(RE::FormID a_id) {
+        // The dismissal-path twin of LootTravelEvictIf: keyed to alias
+        // OCCUPANCY, no-op unless a_id is in the slot. A follower dismissed
+        // mid-retreat has no framework claim left, so MFO's static-60 claim is
+        // his sole one -- evict (fill the player; the null clear is a no-op,
+        // 0.34) so he detaches instead of re-latching on every load.
+        auto* quest = Forms::g_retreatQuest;
+        if (!quest) return;
+        RE::ObjectRefHandle h{};
+        quest->CreateRefHandleByAliasID(h, kAliasRetreatActor);
+        auto* held = h.get() ? h.get().get() : nullptr;
+        if (!held || held->GetFormID() != a_id) return;
+
+        if (auto* player = RE::PlayerCharacter::GetSingleton())
+            ForceRefToNative(quest, kAliasRetreatActor, player);   // no-op off AE, fine
+        if (auto* actor = held->As<RE::Actor>())
+            VerifyDetachedFrom(quest, actor, "retreat", "MFO_RetreatQuest", "dismissed");
+        if (g_retreatHold.actorID == a_id) g_retreatHold = RetreatHold{};
+    }
+
     Status Get() {
         Status s;
         s.phase        = g_holder.phase;
@@ -962,6 +1084,7 @@ namespace MFO::Packages {
 
     void ClearTransientState() {
         ResetHolder();
+        g_retreatHold = RetreatHold{};
         g_requests    = 0;
         g_completions = 0;
         g_declines    = 0;
