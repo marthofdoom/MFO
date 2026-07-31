@@ -4,6 +4,7 @@
 #include "Logistics.h"   // supply-condition reads (counts of potions / arrows)
 #include "Followers.h"   // g_active -- the maintained teammate list (ally selector)
 #include "Config.h"      // g_sharedRadius -- "ally" locality
+#include "Confidence.h"  // ChaseRadius -- the combat chase cap (#22)
 
 namespace MFO::Eval {
 
@@ -103,6 +104,19 @@ namespace MFO::Eval {
                     if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
 
                     const float dist = selfPos.GetDistance(foe->GetPosition());
+
+                    // CONFIDENCE CHASE CAP (#22): never auto-select a foe beyond
+                    // the follower's confidence-scaled chase radius, so a distance-
+                    // blind selector ("attack the weakest / nearest / undead ...")
+                    // can't march him across a pack to a far target (Erik's Falmer
+                    // charge). Hurt/mobbed shrinks it; healthy widens it. The
+                    // player's OWN explicit range selectors bypass -- they set that
+                    // distance on purpose.
+                    if (a_op != Vocab::kCondFoeWithinRange &&
+                        a_op != Vocab::kCondFoeBeyondRange &&
+                        dist > Confidence::ChaseRadius(a_self))
+                        continue;
+
                     float score = dist;   // default for the gate-style selectors
 
                     if (a_op == Vocab::kCondFoeAny) {

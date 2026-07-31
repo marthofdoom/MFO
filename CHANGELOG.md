@@ -3,6 +3,20 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.24 — combat sense 1: confidence-scaled chase range (dev)
+
+Erik no longer charges 20 Falmer solo to reach the weakest one. Confidence now
+feeds combat (the second consumer this system was always meant to have): a
+follower only auto-picks a foe within a confidence-scaled CHASE RADIUS of
+himself. Hurt or mobbed -> it shrinks, he fights only what's on top of him and
+holds near you; healthy and safe -> it widens, he ranges. The "attack the
+weakest foe" order can't march him across a pack anymore. Floor stays above
+melee so he always defends against an adjacent foe; your own explicit
+within/beyond-range gambits bypass it. Tunable via fChaseMin/fChaseMax.
+
+(First of the combat-sense stack; foe-count-into-confidence and a real retreat
+follow.)
+
 ## v0.8.23 — gem transfer only replaces same-role gear
 
 Fix: a follower with a fire enchant on his MELEE weapon lost it to a looted BOW.

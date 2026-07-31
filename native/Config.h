@@ -250,6 +250,12 @@ namespace MFO::Config {
     // scared floor is ~one room and the confident ceiling is several rooms.
     inline std::atomic<float> g_leashMin{ 512.0f };    // scared: ~one room from the player
     inline std::atomic<float> g_leashMax{ 4000.0f };   // confident: several rooms, near a full cell
+    // Combat chase radius (#22): how far from HIMSELF a follower engages a foe,
+    // confidence-scaled. Floor well above melee so he always fights an adjacent
+    // foe; ceiling lets a bold follower range the field. Stops the distance-blind
+    // "attack the weakest" from marching him across a pack.
+    inline std::atomic<float> g_chaseMin{ 600.0f };    // scared: only what's on top of him
+    inline std::atomic<float> g_chaseMax{ 3000.0f };   // confident: ranges across the field
 
     // Which caster a gambit spell goes through. PROVEN 2026-07-21: NO source
     // animates -- kLeftHand/kRightHand/kOther were all tried in the field and

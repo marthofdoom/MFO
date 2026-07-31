@@ -48,4 +48,18 @@ namespace MFO::Confidence {
         const float hi = Config::g_leashMax.load();
         return lo + Of(a_follower) * std::max(0.0f, hi - lo);
     }
+
+    // THE SECOND CONSUMER this header always promised (#22): the confidence-
+    // scaled COMBAT chase radius, in game units, measured from the FOLLOWER. How
+    // far out he will pick a foe to engage. Hurt/mobbed -> low -> he fights only
+    // what is on top of him and holds near the player; healthy/safe -> high ->
+    // he ranges across the field. Gates PickFoe so "attack the weakest foe"
+    // (distance-blind) can't send him charging THROUGH a pack to a distant
+    // target -- Erik's 20-Falmer suicide charge. The floor stays well above
+    // melee reach so he always defends himself against an adjacent foe.
+    inline float ChaseRadius(RE::Actor* a_follower) {
+        const float lo = Config::g_chaseMin.load();
+        const float hi = Config::g_chaseMax.load();
+        return lo + Of(a_follower) * std::max(0.0f, hi - lo);
+    }
 }

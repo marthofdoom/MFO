@@ -132,6 +132,8 @@ namespace MFO::Config {
             else if (a_key == "iTravelGait")         setI(g_travelGait, 0, 3);   // 0=Walk 1=Jog 2=Run 3=FastWalk
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
+            else if (a_key == "fChaseMin")          setF(g_chaseMin,       64.0f, 8192.0f);
+            else if (a_key == "fChaseMax")          setF(g_chaseMax,       64.0f, 8192.0f);
             // Unknown keys are ignored in silence: MCM Helper writes keys we
             // may not know yet, and warning on them would cry wolf every load.
         }
@@ -214,6 +216,8 @@ namespace MFO::Config {
             g_travelGait         = 2;   // Run -- matches the shipped ESP byte
             g_leashMin           = 512.0f;
             g_leashMax           = 4000.0f;
+            g_chaseMin           = 600.0f;
+            g_chaseMax           = 3000.0f;
         }
 
     }
