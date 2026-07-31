@@ -3,6 +3,21 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.27 — hotfix: economy probe CTD on a follower-as-vendor
+
+The [econprobe] treated any nearby actor whose faction passes IsVendor() &&
+OffersServices() as a merchant. A fellow FOLLOWER (Auri) carries a stray vendor
+faction but a malformed merchant container; reading it null-derefs a form cast
+inside GetInventory and crashes to desktop (EXCEPTION_ACCESS_VIOLATION at
+MFO.dll, on the logistics job worker). Reproducible.
+
+- Vendor candidates now skip teammates (a follower is never a merchant; teammates
+  trade through the player, not each other) — kills the exact trigger.
+- The merchant-chest read is gated on chest->GetContainer() (a real container
+  REFR) before walking it — defense-in-depth so any other stray-vendor actor
+  can't recur the same fault.
+Instrument-only still; no transactions. Loose-item and retreat probes unchanged.
+
 ## v0.8.26 — three engine probes (loose-item, retreat, economy) — instrument-only
 
 Log-only builds to reveal three mechanisms in natural play (no deliberate test):

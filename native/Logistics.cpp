@@ -1534,6 +1534,13 @@ namespace MFO::Logistics {
                     if (!actor || actor == a_follower || actor == pc || actor->IsDead() ||
                         actor->IsDisabled() || actor->IsMarkedForDeletion())
                         return RE::BSContainer::ForEachResult::kContinue;
+                    // A fellow FOLLOWER is never a merchant. Auri carries a stray
+                    // vendor faction (IsVendor && OffersServices both pass), but her
+                    // "merchant container" is malformed -- reading it null-derefs a
+                    // form cast and CTDs (crash 2026-07-31, thread on the job worker).
+                    // Teammates trade through the player, not each other.
+                    if (actor->IsPlayerTeammate())
+                        return RE::BSContainer::ForEachResult::kContinue;
                     living.push_back(actor->GetHandle());
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
@@ -1575,10 +1582,14 @@ namespace MFO::Logistics {
                 // two the real barter draws on, so log the split, not just the
                 // sum. An unloaded chest (no 3D) must still read: inventory is
                 // container/extra data.
+                // Only a chest that is a real container REFR (has a base TESContainer)
+                // is safe to walk -- a malformed merchant link (fake vendor faction)
+                // otherwise null-derefs a form cast inside GetInventory (see the
+                // teammate skip above). GetContainer() is the cheap validity gate.
                 auto* chest = fac->vendorData.merchantContainer;
                 constexpr RE::FormID kGold001 = 0x0000000F;
                 int chestGold = 0;
-                if (chest) {
+                if (chest && chest->GetContainer()) {
                     for (auto& [obj, data] : chest->GetInventory()) {
                         if (obj && obj->GetFormID() == kGold001 && data.first > 0)
                             chestGold += data.first;
