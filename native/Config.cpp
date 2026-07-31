@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Config.h"
+#include "Gait.h"
 
 #include <cctype>
 #include <charconv>
@@ -128,6 +129,7 @@ namespace MFO::Config {
             else if (a_key == "fBatchLinger")        setF(g_batchLinger,     0.0f, 15.0f);
             else if (a_key == "fExcursionMax")       setF(g_excursionMax,    5.0f, 300.0f);
             else if (a_key == "fNavmeshGate")        setF(g_navmeshGate,     0.0f, 2048.0f);
+            else if (a_key == "iTravelGait")         setI(g_travelGait, 0, 3);   // 0=Walk 1=Jog 2=Run 3=FastWalk
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
             // Unknown keys are ignored in silence: MCM Helper writes keys we
@@ -209,6 +211,7 @@ namespace MFO::Config {
             g_batchLinger        = 4.0f;
             g_excursionMax       = 60.0f;
             g_navmeshGate        = 300.0f;
+            g_travelGait         = 2;   // Run -- matches the shipped ESP byte
             g_leashMin           = 512.0f;
             g_leashMax           = 4000.0f;
         }
@@ -223,6 +226,14 @@ namespace MFO::Config {
         ReadFile(kMCMPath);    // MCM Helper's store wins
 
         spdlog::set_level(g_enableLogging ? spdlog::level::info : spdlog::level::warn);
+
+        // Config -> engine-record derived state, refreshed by EVERY read so the
+        // MCM-close re-read (Diagnostics' MenuSink) applies it live without each
+        // caller remembering to (the g_showHud note above is the pattern this
+        // avoids repeating). No-ops before Forms::Resolve; kDataLoaded calls it
+        // again after. A single u8 store on MFO's own PACK record -- safe from
+        // the task-queue thread Read() runs on at MCM close.
+        Gait::Apply();
     }
 
 }

@@ -223,6 +223,16 @@ namespace MFO::Config {
     inline std::atomic<float> g_batchLinger{ 4.0f };
     inline std::atomic<float> g_excursionMax{ 60.0f };
 
+    // WALK-TO-LOOT GAIT (task 16, ENGINE_NOTES §0.35). The travel package's
+    // PKDT byte 6: 0=Walk, 1=Jog, 2=Run, 3=FastWalk. Meaningful ONLY because
+    // the ESP ships the 0x2000 Preferred-Speed-enable flag (v0.8.3) -- without
+    // it the byte is inert (measured: 4,386/4,502 flagless vanilla PACKs carry
+    // an inert 2). Applied to the live TESPackage record by Gait::Apply(),
+    // which runs at the end of every Config::Read() -- NOT read per-tick, so
+    // it is derived engine state, not a live atomic. Default 2 (Run) = the
+    // shipped ESP byte, so an absent key changes nothing. iTravelGait.
+    inline std::atomic<int>   g_travelGait{ 2 };
+
     // NAVMESH GATE (units). Before dispatching a walk, MFO checks the nearest
     // navmesh vertex to the loot ref; if it's farther than this, the ref is
     // OFF the navmesh (a corpse clipped into geometry / on furniture) and the

@@ -34,6 +34,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Papyrus.cpp
     Targeting.cpp
     Packages.cpp
+    Gait.cpp
     CasterConsent.cpp
     ItemCatalog.cpp
 )

@@ -367,6 +367,47 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // Is this ARMO a piece of jewellery (amulet/ring)? The patcher's catalog
+        // classifies it from the real record; with no patcher run, fall back to
+        // the record heuristic -- worn on the Amulet or Ring biped slot AND zero
+        // armor rating (an enchanted circlet-of-armor would still protect;
+        // jewellery does not, cf. ArmorIsBetter's clothing test).
+        bool IsJewelryPiece(RE::TESObjectARMO* a_armo) {
+            if (Catalog::Loaded()) return Catalog::IsJewelry(a_armo->GetFormID());
+            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
+            const bool jewelSlot =
+                (mask & static_cast<std::uint32_t>(Slot::kAmulet)) != 0 ||
+                (mask & static_cast<std::uint32_t>(Slot::kRing))   != 0;
+            return jewelSlot && a_armo->GetArmorRating() <= 0.0f;
+        }
+
+        // Take all the jewellery (amulets/rings) on a corpse/container. Held for
+        // the player like gold -- Valuables tier, so it WAITS out first dibs
+        // (below); nothing to equip. Collect-then-transfer like LootAmmo (#2).
+        bool LootJewelry(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; };
+            std::vector<Take> takes;
+            for (auto& [obj, data] : a_src->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* armo = obj->As<RE::TESObjectARMO>();
+                if (!armo || !IsJewelryPiece(armo)) continue;
+                // NEVER-LOOT: quest amulets / unique rings stay for the player.
+                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (a_peek) return true;
+                takes.push_back({ obj, data.first });
+            }
+            if (a_peek) return false;
+            bool moved = false;
+            for (const auto& t : takes) {
+                if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
+                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                  nullptr, a_follower);
+                moved = true;
+            }
+            return moved;
+        }
+
         // ── DRINK ───────────────────────────────────────────────────────────
         // Consume the BEST (highest-magnitude) restore potion of a_which the
         // follower already carries. The AlchemyItem equip path IS the vanilla
@@ -452,7 +493,7 @@ namespace MFO::Logistics {
         }
 
         // ── the looting dispatcher ──────────────────────────────────────────
-        enum class Category { Arrows, Bolts, Potions, Equipment, Gold };
+        enum class Category { Arrows, Bolts, Potions, Equipment, Gold, Jewelry };
 
         // Category label for the [loot] diagnostic. Naming the scanned category is
         // the ONLY way to read the composition line: "empty=36" is meaningless
@@ -465,6 +506,7 @@ namespace MFO::Logistics {
             case Category::Potions:   return "potions";
             case Category::Equipment: return "equipment";
             case Category::Gold:      return "gold";
+            case Category::Jewelry:   return "jewelry";
             default:                  return "?";
             }
         }
@@ -680,6 +722,7 @@ namespace MFO::Logistics {
             case Category::Potions:   return LootPotions(a_follower, a_ref, a_want);
             case Category::Equipment: return LootEquipment(a_follower, a_ref);
             case Category::Gold:      return LootGold(a_follower, a_ref);
+            case Category::Jewelry:   return LootJewelry(a_follower, a_ref);
             }
             return false;
         }
@@ -695,6 +738,7 @@ namespace MFO::Logistics {
             case Category::Potions:   return LootPotions(a_follower, a_ref, a_want, true);
             case Category::Equipment: return LootEquipment(a_follower, a_ref, true);
             case Category::Gold:      return LootGold(a_follower, a_ref, true);
+            case Category::Jewelry:   return LootJewelry(a_follower, a_ref, true);
             }
             return false;
         }
@@ -919,7 +963,7 @@ namespace MFO::Logistics {
                     //   Free (arrows/bolts/potions): released at once -- nobody
                     //     competes for the follower's own restock.
                     //   Gear (equipment): a short anti-snatch grace, or rejection.
-                    //   Valuables (gold; jewelry later): rejection, fair-chance
+                    //   Valuables (gold, jewellery): rejection, fair-chance
                     //     (player was near AND could see it and left it), or the
                     //     abandonment backstop (player never came near).
                     if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
@@ -962,7 +1006,7 @@ namespace MFO::Logistics {
                         released = rejected ||
                                    std::chrono::duration<float>(a_now - cl.seen).count()
                                        >= Config::g_firstDibsDelay.load();   // gear grace
-                    } else {                                     // Category::Gold -> Valuables
+                    } else {                                     // Gold / Jewelry -> Valuables
                         released = rejected ||
                                    cl.nearSecs >= Config::g_fairChance.load() ||
                                    (!cl.everNear &&
@@ -1148,6 +1192,7 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootMagickaPotion){ cat = Category::Potions; want = RE::ActorValue::kMagicka; }
                 else if (op == Vocab::kActLootEquipment)      cat = Category::Equipment;
                 else if (op == Vocab::kActLootGold)           cat = Category::Gold;
+                else if (op == Vocab::kActLootJewelry)        cat = Category::Jewelry;
                 else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
                 else isLoot = false;
                 if (isLoot && LootHere(a_follower, a_corpse, cat, want)) moved = true;
@@ -1178,6 +1223,7 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootMagickaPotion)  acted = LootNearby(a_follower, Category::Potions, a_now, RE::ActorValue::kMagicka, LootMode::kExcursion);
                 else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);
                 else if (op == Vocab::kActLootGold)           acted = LootNearby(a_follower, Category::Gold,    a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
+                else if (op == Vocab::kActLootJewelry)        acted = LootNearby(a_follower, Category::Jewelry, a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
                 else if (op == Vocab::kActWait) break;   // Wait is the user's deliberate STOP gambit
                                                          // (#3.3): end the batch -- returning false with
                                                          // nothing "waiting" makes Holding release.
@@ -1511,6 +1557,7 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootMagickaPotion)  acted = LootNearby(a_follower, Category::Potions, now, RE::ActorValue::kMagicka);
             else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, now);
             else if (op == Vocab::kActLootGold)           acted = LootNearby(a_follower, Category::Gold, now);
+            else if (op == Vocab::kActLootJewelry)        acted = LootNearby(a_follower, Category::Jewelry, now);
             else if (op == Vocab::kActWait) {
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.
             }

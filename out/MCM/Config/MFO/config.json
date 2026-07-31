@@ -347,6 +347,22 @@
           }
         },
         {
+          "id": "iTravelGait:General",
+          "text": "Walk-to-loot gait",
+          "type": "enum",
+          "help": "How fast a follower moves on a loot run. Run is the vanilla-follower default.",
+          "valueOptions": {
+            "sourceType": "ModSettingInt",
+            "options": [
+              "Walk",
+              "Jog",
+              "Run",
+              "Fast walk"
+            ],
+            "defaultValue": 2
+          }
+        },
+        {
           "id": "fTravelRadius:General",
           "text": "Walk-to-loot ceiling (units)",
           "type": "slider",

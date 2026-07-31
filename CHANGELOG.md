@@ -3,6 +3,21 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.20 — loot jewellery + a walk/jog/run gait toggle
+
+Two features built in parallel:
+
+- **Loot jewellery (#11).** A new "Loot jewellery" logistics gambit. Jewellery is
+  identified from the catalog (`mfo_items.json`), falling back to the amulet/ring
+  slot with no armour rating. It rides the same valuables dibs as gold (you get
+  first pick), and never touches catalogued never-loot items.
+- **Walk/jog/run gait (#16).** A "Walk-to-loot gait" MCM option on the Behaviour
+  Layer page. It sets the walk-to-loot excursion's gait by writing the travel
+  package's preferred-speed byte (the mechanism ENGINE_NOTES §0.35 measured) —
+  no hook, re-applied from config each session. Default Run, matching the shipped
+  package, so nothing changes unless you pick Walk or Jog. Normal following is
+  unaffected (that's the follower framework's own package, which MFO never edits).
+
 ## v0.8.19 — arrows, solved: the catalog fixes them too
 
 The arrow probe finally caught it: a corpse the follower was standing on held

@@ -15,6 +15,7 @@
 #include "CasterConsent.h"
 #include "Packages.h"
 #include "Logistics.h"
+#include "Gait.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -248,6 +249,7 @@ namespace {
             spdlog::info("[startup] kDataLoaded");
             MFO::Config::Read();            // config first -- everything else reads it
             MFO::Forms::Resolve();          // then forms
+            MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
             MFO::Followers::ResolveQuirks();
             MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
