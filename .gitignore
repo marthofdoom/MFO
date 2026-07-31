@@ -10,3 +10,7 @@ compile_commands.json
 
 # Third-party reference mods (method study only, never redistributed)
 Docs/*.7z
+
+# dotnet build artifacts (patcher)
+installer/MFO.Synthesis/bin/
+installer/MFO.Synthesis/obj/
