@@ -14,3 +14,6 @@ Docs/*.7z
 # dotnet build artifacts (patcher)
 installer/MFO.Synthesis/bin/
 installer/MFO.Synthesis/obj/
+
+# agent worktrees
+.claude/worktrees/
