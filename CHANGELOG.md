@@ -3,6 +3,23 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.28 — hotfix: disable economy probe (off-thread vendor read CTD)
+
+The v0.8.27 teammate skip removed one trigger but not the real bug: the
+[econprobe] read a LIVE vendor's inventory (chest->GetInventory /
+vendor->GetGoldAmount) from the logistics JOB WORKER, racing the main thread
+that manages the merchant. A form cast returns null mid-race and is dereferenced
+-> CTD on REAL vendors too (Ulfberth/Warmaidens, crash-2026-07-31-13-12-39).
+Corpse loot is safe on the worker (static inventory); a live merchant is not.
+
+- EconomyProbe is DISABLED (kept compiled behind if(false), so it can't bitrot).
+  #21's real barter/buy system must read vendor inventory on the MAIN thread --
+  and SKSE AddTask does not reach main in this runtime, so it needs a genuine
+  main-thread mechanism, not AddTask.
+- Loose-item [acquire] and retreat [retreat] probes are UNAFFECTED (they touch
+  static world refs / packages, never a live actor's inventory off-thread) and
+  keep instrumenting.
+
 ## v0.8.27 — hotfix: economy probe CTD on a follower-as-vendor
 
 The [econprobe] treated any nearby actor whose faction passes IsVendor() &&

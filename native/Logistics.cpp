@@ -2126,11 +2126,22 @@ namespace MFO::Logistics {
                 nxt = now + std::chrono::seconds(30);
                 spdlog::info("[logistics] {:08X} serviced -- nothing to loot/drink right now", id);
             }
-            // ECONOMY PROBE (#21, temp): log-only vendor dry run on the idle
-            // tick -- zero mutations; self-rate-limited (15 s scan / 60 s per
-            // vendor pair). Runs only when the tick did nothing real, so it
-            // never competes with an actual loot/drink action.
-            EconomyProbe(a_follower, a_state, now);
+            // ECONOMY PROBE (#21) -- DISABLED 2026-07-31. It read a LIVE vendor's
+            // inventory (chest->GetInventory / vendor->GetGoldAmount) from the
+            // logistics JOB WORKER, racing the main thread that manages the
+            // merchant -> a form cast returns null and is dereferenced -> CTD on
+            // REAL vendors (Ulfberth/Warmaidens, crash-2026-07-31-13-12-39).
+            // Corpse loot is safe on the worker because a corpse's inventory is
+            // static; a live merchant's is not. The teammate skip (v0.8.27) only
+            // removed one trigger; the fault is the off-thread read itself.
+            // Re-enable ONLY once the vendor reads run on the MAIN thread -- and
+            // note SKSE AddTask does NOT reach main in this runtime (see
+            // [[skse-addtask-runs-on-job-worker]]), so #21 needs a real
+            // main-thread mechanism, not AddTask. Kept compiled (if(false)) so it
+            // can't bitrot.
+            static constexpr bool kEconProbeEnabled = false;
+            if (kEconProbeEnabled)
+                EconomyProbe(a_follower, a_state, now);
         }
     }
 
