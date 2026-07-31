@@ -8,7 +8,7 @@
     <Product>marth's Follower Overhaul Synthesis Patcher</Product>
     <Company>marth</Company>
     <Description>Synthesis patcher: scans the load order and writes MFO's item catalog (mfo_items.json) — potion restore-type, ammo class, jewelry, and a "never loot" exclusion list — so the follower's gambits categorize items from real record data instead of fragile runtime guesses (Requiem-proof).</Description>
-    <InformationalVersion>1.0.0</InformationalVersion>
+    <InformationalVersion>1.0.1</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

@@ -37,7 +37,14 @@ static class Catalog
                         string? name = null, uint? value = null);
 
     static string Id(FormKey fk) => $"0x{fk.ID:X6}";
-    static string Plugin(FormKey fk) => fk.ModKey.FileName;
+    // Canonical LOWERCASE plugin name. Mutagen can stringify the SAME master with
+    // different casing across records (seen on the cc* files under a case-sensitive
+    // FS: "ccBGSSSE037-Curios.esl" vs "ccbgssse037-curios.esl"), which the engine's
+    // case-insensitive LookupForm tolerates but which leaves the catalog with
+    // duplicate-cased plugin strings. Lowercasing makes the output deterministic;
+    // LookupForm resolves it identically (proven in the field: mixed-case rows all
+    // resolved, 0 unresolved).
+    static string Plugin(FormKey fk) => fk.ModKey.FileName.ToString().ToLowerInvariant();
 
     public static int Write(
         ILoadOrderGetter<IModListingGetter<ISkyrimModGetter>> lo, ILinkCache cache, string outPath)
@@ -195,11 +202,21 @@ static class Catalog
         return best;
     }
 
-    // Jewellery = worn on the amulet or ring biped slot. (Circlets are head
-    // armour, not jewellery.) Reads the winning armour's body template.
+    // Jewellery = worn on the amulet or ring biped slot, and NOTHING else. Some
+    // mods also flag a body/head/etc. armour piece with a jewellery bit (field
+    // audit caught "Vampire Lord Armor", "Xivkyn Armor", "Knight of Zenithar
+    // Helmet" landing in jewellery); that is armour borrowing the flag, not
+    // jewellery, so an item that ALSO occupies a real armour slot is rejected. A
+    // true amulet/ring occupies ONLY its jewellery slot. (Circlets are head armour.)
     static bool IsJewelry(IArmorGetter a)
     {
         var f = a.BodyTemplate?.FirstPersonFlags ?? default;
-        return f.HasFlag(BipedObjectFlag.Amulet) || f.HasFlag(BipedObjectFlag.Ring);
+        if (!f.HasFlag(BipedObjectFlag.Amulet) && !f.HasFlag(BipedObjectFlag.Ring))
+            return false;
+        const BipedObjectFlag armourSlots =
+            BipedObjectFlag.Head | BipedObjectFlag.Hair | BipedObjectFlag.Body |
+            BipedObjectFlag.Hands | BipedObjectFlag.Forearms | BipedObjectFlag.Feet |
+            BipedObjectFlag.Calves | BipedObjectFlag.Shield;
+        return (f & armourSlots) == 0;
     }
 }
