@@ -278,6 +278,22 @@ namespace MFO::Logistics {
             return WepClass::OneHand;
         }
 
+        // The follower currently being serviced this tick, set at ServiceFollower
+        // entry. Loot code deep in the call tree (LootEquipment) reads the gambit
+        // table through it without threading a_state through every signature --
+        // safe because the worker services followers SEQUENTIALLY (one
+        // ServiceFollower at a time), so it points at the right state for the
+        // whole of that follower's loot pass. Never dereferenced outside it.
+        const FollowerState* g_svc = nullptr;
+
+        // Does this table author the given action anywhere? (e.g. an equip-ranged
+        // gambit => the follower is meant to use a bow/crossbow, so loot one.)
+        bool TableHasAction(const std::vector<Gambit>& a_tab, const char* a_op) {
+            for (const auto& g : a_tab)
+                if (g.actionOpcode == a_op) return true;
+            return false;
+        }
+
         bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             // Generalized by CATEGORY, never by item (§4.8.2). One better piece
             // per tick (one action per tick, §4.3). We TRANSFER, then EQUIP -- a
@@ -622,22 +638,6 @@ namespace MFO::Logistics {
         // logic reads it: something still worth waiting for -> linger; else the
         // batch is exhausted -> return to the player. Worker-tick-only.
         bool g_scanSawWaiting = false;
-
-        // The follower currently being serviced this tick, set at ServiceFollower
-        // entry. Loot code deep in the call tree (LootEquipment) reads the gambit
-        // table through it without threading a_state through every signature --
-        // safe because the worker services followers SEQUENTIALLY (one
-        // ServiceFollower at a time), so this points at the right state for the
-        // whole of that follower's loot pass. Never dereferenced outside it.
-        const FollowerState* g_svc = nullptr;
-
-        // Does this table author the given action anywhere? (e.g. an equip-ranged
-        // gambit => the follower is meant to use a bow/crossbow, so loot one.)
-        bool TableHasAction(const std::vector<Gambit>& a_tab, const char* a_op) {
-            for (const auto& g : a_tab)
-                if (g.actionOpcode == a_op) return true;
-            return false;
-        }
 
         // kNormal: not (yet) on an excursion -- arm's-reach transfer OR START one
         // by walking to a far corpse (LootTravelFill, claim at 60). kExcursion:
