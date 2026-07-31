@@ -76,6 +76,15 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeAttackingMe     = "cond.foe_attacking_me";
     inline constexpr const char* kCondFoeIsUndead        = "cond.foe_is_undead";
     inline constexpr const char* kCondFoeIsDragon        = "cond.foe_is_dragon";
+    // Foe TRAIT selectors -- what the foe IS or is DOING right now (no param).
+    // Caster = a SpellItem equipped in either hand; ranged = bow/crossbow in
+    // hand; weaker = lower level than this follower; blocking/fleeing read the
+    // foe's live actor/combat state. Frozen serialization strings (#10).
+    inline constexpr const char* kCondFoeIsCaster        = "cond.foe_is_caster";
+    inline constexpr const char* kCondFoeIsRanged        = "cond.foe_is_ranged";
+    inline constexpr const char* kCondFoeWeakerThanMe    = "cond.foe_weaker_than_me";
+    inline constexpr const char* kCondFoeBlocking        = "cond.foe_blocking";
+    inline constexpr const char* kCondFoeFleeing         = "cond.foe_fleeing";
     // ELEMENTAL WEAKNESS selectors -- choose the nearest foe whose resistance to
     // this element is NEGATIVE (an active weakness: race trait, ability, or a
     // -resist effect). Read from the actor's own resist actor-value, never a
@@ -122,6 +131,11 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondSelfLowMagickaPotion = "cond.self_low_magicka_potion";
     inline constexpr const char* kCondSelfOutOfArrows      = "cond.self_out_of_arrows";  // param = count of ARROWS carried
     inline constexpr const char* kCondSelfOutOfBolts       = "cond.self_out_of_bolts";   // param = count of BOLTS carried
+    // Encumbrance gate -- true when the follower's carried weight is ABOVE
+    // param (a fraction of their carry-weight cap, [0,1] like every Percent
+    // param). The natural guard rule: "carry weight above 90% -> Wait" stops
+    // the loot gambits below it before he loots himself immobile.
+    inline constexpr const char* kCondSelfCarryWeightAbove = "cond.self_carry_weight_pct_above";
 
     // The "hurt / low-magicka / low-stamina out of combat" drink triggers reuse
     // the existing self-vitals conditions (kCondSelfHpBelow / kCondSelfMpBelow /
@@ -158,6 +172,11 @@ namespace MFO::Vocab {
     inline constexpr const char* kActLootEquipment      = "act.loot_equipment";
     inline constexpr const char* kActLootGold           = "act.loot_gold";
     inline constexpr const char* kActLootJewelry        = "act.loot_jewelry";
+    // Logistics valuables/consumables, same shape as gold/jewellery. Soul gems
+    // are Valuables tier (held for the player, wait out first dibs); lockpicks
+    // are Free tier like ammo -- a consumable nobody competes for.
+    inline constexpr const char* kActLootSoulGems       = "act.loot_soul_gems";
+    inline constexpr const char* kActLootLockpicks      = "act.loot_lockpicks";
 
     // A cheap actor-value-percentage read. Reads THE NAMED actor's state
     // (INVARIANTS #15 -- say whose).

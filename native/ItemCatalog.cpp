@@ -17,6 +17,7 @@ namespace MFO::Catalog {
         std::unordered_map<RE::FormID, RE::ActorValue> g_potion;
         std::unordered_map<RE::FormID, bool>           g_ammoBolt;   // true = bolt, false = arrow
         std::unordered_set<RE::FormID>                 g_jewelry;
+        std::unordered_set<RE::FormID>                 g_soulgems;
         std::unordered_set<RE::FormID>                 g_excluded;
         bool                                           g_loaded = false;
 
@@ -49,6 +50,7 @@ namespace MFO::Catalog {
         g_potion.clear();
         g_ammoBolt.clear();
         g_jewelry.clear();
+        g_soulgems.clear();
         g_excluded.clear();
         g_loaded = false;
 
@@ -79,13 +81,18 @@ namespace MFO::Catalog {
             for (const auto& e : j.value("jewelry", nlohmann::json::array())) {
                 if (auto fid = Resolve(dh, e)) { g_jewelry.insert(fid); ++nj; } else ++miss;
             }
+            int ns = 0;
+            for (const auto& e : j.value("soulgems", nlohmann::json::array())) {
+                if (auto fid = Resolve(dh, e)) { g_soulgems.insert(fid); ++ns; } else ++miss;
+            }
             for (const auto& e : j.value("exclude", nlohmann::json::array())) {
                 if (auto fid = Resolve(dh, e)) { g_excluded.insert(fid); ++nx; } else ++miss;
             }
 
             g_loaded = true;
-            spdlog::info("[catalog] loaded {} potions, {} ammo, {} jewellery, {} excluded "
-                         "({} rows unresolved in this load order)", np, na, nj, nx, miss);
+            spdlog::info("[catalog] loaded {} potions, {} ammo, {} jewellery, {} soul gems, "
+                         "{} excluded ({} rows unresolved in this load order)",
+                         np, na, nj, ns, nx, miss);
         } catch (const std::exception& ex) {
             spdlog::warn("[catalog] mfo_items.json parse failed: {} -- runtime heuristics only",
                          ex.what());
@@ -105,4 +112,5 @@ namespace MFO::Catalog {
 
     bool IsExcluded(RE::FormID a_item) { return g_excluded.contains(a_item); }
     bool IsJewelry(RE::FormID a_item)  { return g_jewelry.contains(a_item); }
+    bool IsSoulGem(RE::FormID a_item)  { return g_soulgems.contains(a_item); }
 }

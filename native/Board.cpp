@@ -162,6 +162,11 @@ namespace MFO::Board {
         { Vocab::kCondFoeAttackingMe,"Foe attacking me",     ParamKind::None    },
         { Vocab::kCondFoeIsUndead,   "Foe is undead",        ParamKind::None    },
         { Vocab::kCondFoeIsDragon,   "Foe is dragon",        ParamKind::None    },
+        { Vocab::kCondFoeIsCaster,   "Foe is a spellcaster", ParamKind::None    },
+        { Vocab::kCondFoeIsRanged,   "Foe is ranged",        ParamKind::None    },
+        { Vocab::kCondFoeWeakerThanMe, "Foe is weaker than me", ParamKind::None },
+        { Vocab::kCondFoeBlocking,   "Foe is blocking",      ParamKind::None    },
+        { Vocab::kCondFoeFleeing,    "Foe is fleeing",       ParamKind::None    },
         { Vocab::kCondFoeWeakFire,   "Foe: weak to fire",    ParamKind::None    },
         { Vocab::kCondFoeWeakFrost,  "Foe: weak to frost",   ParamKind::None    },
         { Vocab::kCondFoeWeakShock,  "Foe: weak to shock",   ParamKind::None    },
@@ -206,6 +211,7 @@ namespace MFO::Board {
         { Vocab::kCondSelfLowMagickaPotion,"Magicka potions below", ParamKind::Count   },
         { Vocab::kCondSelfOutOfArrows,     "Arrows below",          ParamKind::Count   },
         { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
+        { Vocab::kCondSelfCarryWeightAbove,"Carry weight % above",  ParamKind::Percent },
     };
     inline constexpr VocabEntry kActsLogi[] = {
         { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
@@ -220,6 +226,8 @@ namespace MFO::Board {
         { Vocab::kActLootEquipment,      "Loot better equipment" },
         { Vocab::kActLootGold,           "Loot gold" },
         { Vocab::kActLootJewelry,        "Loot jewellery" },
+        { Vocab::kActLootSoulGems,       "Loot soul gems" },
+        { Vocab::kActLootLockpicks,      "Loot lockpicks" },
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
         int cur = 0;

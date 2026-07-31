@@ -3,6 +3,18 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.25 — new gambit vocabulary + loot depth (big-patch batch 1)
+
+New COMBAT conditions: Foe is a spellcaster / is ranged / is weaker than me / is
+blocking / is fleeing (all read the foe's live state — e.g. "Foe is fleeing ->
+Wait" so he stops chasing runners; "Foe is a spellcaster -> Cast at foe" to shut
+down mages). New LOGISTICS: Loot soul gems, Loot lockpicks, and a "Carry weight %
+above N" condition (guard rule: above 90% -> Wait, so he doesn't loot himself
+immobile). Ammo restock now takes the HIGHER-QUALITY arrows/bolts first to fill a
+quota. And the jewellery slot heuristic now supplements the catalog instead of
+going dead once a catalog loads (catches mod rings added after the last patcher
+run). Soul gems are catalogued (quest gems like Azura's Star excluded).
+
 ## v0.8.24 — combat sense 1: confidence-scaled chase range (dev)
 
 Erik no longer charges 20 Falmer solo to reach the weakest one. Confidence now

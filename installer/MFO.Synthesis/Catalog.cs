@@ -11,6 +11,7 @@
 //   potions[] : restores = health|stamina|magicka
 //   ammo[]    : kind     = arrow|bolt
 //   jewelry[] : (amulets + rings)
+//   soulgems[]: (every SLGM record — the DLL treats membership as the category)
 //   exclude[] : why      = quest|unique|script   (never auto-loot these)
 //               quest/unique stand alone; "script" only fires when a scripted
 //               item ALSO carries another special signal (quest, unique
@@ -41,10 +42,11 @@ static class Catalog
     public static int Write(
         ILoadOrderGetter<IModListingGetter<ISkyrimModGetter>> lo, ILinkCache cache, string outPath)
     {
-        var potions = new List<Entry>();
-        var ammo    = new List<Entry>();
-        var jewelry = new List<Entry>();
-        var exclude = new List<Entry>();
+        var potions  = new List<Entry>();
+        var ammo     = new List<Entry>();
+        var jewelry  = new List<Entry>();
+        var soulgems = new List<Entry>();
+        var exclude  = new List<Entry>();
         var excluded = new HashSet<FormKey>();
 
         // ── EXCLUSION signals gathered first ────────────────────────────────
@@ -105,6 +107,24 @@ static class Catalog
                                name: am.Name?.String, value: am.Value));
         }
 
+        // ── SOUL GEMS ───────────────────────────────────────────────────────
+        // Membership IS the category: the DLL only asks "is this FormID a soul
+        // gem?" (its As<TESSoulGem>() fallback covers uncatalogued mod gems).
+        // Quest gems (Azura's Star et al.) are alias-flagged and land in
+        // exclude[] via the shared quest-item signal below.
+        foreach (var sg in lo.PriorityOrder.SoulGem().WinningOverrides())
+        {
+            if (questItems.Contains(sg.FormKey))
+            {
+                if (excluded.Add(sg.FormKey))
+                    exclude.Add(new Entry(Plugin(sg.FormKey), Id(sg.FormKey), why: "quest",
+                                          name: sg.Name?.String, value: sg.Value));
+                continue;
+            }
+            soulgems.Add(new Entry(Plugin(sg.FormKey), Id(sg.FormKey),
+                                   name: sg.Name?.String, value: sg.Value));
+        }
+
         // ── ARMOR: jewellery classification + exclusions ────────────────────
         foreach (var a in lo.PriorityOrder.Armor().WinningOverrides())
         {
@@ -134,13 +154,15 @@ static class Catalog
             potions,
             ammo,
             jewelry,
+            soulgems,
             exclude,
         };
         var json = JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(outPath, json);
 
         Console.WriteLine($"[MFO] catalog written: {potions.Count} potions, {ammo.Count} ammo, "
-                        + $"{jewelry.Count} jewellery, {exclude.Count} excluded -> {outPath}");
+                        + $"{jewelry.Count} jewellery, {soulgems.Count} soul gems, "
+                        + $"{exclude.Count} excluded -> {outPath}");
         return 0;
     }
 

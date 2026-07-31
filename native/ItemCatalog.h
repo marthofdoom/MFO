@@ -35,4 +35,8 @@ namespace MFO::Catalog {
 
     // Worn on an amulet/ring slot (for the loot-jewellery gambit).
     bool IsJewelry(RE::FormID a_item);
+
+    // A soul gem record (for the loot-soul-gems gambit). Callers still fall
+    // back to As<TESSoulGem>() when the catalog is absent or silent.
+    bool IsSoulGem(RE::FormID a_item);
 }

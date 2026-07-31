@@ -152,16 +152,24 @@ namespace MFO::Logistics {
             // Collect matching ammo tuples first (object, count), THEN transfer
             // -- RemoveItem dispatches TESContainerChangedEvent synchronously, so
             // mutating the source inventory mid-walk is the #2 landmine.
-            struct Take { RE::TESBoundObject* obj; std::int32_t count; };
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; float dmg; };
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && AmmoIsBolt(ammo) == a_wantBolt) {
                     if (a_peek) return true;
-                    takes.push_back({ obj, data.first });
+                    takes.push_back({ obj, data.first,
+                                      ammo->GetRuntimeData().data.damage });
                 }
             }
             if (a_peek) return false;
+            // QUALITY FIRST (#27): transfer the HIGHEST-damage ammo before the
+            // rest, so when the carry-weight gate cuts the haul short it is the
+            // iron arrows left behind, never the ebony. Damage is the record's
+            // own DATA field (AMMO_DATA::damage) -- the same number the game
+            // shows -- so "better" is measured, not name-guessed.
+            std::sort(takes.begin(), takes.end(),
+                      [](const Take& a, const Take& b) { return a.dmg > b.dmg; });
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
@@ -481,19 +489,42 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // Take all the lockpicks on a corpse/container. Same shape as LootGold:
+        // the Lockpick is Skyrim.esm's one fixed MISC record (0x0000000A), so a
+        // FormID match is the simplest, stable test -- every load order carries
+        // it, and mods add lockpick QUANTITY, not new lockpick forms. Weightless
+        // consumable, Free tier like ammo (the follower restocks his own picks;
+        // nobody competes for them) -- so no carry-weight gate and no dibs wait.
+        bool LootLockpicks(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
+            constexpr RE::FormID kLockpick = 0x0000000A;
+            for (auto& [obj, data] : a_src->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (obj->GetFormID() != kLockpick) continue;
+                if (a_peek) return true;
+                a_src->RemoveItem(obj, data.first, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                  nullptr, a_follower);
+                return true;
+            }
+            return false;
+        }
+
         // Is this ARMO a piece of jewellery (amulet/ring)? The patcher's catalog
-        // classifies it from the real record; with no patcher run, fall back to
-        // the record heuristic -- worn on the Amulet or Ring biped slot AND zero
-        // armor rating (an enchanted circlet-of-armor would still protect;
-        // jewellery does not, cf. ArmorIsBetter's clothing test).
+        // classifies it from the real record; the record heuristic -- worn on
+        // the Amulet or Ring biped slot AND zero armor rating (an enchanted
+        // circlet-of-armor would still protect; jewellery does not, cf.
+        // ArmorIsBetter's clothing test) -- SUPPLEMENTS it (#20): a loaded
+        // catalog must never turn the fallback OFF, or a mod-added ring the
+        // patcher run predates is invisible until the next patcher run.
+        // IsJewelry on an unloaded catalog is just an empty-set miss, so this
+        // one OR covers both worlds.
         bool IsJewelryPiece(RE::TESObjectARMO* a_armo) {
-            if (Catalog::Loaded()) return Catalog::IsJewelry(a_armo->GetFormID());
             using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
             const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
             const bool jewelSlot =
                 (mask & static_cast<std::uint32_t>(Slot::kAmulet)) != 0 ||
                 (mask & static_cast<std::uint32_t>(Slot::kRing))   != 0;
-            return jewelSlot && a_armo->GetArmorRating() <= 0.0f;
+            return Catalog::IsJewelry(a_armo->GetFormID()) ||
+                   (jewelSlot && a_armo->GetArmorRating() <= 0.0f);
         }
 
         // Take all the jewellery (amulets/rings) on a corpse/container. Held for
@@ -507,6 +538,41 @@ namespace MFO::Logistics {
                 auto* armo = obj->As<RE::TESObjectARMO>();
                 if (!armo || !IsJewelryPiece(armo)) continue;
                 // NEVER-LOOT: quest amulets / unique rings stay for the player.
+                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (a_peek) return true;
+                takes.push_back({ obj, data.first });
+            }
+            if (a_peek) return false;
+            bool moved = false;
+            for (const auto& t : takes) {
+                if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
+                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                  nullptr, a_follower);
+                moved = true;
+            }
+            return moved;
+        }
+
+        // Is this item a soul gem? Catalog-first (the patcher read the real
+        // record), with the engine type as the fallback -- TESSoulGem is its own
+        // form class (a MISC subclass), so As<TESSoulGem>() is reliable even
+        // with no patcher run. Either signal suffices (the jewellery #20
+        // lesson: a loaded catalog must not turn the runtime test off).
+        bool IsSoulGemItem(RE::TESBoundObject* a_obj) {
+            if (Catalog::IsSoulGem(a_obj->GetFormID())) return true;
+            return a_obj->As<RE::TESSoulGem>() != nullptr;
+        }
+
+        // Take all the soul gems on a corpse/container. Held for the player
+        // like gold/jewellery -- Valuables tier, so it WAITS out first dibs
+        // (below); nothing to equip. Collect-then-transfer like LootAmmo (#2).
+        bool LootSoulGems(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; };
+            std::vector<Take> takes;
+            for (auto& [obj, data] : a_src->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (!IsSoulGemItem(obj)) continue;
+                // NEVER-LOOT: quest gems (Azura's Star et al.) stay for the player.
                 if (Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
@@ -607,7 +673,7 @@ namespace MFO::Logistics {
         }
 
         // ── the looting dispatcher ──────────────────────────────────────────
-        enum class Category { Arrows, Bolts, Potions, Equipment, Gold, Jewelry };
+        enum class Category { Arrows, Bolts, Potions, Equipment, Gold, Jewelry, SoulGems, Lockpicks };
 
         // Category label for the [loot] diagnostic. Naming the scanned category is
         // the ONLY way to read the composition line: "empty=36" is meaningless
@@ -621,6 +687,8 @@ namespace MFO::Logistics {
             case Category::Equipment: return "equipment";
             case Category::Gold:      return "gold";
             case Category::Jewelry:   return "jewelry";
+            case Category::SoulGems:  return "soulgems";
+            case Category::Lockpicks: return "lockpicks";
             default:                  return "?";
             }
         }
@@ -837,6 +905,8 @@ namespace MFO::Logistics {
             case Category::Equipment: return LootEquipment(a_follower, a_ref);
             case Category::Gold:      return LootGold(a_follower, a_ref);
             case Category::Jewelry:   return LootJewelry(a_follower, a_ref);
+            case Category::SoulGems:  return LootSoulGems(a_follower, a_ref);
+            case Category::Lockpicks: return LootLockpicks(a_follower, a_ref);
             }
             return false;
         }
@@ -853,6 +923,8 @@ namespace MFO::Logistics {
             case Category::Equipment: return LootEquipment(a_follower, a_ref, true);
             case Category::Gold:      return LootGold(a_follower, a_ref, true);
             case Category::Jewelry:   return LootJewelry(a_follower, a_ref, true);
+            case Category::SoulGems:  return LootSoulGems(a_follower, a_ref, true);
+            case Category::Lockpicks: return LootLockpicks(a_follower, a_ref, true);
             }
             return false;
         }
@@ -1074,14 +1146,15 @@ namespace MFO::Logistics {
                     // CLAIM-AND-RELEASE (dibs redesign). Eligibility is per
                     // value-tier, and the player's claim releases on EVIDENCE
                     // ABOUT THE PLAYER, not a wall clock.
-                    //   Free (arrows/bolts/potions): released at once -- nobody
-                    //     competes for the follower's own restock.
+                    //   Free (arrows/bolts/potions/lockpicks): released at once --
+                    //     nobody competes for the follower's own restock.
                     //   Gear (equipment): a short anti-snatch grace, or rejection.
-                    //   Valuables (gold, jewellery): rejection, fair-chance
-                    //     (player was near AND could see it and left it), or the
-                    //     abandonment backstop (player never came near).
+                    //   Valuables (gold, jewellery, soul gems): rejection,
+                    //     fair-chance (player was near AND could see it and left
+                    //     it), or the abandonment backstop (player never came
+                    //     near).
                     if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
-                        a_cat == Category::Potions) {
+                        a_cat == Category::Potions || a_cat == Category::Lockpicks) {
                         candidates.push_back(ref->GetHandle());
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
@@ -1120,7 +1193,7 @@ namespace MFO::Logistics {
                         released = rejected ||
                                    std::chrono::duration<float>(a_now - cl.seen).count()
                                        >= Config::g_firstDibsDelay.load();   // gear grace
-                    } else {                                     // Gold / Jewelry -> Valuables
+                    } else {                                     // Gold / Jewelry / SoulGems -> Valuables
                         released = rejected ||
                                    cl.nearSecs >= Config::g_fairChance.load() ||
                                    (!cl.everNear &&
@@ -1307,6 +1380,8 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootEquipment)      cat = Category::Equipment;
                 else if (op == Vocab::kActLootGold)           cat = Category::Gold;
                 else if (op == Vocab::kActLootJewelry)        cat = Category::Jewelry;
+                else if (op == Vocab::kActLootSoulGems)       cat = Category::SoulGems;
+                else if (op == Vocab::kActLootLockpicks)      cat = Category::Lockpicks;
                 else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
                 else isLoot = false;
                 if (isLoot && LootHere(a_follower, a_corpse, cat, want)) moved = true;
@@ -1338,6 +1413,8 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);
                 else if (op == Vocab::kActLootGold)           acted = LootNearby(a_follower, Category::Gold,    a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
                 else if (op == Vocab::kActLootJewelry)        acted = LootNearby(a_follower, Category::Jewelry, a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
+                else if (op == Vocab::kActLootSoulGems)       acted = LootNearby(a_follower, Category::SoulGems, a_now, RE::ActorValue::kNone,   LootMode::kExcursion);
+                else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);
                 else if (op == Vocab::kActWait) break;   // Wait is the user's deliberate STOP gambit
                                                          // (#3.3): end the batch -- returning false with
                                                          // nothing "waiting" makes Holding release.
@@ -1673,6 +1750,8 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootEquipment)      acted = LootNearby(a_follower, Category::Equipment, now);
             else if (op == Vocab::kActLootGold)           acted = LootNearby(a_follower, Category::Gold, now);
             else if (op == Vocab::kActLootJewelry)        acted = LootNearby(a_follower, Category::Jewelry, now);
+            else if (op == Vocab::kActLootSoulGems)       acted = LootNearby(a_follower, Category::SoulGems, now);
+            else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, now);
             else if (op == Vocab::kActWait) {
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.
             }

@@ -18,6 +18,9 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeWithinRange|| a_op == Vocab::kCondFoeBeyondRange ||
                    a_op == Vocab::kCondFoeAttackingPlayer || a_op == Vocab::kCondFoeAttackingMe ||
                    a_op == Vocab::kCondFoeIsUndead   || a_op == Vocab::kCondFoeIsDragon ||
+                   a_op == Vocab::kCondFoeIsCaster   || a_op == Vocab::kCondFoeIsRanged ||
+                   a_op == Vocab::kCondFoeWeakerThanMe || a_op == Vocab::kCondFoeBlocking ||
+                   a_op == Vocab::kCondFoeFleeing    ||
                    a_op == Vocab::kCondFoeWeakFire   || a_op == Vocab::kCondFoeWeakFrost ||
                    a_op == Vocab::kCondFoeWeakShock;
         }
@@ -43,6 +46,30 @@ namespace MFO::Eval {
         bool RaceHasKeyword(RE::Actor* a_foe, const char* a_kw) {
             auto* race = a_foe ? a_foe->GetRace() : nullptr;
             return race && race->HasKeywordString(a_kw);
+        }
+        // Is the foe a spellcaster RIGHT NOW -- a SpellItem equipped in either
+        // hand? Reads what they are actually fighting with, not their spell
+        // list (a warrior who happens to know Flames is not "a caster").
+        bool FoeIsCaster(RE::Actor* a_foe) {
+            if (!a_foe) return false;
+            auto* r = a_foe->GetEquippedObject(false);
+            auto* l = a_foe->GetEquippedObject(true);
+            return (r && r->As<RE::SpellItem>()) || (l && l->As<RE::SpellItem>());
+        }
+        // Is the foe wielding a bow or crossbow? Weapon type, not distance.
+        bool FoeIsRanged(RE::Actor* a_foe) {
+            auto* obj  = a_foe ? a_foe->GetEquippedObject(false) : nullptr;
+            auto* weap = obj ? obj->As<RE::TESObjectWEAP>() : nullptr;
+            if (!weap) return false;
+            const auto wt = weap->GetWeaponType();
+            return wt == RE::WEAPON_TYPE::kBow || wt == RE::WEAPON_TYPE::kCrossbow;
+        }
+        // Is the foe's combat AI in its flee state? Reads the foe's OWN
+        // CombatState (guarded -- the header's IsFleeing() dereferences state
+        // unchecked, so spell out the null chain here).
+        bool FoeIsFleeing(RE::Actor* a_foe) {
+            auto* cc = a_foe ? a_foe->GetActorRuntimeData().combatController : nullptr;
+            return cc && cc->state && cc->state->isFleeing;
         }
         // Count live, engaged foes in the follower's own combat group (no target).
         int FoeCount(RE::Actor* a_self) {
@@ -139,6 +166,16 @@ namespace MFO::Eval {
                         if (!RaceHasKeyword(foe, "ActorTypeUndead")) continue;
                     } else if (a_op == Vocab::kCondFoeIsDragon) {
                         if (!RaceHasKeyword(foe, "ActorTypeDragon")) continue;
+                    } else if (a_op == Vocab::kCondFoeIsCaster) {
+                        if (!FoeIsCaster(foe)) continue;
+                    } else if (a_op == Vocab::kCondFoeIsRanged) {
+                        if (!FoeIsRanged(foe)) continue;
+                    } else if (a_op == Vocab::kCondFoeWeakerThanMe) {
+                        if (foe->GetLevel() >= a_self->GetLevel()) continue;
+                    } else if (a_op == Vocab::kCondFoeBlocking) {
+                        if (!foe->IsBlocking()) continue;
+                    } else if (a_op == Vocab::kCondFoeFleeing) {
+                        if (!FoeIsFleeing(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeWeakFire) {
                         if (!IsWeakTo(foe, RE::ActorValue::kResistFire)) continue;
                     } else if (a_op == Vocab::kCondFoeWeakFrost) {
@@ -230,6 +267,18 @@ namespace MFO::Eval {
                 return Logistics::ArrowCount(a_self) < static_cast<int>(p);
             if (op == Vocab::kCondSelfOutOfBolts)
                 return Logistics::BoltCount(a_self)  < static_cast<int>(p);
+            // ENCUMBRANCE GATE. p is a FRACTION of the follower's carry cap
+            // ([0,1], the Percent-param convention -- the board shows it as a
+            // %). Fails toward FALSE (never over-encumbered) on an unreadable
+            // actor, same fail-closed default as everything here.
+            if (op == Vocab::kCondSelfCarryWeightAbove) {
+                if (!a_self) return false;
+                auto* avo = a_self->AsActorValueOwner();
+                if (!avo) return false;
+                const float cap = avo->GetActorValue(RE::ActorValue::kCarryWeight);
+                if (cap <= 0.0f) return false;
+                return (a_self->GetWeightInContainer() / cap) >= p;
+            }
 
             // Selectors are resolved by the caller, which needs the chosen
             // handle. Reaching here means the caller did not ask -- say false
