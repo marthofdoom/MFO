@@ -23,6 +23,16 @@ return await SynthesisPipeline.Instance
 
 static void RunPatch(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
 {
+    // GUARD (MEO's hard-learned trap): Synthesis names a group's output plugin
+    // after the GROUP. A group named "MFO" therefore outputs MFO.esp -- which
+    // OVERWRITES the real MFO.esp (deleting MFO's forms + startup quest), while
+    // the run still reports success. Refuse rather than silently kill the mod.
+    if (state.PatchMod.ModKey.FileName.String.Equals("MFO.esp", StringComparison.OrdinalIgnoreCase))
+        throw new Exception(
+            "Your Synthesis group is named 'MFO', so its output plugin is MFO.esp and would " +
+            "REPLACE the real MFO.esp (deleting MFO's forms and startup quest). Rename the " +
+            "Synthesis group to anything else (e.g. 'Synthesis'), reinstall MFO.esp, and re-run.");
+
     // Pure JSON emitter: the output plugin stays empty. Flag it ESL so a stray
     // "MFO - Patch.esp" costs no load-order slot (mirrors MAO's IsSmallMaster).
     state.PatchMod.IsSmallMaster = true;

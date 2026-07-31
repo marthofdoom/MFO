@@ -12,6 +12,11 @@
 //   ammo[]    : kind     = arrow|bolt
 //   jewelry[] : (amulets + rings)
 //   exclude[] : why      = quest|unique|script   (never auto-loot these)
+//               quest/unique stand alone; "script" only fires when a scripted
+//               item ALSO carries another special signal (quest, unique
+//               enchant, non-playable flag, or template link) — a benign VMAD
+//               on normal gear no longer excludes it.
+//   All rows carry name/value for auditability; the DLL ignores them.
 // The DLL resolves each with LookupForm<T>(id, plugin) (MAO's mao_tiers scheme).
 
 using System.Text.Json;
@@ -27,7 +32,8 @@ static class Catalog
     // file it lives in — exactly what RE::TESDataHandler::LookupForm(id, plugin)
     // wants at runtime.
     sealed record Entry(string plugin, string id,
-                        string? restores = null, string? kind = null, string? why = null);
+                        string? restores = null, string? kind = null, string? why = null,
+                        string? name = null, uint? value = null);
 
     static string Id(FormKey fk) => $"0x{fk.ID:X6}";
     static string Plugin(FormKey fk) => fk.ModKey.FileName;
@@ -60,14 +66,20 @@ static class Catalog
                     questItems.Add(cro.Object.FormKey);
 
         // Shared exclusion test for any enchantable gear (weapon/armor).
-        void MaybeExclude(FormKey fk, bool scripted, IFormLinkGetter<IObjectEffectGetter> ench)
+        // A script alone is NOT enough — plenty of normal gear carries a benign
+        // VMAD. "script" only fires when the script is corroborated by another
+        // special signal (`special` = non-playable flag or template link; quest
+        // and unique-enchant hits are labelled by their own branches first).
+        void MaybeExclude(FormKey fk, bool scripted, bool special,
+                          IFormLinkGetter<IObjectEffectGetter> ench,
+                          string? name, uint value)
         {
             string? why = null;
-            if (questItems.Contains(fk))                              why = "quest";
-            else if (scripted)                                        why = "script";
+            if (questItems.Contains(fk))                                           why = "quest";
             else if (!ench.IsNull && enchUse.GetValueOrDefault(ench.FormKey) <= 1) why = "unique";
+            else if (scripted && special)                                          why = "script";
             if (why != null && excluded.Add(fk))
-                exclude.Add(new Entry(Plugin(fk), Id(fk), why: why));
+                exclude.Add(new Entry(Plugin(fk), Id(fk), why: why, name: name, value: value));
         }
 
         static bool Scripted(IHaveVirtualMachineAdapterGetter? o)
@@ -79,7 +91,8 @@ static class Catalog
             if (p.Flags.HasFlag(Ingestible.Flag.FoodItem)) continue;   // food, not a potion
             var restores = ClassifyRestore(p, cache);
             if (restores != null)
-                potions.Add(new Entry(Plugin(p.FormKey), Id(p.FormKey), restores: restores));
+                potions.Add(new Entry(Plugin(p.FormKey), Id(p.FormKey), restores: restores,
+                                      name: p.Name?.String, value: p.Value));
         }
 
         // ── AMMO ────────────────────────────────────────────────────────────
@@ -88,20 +101,31 @@ static class Catalog
             if (am.Flags.HasFlag(Ammunition.Flag.NonPlayable)) continue;
             // NonBolt set => arrow; clear => crossbow bolt (matches TESAmmo::IsBolt).
             var kind = am.Flags.HasFlag(Ammunition.Flag.NonBolt) ? "arrow" : "bolt";
-            ammo.Add(new Entry(Plugin(am.FormKey), Id(am.FormKey), kind: kind));
+            ammo.Add(new Entry(Plugin(am.FormKey), Id(am.FormKey), kind: kind,
+                               name: am.Name?.String, value: am.Value));
         }
 
         // ── ARMOR: jewellery classification + exclusions ────────────────────
         foreach (var a in lo.PriorityOrder.Armor().WinningOverrides())
         {
-            MaybeExclude(a.FormKey, Scripted(a), a.ObjectEffect);
+            bool special = a.MajorFlags.HasFlag(Armor.MajorFlag.NonPlayable)
+                        || (a.BodyTemplate?.Flags.HasFlag(BodyTemplate.Flag.NonPlayable) ?? false)
+                        || !a.TemplateArmor.IsNull;
+            MaybeExclude(a.FormKey, Scripted(a), special, a.ObjectEffect,
+                         a.Name?.String, a.Value);
             if (IsJewelry(a) && !excluded.Contains(a.FormKey))
-                jewelry.Add(new Entry(Plugin(a.FormKey), Id(a.FormKey)));
+                jewelry.Add(new Entry(Plugin(a.FormKey), Id(a.FormKey),
+                                      name: a.Name?.String, value: a.Value));
         }
 
         // ── WEAPONS: exclusions only (looted as "equipment") ────────────────
         foreach (var w in lo.PriorityOrder.Weapon().WinningOverrides())
-            MaybeExclude(w.FormKey, Scripted(w), w.ObjectEffect);
+        {
+            bool special = w.MajorFlags.HasFlag(Weapon.MajorFlag.NonPlayable)
+                        || !w.Template.IsNull;
+            MaybeExclude(w.FormKey, Scripted(w), special, w.ObjectEffect,
+                         w.Name?.String, w.BasicStats?.Value ?? 0);
+        }
 
         // ── emit ────────────────────────────────────────────────────────────
         var model = new

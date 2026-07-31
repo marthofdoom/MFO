@@ -1,0 +1,6 @@
+{
+  "AddGitPatcher": {
+    "Url": "https://github.com/marthofdoom/MFO",
+    "SelectedProject": "installer\\MFO.Synthesis\\MFO.Synthesis.csproj"
+  }
+}
