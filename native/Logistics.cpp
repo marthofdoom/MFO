@@ -402,17 +402,30 @@ namespace MFO::Logistics {
             if (!FitsCarryWeight(a_follower, best->GetWeight())) return false;
 
             // MEO gem transfer (#17): capture the OLD worn item this upgrade
-            // replaces (base + instance uid) BEFORE the swap, so MEO carries its
+            // REPLACES (base + instance uid) BEFORE the swap, so MEO carries its
             // socketed gems onto the new piece once it's worn (fired from the
-            // equip event). Weapon -> the equipped weapon; armor -> the worn piece
-            // on a slot the new one covers that actually has gems (uid != 0). All
-            // no-ops when MEO is absent or nothing has gems.
+            // equip event). CROSS-ROLE IS THE BUG (marth): a new BOW must never
+            // pull the gems off the follower's MELEE weapon -- it doesn't replace
+            // it. So the old item must share the new one's ROLE: melee<->melee,
+            // bow<->bow, crossbow<->crossbow, and for armor the same biped slot.
+            // Only a WORN old item with gems (uid != 0) qualifies; no match -> no
+            // transfer. All no-ops when MEO is absent or nothing has gems.
             RE::FormID    fromBase = 0;
             std::uint16_t fromUid  = 0;
             if (MEOBridge::Available()) {
                 RE::TESBoundObject* oldItem = nullptr;
-                if (best->As<RE::TESObjectWEAP>()) {
-                    oldItem = myWeap;   // the weapon being replaced (may be null)
+                if (auto* newWeap = best->As<RE::TESObjectWEAP>()) {
+                    const auto     newWt   = newWeap->GetWeaponType();
+                    const WepClass newRole = WeaponClassOf(newWt);
+                    // The follower's currently-WORN weapon in the same role (bow vs
+                    // crossbow distinguished within Ranged). Never a melee->ranged
+                    // or ranged->melee steal.
+                    if (auto* eqW = myWeap) {
+                        const auto eqWt = eqW->GetWeaponType();
+                        const bool sameRole = (WeaponClassOf(eqWt) == newRole) &&
+                            (newRole != WepClass::Ranged || eqWt == newWt);
+                        if (sameRole) oldItem = eqW;
+                    }
                 } else if (auto* newArmo = best->As<RE::TESObjectARMO>()) {
                     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
                     static constexpr Slot kSlots[] = {

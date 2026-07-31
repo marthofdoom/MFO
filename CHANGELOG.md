@@ -3,6 +3,15 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.23 — gem transfer only replaces same-role gear
+
+Fix: a follower with a fire enchant on his MELEE weapon lost it to a looted BOW.
+The gem-transfer captured the equipped weapon as the "replaced" item for ANY
+weapon pickup, so a new ranged weapon stole the melee's gems even though it
+replaces nothing. Now gems move only between items of the same role — melee to
+melee, bow to bow, crossbow to crossbow (armour was already slot-matched). A new
+bow no longer touches the sword's enchant.
+
 ## v0.8.22 — ranged looting tells bows from crossbows
 
 The equip-ranged loot pickup no longer lumps bows and crossbows together (they
