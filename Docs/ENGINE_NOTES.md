@@ -1604,6 +1604,38 @@ TAKEAWAY: to hand an actor between your quest and a framework at runtime, you
 must change ALIAS OCCUPANCY (fill / evict-to-a-throwaway-ref), NOT the quest
 priority number. Priority is a build-time dial; the alias is the runtime switch.
 
+### 0.37 The main-thread pump: a queue drained from the player's Update vfunc — the only real road to main (2026-07-31)
+
+`SKSE::GetTaskInterface()->AddTask` does NOT reach the main thread in this
+runtime — the queue drains inside `Job_Post_process` on `BSJobs::JobThread`
+(§0.32's crash4, re-proven twice today by the econ-probe vendor-read stacks).
+Anything that must run where the engine mutates live state — a live merchant's
+inventory, 3D teardown, cell mutation — therefore had NO road to main at all.
+
+`native/MainThread.{h,cpp}` builds that road: `Post(std::function<void()>)`
+enqueues under a mutex from any thread; a vfunc hook on the PLAYER's per-frame
+`Update` swaps the queue out under the lock and runs the batch OUTSIDE it (so a
+drained fn can re-Post without deadlock; the repost lands next frame). The hook
+target is `RE::VTABLE_PlayerCharacter[0]` at index **0x0AD** —
+`Actor::Update(float a_delta)`, read from the pinned CommonLibSSE-NG
+(`include/RE/A/Actor.h:367`, vcpkg 3.7.0 = CharmedBaryon @ c4ab853), NOT
+Targeting's 0xE4 (`UpdateCombat`). Hooking the PlayerCharacter vtable rather
+than Character's means the thunk fires ONLY for the player: once per frame, on
+the main thread, with zero per-NPC cost. `Update` is `SKYRIM_REL_VR_VIRTUAL`,
+so on VR the install refuses (same doctrine as the §0.14 hook) and `Post`
+becomes a dropping no-op instead of an unbounded leak.
+
+First consumer: the economy probe (#21). `ServiceFollower` (worker) Posts the
+probe with the follower captured by HANDLE (re-resolved main-side — a raw
+pointer could dangle across the frame of delay) and the logistics gambits
+copied BY VALUE (the worker's `FollowerState&` points into `g_followers`,
+which the main thread itself edits via the board). The probe's own 15 s / 60 s
+rate limits make the per-idle-tick Post cheap. This run doubles as the
+measurement that pump-side vendor reads do not crash, ahead of any real barter.
+
+TAKEAWAY: worker → main is `MFO::MainThread::Post`, never `AddTask`. Capture
+handles and copies, not references — a frame passes before the fn runs.
+
 ### NOT yet proven, despite the session
 - ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
 - (historical) v0.4.1 *saved* a real record twice

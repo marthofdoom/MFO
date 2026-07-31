@@ -33,6 +33,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Loadout.cpp
     Papyrus.cpp
     Targeting.cpp
+    MainThread.cpp
     Packages.cpp
     Gait.cpp
     CasterConsent.cpp

@@ -3,6 +3,23 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.29 — main-thread pump (MFO::MainThread) + econprobe on it
+
+The foundational fix behind #21. MFO's tick runs on a BSJobs job worker and
+AddTask stays on a worker in this runtime, so reading a live merchant's
+inventory raced the main thread and CTD'd (v0.8.26-28). New primitive:
+MFO::MainThread::Post(fn) runs fn on the MAIN thread, drained from a vfunc hook
+on the player's per-frame Update (VTABLE_PlayerCharacter[0] idx 0x0AD, verified
+against pinned CommonLibSSE-NG; VR-refused since the index shifts). Reusable —
+retreat actuation and future engine work can hop to main through it.
+
+- The economy probe is re-enabled, now Posted to the main thread (follower by
+  handle, gambits by-value copy). Still LOG-ONLY — this run VALIDATES that
+  pump-side vendor reads (Ulfberth/Warmaidens, the exact CTD case) don't crash,
+  before any real barter is built. Watch for [mainthread] first drain ... pump
+  is live, then clean [econprobe] lines near a real merchant.
+No transactions yet; loose-item/retreat probes unchanged.
+
 ## v0.8.28 — hotfix: disable economy probe (off-thread vendor read CTD)
 
 The v0.8.27 teammate skip removed one trigger but not the real bug: the

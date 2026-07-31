@@ -17,6 +17,7 @@
 #include "Logistics.h"
 #include "Gait.h"
 #include "MEOBridge.h"
+#include "MainThread.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -254,6 +255,8 @@ namespace {
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::Followers::ResolveQuirks();
+            MFO::MainThread::Install();      // the main-thread pump (§0.37) -- the only real
+                                             // road to main; AddTask drains on a worker here
             MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
             MFO::CasterConsent::InstallHook();   // the influence hook, likewise
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms

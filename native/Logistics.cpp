@@ -11,6 +11,7 @@
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
+#include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -1487,6 +1488,16 @@ namespace MFO::Logistics {
         // faction back onto the process), which breaks the zero-mutation
         // contract of a probe. First faction with IsVendor() && OffersServices()
         // wins, matching the engine's own barter pick closely enough to verify.
+        //
+        // MAIN THREAD ONLY (§0.37). This reads a LIVE merchant's inventory,
+        // which the main thread mutates as it manages the vendor -- read it
+        // from the job worker and a form cast comes back null and is
+        // dereferenced (CTD on Ulfberth/Warmaidens, crash-2026-07-31-13-12-39).
+        // The caller Posts here via MainThread; the statics below are therefore
+        // main-thread-only and unlocked, same discipline as the rest of MFO.
+        // Takes the logistics GAMBITS, not the FollowerState: the caller hands
+        // over a by-value copy because a_state on the worker is a reference
+        // into g_followers, which the main thread itself edits via the board.
 
         // Does the vendor's VEND list trade this item? The list holds KEYWORDS
         // (VendorItemWeapon et al.); notBuySell inverts it into an EXCLUSION
@@ -1502,7 +1513,7 @@ namespace MFO::Logistics {
             return a_notBuySell ? !match : match;
         }
 
-        void EconomyProbe(RE::Actor* a_follower, const FollowerState& a_state,
+        void EconomyProbe(RE::Actor* a_follower, const std::vector<Gambit>& a_logistics,
                           Clock::time_point a_now) {
             const auto fid = a_follower->GetFormID();
 
@@ -1646,7 +1657,7 @@ namespace MFO::Logistics {
                 // logistics table -> have vs want, and the best AFFORDABLE
                 // matching item in the vendor's stock (chest + pocket).
                 const int purse = static_cast<int>(a_follower->GetGoldAmount());
-                for (const auto& g : a_state.logistics()) {
+                for (const auto& g : a_logistics) {
                     if (!g.enabled) continue;
                     const auto& c    = g.conditionOpcode;
                     const int   want = static_cast<int>(g.conditionParam);
@@ -2126,22 +2137,34 @@ namespace MFO::Logistics {
                 nxt = now + std::chrono::seconds(30);
                 spdlog::info("[logistics] {:08X} serviced -- nothing to loot/drink right now", id);
             }
-            // ECONOMY PROBE (#21) -- DISABLED 2026-07-31. It read a LIVE vendor's
-            // inventory (chest->GetInventory / vendor->GetGoldAmount) from the
-            // logistics JOB WORKER, racing the main thread that manages the
-            // merchant -> a form cast returns null and is dereferenced -> CTD on
-            // REAL vendors (Ulfberth/Warmaidens, crash-2026-07-31-13-12-39).
-            // Corpse loot is safe on the worker because a corpse's inventory is
-            // static; a live merchant's is not. The teammate skip (v0.8.27) only
-            // removed one trigger; the fault is the off-thread read itself.
-            // Re-enable ONLY once the vendor reads run on the MAIN thread -- and
-            // note SKSE AddTask does NOT reach main in this runtime (see
-            // [[skse-addtask-runs-on-job-worker]]), so #21 needs a real
-            // main-thread mechanism, not AddTask. Kept compiled (if(false)) so it
-            // can't bitrot.
-            static constexpr bool kEconProbeEnabled = false;
-            if (kEconProbeEnabled)
-                EconomyProbe(a_follower, a_state, now);
+            // ECONOMY PROBE (#21) -- HOPPED to the main thread (§0.37) and
+            // re-enabled. It reads a LIVE vendor's inventory
+            // (chest->GetInventory / vendor->GetGoldAmount); doing that from
+            // this JOB WORKER raced the main thread that manages the merchant
+            // -> a form cast returned null and was dereferenced -> CTD on REAL
+            // vendors (Ulfberth/Warmaidens, crash-2026-07-31-13-12-39). Corpse
+            // loot stays safe HERE because a corpse's inventory is static; a
+            // live merchant's is not. SKSE AddTask cannot make this hop -- it
+            // drains on BSJobs::JobThread in this runtime (§0.32,
+            // [[skse-addtask-runs-on-job-worker]]) -- so the probe rides the
+            // real pump instead. This run IS the validation that pump-side
+            // vendor reads don't crash, ahead of any real barter.
+            //
+            // Captures are chosen for the frame of delay between Post and
+            // drain: the follower goes by HANDLE, re-resolved main-side (he
+            // can unload in between -- a raw pointer would dangle); the gambit
+            // table is COPIED by value (a_state is a reference into
+            // g_followers, which the main thread itself edits via the board --
+            // a copy cannot dangle or tear). Rate limiting (15 s scan / 60 s
+            // per-pair log) lives inside EconomyProbe, so posting every idle
+            // tick is cheap. Still a PROBE: log-only, zero transactions.
+            MainThread::Post([h = a_follower->GetHandle(),
+                              gambits = a_state.logistics(), now]() {
+                auto  ptr      = h.get();
+                auto* follower = ptr.get();
+                if (!follower || follower->IsDead() || follower->IsDisabled()) return;
+                EconomyProbe(follower, gambits, now);
+            });
         }
     }
 
