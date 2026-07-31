@@ -1,0 +1,6 @@
+MFO v0.8.19
+commit:   b915e607b829c12e6275fb6cefb36636eaa87e17
+ci run:   30591658704
+dll:      3f1cb464b88f9ef6f61752579beff3c38ee42ff5bbbff5ca7504c7f91c35ff7c
+esp:      89d944d4478f1fa50fe72c3b6d21b58a33571cce5f9d4107a0ff2a5e85bda8cd
+built:    2026-07-30T23:52:47Z
