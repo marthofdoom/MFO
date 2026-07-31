@@ -3,6 +3,22 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.30 — fix: frozen follower looping on an unreachable loot item
+
+Erik froze ping-ponging between two arrows he could never reach (00020169
+navdist=18 vs dist=630, and 0002016A) -- an off-navmesh item gives a short
+navmesh path that ends far from the item, so he walks "there", can't close the
+last gap, and the idle reassess (which wipes the 25 s block so bodies reachable
+AFTER moving get re-tried) kept resurrecting them into an infinite re-attempt
+loop. Not related to the v0.8.29 pump; pre-existing loot-travel.
+
+- A 2nd STALL on the same ref now promotes it to a STICKY unreachable set: a
+  5-minute cooldown the idle reassess does NOT clear. One stall is still just
+  transient (a momentary block); two is a verdict. Logs "[loot] .. STICKY-
+  unreachable". Sticky set clears on revert/load. Both the walk-stall and the
+  two dispatch-time off-navmesh guards feed it.
+Loot now gives up on a genuinely unreachable item and moves on / returns to you.
+
 ## v0.8.29 — main-thread pump (MFO::MainThread) + econprobe on it
 
 The foundational fix behind #21. MFO's tick runs on a BSJobs job worker and

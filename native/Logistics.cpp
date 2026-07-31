@@ -763,12 +763,44 @@ namespace MFO::Logistics {
         std::unordered_map<RE::FormID, Clock::time_point> g_travelFailed;
         constexpr auto kTravelFailCooldown = std::chrono::seconds(25);
 
+        // STICKY unreachable set. The transient block above is WIPED by the idle
+        // reassess (so a body that becomes reachable once the follower moves gets
+        // re-tried) -- but a GEOMETRICALLY unreachable target never will: an
+        // off-navmesh item gives a short navmesh path that ENDS far from the item,
+        // so the follower walks "there", can't close the last gap, and the wipe
+        // makes him re-pick it forever (marth's frozen-Erik loop, v0.8.29: arrow
+        // 00020169 navdist=18 vs dist=630, ping-ponged with 0002016A). So the
+        // SECOND stall on a ref promotes it here: a long cooldown the reassess does
+        // NOT clear. One stall is still just transient (could be a momentary block);
+        // two is a verdict.
+        std::unordered_map<RE::FormID, Clock::time_point> g_travelUnreach;
+        std::unordered_map<RE::FormID, int>               g_stallStrikes;
+        constexpr auto kTravelStickyCooldown = std::chrono::minutes(5);
+
         bool TravelFailedRecently(RE::FormID a_id, Clock::time_point a_now) {
+            auto su = g_travelUnreach.find(a_id);
+            if (su != g_travelUnreach.end() && a_now < su->second + kTravelStickyCooldown)
+                return true;
             auto it = g_travelFailed.find(a_id);
             return it != g_travelFailed.end() && a_now < it->second + kTravelFailCooldown;
         }
         void MarkTravelFailed(RE::FormID a_id, Clock::time_point a_now) {
             if (a_id) { g_travelFailed[a_id] = a_now; EvictOldest(g_travelFailed); }
+        }
+        // A STALL (no navmesh path at dispatch, or walked with ZERO progress) --
+        // transient-block it like any fail, but on the 2nd strike promote it to the
+        // sticky set so the idle reassess can't resurrect it into a re-attempt loop.
+        void MarkTravelStalled(RE::FormID a_id, Clock::time_point a_now) {
+            if (!a_id) return;
+            MarkTravelFailed(a_id, a_now);
+            if (++g_stallStrikes[a_id] >= 2) {
+                g_stallStrikes.erase(a_id);
+                g_travelUnreach[a_id] = a_now;
+                EvictOldest(g_travelUnreach);
+                spdlog::info("[loot] {:08X} STICKY-unreachable (2nd stall) -- won't re-pick "
+                             "for {}m (survives idle reassess)", a_id,
+                             std::chrono::duration_cast<std::chrono::minutes>(kTravelStickyCooldown).count());
+            }
         }
 
         // IDLE REASSESS (marth: "to be fair, reassess all nearby bodies if nothing
@@ -1329,7 +1361,7 @@ namespace MFO::Logistics {
                     // package can't build a path and he'd freeze -- skip + blocklist
                     // (25s LRU, so the scan isn't re-run) BEFORE dispatch.
                     if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
-                        MarkTravelFailed(rid, a_now);
+                        MarkTravelStalled(rid, a_now);   // off-navmesh -> stall strike
                         spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
                                      a_follower->GetFormID(), rid);
                         continue;
@@ -1367,7 +1399,7 @@ namespace MFO::Logistics {
                     // OFF-NAVMESH GATE (see the excursion path): no mesh near the
                     // ref -> no path -> freeze. Skip + blocklist before dispatch.
                     if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
-                        MarkTravelFailed(rid, a_now);
+                        MarkTravelStalled(rid, a_now);   // off-navmesh -> stall strike
                         spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
                                      a_follower->GetFormID(), rid);
                         continue;
@@ -2012,7 +2044,12 @@ namespace MFO::Logistics {
                 // or the leg deadline. Blacklist it and seek another leg THIS tick.
                 const bool stalled = tref && now - g_travel.progressAt > kNoProgress;
                 if (gone || stalled || now > g_travel.deadline) {
-                    if (tref) MarkTravelFailed(tref->GetFormID(), now);
+                    if (tref) {
+                        // A stall (zero progress) is a reachability verdict -> strike
+                        // toward sticky; a vanished target or a plain deadline is not.
+                        if (stalled) MarkTravelStalled(tref->GetFormID(), now);
+                        else         MarkTravelFailed(tref->GetFormID(), now);
+                    }
                     if (stalled && tref)
                         spdlog::info("[loot] {:08X} unreachable {:08X} (no progress, dist={:.0f}) -- skipping",
                                      id, tref->GetFormID(), dist);
@@ -2122,6 +2159,9 @@ namespace MFO::Logistics {
                      now - g_lastBlocklistReassess >= kReassessCooldown)) {
                     const size_t n = g_travelFailed.size();
                     g_travelFailed.clear();
+                    g_stallStrikes.clear();   // single strikes expire with the transient
+                                              // block; g_travelUnreach (2-strike sticky)
+                                              // deliberately SURVIVES the reassess
                     g_lastBlocklistReassess = now;
                     g_idleCycles[id] = 0;
                     spdlog::info("[loot] {:08X} idle {} ticks -- cleared {} blocklisted "
@@ -2189,6 +2229,8 @@ namespace MFO::Logistics {
         if (g_travel.active) Packages::LootTravelClear("revert");
         g_travel = TravelIntent{};
         g_travelFailed.clear();
+        g_travelUnreach.clear();
+        g_stallStrikes.clear();
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
     }
