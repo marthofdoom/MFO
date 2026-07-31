@@ -37,6 +37,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Gait.cpp
     CasterConsent.cpp
     ItemCatalog.cpp
+    MEOBridge.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)

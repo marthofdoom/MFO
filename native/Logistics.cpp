@@ -9,6 +9,7 @@
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
 #include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
+#include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -306,6 +307,27 @@ namespace MFO::Logistics {
             RE::TESBoundObject* bestWeap    = nullptr;
             std::uint16_t       bestWeapDmg = baseDmg;
 
+            // RANGED ACQUISITION (marth): a follower whose gambits include "equip
+            // ranged" is MEANT to shoot -- so loot a bow/crossbow even when they
+            // don't currently wield a real weapon and their best melee class isn't
+            // ranged (the wieldsRealWeapon/myClass gates above would otherwise
+            // never let a swordsman or an empty-handed archer pick one up). This
+            // covers vanilla Bow/Crossbow and any mod ranged weapon whose type
+            // maps to WepClass::Ranged. Baseline is the best ranged they already
+            // carry (0 if none), so they take their first bow and later upgrade.
+            const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
+            std::uint16_t myRangedDmg = 0;
+            if (wantsRanged) {
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    if (auto* w = obj->As<RE::TESObjectWEAP>();
+                        w && WeaponClassOf(w->GetWeaponType()) == WepClass::Ranged)
+                        myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
+                }
+            }
+            RE::TESBoundObject* bestRanged    = nullptr;
+            std::uint16_t       bestRangedDmg = myRangedDmg;
+
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 // NEVER-LOOT: the catalog marks quest items, artifacts/unique
@@ -316,24 +338,64 @@ namespace MFO::Logistics {
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
                     if (!bestArmor && ArmorIsBetter(a_follower, armo)) bestArmor = obj;
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
+                    const WepClass wc = WeaponClassOf(weap->GetWeaponType());
                     // In the follower's best class, and strictly harder-hitting
                     // than what they effectively wield. A bow never beats a sword
                     // for a swordsman; a greatsword beats a dagger for a 2h user.
-                    if (wieldsRealWeapon &&
-                        WeaponClassOf(weap->GetWeaponType()) == myClass &&
+                    if (wieldsRealWeapon && wc == myClass &&
                         weap->GetAttackDamage() > bestWeapDmg) {
                         bestWeapDmg = weap->GetAttackDamage();
                         bestWeap    = obj;
                     }
+                    // Ranged pickup -- independent of wieldsRealWeapon/myClass.
+                    if (wantsRanged && wc == WepClass::Ranged &&
+                        weap->GetAttackDamage() > bestRangedDmg) {
+                        bestRangedDmg = weap->GetAttackDamage();
+                        bestRanged    = obj;
+                    }
                 }
             }
 
-            // Prefer the weapon upgrade -- it is what makes the follower hit
-            // harder; else the better armor piece. One item this tick (§4.3).
-            RE::TESBoundObject* best = bestWeap ? bestWeap : bestArmor;
+            // Prefer the in-class weapon upgrade; then a ranged weapon they need
+            // for their equip-ranged gambit; then the better armor. One item this
+            // tick (§4.3).
+            RE::TESBoundObject* best = bestWeap ? bestWeap
+                                     : bestRanged ? bestRanged
+                                                  : bestArmor;
             if (a_peek) return best != nullptr;   // just checking for an upgrade
             if (!best) return false;
             if (!FitsCarryWeight(a_follower, best->GetWeight())) return false;
+
+            // MEO gem transfer (#17): capture the OLD worn item this upgrade
+            // replaces (base + instance uid) BEFORE the swap, so MEO carries its
+            // socketed gems onto the new piece once it's worn (fired from the
+            // equip event). Weapon -> the equipped weapon; armor -> the worn piece
+            // on a slot the new one covers that actually has gems (uid != 0). All
+            // no-ops when MEO is absent or nothing has gems.
+            RE::FormID    fromBase = 0;
+            std::uint16_t fromUid  = 0;
+            if (MEOBridge::Available()) {
+                RE::TESBoundObject* oldItem = nullptr;
+                if (best->As<RE::TESObjectWEAP>()) {
+                    oldItem = myWeap;   // the weapon being replaced (may be null)
+                } else if (auto* newArmo = best->As<RE::TESObjectARMO>()) {
+                    using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+                    static constexpr Slot kSlots[] = {
+                        Slot::kHead, Slot::kBody, Slot::kHands, Slot::kForearms,
+                        Slot::kFeet, Slot::kCalves, Slot::kShield,
+                    };
+                    const auto mask = static_cast<std::uint32_t>(newArmo->GetSlotMask());
+                    for (const auto s : kSlots) {
+                        if (!(mask & static_cast<std::uint32_t>(s))) continue;
+                        auto* worn = a_follower->GetWornArmor(s);
+                        if (auto uid = worn ? MEOBridge::WornUid(a_follower, worn) : 0; uid != 0) {
+                            oldItem = worn; fromUid = uid; break;
+                        }
+                    }
+                }
+                if (oldItem && fromUid == 0) fromUid = MEOBridge::WornUid(a_follower, oldItem);
+                if (oldItem) fromBase = oldItem->GetFormID();
+            }
 
             a_src->RemoveItem(best, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer,
                               nullptr, a_follower);
@@ -344,6 +406,10 @@ namespace MFO::Logistics {
             // re-entering here.
             if (auto* eq = RE::ActorEquipManager::GetSingleton())
                 eq->EquipObject(a_follower, best);
+
+            // Move the old piece's gems onto the new one when it becomes worn.
+            // No-op if the old item had no gems (fromUid == 0) or MEO is absent.
+            MEOBridge::QueueGemMove(a_follower, fromBase, fromUid, best->GetFormID());
             return true;
         }
 
@@ -556,6 +622,22 @@ namespace MFO::Logistics {
         // logic reads it: something still worth waiting for -> linger; else the
         // batch is exhausted -> return to the player. Worker-tick-only.
         bool g_scanSawWaiting = false;
+
+        // The follower currently being serviced this tick, set at ServiceFollower
+        // entry. Loot code deep in the call tree (LootEquipment) reads the gambit
+        // table through it without threading a_state through every signature --
+        // safe because the worker services followers SEQUENTIALLY (one
+        // ServiceFollower at a time), so this points at the right state for the
+        // whole of that follower's loot pass. Never dereferenced outside it.
+        const FollowerState* g_svc = nullptr;
+
+        // Does this table author the given action anywhere? (e.g. an equip-ranged
+        // gambit => the follower is meant to use a bow/crossbow, so loot one.)
+        bool TableHasAction(const std::vector<Gambit>& a_tab, const char* a_op) {
+            for (const auto& g : a_tab)
+                if (g.actionOpcode == a_op) return true;
+            return false;
+        }
 
         // kNormal: not (yet) on an excursion -- arm's-reach transfer OR START one
         // by walking to a far corpse (LootTravelFill, claim at 60). kExcursion:
@@ -1342,6 +1424,7 @@ namespace MFO::Logistics {
 
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
+        g_svc = &a_state;   // loot code reads the gambit table through this (worker-sequential)
 
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();

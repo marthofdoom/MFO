@@ -16,6 +16,7 @@
 #include "Packages.h"
 #include "Logistics.h"
 #include "Gait.h"
+#include "MEOBridge.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -251,11 +252,13 @@ namespace {
             MFO::Forms::Resolve();          // then forms
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
+            MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::Followers::ResolveQuirks();
             MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
             MFO::CasterConsent::InstallHook();   // the influence hook, likewise
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
             MFO::Logistics::RegisterSinks();   // the player-looted waiver sink (§4.8.3)
+            MFO::MEOBridge::RegisterSink();  // equip sink: flush follower gem moves onto worn loot
             MFO::Diagnostics::Install();
             break;
 

@@ -3,6 +3,20 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.21 — carry your gems onto looted gear (MEO API) + loot bows for archers
+
+- **Gem transfer on gear swap (#17).** When a follower upgrades to looted gear,
+  their socketed enchant gems come with them — via MEO's new inter-plugin API
+  (`IMEO::MoveGems`). Captured at the swap and fired once the new piece is worn
+  (so MEO can mint its instance id); gems that don't fit return to the shared
+  pouch with their XP intact. Fully optional — no-ops cleanly if MEO isn't in the
+  load order. Also exposes a "with my gems" preview (`PreviewWithGems`) for the
+  board to show compared stats with the current gems simulated.
+- **Ranged-weapon looting (marth).** A follower whose gambits include "equip
+  ranged" now loots a bow/crossbow off corpses even when they aren't already
+  wielding a weapon or their melee class isn't ranged — so an archer actually
+  gets a bow to use. Covers vanilla and modded ranged weapons.
+
 ## v0.8.20 — loot jewellery + a walk/jog/run gait toggle
 
 Two features built in parallel:
