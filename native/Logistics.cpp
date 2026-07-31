@@ -324,22 +324,37 @@ namespace MFO::Logistics {
             std::uint16_t       bestWeapDmg = baseDmg;
 
             // RANGED ACQUISITION (marth): a follower whose gambits include "equip
-            // ranged" is MEANT to shoot -- so loot a bow/crossbow even when they
+            // ranged" is MEANT to shoot -- so loot a ranged weapon even when they
             // don't currently wield a real weapon and their best melee class isn't
-            // ranged (the wieldsRealWeapon/myClass gates above would otherwise
-            // never let a swordsman or an empty-handed archer pick one up). This
-            // covers vanilla Bow/Crossbow and any mod ranged weapon whose type
-            // maps to WepClass::Ranged. Baseline is the best ranged they already
-            // carry (0 if none), so they take their first bow and later upgrade.
+            // ranged (the wieldsRealWeapon/myClass gates would otherwise never let
+            // a swordsman or an empty-handed archer pick one up).
+            //
+            // BOW vs CROSSBOW must not be conflated: they feed different ammo, so
+            // a crossbow-user handed a bow (or vice versa) ends up with a weapon
+            // it has no ammo for. Pick the kind the follower can actually feed --
+            // whichever ranged weapon they already carry (better of the two), else
+            // by the ammo they hold (arrows -> bow, bolts -> crossbow), else bow
+            // by default. Loot only THAT kind; baseline is their current of it.
+            using WT = RE::WEAPON_TYPE;
             const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
-            std::uint16_t myRangedDmg = 0;
+            bool          wantCrossbow = false;
+            std::uint16_t myRangedDmg  = 0;
             if (wantsRanged) {
+                std::uint16_t bowDmg = 0, xbowDmg = 0;
+                int arrows = 0, bolts = 0;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
-                    if (auto* w = obj->As<RE::TESObjectWEAP>();
-                        w && WeaponClassOf(w->GetWeaponType()) == WepClass::Ranged)
-                        myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
+                    if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                        if (w->GetWeaponType() == WT::kBow)           bowDmg  = std::max(bowDmg,  w->GetAttackDamage());
+                        else if (w->GetWeaponType() == WT::kCrossbow) xbowDmg = std::max(xbowDmg, w->GetAttackDamage());
+                    } else if (auto* am = obj->As<RE::TESAmmo>()) {
+                        (AmmoIsBolt(am) ? bolts : arrows) += data.first;
+                    }
                 }
+                if (bowDmg > 0 || xbowDmg > 0)   wantCrossbow = xbowDmg > bowDmg;   // upgrade what they wield
+                else if (arrows > 0 || bolts > 0) wantCrossbow = bolts > arrows;    // else match their ammo
+                else                              wantCrossbow = false;             // else default to a bow
+                myRangedDmg = wantCrossbow ? xbowDmg : bowDmg;
             }
             RE::TESBoundObject* bestRanged    = nullptr;
             std::uint16_t       bestRangedDmg = myRangedDmg;
@@ -363,11 +378,15 @@ namespace MFO::Logistics {
                         bestWeapDmg = weap->GetAttackDamage();
                         bestWeap    = obj;
                     }
-                    // Ranged pickup -- independent of wieldsRealWeapon/myClass.
-                    if (wantsRanged && wc == WepClass::Ranged &&
-                        weap->GetAttackDamage() > bestRangedDmg) {
-                        bestRangedDmg = weap->GetAttackDamage();
-                        bestRanged    = obj;
+                    // Ranged pickup -- ONLY the follower's kind (bow XOR crossbow),
+                    // independent of wieldsRealWeapon/myClass.
+                    if (wantsRanged) {
+                        const auto wt = weap->GetWeaponType();
+                        const bool kindMatch = wantCrossbow ? (wt == WT::kCrossbow) : (wt == WT::kBow);
+                        if (kindMatch && weap->GetAttackDamage() > bestRangedDmg) {
+                            bestRangedDmg = weap->GetAttackDamage();
+                            bestRanged    = obj;
+                        }
                     }
                 }
             }

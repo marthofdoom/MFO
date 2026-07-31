@@ -3,6 +3,14 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.22 — ranged looting tells bows from crossbows
+
+The equip-ranged loot pickup no longer lumps bows and crossbows together (they
+feed different ammo — a crossbow-user handed a bow is stuck with no bolts). The
+follower now loots only the kind it can actually use: whichever ranged weapon it
+already carries (upgrading the better of the two), else the kind matching the
+ammo it holds (arrows -> bow, bolts -> crossbow), else a bow by default.
+
 ## v0.8.21 — carry your gems onto looted gear (MEO API) + loot bows for archers
 
 - **Gem transfer on gear swap (#17).** When a follower upgrades to looted gear,
