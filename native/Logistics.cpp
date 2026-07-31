@@ -2177,34 +2177,33 @@ namespace MFO::Logistics {
                 nxt = now + std::chrono::seconds(30);
                 spdlog::info("[logistics] {:08X} serviced -- nothing to loot/drink right now", id);
             }
-            // ECONOMY PROBE (#21) -- HOPPED to the main thread (§0.37) and
-            // re-enabled. It reads a LIVE vendor's inventory
-            // (chest->GetInventory / vendor->GetGoldAmount); doing that from
-            // this JOB WORKER raced the main thread that manages the merchant
-            // -> a form cast returned null and was dereferenced -> CTD on REAL
-            // vendors (Ulfberth/Warmaidens, crash-2026-07-31-13-12-39). Corpse
-            // loot stays safe HERE because a corpse's inventory is static; a
-            // live merchant's is not. SKSE AddTask cannot make this hop -- it
-            // drains on BSJobs::JobThread in this runtime (§0.32,
-            // [[skse-addtask-runs-on-job-worker]]) -- so the probe rides the
-            // real pump instead. This run IS the validation that pump-side
-            // vendor reads don't crash, ahead of any real barter.
+            // ECONOMY PROBE (#21) -- DISABLED again 2026-07-31 after the MAIN-THREAD
+            // run STILL crashed (crash-2026-07-31-15-49-45, vendor Ma'dran). That
+            // is the decisive result: the vendor CTD is NOT a thread race. The pump
+            // is proven live ("[mainthread] first drain ..."), the probe ran ON the
+            // main thread, and it still null-derefed inside chest->GetInventory()
+            // on the merchant's chest (RSI=Chest, a form cast -> null -> deref). The
+            // chest is a persistent merchant container that no barter menu has
+            // populated, so its InventoryChanges is not set up and native
+            // GetInventory faults on it -- on ANY thread. GetContainer() passes (it
+            // IS a real container); the fault is deeper.
             //
-            // Captures are chosen for the frame of delay between Post and
-            // drain: the follower goes by HANDLE, re-resolved main-side (he
-            // can unload in between -- a raw pointer would dangle); the gambit
-            // table is COPIED by value (a_state is a reference into
-            // g_followers, which the main thread itself edits via the board --
-            // a copy cannot dangle or tear). Rate limiting (15 s scan / 60 s
-            // per-pair log) lives inside EconomyProbe, so posting every idle
-            // tick is cheap. Still a PROBE: log-only, zero transactions.
-            MainThread::Post([h = a_follower->GetHandle(),
-                              gambits = a_state.logistics(), now]() {
-                auto  ptr      = h.get();
-                auto* follower = ptr.get();
-                if (!follower || follower->IsDead() || follower->IsDisabled()) return;
-                EconomyProbe(follower, gambits, now);
-            });
+            // So the real barter cannot read merchant stock via native
+            // TESObjectREFR::GetInventory on an unpopulated merchant chest. It needs
+            // a safe merchant-read (Papyrus, which is what the game's own barter menu
+            // uses; or force-initialising the chest's InventoryChanges first). The
+            // main-thread pump (§0.37) is still correct + needed for the TRANSACTION
+            // (mutations must run on main), just not sufficient for the READ.
+            // See [[economy-vendor-detection-excludes-teammates]] + ENGINE_NOTES.
+            static constexpr bool kEconProbeEnabled = false;
+            if (kEconProbeEnabled)
+                MainThread::Post([h = a_follower->GetHandle(),
+                                  gambits = a_state.logistics(), now]() {
+                    auto  ptr      = h.get();
+                    auto* follower = ptr.get();
+                    if (!follower || follower->IsDead() || follower->IsDisabled()) return;
+                    EconomyProbe(follower, gambits, now);
+                });
         }
     }
 

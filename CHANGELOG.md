@@ -3,6 +3,23 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.31 — econprobe disabled again: the vendor CTD is NOT a thread race
+
+The v0.8.29 pump ran the econprobe on the MAIN thread and it STILL crashed
+(crash-2026-07-31-15-49-45, vendor Ma'dran) with the identical signature -- a
+null cast-deref inside chest->GetInventory() on the merchant's chest (RSI=Chest).
+Decisive: the fault is native GetInventory on a persistent merchant container
+whose InventoryChanges no barter menu has populated -- it faults on ANY thread,
+not a race. GetContainer() passes; the fault is deeper.
+
+- Econprobe disabled (kept compiled behind if(false)). The main-thread pump
+  (§0.37) stays -- it's still correct + needed for the barter TRANSACTION
+  (mutations must run on main), just not sufficient for the READ.
+- Real barter needs a SAFE merchant-stock read (Papyrus, as the game's own
+  barter menu uses; or force-initialising the chest inventory) -- not native
+  GetInventory on an unpopulated merchant chest. Tracked under #21.
+No gameplay change; loose-item/retreat probes unaffected.
+
 ## v0.8.30 — fix: frozen follower looping on an unreachable loot item
 
 Erik froze ping-ponging between two arrows he could never reach (00020169
