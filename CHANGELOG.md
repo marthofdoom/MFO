@@ -3,6 +3,25 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.32 — fix: followers churning unreachable loot legs forever
+
+Root cause of both followers looping unreachable corpses (v0.8.31, pathSpeed=0,
+navdist<<dist, act.loot_equipment re-firing for minutes): the excursion RETARGET
+resets the no-progress tracker (progressAt) every tick, and it re-picked the
+closest walkable ref every ~2-4 s -- faster than the 7 s stall timer -- so an
+unreachable leg NEVER accumulated the stall that sticky-blocklists it (the v0.8.30
+fix could never trigger). The follower ping-ponged legs indefinitely.
+
+- Excursion now COMMITS to the current leg: while already walking to a still-valid,
+  not-yet-stalled target, it does not retarget. The Walking-phase arrival/stall
+  logic finishes the leg first, THEN the scan picks the next. So a stall finally
+  accumulates -> 2 strikes -> sticky-unreachable -> excluded -> the loop converges
+  and he returns to the player. Arm's-reach grabs and reachable multi-corpse
+  looting are unchanged.
+
+Note: does not by itself address the invisible-drawn-weapon report (under separate
+investigation); it stops the loot-travel churn that co-occurred with it.
+
 ## v0.8.31 — econprobe disabled again: the vendor CTD is NOT a thread race
 
 The v0.8.29 pump ran the econprobe on the MAIN thread and it STILL crashed

@@ -1349,6 +1349,24 @@ namespace MFO::Logistics {
                         if (LootHere(a_follower, ref, a_cat, a_potionWant)) return true;
                         continue;   // arm's-reach corpse was empty -- try the next
                     }
+                    // COMMIT TO THE CURRENT LEG. RETARGET (below) resets the
+                    // no-progress tracker (progressAt), so re-picking the closest
+                    // ref EVERY tick meant an unreachable leg never accumulated the
+                    // kNoProgress stall that sticky-blocklists it -- both followers
+                    // churned unreachable corpses forever (v0.8.31: pathSpeed=0,
+                    // navdist<<dist, legs switching every 2-4 s < the 7 s timer).
+                    // While already walking to a still-valid, not-yet-stalled
+                    // target, do NOT retarget: let the Walking-phase arrival/stall
+                    // logic finish this leg, THEN the scan picks the next. Arm's-
+                    // reach grabs (above) still fire; only the churn is stopped.
+                    if (g_travel.phase == TravelPhase::Walking) {
+                        auto  tptr = g_travel.target.get();
+                        auto* cur  = tptr.get();
+                        if (cur && !cur->IsDisabled() && !cur->IsMarkedForDeletion() &&
+                            !TravelFailedRecently(cur->GetFormID(), a_now) &&
+                            a_now - g_travel.progressAt <= kNoProgress)
+                            return false;   // stay the course
+                    }
                     // A LOOSE ref (route 2b) falls through to RETARGET even at
                     // arm's reach: the acquire runs at the driver's ARRIVAL
                     // (Activate dispatch), never as an in-place transfer here.
