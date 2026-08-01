@@ -1,3 +1,9 @@
+## v1.0.2 -- no shields for two-hander/bow followers
+
+Farkas (two-handed) looted a shield -- useless with no free off-hand. Armor loot
+now skips shield-slot gear when the follower's best weapon class is two-handed or
+ranged.
+
 ## v1.0.1 -- loot armour by class skill (#21 follow-up)
 
 Auri (Heavy Armor skill 5) kept looting heavy plate: ArmorIsBetter compared raw

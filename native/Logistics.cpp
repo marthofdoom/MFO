@@ -405,7 +405,14 @@ namespace MFO::Logistics {
                 if (Catalog::IsExcluded(obj->GetFormID())) continue;
 
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
-                    if (!bestArmor && ArmorIsBetter(a_follower, armo)) bestArmor = obj;
+                    // A SHIELD needs a free off-hand; a two-hander or bow user has
+                    // none, so it's dead weight -- never loot one for them (marth:
+                    // Farkas, a two-hander, picked up a shield).
+                    const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
+                        & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
+                    const bool shieldUseless = isShield &&
+                        (myClass == WepClass::TwoHand || myClass == WepClass::Ranged);
+                    if (!bestArmor && !shieldUseless && ArmorIsBetter(a_follower, armo)) bestArmor = obj;
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
                     if (IsCreatureWeapon(weap)) continue;   // never equip automaton/creature gear
                     const WepClass wc = WeaponClassOf(weap->GetWeaponType());
