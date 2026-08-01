@@ -1783,6 +1783,7 @@ namespace MFO::Logistics {
                     g_econTrade[fid] = a_now + std::chrono::seconds(20);
                     break;
                 }
+            }   // for (living vendors)
         }
 
         // ── the player-looted waiver sink (#22h) ────────────────────────────
