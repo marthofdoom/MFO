@@ -1,3 +1,17 @@
+## v0.8.47 -- econ Phase 4 hardening + save-safety (#21)
+
+- POTIONS: PlanBuy classifies stock with Logistics::PotionRestores (catalog +
+  heuristic), the SAME classifier the follower counts/drinks with -- catalog-only
+  left an alchemist's potions unbought despite a real need (field: Arcadia BUY 0).
+- ANTI-THRASH: per-follower trade cooldown (20s) + one trade per scan, so a
+  purchase settles before the need is re-evaluated -- stops the same-scan double-buy
+  across two nearby vendors (field: Erik +17 @ Ysolda AND +22 @ Adrianne, one second).
+- DON'T-TRADE-MID-LOOT: a follower walking to loot skips trading until the excursion ends.
+- SAVE-SAFETY: TradeBridge::ClearTransientState now runs on revert (pending orders
+  hold session-only handles; a resumed RunTrade with a dead token aborts safe). The
+  BUY loop now pays PER-ITEM (move+pay together, token-free GetFormValue) so a save
+  landing mid-loop leaves a consistent partial trade, never free items.
+
 ## v0.8.46 -- econ: buy potions via the follower's own classifier (#21)
 
 At an alchemist a follower with a potion NEED bought 0 (field: Arcadia). PlanBuy

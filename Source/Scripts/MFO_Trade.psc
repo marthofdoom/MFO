@@ -20,7 +20,7 @@ Form[]          Function GetSellForms(int token)      global native
 Int[]           Function GetSellCounts(int token)     global native
 Int[]           Function GetSellValues(int token)     global native
 Int[]           Function PlanBuy(int token, Form[] forms, Int[] counts) global native
-Int             Function GetBuySpent(int token)       global native
+Int             Function GetFormValue(Form akForm)    global native
 Function ReportTrade(int token, int soldValue, int soldCount, int boughtCount, int spent, int vendorGold) global native
 
 Function RunTrade(int token)
@@ -84,17 +84,21 @@ Function RunTrade(int token)
         int b = 0
         while b < m && b < plan.Length
             if plan[b] > 0
-                boughtCount += plan[b]
+                int qty = plan[b]
+                int lineGold = qty * GetFormValue(stock[b])
+                boughtCount += qty
+                spent += lineGold
+                ; PER-ITEM atomic: move the goods AND pay for them together, so a
+                ; save that lands mid-loop leaves a consistent partial trade (the
+                ; done items are fully paid, the rest just don't happen) -- never
+                ; free items. GetFormValue is token-free, so it survives a load.
                 if !probe
-                    chest.RemoveItem(stock[b], plan[b], true, follower)   ; goods -> follower
+                    chest.RemoveItem(stock[b], qty, true, follower)          ; goods -> follower
+                    follower.RemoveItem(gold001, lineGold, true, chest)      ; pay into the vendor's chest
                 endif
             endif
             b += 1
         endwhile
-        spent = GetBuySpent(token)
-        if spent > 0 && !probe
-            follower.RemoveItem(gold001, spent, true, chest)   ; follower pays into the vendor's chest
-        endif
     endif
 
     ReportTrade(token, soldValue, soldCount, boughtCount, spent, vendorGold)

@@ -1670,6 +1670,18 @@ namespace MFO::Logistics {
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
 
+            // PHASE 4 anti-thrash + don't-trade-mid-loot.
+            // (a) A follower already walking to loot must not break off to trade --
+            //     loot and trade never overlap; finish the excursion first.
+            if (g_travel.active && g_travel.follower == fid) return;
+            // (b) Per-follower TRADE cooldown: at most one trade dispatch per window,
+            //     so a purchase SETTLES (the arrow/potion count updates) before the
+            //     next scan re-evaluates the need. Without it a follower near two
+            //     vendors traded with BOTH in the same scan and over-bought (field:
+            //     Erik +17 @ Ysolda AND +22 @ Adrianne, same second).
+            static std::unordered_map<RE::FormID, Clock::time_point> s_nextTrade;
+            if (auto& tn = s_nextTrade[fid]; tn.time_since_epoch().count() != 0 && a_now < tn) return;
+
             static std::unordered_map<std::uint64_t, Clock::time_point> s_nextEconPair;
             for (auto& h : living) {
                 auto  ptr    = h.get();
@@ -1759,6 +1771,10 @@ namespace MFO::Logistics {
 
                 TradeBridge::VendorTrade(a_follower, vendor, chest,
                                          std::move(sell), std::move(needs), purse);
+                // One trade per follower per window, then STOP scanning vendors this
+                // tick -- let this trade settle before touching another merchant.
+                s_nextTrade[fid] = a_now + std::chrono::seconds(20);
+                break;
             }
         }
 

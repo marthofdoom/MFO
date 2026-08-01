@@ -11,6 +11,7 @@
 #include "CasterConsent.h"
 #include "Packages.h"
 #include "Papyrus.h"
+#include "TradeBridge.h"
 #include "Board.h"
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
@@ -384,6 +385,10 @@ namespace MFO {
         // after a revert that belief is worth nothing (#16).
         Packages::ReleaseAll("revert");
         Papyrus::ClearTransientState();   // counters are session-scoped like every sibling
+        TradeBridge::ClearTransientState();   // #21: drop pending trade orders -- their
+                                              // actor/chest handles are this-session only,
+                                              // and a resumed RunTrade with a stale token
+                                              // fails SAFE (GetVendorChest -> none -> abort)
         Rapport::ResetSessionCounters();
         // (StopPump moved to the TOP of this function -- it must precede the clears.)
         Board::SetHud(false);      // else it lingers over the main menu with stale rows

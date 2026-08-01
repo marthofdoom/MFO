@@ -157,10 +157,11 @@ namespace MFO::TradeBridge {
             return plan;
         }
 
-        std::int32_t GetBuySpent(RE::StaticFunctionTag*, std::int32_t a_token) {
-            std::scoped_lock lk(g_mtx);
-            auto* o = Find(a_token);
-            return o ? o->buySpent : 0;
+        // Token-FREE base value of a form. Papyrus pays per-item with this so the
+        // buy loop is self-contained (move + pay together) and survives a save that
+        // lands mid-loop -- unlike a token'd total, which is gone after a load.
+        std::int32_t GetFormValue(RE::StaticFunctionTag*, RE::TESForm* a_form) {
+            return BaseValue(a_form);
         }
 
         // Papyrus reports the result; native logs it + frees the token.
@@ -204,7 +205,7 @@ namespace MFO::TradeBridge {
         a_vm->RegisterFunction("GetSellCounts",    "MFO_Trade", GetSellCounts);
         a_vm->RegisterFunction("GetSellValues",    "MFO_Trade", GetSellValues);
         a_vm->RegisterFunction("PlanBuy",          "MFO_Trade", PlanBuy);
-        a_vm->RegisterFunction("GetBuySpent",      "MFO_Trade", GetBuySpent);
+        a_vm->RegisterFunction("GetFormValue",     "MFO_Trade", GetFormValue);
         a_vm->RegisterFunction("ReportTrade",      "MFO_Trade", ReportTrade);
         spdlog::info("[trade] registered MFO_Trade natives (sell + buy bridge)");
         return true;
