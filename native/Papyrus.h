@@ -58,6 +58,14 @@ namespace MFO::Papyrus {
     // caller must observe the ref/inventory on a later tick.
     bool DispatchActivate(RE::TESObjectREFR* a_ref, RE::TESObjectREFR* a_activator);
 
+    // MFO_Trade.RunTrade(token) -- the #21 econ bridge trigger. Unlike the two
+    // calls above (vanilla-class natives reached by class name), this targets a
+    // CUSTOM script class attached to a_quest's VMAD, so the quest MUST be
+    // running with MFO_Trade bound (it is: start-game-enabled + SEQ). The script
+    // pulls the follower/vendor/lists back through MFO-registered natives keyed
+    // by token. Returns whether the call was DISPATCHED (async, like the others).
+    bool DispatchTradeRun(RE::TESForm* a_quest, std::int32_t a_token);
+
     // How many dispatches this session, for the heartbeat (#53). A subsystem
     // whose correct behaviour is invisible must publish one.
     std::uint32_t Dispatches();

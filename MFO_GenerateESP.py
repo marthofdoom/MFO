@@ -38,7 +38,8 @@ FID_MCM_QUEST      = OWN | 0x808   # carries the MCM Helper config script
 FID_COMMAND_QUEST  = OWN | 0x80A   # M9: carries the alias MFO fills with a target
 FID_PROBE_GLOB     = OWN | 0x80B   # M9 PoC: GetGlobalValue switchboard for the probes
 FID_LOOT_QUEST     = OWN | 0x80C   # Option A: delivery route for the travel-to-loot package
-# 0x80D-0x80F  reserved: more command aliases / globals
+FID_TRADE_QUEST    = OWN | 0x80E   # #21 econ: carries MFO_Trade (the merchant-read/transaction bridge)
+# 0x80D, 0x80F  reserved: more command aliases / globals
 # 0x810+       reserved: player-side perks, if that is ever ruled in
 FID_CAST_PACKAGE   = OWN | 0x820   # M9: PACK instance riding vanilla UseMagic
 FID_POC_PACK_BASE  = OWN | 0x821   # M9 PoC: one PACK per probe, 0x821+
@@ -359,6 +360,20 @@ def make_mcm_quest():
 
 
 # ── M9: the command quest + its alias ───────────────────────────────────────
+def make_trade_quest():
+    # #21 econ bridge. Start-game-enabled, NOT run-once (so it re-registers on an
+    # existing save via the SEQ, exactly like the MCM quest). Carries MFO_Trade
+    # (extends Quest) with zero VMAD properties -- the DLL drives it by dispatching
+    # RunTrade(token) to this quest's handle, and MFO_Trade pulls the follower /
+    # vendor / lists back through MFO-registered Papyrus natives. No alias needed:
+    # everything the script touches comes from the token'd TradeOrder in native.
+    vmad = VMADBuilder()
+    vmad.add_script("MFO_Trade", [])
+    body = subrec('EDID', zstr("MFO_TradeQuest")) + subrec('FULL', zstr("MFO Trade")) + subrec('VMAD', vmad.build())
+    body += subrec('DNAM', qust_dnam(0x0011)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
+    return record('QUST', FID_TRADE_QUEST, 0, body)
+
+
 def make_command_quest():
     """The delivery route for a package onto a follower MFO does not own.
 
@@ -829,7 +844,8 @@ def make_pack():
 
 def make_qust():
     return group('QUST', make_startup_quest() + make_mcm_quest()
-                 + make_command_quest() + make_loot_quest() + make_retreat_quest())
+                 + make_command_quest() + make_loot_quest() + make_retreat_quest()
+                 + make_trade_quest())
 
 
 def main():
@@ -864,10 +880,11 @@ def main():
         f.write(struct.pack('<I', FID_COMMAND_QUEST))
         f.write(struct.pack('<I', FID_LOOT_QUEST))
         f.write(struct.pack('<I', FID_RETREAT_QUEST))
+        f.write(struct.pack('<I', FID_TRADE_QUEST))
 
     print(f"MFO {VERSION}")
     print(f"Written: {out_path} ({len(data):,} bytes)")
-    print(f"Written: {seq_path} (4 start-game-enabled quests: MCM, Command, Loot, Retreat)")
+    print(f"Written: {seq_path} (5 start-game-enabled quests: MCM, Command, Loot, Retreat, Trade)")
     print()
     print("Records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{NEXT_OBJECT_ID:03X}")
@@ -879,6 +896,7 @@ def main():
     print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (2 aliases, DLL-filled)")
     print(f"  QUST  0x{FID_LOOT_QUEST & 0xFFF:03X}        MFO_LootQuest (2 aliases, DLL-filled; static prio {LOOT_PRIORITY})")
     print(f"  QUST  0x{FID_RETREAT_QUEST & 0xFFF:03X}        MFO_RetreatQuest (2 aliases, DLL-filled; static prio {RETREAT_PRIORITY})")
+    print(f"  QUST  0x{FID_TRADE_QUEST & 0xFFF:03X}        MFO_TradeQuest (MFO_Trade script; econ bridge)")
     print(f"  PACK  0x{FID_CAST_PACKAGE & 0xFFF:03X}        MFO_CastPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X}"
           + ("  [NOT attached under POC]" if POC_ENABLED else ""))
     print(f"  PACK  0x{FID_TRAVEL_PACKAGE & 0xFFF:03X}        MFO_TravelPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X}")

@@ -12,6 +12,7 @@
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
+#include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -1975,6 +1976,12 @@ namespace MFO::Logistics {
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
         g_svc = &a_state;   // loot code reads the gambit table through this (worker-sequential)
+
+        // #21 econ bridge -- Phase 0 self-test. Once the trade quest is running,
+        // dispatch RunTrade(1) a single time to prove the whole round trip
+        // (DLL -> MFO_Trade.RunTrade -> NativePing -> log). Self-latches; a no-op
+        // every tick after. Removed when Phase 1 wires the real vendor trigger.
+        TradeBridge::SelfTest();
 
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();

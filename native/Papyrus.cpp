@@ -108,6 +108,28 @@ namespace MFO::Papyrus {
         return ok;
     }
 
+    bool DispatchTradeRun(RE::TESForm* a_quest, std::int32_t a_token) {
+        if (!a_quest) { ++g_failures; return false; }
+        auto* vm = VM();
+        if (!vm) { ++g_failures; return false; }
+
+        // The handle is the QUEST's; MFO_Trade is bound to it via VMAD, so the
+        // custom-class method resolves against a real script instance (unlike the
+        // vanilla-class calls above, which need no bound script).
+        RE::VMHandle handle{};
+        if (!HandleFor(a_quest, handle)) { ++g_failures; return false; }
+
+        std::unique_ptr<RE::BSScript::IFunctionArguments> args{
+            RE::MakeFunctionArguments(std::move(a_token)) };
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+
+        const bool ok = vm->DispatchMethodCall2(handle, "MFO_Trade", "RunTrade",
+                                                args.get(), callback);
+        if (ok) ++g_dispatches;
+        else    ++g_failures;
+        return ok;
+    }
+
     std::uint32_t Dispatches() { return g_dispatches.load(); }
     std::uint32_t Failures()   { return g_failures.load(); }
 

@@ -46,11 +46,13 @@ REQUIRED = {
     # RETREAT PROBE: travel-to-player under kIgnoreCombat.
     0x830: ('QUST', "MFO_RetreatQuest",     ['EDID', 'DNAM', 'ALST', 'ALPC']),
     0x831: ('PACK', "MFO_RetreatPackage",   ['EDID', 'PKDT', 'PKCU', 'PLDT']),
+    # #21 econ bridge: carries MFO_Trade (VMAD), no aliases (script pulls from natives).
+    0x80E: ('QUST', "MFO_TradeQuest",       ['EDID', 'DNAM', 'VMAD']),
 }
 
 # Quests that are start-game-enabled but NOT run-once must appear in the SEQ or
 # they never start on an existing save.
-SEQ_EXPECTED = {0x808, 0x80A, 0x80C, 0x830}
+SEQ_EXPECTED = {0x808, 0x80A, 0x80C, 0x830, 0x80E}
 
 GRUP_HDR = 24
 REC_HDR = 24

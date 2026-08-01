@@ -18,6 +18,7 @@
 #include "Gait.h"
 #include "MEOBridge.h"
 #include "MainThread.h"
+#include "TradeBridge.h"
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -356,6 +357,12 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     serialization->SetRevertCallback(MFO::RevertCallback);
 
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
+
+    // #21 econ bridge: register MFO_Trade's Papyrus natives. Must go here, at
+    // plugin load -- the Papyrus interface runs the callback when the VM
+    // initialises (each game load); registering at kDataLoaded would be too late.
+    if (auto* papyrus = SKSE::GetPapyrusInterface())
+        papyrus->Register(MFO::TradeBridge::RegisterFuncs);
 
     spdlog::info("=== MFO loaded (M3 + Field Kit overlay) ===");
     return true;

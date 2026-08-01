@@ -87,6 +87,18 @@ python3 MFO_GenerateESP.py out >/dev/null
 python3 tools/audit_esp.py          # PASS is a merge gate; a FAIL stops the release
 echo
 
+# 2b. Papyrus, always recompiled (Wine + Nemesis compiler) so the shipped .pex
+# can never lag Source/Scripts. If the compiler is unreachable, fall back to the
+# committed out/Scripts/*.pex -- but a MISSING MFO_Trade.pex is fatal (its VMAD
+# would reference a dead script). #21 econ bridge.
+if [[ -x "/mnt/gaming/Steam/steamapps/common/Proton Hotfix/files/bin/wine" ]]; then
+    tools/compile.sh all || { echo "ERROR: Papyrus compile failed." >&2; exit 1; }
+else
+    echo "WARN: Wine compiler absent -- shipping committed out/Scripts/*.pex"
+fi
+[[ -f out/Scripts/MFO_Trade.pex ]] || { echo "ERROR: out/Scripts/MFO_Trade.pex missing." >&2; exit 1; }
+echo
+
 # 3. DLL from the latest green CI run, with its provenance recorded.
 RUN_ID="$($GH run list --workflow=native --status=success --limit 1 --json databaseId -q '.[0].databaseId')"
 if [[ -z "$RUN_ID" ]]; then
@@ -132,6 +144,10 @@ cp out/MCM/Config/MFO/config.json "$STAGE/pkg/MCM/Config/MFO/"
 # back -1 (no value to bind to), so the whole MCM shows -1 (2026-07-28).
 cp out/MCM/Settings/MFO.ini       "$STAGE/pkg/MCM/Settings/"
 cp out/Scripts/MFO_MCM.pex        "$STAGE/pkg/Scripts/"
+# #21 econ bridge: MFO_Trade.pex MUST ship or MFO_TradeQuest's VMAD references a
+# missing script and the bridge is silently dead. Compiled fresh from
+# Source/Scripts/MFO_Trade.psc by tools/compile.sh (checked below).
+cp out/Scripts/MFO_Trade.pex      "$STAGE/pkg/Scripts/"
 cp THIRD-PARTY-NOTICES.md  "$STAGE/pkg/"    # ships with every build, INVARIANTS #42a
 
 ZIP="MFO-v${VER}.zip"

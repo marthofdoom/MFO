@@ -32,6 +32,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Logistics.cpp
     Loadout.cpp
     Papyrus.cpp
+    TradeBridge.cpp
     Targeting.cpp
     MainThread.cpp
     Packages.cpp

@@ -3,6 +3,26 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.39 — econ bridge Phase 0: the native↔Papyrus round trip (#21)
+
+First increment of Fable's ECON_PAPYRUS_PLAN. The merchant read/transaction can't
+live in C++ (native GetInventory on an unpopulated merchant chest CTDs), so it moves
+to Papyrus; native keeps the decision. This build stands up and PROVES the bridge
+before any merchant is touched:
+
+- ESP: new `MFO_TradeQuest` (0x80E) carrying `MFO_Trade` (VMAD), start-game-enabled
+  + SEQ (audit_esp updated; frozen-id table + SEQ_EXPECTED).
+- Papyrus pipeline (NEW): `Source/Scripts/MFO_Trade.psc` + `Source/Stubs/` (mirrors
+  MAO/MEO) + `tools/compile.sh` (Proton-wine + Nemesis PapyrusCompiler). release.sh
+  recompiles + ships `MFO_Trade.pex` every build.
+- Native `TradeBridge.{h,cpp}`: registers MFO_Trade's Papyrus natives (Phase 0:
+  `NativePing`), and a self-test that dispatches `RunTrade(1)` once the quest is
+  running. `Papyrus::DispatchTradeRun` adds custom-class dispatch. Forms resolves
+  `g_tradeQuest`.
+- Proof = the log shows `[trade] registered …`, `[trade] self-test: dispatching …`,
+  then `[trade] NativePing token=1 -- bridge round-trip OK`. Phases 1–4 (read-only
+  probe → sell → buy → harden) build on this.
+
 ## v0.8.38 — no looting in player homes (default; MCM toggle)
 
 marth: followers shouldn't rifle your own house. Looting is now suppressed in any

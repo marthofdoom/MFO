@@ -35,6 +35,8 @@ namespace MFO::Forms {
     // Travel package pull a follower away from a live combat controller?
     inline constexpr RE::FormID kRetreatQuest     = 0x830;
     inline constexpr RE::FormID kRetreatPackage   = 0x831;
+    // #21 econ bridge: carries MFO_Trade (VMAD), dispatched by the DLL.
+    inline constexpr RE::FormID kTradeQuest       = 0x80E;
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -49,6 +51,7 @@ namespace MFO::Forms {
     inline RE::TESPackage* g_travelPackage = nullptr;  // Option A
     inline RE::TESQuest*   g_retreatQuest   = nullptr; // RETREAT PROBE
     inline RE::TESPackage* g_retreatPackage = nullptr; // RETREAT PROBE
+    inline RE::TESQuest*   g_tradeQuest     = nullptr; // #21 econ bridge
 
     // Resolve at kDataLoaded. Returns false if anything required is missing.
     // A missing form disables ONE feature with a named log line -- never a
