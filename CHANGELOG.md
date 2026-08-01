@@ -3,6 +3,14 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.35 — heal evicts the creature weapon (stop the re-wield loop)
+
+The v0.8.34 heal only *unequipped* the non-playable creature weapon, leaving it in
+the follower's pack. The engine re-wielded it as "best weapon" within seconds, so
+the 5 s poll churned forever (field: the same Dwarven Sphere Crossbow re-healed
+3 min apart). The heal now RemoveItem()s every copy to the player (kStoreInContainer),
+so nothing can re-select it.
+
 ## v0.8.34 — heal + block wrongly-looted non-playable (creature) weapons
 
 Confirmed via MEO's [wdiag] logging: MFO looted a "Dwarven Sphere Crossbow" (an
