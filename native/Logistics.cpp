@@ -1859,12 +1859,61 @@ namespace MFO::Logistics {
         return DrinkBest(a_follower, a_which);
     }
 
+    // HEAL: a follower wielding an EXCLUDED weapon renders it INVISIBLE -- MFO
+    // wrongly looted a NON-PLAYABLE creature weapon (field: a Dwarven Sphere
+    // Crossbow off an automaton corpse) before the catalog excluded that class. It
+    // still FIRES, so combat looks fine, but there's no humanoid mesh. Swap it for
+    // the follower's best carried PLAYABLE weapon (or just take it off if they carry
+    // none). Reuses Catalog::IsExcluded, which now flags nonplayable weapons; a
+    // no-op once healed, so it's safe to poll. Requires the regenerated catalog.
+    void HealExcludedWeapon(RE::Actor* a_follower) {
+        auto* em = RE::ActorEquipManager::GetSingleton();
+        if (!em) return;
+        for (int hand = 0; hand < 2; ++hand) {
+            auto* eq  = a_follower->GetEquippedObject(hand == 1);   // false=right, true=left
+            auto* bad = eq ? eq->As<RE::TESObjectWEAP>() : nullptr;
+            if (!bad || !Catalog::IsExcluded(bad->GetFormID())) continue;
+            RE::TESBoundObject* best    = nullptr;
+            std::uint16_t       bestDmg = 0;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* w = obj->As<RE::TESObjectWEAP>();
+                if (!w || Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (WeaponClassOf(w->GetWeaponType()) == WepClass::Other) continue;  // no staff/creature
+                if (w->GetAttackDamage() > bestDmg) { bestDmg = w->GetAttackDamage(); best = obj; }
+            }
+            if (best) {
+                em->EquipObject(a_follower, best);   // auto-unequips the excluded one
+                spdlog::info("[heal] {:08X} wielded excluded '{}' -- swapped to '{}'",
+                             a_follower->GetFormID(),
+                             bad->GetName() ? bad->GetName() : "?",
+                             best->GetName() ? best->GetName() : "?");
+            } else {
+                em->UnequipObject(a_follower, bad);  // nothing real carried -- just take it off
+                spdlog::info("[heal] {:08X} unequipped excluded '{}' (no real weapon carried)",
+                             a_follower->GetFormID(), bad->GetName() ? bad->GetName() : "?");
+            }
+            return;   // one hand per call
+        }
+    }
+
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
         g_svc = &a_state;   // loot code reads the gambit table through this (worker-sequential)
 
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
+
+        // Undo a wrongly-looted non-playable weapon (invisible on a follower) before
+        // anything else this tick -- cheap + rate-limited (5 s), a no-op once healed.
+        {
+            static std::unordered_map<RE::FormID, Clock::time_point> s_nextHeal;
+            auto& hn = s_nextHeal[id];
+            if (hn.time_since_epoch().count() == 0 || now >= hn) {
+                hn = now + std::chrono::seconds(5);
+                HealExcludedWeapon(a_follower);
+            }
+        }
 
         // GLOBAL travel-intent BACKSTOP, keyed to NO follower in particular, and
         // run BEFORE the logistics early-return on purpose. The per-follower

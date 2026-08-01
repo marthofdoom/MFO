@@ -3,6 +3,21 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.33 — heal: swap out a wrongly-looted non-playable weapon
+
+Confirmed via MEO's [wdiag] logging: MFO looted a "Dwarven Sphere Crossbow" (an
+automaton's built-in weapon, no humanoid model) off a corpse and equipped it on
+both followers -> invisible weapon that still fires (ExtraWorn intact; the MEO
+two-hander slot bug was a separate, now-fixed issue).
+
+- Catalog (patcher) now excludes every NON-PLAYABLE weapon, so LootEquipment's
+  IsExcluded skip stops looting creature/automaton gear + Bound weapons going
+  forward (re-run Synthesis to regenerate; 473 -> 723 excluded).
+- HEAL (DLL): a follower found wielding an excluded weapon has it swapped for their
+  best carried PLAYABLE weapon (or unequipped if they carry none). Rate-limited 5 s,
+  no-op once healed. Reuses Catalog::IsExcluded, so it needs the regenerated catalog.
+Together: re-run Synthesis, then reload -- the crossbows swap out and never return.
+
 ## v0.8.32 — fix: followers churning unreachable loot legs forever
 
 Root cause of both followers looping unreachable corpses (v0.8.31, pathSpeed=0,
