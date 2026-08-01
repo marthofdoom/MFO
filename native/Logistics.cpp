@@ -2112,6 +2112,11 @@ namespace MFO::Logistics {
                 // fire during that hold would falsely blacklist a corpse he reached
                 // and is politely waiting on (audit).
                 if (!gone && dist <= kArrivalDist) {
+                    // REACHED it -> this body is provably reachable: clear any stall
+                    // strike so a merely-transient earlier block (boxed in by an actor,
+                    // a door) never accumulates toward the sticky verdict. Only bodies
+                    // he can NEVER close on keep striking -> those go sticky (above).
+                    g_stallStrikes.erase(tref->GetFormID());
                     // MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
                     if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking()))
                         return;   // arrived, holding under the bar -- retry next tick
@@ -2279,9 +2284,15 @@ namespace MFO::Logistics {
                      now - g_lastBlocklistReassess >= kReassessCooldown)) {
                     const size_t n = g_travelFailed.size();
                     g_travelFailed.clear();
-                    g_stallStrikes.clear();   // single strikes expire with the transient
-                                              // block; g_travelUnreach (2-strike sticky)
-                                              // deliberately SURVIVES the reassess
+                    // NOTE: g_stallStrikes deliberately SURVIVES the reassess. Wiping
+                    // it here defeated the 2-strike sticky entirely: a geometrically
+                    // unreachable body (navmesh path ends short -- e.g. deck 0002CFBF
+                    // navdist=148 < gate 300, dist frozen every walk) stalls once per
+                    // excursion, but the reassess reset its strike to 0 before the 2nd
+                    // could promote it, so it was re-picked forever and burned whole
+                    // excursions. Strikes now accumulate across excursions; a body that
+                    // proves reachable has its strike cleared on ARRIVAL (below), so a
+                    // merely-transient block never falsely reaches sticky.
                     g_lastBlocklistReassess = now;
                     g_idleCycles[id] = 0;
                     spdlog::info("[loot] {:08X} idle {} ticks -- cleared {} blocklisted "

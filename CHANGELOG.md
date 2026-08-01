@@ -3,6 +3,25 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.37 — stall strikes survive the reassess (kill the unreachable-body churn)
+
+The [lootskip] capture proved the real efficiency killer: a follower burned whole
+excursions re-walking to a GEOMETRICALLY UNREACHABLE body (deck 0002CFBF, navdist=148
+< off-navmesh gate 300, so the gate passed it; the navmesh path ends ~148u short and
+`dist` froze at 975/979 every walk). The 2-strike sticky blocklist should have caught
+it, but the idle reassess called `g_stallStrikes.clear()` every ~15s, resetting the
+strike to 0 before the 2nd stall could promote it -> re-picked forever.
+
+- Stall strikes now SURVIVE the reassess, so a body that stalls once per excursion
+  accumulates to the 2nd strike and goes sticky (5 min, won't re-pick).
+- A body the follower actually REACHES has its strike cleared on arrival, so a merely
+  transient block (boxed in by an actor/door) never falsely accumulates to sticky.
+
+Known-remaining (measuring next): a reachable-but-empty body ("arrived, nothing to
+take", deck 0007F61D) still re-picked after the reassess; and the single global loot
+alias serialises the two followers (aliasBusy in [lootskip]) -- a 2nd alias is an ESP
+change, tracked separately.
+
 ## v0.8.36 — loot skip-reason diagnostic ([lootskip])
 
 marth: "not sure why loot efficiency was so bad" -- Eric grabbed a potion right in
