@@ -31,4 +31,10 @@ namespace MFO::MainThread {
     // in that case Post() becomes a documented no-op rather than a leak.
     void Install();
 
+    // Drop every queued closure without running it. Called on revert: a fn posted
+    // before a load re-resolves its captured handle against the NEXT session's
+    // handle table (handles are reused), so draining it post-load could run on the
+    // wrong actor. The hook stays installed; only the pending work is discarded.
+    void Clear();
+
 }

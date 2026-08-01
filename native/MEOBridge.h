@@ -21,6 +21,12 @@ namespace MFO::MEOBridge {
     // kDataLoaded (after form resolution, with the other sinks).
     void RegisterSink();
 
+    // Save-scoped: the pending-gem-move map keys on (followerFormID, toBase) and
+    // holds source-item FormIDs for a swap that hasn't flushed yet. Cleared on
+    // revert -- else a stale key could match an equip event for a REUSED FormID
+    // next session and move gems onto the wrong actor (save-safety audit).
+    void ClearTransientState();
+
     // Worker-safe. Record that when `a_follower` next EQUIPS `a_toBase`, MEO
     // should move the gems from their old worn item `a_fromBase`/`a_fromUid`
     // into it. The move fires from the equip event (main thread), once the

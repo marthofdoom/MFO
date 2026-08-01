@@ -97,6 +97,11 @@ namespace MFO::MEOBridge {
         g_pending[Key(a_follower->GetFormID(), a_toBase)] = { a_fromBase, a_fromUid };
     }
 
+    void ClearTransientState() {
+        std::scoped_lock lk(g_mx);
+        g_pending.clear();
+    }
+
     GemPreview PreviewWithGems(RE::Actor* a_actor, RE::TESBoundObject* a_candidateBase) {
         GemPreview out{ 0, 0, 0, 0.0f };
         if (!g_meo || !a_actor || !a_candidateBase) return out;

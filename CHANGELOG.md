@@ -1,3 +1,14 @@
+## v0.8.48 -- save-safety audit fixes
+
+Audit found three mutable states that outlived a revert (neither serialized nor
+cleared), each able to act on a REUSED FormID/handle in the next session:
+- MEOBridge g_pending (pending gem-move map) -> new MEOBridge::ClearTransientState.
+- MainThread pump queue -> new MainThread::Clear (drops queued closures whose
+  captured handles would re-resolve against the next session).
+- Probe watch handles -> Probe::ReleaseAll now runs on revert too (was kPostLoadGame only).
+All three wired into ResetAllState. Quest alias fills were already covered by
+Packages::ReleaseAll on every lifecycle edge.
+
 ## v0.8.47 -- econ Phase 4 hardening + save-safety (#21)
 
 - POTIONS: PlanBuy classifies stock with Logistics::PotionRestores (catalog +

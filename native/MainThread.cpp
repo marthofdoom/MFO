@@ -76,6 +76,11 @@ namespace MFO::MainThread {
         g_queue.push_back(std::move(a_fn));
     }
 
+    void Clear() {
+        std::lock_guard lk(g_mx);
+        g_queue.clear();
+    }
+
     void Install() {
         // SKYRIM_REL_VR_VIRTUAL: on VR the Update slot sits at a DIFFERENT
         // index, and writing 0x0AD there would vector every frame into an

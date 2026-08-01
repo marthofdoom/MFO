@@ -12,6 +12,9 @@
 #include "Packages.h"
 #include "Papyrus.h"
 #include "TradeBridge.h"
+#include "MEOBridge.h"
+#include "MainThread.h"
+#include "Probe.h"
 #include "Board.h"
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
@@ -359,6 +362,10 @@ namespace MFO {
         // concurrent unordered_map insert+clear is UB). Restarted on the next
         // kPostLoadGame/kNewGame. (Was called LAST here, after the clears -- the race.)
         Diagnostics::StopPump();
+        // Drop any main-thread work queued before the load -- its captured handles
+        // would re-resolve against the NEXT session's (reused) handle table. Safe
+        // now that StopPump halted the worker that feeds the queue (audit).
+        MainThread::Clear();
         g_followers.clear();
         // ARCHITECTURE §7: revert zeroes EVERYTHING save-scoped. The active
         // handle list is save-scoped too -- handle slots get reused, so a
@@ -389,6 +396,9 @@ namespace MFO {
                                               // actor/chest handles are this-session only,
                                               // and a resumed RunTrade with a stale token
                                               // fails SAFE (GetVendorChest -> none -> abort)
+        MEOBridge::ClearTransientState();   // audit: pending gem-move map was never cleared
+        Probe::ReleaseAll();                // audit: watch handles outlived a revert (were
+                                            // cleared only at kPostLoadGame, not here)
         Rapport::ResetSessionCounters();
         // (StopPump moved to the TOP of this function -- it must precede the clears.)
         Board::SetHud(false);      // else it lingers over the main menu with stale rows
