@@ -231,9 +231,27 @@ namespace MFO::Logistics {
         // the light/heavy-skill steer are a refinement not implemented here --
         // this compares raw armor rating. It never upgrades a follower's whole
         // outfit in one tick, only the single better piece it transfers.
+        // A follower should only pick up armour of the CLASS they can actually use:
+        // Auri (Heavy Armor skill 5) kept looting heavy plate on raw rating alone
+        // (marth). Take heavy only when the follower is STRICTLY more heavy- than
+        // light-skilled; take light whenever they are at least as light-skilled.
+        // Ties and pure casters (both low) fall to light, never heavy. Clothing has
+        // no skill and is rating 0 (rejected below) so it rides through.
+        bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
+            using AT = RE::BGSBipedObjectForm::ArmorType;
+            const auto type = a_armo->GetArmorType();
+            if (type == AT::kClothing) return true;
+            auto* avo = a_follower->AsActorValueOwner();
+            if (!avo) return true;
+            const float heavy = avo->GetActorValue(RE::ActorValue::kHeavyArmor);
+            const float light = avo->GetActorValue(RE::ActorValue::kLightArmor);
+            return (type == AT::kHeavyArmor) ? (heavy > light) : (light >= heavy);
+        }
+
         bool ArmorIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
             const float cand = a_armo->GetArmorRating();
             if (cand <= 0.0f) return false;   // clothing / jewellery -- not armor
+            if (!ArmorClassSuits(a_follower, a_armo)) return false;   // wrong class for this follower
 
             using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
             static constexpr Slot kSlots[] = {

@@ -1,3 +1,11 @@
+## v1.0.1 -- loot armour by class skill (#21 follow-up)
+
+Auri (Heavy Armor skill 5) kept looting heavy plate: ArmorIsBetter compared raw
+armour rating only, ignoring class. Now gated by ArmorClassSuits -- a follower takes
+heavy armour only when STRICTLY more heavy- than light-skilled, and light whenever
+at least as light-skilled; ties and casters fall to light, never heavy. Clothing
+(rating 0) unaffected.
+
 ## v1.0.0 -- Follower economy + magnum-opus milestone (#21)
 
 First 1.0. Followers now run a full autonomous ECONOMY at merchants -- sell their
