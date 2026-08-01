@@ -1735,14 +1735,30 @@ namespace MFO::Logistics {
                 std::sort(sell.begin(), sell.end(),
                           [](const auto& a, const auto& b) { return a.value > b.value; });
 
-                // BUY is deferred to Phase 3: it needs vendor-stock ENUMERATION in
-                // Papyrus (po3 AddAllItemsToArray). The native candidate-guess can't
-                // know which of hundreds of arrow/potion types a vendor stocks -- the
-                // field log showed stock=0 for every guessed candidate. Phase 3 rule
-                // (marth): buy the BEST the follower can AFFORD, up to the number
-                // needed -- rank the vendor's ACTUAL stock by value, buy down until
-                // quota met or purse spent.
-                TradeBridge::VendorTrade(a_follower, vendor, chest, std::move(sell), purse);
+                // BUY NEEDS: each supply gambit BELOW its threshold -> the category
+                // + how many MORE to acquire. Papyrus enumerates the vendor's ACTUAL
+                // stock and TradeBridge::PlanBuy matches it to these (best affordable
+                // first, capped at quota + purse). Native can't pre-name the stock --
+                // the field log proved guessing gives stock=0 -- so it names the
+                // NEED and lets the enumeration find the match.
+                std::vector<TradeBridge::NeedCat> needs;
+                auto addNeed = [&](TradeBridge::NeedCat::Kind a_kind, int have, int want) {
+                    if (have < want) needs.push_back({ static_cast<std::int32_t>(a_kind),
+                                                       static_cast<std::int32_t>(want - have) });
+                };
+                for (const auto& g : a_logistics) {
+                    if (!g.enabled) continue;
+                    const auto& c    = g.conditionOpcode;
+                    const int   want = static_cast<int>(g.conditionParam);
+                    if      (c == Vocab::kCondSelfLowHealthPotion)  addNeed(TradeBridge::NeedCat::kPotHealth,  CountPotions(a_follower, RE::ActorValue::kHealth),  want);
+                    else if (c == Vocab::kCondSelfLowStaminaPotion) addNeed(TradeBridge::NeedCat::kPotStamina, CountPotions(a_follower, RE::ActorValue::kStamina), want);
+                    else if (c == Vocab::kCondSelfLowMagickaPotion) addNeed(TradeBridge::NeedCat::kPotMagicka, CountPotions(a_follower, RE::ActorValue::kMagicka), want);
+                    else if (c == Vocab::kCondSelfOutOfArrows)      addNeed(TradeBridge::NeedCat::kArrows,     ArrowCount(a_follower),                             want);
+                    else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
+                }
+
+                TradeBridge::VendorTrade(a_follower, vendor, chest,
+                                         std::move(sell), std::move(needs), purse);
             }
         }
 

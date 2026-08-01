@@ -3,25 +3,25 @@
 
 // #21 ECON BRIDGE -- native side (Fable's ECON_PAPYRUS_PLAN).
 //
-// The merchant read + transaction cannot run in C++: native
-// TESObjectREFR::GetInventory() / Actor::GetGoldAmount() CTD on a merchant chest
-// / a follower whose InventoryChanges the worker tick is mutating (§0.37, memory
-// getgoldamount-ctds-count-gold-from-getinventory). So the merchant work moves to
-// Papyrus (MFO_Trade.psc) -- the path the game's own barter menu uses -- and
-// native keeps the DECISION (vendor resolution, sellables, catalog).
+// The merchant read + transaction cannot run in C++: native GetInventory /
+// GetGoldAmount CTD on a merchant chest / a follower whose InventoryChanges the
+// worker tick is mutating (§0.37, memory getgoldamount-ctds-count-gold-from-
+// getinventory). So the merchant work moves to Papyrus (MFO_Trade.psc) -- the
+// path the game's own barter menu uses -- and native keeps the DECISION.
 //
-// FLOW: native resolves the vendor + builds the SELL list from the follower's own
-// inventory (safe), stores it as a token'd TradeOrder, and dispatches
-// RunTrade(token) at MFO_TradeQuest. MFO_Trade pulls the order through the
-// registered natives, reads the chest's barter gold (crash-free GetItemCount),
-// and -- when bEconomy is on -- runs the SELL loop (RemoveItem follower->chest,
-// pay the follower, deduct the chest's gold), capped at the chest's gold. It then
-// reports what actually moved. bEconomy OFF = a dry run: it computes and reports
-// the plan without mutating (the read-only probe).
+// FLOW: native resolves the vendor + builds the SELL list (follower's own
+// inventory) and the BUY NEEDS (which supply gambits are below N, by how much),
+// stores them token'd, and dispatches RunTrade at MFO_TradeQuest. MFO_Trade reads
+// the chest's barter gold, runs the SELL loop, ENUMERATES the vendor's stock
+// (po3 AddAllItemsToArray -- native can't guess which of hundreds of arrow/potion
+// types a vendor carries), hands it to native PlanBuy (which classifies + ranks
+// the ACTUAL stock, best-affordable-first, capped at quota and purse), executes
+// the buys, and reports. bEconomy OFF = a dry run (enumerate + plan, no mutation)
+// -- so the enumeration read is exercised safely before any purchase.
 namespace MFO::TradeBridge {
 
     // One sellable line -- the follower's own, un-worn, un-excluded, vendor-
-    // tradeable gear. All native-safe reads. Native pre-sorts highest-value-first.
+    // tradeable gear. Native pre-sorts highest-value-first.
     struct SellRow {
         RE::TESBoundObject* obj     = nullptr;
         std::int32_t        count   = 0;
@@ -29,17 +29,26 @@ namespace MFO::TradeBridge {
         bool                jewelry = false;
     };
 
+    // One buy need -- a supply category the follower is below threshold on. quota
+    // is how many MORE to acquire. PlanBuy matches enumerated stock to these.
+    struct NeedCat {
+        enum Kind : std::int32_t { kPotHealth = 0, kPotStamina, kPotMagicka, kArrows, kBolts };
+        std::int32_t kind  = 0;
+        std::int32_t quota = 0;
+    };
+
     // Register MFO_Trade's Papyrus natives on the VM. Wired once at plugin load
     // via SKSE::GetPapyrusInterface()->Register(RegisterFuncs).
     bool RegisterFuncs(RE::BSScript::IVirtualMachine* a_vm);
 
-    // Store a sell order and dispatch RunTrade at MFO_TradeQuest. Called from the
-    // (main-thread) econ scan once a vendor is resolved; the sell vector is moved
-    // in. probeOnly is set from bEconomy (off -> dry run). No-op if the trade
-    // quest is unresolved/not running.
+    // Store a trade order and dispatch RunTrade at MFO_TradeQuest. Called from the
+    // (main-thread) econ scan once a vendor is resolved; vectors are moved in.
+    // probeOnly is set from bEconomy (off -> dry run). No-op if the trade quest is
+    // unresolved/not running.
     void VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
                      RE::TESObjectREFR* a_chest,
-                     std::vector<SellRow> a_sell, std::int32_t a_budget);
+                     std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
+                     std::int32_t a_budget);
 
     // Drop any pending orders (revert/quit). Token map is transient state.
     void ClearTransientState();

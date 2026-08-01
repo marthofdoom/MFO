@@ -1,3 +1,13 @@
+## v0.8.45 -- econ Phase 3: follower BUYING via vendor-stock enumeration (#21)
+
+Buy the supplies a follower is short on. Native names the NEED (which supply gambit
+is below N, by how much); MFO_Trade ENUMERATES the vendor's actual stock (po3
+AddAllItemsToArray -- guessing candidates gave stock=0 everywhere) and hands it to
+TradeBridge::PlanBuy, which classifies it via the catalog and picks the BEST
+affordable, up to the number needed, bounded by the purse (marth's rule). Papyrus
+executes: goods chest->follower, gold follower->chest. Gated by bEconomy (off = dry
+run that still enumerates+plans, so the new read is proven before any purchase).
+
 ## v0.8.44 -- econ Phase 2: follower SELL at merchants (#21)
 
 Bridge proven (Phase 1, crash-free Papyrus read), so wire the SELL transaction.
