@@ -1712,8 +1712,15 @@ namespace MFO::Logistics {
                 // for the log + (Phase 2) the sell loop.
                 spdlog::info("[bc] 2 sell-loop start (follower GetInventory)");
                 std::vector<TradeBridge::SellRow> sell;
+                // Count the follower's PURSE in this same pass. Actor::GetGoldAmount()
+                // CTDs here (Actor.cpp:445, null-deref on the InventoryChanges the
+                // worker tick may be mutating -- crash 2026-08-01 00:50), but the
+                // GetInventory snapshot below is safe (it built fine the same frame),
+                // so sum Gold001 (0x0000000F) straight from it. Never GetGoldAmount.
+                int purse = 0;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
+                    if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
@@ -1735,9 +1742,8 @@ namespace MFO::Logistics {
                 // afford. Native ranks by base value (safe -- off the form); Papyrus
                 // will read the vendor STOCK for each. The catalog is lookup-only,
                 // so we walk the data handler's form arrays and filter by category.
-                spdlog::info("[bc] 3 sell built n={}, reading purse (GetGoldAmount)", sell.size());
-                const int purse = static_cast<int>(a_follower->GetGoldAmount());
-                spdlog::info("[bc] 4 purse={}, buy-walk start (form arrays)", purse);
+                spdlog::info("[bc] 3 sell built n={}, purse={} (counted, no GetGoldAmount)", sell.size(), purse);
+                spdlog::info("[bc] 4 buy-walk start (form arrays)");
                 std::vector<TradeBridge::BuyRow> buy;
                 auto* dh = RE::TESDataHandler::GetSingleton();
                 auto baseValue = [](RE::TESBoundObject* o) -> int {

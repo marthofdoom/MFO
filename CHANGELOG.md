@@ -1,3 +1,12 @@
+## v0.8.43 -- FIX Phase 1 CTD: count purse from GetInventory, not GetGoldAmount (#21)
+
+Breadcrumb [bc]3 + the PDB pinned the v0.8.40/0.8.42 vendor crash to
+RE::Actor::GetGoldAmount(bool) (Actor.cpp:445) -- a null-deref reading the
+follower purse, on the InventoryChanges the worker tick may be mutating. The
+GetInventory snapshot in the same frame is safe, so the probe now sums Gold001
+(0x0000000F) straight from it and never calls GetGoldAmount. Probe stays enabled;
+[bc] breadcrumbs kept for one verify run.
+
 ## v0.8.42 -- DIAGNOSTIC: re-enable econ probe with PDB + breadcrumbs (#21)
 
 Pins the v0.8.40 vendor CTD. CMake now emits MFO.pdb in Release (CI uploads it), and
