@@ -1894,15 +1894,27 @@ namespace MFO::Logistics {
             }
             if (best) {
                 em->EquipObject(a_follower, best);   // auto-unequips the excluded one
-                spdlog::info("[heal] {:08X} wielded excluded '{}' -- swapped to '{}'",
-                             a_follower->GetFormID(),
-                             bad->GetName() ? bad->GetName() : "?",
-                             best->GetName() ? best->GetName() : "?");
             } else {
                 em->UnequipObject(a_follower, bad);  // nothing real carried -- just take it off
-                spdlog::info("[heal] {:08X} unequipped excluded '{}' (no real weapon carried)",
-                             a_follower->GetFormID(), bad->GetName() ? bad->GetName() : "?");
             }
+            // CRITICAL: un-equipping alone leaves the creature weapon in the pack, and
+            // the engine re-wields it as "best weapon" within seconds -- the poll then
+            // just churns forever (field-caught: same 'Dwarven Sphere Crossbow' re-healed
+            // 3 min apart). Evict it to the player so nothing can re-select it. Count the
+            // copies so a stack leaves entirely.
+            std::int32_t haveBad = 0;
+            for (auto& [obj, data] : a_follower->GetInventory())
+                if (obj == bad) { haveBad = data.first; break; }
+            if (haveBad > 0) {
+                if (auto* player = RE::PlayerCharacter::GetSingleton())
+                    a_follower->RemoveItem(bad, haveBad, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                           nullptr, player);
+            }
+            spdlog::info("[heal] {:08X} excluded '{}' -> {}, evicted {}x to player",
+                         a_follower->GetFormID(),
+                         bad->GetName() ? bad->GetName() : "?",
+                         best ? (best->GetName() ? best->GetName() : "?") : "(bare hands)",
+                         haveBad);
             return;   // one hand per call
         }
     }
