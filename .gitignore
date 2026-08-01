@@ -17,3 +17,5 @@ installer/MFO.Synthesis/obj/
 
 # agent worktrees
 .claude/worktrees/
+# compiled fresh by tools/compile.sh at release (nondeterministic timestamp)
+out/Scripts/MFO_Trade.pex
