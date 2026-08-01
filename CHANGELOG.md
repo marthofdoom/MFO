@@ -3,6 +3,19 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.40 — econ bridge Phase 1: read-only merchant probe (#21)
+
+The crash gate. Native resolves the vendor (teammate skip, VisitFactions
+IsVendor+OffersServices, GetContainer gate) and builds the plan from SAFE reads --
+the follower's own inventory (WOULD SELL) and catalog-walked buy candidates ranked
+by value (WOULD BUY) -- then dispatches a token'd order to MFO_Trade. The script
+does the crash-prone reads in Papyrus (`chest.GetItemCount(Gold001)` + per-candidate
+stock, the barter-safe path C.O.I.N. proves) and reports back; native logs the full
+`[econprobe] WOULD SELL / WOULD BUY` plan. ZERO transactions. This is the read the
+old native probe kept CTD-ing on (disabled since v0.8.31) -- now crash-free.
+TradeBridge gains the pull accessors (GetVendorChest/Actor/BuyCandidates/ProbeOnly)
++ ReportProbe; the Phase 0 NativePing self-test is retired.
+
 ## v0.8.39 — econ bridge Phase 0: the native↔Papyrus round trip (#21)
 
 First increment of Fable's ECON_PAPYRUS_PLAN. The merchant read/transaction can't
