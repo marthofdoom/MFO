@@ -1702,12 +1702,15 @@ namespace MFO::Logistics {
                 // CTDs on any thread (§0.37). The chest read moves to Papyrus.
                 auto* chest = fac->vendorData.merchantContainer;
                 if (!chest || !chest->GetContainer()) continue;
+                spdlog::info("[bc] 1 resolved: vendor {:08X} chest {:08X}",
+                             vendor->GetFormID(), chest->GetFormID());
 
                 // WOULD SELL: the follower's OWN unworn weapons/armour (jewellery
                 // is ARMO, so IsJewelryPiece rides along) that clear the never-loot
                 // catalog and the vendor's VEND filter. All native-SAFE reads (the
                 // follower's own inventory). Papyrus never sees this list -- it is
                 // for the log + (Phase 2) the sell loop.
+                spdlog::info("[bc] 2 sell-loop start (follower GetInventory)");
                 std::vector<TradeBridge::SellRow> sell;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
@@ -1732,7 +1735,9 @@ namespace MFO::Logistics {
                 // afford. Native ranks by base value (safe -- off the form); Papyrus
                 // will read the vendor STOCK for each. The catalog is lookup-only,
                 // so we walk the data handler's form arrays and filter by category.
+                spdlog::info("[bc] 3 sell built n={}, reading purse (GetGoldAmount)", sell.size());
                 const int purse = static_cast<int>(a_follower->GetGoldAmount());
+                spdlog::info("[bc] 4 purse={}, buy-walk start (form arrays)", purse);
                 std::vector<TradeBridge::BuyRow> buy;
                 auto* dh = RE::TESDataHandler::GetSingleton();
                 auto baseValue = [](RE::TESBoundObject* o) -> int {
@@ -1787,8 +1792,10 @@ namespace MFO::Logistics {
 
                 // Hand the crash-prone reads to Papyrus. It reports back the chest
                 // gold + per-candidate stock, and native logs the full plan.
+                spdlog::info("[bc] 5 buy built n={}, dispatching VendorProbe", buy.size());
                 TradeBridge::VendorProbe(a_follower, vendor, chest,
                                          std::move(sell), std::move(buy), purse);
+                spdlog::info("[bc] 6 VendorProbe returned");
             }
         }
 
@@ -2327,14 +2334,10 @@ namespace MFO::Logistics {
             // main-thread pump (§0.37) is still correct + needed for the TRANSACTION
             // (mutations must run on main), just not sufficient for the READ.
             // See [[economy-vendor-detection-excludes-teammates]] + ENGINE_NOTES.
-            // Phase 1 (#21): re-DISABLED after a field CTD (v0.8.40, crash
-            // 2026-08-01 00:22, near Bannered Mare vendor). The crash is on the
-            // MAIN thread inside the probe's build path (Papyrus dispatch is fine
-            // -- Phase 0 self-test proved it), a null-deref in an inventory/type
-            // switch. Symbols weren't in the CI artifact so the exact line is
-            // unpinned; re-enable with per-step breadcrumbs + a PDB build once
-            // fixed. Hotfix: OFF so marth can keep testing.
-            static constexpr bool kEconProbeEnabled = false;
+            // Phase 1 (#21): re-enabled as a DIAGNOSTIC build (v0.8.42) -- PDB now
+            // emitted + per-step [bc] breadcrumbs in EconomyProbe, so the v0.8.40
+            // CTD pins to an exact step/line instead of a guess.
+            static constexpr bool kEconProbeEnabled = true;
             if (kEconProbeEnabled)
                 MainThread::Post([h = a_follower->GetHandle(),
                                   gambits = a_state.logistics(), now]() {

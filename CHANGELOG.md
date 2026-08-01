@@ -1,3 +1,11 @@
+## v0.8.42 -- DIAGNOSTIC: re-enable econ probe with PDB + breadcrumbs (#21)
+
+Pins the v0.8.40 vendor CTD. CMake now emits MFO.pdb in Release (CI uploads it), and
+EconomyProbe logs [bc] 1..6 before each risky step (resolve, sell GetInventory,
+purse GetGoldAmount, buy-walk, dispatch). The last [bc] before a crash = the exact
+faulting step; the PDB symbolizes the address. Expected to crash once more, on
+purpose, to capture that.
+
 ## v0.8.41 -- HOTFIX: disable econ probe (Phase 1 CTD)
 
 v0.8.40 re-enabled the econ probe; it CTD'd on the main thread near a real vendor

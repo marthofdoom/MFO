@@ -44,5 +44,12 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
 target_precompile_headers(${PROJECT_NAME} PRIVATE PCH.h)
+
+# Emit a PDB even in Release so a field crash symbolizes to a source line. /Zi
+# adds debug info; /DEBUG writes the .pdb; /OPT:REF,ICF undo the size cost the
+# linker would otherwise skip once /DEBUG is on. The CI already uploads MFO.pdb
+# beside the DLL -- it was just never being generated.
+target_compile_options(${PROJECT_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/Zi>)
+target_link_options(${PROJECT_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG /OPT:REF /OPT:ICF>)
 target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui d3d11 nlohmann_json::nlohmann_json)
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
