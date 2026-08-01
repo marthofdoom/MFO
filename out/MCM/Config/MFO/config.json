@@ -201,6 +201,16 @@
           }
         },
         {
+          "id": "bLootInPlayerHomes:General",
+          "text": "Loot in player homes",
+          "type": "toggle",
+          "help": "OFF (default): followers never loot in your own house (any cell flagged LocTypePlayerHouse). ON: they loot there too. Drinking/supply is unaffected either way.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
           "id": "fLootRadius:General",
           "text": "Loot scan (units)",
           "type": "slider",

@@ -202,6 +202,14 @@ namespace MFO::Config {
     // unreachable target is not re-tried into a loop.
     inline std::atomic<bool>  g_lootTravel{ true };
 
+    // LOOT IN PLAYER HOMES. Default OFF: a follower rifling your own house reads
+    // as theft, not battlefield tidying, so looting is suppressed in any cell
+    // whose LOCATION carries the vanilla LocTypePlayerHouse keyword (bought
+    // houses, Hearthfire builds, and the home mods that set it). Turn ON to let
+    // them loot everywhere. Only LOOTING is gated -- drinking/supply still run.
+    // bLootInPlayerHomes.
+    inline std::atomic<bool>  g_lootInPlayerHomes{ false };
+
     // HARD CEILING on the walk-to-loot distance (units). The real limit is the
     // confidence LEASH (walkLimit = min(leash, this)); this is only for anyone
     // who wants to clamp the walk BELOW the leash. Default high so the leash

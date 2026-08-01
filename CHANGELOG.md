@@ -3,6 +3,16 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.38 — no looting in player homes (default; MCM toggle)
+
+marth: followers shouldn't rifle your own house. Looting is now suppressed in any
+cell whose LOCATION carries vanilla LocTypePlayerHouse (0x01CB85, Skyrim.esm) --
+bought houses, Hearthfire builds, and the home mods that set it. New MCM toggle
+`bLootInPlayerHomes` (Logistics page), DEFAULT OFF; turn it on to loot there too.
+Only LOOTING is gated -- drinking/supply still run. An excursion already underway
+is cleared ("player home") the moment you step inside. Gate lives in LootNearby's
+early-out + the excursion driver's hard-interrupt block.
+
 ## v0.8.37 — stall strikes survive the reassess (kill the unreachable-body churn)
 
 The [lootskip] capture proved the real efficiency killer: a follower burned whole

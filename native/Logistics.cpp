@@ -852,6 +852,25 @@ namespace MFO::Logistics {
             }();
             return present;
         }
+
+        // PLAYER-HOME gate. A follower ransacking your own house reads as theft,
+        // not tidying, so looting is suppressed wherever the player's current
+        // LOCATION carries vanilla LocTypePlayerHouse (0x01CB85 in Skyrim.esm) --
+        // bought houses, Hearthfire builds, and the home mods that set it. The
+        // keyword is resolved once by its FormID (LookupByEditorID is unreliable
+        // unless a tweak kept EDIDs). Gated by bLootInPlayerHomes (default OFF);
+        // the caller checks the toggle so this stays a pure "are we in a home?".
+        bool InPlayerHome() {
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            if (!pc) return false;
+            static RE::BGSKeyword* kHouse = []() -> RE::BGSKeyword* {
+                auto* dh = RE::TESDataHandler::GetSingleton();
+                return dh ? dh->LookupForm<RE::BGSKeyword>(0x01CB85, "Skyrim.esm") : nullptr;
+            }();
+            if (!kHouse) return false;
+            auto* loc = pc->GetCurrentLocation();
+            return loc && loc->HasKeyword(kHouse);
+        }
         bool PlayerIsConsidering(RE::FormID a_sourceID) {
             if (auto* ui = RE::UI::GetSingleton();
                 ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) return true;   // vanilla menu
@@ -1064,6 +1083,9 @@ namespace MFO::Logistics {
             // deferred FCL gate, §0.32). An invisible courtesy: crouch and they
             // hold off.
             if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && pc->IsSneaking())
+                return false;
+            // PLAYER HOME: don't loot your own house unless opted in (default OFF).
+            if (!Config::g_lootInPlayerHomes.load() && InPlayerHome())
                 return false;
             // WALK THE FOLLOWER'S OWN CELL, NOT TES::ForEachReferenceInRange.
             // crash4 (2026-07-22, exterior Wilderness): TES::ForEachReferenceInRange
@@ -2028,9 +2050,11 @@ namespace MFO::Logistics {
             const bool outOfLeash = pc &&
                 a_follower->GetPosition().GetDistance(pc->GetPosition())
                     > Confidence::LeashRadius(a_follower) * 1.15f;
-            if (a_follower->IsInCombat() || overCap || outOfLeash) {
+            const bool inHome = !Config::g_lootInPlayerHomes.load() && InPlayerHome();
+            if (a_follower->IsInCombat() || overCap || outOfLeash || inHome) {
                 Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
-                                          : (overCap ? "excursion cap" : "left leash"),
+                                          : (overCap ? "excursion cap"
+                                          : (inHome ? "player home" : "left leash")),
                                           a_follower);
                 g_travel = TravelIntent{};
                 // fall through to a normal eval this tick (combat table / follow).
