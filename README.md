@@ -5,13 +5,13 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v0.8.0, pre-release.** Gambits execute — both tables. Follower
-detection, Rapport, the in-game board, and combat + logistics actuation are
-built and field-tested; followers cast (their own AI, animated, at chosen
-targets), attack, drink, restock, loot, and now *walk* to loot. Active
-development, so 0.x: newest features want hardware tuning. Build order and
-what's still deferred are in [`ROADMAP.md`](Docs/ROADMAP.md); the per-version
-history is in [`CHANGELOG.md`](CHANGELOG.md).
+**Status: v1.0.** Gambits execute — both tables. Follower detection, Rapport,
+the in-game board, and combat + logistics actuation are built and field-tested;
+followers cast (their own AI, animated, at chosen targets), attack, drink,
+restock, loot, *walk* to loot, and **trade at merchants** — selling their junk
+and buying the supplies they run short on. Build order and what's still deferred
+are in [`ROADMAP.md`](Docs/ROADMAP.md); the per-version history is in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -49,8 +49,9 @@ potion), loot arrows and bolts (separate gambits), loot gold, and **loot
 better equipment**. Equipment generalises by **category and metric, never by
 item** — a weapon upgrade is judged within the follower's dominant weapon-skill
 class (a two-hander takes the greatsword over a dagger, an archer won't swap to
-a mace), armour by rating on the slot. Modded gear works with no patch, and a
-caster won't hoover up a random sword.
+a mace), armour by rating on the slot **within the class they can use** — a
+light-armour follower won't pick up plate they have no skill in. Modded gear
+works with no patch, and a caster won't hoover up a random sword.
 
 **Followers loot like people, not vacuums:**
 
@@ -65,6 +66,17 @@ caster won't hoover up a random sword.
   It never takes owned goods, and holds off entirely while **you're sneaking**
   so they don't blow your stealth. Once *you've* taken from a source the wait
   collapses; you've had your look.
+- **Not in your house.** Followers never loot inside a player home (any cell the
+  game flags as one) unless you opt in.
+
+**Followers trade at merchants.** Stand a follower next to a vendor and they
+**sell** their unworn junk — highest value first, capped by the vendor's own
+gold — and **buy** the supplies they've run short on, chosen from what that
+vendor *actually stocks*: the best they can afford, up to the number they need,
+from their own purse. Off by default; enable **Follower economy** in the MCM.
+The merchant reads and the transaction run through Papyrus (the path the barter
+menu itself uses), so it is crash-safe where a raw engine read is not, and it is
+hardened against a mid-trade save.
 
 ---
 

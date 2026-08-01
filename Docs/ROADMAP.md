@@ -441,7 +441,17 @@ so marth can confirm v0.7.7 (MCM/looting/gambits) works in the field first.
   (detect the mod; likely strip/gate whatever perk/package/AI-flag it grants a
   managed follower). marth, 2026-07-28. Not today.
 
-## Follower economy — vendor autonomy *(DEFERRED, big; marth 2026-07-29)*
+## Follower economy — vendor autonomy *(SHIPPED v1.0; ECON_PAPYRUS_PLAN)*
+
+Shipped in 1.0 via a native↔Papyrus bridge (`native/TradeBridge`, `Source/Scripts/
+MFO_Trade.psc`): the crash-prone merchant reads + the transaction run in Papyrus
+(the barter menu's own path), native keeps the decision. A follower at a vendor
+**sells** unworn junk (highest value first, capped at the chest's barter gold) and
+**buys** what it is short on from the vendor's **enumerated** stock (best affordable,
+up to the quota, from its purse). Gated by the `bEconomy` MCM toggle (off = dry-run
+log). Save-safe + Fable-audited (worker-thread scan, per-chest guard, live clamps).
+Still deferred: *walking* to the vendor unprompted (see "Autonomous town errands")
+and a displaced-by-upgrade sell ledger. Original plan below, for the record.
 
 The capstone of the behaviour layer: a follower manages their own gear and purse
 like a person, not an inventory the player micromanages. In town they:
