@@ -148,9 +148,19 @@ static class Catalog
         // ── WEAPONS: exclusions only (looted as "equipment") ────────────────
         foreach (var w in lo.PriorityOrder.Weapon().WinningOverrides())
         {
-            bool special = w.MajorFlags.HasFlag(Weapon.MajorFlag.NonPlayable)
-                        || !w.Template.IsNull;
-            MaybeExclude(w.FormKey, Scripted(w), special, w.ObjectEffect,
+            // NON-PLAYABLE = creature/automaton gear (a Dwarven Sphere's built-in
+            // crossbow, a dragon's bite, etc.) with no humanoid model. Loot it onto
+            // a follower and it is INVISIBLE (they still FIRE it) -- field-caught: MFO
+            // looted a "Dwarven Sphere Crossbow" off an automaton corpse onto two
+            // followers. Exclude on its OWN signal, not only when scripted.
+            if (w.MajorFlags.HasFlag(Weapon.MajorFlag.NonPlayable))
+            {
+                if (excluded.Add(w.FormKey))
+                    exclude.Add(new Entry(Plugin(w.FormKey), Id(w.FormKey), why: "nonplayable",
+                                          name: w.Name?.String, value: w.BasicStats?.Value ?? 0));
+                continue;
+            }
+            MaybeExclude(w.FormKey, Scripted(w), /*special:*/ !w.Template.IsNull, w.ObjectEffect,
                          w.Name?.String, w.BasicStats?.Value ?? 0);
         }
 
