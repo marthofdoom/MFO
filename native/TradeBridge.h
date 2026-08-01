@@ -45,7 +45,10 @@ namespace MFO::TradeBridge {
     // (main-thread) econ scan once a vendor is resolved; vectors are moved in.
     // probeOnly is set from bEconomy (off -> dry run). No-op if the trade quest is
     // unresolved/not running.
-    void VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
+    // Returns true only if an order was actually dispatched. False = the bridge is
+    // unavailable, the chest already has a live order (per-chest guard), or the
+    // dispatch failed -- so the caller must NOT burn its trade cooldown.
+    bool VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
                      std::int32_t a_budget);

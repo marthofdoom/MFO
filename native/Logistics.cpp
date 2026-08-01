@@ -1627,14 +1627,21 @@ namespace MFO::Logistics {
             return a_notBuySell ? !match : match;
         }
 
+        // Econ scan cadence clocks. Namespace scope (not function-local statics) so
+        // ClearTransientState wipes them on revert (Fable audit #7): FF-dynamic
+        // follower IDs get reused, so a stale 15/20/60 s cooldown must not carry
+        // into the next save, and the pair map must not grow unbounded across one.
+        std::unordered_map<RE::FormID,   Clock::time_point> g_econScan;    // per-follower 15 s
+        std::unordered_map<RE::FormID,   Clock::time_point> g_econTrade;   // per-follower 20 s
+        std::unordered_map<std::uint64_t, Clock::time_point> g_econPair;   // per-(follower,vendor) 60 s
+
         void EconomyProbe(RE::Actor* a_follower, const std::vector<Gambit>& a_logistics,
                           Clock::time_point a_now) {
             const auto fid = a_follower->GetFormID();
 
             // Per-follower SCAN cooldown (15 s) -- the cell walk itself is the
             // cost being limited here, same pattern as the other diagnostics.
-            static std::unordered_map<RE::FormID, Clock::time_point> s_nextEconScan;
-            auto& sn = s_nextEconScan[fid];
+            auto& sn = g_econScan[fid];
             if (sn.time_since_epoch().count() != 0 && a_now < sn) return;
             sn = a_now + std::chrono::seconds(15);
 
@@ -1679,10 +1686,8 @@ namespace MFO::Logistics {
             //     next scan re-evaluates the need. Without it a follower near two
             //     vendors traded with BOTH in the same scan and over-bought (field:
             //     Erik +17 @ Ysolda AND +22 @ Adrianne, same second).
-            static std::unordered_map<RE::FormID, Clock::time_point> s_nextTrade;
-            if (auto& tn = s_nextTrade[fid]; tn.time_since_epoch().count() != 0 && a_now < tn) return;
+            if (auto& tn = g_econTrade[fid]; tn.time_since_epoch().count() != 0 && a_now < tn) return;
 
-            static std::unordered_map<std::uint64_t, Clock::time_point> s_nextEconPair;
             for (auto& h : living) {
                 auto  ptr    = h.get();
                 auto* vendor = ptr.get();
@@ -1700,7 +1705,7 @@ namespace MFO::Logistics {
 
                 // Per-(follower,vendor) log cooldown (60 s).
                 const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendor->GetFormID();
-                auto& pn = s_nextEconPair[pairKey];
+                auto& pn = g_econPair[pairKey];
                 if (pn.time_since_epoch().count() != 0 && a_now < pn) continue;
                 pn = a_now + std::chrono::seconds(60);
 
@@ -1769,13 +1774,15 @@ namespace MFO::Logistics {
                     else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
                 }
 
-                TradeBridge::VendorTrade(a_follower, vendor, chest,
-                                         std::move(sell), std::move(needs), purse);
-                // One trade per follower per window, then STOP scanning vendors this
-                // tick -- let this trade settle before touching another merchant.
-                s_nextTrade[fid] = a_now + std::chrono::seconds(20);
-                break;
-            }
+                // Only burn the cooldown + stop scanning if a trade ACTUALLY
+                // dispatched (Fable audit #8): a chest already busy with another
+                // follower's order, or the bridge being down, must not cost this
+                // follower its 20 s window -- try the next vendor / next scan.
+                if (TradeBridge::VendorTrade(a_follower, vendor, chest,
+                                             std::move(sell), std::move(needs), purse)) {
+                    g_econTrade[fid] = a_now + std::chrono::seconds(20);
+                    break;
+                }
         }
 
         // ── the player-looted waiver sink (#22h) ────────────────────────────
@@ -2316,15 +2323,17 @@ namespace MFO::Logistics {
             // Phase 1 (#21): re-enabled as a DIAGNOSTIC build (v0.8.42) -- PDB now
             // emitted + per-step [bc] breadcrumbs in EconomyProbe, so the v0.8.40
             // CTD pins to an exact step/line instead of a guess.
+            // Runs HERE, on the WORKER, NOT via MainThread::Post (Fable audit #1/#4):
+            // the reads -- follower GetInventory / CountPotions / g_travel -- must
+            // stay on the SAME thread as the loot/heal/loadout mutations that share
+            // this task, or they race the follower's InventoryChanges (the Actor.cpp
+            // :445 CTD class). The old main-thread rationale ("mutations run on main")
+            // is obsolete: the merchant read AND the transaction now run in Papyrus
+            // (VM thread) via the bridge, so nothing here needs main -- and the
+            // dispatch is worker->VM, exactly like DispatchActivate already does.
             static constexpr bool kEconProbeEnabled = true;
             if (kEconProbeEnabled)
-                MainThread::Post([h = a_follower->GetHandle(),
-                                  gambits = a_state.logistics(), now]() {
-                    auto  ptr      = h.get();
-                    auto* follower = ptr.get();
-                    if (!follower || follower->IsDead() || follower->IsDisabled()) return;
-                    EconomyProbe(follower, gambits, now);
-                });
+                EconomyProbe(a_follower, a_state.logistics(), now);
         }
     }
 
@@ -2344,6 +2353,9 @@ namespace MFO::Logistics {
         g_lastLootSource = 0;
         g_drinkUntil.clear();
         g_playerLooted.clear();
+        g_econScan.clear();   // #21 econ cadence clocks -- save-scoped (Fable audit #7)
+        g_econTrade.clear();
+        g_econPair.clear();
         // Drop any in-flight travel intent and release the engine alias so a
         // revert/load never leaves a follower latched (#55).
         if (g_travel.active) Packages::LootTravelClear("revert");

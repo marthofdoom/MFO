@@ -15,6 +15,8 @@ namespace MFO::TradeBridge {
             RE::ActorHandle      follower;
             RE::ActorHandle      vendor;
             RE::ObjectRefHandle  chest;
+            RE::FormID           chestId = 0;  // for the per-chest in-flight guard
+            std::chrono::steady_clock::time_point dispatchedAt{};  // for the stale-order reap
             std::vector<SellRow> sell;
             std::vector<NeedCat> needs;      // mutated by PlanBuy as quotas fill
             std::int32_t         budget = 0; // follower purse; PlanBuy spends it down
@@ -190,7 +192,7 @@ namespace MFO::TradeBridge {
                          fol && fol->GetName() ? fol->GetName() : "?",
                          ven && ven->GetName() ? ven->GetName() : "?",
                          a_vendorGold, verb, a_soldCount, a_soldValue, a_boughtCount, a_spent,
-                         o.sell.size(), o.needs.size(), o.budget);
+                         o.sell.size(), o.needs.size(), o.budget + o.buySpent);   // original purse
         }
 
     }
@@ -211,21 +213,43 @@ namespace MFO::TradeBridge {
         return true;
     }
 
-    void VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
+    bool VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
                      std::int32_t a_budget) {
         auto* q = Forms::g_tradeQuest;
-        if (!q || !q->IsRunning()) return;
-        if (!a_follower || !a_chest) return;
+        if (!q || !q->IsRunning()) return false;
+        if (!a_follower || !a_chest)  return false;
 
-        const std::int32_t token = g_nextToken.fetch_add(1);
+        const RE::FormID chestId = a_chest->GetFormID();
+        std::int32_t token;
+        const auto nowT = std::chrono::steady_clock::now();
         {
             std::scoped_lock lk(g_mtx);
+            // REAP stale orders first: a dispatch that the VM accepted but never ran
+            // (dropped stack, broken .pex) would otherwise sit forever and, via the
+            // per-chest guard below, block that merchant permanently. RunTrade
+            // completes in well under a second; 30 s is a safe grave. (audit #8)
+            for (auto it = g_orders.begin(); it != g_orders.end(); ) {
+                if (nowT - it->second.dispatchedAt > std::chrono::seconds(30)) it = g_orders.erase(it);
+                else ++it;
+            }
+
+            // PER-CHEST in-flight guard (Fable audit #2): never let two followers
+            // hold a live order against the SAME merchant chest -- both would read
+            // the same barter gold and the chest would pay out twice (gold minted
+            // from nothing). The loser waits for the winner's order to complete
+            // (ReportTrade frees it) and trades next scan.
+            for (auto& [tok, o] : g_orders)
+                if (o.chestId == chestId) return false;
+
+            token = g_nextToken.fetch_add(1);
             TradeOrder o;
             o.follower  = a_follower->GetHandle();
             o.vendor    = a_vendor ? a_vendor->GetHandle() : RE::ActorHandle{};
             o.chest     = a_chest->GetHandle();
+            o.chestId   = chestId;
+            o.dispatchedAt = nowT;
             o.sell      = std::move(a_sell);
             o.needs     = std::move(a_needs);
             o.budget    = a_budget;
@@ -236,12 +260,19 @@ namespace MFO::TradeBridge {
             std::scoped_lock lk(g_mtx);
             g_orders.erase(token);
             spdlog::warn("[econ] dispatch failed for token {}", token);
+            return false;
         }
+        return true;
     }
 
     void ClearTransientState() {
         std::scoped_lock lk(g_mtx);
         g_orders.clear();
+        // Cross-save token guard (Fable audit #3): a RunTrade suspended in a save
+        // resumes with its OLD token; jump the counter far past any value the next
+        // session could reissue, so the stale token can never name a fresh order
+        // (GetVendorChest -> none -> the resumed stack aborts safe).
+        g_nextToken.fetch_add(1'000'000);
     }
 
 }

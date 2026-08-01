@@ -54,6 +54,13 @@ Function RunTrade(int token)
             if canBuy > have
                 canBuy = have
             endif
+            ; Clamp to what the follower ACTUALLY still has at execution time -- the
+            ; sell list was snapshotted frames ago and gear may have been equipped,
+            ; healed-evicted, or taken since (audit #5). Else AddItem would pay for
+            ; items RemoveItem can't deliver.
+            if !probe && canBuy > follower.GetItemCount(f)
+                canBuy = follower.GetItemCount(f)
+            endif
             if canBuy > 0
                 if !probe
                     follower.RemoveItem(f, canBuy, true, chest)
@@ -86,15 +93,20 @@ Function RunTrade(int token)
             if plan[b] > 0
                 int qty = plan[b]
                 int lineGold = qty * GetFormValue(stock[b])
-                boughtCount += qty
-                spent += lineGold
-                ; PER-ITEM atomic: move the goods AND pay for them together, so a
-                ; save that lands mid-loop leaves a consistent partial trade (the
-                ; done items are fully paid, the rest just don't happen) -- never
-                ; free items. GetFormValue is token-free, so it survives a load.
-                if !probe
+                if probe
+                    boughtCount += qty
+                    spent += lineGold
+                elseif follower.GetItemCount(gold001) >= lineGold
+                    ; PER-ITEM atomic + affordability-gated: only move goods the
+                    ; follower can pay for RIGHT NOW (its purse may have dropped since
+                    ; dispatch -- audit #6), and move+pay together so a save mid-loop
+                    ; leaves a consistent partial trade (done items fully paid, rest
+                    ; skipped) -- never free items, never unpaid goods. GetFormValue
+                    ; is token-free, so it survives a load.
                     chest.RemoveItem(stock[b], qty, true, follower)          ; goods -> follower
                     follower.RemoveItem(gold001, lineGold, true, chest)      ; pay into the vendor's chest
+                    boughtCount += qty
+                    spent += lineGold
                 endif
             endif
             b += 1

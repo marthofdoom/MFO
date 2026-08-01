@@ -1,3 +1,21 @@
+## v0.8.49 -- Fable audit fixes (1.0 RC hardening, #21)
+
+Adversarial Fable audit of the econ bridge + save-safety. All findings fixed:
+- CRIT #1/#4: econ scan runs on the WORKER now (direct call, not MainThread::Post),
+  so follower inventory + g_travel reads share the thread with the loot/heal/loadout
+  mutations instead of racing them (the Actor.cpp:445 CTD class). Transaction stays
+  in Papyrus (VM); dispatch is worker->VM like DispatchActivate.
+- MAJOR #2: per-chest in-flight guard -- two followers can no longer hold live orders
+  on one vendor chest (was minting gold: both read the same barter gold, chest paid twice).
+- MAJOR #3: g_nextToken jumps +1e6 on revert so a save-suspended RunTrade token can
+  never collide with a reissued one (resumes -> no chest -> aborts safe).
+- #5/#6: sell/buy clamp to the LIVE follower count/purse at execution (no paying for
+  undelivered goods, no delivering unpaid goods if state shifted since dispatch).
+- #7: econ cadence clocks hoisted to namespace scope + cleared on revert.
+- #8: trade cooldown burned only on a CONFIRMED dispatch; stale orders reaped at 30 s
+  (so a leaked order cannot block a chest forever via the new guard).
+- #10: [econ] log reports the ORIGINAL purse, not the post-PlanBuy remainder.
+
 ## v0.8.48 -- save-safety audit fixes
 
 Audit found three mutable states that outlived a revert (neither serialized nor
