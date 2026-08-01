@@ -126,6 +126,7 @@ namespace MFO::Config {
             else if (a_key == "fLootRadius")        setF(g_lootRadius,     64.0f, 4096.0f);
             else if (a_key == "bLootTravel")        setB(g_lootTravel);
             else if (a_key == "bLootInPlayerHomes") setB(g_lootInPlayerHomes);
+            else if (a_key == "bEconomy")           setB(g_economy);
             else if (a_key == "fTravelRadius")       setF(g_travelRadius,   64.0f, 8192.0f);   // match the MCM slider max
             else if (a_key == "fBatchLinger")        setF(g_batchLinger,     0.0f, 15.0f);
             else if (a_key == "fExcursionMax")       setF(g_excursionMax,    5.0f, 300.0f);
@@ -211,6 +212,7 @@ namespace MFO::Config {
             g_lootRadius         = 3000.0f;
             g_lootTravel         = true;
             g_lootInPlayerHomes  = false;
+            g_economy            = false;
             g_travelRadius       = 4096.0f;
             g_batchLinger        = 4.0f;
             g_excursionMax       = 60.0f;

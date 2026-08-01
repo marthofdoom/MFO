@@ -211,6 +211,16 @@
           }
         },
         {
+          "id": "bEconomy:General",
+          "text": "Follower economy (sell/buy)",
+          "type": "toggle",
+          "help": "OFF (default): a follower at a merchant only LOGS what it would trade (dry run). ON: it sells its unworn junk (highest-value first, capped by the vendor's gold) and buys supplies it is short on. Stand a follower by a merchant to trade.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
           "id": "fLootRadius:General",
           "text": "Loot scan (units)",
           "type": "slider",

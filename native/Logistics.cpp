@@ -1702,21 +1702,14 @@ namespace MFO::Logistics {
                 // CTDs on any thread (§0.37). The chest read moves to Papyrus.
                 auto* chest = fac->vendorData.merchantContainer;
                 if (!chest || !chest->GetContainer()) continue;
-                spdlog::info("[bc] 1 resolved: vendor {:08X} chest {:08X}",
-                             vendor->GetFormID(), chest->GetFormID());
-
-                // WOULD SELL: the follower's OWN unworn weapons/armour (jewellery
-                // is ARMO, so IsJewelryPiece rides along) that clear the never-loot
-                // catalog and the vendor's VEND filter. All native-SAFE reads (the
-                // follower's own inventory). Papyrus never sees this list -- it is
-                // for the log + (Phase 2) the sell loop.
-                spdlog::info("[bc] 2 sell-loop start (follower GetInventory)");
+                // SELL list: the follower's OWN unworn weapons/armour (jewellery is
+                // ARMO, so IsJewelryPiece rides along) that clear the never-loot
+                // catalog and the vendor's VEND filter -- all native-SAFE reads. Also
+                // count the PURSE in the same pass: Actor::GetGoldAmount() CTDs here
+                // (Actor.cpp:445, null-deref on the InventoryChanges the worker tick
+                // may be mutating -- crash 2026-08-01), but the GetInventory snapshot
+                // is safe, so sum Gold001 (0x0000000F) straight from it.
                 std::vector<TradeBridge::SellRow> sell;
-                // Count the follower's PURSE in this same pass. Actor::GetGoldAmount()
-                // CTDs here (Actor.cpp:445, null-deref on the InventoryChanges the
-                // worker tick may be mutating -- crash 2026-08-01 00:50), but the
-                // GetInventory snapshot below is safe (it built fine the same frame),
-                // so sum Gold001 (0x0000000F) straight from it. Never GetGoldAmount.
                 int purse = 0;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
@@ -1728,80 +1721,28 @@ namespace MFO::Logistics {
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
-                    if (entry && entry->IsWorn())                    continue;   // never sell worn gear
-                    if (Catalog::IsExcluded(obj->GetFormID()))       continue;
-                    if (!VendorTrades(vend, vv.notBuySell, kwf))     continue;
+                    if (entry && entry->IsWorn())                continue;   // never sell worn gear
+                    if (Catalog::IsExcluded(obj->GetFormID()))   continue;
+                    if (!VendorTrades(vend, vv.notBuySell, kwf)) continue;
                     sell.push_back(TradeBridge::SellRow{
                         obj, static_cast<std::int32_t>(data.first),
                         entry ? entry->GetValue() : 0,
                         armo && IsJewelryPiece(armo) });
                 }
+                // Highest-value first: the vendor's barter gold is limited (field log:
+                // sale total often > vendor gold), so sell the most valuable junk first
+                // to convert the most worth per visit. Papyrus caps at the chest's gold.
+                std::sort(sell.begin(), sell.end(),
+                          [](const auto& a, const auto& b) { return a.value > b.value; });
 
-                // WOULD BUY candidates: for each supply gambit BELOW its threshold,
-                // the top-value catalog items of that category the follower could
-                // afford. Native ranks by base value (safe -- off the form); Papyrus
-                // will read the vendor STOCK for each. The catalog is lookup-only,
-                // so we walk the data handler's form arrays and filter by category.
-                spdlog::info("[bc] 3 sell built n={}, purse={} (counted, no GetGoldAmount)", sell.size(), purse);
-                spdlog::info("[bc] 4 buy-walk start (form arrays)");
-                std::vector<TradeBridge::BuyRow> buy;
-                auto* dh = RE::TESDataHandler::GetSingleton();
-                auto baseValue = [](RE::TESBoundObject* o) -> int {
-                    auto* vf = o ? o->As<RE::TESValueForm>() : nullptr;
-                    return vf ? vf->value : 0;
-                };
-                // Collect the top-6 affordable candidates of one category.
-                auto addCategory = [&](const char* label, int have, int want, auto matcher) {
-                    if (have >= want) return;   // gambit not below threshold -> not shopping
-                    std::vector<TradeBridge::BuyRow> pool;
-                    matcher(pool);
-                    std::sort(pool.begin(), pool.end(),
-                              [](const auto& a, const auto& b) { return a.value > b.value; });
-                    int k = 0;
-                    for (auto& r : pool) {
-                        if (r.value > purse) continue;         // unaffordable
-                        r.label = label; r.have = have; r.want = want;
-                        buy.push_back(r);
-                        if (++k >= 6) break;
-                    }
-                };
-                auto potionPool = [&](RE::ActorValue a_av) {
-                    return [&, a_av](std::vector<TradeBridge::BuyRow>& out) {
-                        if (!dh) return;
-                        for (auto* alc : dh->GetFormArray<RE::AlchemyItem>()) {
-                            if (!alc || Catalog::IsExcluded(alc->GetFormID())) continue;
-                            if (PotionRestores(alc) != a_av) continue;
-                            out.push_back(TradeBridge::BuyRow{ alc, baseValue(alc), 0, 0, {} });
-                        }
-                    };
-                };
-                auto ammoPool = [&](bool a_bolt) {
-                    return [&, a_bolt](std::vector<TradeBridge::BuyRow>& out) {
-                        if (!dh) return;
-                        for (auto* am : dh->GetFormArray<RE::TESAmmo>()) {
-                            if (!am || Catalog::IsExcluded(am->GetFormID())) continue;
-                            if (AmmoIsBolt(am) != a_bolt) continue;
-                            out.push_back(TradeBridge::BuyRow{ am, baseValue(am), 0, 0, {} });
-                        }
-                    };
-                };
-                for (const auto& g : a_logistics) {
-                    if (!g.enabled) continue;
-                    const auto& c    = g.conditionOpcode;
-                    const int   want = static_cast<int>(g.conditionParam);
-                    if      (c == Vocab::kCondSelfLowHealthPotion)  addCategory("potH",   CountPotions(a_follower, RE::ActorValue::kHealth),  want, potionPool(RE::ActorValue::kHealth));
-                    else if (c == Vocab::kCondSelfLowStaminaPotion) addCategory("potS",   CountPotions(a_follower, RE::ActorValue::kStamina), want, potionPool(RE::ActorValue::kStamina));
-                    else if (c == Vocab::kCondSelfLowMagickaPotion) addCategory("potM",   CountPotions(a_follower, RE::ActorValue::kMagicka), want, potionPool(RE::ActorValue::kMagicka));
-                    else if (c == Vocab::kCondSelfOutOfArrows)      addCategory("arrows", ArrowCount(a_follower),                             want, ammoPool(false));
-                    else if (c == Vocab::kCondSelfOutOfBolts)       addCategory("bolts",  BoltCount(a_follower),                              want, ammoPool(true));
-                }
-
-                // Hand the crash-prone reads to Papyrus. It reports back the chest
-                // gold + per-candidate stock, and native logs the full plan.
-                spdlog::info("[bc] 5 buy built n={}, dispatching VendorProbe", buy.size());
-                TradeBridge::VendorProbe(a_follower, vendor, chest,
-                                         std::move(sell), std::move(buy), purse);
-                spdlog::info("[bc] 6 VendorProbe returned");
+                // BUY is deferred to Phase 3: it needs vendor-stock ENUMERATION in
+                // Papyrus (po3 AddAllItemsToArray). The native candidate-guess can't
+                // know which of hundreds of arrow/potion types a vendor stocks -- the
+                // field log showed stock=0 for every guessed candidate. Phase 3 rule
+                // (marth): buy the BEST the follower can AFFORD, up to the number
+                // needed -- rank the vendor's ACTUAL stock by value, buy down until
+                // quota met or purse spent.
+                TradeBridge::VendorTrade(a_follower, vendor, chest, std::move(sell), purse);
             }
         }
 

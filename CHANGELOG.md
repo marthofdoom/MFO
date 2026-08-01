@@ -1,3 +1,13 @@
+## v0.8.44 -- econ Phase 2: follower SELL at merchants (#21)
+
+Bridge proven (Phase 1, crash-free Papyrus read), so wire the SELL transaction.
+Native builds the follower's sell list (unworn, un-excluded, VEND-tradeable gear,
+highest-value first) and dispatches it; MFO_Trade reads the chest's barter gold and
+sells down that list capped at the chest gold (RemoveItem follower->chest, pay the
+follower, deduct chest gold), reporting what moved. New MCM toggle bEconomy (default
+OFF = dry-run log only; ON = actually trade). BUY (Phase 3) needs vendor-stock
+enumeration (candidate-guessing gave stock=0 everywhere) -- next.
+
 ## v0.8.43 -- FIX Phase 1 CTD: count purse from GetInventory, not GetGoldAmount (#21)
 
 Breadcrumb [bc]3 + the PDB pinned the v0.8.40/0.8.42 vendor crash to
