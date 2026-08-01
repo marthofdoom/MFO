@@ -1453,6 +1453,37 @@ namespace MFO::Logistics {
                 // Corpse/container within reach (or travel unavailable): transfer.
                 if (LootHere(a_follower, ref, a_cat, a_potionWant)) return true;
             }
+            // SKIP-REASON DIAGNOSTIC (v0.8.36). Nothing acted this tick even though
+            // the scan collected candidates -- recompute WHY the CLOSEST eligible
+            // body was passed over, so "loot efficiency is bad" is a measured fact,
+            // not a guess (marth: Eric found the potion in front of him only after
+            // several runs). Rate-limited per (follower,cat) 10 s, mirroring the scan
+            // log. The committed-to-leg early-out (return false while Walking) never
+            // reaches here, so this fires only on a genuine no-op tick.
+            if (!candidates.empty()) {
+                static std::unordered_map<std::uint64_t, Clock::time_point> s_nextSkipLog;
+                const auto key = (static_cast<std::uint64_t>(a_follower->GetFormID()) << 8)
+                               | static_cast<std::uint64_t>(a_cat);
+                auto& nxt = s_nextSkipLog[key];
+                if (nxt.time_since_epoch().count() == 0 || a_now >= nxt) {
+                    nxt = a_now + std::chrono::seconds(10);
+                    auto p0 = candidates.front().get();
+                    if (auto* r0 = p0.get()) {
+                        const auto  r0id = r0->GetFormID();
+                        const float dF   = origin.GetDistance(r0->GetPosition());
+                        const float dP   = playerPos.GetDistance(r0->GetPosition());
+                        spdlog::info("[lootskip] {:08X} cat={} closest={:08X} distF={:.0f} distPlayer={:.0f} "
+                                     "walkLimit={:.0f} | considering={} bubble={}(<{:.0f}) blocklist={} "
+                                     "aliasBusy={} navdist={:.0f}(gate {:.0f})",
+                                     a_follower->GetFormID(), CatName(a_cat), r0id, dF, dP, walkLimit,
+                                     PlayerIsConsidering(r0id),
+                                     dP <= Config::g_playerBubble.load(), Config::g_playerBubble.load(),
+                                     TravelFailedRecently(r0id, a_now),
+                                     (g_travel.active && g_travel.follower != a_follower->GetFormID()),
+                                     NavmeshReach(a_follower, r0), Config::g_navmeshGate.load());
+                    }
+                }
+            }
             // Excursion Hold decision needs to know if loot is still WAITING on
             // the player's dibs (vs genuinely nothing left).
             if (a_mode == LootMode::kExcursion && dNotYet > 0) g_scanSawWaiting = true;

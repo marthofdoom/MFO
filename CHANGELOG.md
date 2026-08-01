@@ -3,6 +3,18 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
+## v0.8.36 — loot skip-reason diagnostic ([lootskip])
+
+marth: "not sure why loot efficiency was so bad" -- Eric grabbed a potion right in
+front of him only after several runs. The scan log shows candidates were eligible
+but the per-candidate SKIP reasons in the act loop (player-bubble convergence yield,
+fail/sticky blocklist, single-alias busy, player-considering, off-navmesh) were
+silent. Added a rate-limited `[lootskip]` line: when a tick collects candidates but
+loots nothing, it recomputes and logs WHY the CLOSEST eligible body was passed over.
+Diagnostic only -- no behaviour change. Prime suspect: the 256u convergence bubble
+(a body near YOU is deferred to you) plus the single global loot alias serialising
+the two followers.
+
 ## v0.8.35 — heal evicts the creature weapon (stop the re-wield loop)
 
 The v0.8.34 heal only *unequipped* the non-playable creature weapon, leaving it in
