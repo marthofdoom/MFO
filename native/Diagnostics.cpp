@@ -378,8 +378,17 @@ namespace MFO::Diagnostics {
         // A tick started after the store above early-returns without setting the
         // flag, so this waits only for the one genuinely in-flight tick and can't
         // deadlock; the cap is a backstop, not an expected path.
-        for (int i = 0; g_tickActive.load() && i < 2000; ++i)
+        int waited = 0;
+        for (; g_tickActive.load() && waited < 2000; ++waited)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // The cap is a backstop, never an expected path. If it TRIPS, the clears
+        // that follow race the still-live tick's map inserts (the unordered_map UB
+        // this StopPump rework was built to prevent) -- so make it LOUD rather than
+        // silent, per the Fable audit (#9). A crash right after a load-screen would
+        // point straight here.
+        if (g_tickActive.load())
+            spdlog::error("[diag] StopPump: worker tick STILL active after {}ms cap -- revert "
+                          "clears may race its inserts (audit #9); a post-load crash starts here", waited);
     }
 
     void StartPump() {

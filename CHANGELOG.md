@@ -1,3 +1,22 @@
+## v1.0.0 -- Follower economy + magnum-opus milestone (#21)
+
+First 1.0. Followers now run a full autonomous ECONOMY at merchants -- sell their
+unworn junk (highest-value first, capped at the vendor's barter gold) and buy the
+supplies they're short on (best affordable, up to the number needed, from the
+vendor's ACTUAL enumerated stock) -- via a native<->Papyrus bridge that keeps the
+crash-prone merchant reads out of C++ (Fable's ECON_PAPYRUS_PLAN, phases 0-4).
+Gated by the bEconomy MCM toggle (off = dry-run plan in the log).
+
+Hardened for release: a full save-safety audit (revert now clears the pump queue,
+MEO gem map, probe handles, trade orders) and an adversarial Fable audit of the
+bridge -- econ scan moved to the worker thread (no inventory race), a per-chest
+in-flight guard (no gold duplication with two followers at one vendor), cross-save
+token guard, live-count clamps on every transaction line, and stale-order reaping.
+
+Builds on everything since 0.8.x: loot-travel efficiency (sticky-unreachable churn
+fixed), invisible-weapon heal, no-looting-in-player-homes, the MCM economy toggle,
+and the Papyrus compile pipeline (Source/ + tools/compile.sh).
+
 ## v0.8.49 -- Fable audit fixes (1.0 RC hardening, #21)
 
 Adversarial Fable audit of the econ bridge + save-safety. All findings fixed:
