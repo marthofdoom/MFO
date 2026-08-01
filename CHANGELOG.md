@@ -1,3 +1,11 @@
+## v0.8.46 -- econ: buy potions via the follower's own classifier (#21)
+
+At an alchemist a follower with a potion NEED bought 0 (field: Arcadia). PlanBuy
+classified stock catalog-only, but the follower COUNTS/drinks potions with the
+runtime classifier (catalog-first + archetype heuristic) -- so a potion the catalog
+didn't know was invisible to buying yet counted toward the need. PlanBuy now uses
+Logistics::PotionRestores (the same one), so buy matches count. Arrows unaffected.
+
 ## v0.8.45 -- econ Phase 3: follower BUYING via vendor-stock enumeration (#21)
 
 Buy the supplies a follower is short on. Native names the NEED (which supply gambit

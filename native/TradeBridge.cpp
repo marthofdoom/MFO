@@ -4,6 +4,7 @@
 #include "Papyrus.h"
 #include "Config.h"
 #include "ItemCatalog.h"
+#include "Logistics.h"   // Logistics::PotionRestores -- the SAME classifier CountPotions uses
 #include <mutex>
 
 namespace MFO::TradeBridge {
@@ -41,8 +42,12 @@ namespace MFO::TradeBridge {
         std::int32_t ClassifyBuy(RE::TESForm* a_form) {
             if (!a_form) return -1;
             const auto id = a_form->GetFormID();
-            if (a_form->As<RE::AlchemyItem>()) {
-                switch (Catalog::PotionRestores(id)) {
+            if (auto* alc = a_form->As<RE::AlchemyItem>()) {
+                // The SAME classifier the follower counts/drinks with (catalog-first,
+                // then the archetype heuristic) -- catalog-only left the vendor's
+                // health potions unclassified, so a follower that NEEDED potions (its
+                // count uses this classifier) bought none (field: Arcadia, BUY 0).
+                switch (Logistics::PotionRestores(alc)) {
                     case RE::ActorValue::kHealth:  return NeedCat::kPotHealth;
                     case RE::ActorValue::kStamina: return NeedCat::kPotStamina;
                     case RE::ActorValue::kMagicka: return NeedCat::kPotMagicka;
