@@ -3,7 +3,7 @@
 Versions are immutable once released. Bump `VERSION` for every build that
 reaches the game.
 
-## v0.8.33 — heal: swap out a wrongly-looted non-playable weapon
+## v0.8.34 — heal + block wrongly-looted non-playable (creature) weapons
 
 Confirmed via MEO's [wdiag] logging: MFO looted a "Dwarven Sphere Crossbow" (an
 automaton's built-in weapon, no humanoid model) off a corpse and equipped it on
@@ -16,7 +16,9 @@ two-hander slot bug was a separate, now-fixed issue).
 - HEAL (DLL): a follower found wielding an excluded weapon has it swapped for their
   best carried PLAYABLE weapon (or unequipped if they carry none). Rate-limited 5 s,
   no-op once healed. Reuses Catalog::IsExcluded, so it needs the regenerated catalog.
-Together: re-run Synthesis, then reload -- the crossbows swap out and never return.
+Both the loot filter and the heal ALSO use a direct runtime non-playable check
+(record-header flag bit 2, GetFormFlags), so this works off the DLL alone -- no
+catalog regen required. Reload and the crossbows swap out and never return.
 
 ## v0.8.32 — fix: followers churning unreachable loot legs forever
 

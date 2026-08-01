@@ -304,6 +304,15 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // A NON-PLAYABLE weapon (record-header flag bit 2 == Mutagen
+        // Weapon.MajorFlag.NonPlayable, confirmed set on the Dwarven Sphere Crossbow)
+        // is creature/automaton gear with no humanoid mesh -- invisible if a follower
+        // equips it, though it still fires. Direct check so the loot filter + heal
+        // work off the DLL alone, independent of the catalog's nonplayable exclusion.
+        bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w) {
+            return a_w && (a_w->GetFormFlags() & (1u << 2)) != 0;
+        }
+
         bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             // Generalized by CATEGORY, never by item (§4.8.2). One better piece
             // per tick (one action per tick, §4.3). We TRANSFER, then EQUIP -- a
@@ -379,6 +388,7 @@ namespace MFO::Logistics {
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
                     if (!bestArmor && ArmorIsBetter(a_follower, armo)) bestArmor = obj;
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
+                    if (IsCreatureWeapon(weap)) continue;   // never equip automaton/creature gear
                     const WepClass wc = WeaponClassOf(weap->GetWeaponType());
                     // In the follower's best class, and strictly harder-hitting
                     // than what they effectively wield. A bow never beats a sword
@@ -1872,13 +1882,13 @@ namespace MFO::Logistics {
         for (int hand = 0; hand < 2; ++hand) {
             auto* eq  = a_follower->GetEquippedObject(hand == 1);   // false=right, true=left
             auto* bad = eq ? eq->As<RE::TESObjectWEAP>() : nullptr;
-            if (!bad || !Catalog::IsExcluded(bad->GetFormID())) continue;
+            if (!bad || (!Catalog::IsExcluded(bad->GetFormID()) && !IsCreatureWeapon(bad))) continue;
             RE::TESBoundObject* best    = nullptr;
             std::uint16_t       bestDmg = 0;
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
-                if (!w || Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (!w || Catalog::IsExcluded(obj->GetFormID()) || IsCreatureWeapon(w)) continue;
                 if (WeaponClassOf(w->GetWeaponType()) == WepClass::Other) continue;  // no staff/creature
                 if (w->GetAttackDamage() > bestDmg) { bestDmg = w->GetAttackDamage(); best = obj; }
             }
