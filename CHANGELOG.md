@@ -1,3 +1,10 @@
+## v0.8.41 -- HOTFIX: disable econ probe (Phase 1 CTD)
+
+v0.8.40 re-enabled the econ probe; it CTD'd on the main thread near a real vendor
+(Bannered Mare), a null-deref in the probe build path (NOT the Papyrus dispatch --
+Phase 0 proved that). Disabled again so testing can continue. Phase 1 returns once
+the crash is pinned with symbols (CI PDB fix pending) + per-step breadcrumbs.
+
 # MFO — Changelog
 
 Versions are immutable once released. Bump `VERSION` for every build that

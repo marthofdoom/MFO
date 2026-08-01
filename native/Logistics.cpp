@@ -2327,10 +2327,14 @@ namespace MFO::Logistics {
             // main-thread pump (§0.37) is still correct + needed for the TRANSACTION
             // (mutations must run on main), just not sufficient for the READ.
             // See [[economy-vendor-detection-excludes-teammates]] + ENGINE_NOTES.
-            // Phase 1 (#21): RE-ENABLED. The crashing native chest read is gone --
-            // the merchant read now happens in Papyrus (MFO_Trade), so the probe is
-            // dispatched from the main thread and reports back a crash-free plan.
-            static constexpr bool kEconProbeEnabled = true;
+            // Phase 1 (#21): re-DISABLED after a field CTD (v0.8.40, crash
+            // 2026-08-01 00:22, near Bannered Mare vendor). The crash is on the
+            // MAIN thread inside the probe's build path (Papyrus dispatch is fine
+            // -- Phase 0 self-test proved it), a null-deref in an inventory/type
+            // switch. Symbols weren't in the CI artifact so the exact line is
+            // unpinned; re-enable with per-step breadcrumbs + a PDB build once
+            // fixed. Hotfix: OFF so marth can keep testing.
+            static constexpr bool kEconProbeEnabled = false;
             if (kEconProbeEnabled)
                 MainThread::Post([h = a_follower->GetHandle(),
                                   gambits = a_state.logistics(), now]() {
