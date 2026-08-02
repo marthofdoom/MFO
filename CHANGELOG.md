@@ -1,3 +1,9 @@
+## v1.0.3 -- equip-melee followers loot a melee weapon regardless of skill (#35)
+
+A follower whose table has an "equip melee" gambit now loots a best-class melee
+weapon even at poor skill / empty-handed (they use it occasionally), mirroring the
+existing equip-ranged override.
+
 ## v1.0.2 -- no shields for two-hander/bow followers
 
 Farkas (two-handed) looted a shield -- useless with no free off-hand. Armor loot

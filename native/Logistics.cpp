@@ -375,6 +375,10 @@ namespace MFO::Logistics {
             // by default. Loot only THAT kind; baseline is their current of it.
             using WT = RE::WEAPON_TYPE;
             const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
+            // A follower whose table says "equip melee" is MEANT to swing one, so
+            // loot a melee weapon of their best class even at poor skill / empty-
+            // handed (they'll use it occasionally) -- mirrors wantsRanged (marth).
+            const bool wantsMelee = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
             bool          wantCrossbow = false;
             std::uint16_t myRangedDmg  = 0;
             if (wantsRanged) {
@@ -419,7 +423,7 @@ namespace MFO::Logistics {
                     // In the follower's best class, and strictly harder-hitting
                     // than what they effectively wield. A bow never beats a sword
                     // for a swordsman; a greatsword beats a dagger for a 2h user.
-                    if (wieldsRealWeapon && wc == myClass &&
+                    if ((wieldsRealWeapon || wantsMelee) && wc == myClass &&
                         weap->GetAttackDamage() > bestWeapDmg) {
                         bestWeapDmg = weap->GetAttackDamage();
                         bestWeap    = obj;
