@@ -65,6 +65,12 @@ namespace MFO::Board {
 
         bool g_stickNav[4] = { false, false, false, false };   // up/down/left/right
         std::atomic<bool> g_shoutDownSeen{ false };
+        // Set on OPEN. R1 (the RShoulder) is the Field Orders power on the deck,
+        // so the press that OPENS the board is an R1 hold; the draw waits for
+        // that press to be released before R1 counts as a party-switch, so the
+        // board does not skip a follower the instant it appears (same class as
+        // the B sticky-release guard).
+        std::atomic<bool> g_justOpened{ false };
 
         // ── input translation ───────────────────────────────────────────────
         ImGuiKey GamepadToImGuiKey(std::uint32_t a_key) {
@@ -79,6 +85,9 @@ namespace MFO::Board {
             case K::kY:             return ImGuiKey_GamepadFaceUp;
             case K::kLeftShoulder:  return ImGuiKey_GamepadL1;
             case K::kRightShoulder: return ImGuiKey_GamepadR1;
+            // View/Back cycles the panels (Followers <-> Gambits). ImGui nav
+            // never binds GamepadBack, so it is a free command button.
+            case K::kBack:          return ImGuiKey_GamepadBack;
             default:                return ImGuiKey_None;
             }
             // kB is deliberately ABSENT: it is intercepted as close before
@@ -119,8 +128,12 @@ namespace MFO::Board {
     // So an edit is enqueued from the draw and APPLIED in PublishSnapshot,
     // which runs on the main thread (#2, the same rule as everything touching
     // g_followers). Never write a rule table from a draw call.
+    // SetCond/SetAct are ABSOLUTE picks (the FFXII list-picker chooses an index
+    // directly, rather than cycling): c.param carries the index into this
+    // table's condition/action vocabulary. Cycle* remain for any legacy caller.
     enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
-                                         CycleCond, CycleAct, SetParam, SetSpell };
+                                         CycleCond, CycleAct, SetParam, SetSpell,
+                                         SetCond, SetAct };
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
         RE::FormID spell = 0;
@@ -357,6 +370,16 @@ namespace MFO::Board {
 
             auto& io = ImGui::GetIO();
 
+            // R1 opened the board (it casts the Field Orders power). Wait for that
+            // opening press to be RELEASED before R1 counts as a party-switch, so
+            // opening does not immediately advance the follower. IsKeyDown reflects
+            // only edges fed while OPEN; the guard is belt-and-suspenders on top of
+            // the fact that the opening DOWN was seen while closed and never fed.
+            static bool s_r1Guard = false;
+            if (g_justOpened.exchange(false)) s_r1Guard = true;
+            if (s_r1Guard && !ImGui::IsKeyDown(ImGuiKey_GamepadR1)) s_r1Guard = false;
+            const bool r1Ready = !s_r1Guard;
+
             ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                                     ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
             ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.60f, io.DisplaySize.y * 0.62f),
@@ -398,22 +421,19 @@ namespace MFO::Board {
             ImGui::Spacing();
             ImGui::Separator();
 
-            // LB/RB switch tabs on a controller. ImGui does not do this for a
-            // tab bar on its own, so drive it manually: the shoulder edges move
-            // a tab index and each BeginTabItem is told to select itself when
-            // the index points at it. Gated on !IsAnyItemActive so L1/R1 still
-            // serve tweak-fast/slow while a value is being edited. A mouse click
-            // resyncs s_tab inside the opened tab body.
+            // TAB SWITCH moved OFF the shoulders: L1/R1 are now the FFXII
+            // party-switch (change follower) inside the Gambits tab. The
+            // View/Back pad button cycles the two panels instead -- ImGui nav
+            // never binds GamepadBack, so nothing collides. A mouse click on a
+            // tab still resyncs s_tab inside the opened body.
             static int s_tab = 0;
-            static bool s_tabForce = false;   // apply SetSelected for ONE frame after a shoulder edge
+            static bool s_tabForce = false;   // apply SetSelected for ONE frame after an edge
             constexpr int kTabCount = 2;   // Followers, Gambits (diagnostics tabs removed, marth)
-            // Don't steal L1/R1 while an item is being tweaked (they serve
-            // tweak fast/slow) or while a popup is open (a combo would be torn
-            // out from under the user).
+            // Gated like everything else: never while an item is being tweaked or
+            // a picker popup is open.
             if (!ImGui::IsAnyItemActive() &&
                 !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
-                if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) { s_tab = (s_tab + 1) % kTabCount; s_tabForce = true; }
-                if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) { s_tab = (s_tab + kTabCount - 1) % kTabCount; s_tabForce = true; }
+                if (ImGui::IsKeyPressed(ImGuiKey_GamepadBack, false)) { s_tab = (s_tab + 1) % kTabCount; s_tabForce = true; }
             }
             // SetSelected ONLY on the frame after a shoulder press. Forcing it
             // every frame would re-assert s_tab and revert a mouse click on a
@@ -503,38 +523,82 @@ namespace MFO::Board {
                     ImGui::EndTabItem();
                 }
 
-                // ── THE GAMBIT EDITOR (M7) ──────────────────────────────
+                // ── THE GAMBIT EDITOR (M7) -- FFXII-faithful ────────────
+                // Rebuilt to mirror Final Fantasy XII's Gambit screen: one
+                // party member in context (L1/R1 switch), a dense numbered list
+                // of ON/OFF gambit rows, and -- the signature FFXII interaction
+                // -- NO dropdowns. Highlight a slot's condition or action, press
+                // A, and a large full-height SCROLLING LIST of every choice
+                // opens; scroll, A to pick, B to back out. Every pick still
+                // funnels through the same QueueEdit machinery, so the frozen
+                // opcode / serialization model is untouched -- this is a new face
+                // on the old edits, presentation only.
                 if (ImGui::BeginTabItem("Gambits", nullptr, tabSel(1))) {
                     s_tab = 1;
                     static RE::FormID sel = 0;
                     static int selTable = 0;   // 0 combat, 1 logistics
 
-                    // Follower picker.
+                    // The active party, in snapshot order -- L1/R1 and the on
+                    // screen < > cycle through this.
+                    std::vector<RE::FormID> party;
+                    for (const auto& r : snap.rows) if (r.active) party.push_back(r.id);
+
                     const FollowerRow* who = nullptr;
                     for (const auto& r : snap.rows) if (r.active && r.id == sel) { who = &r; break; }
                     if (!who) for (const auto& r : snap.rows) if (r.active) { who = &r; sel = r.id; break; }
 
                     if (!who) {
                         ImGui::TextDisabled("No active follower. Recruit one to edit gambits.");
+                        ImGui::EndTabItem();
                     } else {
-                        if (ImGui::BeginCombo("Follower", who->name.c_str())) {
-                            for (const auto& r : snap.rows) {
-                                if (!r.active) continue;
-                                ImGui::PushID((int)r.id);
-                                if (ImGui::Selectable(r.name.c_str(), r.id == sel)) sel = r.id;
-                                if (r.id == sel) ImGui::SetItemDefaultFocus();   // pad opens onto current
-                                ImGui::PopID();
-                            }
-                            ImGui::EndCombo();
+                        auto switchFollower = [&](int d) {
+                            if (party.size() < 2) return;
+                            int idx = 0;
+                            for (int k = 0; k < (int)party.size(); ++k)
+                                if (party[k] == sel) { idx = k; break; }
+                            idx = ((idx + d) % (int)party.size() + (int)party.size())
+                                  % (int)party.size();
+                            sel = party[idx];
+                        };
+
+                        const bool popupOpen = ImGui::IsPopupOpen(nullptr,
+                            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+
+                        // L1/R1 = switch party member (FFXII). Gated exactly like
+                        // the old tab code; R1 additionally waits for the opening
+                        // press to be released (r1Ready) so opening the board does
+                        // not skip a follower.
+                        if (!ImGui::IsAnyItemActive() && !popupOpen) {
+                            if (r1Ready && ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false))
+                                switchFollower(+1);
+                            if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false))
+                                switchFollower(-1);
                         }
+
+                        // ── PARTY CONTEXT BAR ───────────────────────────
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::BeginDisabled(party.size() < 2);
+                        if (ImGui::SmallButton("<##prevf")) switchFollower(-1);
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::PushFont(g_fontHead);
+                        ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                        ImGui::TextUnformatted(who->name.c_str());
+                        ImGui::PopStyleColor();
+                        ImGui::PopFont();
                         ImGui::SameLine();
                         ImGui::TextDisabled("rank %u", who->rank);
+                        ImGui::SameLine();
+                        ImGui::BeginDisabled(party.size() < 2);
+                        if (ImGui::SmallButton(">##nextf")) switchFollower(+1);
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("  [LB]/[RB] change follower");
 
                         const bool combat = (selTable == 0);
                         const auto& rules = combat ? who->combat : who->logistics;
                         const int slots = combat ? who->combatSlots : who->logisticsSlots;
 
-                        // The vocabulary for the table being edited.
                         const VocabEntry* condTab = combat ? kCondsCombat : kCondsLogi;
                         const int condN = combat ? (int)std::size(kCondsCombat)
                                                  : (int)std::size(kCondsLogi);
@@ -542,21 +606,79 @@ namespace MFO::Board {
                         const int actN = combat ? (int)std::size(kActsCombat)
                                                 : (int)std::size(kActsLogi);
 
+                        // Combat / Logistics PAGE selector (FFXII flips pages the
+                        // same way). Segmented radios, not a dropdown.
                         if (ImGui::RadioButton("Combat", combat)) selTable = 0;
                         ImGui::SameLine();
                         if (ImGui::RadioButton("Logistics", !combat)) selTable = 1;
                         ImGui::SameLine();
                         ImGui::TextDisabled("%d / %d slots used", (int)rules.size(), slots);
+                        ImGui::Separator();
 
-                        // Rules top-down = priority order. First match wins.
-                        if (ImGui::BeginTable("##rules", 6,
-                                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                            ImGui::TableSetupColumn("On",   ImGuiTableColumnFlags_WidthFixed, 34);
-                            ImGui::TableSetupColumn("When (condition)", ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 104);
-                            ImGui::TableSetupColumn("Do (action)",      ImGuiTableColumnFlags_WidthStretch);
+                        // ── THE LIST-PICKER (the FFXII interaction) ─────
+                        // A big centred scrolling list of Selectables. Opened by
+                        // pressing A on a row cell; nav lands on the current pick;
+                        // A chooses, B backs out (the input hook's cascaded Escape
+                        // closes this popup before it would ever close the board).
+                        // onPick receives the chosen index. PushID(k) keeps IDs
+                        // unique even when two entries share a label (e.g. spells).
+                        auto listPopup = [&](const char* pid, const char* title,
+                                             int count, auto labelAt, int current,
+                                             auto onPick) {
+                            ImGui::SetNextWindowPos(
+                                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                            ImGui::SetNextWindowSize(
+                                ImVec2(std::max(360.0f, io.DisplaySize.x * 0.30f),
+                                       io.DisplaySize.y * 0.55f), ImGuiCond_Appearing);
+                            if (ImGui::BeginPopup(pid)) {
+                                ImGui::PushFont(g_fontHead);
+                                ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                                ImGui::TextUnformatted(title);
+                                ImGui::PopStyleColor();
+                                ImGui::PopFont();
+                                ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
+                                ImGui::Separator();
+                                for (int k = 0; k < count; ++k) {
+                                    const bool cur = (k == current);
+                                    ImGui::PushID(k);
+                                    if (ImGui::Selectable(labelAt(k), cur)) {
+                                        onPick(k);
+                                        ImGui::CloseCurrentPopup();
+                                    }
+                                    if (cur) {
+                                        ImGui::SetItemDefaultFocus();
+                                        if (ImGui::IsWindowAppearing())
+                                            ImGui::SetScrollHereY(0.5f);
+                                    }
+                                    ImGui::PopID();
+                                }
+                                ImGui::EndPopup();
+                            }
+                        };
+
+                        // ── DENSE GAMBIT LIST ───────────────────────────
+                        // Tight padding so a full page of gambits reads like
+                        // FFXII's, not a few fat rows. Scrolls when long.
+                        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.0f, 3.0f));
+                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 3.0f));
+                        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
+
+                        std::uint32_t rowFocusUid = 0;
+                        const float listH = ImGui::GetTextLineHeightWithSpacing() * 11.0f;
+
+                        if (ImGui::BeginTable("##rules", 7,
+                                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_ScrollY, ImVec2(0.0f, listH))) {
+                            ImGui::TableSetupColumn("#",    ImGuiTableColumnFlags_WidthFixed, 24);
+                            ImGui::TableSetupColumn("On",   ImGuiTableColumnFlags_WidthFixed, 30);
+                            ImGui::TableSetupColumn("When (target / condition)",
+                                                            ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn("Value",ImGuiTableColumnFlags_WidthFixed, 84);
+                            ImGui::TableSetupColumn("Do (action)",
+                                                            ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("Spell",ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 118);
+                            ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 96);
                             ImGui::TableHeadersRow();
 
                             for (int i = 0; i < (int)rules.size(); ++i) {
@@ -564,12 +686,6 @@ namespace MFO::Board {
                                 ImGui::TableNextRow();
 
                                 // FLAIR #9: the FFXII "line lights up" pulse.
-                                // For ~1 s after the rule fires, fade the row
-                                // background from the skin accent back to
-                                // normal -- the board becomes a live readout
-                                // of the follower thinking. Display-only: the
-                                // scheduler stamps lastFiredAt, this just ages
-                                // it; drawn only while the board is open.
                                 if (rv.firedAt.time_since_epoch().count() != 0) {
                                     const float age = std::chrono::duration<float>(
                                         std::chrono::steady_clock::now() - rv.firedAt).count();
@@ -582,142 +698,163 @@ namespace MFO::Board {
                                 }
 
                                 ImGui::PushID((int)rv.uid);
+                                auto track = [&] { if (ImGui::IsItemFocused()) rowFocusUid = rv.uid; };
 
+                                // #
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextDisabled("%d", i + 1);
+
+                                // ON / OFF toggle
                                 ImGui::TableNextColumn();
                                 bool en = rv.enabled;
                                 if (ImGui::Checkbox("##en", &en))
                                     QueueEdit({ EditKind::Toggle, sel, selTable, rv.uid, 0 });
+                                track();
 
-                                // Condition -- cycle with < >
+                                // WHEN -- Selectable that opens the condition list.
                                 ImGui::TableNextColumn();
-                                if (ImGui::SmallButton("<")) QueueEdit({ EditKind::CycleCond, sel, selTable, rv.uid, -1 });
-                                ImGui::SameLine();
-                                if (ImGui::SmallButton(">")) QueueEdit({ EditKind::CycleCond, sel, selTable, rv.uid,  1 });
-                                ImGui::SameLine();
-                                // FLAIR #10: FFXII slot typography -- the
-                                // condition in the skin accent, the action in
-                                // the normal text tone (the two-tone that makes
-                                // a gambit's SHAPE readable at a glance).
-                                ImGui::TextColored(skin.accent, "%s",
-                                                   labelFor(rv.condOp, condTab, condN));
-                                if (rv.lastFired) { ImGui::SameLine(); ImGui::TextColored(
-                                    ImVec4(0.4f,0.9f,0.4f,1), "*"); }
-
-                                // Param cell. The widget matches what the param
-                                // MEANS (marth's rule): a percentage is a %-slider,
-                                // a count is a whole number, a param-less condition
-                                // shows a dash. FLANKED BY < > STEPPERS so a
-                                // controller sets any value without entering
-                                // tweak mode -- the same nav-focusable SmallButton
-                                // the condition/action cyclers use. Mouse-drag and
-                                // double-click-to-type still work on the middle.
-                                ImGui::TableNextColumn();
-                                switch (kindFor(rv.condOp, condTab, condN)) {
-                                case ParamKind::Percent: {
-                                    if (ImGui::SmallButton("<##pv"))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    std::clamp(rv.param - 0.05f, 0.0f, 1.0f) });
-                                    ImGui::SameLine(0, 2);
-                                    ImGui::SetNextItemWidth(46);
-                                    float pct = std::clamp(rv.param, 0.0f, 1.0f) * 100.0f;
-                                    if (ImGui::DragFloat("##p", &pct, 0.5f, 0.0f, 100.0f, "%.0f%%"))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    std::clamp(pct, 0.0f, 100.0f) / 100.0f });
-                                    ImGui::SameLine(0, 2);
-                                    if (ImGui::SmallButton(">##pv"))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    std::clamp(rv.param + 0.05f, 0.0f, 1.0f) });
-                                    break; }
-                                case ParamKind::Count: {
-                                    // Min 1: "fewer than 0" can never be true.
-                                    int n = (int)(rv.param + 0.5f);   // counts are whole
-                                    if (ImGui::SmallButton("<##pv"))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    (float)std::clamp(n - 1, 1, 999) });
-                                    ImGui::SameLine(0, 2);
-                                    ImGui::SetNextItemWidth(46);
-                                    if (ImGui::DragInt("##p", &n, 0.25f, 1, 999))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    (float)std::clamp(n, 1, 999) });
-                                    ImGui::SameLine(0, 2);
-                                    if (ImGui::SmallButton(">##pv"))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    (float)std::clamp(n + 1, 1, 999) });
-                                    break; }
-                                case ParamKind::Distance: {
-                                    // Whole units, wider scale (step 50, cap ~5000).
-                                    int u = (int)(rv.param + 0.5f);
-                                    if (ImGui::SmallButton("<##pv"))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    (float)std::clamp(u - 50, 0, 5000) });
-                                    ImGui::SameLine(0, 2);
-                                    ImGui::SetNextItemWidth(46);
-                                    if (ImGui::DragInt("##p", &u, 5.0f, 0, 5000, "%du"))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    (float)std::clamp(u, 0, 5000) });
-                                    ImGui::SameLine(0, 2);
-                                    if (ImGui::SmallButton(">##pv"))
-                                        QueueEdit({ EditKind::SetParam, sel, selTable, rv.uid,
-                                                    (float)std::clamp(u + 50, 0, 5000) });
-                                    break; }
-                                default:
-                                    ImGui::TextDisabled("-");
-                                    break;
+                                {
+                                    std::string cl = "When ";
+                                    cl += labelFor(rv.condOp, condTab, condN);
+                                    ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                                    const bool clicked = ImGui::Selectable(cl.c_str());
+                                    ImGui::PopStyleColor();
+                                    if (clicked) ImGui::OpenPopup("##cond");
+                                    track();
+                                    if (rv.lastFired) { ImGui::SameLine();
+                                        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1), "*"); }
+                                    int curC = 0;
+                                    for (int k = 0; k < condN; ++k)
+                                        if (rv.condOp == condTab[k].op) { curC = k; break; }
+                                    listPopup("##cond", "When (target / condition)", condN,
+                                        [&](int k) { return condTab[k].label; }, curC,
+                                        [&](int k) {
+                                            QueueEdit({ EditKind::SetCond, sel, selTable,
+                                                        rv.uid, (float)k });
+                                        });
                                 }
 
-                                // Action -- cycle
+                                // VALUE -- opens a preset list matched to what the
+                                // param MEANS. No sliders / no typing, so the whole
+                                // editor is list-driven and pad-first.
                                 ImGui::TableNextColumn();
-                                if (ImGui::SmallButton("<##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, rv.uid, -1 });
-                                ImGui::SameLine();
-                                if (ImGui::SmallButton(">##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, rv.uid,  1 });
-                                ImGui::SameLine();
-                                // FLAIR #10 (cont.): the arrow completes the
-                                // condition -> action shape; act.wait draws
-                                // dimmed -- FFXII's "OFF/hold" idiom.
-                                ImGui::TextDisabled("->");
-                                ImGui::SameLine();
-                                if (rv.actOp == Vocab::kActWait)
-                                    ImGui::TextDisabled("%s", labelFor(rv.actOp, actTab, actN));
-                                else
-                                    ImGui::TextUnformatted(labelFor(rv.actOp, actTab, actN));
+                                {
+                                    const ParamKind pk = kindFor(rv.condOp, condTab, condN);
+                                    if (pk == ParamKind::None) {
+                                        ImGui::TextDisabled("-");
+                                    } else {
+                                        std::string vs;
+                                        if (pk == ParamKind::Percent)
+                                            vs = std::to_string((int)(std::clamp(rv.param, 0.0f, 1.0f)
+                                                                      * 100.0f + 0.5f)) + "%";
+                                        else if (pk == ParamKind::Count)
+                                            vs = std::to_string((int)(rv.param + 0.5f));
+                                        else
+                                            vs = std::to_string((int)(rv.param + 0.5f)) + "u";
+                                        if (ImGui::Selectable(vs.c_str())) ImGui::OpenPopup("##val");
+                                        track();
 
-                                // Spell picker -- only meaningful for cast
-                                // actions. Lists the follower's own known spells.
-                                ImGui::TableNextColumn();
-                                const bool isCast = (rv.actOp == Vocab::kActCastSelf ||
-                                                     rv.actOp == Vocab::kActCastTarget);
-                                if (!isCast) {
-                                    ImGui::TextDisabled("-");
-                                } else {
-                                    const char* cur = rv.spellName.empty() ? "(pick)" : rv.spellName.c_str();
-                                    ImGui::SetNextItemWidth(-1);
-                                    if (ImGui::BeginCombo("##sp", cur)) {
-                                        for (const auto& [sid, sname] : who->knownSpells) {
-                                            if (ImGui::Selectable(sname.c_str(), sid == rv.spell)) {
-                                                EditCmd e{ EditKind::SetSpell, sel, selTable, rv.uid, 0 };
-                                                e.spell = sid; QueueEdit(e);
-                                            }
+                                        std::vector<std::pair<float, std::string>> pv;
+                                        if (pk == ParamKind::Percent) {
+                                            for (int p = 5; p <= 100; p += 5)
+                                                pv.emplace_back(p / 100.0f, std::to_string(p) + "%");
+                                        } else if (pk == ParamKind::Count) {
+                                            for (int n = 1; n <= 20; ++n)
+                                                pv.emplace_back((float)n, std::to_string(n));
+                                            for (int n : { 25, 30, 40, 50, 75, 100 })
+                                                pv.emplace_back((float)n, std::to_string(n));
+                                        } else {   // Distance
+                                            for (int u = 0; u <= 2000; u += 100)
+                                                pv.emplace_back((float)u, std::to_string(u) + "u");
+                                            for (int u : { 2500, 3000, 4000, 5000 })
+                                                pv.emplace_back((float)u, std::to_string(u) + "u");
                                         }
-                                        if (who->knownSpells.empty())
-                                            ImGui::TextDisabled("follower knows no spells");
-                                        ImGui::EndCombo();
+                                        int curV = 0; float best = 1e9f;
+                                        for (int k = 0; k < (int)pv.size(); ++k) {
+                                            float d = pv[k].first - rv.param; if (d < 0) d = -d;
+                                            if (d < best) { best = d; curV = k; }
+                                        }
+                                        listPopup("##val", "Value", (int)pv.size(),
+                                            [&](int k) { return pv[k].second.c_str(); }, curV,
+                                            [&](int k) {
+                                                QueueEdit({ EditKind::SetParam, sel, selTable,
+                                                            rv.uid, pv[k].first });
+                                            });
                                     }
-                                    if (!rv.fail.empty() && ImGui::IsItemHovered())
-                                        ImGui::SetTooltip("last: %s", rv.fail.c_str());
                                 }
 
-                                // Reorder / delete. The up/dn buttons are
-                                // nav-focusable, so reorder is pad-reachable
-                                // (the §6.5 floor); a dedicated L1/R1 binding is
-                                // a later refinement.
+                                // DO -- action list.
                                 ImGui::TableNextColumn();
-                                if (ImGui::SmallButton(" up ")) QueueEdit({ EditKind::MoveUp, sel, selTable, rv.uid, 0 });
+                                {
+                                    std::string al = "-> ";
+                                    al += labelFor(rv.actOp, actTab, actN);
+                                    const bool wait = (rv.actOp == Vocab::kActWait);
+                                    if (wait) ImGui::PushStyleColor(ImGuiCol_Text,
+                                        ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                                    const bool clicked = ImGui::Selectable(al.c_str());
+                                    if (wait) ImGui::PopStyleColor();
+                                    if (clicked) ImGui::OpenPopup("##act");
+                                    track();
+                                    int curA = 0;
+                                    for (int k = 0; k < actN; ++k)
+                                        if (rv.actOp == actTab[k].op) { curA = k; break; }
+                                    listPopup("##act", "Do (action)", actN,
+                                        [&](int k) { return actTab[k].label; }, curA,
+                                        [&](int k) {
+                                            QueueEdit({ EditKind::SetAct, sel, selTable,
+                                                        rv.uid, (float)k });
+                                        });
+                                }
+
+                                // SPELL -- only for cast actions; its own list.
+                                ImGui::TableNextColumn();
+                                {
+                                    const bool isCast = (rv.actOp == Vocab::kActCastSelf ||
+                                                         rv.actOp == Vocab::kActCastTarget);
+                                    if (!isCast) {
+                                        ImGui::TextDisabled("-");
+                                    } else {
+                                        const char* cur = rv.spellName.empty()
+                                                          ? "(pick spell)" : rv.spellName.c_str();
+                                        if (ImGui::Selectable(cur)) ImGui::OpenPopup("##spell");
+                                        track();
+                                        if (!rv.fail.empty() && ImGui::IsItemHovered())
+                                            ImGui::SetTooltip("last: %s", rv.fail.c_str());
+                                        if (who->knownSpells.empty()) {
+                                            ImGui::SetNextWindowPos(
+                                                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                                            if (ImGui::BeginPopup("##spell")) {
+                                                ImGui::TextDisabled("follower knows no spells");
+                                                ImGui::EndPopup();
+                                            }
+                                        } else {
+                                            int curS = -1;
+                                            for (int k = 0; k < (int)who->knownSpells.size(); ++k)
+                                                if (who->knownSpells[k].first == rv.spell) { curS = k; break; }
+                                            listPopup("##spell", "Spell", (int)who->knownSpells.size(),
+                                                [&](int k) { return who->knownSpells[k].second.c_str(); },
+                                                curS,
+                                                [&](int k) {
+                                                    EditCmd e{ EditKind::SetSpell, sel, selTable,
+                                                               rv.uid, 0 };
+                                                    e.spell = who->knownSpells[k].first;
+                                                    QueueEdit(e);
+                                                });
+                                        }
+                                    }
+                                }
+
+                                // REORDER / DELETE (kept on buttons so reorder does
+                                // not fight the shoulder party-switch, per spec).
+                                ImGui::TableNextColumn();
+                                if (ImGui::SmallButton("up")) QueueEdit({ EditKind::MoveUp, sel, selTable, rv.uid, 0 });
+                                track();
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton("dn"))  QueueEdit({ EditKind::MoveDown, sel, selTable, rv.uid, 0 });
+                                if (ImGui::SmallButton("dn")) QueueEdit({ EditKind::MoveDown, sel, selTable, rv.uid, 0 });
+                                track();
                                 ImGui::SameLine();
-                                // Destructive -> two-click arm (§6.6). First click
-                                // arms this rule (danger colour); a second within the
-                                // window deletes; any other rule disarms it.
                                 static std::uint32_t s_armed = 0;
                                 const bool armed = (s_armed == rv.uid);
                                 if (armed) ImGui::PushStyleColor(ImGuiCol_Button, skin.danger);
@@ -726,25 +863,29 @@ namespace MFO::Board {
                                     else s_armed = rv.uid;
                                 }
                                 if (armed) ImGui::PopStyleColor();
+                                track();
 
                                 ImGui::PopID();
                             }
                             ImGui::EndTable();
                         }
+                        ImGui::PopStyleVar(3);
 
-                        // ── FULL-WIDTH GAMBIT SUMMARY ───────────────────────
-                        // marth: on the Steam Deck the edit table's stretch
-                        // columns are too narrow to read a whole rule -- the
-                        // condition/action labels clip. This read-only list
-                        // restates every rule as one WRAPPING, full-width
-                        // sentence, so the ENTIRE gambit is always legible no
-                        // matter how the table truncates. Purely additive and
-                        // non-focusable: it cannot affect editing or pad nav.
+                        // Y / FaceUp = toggle the ON/OFF of the nav-focused row
+                        // from anywhere in it (FFXII "flip the line"). ImGui's
+                        // FaceUp nav action only acts on text-input widgets, and
+                        // the editor now has none, so it is inert here -- no
+                        // collision. Gated like the shoulder bindings.
+                        if (rowFocusUid != 0 && !ImGui::IsAnyItemActive() && !popupOpen &&
+                            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false))
+                            QueueEdit({ EditKind::Toggle, sel, selTable, rowFocusUid, 0 });
+
+                        // ── FULL-WIDTH READ-ONLY SUMMARY (Deck legibility) ──
                         if (!rules.empty()) {
                             ImGui::Spacing();
                             ImGui::TextDisabled("Full rules (read-only) -- top wins");
                             ImGui::Separator();
-                            ImGui::PushTextWrapPos(0.0f);   // wrap at pane's right edge
+                            ImGui::PushTextWrapPos(0.0f);
                             for (int i = 0; i < (int)rules.size(); ++i) {
                                 const auto& rv = rules[i];
                                 std::string cond = std::to_string(i + 1) + ".  When ";
@@ -766,15 +907,10 @@ namespace MFO::Board {
                                 if (!rv.enabled) {
                                     ImGui::PushStyleColor(ImGuiCol_Text,
                                         ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                                    ImGui::TextWrapped("%s   ->   %s   [disabled]",
+                                    ImGui::TextWrapped("%s   ->   %s   [off]",
                                                        cond.c_str(), act.c_str());
                                     ImGui::PopStyleColor();
                                 } else {
-                                    // FLAIR #10: the same two-tone as the edit
-                                    // table -- condition in the accent, dim
-                                    // arrow, action in the text tone (act.wait
-                                    // dimmed). Wrap pos is already pushed, so
-                                    // each segment still wraps at the pane edge.
                                     ImGui::TextColored(skin.accent, "%s", cond.c_str());
                                     ImGui::SameLine(0, 0);
                                     ImGui::TextDisabled("  ->  ");
@@ -802,10 +938,11 @@ namespace MFO::Board {
                             ImGui::TextDisabled("all %d slots used -- more unlock with rapport", slots); }
 
                         ImGui::Spacing();
-                        ImGui::TextDisabled("Top rule wins -- order is priority. A green * fired last tick. "
-                                            "Set a value with < >, drag, or double-click to type.");
+                        ImGui::TextDisabled("Highlight a slot and press [A]/E to open its list. "
+                                            "[Y] toggles the highlighted line. Top rule wins.");
+
+                        ImGui::EndTabItem();
                     }
-                    ImGui::EndTabItem();
                 }
 
                 ImGui::EndTabBar();
@@ -819,12 +956,11 @@ namespace MFO::Board {
             // loaded) with the keyboard equivalent inline, so one strip serves
             // pad and keyboard. Drawn on the render thread between NewFrame and
             // Render, where IsAnyItemActive/IsPopupOpen are valid.
-            if (ImGui::IsAnyItemActive())
-                ImGui::TextDisabled("[A]/E confirm   [B]/Esc cancel   < > adjust   (drag or type too)");
-            else if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
-                ImGui::TextDisabled("[A]/E select   [B]/Esc close   d-pad to move");
+            if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+                ImGui::TextDisabled("[A]/E pick   [B]/Esc back   d-pad to move");
             else
-                ImGui::TextDisabled("[A]/E select   [B]/Esc close   [LB]/[RB] tabs   d-pad move   -   Skin in MCM");
+                ImGui::TextDisabled("[A]/E open list   [B]/Esc back-or-close   [LB]/[RB] follower   "
+                                    "[View] tab   [Y] toggle line   d-pad move   -   Skin in MCM");
             ImGui::End();
             ImGui::PopStyleColor(skinCols);
         }
@@ -1132,16 +1268,26 @@ namespace MFO::Board {
                         case RE::INPUT_DEVICE::kGamepad:
                             if (static_cast<RE::BSWin32GamepadDevice::Key>(code) ==
                                     RE::BSWin32GamepadDevice::Key::kB) {
-                                // Same symmetric routing as keyboard Esc -- a
-                                // press with nothing open closes the panel, all
-                                // other edges drive ImGui Escape, and every
-                                // release reaches ImGui so B-cancel never sticks.
+                                // CASCADED BACK. imguiBusy is true whenever a
+                                // list-picker popup / text box / active widget is
+                                // open, so B drives ImGui's Escape and closes the
+                                // INNERMOST context (the picker) without touching
+                                // the board. Only at the ROOT -- nothing sub-open
+                                // -- does a B press close the board. Every release
+                                // still reaches ImGui so B-cancel never sticks, and
+                                // one press walks up exactly one level.
                                 if (down && !imguiBusy) g_wantClose = true;
                                 else io.AddKeyEvent(ImGuiKey_Escape, down);
-                            } else if (code == ShoutKey(RE::INPUT_DEVICE::kGamepad)) {
-                                if (down) g_shoutDownSeen = true;
-                                else if (g_shoutDownSeen.exchange(false)) g_wantClose = true;
                             } else if (auto k = GamepadToImGuiKey(code); k != ImGuiKey_None) {
+                                // NB: the gamepad shout-close branch was removed on
+                                // purpose. R1 is the Field Orders power on the deck;
+                                // while the board is OPEN it must NOT re-close it
+                                // (that is B's job now). Instead R1 -> GamepadR1 and
+                                // becomes the in-board party-switch. The opening R1
+                                // press was seen while the board was CLOSED (hook
+                                // passthrough), so it never reaches here -- only
+                                // presses made while open do. The game never sees
+                                // the swallowed R1, so the power is not re-cast.
                                 io.AddKeyEvent(k, down);
                             }
                             break;
@@ -1214,6 +1360,7 @@ namespace MFO::Board {
         if (now) {
             for (bool& s : g_stickNav) s = false;   // no stuck direction from last time
             g_shoutDownSeen = false;                // the opening press's RELEASE must not close it
+            g_justOpened = true;                    // R1 party-switch waits for a release after open
             g_cursorInit = true;                    // seed the cursor or the first click misses
             g_cursorX = g_bbW * 0.5f;
             g_cursorY = g_bbH * 0.5f;
@@ -1308,6 +1455,20 @@ namespace MFO::Board {
                 tab[i].actionOpcode = t[n].op; break; }
             case EditKind::SetParam: tab[i].conditionParam = c.param; break;
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
+            case EditKind::SetCond: {
+                // Absolute pick by index into THIS table's condition vocabulary
+                // (writes the frozen opcode string, exactly as CycleCond does).
+                const VocabEntry* t = (table == 1) ? kCondsLogi : kCondsCombat;
+                const int tn = (table == 1) ? (int)std::size(kCondsLogi)
+                                            : (int)std::size(kCondsCombat);
+                const int n = std::clamp((int)(c.param + 0.5f), 0, tn - 1);
+                tab[i].conditionOpcode = t[n].op; break; }
+            case EditKind::SetAct: {
+                const VocabEntry* t = (table == 1) ? kActsLogi : kActsCombat;
+                const int tn = (table == 1) ? (int)std::size(kActsLogi)
+                                            : (int)std::size(kActsCombat);
+                const int n = std::clamp((int)(c.param + 0.5f), 0, tn - 1);
+                tab[i].actionOpcode = t[n].op; break; }
             default: break;
             }
         }
