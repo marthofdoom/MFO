@@ -1,3 +1,9 @@
+## v1.0.4 -- keep both weapons of a hybrid (bow+melee) follower (#35)
+
+A follower who uses both a bow and a melee weapon only has one WORN at a time, so
+the sheathed other read as unworn junk and got sold. The sell list now protects the
+BEST weapon of EACH class (melee + ranged); only worse duplicates are sold.
+
 ## v1.0.3 -- equip-melee followers loot a melee weapon regardless of skill (#35)
 
 A follower whose table has an "equip melee" gambit now loots a best-class melee

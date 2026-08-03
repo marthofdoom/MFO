@@ -1755,6 +1755,26 @@ namespace MFO::Logistics {
                 // (Actor.cpp:445, null-deref on the InventoryChanges the worker tick
                 // may be mutating -- crash 2026-08-01), but the GetInventory snapshot
                 // is safe, so sum Gold001 (0x0000000F) straight from it.
+                // KEEP THE LOADOUT: a follower who fights with BOTH a bow and a melee
+                // weapon only ever has ONE worn at a time, so the sheathed other reads
+                // as unworn and was SOLD (marth). Protect the BEST weapon of EACH
+                // class -- melee and ranged -- from the sell list; only worse
+                // duplicates are junk. (IsWorn alone caught just the drawn one.)
+                RE::TESBoundObject* keepMelee  = nullptr; std::uint16_t keepMeleeDmg  = 0;
+                RE::TESBoundObject* keepRanged = nullptr; std::uint16_t keepRangedDmg = 0;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* w = obj->As<RE::TESObjectWEAP>();
+                    if (!w || IsCreatureWeapon(w)) continue;
+                    const WepClass wc = WeaponClassOf(w->GetWeaponType());
+                    const std::uint16_t dmg = w->GetAttackDamage();
+                    if (wc == WepClass::Ranged) {
+                        if (!keepRanged || dmg >= keepRangedDmg) { keepRangedDmg = dmg; keepRanged = obj; }
+                    } else if (wc == WepClass::OneHand || wc == WepClass::TwoHand) {
+                        if (!keepMelee || dmg >= keepMeleeDmg)   { keepMeleeDmg  = dmg; keepMelee  = obj; }
+                    }
+                }
+
                 std::vector<TradeBridge::SellRow> sell;
                 int purse = 0;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -1763,6 +1783,7 @@ namespace MFO::Logistics {
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
+                    if (weap && (obj == keepMelee || obj == keepRanged)) continue;   // loadout, not junk
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
