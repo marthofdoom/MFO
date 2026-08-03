@@ -1953,6 +1953,20 @@ namespace MFO::Logistics {
 
                 std::vector<TradeBridge::SellRow> sell;
                 int purse = 0;
+                // A MEO-socketed instance carries an ExtraUniqueID -- NEVER sell one:
+                // the sale discards the follower's socketed gems with the weapon
+                // (marth). Worn gear is already barred below; this catches an UNWORN
+                // gemmed weapon the loadout keep-set didn't protect. Conservative --
+                // a bare uid (socket later emptied) also stays, which is the safe
+                // direction (keep a weapon vs lose gems). Same extraList/ExtraUniqueID
+                // read MEOBridge::WornUid uses, worker-safe against a loaded follower.
+                auto socketed = [](RE::InventoryEntryData* e) {
+                    if (!e || !e->extraLists) return false;
+                    for (auto* xl : *e->extraLists)
+                        if (auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
+                            uid && uid->uniqueID != 0) return true;
+                    return false;
+                };
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
