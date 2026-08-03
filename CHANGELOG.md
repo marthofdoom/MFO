@@ -1,3 +1,21 @@
+## v1.0.14 -- FFXII-faithful gambit board
+
+The Field Orders board now really copies FFXII's Gambits menu:
+- NO DROPDOWNS: highlight a slot, press A, and a large full-height scrolling LIST
+  of every condition / action / value / spell opens -- scroll, pick, B backs out.
+  Every slider/combo/text widget is gone (the value is a preset list-pick too).
+- DENSE FFXII LAYOUT: a tight 7-column table (~11 rows visible) so a full page
+  reads like FFXII's, with a party-context bar (name + rank, prev/next) and a
+  Combat/Logistics page selector.
+- CONTROLLER FLOW: R1 opens (guarded); inside, R1/L1 switch party member, A picks,
+  B is a CASCADED back (closes the innermost picker, exits only at the root), the
+  View button switches Followers<->Gambits, Y toggles a gambit line on/off. R1 no
+  longer closes the board (it's swallowed for party-switch) -- B closes.
+- SKINS UNCHANGED: the condition->action two-tone and the picker overlay pull from
+  the active skin, so all four (Ebony & Brass / Dwemer Parchment / Soul Cairn /
+  Quicksilver) keep their identity. Presentation only -- frozen opcodes and the
+  co-save schema are untouched.
+
 ## v1.0.13 -- target-relative range, weapon cleanup, MCM self-heal
 
 - RANGE CONDITIONS ARE TARGET-RELATIVE: "foe within/beyond range" now measure the
