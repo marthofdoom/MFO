@@ -339,6 +339,11 @@ namespace MFO::Actuation {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!w || w->IsStaff()) continue;
+                // NON-PLAYABLE (record-header flag bit 2) is creature/automaton
+                // gear -- fires but is INVISIBLE on a humanoid (same check as
+                // Logistics' IsCreatureWeapon). Loot never stocks these, but a
+                // player-given stray must not win the combat equip either.
+                if ((w->GetFormFlags() & (1u << 2)) != 0) continue;
                 if ((w->IsBow() || w->IsCrossbow()) != a_ranged) continue;
                 if (w->GetAttackDamage() >= bestDmg) { bestDmg = w->GetAttackDamage(); best = w; }
             }

@@ -375,8 +375,10 @@ namespace MFO::Logistics {
 
         bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             // Generalized by CATEGORY, never by item (§4.8.2). One better piece
-            // per tick (one action per tick, §4.3). We TRANSFER, then EQUIP -- a
-            // real person who finds a better cuirass puts it on, they do not just
+            // per CALL (one action per tick, §4.3; StripCorpse drains by calling
+            // again -- each take raises the inventory baseline). We TRANSFER,
+            // then EQUIP IN PLACE (see the equipIt gate below) -- a real person
+            // who finds a better cuirass puts it on, they do not just
             // carry it (marth: the follower is a thinking person). Safe here
             // because logistics runs OUT of combat, where Loadout is not holding
             // a hand for a cast, and MFO has no equip-event sink to loop on;
@@ -431,41 +433,57 @@ namespace MFO::Logistics {
             // Ranged is a primary if a gambit wants it OR they already wield one.
             const bool doRanged = wantsRanged || wieldsRanged;
 
-            // Baseline the MELEE upgrade must beat: our current weapon's damage
-            // only if it is already IN the target class; else 0, so the first real
-            // one wins (equip-melee picking up a 2H while we hold a 1H).
-            std::uint16_t baseDmg = (wieldsMelee && wieldedClass == meleeTargetClass)
-                                    ? myWeap->GetAttackDamage() : 0;
-
-            RE::TESBoundObject* bestArmor   = nullptr;
-            RE::TESBoundObject* bestWeap    = nullptr;
-            std::uint16_t       bestWeapDmg = baseDmg;
-
-            // BOW vs CROSSBOW must not be conflated: they feed different ammo, so a
-            // crossbow-user handed a bow (or vice versa) has a weapon it can't feed.
-            // Pick the kind the follower can actually feed -- whichever ranged weapon
-            // they already carry (better of the two), else by the ammo they hold
-            // (arrows -> bow, bolts -> crossbow), else a bow. Loot only THAT kind;
-            // baseline is their current of it.
+            // Baseline the MELEE upgrade must beat: the best in-target-class
+            // weapon anywhere in the follower's OWN INVENTORY (the equipped one
+            // is part of it). Equipped-only was the residual thrash hole: a
+            // follower HOLDING HIS BOW with an equip-melee gambit baselined
+            // melee at 0, so every corpse's iron dagger "beat" the good sword
+            // already in his pack -- looted a duplicate and force-equipped it
+            // over the bow, corpse after corpse (the in-AND-out-of-combat half
+            // of "Erik switches weapons for no reason": the combat gambit put
+            // the bow back, the next corpse knocked it out again). The ranged
+            // path already baselined from inventory; melee now matches it. One
+            // pass covers both, plus the ammo census for the bow-vs-crossbow
+            // kind choice. Creature/excluded weapons are unusable gear -- they
+            // never set a baseline or steer the kind.
+            std::uint16_t baseDmg      = 0;
             bool          wantCrossbow = false;
             std::uint16_t myRangedDmg  = 0;
-            if (doRanged) {
+            {
                 std::uint16_t bowDmg = 0, xbowDmg = 0;
                 int arrows = 0, bolts = 0;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                        if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
+                        if (meleeTargetClass != WepClass::Other &&
+                            WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
+                            baseDmg = std::max(baseDmg, w->GetAttackDamage());
                         if (w->GetWeaponType() == WT::kBow)           bowDmg  = std::max(bowDmg,  w->GetAttackDamage());
                         else if (w->GetWeaponType() == WT::kCrossbow) xbowDmg = std::max(xbowDmg, w->GetAttackDamage());
                     } else if (auto* am = obj->As<RE::TESAmmo>()) {
                         (AmmoIsBolt(am) ? bolts : arrows) += data.first;
                     }
                 }
-                if (bowDmg > 0 || xbowDmg > 0)   wantCrossbow = xbowDmg > bowDmg;   // upgrade what they wield
-                else if (arrows > 0 || bolts > 0) wantCrossbow = bolts > arrows;    // else match their ammo
-                else                              wantCrossbow = false;             // else default to a bow
-                myRangedDmg = wantCrossbow ? xbowDmg : bowDmg;
+                // BOW vs CROSSBOW must not be conflated: they feed different
+                // ammo, so the wrong kind is a weapon they can't feed. Carrying
+                // BOTH kinds, the ammo they actually hold decides (damage breaks
+                // an ammo tie); carrying ONE kind, that kind; carrying neither,
+                // their ammo decides; a blank slate defaults to bow. Loot only
+                // THAT kind; baseline is their best carried of it.
+                if (doRanged) {
+                    if (bowDmg > 0 && xbowDmg > 0)
+                        wantCrossbow = (bolts != arrows) ? (bolts > arrows) : (xbowDmg > bowDmg);
+                    else if (bowDmg > 0 || xbowDmg > 0) wantCrossbow = xbowDmg > bowDmg;
+                    else if (arrows > 0 || bolts > 0)   wantCrossbow = bolts > arrows;
+                    else                                wantCrossbow = false;
+                    myRangedDmg = wantCrossbow ? xbowDmg : bowDmg;
+                }
             }
+
+            RE::TESBoundObject* bestArmor     = nullptr;
+            RE::TESBoundObject* bestWeap      = nullptr;
+            std::uint16_t       bestWeapDmg   = baseDmg;
             RE::TESBoundObject* bestRanged    = nullptr;
             std::uint16_t       bestRangedDmg = myRangedDmg;
 
@@ -566,12 +584,30 @@ namespace MFO::Logistics {
             a_src->RemoveItem(best, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer,
                               nullptr, a_follower);
 
-            // PUT IT ON. EquipObject on a slot-conflicting armor auto-unequips
-            // the worse piece; a weapon takes the right hand. queue=true so the
-            // engine applies it on its own next update rather than synchronously
-            // re-entering here.
-            if (auto* eq = RE::ActorEquipManager::GetSingleton())
-                eq->EquipObject(a_follower, best);
+            // PUT IT ON -- BUT HANDS ARE GAMBIT TERRITORY (marth: the equipped
+            // weapon must be STABLE; roles switch only on a gambit or a cast).
+            // Loot re-equips only IN PLACE: the new weapon must replace the same
+            // role currently in the hand (melee over melee, bow over bow,
+            // crossbow over crossbow), or the hand must be weaponless. Acquiring
+            // the OTHER role -- equip-melee while wielding a bow, equip-ranged
+            // while wielding a sword, anything while holding a staff -- STOCKS
+            // the pack only; the combat equip gambit (or their own AI) decides
+            // when it goes in the hand. The unconditional EquipObject here was
+            // the out-of-combat half of the weapon thrash: every corpse
+            // re-decided the hand. Armor always equips (slots, not hands); a
+            // slot-conflicting piece auto-unequips the worse one. queue=true so
+            // the engine applies it on its own next update rather than
+            // synchronously re-entering here.
+            bool equipIt = true;
+            if (auto* nw = best->As<RE::TESObjectWEAP>(); nw && myWeap) {
+                const auto     newWt   = nw->GetWeaponType();
+                const WepClass newRole = WeaponClassOf(newWt);
+                equipIt = WeaponClassOf(myWeap->GetWeaponType()) == newRole &&
+                          (newRole != WepClass::Ranged || myWeap->GetWeaponType() == newWt);
+            }
+            if (equipIt)
+                if (auto* eq = RE::ActorEquipManager::GetSingleton())
+                    eq->EquipObject(a_follower, best);
 
             // [equip] DIAGNOSTIC: the weapon swap was INVISIBLE in the log --
             // marth's "Erik switches melee weapons for no reason" could not be
@@ -579,9 +615,9 @@ namespace MFO::Logistics {
             // chose it, so a soak shows a real upgrade vs a thrash (e.g. a bow-
             // user whose skill-class is melee getting a melee weapon forced on).
             if (auto* nw = best->As<RE::TESObjectWEAP>()) {
-                spdlog::info("[equip] {:08X}: LOOT weapon '{}' dmg={} class={} <- over '{}' "
+                spdlog::info("[equip] {:08X}: LOOT-{} weapon '{}' dmg={} class={} <- held '{}' "
                              "dmg={} class={} | meleeTgt={} wantsMelee={} wantsRanged={} baseDmg={}",
-                             a_follower->GetFormID(),
+                             a_follower->GetFormID(), equipIt ? "EQUIP" : "STOCK",
                              nw->GetFullName() ? nw->GetFullName() : "?", nw->GetAttackDamage(),
                              static_cast<int>(WeaponClassOf(nw->GetWeaponType())),
                              myWeap && myWeap->GetFullName() ? myWeap->GetFullName() : "(none)",
@@ -1689,7 +1725,20 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootLockpicks)      cat = Category::Lockpicks;
                 else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
                 else isLoot = false;
-                if (isLoot && LootHere(a_follower, a_corpse, cat, want)) moved = true;
+                if (isLoot) {
+                    // Equipment moves ONE piece per call (§4.3's shape) while the
+                    // other categories take all they want internally -- but this
+                    // visit is the corpse's LAST (it's marked DONE right after we
+                    // return). One call stranded everything past the first take:
+                    // a body with a better sword AND the bow the equip-ranged
+                    // gambit needs (dual-primary) yielded only the sword, and the
+                    // bow/cuirass sat blocklisted for 25 s or forever. Drain the
+                    // category: each take raises the inventory-derived baseline,
+                    // so this terminates; the guard is belt-and-braces (2 weapon
+                    // roles + 7 armor slots).
+                    int guard = (cat == Category::Equipment) ? 10 : 1;
+                    while (guard-- > 0 && LootHere(a_follower, a_corpse, cat, want)) moved = true;
+                }
                 start = choice.ruleIndex + 1;
             }
             return moved;
