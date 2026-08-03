@@ -109,6 +109,28 @@ namespace MFO::Eval {
             RE::ActorHandle best;
             if (!a_self) return best;
 
+            // TARGET-RELATIVE RANGE (marth): "foe targeted within/beyond range"
+            // reads the distance to the follower's CURRENT combat target -- the foe
+            // they are actually engaged with -- NOT the nearest foe of that range.
+            // This is what makes an equip-melee "targeted within" / equip-ranged
+            // "targeted beyond" PAIR key off the SAME foe. The old any-foe scan let
+            // a DISTANT foe satisfy "beyond" while the follower was toe-to-toe with
+            // a close one, so a bow gambit fought his own AI for the melee he was
+            // already in -- the observed equip thrash (D5/H6). No current target ->
+            // the condition is false and the rule falls through. Reads only the
+            // handle (no combat-group lock); brawl gate still applies.
+            if (a_op == Vocab::kCondFoeWithinRange || a_op == Vocab::kCondFoeBeyondRange) {
+                auto tp   = a_self->GetActorRuntimeData().currentCombatTarget.get();
+                auto* tgt = tp.get();
+                if (!tgt || tgt->IsDead() || tgt->IsDisabled()) return best;
+                if (!tgt->IsHostileToActor(a_self)) return best;   // don't act in a brawl
+                const float d  = a_self->GetPosition().GetDistance(tgt->GetPosition());
+                const bool  ok = (a_op == Vocab::kCondFoeWithinRange) ? (d <= a_param)
+                                                                      : (d > a_param);
+                if (ok) best = tgt->GetHandle();
+                return best;
+            }
+
             auto& rt = a_self->GetActorRuntimeData();
             auto* cc = rt.combatController;
             if (!cc || !cc->combatGroup) return best;
@@ -178,13 +200,10 @@ namespace MFO::Eval {
                     // the follower's confidence-scaled chase radius, so a distance-
                     // blind selector ("attack the weakest / nearest / undead ...")
                     // can't march him across a pack to a far target (Erik's Falmer
-                    // charge). Hurt/mobbed shrinks it; healthy widens it. The
-                    // player's OWN explicit range selectors bypass -- they set that
-                    // distance on purpose.
-                    if (a_op != Vocab::kCondFoeWithinRange &&
-                        a_op != Vocab::kCondFoeBeyondRange &&
-                        dist > chaseCap)
-                        continue;
+                    // charge). Hurt/mobbed shrinks it; healthy widens it. (The
+                    // target-relative range conditions returned above, so they
+                    // never reach this scan.)
+                    if (dist > chaseCap) continue;
 
                     float score = dist;   // default for the gate-style selectors
 
@@ -196,10 +215,6 @@ namespace MFO::Eval {
                         score = hp;
                     } else if (a_op == Vocab::kCondFoeHighestHp) {
                         score = -Vocab::HealthPct(foe);
-                    } else if (a_op == Vocab::kCondFoeWithinRange) {
-                        if (dist > a_param) continue;
-                    } else if (a_op == Vocab::kCondFoeBeyondRange) {
-                        if (dist <= a_param) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingPlayer) {
                         if (!FoeTargets(foe, a_player)) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingMe) {

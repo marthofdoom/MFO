@@ -70,8 +70,8 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeCountAtLeast = "cond.foe_count_at_least";
     // Foe SELECTORS -- choose a target AND gate, resolved in PickFoe.
     inline constexpr const char* kCondFoeHighestHp       = "cond.foe_highest_hp";
-    inline constexpr const char* kCondFoeWithinRange     = "cond.foe_within_range";   // param = units
-    inline constexpr const char* kCondFoeBeyondRange     = "cond.foe_beyond_range";   // param = units
+    inline constexpr const char* kCondFoeWithinRange     = "cond.foe_within_range";   // param = units; TARGET-relative (current combat target)
+    inline constexpr const char* kCondFoeBeyondRange     = "cond.foe_beyond_range";   // param = units; TARGET-relative (current combat target)
     inline constexpr const char* kCondFoeAttackingPlayer = "cond.foe_attacking_player";
     inline constexpr const char* kCondFoeAttackingMe     = "cond.foe_attacking_me";
     inline constexpr const char* kCondFoeAttackingMeMelee  = "cond.foe_attacking_me_melee";   // targets follower, melee
