@@ -1,3 +1,28 @@
+## v1.0.12 -- weapon stability, combat fall-through, and human texture
+
+WEAPON THRASH FIXED (marth: "Erik switches melee weapons for no reason"):
+- Loot no longer chooses weapons by SKILL (which force-equipped melee onto a
+  bow-user and thrashed with the AI). What a follower maintains is GAMBIT-driven:
+  equip-melee -> best melee skill class; equip-ranged -> a bow/crossbow by ammo;
+  neither -> upgrade the role they already wield, in place. Loot STOCKS cross-role
+  weapons; only equip gambits move them into the hand (Fable-reviewed: arsenal-wide
+  baseline, StripCorpse drains a corpse fully).
+- The economy NEVER sells a socketed weapon (an unworn gemmed spare was the leak).
+
+COMBAT FALL-THROUGH (D1, the big correctness fix; Opus-reviewed):
+- The combat table now falls through a rule it CANNOT act on (unaffordable cast,
+  empty potion, satisfied equip, cast cooldown, 2H debounce) to the rules below,
+  instead of that top rule silently shadowing everything for the rest of the fight.
+  A follower no longer dies holding a heal he can't afford; spellsword/hybrid lists
+  are buildable. Still one gambit action per tick. Satisfied-equip hand-claim stops
+  melee<->ranged thrash; spell loans survive fall-through.
+
+FLAIR (feel more human / FFXII): per-follower temperament so the party isn't a
+metronome; a brief "ready beat" on entering combat; a weapon-ready flourish on
+equip; "sizing up" hesitation before switching targets; the board pulses a rule
+as it fires + condition->action coloring; follower names in the log; a rapport
+rank-up toast.
+
 ## v1.0.11 -- brawl gate + combat sense + loot fix (Opus-reviewed)
 
 - BRAWL GATE (#34): a follower no longer attacks a foe it is not actually hostile
