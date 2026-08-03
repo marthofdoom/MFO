@@ -1,3 +1,22 @@
+## v1.0.13 -- target-relative range, weapon cleanup, MCM self-heal
+
+- RANGE CONDITIONS ARE TARGET-RELATIVE: "foe within/beyond range" now measure the
+  distance to the follower's CURRENT combat target, not the nearest foe of that
+  range. The any-foe scan let a DISTANT foe satisfy "beyond" while the follower was
+  meleeing a CLOSE one, so an equip-ranged (bow) gambit won every tick even in
+  melee and MFO fought its own AI for the bow -- the equip re-fire thrash the soak
+  showed. Now the within/beyond pair keys off the SAME foe; the board relabels them
+  "Foe targeted within/beyond range" (opcodes unchanged, existing gambits adopt it).
+- OFF-ROLE WEAPON SHED: a follower carrying a weapon of a role they don't maintain
+  (a 2H on a 1H fighter, a crossbow on a bow user) -- default-loadout or a pre-1.0.12
+  leftover the game AI kept equipping -- is handed back to the player, one per idle
+  tick. Same gambit-driven roles as loot; skips socketed/quest/creature/staff; never
+  disarms. [shed] logs each hand-back.
+- MCM SELF-HEAL: on load the DLL seeds any missing MCM key into the settings store,
+  so a new toggle in an update binds on a player's EXISTING save with no hand-
+  editing (retires the per-toggle band-aid; the same gap is queued for MEO/MAO).
+- MCM shows the build version (Interface > Debug), stamped from VERSION.
+
 ## v1.0.12 -- weapon stability, combat fall-through, and human texture
 
 WEAPON THRASH FIXED (marth: "Erik switches melee weapons for no reason"):
