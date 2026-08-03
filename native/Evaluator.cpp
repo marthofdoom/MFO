@@ -1,4 +1,6 @@
 #include "PCH.h"
+#include <chrono>          // brawl-gate log throttle (#34)
+#include <unordered_map>   // brawl-gate log throttle (#34)
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Logistics.h"   // supply-condition reads (counts of potions / arrows)
@@ -72,22 +74,24 @@ namespace MFO::Eval {
             auto* cc = a_foe ? a_foe->GetActorRuntimeData().combatController : nullptr;
             return cc && cc->state && cc->state->isFleeing;
         }
-        // Count live, engaged foes in the follower's own combat group (no target).
-        int FoeCount(RE::Actor* a_self) {
-            if (!a_self) return 0;
-            auto* cc = a_self->GetActorRuntimeData().combatController;
-            if (!cc || !cc->combatGroup) return 0;
-            int n = 0;
-            RE::BSReadLockGuard lk(cc->combatGroup->lock);
-            for (const auto& t : cc->combatGroup->targets) {
-                auto ptr = t.targetHandle.get();   // HOLD the NiPointer (Targeting rule)
-                auto* foe = ptr.get();
-                if (!foe || foe == a_self) continue;
-                if (foe->IsDead() || foe->IsDisabled()) continue;
-                if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
-                ++n;
-            }
-            return n;
+        // Count live, engaged foes in the follower's own combat group. The
+        // traversal now lives in CombatSense.h so Confidence (#23) and the
+        // cond.foe_count_at_least gambit read the exact same tally.
+        int FoeCount(RE::Actor* a_self) { return CombatSense::FoeCount(a_self); }
+
+        // Surface the brawl gate ONLY when it suppressed the entire candidate
+        // set (a fist-fight opponent was the follower's only "foe"), so a field
+        // test can tell "gambit did nothing" from "correctly held fire." Throttled
+        // per follower, and called OUTSIDE the combat-group lock.
+        void LogBrawlSkip(RE::Actor* a_self, RE::FormID a_foe, int a_count) {
+            static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_next;
+            const auto now = std::chrono::steady_clock::now();
+            auto& nxt = s_next[a_self->GetFormID()];
+            if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
+            nxt = now + std::chrono::seconds(5);
+            spdlog::info("[brawl] {:08X}: held fire -- {} non-hostile foe(s) in group "
+                         "(e.g. {:08X}), no real target. Brawl / proving fight?",
+                         a_self->GetFormID(), a_count, a_foe);
         }
 
         // Pick a foe from the follower's OWN COMBAT GROUP.
@@ -114,6 +118,20 @@ namespace MFO::Eval {
             // that does not qualify at all.
             float bestScore = std::numeric_limits<float>::max();
             const auto selfPos = a_self->GetPosition();
+            int         nonHostile = 0;   // brawl gate: foes skipped as non-hostile
+            RE::FormID  lastNH     = 0;
+
+            // Compute the chase cap ONCE, and BEFORE taking the combat-group lock.
+            // ChaseRadius -> Confidence::Of -> CombatSense::FoeCount ALSO reads
+            // cc->combatGroup under that same lock (#23). Calling it inside the
+            // loop below (as this used to) would nest a read-lock inside the read
+            // lock we hold here -- benign only until the main thread's combat AI
+            // takes the WRITE lock between the two acquisitions, at which point
+            // both threads spin forever (worker holds read#1, waits on read#2;
+            // main holds the write bit, waits for readers to drain). Hoisting it
+            // out removes the nesting entirely -- and the cap is per-follower, not
+            // per-candidate, so this is also strictly less work.
+            const float chaseCap = Confidence::ChaseRadius(a_self);
 
             // The group is shared mutable engine state; read it under its own
             // lock, and do NOTHING but read inside.
@@ -131,6 +149,29 @@ namespace MFO::Eval {
                     // #59 guards against, one layer up.
                     if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
 
+                    // BRAWL / PROVING-FIGHT GATE (#34): the engine keeps a
+                    // NON-HOSTILE sparring partner in the combat group -- a tavern
+                    // brawl, or the Companions' proving fight vs Vilkas. Latching a
+                    // real attack or offensive spell onto them turns a fist-fight
+                    // into an assault (a bounty, a broken quest, a friend made an
+                    // enemy). A foe the follower is not actually hostile to is never
+                    // a valid gambit target. IsHostileToActor is the engine's own
+                    // relationship+combat read (proven available in Probe). Skips
+                    // are counted and surfaced after the lock (see LogBrawlSkip).
+                    //
+                    // TRADE-OFF (kept deliberately): a real foe attacking only the
+                    // PLAYER can read non-hostile-to-follower for the brief window
+                    // before aggro propagates, so the follower may not pre-empt it.
+                    // That window self-corrects, and the alternative -- exempting
+                    // the "attacking player" selector from this gate -- would let a
+                    // follower join the player's BRAWL (the opponent is swinging at
+                    // the player too), which is the exact bug this closes. The
+                    // [brawl] log surfaces real passivity if the soak shows any.
+                    if (!foe->IsHostileToActor(a_self)) {
+                        ++nonHostile; lastNH = foe->GetFormID();
+                        continue;
+                    }
+
                     const float dist = selfPos.GetDistance(foe->GetPosition());
 
                     // CONFIDENCE CHASE CAP (#22): never auto-select a foe beyond
@@ -142,7 +183,7 @@ namespace MFO::Eval {
                     // distance on purpose.
                     if (a_op != Vocab::kCondFoeWithinRange &&
                         a_op != Vocab::kCondFoeBeyondRange &&
-                        dist > Confidence::ChaseRadius(a_self))
+                        dist > chaseCap)
                         continue;
 
                     float score = dist;   // default for the gate-style selectors
@@ -198,6 +239,9 @@ namespace MFO::Eval {
                     if (score < bestScore) { bestScore = score; best = t.targetHandle; }
                 }
             }
+            // Held fire in a brawl: the only "foes" were non-hostile and nothing
+            // real was selected. Log outside the group lock (throttled).
+            if (nonHostile > 0 && !best) LogBrawlSkip(a_self, lastNH, nonHostile);
             return best;
         }
 

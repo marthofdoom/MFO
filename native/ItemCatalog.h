@@ -21,6 +21,15 @@ namespace MFO::Catalog {
     // catalogued restore potion (caller then uses its archetype fallback).
     RE::ActorValue PotionRestores(RE::FormID a_potion);
 
+    // A CURE potion (CurePoison / CureDisease archetype), from the catalog. These
+    // carry no restore ActorValue, so PotionRestores misses them; the cure-poison
+    // gambit reads this instead. kNone when uncatalogued (fail-open: needs a
+    // patcher run, and the runtime has no reliable cure heuristic to fall back on).
+    enum class Cure { kNone, kPoison, kDisease, kBoth };
+    Cure PotionCures(RE::FormID a_potion);
+    bool CuresPoison(RE::FormID a_potion);    // kPoison or kBoth
+    bool CuresDisease(RE::FormID a_potion);   // kDisease or kBoth
+
     // Arrow-vs-bolt from the record's real flag. Runtime TESAmmo::IsBolt() is
     // unreliable in practice (vanilla arrows report IsBolt()==true here), which
     // made the follower reject every arrow; the catalog gets it right. kUnknown
