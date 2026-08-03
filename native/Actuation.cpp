@@ -350,6 +350,11 @@ namespace MFO::Actuation {
 
         // (EquipTorch moved to Logistics -- torch is upkeep, not a combat action, #35.)
 
+        // Followers currently holding a KeepOffset (keep-distance / flee). Cleared
+        // when they pick any other action (below) or leave combat (Logistics tick).
+        // Main-thread only; wiped on revert.
+        std::unordered_set<RE::FormID> g_keepOffset;
+
     }
 
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice) {
@@ -359,6 +364,12 @@ namespace MFO::Actuation {
         if (!a_follower || a_choice.ruleIndex < 0) return { Result::NoOp, {} };
 
         const auto& op = a_choice.actionOpcode;
+
+        // Release a stale KeepOffset the instant this follower chooses any OTHER
+        // action -- else keep-distance/flee would stick after the situation clears.
+        if (op != Vocab::kActKeepDistance && op != Vocab::kActFleeTotal) {
+            if (g_keepOffset.erase(a_follower->GetFormID())) Papyrus::ClearKeepOffset(a_follower);
+        }
 
         if (op == Vocab::kActWait) {
             // Deliberately consumes the tick without acting -- the FFXII
@@ -430,6 +441,22 @@ namespace MFO::Actuation {
                 return { Result::Fired, "flee -> retreat to player" };
             return { Result::FailedOther, "retreat alias unavailable" };
         }
+        if (op == Vocab::kActKeepDistance || op == Vocab::kActFleeTotal) {
+            // EXPERIMENTAL (#35): back off / run from the selected foe via
+            // KeepOffsetFromActor. Held until the follower picks another action or
+            // leaves combat (see the release above + Logistics tick). Field-verify.
+            auto ptr = a_choice.target.get();
+            auto* foe = ptr.get();
+            if (!foe) return { Result::FailedOther, "chosen foe no longer resolves" };
+            const bool total = (op == Vocab::kActFleeTotal);
+            if (Papyrus::KeepOffset(a_follower, foe, total ? 1500.0f : 450.0f)) {
+                g_keepOffset.insert(a_follower->GetFormID());
+                return { Result::Fired, std::format("{} from {} (experimental)",
+                                                    total ? "flee" : "keep distance",
+                                                    foe->GetName() ? foe->GetName() : "?") };
+            }
+            return { Result::FailedOther, "KeepOffset dispatch failed" };
+        }
         if (op == Vocab::kActPowerAttack) {
             // EXPERIMENTAL (#35): there is no engine verb for "power-attack X".
             // Aim at the foe via the latch (like Attack), then fire the standing
@@ -465,5 +492,12 @@ namespace MFO::Actuation {
         // newer vocabulary; it must never fall through to something else.
         return { Result::FailedOther, std::format("unknown action '{}'", op) };
     }
+
+    void ClearKeepOffsetIfLatched(RE::Actor* a_follower) {
+        if (a_follower && g_keepOffset.erase(a_follower->GetFormID()))
+            Papyrus::ClearKeepOffset(a_follower);
+    }
+
+    void ClearTransientState() { g_keepOffset.clear(); }
 
 }

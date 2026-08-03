@@ -26,4 +26,11 @@ namespace MFO::Actuation {
     // (§5.3 -- a rule that could not run says why, it is not silent).
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice);
 
+    // Release a KeepOffset (keep-distance / flee) this follower is holding, if any.
+    // Called out of combat (Logistics tick) so the offset never outlives the fight.
+    void ClearKeepOffsetIfLatched(RE::Actor* a_follower);
+
+    // Drop the keep-offset latch on revert (save-safety, #35).
+    void ClearTransientState();
+
 }

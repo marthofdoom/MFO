@@ -13,6 +13,7 @@
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
 #include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
+#include "Actuation.h"    // #35: release a keep-distance/flee KeepOffset out of combat
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -2043,6 +2044,11 @@ namespace MFO::Logistics {
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
         g_svc = &a_state;   // loot code reads the gambit table through this (worker-sequential)
+
+        // Out of combat now -> release any keep-distance/flee KeepOffset the combat
+        // table set, so it never outlives the fight (#35). Same worker thread as
+        // Actuation::Fire, so the latch is single-threaded.
+        Actuation::ClearKeepOffsetIfLatched(a_follower);
 
 
         const auto id  = a_follower->GetFormID();

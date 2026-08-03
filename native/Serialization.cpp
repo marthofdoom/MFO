@@ -12,6 +12,7 @@
 #include "Packages.h"
 #include "Papyrus.h"
 #include "TradeBridge.h"
+#include "Actuation.h"
 #include "MEOBridge.h"
 #include "MainThread.h"
 #include "Probe.h"
@@ -383,6 +384,7 @@ namespace MFO {
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
         CasterConsent::ClearTransientState();
+        Actuation::ClearTransientState();   // #35: keep-distance/flee latch
         Board::ClearPendingEdits();
         // The alias fill is the one piece of MFO state the ENGINE persists for
         // us whether we want it or not, so revert cannot just forget it the way

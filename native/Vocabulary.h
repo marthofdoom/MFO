@@ -109,8 +109,10 @@ namespace MFO::Vocab {
     // holding that category.
     inline constexpr const char* kActEquipRanged = "act.equip_ranged";
     inline constexpr const char* kActEquipMelee  = "act.equip_melee";
-    inline constexpr const char* kActFlee        = "act.flee";          // disengage -> retreat to player
-    inline constexpr const char* kActPowerAttack = "act.power_attack";  // EXPERIMENTAL (anim event)
+    inline constexpr const char* kActFlee         = "act.flee";          // disengage -> retreat to player
+    inline constexpr const char* kActPowerAttack  = "act.power_attack";  // EXPERIMENTAL (anim event)
+    inline constexpr const char* kActKeepDistance = "act.keep_distance"; // EXPERIMENTAL (KeepOffset, back off foe)
+    inline constexpr const char* kActFleeTotal    = "act.flee_total";    // EXPERIMENTAL (KeepOffset, run from foe)
     inline constexpr const char* kActEquipTorch  = "act.equip_torch";
 
     // ── LOGISTICS TABLE (DESIGN §4.8) ───────────────────────────────────────

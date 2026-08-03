@@ -66,6 +66,13 @@ namespace MFO::Papyrus {
     // by token. Returns whether the call was DISPATCHED (async, like the others).
     bool DispatchTradeRun(RE::TESForm* a_quest, std::int32_t a_token);
 
+    // Actor.KeepOffsetFromActor(target, 0, -dist, 0, ...) -- makes the follower try
+    // to hold position `dist` BEHIND the foe, which reads as keep-distance (small
+    // dist) or flee (large dist). ClearKeepOffset releases it. EXPERIMENTAL (#35):
+    // whether the combat controller honours a movement override is unproven.
+    bool KeepOffset(RE::Actor* a_follower, RE::Actor* a_target, float a_dist);
+    bool ClearKeepOffset(RE::Actor* a_follower);
+
     // How many dispatches this session, for the heartbeat (#53). A subsystem
     // whose correct behaviour is invisible must publish one.
     std::uint32_t Dispatches();

@@ -1,3 +1,12 @@
+## v1.0.8 -- gambit v2 (4/n): keep-distance + flee-from-foe [EXPERIMENTAL] (#35)
+
+Two new combat actions via Actor.KeepOffsetFromActor (Papyrus dispatch): "Keep distance"
+(hold ~450u behind the selected foe) and "Flee from foe" (~1500u, run). A per-follower
+latch releases the offset (ClearKeepOffsetFromActor) the instant the follower picks any
+other action or leaves combat (Logistics tick), and on revert. EXPERIMENTAL: whether the
+combat controller honours the movement override for an AI follower is unproven -- field-verify.
+Distinct from 1.0.6 "Flee to player" (retreat package).
+
 ## v1.0.7 -- gambit v2 (3/n): arrow quality-trade + torch to logistics (#35)
 
 - ARROW TRADE (#3): each arrow loot now TRADES worst-for-better, count-neutral -- takes
