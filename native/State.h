@@ -39,6 +39,11 @@ namespace MFO {
         // (INVARIANTS.md #14 companion -- outcome is display-only).
         bool        lastFired = false;
         std::string lastFailReason;
+        // When the rule last FIRED (flair #9: the board pulses the row for ~1 s
+        // after this). Display-only like lastFired; steady_clock so the render
+        // thread can age it without any cross-thread clock question. A default
+        // (epoch) value reads as "long ago" -> no pulse.
+        std::chrono::steady_clock::time_point lastFiredAt{};
     };
 
     // Package overrides PERSIST THROUGH SAVES (ENGINE_NOTES.md §2.1).

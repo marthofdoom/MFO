@@ -96,6 +96,16 @@
             "sourceType": "ModSettingBool",
             "defaultValue": 0
           }
+        },
+        {
+          "id": "bRapportToasts:General",
+          "text": "Rank-up notifications",
+          "type": "toggle",
+          "help": "ON (default): one HUD line when a follower's rapport rank rises (\"Lydia fights beside you with new resolve.\"). Rank changes are rare, so this cannot spam. OFF: rank changes go to the log only.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
         }
       ]
     },

@@ -19,6 +19,23 @@ namespace MFO::Actuation {
     struct Outcome {
         Result      result = Result::NoOp;
         std::string reason;   // for the board / log when it did not fire
+
+        // THE OUTCOME TAXONOMY (GAMBIT_FLOWS §2). `transparent` marks an outcome
+        // the combat scan may fall PAST to try the rules below -- the dividing
+        // line is activity vs state:
+        //   TRANSPARENT: the rule's goal already holds (equip "already holding
+        //     that category"), or it provably cannot run this tick (insufficient
+        //     magicka, reserve floor, no weapon carried, no potion, cast
+        //     cooldown, two-handed debounce, gear debt). A window, not a wall.
+        //   OPAQUE (false): the outcome IS an ongoing activity that legitimately
+        //     occupies the tick -- act.wait (the authored suppress idiom),
+        //     attack "already on that target" (FFXII: lines below an active
+        //     Attack never run), and the cast-grace hold (the wait IS the cast
+        //     happening; firing lower rules mid-grace re-opens the §0.6
+        //     confound). Fired outcomes are opaque by definition.
+        // Defaults false so any path that forgets to tag stays a wall -- the
+        // pre-fall-through behaviour, safe in direction.
+        bool        transparent = false;
     };
 
     // Execute a chosen action on a follower. Returns what happened so the

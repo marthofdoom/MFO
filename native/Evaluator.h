@@ -33,11 +33,13 @@ namespace MFO::Eval {
     // Returns ruleIndex == -1 when nothing matched: the caller then makes NO
     // engine call at all (§4.4's do-nothing guarantee).
     //
-    // a_startIndex lets the LOGISTICS caller resume the scan past a rule that
-    // matched but whose action did nothing (e.g. "loot potions" when no potions
-    // are nearby), so a near-always-true rule cannot SHADOW the useful rules
-    // below it. Combat keeps the default 0 -- there, a matched rule consuming
-    // the tick is the intended first-match-wins / Wait-suppress semantics.
+    // a_startIndex lets BOTH callers resume the scan past a rule that matched
+    // but whose action did nothing: logistics past a "loot potions" with no
+    // potions nearby, and the combat scheduler past any TRANSPARENT outcome
+    // (satisfied equip, unaffordable cast, empty potion stack -- GAMBIT_FLOWS
+    // §2/H1), so a near-always-true rule cannot SHADOW the useful rules below
+    // it. Opaque outcomes (act.wait, a latched attack, the cast-grace hold)
+    // still consume the tick -- the caller decides; this function just scans.
     Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state,
                     Table a_table = Table::Combat, int a_startIndex = 0);
 

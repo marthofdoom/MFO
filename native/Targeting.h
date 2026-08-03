@@ -42,6 +42,12 @@ namespace MFO::Targeting {
     void Clear(RE::FormID a_follower);
     void ClearAll();
 
+    // The follower's current latch, or an empty handle when none. MAIN THREAD
+    // (shared-lock read). Exists for the scheduler's retarget hesitation
+    // (GAMBIT_FLAIR #5): a target SWITCH must be distinguishable from a first
+    // engagement without mutating the latch.
+    RE::ActorHandle Current(RE::FormID a_follower);
+
     bool IsHooked();
 
     // Probe instrumentation (§0.14's decisive measurement).

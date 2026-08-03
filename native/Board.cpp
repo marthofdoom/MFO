@@ -562,6 +562,25 @@ namespace MFO::Board {
                             for (int i = 0; i < (int)rules.size(); ++i) {
                                 const auto& rv = rules[i];
                                 ImGui::TableNextRow();
+
+                                // FLAIR #9: the FFXII "line lights up" pulse.
+                                // For ~1 s after the rule fires, fade the row
+                                // background from the skin accent back to
+                                // normal -- the board becomes a live readout
+                                // of the follower thinking. Display-only: the
+                                // scheduler stamps lastFiredAt, this just ages
+                                // it; drawn only while the board is open.
+                                if (rv.firedAt.time_since_epoch().count() != 0) {
+                                    const float age = std::chrono::duration<float>(
+                                        std::chrono::steady_clock::now() - rv.firedAt).count();
+                                    if (age >= 0.0f && age < 1.0f) {
+                                        ImVec4 pulse = skin.accent;
+                                        pulse.w = 0.30f * (1.0f - age);
+                                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                                               ImGui::GetColorU32(pulse));
+                                    }
+                                }
+
                                 ImGui::PushID((int)rv.uid);
 
                                 ImGui::TableNextColumn();
@@ -575,7 +594,12 @@ namespace MFO::Board {
                                 ImGui::SameLine();
                                 if (ImGui::SmallButton(">")) QueueEdit({ EditKind::CycleCond, sel, selTable, rv.uid,  1 });
                                 ImGui::SameLine();
-                                ImGui::TextUnformatted(labelFor(rv.condOp, condTab, condN));
+                                // FLAIR #10: FFXII slot typography -- the
+                                // condition in the skin accent, the action in
+                                // the normal text tone (the two-tone that makes
+                                // a gambit's SHAPE readable at a glance).
+                                ImGui::TextColored(skin.accent, "%s",
+                                                   labelFor(rv.condOp, condTab, condN));
                                 if (rv.lastFired) { ImGui::SameLine(); ImGui::TextColored(
                                     ImVec4(0.4f,0.9f,0.4f,1), "*"); }
 
@@ -647,7 +671,15 @@ namespace MFO::Board {
                                 ImGui::SameLine();
                                 if (ImGui::SmallButton(">##a")) QueueEdit({ EditKind::CycleAct, sel, selTable, rv.uid,  1 });
                                 ImGui::SameLine();
-                                ImGui::TextUnformatted(labelFor(rv.actOp, actTab, actN));
+                                // FLAIR #10 (cont.): the arrow completes the
+                                // condition -> action shape; act.wait draws
+                                // dimmed -- FFXII's "OFF/hold" idiom.
+                                ImGui::TextDisabled("->");
+                                ImGui::SameLine();
+                                if (rv.actOp == Vocab::kActWait)
+                                    ImGui::TextDisabled("%s", labelFor(rv.actOp, actTab, actN));
+                                else
+                                    ImGui::TextUnformatted(labelFor(rv.actOp, actTab, actN));
 
                                 // Spell picker -- only meaningful for cast
                                 // actions. Lists the follower's own known spells.
@@ -715,30 +747,42 @@ namespace MFO::Board {
                             ImGui::PushTextWrapPos(0.0f);   // wrap at pane's right edge
                             for (int i = 0; i < (int)rules.size(); ++i) {
                                 const auto& rv = rules[i];
-                                std::string s = std::to_string(i + 1) + ".  When ";
-                                s += labelFor(rv.condOp, condTab, condN);
+                                std::string cond = std::to_string(i + 1) + ".  When ";
+                                cond += labelFor(rv.condOp, condTab, condN);
                                 switch (kindFor(rv.condOp, condTab, condN)) {
                                 case ParamKind::Percent:
-                                    s += " " + std::to_string((int)(std::clamp(rv.param, 0.0f, 1.0f)
-                                                                     * 100.0f + 0.5f)) + "%"; break;
+                                    cond += " " + std::to_string((int)(std::clamp(rv.param, 0.0f, 1.0f)
+                                                                        * 100.0f + 0.5f)) + "%"; break;
                                 case ParamKind::Count:
-                                    s += " " + std::to_string((int)(rv.param + 0.5f)); break;
+                                    cond += " " + std::to_string((int)(rv.param + 0.5f)); break;
                                 case ParamKind::Distance:
-                                    s += " " + std::to_string((int)(rv.param + 0.5f)) + "u"; break;
+                                    cond += " " + std::to_string((int)(rv.param + 0.5f)) + "u"; break;
                                 default: break;
                                 }
-                                s += "   ->   ";
-                                s += labelFor(rv.actOp, actTab, actN);
+                                std::string act = labelFor(rv.actOp, actTab, actN);
                                 if ((rv.actOp == Vocab::kActCastSelf ||
                                      rv.actOp == Vocab::kActCastTarget) && !rv.spellName.empty())
-                                    s += " (" + rv.spellName + ")";
+                                    act += " (" + rv.spellName + ")";
                                 if (!rv.enabled) {
                                     ImGui::PushStyleColor(ImGuiCol_Text,
                                         ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                                    ImGui::TextWrapped("%s   [disabled]", s.c_str());
+                                    ImGui::TextWrapped("%s   ->   %s   [disabled]",
+                                                       cond.c_str(), act.c_str());
                                     ImGui::PopStyleColor();
                                 } else {
-                                    ImGui::TextWrapped("%s", s.c_str());
+                                    // FLAIR #10: the same two-tone as the edit
+                                    // table -- condition in the accent, dim
+                                    // arrow, action in the text tone (act.wait
+                                    // dimmed). Wrap pos is already pushed, so
+                                    // each segment still wraps at the pane edge.
+                                    ImGui::TextColored(skin.accent, "%s", cond.c_str());
+                                    ImGui::SameLine(0, 0);
+                                    ImGui::TextDisabled("  ->  ");
+                                    ImGui::SameLine(0, 0);
+                                    if (rv.actOp == Vocab::kActWait)
+                                        ImGui::TextDisabled("%s", act.c_str());
+                                    else
+                                        ImGui::TextUnformatted(act.c_str());
                                     if (rv.lastFired) {
                                         ImGui::SameLine();
                                         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1), "*");
@@ -1189,6 +1233,7 @@ namespace MFO::Board {
             v.condOp = g.conditionOpcode; v.actOp = g.actionOpcode;
             v.param  = g.conditionParam;  v.spell = g.actionParamForm;
             v.enabled = g.enabled;        v.lastFired = g.lastFired; v.fail = g.lastFailReason;
+            v.firedAt = g.lastFiredAt;    // flair #9: the row pulse ages this
             if (v.spell) {
                 if (auto* sp = RE::TESForm::LookupByID(v.spell))
                     v.spellName = sp->GetName() ? sp->GetName() : "?";

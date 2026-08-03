@@ -7,7 +7,8 @@
 #include "CasterConsent.h"
 #include "Targeting.h"
 #include "Logistics.h"
-#include "Packages.h"   // #35: act.flee reuses the retreat package
+#include "Packages.h"    // #35: act.flee reuses the retreat package
+#include "Temperament.h" // flair #1: per-follower timing seed (grace offset)
 
 namespace MFO::Actuation {
 
@@ -22,11 +23,15 @@ namespace MFO::Actuation {
         }
 
         Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target) {
-            if (!a_target) return { Result::FailedOther, "no valid target" };
+            // TRANSPARENT (GAMBIT_FLOWS §2): a cast that provably cannot run this
+            // tick must not wall off the rules below it -- FFXII skips an
+            // unaffordable gambit and runs the next line.
+            if (!a_target) return { Result::FailedOther, "no valid target", true };
 
             auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
             if (!spell) {
-                return { Result::FailedOther, std::format("spell {:08X} not in load order", a_spellID) };
+                return { Result::FailedOther,
+                         std::format("spell {:08X} not in load order", a_spellID), true };
             }
 
             // COMPETENCE IS NOT PERMISSION (DESIGN.md §5.3). MFO does not top up
@@ -47,8 +52,10 @@ namespace MFO::Actuation {
                     Loadout::ReleaseSpell(a_follower->GetFormID());
                     spdlog::debug("[eval] {:08X} has {:.0f} magicka, needs {:.0f}",
                                   a_follower->GetFormID(), have, cost);
+                    // TRANSPARENT: this is the spellsword flow -- reserve/empty
+                    // pool falls through to steel (GAMBIT_FLOWS D1, §3.5).
                     return { Result::FailedSkill,
-                             std::format("insufficient magicka (needs {:.0f})", cost) };
+                             std::format("insufficient magicka (needs {:.0f})", cost), true };
                 }
 
                 // THE RESERVE. §5.3 says the follower's competence decides what
@@ -70,7 +77,8 @@ namespace MFO::Actuation {
                     if (mx > 0.0f && (have - cost) < reserve * mx) {
                         Loadout::ReleaseSpell(a_follower->GetFormID());
                         return { Result::FailedSkill,
-                                 std::format("magicka reserve (floor {:.0f})", reserve * mx) };
+                                 std::format("magicka reserve (floor {:.0f})", reserve * mx),
+                                 true };   // transparent -- fall to steel (§3.5)
                     }
                 }
             }
@@ -134,22 +142,34 @@ namespace MFO::Actuation {
                     // passes and the condition is still true, fall through to
                     // the silent cast -- an unanimated heal beats no heal.
                     const float held = Loadout::SecondsSinceEquip(a_follower->GetFormID());
-                    if (held < Config::g_aiCastGrace.load()) {
+                    // FLAIR #6: each caster has their own patience. The MCM knob
+                    // stays the CENTER; the temperament seed spreads the band
+                    // +-13% so two mages who both fail to animate do not land
+                    // twin silent heals on the same beat. Deterministic per
+                    // follower; the reason string (the dedup key) is unchanged.
+                    const float grace = Config::g_aiCastGrace.load() *
+                        (0.87f + 0.26f * Temperament(a_follower->GetFormID()));
+                    if (held < grace) {
                         // A STABLE reason string. The transition logger compares
                         // reasons, so embedding the elapsed time here would make
                         // every tick a "new" reason and log at 7.5 Hz.
+                        // OPAQUE (marth, GAMBIT_FLOWS §7.1): the hold IS the cast
+                        // happening -- firing lower rules mid-grace risks
+                        // disturbing the AI's cast (the §0.6 confound).
                         return { Result::NoOp, "waiting for their AI to cast it" };
                     }
                     break;
                 }
                 case Loadout::Ready::Debounced:
                     // NOT a rule failure -- the follower is willing and able,
-                    // MFO is declining to thrash their gear. Falls through on
-                    // the next tick.
-                    return { Result::NoOp, why };
+                    // MFO is declining to thrash their gear.
+                    // TRANSPARENT (marth, GAMBIT_FLOWS §7.1): cast cooldown /
+                    // two-handed debounce / gear debt are seconds-long waits
+                    // during which the follower FIGHTS -- the rules below run.
+                    return { Result::NoOp, why, true };
                 case Loadout::Ready::Failed:
                 default:
-                    return { Result::FailedSkill, why };
+                    return { Result::FailedSkill, why, true };   // transparent (§2)
                 }
             }
 
@@ -280,7 +300,7 @@ namespace MFO::Actuation {
             auto* caster = a_follower->GetMagicCaster(src);
             if (!caster) {
                 caster = a_follower->GetMagicCaster(CS::kInstant);
-                if (!caster) return { Result::FailedOther, "no magic caster" };
+                if (!caster) return { Result::FailedOther, "no magic caster", true };
             }
             caster->CastSpellImmediate(spell, false, a_target, 1.0f, false, 0.0f, a_follower);
 
@@ -331,7 +351,14 @@ namespace MFO::Actuation {
             if (auto* cur = a_follower->GetEquippedObject(false)) {
                 if (auto* w = cur->As<RE::TESObjectWEAP>(); w && !w->IsStaff()) {
                     const bool curRanged = w->IsBow() || w->IsCrossbow();
-                    if (curRanged == a_ranged) return { Result::NoOp, "already holding that category" };
+                    // TRANSPARENT (satisfied): the rule's goal already holds, so
+                    // the scan falls past it -- AND the scheduler reads this
+                    // exact shape (transparent NoOp on an equip action) as the
+                    // H2 hand-claim: a lower CONTRADICTORY equip is skipped
+                    // without firing, so fall-through cannot manufacture the
+                    // melee<->ranged thrash of GAMBIT_FLOWS D4.
+                    if (curRanged == a_ranged)
+                        return { Result::NoOp, "already holding that category", true };
                 }
             }
             RE::TESObjectWEAP* best = nullptr; std::uint16_t bestDmg = 0;
@@ -348,8 +375,16 @@ namespace MFO::Actuation {
                 if (w->GetAttackDamage() >= bestDmg) { bestDmg = w->GetAttackDamage(); best = w; }
             }
             if (!best) return { Result::FailedSkill, a_ranged ? "no ranged weapon carried"
-                                                              : "no melee weapon carried" };
+                                                              : "no melee weapon carried",
+                                true };   // transparent -- cannot act, rules below run (§2)
             if (auto* mgr = RE::ActorEquipManager::GetSingleton()) mgr->EquipObject(a_follower, best);
+            // FLAIR #4: visibly COMMIT to the new tool -- steel out, squared up
+            // -- rather than leaving the swap in whatever draw state the last
+            // weapon had. The exact call Loadout.cpp:240 already ships for the
+            // cast path; drawing while already drawn is a no-op, and this path
+            // only runs on a real equip Fired (which buys a suppression window),
+            // so it cannot repeat-fire.
+            a_follower->DrawWeaponMagicHands(true);
             spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' dmg={}", a_follower->GetFormID(),
                          a_ranged ? "ranged" : "melee",
                          best->GetFullName() ? best->GetFullName() : "?", bestDmg);
@@ -371,7 +406,8 @@ namespace MFO::Actuation {
         if (op == Vocab::kActWait) {
             // Deliberately consumes the tick without acting -- the FFXII
             // "do nothing on purpose" idiom that lets a rule suppress the ones
-            // below it (DESIGN.md §3.3).
+            // below it (DESIGN.md §3.3). OPAQUE by design (GAMBIT_FLOWS §7.1):
+            // Wait is the authored suppress idiom; it must keep walling.
             return { Result::NoOp, {} };
         }
         if (op == Vocab::kActAttack) {
@@ -385,13 +421,13 @@ namespace MFO::Actuation {
             // winning simply keeps naming the same foe.
             auto ptr = a_choice.target.get();
             auto* foe = ptr.get();
-            if (!foe) return { Result::FailedOther, "chosen foe no longer resolves" };
+            if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
 
             // Ask the HOOK, not the config. They disagree whenever install was
             // refused with the flag on -- VR, today. Reporting Fired there would
             // buy a suppression window for a latch nothing reads.
             if (!Targeting::IsHooked()) {
-                return { Result::FailedOther, "targeting hook not installed" };
+                return { Result::FailedOther, "targeting hook not installed", true };
             }
 
             // Re-commanding the SAME foe is not an action. The latch persists
@@ -400,6 +436,9 @@ namespace MFO::Actuation {
             // window forever -- nine identical log lines in one fight, and a
             // suppression window burned each time that a higher rule could
             // have used.
+            // OPAQUE by design (GAMBIT_FLOWS D3): Attack is an ACTIVITY --
+            // FFXII's own semantics put reactive rules ABOVE it, and lines
+            // below an active Attack never run. Do NOT make this transparent.
             if (!Targeting::Command(a_follower->GetFormID(), a_choice.target)) {
                 return { Result::NoOp, "already on that target" };
             }
@@ -436,7 +475,7 @@ namespace MFO::Actuation {
             // the retreat driver. #35.
             if (Packages::RetreatFill(a_follower))
                 return { Result::Fired, "flee -> retreat to player" };
-            return { Result::FailedOther, "retreat alias unavailable" };
+            return { Result::FailedOther, "retreat alias unavailable", true };
         }
         if (op == Vocab::kActPowerAttack) {
             // EXPERIMENTAL (#35): there is no engine verb for "power-attack X".
@@ -445,8 +484,9 @@ namespace MFO::Actuation {
             // not in a melee-attack state -- FIELD-VERIFY before trusting it.
             auto ptr = a_choice.target.get();
             auto* foe = ptr.get();
-            if (!foe) return { Result::FailedOther, "chosen foe no longer resolves" };
-            if (!Targeting::IsHooked()) return { Result::FailedOther, "targeting hook not installed" };
+            if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
+            if (!Targeting::IsHooked())
+                return { Result::FailedOther, "targeting hook not installed", true };
             // Only meaningful with a MELEE weapon drawn -- a power attack from a bow
             // or empty hands is nonsense and would just burn the tick (Fable).
             auto* r = a_follower->GetEquippedObject(false);
@@ -454,14 +494,17 @@ namespace MFO::Actuation {
             const auto wt = w ? w->GetWeaponType() : RE::WEAPON_TYPE::kHandToHandMelee;
             const bool melee = w && wt != RE::WEAPON_TYPE::kBow && wt != RE::WEAPON_TYPE::kCrossbow &&
                                     wt != RE::WEAPON_TYPE::kStaff;
-            if (!melee) return { Result::FailedSkill, "no melee weapon drawn for a power attack" };
+            // TRANSPARENT: "foe blocking -> power attack" while holding a bow
+            // must not starve the attack rule below for as long as the foe
+            // blocks (GAMBIT_FLOWS §3.6).
+            if (!melee) return { Result::FailedSkill, "no melee weapon drawn for a power attack", true };
             Targeting::Command(a_follower->GetFormID(), a_choice.target);
             // Report Fired ONLY if the graph accepted the event -- else a rejected
             // no-op must NOT buy a suppression window (Fable: Fired-on-reject went
             // visibly passive). `sent` still isn't proof the swing landed; field-verify.
             if (a_follower->NotifyAnimationGraph("attackPowerStartInPlace"))
                 return { Result::Fired, "power attack (experimental)" };
-            return { Result::FailedOther, "power-attack anim rejected" };
+            return { Result::FailedOther, "power-attack anim rejected", true };
         }
 
         // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,
@@ -477,12 +520,17 @@ namespace MFO::Actuation {
                                                                     RE::ActorValue::kMagicka;
             if (Logistics::DrinkPotion(a_follower, av))
                 return { Result::Fired, "drank a potion" };
-            return { Result::FailedSkill, "no matching potion, or still on cooldown" };
+            // TRANSPARENT: the worst concrete D1 -- a follower must not die
+            // holding a heal rule below an out-of-potions drink rule (§3.1).
+            return { Result::FailedSkill, "no matching potion, or still on cooldown", true };
         }
 
         // Unknown action opcode: fail closed and say so. Likely a rule from a
-        // newer vocabulary; it must never fall through to something else.
-        return { Result::FailedOther, std::format("unknown action '{}'", op) };
+        // newer vocabulary; it must never fall through to SOMETHING ELSE for
+        // this rule -- but the scan may fall PAST it, exactly as the logistics
+        // scan skips a stray opcode so it cannot shadow the rules below
+        // (Logistics.cpp fall-through precedent).
+        return { Result::FailedOther, std::format("unknown action '{}'", op), true };
     }
 
 }

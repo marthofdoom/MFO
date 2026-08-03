@@ -40,6 +40,13 @@ namespace MFO::Config {
     inline std::atomic<int>   g_rank4{ 2500 };
     inline std::atomic<int>   g_rank5{ 5000 };
 
+    // Rank-up HUD toast (flair #13): one DebugNotification when a follower's
+    // rapport RANK changes -- "Lydia fights beside you with new resolve."
+    // Transition-only by construction (thresholds make rank changes rare), ON
+    // by default: it is feedback on something that already happened, never an
+    // engine act on the follower. bRapportToasts.
+    inline std::atomic<bool>  g_rapportToasts{ true };
+
     // -- diagnostics ---------------------------------------------------------
     inline std::atomic<bool>  g_enableLogging{ true };
     inline std::atomic<bool>  g_profileRapport{ false };

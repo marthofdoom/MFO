@@ -144,6 +144,12 @@ namespace MFO::Targeting {
         return true;
     }
 
+    RE::ActorHandle Current(RE::FormID a_follower) {
+        std::shared_lock lk(g_latchMx);
+        const auto it = g_latch.find(a_follower);
+        return it != g_latch.end() ? it->second : RE::ActorHandle{};
+    }
+
     void Clear(RE::FormID a_follower) {
         std::unique_lock lk(g_latchMx);
         g_latch.erase(a_follower);
