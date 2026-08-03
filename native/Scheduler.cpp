@@ -184,6 +184,20 @@ namespace MFO::Scheduler {
         // it yields even for a follower with no combat gambits.
         Logistics::ReleaseTravelOnCombat(f);
 
+        // COMBAT SENSE sample (#23): confidence now folds foe count in, so a
+        // field test can watch a growing pack tighten the leash and, past a few
+        // foes, arm auto-retreat. Purely observational; throttled ~3 s / follower.
+        {
+            static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_nextSense;
+            auto& nxt = s_nextSense[id];
+            if (nxt.time_since_epoch().count() == 0 || now >= nxt) {
+                nxt = now + std::chrono::seconds(3);
+                spdlog::info("[sense] {:08X}: foes={} confidence={:.2f} leash={:.0f} chase={:.0f}",
+                             id, CombatSense::FoeCount(f), Confidence::Of(f),
+                             Confidence::LeashRadius(f), Confidence::ChaseRadius(f));
+            }
+        }
+
         // ── AUTO-RETREAT (leash safety, opt-in via bAutoRetreat) ─────────────
         // The confidence leash taken to its conclusion: a follower who is badly
         // outmatched (confidence below threshold -- by the leash tenet he WANTS
@@ -205,12 +219,12 @@ namespace MFO::Scheduler {
                 if (cur == Forms::g_retreatPackage) note.took = true;
 
                 if (pc && dPlayer <= kRetreatArriveDist) {
-                    spdlog::debug("[retreat] {:08X}: reached player after {:.1f}s", id, secs);
+                    spdlog::info("[retreat] {:08X}: reached player after {:.1f}s", id, secs);
                     Packages::RetreatClear("arrived", f);
                 } else if (secs > kRetreatTimeout) {
                     // Transition-only: one line when the fall-back gives up, with
                     // enough to tell "controller never yielded" from "too slow".
-                    spdlog::debug("[retreat] {:08X}: gave up after {:.1f}s (took={}, dPlayer={:.0f})",
+                    spdlog::info("[retreat] {:08X}: gave up after {:.1f}s (took={}, dPlayer={:.0f})",
                                   id, secs, note.took, dPlayer);
                     Packages::RetreatClear("timeout", f);
                 }
@@ -230,7 +244,7 @@ namespace MFO::Scheduler {
                 f->IsInCombat() && pc && dPlayer > kRetreatMinDist) {
                 note.tried = true;   // one fall-back per fight, fill failures included
                 if (Packages::RetreatFill(f)) {
-                    spdlog::debug("[retreat] {:08X}: falling back -- confidence={:.2f} dPlayer={:.0f}",
+                    spdlog::info("[retreat] {:08X}: falling back -- confidence={:.2f} dPlayer={:.0f}",
                                   id, Confidence::Of(f), dPlayer);
                 }
             }

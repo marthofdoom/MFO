@@ -1297,7 +1297,17 @@ namespace MFO::Logistics {
                     // this follower's nerve right now. This is the invisible
                     // string: the same corpse is in-reach when they feel safe and
                     // out-of-reach when they do not.
-                    if (playerPos.GetDistance(ref->GetPosition()) > leash) {
+                    //
+                    // EXCEPT what is already at the follower's OWN feet (#30): the
+                    // leash bounds how far he TRAVELS from you, not what he grabs
+                    // where he already stands. A follower out looting a corpse that
+                    // WAS in leash would otherwise ignore a potion beside it that
+                    // sits a hair past the player-bubble -- the "found the potion
+                    // right in front of him only after several runs" report. If
+                    // he's within arrival distance of the ref, no excursion is
+                    // needed, so the leash does not apply.
+                    if (playerPos.GetDistance(ref->GetPosition()) > leash &&
+                        a_follower->GetPosition().GetDistance(ref->GetPosition()) > kArrivalDist) {
                         ++dLeash; return RE::BSContainer::ForEachResult::kContinue;
                     }
                     // MUST HOLD WHAT WE WANT. A read-only peek: never make him walk
