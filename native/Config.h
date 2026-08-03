@@ -217,6 +217,13 @@ namespace MFO::Config {
     // scan enabled while tuning. bEconomy.
     inline std::atomic<bool>  g_economy{ false };
 
+    // AUTO-RETREAT (leash safety). Default OFF: when ON, a follower who is badly
+    // outnumbered/hurt (confidence below threshold) AND far from you in combat
+    // falls back to your side under kIgnoreCombat travel -- the confidence leash
+    // taken to its conclusion. Off by default so a default install never acts
+    // without an authored rule (byte-identical-when-idle tenet). bAutoRetreat.
+    inline std::atomic<bool>  g_autoRetreat{ false };
+
     // HARD CEILING on the walk-to-loot distance (units). The real limit is the
     // confidence LEASH (walkLimit = min(leash, this)); this is only for anyone
     // who wants to clamp the walk BELOW the leash. Default high so the leash

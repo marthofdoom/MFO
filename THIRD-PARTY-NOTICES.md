@@ -1,9 +1,10 @@
 # Third-party notices
 
-MFO's own source is MIT (see `LICENSE`) and lives entirely in `native/` —
-five files, all written for this project. **No third-party source is vendored
-into this repository.** Dependencies are fetched at build time by vcpkg from
-the pinned registries in `native/vcpkg-configuration.json`.
+MFO's own source is MIT (see `LICENSE`) and lives entirely in `native/`, all
+written for this project. **No third-party source is vendored into this
+repository.** Dependencies are fetched at build time by vcpkg from the pinned
+registries in `native/vcpkg-configuration.json`. The one class of third-party
+*asset* that does ship in the repo is the two board fonts (below).
 
 However, `MFO.dll` is built with the `x64-windows-static-md` triplet, so its
 dependencies are **statically linked into the shipped binary**. MIT requires
@@ -47,21 +48,61 @@ SOFTWARE.
 
 ---
 
-## Transitive dependencies — OUTSTANDING
+## Dear ImGui
 
-CommonLibSSE-NG pulls in further libraries (spdlog and fmt among them) which
-are also linked into the binary. **These have not yet been individually
-verified and are not yet reproduced here.**
+The in-game board's renderer (with the `dx11-binding` and `win32-binding`
+features). Fetched from vcpkg; direct dependency in `native/vcpkg.json`.
 
-**This must be resolved before any public release.** Enumerate the real
-linked set from the vcpkg install tree rather than from memory, and reproduce
-each licence verbatim from its own repository. Assuming a licence is the same
-mistake as assuming an engine mechanism.
+**MIT License — Copyright (c) 2014-2025 Omar Cornut**
 
-## Planned additions (not yet dependencies)
+The MIT text is identical to the block reproduced under CommonLibSSE-NG above,
+with the copyright line replaced by the one shown here.
 
-The ImGui board (roadmap M7) will add **Dear ImGui**. Add its notice in the
-same commit that adds it to `vcpkg.json`, not afterward.
+---
+
+## nlohmann/json
+
+The JSON reader for the item catalog (`mfo_items.json`) consumed at runtime.
+Fetched from vcpkg; direct dependency in `native/vcpkg.json`.
+
+**MIT License — Copyright (c) 2013-2025 Niels Lohmann**
+
+MIT text as above, with this copyright line.
+
+---
+
+## spdlog
+
+Logging. Pulled in transitively (CommonLibSSE-NG links it) and linked into the
+binary. Fetched from vcpkg.
+
+**MIT License — Copyright (c) 2016 Gabime**
+
+MIT text as above, with this copyright line. spdlog bundles **fmt** (below).
+
+---
+
+## fmt
+
+String formatting, bundled by spdlog and linked into the binary.
+
+**Copyright (c) 2012 - present, Victor Zverovich and {fmt} contributors.**
+Licensed under the MIT License. MIT text as above, with this copyright line.
+
+---
+
+## Fonts — SIL Open Font License 1.1
+
+The board bakes two OFL fonts into its ImGui atlases at load, shipped under
+`SKSE/Plugins/MFO/fonts/`:
+
+- `head.ttf` — **Cinzel**, © 2012 Natanael Gama (Reserved Font Name *Cinzel*).
+- `body.ttf` — **EB Garamond**, © 2017 Georg Duffner and Octavio Pardo
+  (Reserved Font Name *EB Garamond*).
+
+Both are used unmodified and are not renamed, so the Reserved Font Names are
+respected. The full licence text and per-font copyright notices travel with
+every release in [`OFL.txt`](OFL.txt), as OFL §2 requires.
 
 ---
 

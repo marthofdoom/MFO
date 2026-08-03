@@ -334,6 +334,18 @@ namespace MFO::Eval {
                 continue;
             }
 
+            // A PLAYER-targeting condition names the PLAYER as the target, so
+            // "Player HP % below -> Cast on target" heals YOU, not the follower
+            // (Fable RC#6: subjectSelector was never authored, so Subject::Player was
+            // dead and the cast fell back to Self). Self/other conditions leave the
+            // target empty and the action resolves its own subject as before.
+            // Gated to Cast-on-target ONLY: Attack/PowerAttack also read the target,
+            // and "Player HP% below -> Attack" must NOT turn the follower on you
+            // (Opus RC-review: un-gated player targeting was friendly-fire).
+            if (!chosen && g.conditionOpcode == Vocab::kCondPlayerHpBelow &&
+                g.actionOpcode == Vocab::kActCastTarget && player)
+                chosen = player->GetHandle();
+
             // First true condition wins; nothing below is evaluated (§4.3).
             out.ruleIndex    = i;
             out.actionOpcode = g.actionOpcode;

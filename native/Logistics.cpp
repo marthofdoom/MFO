@@ -925,6 +925,19 @@ namespace MFO::Logistics {
             return present;
         }
 
+        // po3's Papyrus Extender -- the economy's merchant enumeration
+        // (AddAllItemsToArray) lives there. Absent -> the buy phase can't work, so we
+        // don't dispatch the econ scan at all (no silent Papyrus failures). Logged once.
+        bool Po3Present() {
+            static const bool present = [] {
+                const bool p = ::GetModuleHandleA("po3_papyrusextender.dll") != nullptr;
+                if (!p) spdlog::info("[econ] po3 Papyrus Extender not found -- follower economy disabled "
+                                     "(install powerofthree's Papyrus Extender to use it)");
+                return p;
+            }();
+            return present;
+        }
+
         // PLAYER-HOME gate. A follower ransacking your own house reads as theft,
         // not tidying, so looting is suppressed wherever the player's current
         // LOCATION carries vanilla LocTypePlayerHouse (0x01CB85 in Skyrim.esm) --
@@ -2445,19 +2458,16 @@ namespace MFO::Logistics {
             // main-thread pump (§0.37) is still correct + needed for the TRANSACTION
             // (mutations must run on main), just not sufficient for the READ.
             // See [[economy-vendor-detection-excludes-teammates]] + ENGINE_NOTES.
-            // Phase 1 (#21): re-enabled as a DIAGNOSTIC build (v0.8.42) -- PDB now
-            // emitted + per-step [bc] breadcrumbs in EconomyProbe, so the v0.8.40
-            // CTD pins to an exact step/line instead of a guess.
-            // Runs HERE, on the WORKER, NOT via MainThread::Post (Fable audit #1/#4):
-            // the reads -- follower GetInventory / CountPotions / g_travel -- must
-            // stay on the SAME thread as the loot/heal/loadout mutations that share
-            // this task, or they race the follower's InventoryChanges (the Actor.cpp
-            // :445 CTD class). The old main-thread rationale ("mutations run on main")
-            // is obsolete: the merchant read AND the transaction now run in Papyrus
-            // (VM thread) via the bridge, so nothing here needs main -- and the
-            // dispatch is worker->VM, exactly like DispatchActivate already does.
-            static constexpr bool kEconProbeEnabled = true;
-            if (kEconProbeEnabled)
+            // #21 econ scan. GATED behind bEconomy (off by default) AND po3 presence
+            // (Fable RC#3): with the toggle off, nothing runs -- no dispatch, no
+            // Papyrus, no log -- so a user who hasn't opted in (or lacks po3) never
+            // touches the merchant path. Runs on the WORKER, not MainThread::Post
+            // (Fable #1/#4): the reads (follower GetInventory / CountPotions /
+            // g_travel) must share the thread with the loot/heal/loadout mutations in
+            // this same task or they race InventoryChanges (the Actor.cpp:445 CTD
+            // class). The merchant read + transaction run in Papyrus (VM), so nothing
+            // here needs main; dispatch is worker->VM, like DispatchActivate.
+            if (Config::g_economy.load() && Po3Present())
                 EconomyProbe(a_follower, a_state.logistics(), now);
         }
     }

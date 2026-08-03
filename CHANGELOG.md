@@ -1,3 +1,30 @@
+## v1.0.10 -- release-readiness fixes (Fable RC review)
+
+A Fable "is this good enough to ship to the world?" pass judged the ENGINE ready
+but the SHIPPING SURFACE not; the seven blockers it named are fixed here.
+- LICENSING (RC#1): THIRD-PARTY-NOTICES.md now enumerates the real statically-linked
+  set (CommonLibSSE-NG, Dear ImGui, nlohmann/json, spdlog, fmt -- all MIT) instead of
+  leaving transitive deps "OUTSTANDING"; added OFL.txt (SIL OFL 1.1 + per-font copyright)
+  for the two board fonts, Cinzel and EB Garamond, which ship in the repo.
+- DOCS (RC#2): README gains Requirements + Installation -- SKSE, Address Library, SkyUI +
+  MCM Helper >=9, po3 (economy only), Synthesis (catalog); SE/AE only, VR unsupported,
+  act.flee is AE-only.
+- ECONOMY GATE (RC#3): the merchant scan now runs only when bEconomy is ON *and*
+  po3_papyrusextender.dll is loaded (logged once if absent), instead of an always-on
+  constexpr probe.
+- AUTO-RETREAT (RC#4): the retreat probe is promoted to a real, opt-in leash behavior
+  behind a new **bAutoRetreat** toggle (default OFF): a badly-outmatched follower far from
+  you in combat falls back to your side. Per-tick diagnostic spam cut to transition-only
+  debug lines; the combat-controller observation block removed.
+- WAIT IN LOGISTICS (RC#5): "Wait" is now selectable as a logistics action (a deliberate
+  no-op that gates lower rules), matching combat.
+- PLAYER-HP HEAL (RC#6): a "Player HP% below -> Cast on target" rule now targets the PLAYER,
+  not the casting follower -- the condition's subject was being dropped. Gated to the
+  cast-on-target action so "Player HP% below -> Attack" can't turn a follower on you.
+- SE/AE HONESTY: README + the new toggle's help now state that the walk-to-it behaviours
+  (walk-to-loot, Flee, Auto-retreat) are Anniversary-Edition-only; they no-op on SE 1.5.97.
+  Combat gambits, restocking, looting, and the economy work on both.
+
 ## v1.0.9 -- Fable review fixes for the gambit-v2 tags (#35)
 
 Two adversarial Fable passes over v1.0.1-v1.0.8 found real bugs; all fixed:

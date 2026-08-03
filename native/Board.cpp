@@ -234,6 +234,7 @@ namespace MFO::Board {
         { Vocab::kActLootSoulGems,       "Loot soul gems" },
         { Vocab::kActLootLockpicks,      "Loot lockpicks" },
         { Vocab::kActEquipTorch,         "Equip torch" },
+        { Vocab::kActWait,               "Wait" },   // gate lower rules, e.g. "carry weight > 90% -> Wait"
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
         int cur = 0;

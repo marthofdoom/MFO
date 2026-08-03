@@ -153,6 +153,47 @@ leash and walk-to-loot.
 
 ---
 
+## Requirements
+
+- **Skyrim Special Edition / Anniversary Edition**, on a version SKSE and
+  Address Library support. **VR is not supported. Anniversary Edition (1.6.x)
+  is recommended:** the *walk-to-it* behaviours — walking to loot, *Flee to
+  player*, and *Auto-retreat* — ride a native alias fill that is only verified
+  on AE, so on Special Edition (1.5.97) they are inactive (loot is picked up at
+  arm's reach; flee/retreat do nothing). Everything else — combat gambits
+  (cast/attack/drink), restocking, looting itself, and the merchant economy —
+  works on SE and AE alike.
+- **SKSE64**
+- **Address Library for SKSE Plugins**
+- **SkyUI** and **MCM Helper** (version 9 or newer) — the settings menu
+- **powerofthree's Papyrus Extender** (`po3_papyrusextender.dll`) — required
+  only for the optional follower economy (selling/buying); everything else runs
+  without it. If it is absent, the economy stays off and MFO logs one line
+  saying so.
+- **Synthesis** — MFO reads an item catalog (`mfo_items.json`) that a bundled
+  Synthesis patcher generates from *your* load order so gambit categories
+  (potions, ammo, gear classes) cover modded items with no per-mod patch. MFO
+  runs without it, falling back to a shipped catalog; run the patcher for full
+  modded-item coverage.
+
+## Installation
+
+1. Install the requirements above with your mod manager (Mod Organizer 2 or
+   Vortex), each per its own instructions.
+2. Install MFO's archive as a normal mod and enable `MFO.esp`.
+3. Run the MFO Synthesis patcher as part of your Synthesis build (optional but
+   recommended — see above).
+4. Launch through SKSE. Open the MCM (**Mod Configuration → marth's Follower
+   Overhaul**) to configure; every behaviour ships off or conservative by
+   default.
+
+Load order is not sensitive — MFO drives followers through runtime AI, not
+record edits, so it does not conflict with follower mods, AI overhauls, or
+combat mods. **Updating mid-playthrough is safe:** all state lives in the
+co-save and reverts cleanly on load.
+
+---
+
 ## Docs
 
 Start at [`Docs/INDEX.md`](Docs/INDEX.md), which sets the read order and marks
@@ -185,6 +226,8 @@ deliberately** — bump them on purpose, never float them.
 
 MFO's own code is MIT — see [`LICENSE`](LICENSE). All of it lives in `native/`;
 no third-party source is vendored here. The shipped DLL statically links
-CommonLibSSE-NG (MIT, © 2018 Ryan-rsm-McKenzie) and its dependencies; their
-notices are in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), which ships
-with every release.
+CommonLibSSE-NG (MIT, © 2018 Ryan-rsm-McKenzie), Dear ImGui, nlohmann/json,
+spdlog and fmt (all MIT); their notices are in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The two board fonts —
+**Cinzel** and **EB Garamond** — are licensed under the SIL Open Font License
+1.1, reproduced in [`OFL.txt`](OFL.txt). Both files ship with every release.

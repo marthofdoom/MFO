@@ -221,6 +221,16 @@
           }
         },
         {
+          "id": "bAutoRetreat:General",
+          "text": "Auto-retreat when outmatched",
+          "type": "toggle",
+          "help": "OFF (default): a follower fights on wherever the gambit table sends it. ON: a follower who is badly outmatched (low confidence) AND far from you in combat falls back to your side -- the confidence leash taken to its conclusion. Fires once per fight; the follower stops gambitting while falling back. Anniversary Edition only (like walk-to-loot); does nothing on Special Edition 1.5.97.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
           "id": "fLootRadius:General",
           "text": "Loot scan (units)",
           "type": "slider",

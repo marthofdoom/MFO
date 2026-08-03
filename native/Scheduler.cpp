@@ -47,20 +47,19 @@ namespace MFO::Scheduler {
         std::atomic<double>        g_lastTickMs{ 0.0 };
         std::atomic<std::uint32_t> g_ticks{ 0 };
 
-        // ── RETREAT PROBE bookkeeping ───────────────────────────────────────
-        // One measurement per combat per follower: `tried` arms once when the
+        // ── AUTO-RETREAT bookkeeping ────────────────────────────────────────
+        // One fall-back per combat per follower: `tried` arms once when the
         // fill gate first passes and is erased when the follower leaves combat,
-        // so the next fight measures again. `took` records whether the travel
-        // package was EVER observed as his current package -- the bit that
-        // separates "NEVER TOOK" (combat controller kept locomotion) from
-        // "took but too slow" at the timeout.
+        // so the next fight can fall back again. `took` records whether the
+        // travel package was ever his current package -- lets the timeout line
+        // tell "controller never yielded" from "took but too slow".
         struct RetreatNote {
             bool tried = false;
             bool took  = false;
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
 
-        // The probe's dials. Fill: confidence below 0.25 (a follower who by the
+        // The dials. Fill: confidence below 0.25 (a follower who by the
         // leash tenet WANTS to be at the player's side) while >400u away from
         // the player -- far enough that arrival is an unambiguous pull, not
         // drift. Arrival: 200u (package radius 150 + engine stop slack).
@@ -185,14 +184,15 @@ namespace MFO::Scheduler {
         // it yields even for a follower with no combat gambits.
         Logistics::ReleaseTravelOnCombat(f);
 
-        // ── RETREAT PROBE ────────────────────────────────────────────────────
-        // THE QUESTION, measured in natural play: can an alias Travel package
-        // carrying kIgnoreCombat pull a follower AWAY from a live combat
-        // controller? Trigger: low confidence (he WANTS the player's side, by
-        // the leash tenet) while far from the player, once per combat per
-        // follower. Every serviced tick while the claim stands is instrumented
-        // (the §0.36 WALK-diagnostic shape); teardown on arrival / timeout here
-        // and on combat end in the non-combat branch above.
+        // ── AUTO-RETREAT (leash safety, opt-in via bAutoRetreat) ─────────────
+        // The confidence leash taken to its conclusion: a follower who is badly
+        // outmatched (confidence below threshold -- by the leash tenet he WANTS
+        // to be at the player's side) AND far from the player in combat falls
+        // back under a kIgnoreCombat alias Travel package that outranks his
+        // combat controller's locomotion. Fires once per fight; teardown on
+        // arrival / timeout here and on combat end in the non-combat branch
+        // above. OFF by default -- a default install never acts without an
+        // authored rule. Measured reliable in §0.36; logging is transition-only.
         {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const float dPlayer = pc ?
@@ -202,58 +202,36 @@ namespace MFO::Scheduler {
                 auto& note = g_retreatNotes[id];
                 const float secs  = Packages::RetreatSeconds();
                 auto*       cur   = f->GetCurrentPackage();
-                const bool  onPkg = cur == Forms::g_retreatPackage;
-                if (onPkg) note.took = true;
-                spdlog::info("[retreat] {:08X}: onPkg={} curPkg={:08X} inCombat={} dPlayer={:.0f}",
-                             id, onPkg, cur ? cur->GetFormID() : 0u,
-                             f->IsInCombat(), dPlayer);
-
-                // PART 1b rider -- OBSERVE the combat controller, never write it.
-                // combatController (Actor runtime data) -> state (+0x08) ->
-                // isFleeing (+0x04); targetHandle at +0x2C. All below the
-                // AE-only spinlock at +0x68, so the reads are AE-safe.
-                if (auto* cc = f->GetActorRuntimeData().combatController) {
-                    if (auto* st = cc->state) {
-                        float dTarget = -1.0f;
-                        if (auto tgt = cc->targetHandle.get())   // HOLD the NiPointer
-                            dTarget = f->GetPosition().GetDistance(tgt->GetPosition());
-                        spdlog::info("[retreat-b] {:08X}: isFleeing={} dTarget={:.0f} dPlayer={:.0f}",
-                                     id, st->isFleeing, dTarget, dPlayer);
-                    }
-                }
+                if (cur == Forms::g_retreatPackage) note.took = true;
 
                 if (pc && dPlayer <= kRetreatArriveDist) {
-                    spdlog::info("[retreat] {:08X}: ARRIVED at player after {:.1f}s -- "
-                                 "travel pkg held DURING combat", id, secs);
+                    spdlog::debug("[retreat] {:08X}: reached player after {:.1f}s", id, secs);
                     Packages::RetreatClear("arrived", f);
                 } else if (secs > kRetreatTimeout) {
-                    if (note.took)
-                        spdlog::warn("[retreat] {:08X}: TIMED OUT after {:.1f}s -- pkg TOOK "
-                                     "but never arrived (dPlayer={:.0f}, curPkg={:08X})",
-                                     id, secs, dPlayer, cur ? cur->GetFormID() : 0u);
-                    else
-                        spdlog::warn("[retreat] {:08X}: NEVER TOOK after {:.1f}s -- "
-                                     "curPkg={:08X}, combat controller kept locomotion",
-                                     id, secs, cur ? cur->GetFormID() : 0u);
+                    // Transition-only: one line when the fall-back gives up, with
+                    // enough to tell "controller never yielded" from "too slow".
+                    spdlog::debug("[retreat] {:08X}: gave up after {:.1f}s (took={}, dPlayer={:.0f})",
+                                  id, secs, note.took, dPlayer);
                     Packages::RetreatClear("timeout", f);
                 }
 
-                // While the retreat claim stands, do NOT run the gambit table:
-                // a cast rule would fill the COMMAND alias (also priority 60)
-                // on the same actor, and the measurement would be MFO-vs-MFO
-                // arbitration instead of travel-vs-combat-controller.
+                // While falling back, do NOT run the gambit table: a cast rule
+                // would fill the COMMAND alias (also priority 60) on the same
+                // actor and fight the retreat travel for the alias. A retreating
+                // follower is disengaging, not gambitting -- that is the point.
                 g_lastTickMs = std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - t0).count();
                 return;
             }
 
             auto& note = g_retreatNotes[id];
-            if (!note.tried && Confidence::Of(f) < kRetreatConfidence &&
+            if (Config::g_autoRetreat.load() && !note.tried &&
+                Confidence::Of(f) < kRetreatConfidence &&
                 f->IsInCombat() && pc && dPlayer > kRetreatMinDist) {
-                note.tried = true;   // one measurement per combat, fill failures included
+                note.tried = true;   // one fall-back per fight, fill failures included
                 if (Packages::RetreatFill(f)) {
-                    spdlog::info("[retreat] {:08X}: probe engaged -- confidence={:.2f} "
-                                 "dPlayer={:.0f}", id, Confidence::Of(f), dPlayer);
+                    spdlog::debug("[retreat] {:08X}: falling back -- confidence={:.2f} dPlayer={:.0f}",
+                                  id, Confidence::Of(f), dPlayer);
                 }
             }
         }
