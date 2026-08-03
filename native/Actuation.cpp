@@ -7,6 +7,7 @@
 #include "CasterConsent.h"
 #include "Targeting.h"
 #include "Logistics.h"
+#include "Packages.h"   // #35: act.flee reuses the retreat package
 
 namespace MFO::Actuation {
 
@@ -429,6 +430,30 @@ namespace MFO::Actuation {
         if (op == Vocab::kActEquipRanged) return EquipWeapon(a_follower, true);
         if (op == Vocab::kActEquipMelee)  return EquipWeapon(a_follower, false);
         if (op == Vocab::kActEquipTorch)  return EquipTorch(a_follower);
+
+        if (op == Vocab::kActFlee) {
+            // Disengage by reusing the RETREAT package -- travel to the player
+            // under kIgnoreCombat, the proven machinery that pulls a follower off
+            // a fight (Packages::RetreatFill). Cleared on combat end / arrival by
+            // the retreat driver. #35.
+            if (Packages::RetreatFill(a_follower))
+                return { Result::Fired, "flee -> retreat to player" };
+            return { Result::FailedOther, "retreat alias unavailable" };
+        }
+        if (op == Vocab::kActPowerAttack) {
+            // EXPERIMENTAL (#35): there is no engine verb for "power-attack X".
+            // Aim at the foe via the latch (like Attack), then fire the standing
+            // power-attack animation event directly. May no-op if the follower is
+            // not in a melee-attack state -- FIELD-VERIFY before trusting it.
+            auto ptr = a_choice.target.get();
+            auto* foe = ptr.get();
+            if (!foe) return { Result::FailedOther, "chosen foe no longer resolves" };
+            if (!Targeting::IsHooked()) return { Result::FailedOther, "targeting hook not installed" };
+            Targeting::Command(a_follower->GetFormID(), a_choice.target);
+            const bool sent = a_follower->NotifyAnimationGraph("attackPowerStartInPlace");
+            return { Result::Fired, std::format("power attack (experimental, anim {})",
+                                                sent ? "sent" : "REJECTED") };
+        }
 
         // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,
         // available here so a survival gambit ("Self HP < 30% -> Drink health

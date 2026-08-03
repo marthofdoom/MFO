@@ -1,3 +1,15 @@
+## v1.0.6 -- gambit v2 (2/n): flee + power-attack combat actions [EXPERIMENTAL] (#35)
+
+- FLEE (act.flee): disengage by reusing the retreat package (travel to player under
+  kIgnoreCombat). Solid reuse of proven machinery.
+- POWER ATTACK (act.power_attack): EXPERIMENTAL -- no engine verb exists, so it aims
+  via the latch then fires the standing power-attack anim event; logs whether the
+  graph accepted it. Field-verify.
+
+DROPPED from the batch: in-combat potion looting (breaks combat). DEFERRED:
+keep-distance (needs its own travel-away package, like retreat); arrow-at-quota trade;
+lockpick-doors (needs a verified unlock call). Foe melee/ranged conditions shipped in 1.0.5.
+
 ## v1.0.5 -- gambit v2 (1/n): foe-attacking-me melee/ranged split (#35)
 
 New combat conditions "Foe attacking me: melee" and "Foe attacking me: ranged" --
