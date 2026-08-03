@@ -3,6 +3,7 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
+#include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
 #include "Confidence.h"   // the confidence leash (core tenet)
@@ -237,7 +238,7 @@ namespace MFO::Logistics {
         // condition (marth: the any-potion action never replaced per-type loot).
         bool LootPotions(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::ActorValue a_want,
                          bool a_peek = false) {
-            struct Take { RE::TESBoundObject* obj; std::int32_t count; };
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; float mag; bool health; };
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
@@ -247,10 +248,36 @@ namespace MFO::Logistics {
                 } else {
                     if (!alc || PotionRestores(alc) != a_want) continue;   // only this resource
                 }
-                if (a_peek) return true;
-                takes.push_back({ obj, data.first });
+                const bool health = alc && PotionRestores(alc) == RE::ActorValue::kHealth;
+                takes.push_back({ obj, data.first, health ? PotionMagnitude(alc) : 0.0f, health });
             }
-            if (a_peek) return false;
+
+            // HEALING STOCK CAP (marth: "only loot the strongest 4 readily
+            // available healing potions"). Clamp the HEALTH potions in this body
+            // to what fits under the cap once the follower's current stock is
+            // counted, STRONGEST first -- so a body of weak potions is skipped
+            // once stocked, and a mixed body gives up its best. Only health is
+            // touched; stamina/magicka/fortify/cure pass through. Runs on the
+            // peek too, so a stocked follower never walks over for another.
+            if (const int cap = Config::g_healingStock.load(); cap > 0) {
+                std::vector<std::size_t> h;
+                for (std::size_t i = 0; i < takes.size(); ++i)
+                    if (takes[i].health) h.push_back(i);
+                if (!h.empty()) {
+                    std::sort(h.begin(), h.end(),
+                              [&](std::size_t a, std::size_t b) { return takes[a].mag > takes[b].mag; });
+                    int room = cap - CountPotions(a_follower, RE::ActorValue::kHealth);
+                    if (room < 0) room = 0;
+                    for (std::size_t idx : h) {
+                        const std::int32_t take = std::min<std::int32_t>(room, takes[idx].count);
+                        takes[idx].count = take;   // clamped to 0 -> pruned below
+                        room -= take;
+                    }
+                }
+            }
+            std::erase_if(takes, [](const Take& t) { return t.count <= 0; });
+
+            if (a_peek) return !takes.empty();
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
@@ -1366,7 +1393,32 @@ namespace MFO::Logistics {
                     // first (any explicit owner, including the player), then keep
                     // IsOffLimits() as the second bar for cell-owned/no-owner
                     // crime cases. No delay or waiver overrides this.
-                    if (ref->GetOwner())    { ++dOwned;     return RE::BSContainer::ForEachResult::kContinue; }
+                    if (auto* owner = ref->GetOwner()) {
+                        ++dOwned;
+                        // OWNED PROBE (marth: "not sure potions are being looted").
+                        // The in-town soak showed EVERY potion source dropped as
+                        // owned -- but that log can't tell a legit shop container
+                        // from a killed corpse wrongly read as owned. Dump, rate-
+                        // limited per ref, WHAT was rejected: a dead hostile's
+                        // corpse should carry no owner; a shop barrel should. If
+                        // combat corpses show up here, the gate is eating real loot.
+                        if (a_cat == Category::Potions) {
+                            static std::unordered_map<RE::FormID, Clock::time_point> s_nextOP;
+                            auto& op = s_nextOP[ref->GetFormID()];
+                            if (op.time_since_epoch().count() == 0 || a_now >= op) {
+                                op = a_now + std::chrono::seconds(20);
+                                auto* act = ref->As<RE::Actor>();
+                                auto* fn  = owner->As<RE::TESFullName>();
+                                spdlog::info("[ownprobe] {:08X} dropped-owned ref={:08X} deadActor={} "
+                                             "owner={:08X} formType={} \"{}\"",
+                                             a_follower->GetFormID(), ref->GetFormID(),
+                                             (act && act->IsDead()) ? 1 : 0,
+                                             owner->GetFormID(), static_cast<int>(owner->GetFormType()),
+                                             (fn && fn->GetFullName()) ? fn->GetFullName() : "?");
+                            }
+                        }
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
                     if (ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
                     // Locked -- UNLESS the follower's Lockpicking skill can open
                     // it. RemoveItem ignores locks, so without this a follower
@@ -2103,6 +2155,28 @@ namespace MFO::Logistics {
             return RE::ActorValue::kNone;
         }
         return mgef->data.primaryAV;
+    }
+
+    float PotionMagnitude(RE::AlchemyItem* a_potion) {
+        if (!a_potion) return 0.0f;
+        const auto want = PotionRestores(a_potion);   // catalog-authoritative type
+        if (want == RE::ActorValue::kNone) return 0.0f;
+        // Largest magnitude among the potion's restore effects on that resource.
+        // Same archetype gate as PotionRestores (value modifiers only, so fortify
+        // and cure never count), so the number belongs to the resource the potion
+        // is classified under.
+        float best = 0.0f;
+        for (const auto* e : a_potion->effects) {
+            const auto* mgef = e ? e->baseEffect : nullptr;
+            if (!mgef) continue;
+            const auto arch = mgef->data.archetype;
+            if (arch != RE::EffectArchetypes::ArchetypeID::kValueModifier &&
+                arch != RE::EffectArchetypes::ArchetypeID::kDualValueModifier) continue;
+            if (mgef->data.primaryAV != want) continue;
+            const float mag = e->GetMagnitude();
+            if (mag > best) best = mag;
+        }
+        return best;
     }
 
     int CountPotions(RE::Actor* a_follower, RE::ActorValue a_which) {

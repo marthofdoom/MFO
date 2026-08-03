@@ -1,3 +1,19 @@
+## v1.0.15 -- B cascade fix, healing-potion stock cap
+
+- BOARD: B now truly cascades. It was closing the whole board even with a list-
+  picker open, because the input hook read ImGui's popup state cross-thread (that
+  state lives on the render thread) and always saw "nothing open". The render
+  thread now publishes the busy state to the input thread, so B closes the open
+  picker first and exits the board only at the root. Keyboard Esc shares the fix.
+- HEALING STOCK CAP: a follower loots at most N Restore-Health potions (MCM
+  "Healing potion stock", default 4), STRONGEST available first -- a small reserve
+  of the best rather than a hoard of every weak potion. The loot scan honours it,
+  so a stocked follower won't even walk over for another. 0 = no limit; stamina
+  and magicka loot as before.
+- [ownprobe] diagnostic: when a potion source is skipped as owned, log whether it
+  was a dead actor's corpse or an owned container -- to settle whether killed
+  corpses are wrongly read as owned vs. legitimately-owned shop/townsfolk loot.
+
 ## v1.0.14 -- FFXII-faithful gambit board
 
 The Field Orders board now really copies FFXII's Gambits menu:

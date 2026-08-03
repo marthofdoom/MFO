@@ -231,6 +231,14 @@ namespace MFO::Config {
     // without an authored rule (byte-identical-when-idle tenet). bAutoRetreat.
     inline std::atomic<bool>  g_autoRetreat{ false };
 
+    // HEALING-POTION STOCK CAP (marth: "only loot the strongest 4 readily
+    // available healing potions"). A follower loots Restore-Health potions only
+    // up to this many carried, STRONGEST first -- a small reserve of the best,
+    // not a hoard of every weak potion. The loot peek honours it too, so a
+    // stocked follower won't even walk over for a 5th. 0 = no limit (loot as
+    // before). Health only; stamina/magicka are unaffected. iHealingStock.
+    inline std::atomic<int>   g_healingStock{ 4 };
+
     // HARD CEILING on the walk-to-loot distance (units). The real limit is the
     // confidence LEASH (walkLimit = min(leash, this)); this is only for anyone
     // who wants to clamp the walk BELOW the leash. Default high so the leash

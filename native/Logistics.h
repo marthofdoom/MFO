@@ -34,6 +34,13 @@ namespace MFO::Logistics {
     // return kNone by construction. Reads only the POTION, no actor.
     RE::ActorValue PotionRestores(RE::AlchemyItem* a_potion);
 
+    // The dominant restore MAGNITUDE of a_potion, in the same resource
+    // PotionRestores classifies it under (the largest-magnitude value-modifier
+    // effect on that AV). 0 for non-restore potions. Used to rank health potions
+    // strongest-first for the loot stock cap -- a relative measure, so a list
+    // that restores 50 flat and one that restores 5/sec both order correctly.
+    float PotionMagnitude(RE::AlchemyItem* a_potion);
+
     // Count of H/S/M restore potions of a_which resource in a_follower's OWN
     // inventory (#14 -- the named follower, never the player). Walks the
     // inventory, so it is a ~1 s logistics-tick read, not a combat one.
