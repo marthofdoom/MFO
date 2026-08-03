@@ -230,6 +230,84 @@ namespace MFO::Config {
 
     }
 
+    // MCM MIGRATION SELF-HEAL (see Config.h). MCM Helper's live store is the MO2
+    // overwrite copy of Data/MCM/Settings/MFO.ini; on an EXISTING save it lacks
+    // any toggle added since -- the control reads -1 / won't bind, and a DOWNLOADED
+    // update can't be hand-seeded. Ensure every MCM ModSetting key exists here
+    // before MCM Helper reads, appending any missing one with its default. All MFO
+    // ModSettings live under [General], so appending at EOF keeps them in-section.
+    // Runs ONCE at load (kDataLoaded). If the store is absent (fresh install) MCM
+    // Helper creates it complete, so there is nothing to do. Degrades to prior
+    // behavior on ANY I/O error -- never worse than today.
+    //
+    // KEEP kMcmDefaults IN SYNC with out/MCM/Settings/MFO.ini -- it is the sixth
+    // place a new toggle is wired (atomic, parse+reset, both inis, config.json).
+    void EnsureMcmDefaults() {
+        static constexpr std::pair<const char*, const char*> kMcmDefaults[] = {
+            { "fRapportRate", "1.000000" },   { "fRapportKill", "1.000000" },
+            { "fRapportBossMult", "5.000000" }, { "fRapportDragonMult", "10.000000" },
+            { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
+            { "bAllowSummons", "0" },          { "bEquipToCast", "1" },
+            { "bCasterHook", "1" },            { "bCommandTarget", "1" },
+            { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },
+            { "fMagickaReserve", "0.000000" }, { "bLogistics", "1" },
+            { "fFirstDibsDelay", "4.000000" }, { "fQuickLootWaiver", "4.000000" },
+            { "fChanceRadius", "512.000000" }, { "fFairChance", "6.000000" },
+            { "fAbandonDelay", "45.000000" },  { "fDepartRadius", "700.000000" },
+            { "fPlayerBubble", "256.000000" }, { "fLootRadius", "3000.000000" },
+            { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
+            { "bEconomy", "0" },               { "bAutoRetreat", "0" },
+            { "bRapportToasts", "1" },         { "iTravelGait", "2" },
+            { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "4.000000" },
+            { "fExcursionMax", "60.000000" },  { "fNavmeshGate", "300.000000" },
+            { "fLeashMin", "512.000000" },     { "fLeashMax", "4000.000000" },
+            { "iMenuStyle", "0" },             { "bShowHud", "0" },
+            { "bDebugUnlockSlots", "0" },
+        };
+
+        std::ifstream in(kMCMPath, std::ios::binary);
+        if (!in) return;   // no store yet -> MCM Helper will create it complete
+        std::stringstream ss;
+        ss << in.rdbuf();
+        in.close();
+        std::string text = ss.str();
+        if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
+            static_cast<unsigned char>(text[1]) == 0xBB &&
+            static_cast<unsigned char>(text[2]) == 0xBF)
+            text.erase(0, 3);   // strip MCM Helper's UTF-8 BOM before scanning
+
+        // PRESENT = some line begins (after leading ws) with the exact key token
+        // followed by ws/'='. Line-by-line so "bLoot..." never matches a prefix.
+        auto present = [&text](const char* a_key) {
+            const std::string key = a_key;
+            std::stringstream ls(text);
+            std::string line;
+            while (std::getline(ls, line)) {
+                const auto b = line.find_first_not_of(" \t\r");
+                if (b == std::string::npos) continue;
+                if (line.compare(b, key.size(), key) == 0) {
+                    auto a = b + key.size();
+                    while (a < line.size() && (line[a] == ' ' || line[a] == '\t')) ++a;
+                    if (a < line.size() && line[a] == '=') return true;
+                }
+            }
+            return false;
+        };
+
+        std::string add;
+        int n = 0;
+        for (const auto& [k, v] : kMcmDefaults)
+            if (!present(k)) { add += k; add += " = "; add += v; add += "\n"; ++n; }
+        if (add.empty()) return;
+
+        std::ofstream out(kMCMPath, std::ios::binary | std::ios::app);
+        if (!out) return;
+        if (!text.empty() && text.back() != '\n') out << "\n";   // don't glue onto the last line
+        out << add;
+        out.close();
+        spdlog::info("[config] MCM self-heal: seeded {} missing setting(s) into the store", n);
+    }
+
     void Read() {
         // RESET first, always. Without this an absent key keeps its last
         // in-memory value instead of reverting to default -- MAO §27.

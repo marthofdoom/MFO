@@ -302,4 +302,11 @@ namespace MFO::Config {
     // Board's g_hud) must be RE-APPLIED after Read() by whoever re-reads.
     void Read();
 
+    // MCM migration self-heal: ensure the MCM Helper store (Data/MCM/Settings/
+    // MFO.ini) has every ModSetting key, appending any a mid-playthrough update
+    // added so its toggle binds on an EXISTING save (MCM Helper does not seed
+    // missing keys). Call ONCE at kDataLoaded, BEFORE Config::Read and before MCM
+    // registration. Idempotent + degrades safely; see the .cpp for the key table.
+    void EnsureMcmDefaults();
+
 }

@@ -250,6 +250,9 @@ namespace {
             // Sinks must come AFTER form resolution or they fire against
             // unresolved forms.
             spdlog::info("[startup] kDataLoaded");
+            MFO::Config::EnsureMcmDefaults();  // seed any new toggle's key into the MCM
+                                               // store BEFORE reading it, so an update's
+                                               // toggle binds on an existing save (#32)
             MFO::Config::Read();            // config first -- everything else reads it
             MFO::Forms::Resolve();          // then forms
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
