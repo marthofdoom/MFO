@@ -43,13 +43,7 @@ namespace MFO::Board {
         // long before any save, so defaulting this on drew the HUD over the
         // title screen, loading screens and every vanilla menu.
         std::atomic<bool> g_hud{ false };      // compact readout -- passive, never takes input
-        std::atomic<bool> g_wantClose{ false };
-        // Published by the RENDER thread each frame: is a list-picker popup / active
-        // widget open? The input hook (a DIFFERENT thread) must NOT call ImGui::
-        // IsPopupOpen itself -- the ImGui context belongs to the render thread and
-        // the cross-thread read returned false even with a picker open, so B closed
-        // the whole board instead of backing out one level (the cascaded-back bug).
-        std::atomic<bool> g_uiBusy{ false };
+        std::atomic<bool> g_wantClose{ false };   // keyboard shout-key close (unconditional)
         std::atomic<bool> g_cursorInit{ false };
         std::atomic<float> g_cursorX{ 0.0f }, g_cursorY{ 0.0f };
         std::atomic<std::uint64_t> g_frame{ 0 };
@@ -374,6 +368,14 @@ namespace MFO::Board {
         void DrawFieldKit(const Snapshot& snap) {
             if (g_wantClose.exchange(false)) { g_open = false; return; }
 
+            // CASCADED BACK is decided at the END of this function (after we know
+            // whether a picker was drawn), on the render thread, off ImGui's own
+            // nav-cancel keypress -- see the comment there. s_prevPickerOpen carries
+            // last frame's ground truth (did any picker's BeginPopup return true);
+            // pickerDrawnThisFrame is set by every BeginPopup that opens below.
+            static bool s_prevPickerOpen = false;
+            bool        pickerDrawnThisFrame = false;
+
             auto& io = ImGui::GetIO();
 
             // R1 opened the board (it casts the Field Orders power). Wait for that
@@ -382,7 +384,7 @@ namespace MFO::Board {
             // only edges fed while OPEN; the guard is belt-and-suspenders on top of
             // the fact that the opening DOWN was seen while closed and never fed.
             static bool s_r1Guard = false;
-            if (g_justOpened.exchange(false)) s_r1Guard = true;
+            if (g_justOpened.exchange(false)) { s_r1Guard = true; s_prevPickerOpen = false; }
             if (s_r1Guard && !ImGui::IsKeyDown(ImGuiKey_GamepadR1)) s_r1Guard = false;
             const bool r1Ready = !s_r1Guard;
 
@@ -638,6 +640,7 @@ namespace MFO::Board {
                                 ImVec2(std::max(360.0f, io.DisplaySize.x * 0.30f),
                                        io.DisplaySize.y * 0.55f), ImGuiCond_Appearing);
                             if (ImGui::BeginPopup(pid)) {
+                                pickerDrawnThisFrame = true;   // ground truth: a picker is on screen
                                 ImGui::PushFont(g_fontHead);
                                 ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
                                 ImGui::TextUnformatted(title);
@@ -832,6 +835,7 @@ namespace MFO::Board {
                                                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                                                 ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
                                             if (ImGui::BeginPopup("##spell")) {
+                                                pickerDrawnThisFrame = true;
                                                 ImGui::TextDisabled("follower knows no spells");
                                                 ImGui::EndPopup();
                                             }
@@ -962,15 +966,22 @@ namespace MFO::Board {
             // loaded) with the keyboard equivalent inline, so one strip serves
             // pad and keyboard. Drawn on the render thread between NewFrame and
             // Render, where IsAnyItemActive/IsPopupOpen are valid.
-            // PUBLISH the busy state for the input hook (which can't read the ImGui
-            // context safely from its own thread). Computed here, between NewFrame
-            // and Render, where IsPopupOpen/IsAnyItemActive are valid. This is what
-            // makes B a CASCADED back: busy -> B closes the innermost picker; not
-            // busy (root) -> B closes the board.
-            const bool popupBusy = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-            g_uiBusy.store(popupBusy || ImGui::IsAnyItemActive() || ImGui::GetIO().WantTextInput,
-                           std::memory_order_relaxed);
-            if (popupBusy)
+            // CASCADED BACK, decided here on the render thread off ImGui's OWN
+            // nav-cancel key -- the only signal that can't race the picker close.
+            // The Win32 backend polls XInput itself (ImGui_ImplWin32_NewFrame) and
+            // feeds physical B as GamepadFaceRight, ImGui's nav-cancel; our input
+            // hook can't stop that and must not add a second B path. So by the time
+            // this runs, ImGui's nav-cancel has ALREADY closed any open picker this
+            // frame. Rule: a cancel press (B / Esc) when NO picker was up last frame
+            // AND none opened this frame is a root back -> close the board. A cancel
+            // press with a picker up is the picker-back ImGui just handled -> keep
+            // the board. Same key, same thread as the close: they can't disagree.
+            const bool cancelPressed = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+                                       ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+            if (cancelPressed && !s_prevPickerOpen && !pickerDrawnThisFrame)
+                g_open = false;
+            s_prevPickerOpen = pickerDrawnThisFrame;   // ground truth for next frame
+            if (pickerDrawnThisFrame)
                 ImGui::TextDisabled("[A]/E pick   [B]/Esc back   d-pad to move");
             else
                 ImGui::TextDisabled("[A]/E open list   [B]/Esc back-or-close   [LB]/[RB] follower   "
@@ -1244,14 +1255,11 @@ namespace MFO::Board {
                         // closed the entire board (the §6.5 controller-parity
                         // floor). Read under the io lock we already hold, so it
                         // is race-free against the render thread.
-                        // Read the render thread's PUBLISHED busy flag. Calling
-                        // ImGui::IsPopupOpen/IsAnyItemActive here is cross-thread (the
-                        // ImGui context belongs to the render thread) and read FALSE
-                        // even with a picker open -- so B closed the whole board
-                        // instead of backing out one level. g_uiBusy is computed each
-                        // frame where those reads are valid (see the render publish).
-                        const bool imguiBusy = g_uiBusy.load(std::memory_order_relaxed);
-
+                        // The BACK keys never decide the close here -- this thread
+                        // can't read ImGui. Keyboard Esc/Tab forward Escape; gamepad
+                        // B is left to the Win32 backend's own XInput nav-cancel. The
+                        // render thread resolves the board close off that keypress
+                        // and the on-screen picker state (see DrawFieldKit's end).
                         switch (b->device.get()) {
                         case RE::INPUT_DEVICE::kMouse:
                             if (code <= 4) io.AddMouseButtonEvent(static_cast<int>(code), down);
@@ -1261,16 +1269,12 @@ namespace MFO::Board {
 
                         case RE::INPUT_DEVICE::kKeyboard:
                             if (code == 0x01 || code == 0x0F) {          // Esc / Tab
-                                // A PRESS with nothing open closes the panel;
-                                // every other edge drives ImGui's Escape (cancel
-                                // the popup/text box). Routing ALL releases to
-                                // ImGui -- even when we are no longer busy -- is
-                                // deliberate: the popup often closes between the
-                                // press and the release, and a dropped release
-                                // would leave ImGuiKey_Escape stuck down for the
-                                // session, killing cancel after one use.
-                                if (down && !imguiBusy) g_wantClose = true;
-                                else io.AddKeyEvent(ImGuiKey_Escape, down);
+                                // Forward Escape (both edges) so ImGui's keyboard
+                                // nav-cancel closes an open picker and the render
+                                // thread's resolver sees the press. The board-close
+                                // decision is made THERE (off IsKeyPressed), never
+                                // here -- this thread can't read ImGui state.
+                                io.AddKeyEvent(ImGuiKey_Escape, down);
                             } else if (code == ShoutKey(RE::INPUT_DEVICE::kKeyboard)) {
                                 // Close on RELEASE, swallow both edges. Closing on
                                 // the press leaks the release to the game, which
@@ -1285,16 +1289,16 @@ namespace MFO::Board {
                         case RE::INPUT_DEVICE::kGamepad:
                             if (static_cast<RE::BSWin32GamepadDevice::Key>(code) ==
                                     RE::BSWin32GamepadDevice::Key::kB) {
-                                // CASCADED BACK. imguiBusy is true whenever a
-                                // list-picker popup / text box / active widget is
-                                // open, so B drives ImGui's Escape and closes the
-                                // INNERMOST context (the picker) without touching
-                                // the board. Only at the ROOT -- nothing sub-open
-                                // -- does a B press close the board. Every release
-                                // still reaches ImGui so B-cancel never sticks, and
-                                // one press walks up exactly one level.
-                                if (down && !imguiBusy) g_wantClose = true;
-                                else io.AddKeyEvent(ImGuiKey_Escape, down);
+                                // CASCADED BACK. Do NOT forward B ourselves: the
+                                // ImGui Win32 backend polls XInput directly and
+                                // already feeds physical B as GamepadFaceRight (its
+                                // nav-cancel), which closes the innermost picker on
+                                // the render thread. A second B path here is exactly
+                                // what raced and closed the whole board. We only
+                                // intercept so the game never sees B (swallowed
+                                // below); the render-thread resolver decides the
+                                // board close off that same nav-cancel keypress.
+                                (void)down;
                             } else if (auto k = GamepadToImGuiKey(code); k != ImGuiKey_None) {
                                 // NB: the gamepad shout-close branch was removed on
                                 // purpose. R1 is the Field Orders power on the deck;

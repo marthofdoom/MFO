@@ -1,3 +1,16 @@
+## v1.0.16 -- B cascade fix, real root cause (single B path)
+
+- BOARD: found why the last two B fixes did nothing. ImGui's Win32 backend polls
+  the controller over XInput ITSELF, on the render thread, and feeds physical B as
+  its native nav-cancel -- so B reached ImGui TWICE (once from the backend, once
+  from MFO's input hook) on two racing threads, and no input-side logic could win.
+  Fix: stop adding a second B path. The input hook no longer touches gamepad B
+  (the backend's nav-cancel closes the open picker); the board-close is decided on
+  the render thread, off that SAME keypress, only when no picker was on screen.
+  One signal, one thread -- picker up: B backs out of it; root: B closes the board.
+  Keyboard Esc/Tab still forward Escape (the backend does gamepad only). Verified
+  by adversarial review.
+
 ## v1.0.15 -- B cascade fix, healing-potion stock cap
 
 - BOARD: B now truly cascades. It was closing the whole board even with a list-
