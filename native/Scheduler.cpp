@@ -373,7 +373,15 @@ namespace MFO::Scheduler {
             // latch yet), and so is self-defense (foe_attacking_me*).
             if (op == Vocab::kActAttack && choice.target) {
                 const auto cur = Targeting::Current(id);
-                if (cur && !(cur == choice.target)) {
+                // Only a LIVE current target earns the hesitation beat. A stale
+                // latch to a DEAD/gone foe must not stall a switch (Opus review:
+                // an oscillating winner + a dead latch would leave the follower
+                // stuck on a corpse, never re-engaging) -- resolve it, and if it
+                // is not a living actor, commit the switch immediately below.
+                auto curPtr = cur.get();
+                auto* curActor = curPtr.get();
+                const bool curLive = curActor && !curActor->IsDead() && !curActor->IsDisabled();
+                if (curLive && !(cur == choice.target)) {
                     bool exempt = false;
                     if (choice.ruleIndex < static_cast<int>(rec->second.combat().size())) {
                         const auto& cop = rec->second.combat()[choice.ruleIndex].conditionOpcode;

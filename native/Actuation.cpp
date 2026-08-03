@@ -498,13 +498,18 @@ namespace MFO::Actuation {
             // must not starve the attack rule below for as long as the foe
             // blocks (GAMBIT_FLOWS §3.6).
             if (!melee) return { Result::FailedSkill, "no melee weapon drawn for a power attack", true };
+            // Try the anim FIRST and commit the target latch ONLY if it accepted.
+            // Latch-then-reject (Opus review) was a two-mutation tick: Command wrote
+            // the latch, then the transparent reject fell through and let a LOWER rule
+            // also fire -- and a FAILED power attack still committed a target. Ordering
+            // the graph check ahead means a rejected power attack mutates NOTHING and
+            // falls through cleanly (§4.3, GAMBIT_FLOWS §3.6). `sent` still isn't proof
+            // the swing landed; field-verify. Report Fired only on accept so a reject
+            // buys no suppression window (Fable: Fired-on-reject went visibly passive).
+            if (!a_follower->NotifyAnimationGraph("attackPowerStartInPlace"))
+                return { Result::FailedOther, "power-attack anim rejected", true };
             Targeting::Command(a_follower->GetFormID(), a_choice.target);
-            // Report Fired ONLY if the graph accepted the event -- else a rejected
-            // no-op must NOT buy a suppression window (Fable: Fired-on-reject went
-            // visibly passive). `sent` still isn't proof the swing landed; field-verify.
-            if (a_follower->NotifyAnimationGraph("attackPowerStartInPlace"))
-                return { Result::Fired, "power attack (experimental)" };
-            return { Result::FailedOther, "power-attack anim rejected", true };
+            return { Result::Fired, "power attack (experimental)" };
         }
 
         // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,
