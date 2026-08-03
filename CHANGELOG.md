@@ -1,3 +1,13 @@
+## v1.0.7 -- gambit v2 (3/n): arrow quality-trade + torch to logistics (#35)
+
+- ARROW TRADE (#3): each arrow loot now TRADES worst-for-better, count-neutral -- takes
+  up to the number of better arrows available off a body, best-first, and sheds an equal
+  count of the follower's worst (given back to the body), never shedding one as good as
+  what it took. Empty-handed = clean restock; a junk stack gets upgraded in place.
+- TORCH -> LOGISTICS (#4): "Equip torch" moved out of the combat table (never needed in
+  combat) into logistics; added "In an interior"/"At night" to the logistics conditions
+  to pair it. Combat executor no longer dispatches it.
+
 ## v1.0.6 -- gambit v2 (2/n): flee + power-attack combat actions [EXPERIMENTAL] (#35)
 
 - FLEE (act.flee): disengage by reusing the retreat package (travel to player under

@@ -152,35 +152,67 @@ namespace MFO::Logistics {
         // body that hasn't got what the gambit wants (marth).
         bool LootAmmo(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
                       bool a_peek = false) {
-            // Collect matching ammo tuples first (object, count), THEN transfer
-            // -- RemoveItem dispatches TESContainerChangedEvent synchronously, so
-            // mutating the source inventory mid-walk is the #2 landmine.
-            struct Take { RE::TESBoundObject* obj; std::int32_t count; float dmg; };
-            std::vector<Take> takes;
+            // Collect first, mutate after -- RemoveItem dispatches
+            // TESContainerChangedEvent synchronously, so touching an inventory
+            // mid-walk is the #2 landmine.
+            struct Ammo { RE::TESBoundObject* obj; std::int32_t count; float dmg; };
+            std::vector<Ammo> body;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (auto* ammo = obj->As<RE::TESAmmo>(); ammo && AmmoIsBolt(ammo) == a_wantBolt) {
+                if (auto* am = obj->As<RE::TESAmmo>(); am && AmmoIsBolt(am) == a_wantBolt) {
                     if (a_peek) return true;
-                    takes.push_back({ obj, data.first,
-                                      ammo->GetRuntimeData().data.damage });
+                    body.push_back({ obj, static_cast<std::int32_t>(data.first),
+                                     am->GetRuntimeData().data.damage });
                 }
             }
             if (a_peek) return false;
-            // QUALITY FIRST (#27): transfer the HIGHEST-damage ammo before the
-            // rest, so when the carry-weight gate cuts the haul short it is the
-            // iron arrows left behind, never the ebony. Damage is the record's
-            // own DATA field (AMMO_DATA::damage) -- the same number the game
-            // shows -- so "better" is measured, not name-guessed.
-            std::sort(takes.begin(), takes.end(),
-                      [](const Take& a, const Take& b) { return a.dmg > b.dmg; });
-            bool moved = false;
-            for (const auto& t : takes) {
-                if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
-                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
-                moved = true;
+            if (body.empty()) return false;
+
+            // The follower's OWN matching ammo, and its WORST damage. With none held
+            // this is a pure restock (worstHeld = -1 -> every body arrow is "better",
+            // nothing to shed). Held junk turns it into a TRADE.
+            std::vector<Ammo> held;
+            float worstHeld = std::numeric_limits<float>::max();
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (auto* am = obj->As<RE::TESAmmo>(); am && AmmoIsBolt(am) == a_wantBolt) {
+                    const float d = am->GetRuntimeData().data.damage;
+                    held.push_back({ obj, static_cast<std::int32_t>(data.first), d });
+                    worstHeld = std::min(worstHeld, d);
+                }
             }
-            return moved;
+            if (held.empty()) worstHeld = -1.0f;
+
+            // TAKE the body arrows BETTER than the follower's worst, best-first (so
+            // the carry-weight gate drops iron, never ebony). Track the weakest we
+            // actually took, so the shed below never gives back something as good.
+            std::sort(body.begin(), body.end(), [](const Ammo& a, const Ammo& b) { return a.dmg > b.dmg; });
+            std::int32_t taken = 0;
+            float minTaken = std::numeric_limits<float>::max();
+            for (auto& b : body) {
+                if (b.dmg <= worstHeld) break;   // rest are not upgrades
+                if (!FitsCarryWeight(a_follower, b.obj->GetWeight() * b.count)) continue;
+                a_src->RemoveItem(b.obj, b.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
+                taken   += b.count;
+                minTaken = std::min(minTaken, b.dmg);
+            }
+            if (taken == 0) return false;
+
+            // TRADE (marth #35): give the follower's WORST arrows back to the body,
+            // one per better arrow taken -- capped at `taken` (<= better available)
+            // and only ever shedding arrows strictly worse than the weakest we took.
+            // Empty-handed followers shed nothing (held is empty), so it stays a
+            // clean restock; a junk stack gets upgraded count-neutral.
+            std::sort(held.begin(), held.end(), [](const Ammo& a, const Ammo& b) { return a.dmg < b.dmg; });
+            std::int32_t toShed = taken;
+            for (auto& h : held) {
+                if (toShed <= 0) break;
+                if (h.dmg >= minTaken) break;   // worst-first: nothing worse remains
+                const std::int32_t n = std::min(toShed, h.count);
+                a_follower->RemoveItem(h.obj, n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_src);
+                toShed -= n;
+            }
+            return true;
         }
 
         // Is this alchemy item a POTION the follower would drink? Any potion --
@@ -1931,6 +1963,22 @@ namespace MFO::Logistics {
     int ArrowCount(RE::Actor* a_follower) { return AmmoCount(a_follower, false); }
     int BoltCount(RE::Actor* a_follower)  { return AmmoCount(a_follower, true);  }
 
+    // Equip a carriable torch the follower holds (moved here from combat, #35 --
+    // torch is upkeep; pair with "In an interior"/"At night"). No-op if a light is
+    // already in hand or none is carried.
+    bool EquipTorch(RE::Actor* a_follower) {
+        if (auto* l = a_follower->GetEquippedObject(true); l && l->As<RE::TESObjectLIGH>())
+            return false;
+        for (auto& [obj, data] : a_follower->GetInventory()) {
+            if (!obj || data.first <= 0) continue;
+            auto* light = obj->As<RE::TESObjectLIGH>();
+            if (!light || !light->CanBeCarried()) continue;
+            if (auto* mgr = RE::ActorEquipManager::GetSingleton()) mgr->EquipObject(a_follower, light);
+            return true;
+        }
+        return false;
+    }
+
     // ── public: actuation ───────────────────────────────────────────────────
 
     // Public forwarder so Actuation (the combat dispatcher) drinks through the
@@ -2297,6 +2345,7 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootJewelry)        acted = LootNearby(a_follower, Category::Jewelry, now);
             else if (op == Vocab::kActLootSoulGems)       acted = LootNearby(a_follower, Category::SoulGems, now);
             else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, now);
+            else if (op == Vocab::kActEquipTorch)         acted = EquipTorch(a_follower);   // #35: torch is upkeep
             else if (op == Vocab::kActWait) {
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.
             }

@@ -348,18 +348,7 @@ namespace MFO::Actuation {
             return { Result::Fired, a_ranged ? "equipped ranged" : "equipped melee" };
         }
 
-        Outcome EquipTorch(RE::Actor* a_follower) {
-            if (auto* l = a_follower->GetEquippedObject(true); l && l->As<RE::TESObjectLIGH>())
-                return { Result::NoOp, "already lit" };
-            for (auto& [obj, data] : a_follower->GetInventory()) {
-                if (!obj || data.first <= 0) continue;
-                auto* light = obj->As<RE::TESObjectLIGH>();
-                if (!light || !light->CanBeCarried()) continue;
-                if (auto* mgr = RE::ActorEquipManager::GetSingleton()) mgr->EquipObject(a_follower, light);
-                return { Result::Fired, "lit a torch" };
-            }
-            return { Result::FailedSkill, "no torch carried" };
-        }
+        // (EquipTorch moved to Logistics -- torch is upkeep, not a combat action, #35.)
 
     }
 
@@ -429,7 +418,8 @@ namespace MFO::Actuation {
 
         if (op == Vocab::kActEquipRanged) return EquipWeapon(a_follower, true);
         if (op == Vocab::kActEquipMelee)  return EquipWeapon(a_follower, false);
-        if (op == Vocab::kActEquipTorch)  return EquipTorch(a_follower);
+        // kActEquipTorch moved to the LOGISTICS table (#35, marth: never needed in
+        // combat) -- handled by Logistics::ServiceFollower now, not here.
 
         if (op == Vocab::kActFlee) {
             // Disengage by reusing the RETREAT package -- travel to the player

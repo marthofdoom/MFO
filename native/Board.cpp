@@ -201,7 +201,6 @@ namespace MFO::Board {
         { Vocab::kActDrinkMagickaPotion,"Drink magicka potion" },
         { Vocab::kActEquipRanged,       "Equip ranged weapon" },
         { Vocab::kActEquipMelee,        "Equip melee weapon" },
-        { Vocab::kActEquipTorch,        "Equip torch" },
         { Vocab::kActPowerAttack,       "Power attack (experimental)" },
         { Vocab::kActFlee,              "Flee to player" },
     };
@@ -216,6 +215,8 @@ namespace MFO::Board {
         { Vocab::kCondSelfOutOfArrows,     "Arrows below",          ParamKind::Count   },
         { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
         { Vocab::kCondSelfCarryWeightAbove,"Carry weight % above",  ParamKind::Percent },
+        { Vocab::kCondIsInterior,          "In an interior",        ParamKind::None    },
+        { Vocab::kCondIsNight,             "At night",              ParamKind::None    },
     };
     inline constexpr VocabEntry kActsLogi[] = {
         { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
@@ -232,6 +233,7 @@ namespace MFO::Board {
         { Vocab::kActLootJewelry,        "Loot jewellery" },
         { Vocab::kActLootSoulGems,       "Loot soul gems" },
         { Vocab::kActLootLockpicks,      "Loot lockpicks" },
+        { Vocab::kActEquipTorch,         "Equip torch" },
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
         int cur = 0;
