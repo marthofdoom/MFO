@@ -1,3 +1,29 @@
+## v1.0.11 -- brawl gate + combat sense + loot fix (Opus-reviewed)
+
+- BRAWL GATE (#34): a follower no longer attacks a foe it is not actually hostile
+  to. Eval::PickFoe skips any combat-group member failing IsHostileToActor, so a
+  tavern brawl or the Companions' proving fight (Vilkas) can't be turned into a
+  real assault -- one gate covers attack / power-attack / cast-target. Logs
+  [brawl] "held fire" only when a non-hostile opponent was the sole candidate.
+- COMBAT SENSE (#23): foe count now folds into the confidence leash -- being
+  MOBBED reads less safe than a duel. A five-foe pack drops a full-health follower
+  under the auto-retreat floor; a two-foe fight matches the old value, so existing
+  leash/chase tuning is unchanged at the common case. New shared CombatSense::
+  FoeCount; [sense] tuning log.
+- LOOT EFFICIENCY (#30): a follower now grabs loot already at its own feet even
+  when it sits a hair past the player-leash bubble -- the "found the potion right
+  in front of him only after several runs" report. The leash bounds travel, not
+  what he picks up where he stands.
+- CURE CATALOG (#35, data layer only): the Synthesis patcher classifies cure-
+  poison / cure-disease potions (CurePoison/CureDisease archetypes) and the DLL
+  recognises them, so they are not mis-sold. The "drink a cure" gambit is
+  deferred until requested. Needs a Synthesis re-run to populate.
+- Auto-retreat transition logs raised to info so a field test can see them.
+- FIX (Opus review): a combat-group read-lock was nested inside itself via the
+  new foe-count read (PickFoe -> ChaseRadius -> FoeCount), which could deadlock
+  the game mid-combat if the engine took the write lock between the two reads.
+  The chase cap is now computed once before the lock. Caught before shipping.
+
 ## v1.0.10 -- release-readiness fixes (Fable RC review)
 
 A Fable "is this good enough to ship to the world?" pass judged the ENGINE ready
