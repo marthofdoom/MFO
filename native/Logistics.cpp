@@ -4,6 +4,7 @@
 #include "Vocabulary.h"
 #include "Config.h"
 #include <cmath>          // std::sin/cos/sqrt for the view cone
+#include <unordered_set>  // keepWeapons: best-of-each-class protection set
 #include "Confidence.h"   // the confidence leash (core tenet)
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
