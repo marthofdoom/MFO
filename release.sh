@@ -149,6 +149,7 @@ cp out/Scripts/MFO_MCM.pex        "$STAGE/pkg/Scripts/"
 # Source/Scripts/MFO_Trade.psc by tools/compile.sh (checked below).
 cp out/Scripts/MFO_Trade.pex      "$STAGE/pkg/Scripts/"
 cp THIRD-PARTY-NOTICES.md  "$STAGE/pkg/"    # ships with every build, INVARIANTS #42a
+cp OFL.txt                 "$STAGE/pkg/"    # SIL OFL 1.1 for the board fonts (RC#1); OFL 2 requires it travel
 
 ZIP="MFO-v${VER}.zip"
 rm -f "$ZIP"
