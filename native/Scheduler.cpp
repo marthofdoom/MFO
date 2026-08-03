@@ -12,6 +12,8 @@
 #include "State.h"
 #include "Confidence.h"   // retreat probe: the fill gate reads Of()
 #include "Forms.h"        // retreat probe: g_retreatPackage for the onPkg readout
+#include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
+#include "Temperament.h"  // flair #1: per-follower timing seed
 
 namespace MFO::Scheduler {
 
@@ -41,8 +43,26 @@ namespace MFO::Scheduler {
             int         firedRule = -1;     // which rule bought the quiet
             int         failRule  = -1;     // last failure reported, for #22j
             std::string failReason;
+            std::string lastChain;          // last skip-chain line logged (1.4 dedup)
         };
         std::unordered_map<RE::FormID, Recent> g_recent;
+
+        // FLAIR #3 -- combat-entry READY BEAT. First combat service stamps the
+        // entry; the gambit table holds for ~200-350 ms (temperament-jittered)
+        // so no follower acts with inhuman instantaneity, and the party stops
+        // opening in unison. Cleared where retreat notes are cleared (combat
+        // end), so it re-arms per fight. Wall-clock, not ticks: large parties
+        // (already serviced every N x 133 ms) never stack extra delay.
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_combatEnteredAt;
+
+        // FLAIR #5 -- RETARGET HESITATION. A target SWITCH of an existing latch
+        // must win twice before it commits: the first winning service stores
+        // the proposal and reports NoOp "sizing up <name>"; the second service
+        // that proposes the SAME foe commits. First engagement of a fight is
+        // exempt (the latch map is empty -- cleared on combat end by Rapport's
+        // CombatSink), and so are the foe_attacking_me selectors: self-defense
+        // stays snappy. Keyed like g_recent; cleared on combat end.
+        std::unordered_map<RE::FormID, RE::ActorHandle> g_proposedTarget;
 
         std::atomic<double>        g_lastTickMs{ 0.0 };
         std::atomic<std::uint32_t> g_ticks{ 0 };
@@ -74,6 +94,8 @@ namespace MFO::Scheduler {
     void ClearTransientState() {
         g_retreatNotes.clear();
         g_recent.clear();
+        g_combatEnteredAt.clear();
+        g_proposedTarget.clear();
         g_lastServiced = 0;
         g_lastTick = {};
         g_lastTickMs = 0.0;
@@ -170,6 +192,8 @@ namespace MFO::Scheduler {
                 Packages::RetreatClear("combat ended", f);
             }
             g_retreatNotes.erase(id);
+            g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
+            g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
 
             Logistics::ServiceFollower(f, it->second);
             g_lastTickMs = std::chrono::duration<double, std::milli>(
@@ -252,54 +276,199 @@ namespace MFO::Scheduler {
 
         if (it->second.combat().empty()) return;      // no rules -> nothing to run
 
-        const auto choice = Eval::Evaluate(f, it->second);
-
-        // THE FREQUENCY LIMITER. A gambit spell stays in the follower's hand
-        // only while a cast rule still wants it -- because their AI casts what
-        // they are holding, and MFO controls what they hold. Leaving a heal
-        // equipped after the follower is healed is what let one drain ~1000
-        // magicka: the condition had gone false and the spell was still there.
-        //
-        // This is the honest lever. MFO cannot tell the combat AI "cast less";
-        // it can decide what is available to cast.
-        const bool wantsCast = choice.ruleIndex >= 0 &&
-                               (choice.actionOpcode == Vocab::kActCastSelf ||
-                                choice.actionOpcode == Vocab::kActCastTarget);
-        if (!wantsCast) { Loadout::ReleaseSpell(id); CasterConsent::Clear(id); }
-
-        // §4.4: no match means NO ENGINE CALL. Not a neutral command -- nothing.
-        if (choice.ruleIndex < 0) {
-            g_lastTickMs = std::chrono::duration<double, std::milli>(
-                               std::chrono::steady_clock::now() - t0).count();
-            return;
-        }
-
-        // SUPPRESSION IS POSITIONAL, NEVER ABSOLUTE (INVARIANTS #26).
-        // An absolute per-follower window means a just-fired rule 6 deafens the
-        // follower to the player's rule 1 heal for the whole window -- the
-        // priority inversion #26 exists to forbid, and 1.5 s of it on a dying
-        // follower is player-visible. So: still evaluate, and let a HIGHER
-        // rule (lower index) preempt. Only equal-or-lower rules stay quiet.
-        if (auto r = g_recent.find(id); r != g_recent.end() && now < r->second.until) {
-            if (choice.ruleIndex >= r->second.firedRule) {
+        // ── FLAIR #3: COMBAT-ENTRY READY BEAT ────────────────────────────────
+        // The first serviced tick of a fight stamps the entry; the table holds
+        // for one human beat (~200-350 ms by temperament) before the opening
+        // action. Once per combat entry -- never delays mid-fight reactions --
+        // and silent: no engine call, no log, exactly a slightly-later opening.
+        {
+            const auto beat = g_combatEnteredAt.try_emplace(id, now).first;
+            const auto hold = std::chrono::milliseconds(
+                200 + static_cast<int>(150.0f * Temperament(id)));
+            if (now < beat->second + hold) {
                 g_lastTickMs = std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - t0).count();
                 return;
             }
         }
 
-        const auto outcome = Actuation::Fire(f, choice);
+        // ── THE COMBAT SCAN (GAMBIT_FLOWS H1 + H2 + H3) ──────────────────────
+        // Mirrors the logistics fall-through (Logistics.cpp): try matching
+        // rules in order until one produces a REAL outcome. A rule whose
+        // outcome is TRANSPARENT -- satisfied equip, unaffordable cast, empty
+        // potion stack, cast cooldown, 2H debounce -- must not shadow the
+        // rules below it: that shadow is why a spellsword never fell back to
+        // steel and a follower died holding a heal below an empty drink rule
+        // (D1/D2). Still AT MOST ONE real action per tick (§4.3): transparent
+        // outcomes are by definition non-mutating, and the scan stops cold on
+        // the first Fired or opaque hold (act.wait, a latched attack, the
+        // cast-grace wait -- those legitimately occupy the tick).
+        auto& recent = g_recent[id];
+        const bool inWindow = now < recent.until;
 
-        // Re-find rather than reuse the iterator: Fire() dispatches engine
+        bool castSeen   = false;   // H3: some cast rule's condition held this tick
+        int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
+        bool stopped    = false;   // scan ended on a Fired / opaque hold
+        bool suppressed = false;   // scan stopped at the suppression window
+        std::string chain;         // 1.4: skip-chain, e.g. "0(no potion),2(satisfied)"
+        Eval::Choice choice;
+        Actuation::Outcome outcome;
+
+        for (int start = 0; ; ) {
+            // Re-find the record each pass (INVARIANTS #2): a transparent
+            // outcome may still have dispatched engine events (a failing cast
+            // self-releases the spell), so never hold an iterator across one.
+            const auto rec = g_followers.find(id);
+            if (rec == g_followers.end()) break;
+
+            choice = Eval::Evaluate(f, rec->second, Table::Combat, start);
+            if (choice.ruleIndex < 0) break;          // nothing (more) matched
+
+            const auto& op = choice.actionOpcode;
+            const bool isCast  = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget;
+            const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged;
+
+            // SUPPRESSION IS POSITIONAL, NEVER ABSOLUTE (INVARIANTS #26) --
+            // and it survives the scan unchanged: during a window the scan
+            // stops COLD when the next candidate reaches the fired rule's
+            // index; it never scans past it. Rules ABOVE the fired rule are
+            // still tried first (transparent ones fall through as usual), so a
+            // dying follower's rule-1 heal preempts exactly as before.
+            if (inWindow && choice.ruleIndex >= recent.firedRule) {
+                if (isCast) castSeen = true;   // its condition held: keep the loan (H3)
+                suppressed = true;
+                break;
+            }
+
+            // H2 -- THE HAND CLAIM. A satisfied equip rule above has already
+            // decided this tick's weapon category; a lower CONTRADICTORY equip
+            // is skipped WITHOUT firing, whatever its condition says. This is
+            // first-match-wins applied to the hand as a resource -- without it
+            // the fall-through would re-manufacture the melee<->ranged thrash
+            // in mixed packs (D4). Per marth (§7.2) the claim binds only
+            // equip-vs-equip: a cast rule below still fires (its off-hand
+            // borrow is a loan, not a contradiction -- spellsword lists work).
+            // Per-scan state only; nothing persists across ticks (#22).
+            if (isEquip && handClaim != 0) {
+                const int cat = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                if (cat != handClaim) {
+                    chain += std::format("{}{}(hand claimed)",
+                                         chain.empty() ? "" : ",", choice.ruleIndex);
+                    start = choice.ruleIndex + 1;
+                    continue;
+                }
+            }
+
+            // H3: the condition of a cast rule held this tick -- whether it
+            // now fires, waits out its grace, sits debounced, or fails (the
+            // failure paths self-release internally). Only a tick where NO
+            // cast condition held releases the loan, after the loop.
+            if (isCast) castSeen = true;
+
+            // ── FLAIR #5: RETARGET HESITATION ────────────────────────────────
+            // A switch of an existing latch must win twice: first winning
+            // service proposes and holds ("sizing up <name>" -- an opaque
+            // beat, like the attack latch itself); the second service that
+            // proposes the same foe commits. First engagement is exempt (no
+            // latch yet), and so is self-defense (foe_attacking_me*).
+            if (op == Vocab::kActAttack && choice.target) {
+                const auto cur = Targeting::Current(id);
+                // Only a LIVE current target earns the hesitation beat. A stale
+                // latch to a DEAD/gone foe must not stall a switch (Opus review:
+                // an oscillating winner + a dead latch would leave the follower
+                // stuck on a corpse, never re-engaging) -- resolve it, and if it
+                // is not a living actor, commit the switch immediately below.
+                auto curPtr = cur.get();
+                auto* curActor = curPtr.get();
+                const bool curLive = curActor && !curActor->IsDead() && !curActor->IsDisabled();
+                if (curLive && !(cur == choice.target)) {
+                    bool exempt = false;
+                    if (choice.ruleIndex < static_cast<int>(rec->second.combat().size())) {
+                        const auto& cop = rec->second.combat()[choice.ruleIndex].conditionOpcode;
+                        exempt = cop == Vocab::kCondFoeAttackingMe ||
+                                 cop == Vocab::kCondFoeAttackingMeMelee ||
+                                 cop == Vocab::kCondFoeAttackingMeRanged;
+                    }
+                    if (!exempt) {
+                        auto& prop = g_proposedTarget[id];
+                        if (!(prop == choice.target)) {
+                            prop = choice.target;
+                            auto tp = choice.target.get();
+                            outcome = { Actuation::Result::NoOp,
+                                        std::format("sizing up {}",
+                                                    tp && tp->GetName() ? tp->GetName() : "?") };
+                            stopped = true;   // opaque: consumes the tick, once
+                            break;
+                        }
+                        g_proposedTarget.erase(id);   // won twice -> commit below
+                    }
+                } else {
+                    g_proposedTarget.erase(id);       // first latch / same foe
+                }
+            }
+
+            outcome = Actuation::Fire(f, choice);
+
+            if (outcome.transparent) {
+                // A satisfied equip (transparent NoOp on an equip action) is
+                // the H2 claim; every other transparent outcome just records
+                // its reason in the chain and the scan moves on.
+                const bool satisfiedEquip =
+                    isEquip && outcome.result == Actuation::Result::NoOp;
+                if (satisfiedEquip) handClaim = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                chain += std::format("{}{}({})", chain.empty() ? "" : ",",
+                                     choice.ruleIndex,
+                                     satisfiedEquip ? "satisfied" : outcome.reason.c_str());
+                start = choice.ruleIndex + 1;
+                continue;
+            }
+
+            stopped = true;                    // Fired or opaque hold -> done
+            break;
+        }
+
+        // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
+        // aware). A gambit spell stays in the follower's hand only while some
+        // cast rule still wants it -- because their AI casts what they hold,
+        // and MFO controls what they hold. Under the scan, "wants it" means
+        // the rule's CONDITION held this tick (fired, in grace, debounced, or
+        // suppressed-in-window) even when a lower rule ended up acting --
+        // releasing on "the final winner is not a cast" would yank the spell
+        // mid-grace every time a skipped cast let a lower rule run (D6).
+        if (!castSeen) { Loadout::ReleaseSpell(id); CasterConsent::Clear(id); }
+
+        const char* name = f->GetName() ? f->GetName() : "?";   // flair #11
+
+        if (!stopped) {
+            // §4.4: nothing acted -> NO ENGINE CALL was made. Either no rule
+            // matched, every match was transparent, or the scan reached the
+            // suppression window. 1.4: keep the fall-through legible with ONE
+            // skip-chain line, dedup'd on the whole chain (#22j) so a stable
+            // situation logs once, not at 7.5 Hz.
+            if (!chain.empty()) {
+                std::string line = std::format("rules {} skipped -> {}", chain,
+                                               suppressed ? "suppressed (window)"
+                                                          : "no action");
+                if (recent.lastChain != line) {
+                    recent.lastChain = std::move(line);
+                    spdlog::info("[eval] {} ({:08X}) {}", name, id, recent.lastChain);
+                }
+            }
+            g_lastTickMs = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - t0).count();
+            return;
+        }
+
+        // Re-find rather than reuse an iterator: Fire() dispatches engine
         // events synchronously, and INVARIANTS #2 says re-find live records by
         // key at act time instead of holding one across an engine call.
-        auto& recent = g_recent[id];
         if (auto rec = g_followers.find(id); rec != g_followers.end()) {
             if (choice.ruleIndex < static_cast<int>(rec->second.combat().size())) {
                 // Display only -- the evaluator never reads these back (#22).
                 auto& rule = rec->second.combat()[choice.ruleIndex];
                 rule.lastFired = (outcome.result == Actuation::Result::Fired);
                 rule.lastFailReason = outcome.reason;
+                if (rule.lastFired) rule.lastFiredAt = now;   // flair #9: board pulse
             }
         }
 
@@ -308,12 +477,27 @@ namespace MFO::Scheduler {
             // Suppress only on a REAL action. A wait or a failed cast must not
             // buy quiet time, or a follower who cannot afford a heal would go
             // silent instead of falling through on the next tick.
-            recent.until = now + std::chrono::milliseconds(
-                static_cast<int>(Config::g_suppressWindow.load() * 1000.0f));
+            //
+            // FLAIR #2 -- the window is TEMPO'd per follower (+-12% by the
+            // temperament seed) so a shared trigger no longer opens and closes
+            // the whole party's windows in lockstep. The MCM knob stays the
+            // center; the [eval] timestamps keep the actual cadence readable.
+            recent.until = now + std::chrono::milliseconds(static_cast<int>(
+                Config::g_suppressWindow.load() * 1000.0f *
+                (0.88f + 0.24f * Temperament(id))));
             recent.firedRule = choice.ruleIndex;
             recent.failRule  = -1;
             recent.failReason.clear();
-            spdlog::info("[eval] {:08X} fired rule {} ({})", id, choice.ruleIndex, choice.actionOpcode);
+            recent.lastChain.clear();
+            // 1.4 / Decision 3: when the fire came through a skip chain, ONE
+            // line carries the whole story; otherwise the classic fired line.
+            if (chain.empty()) {
+                spdlog::info("[eval] {} ({:08X}) fired rule {} ({})",
+                             name, id, choice.ruleIndex, choice.actionOpcode);
+            } else {
+                spdlog::info("[eval] {} ({:08X}) rules {} skipped -> rule {} fired ({})",
+                             name, id, chain, choice.ruleIndex, choice.actionOpcode);
+            }
             break;
 
         case Actuation::Result::FailedSkill:
@@ -323,11 +507,18 @@ namespace MFO::Scheduler {
             // suppress), so logging it unconditionally means ~7.5 lines/sec
             // per follower, each with a synchronous flush on the main thread:
             // both a frame cost and a flood that drowns the signal (#22j).
+            // (Post-H1, failures are transparent and rarely terminate the
+            // scan; this case remains for any opaque wall left by design.)
             if (recent.failRule != choice.ruleIndex || recent.failReason != outcome.reason) {
                 recent.failRule   = choice.ruleIndex;
                 recent.failReason = outcome.reason;
-                spdlog::info("[eval] {:08X} rule {} ({}) did NOT fire: {}",
-                             id, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                if (chain.empty()) {
+                    spdlog::info("[eval] {} ({:08X}) rule {} ({}) did NOT fire: {}",
+                                 name, id, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                } else {
+                    spdlog::info("[eval] {} ({:08X}) rules {} skipped -> rule {} ({}) did NOT fire: {}",
+                                 name, id, chain, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                }
             }
             break;
 
@@ -348,8 +539,13 @@ namespace MFO::Scheduler {
                 (recent.failRule != choice.ruleIndex || recent.failReason != outcome.reason)) {
                 recent.failRule   = choice.ruleIndex;
                 recent.failReason = outcome.reason;
-                spdlog::info("[eval] {:08X} rule {} ({}) held off: {}",
-                             id, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                if (chain.empty()) {
+                    spdlog::info("[eval] {} ({:08X}) rule {} ({}) held off: {}",
+                                 name, id, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                } else {
+                    spdlog::info("[eval] {} ({:08X}) rules {} skipped -> rule {} ({}) held off: {}",
+                                 name, id, chain, choice.ruleIndex, choice.actionOpcode, outcome.reason);
+                }
             }
             break;
 

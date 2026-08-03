@@ -350,6 +350,21 @@ namespace MFO::Rapport {
                          a_actorID, before, st.rank, st.rapport,
                          SlotsForRank(before, Table::Combat),    SlotsForRank(st.rank, Table::Combat),
                          SlotsForRank(before, Table::Logistics), SlotsForRank(st.rank, Table::Logistics));
+
+            // FLAIR #13: surface the rank TRANSITION on the HUD -- the
+            // fighting-together system's "the party grows" beat. Transition-
+            // only by construction (rank changes are rare by BALANCE design),
+            // gated behind a default-on toggle for anyone who wants a clean
+            // HUD. DebugNotification just enqueues a UI message, the same call
+            // other queued-task paths ship; copy stays short and dry.
+            if (Config::g_rapportToasts.load()) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
+                const char* who = (a && a->GetName() && a->GetName()[0])
+                                      ? a->GetName() : "Your follower";
+                const std::string msg =
+                    std::format("{} fights beside you with new resolve.", who);
+                RE::DebugNotification(msg.c_str());
+            }
         }
     }
 

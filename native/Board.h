@@ -29,6 +29,9 @@ namespace MFO::Board {
         bool        enabled = true;
         bool        lastFired = false;
         std::string fail;
+        // When the rule last fired (flair #9). A plain steady_clock stamp --
+        // safe to age from the render thread; epoch default = no pulse.
+        std::chrono::steady_clock::time_point firedAt{};
     };
 
     struct FollowerRow {
