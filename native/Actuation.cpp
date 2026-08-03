@@ -345,6 +345,9 @@ namespace MFO::Actuation {
             if (!best) return { Result::FailedSkill, a_ranged ? "no ranged weapon carried"
                                                               : "no melee weapon carried" };
             if (auto* mgr = RE::ActorEquipManager::GetSingleton()) mgr->EquipObject(a_follower, best);
+            spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' dmg={}", a_follower->GetFormID(),
+                         a_ranged ? "ranged" : "melee",
+                         best->GetFullName() ? best->GetFullName() : "?", bestDmg);
             return { Result::Fired, a_ranged ? "equipped ranged" : "equipped melee" };
         }
 

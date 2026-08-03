@@ -335,7 +335,9 @@ namespace MFO::Logistics {
             }
         }
 
-        WepClass BestWeaponClass(RE::Actor* a_f) {
+        // Retained for reference / possible reuse; loot no longer skill-forces a
+        // weapon role (#weapon-switch), so this is not currently called.
+        [[maybe_unused]] WepClass BestWeaponClass(RE::Actor* a_f) {
             auto* avo = a_f->AsActorValueOwner();
             if (!avo) return WepClass::OneHand;
             const float one = avo->GetActorValue(RE::ActorValue::kOneHanded);
@@ -379,48 +381,75 @@ namespace MFO::Logistics {
             // because logistics runs OUT of combat, where Loadout is not holding
             // a hand for a cast, and MFO has no equip-event sink to loop on;
             // armor slots are independent of the (left-hand) spell hand.
-            const WepClass myClass = BestWeaponClass(a_follower);
             auto* equippedWeap = a_follower->GetEquippedObject(false);
             auto* myWeap       = equippedWeap ? equippedWeap->As<RE::TESObjectWEAP>() : nullptr;
             // ONLY loot weapons for an actual weapon-fighter: someone who already
             // wields a real melee/ranged weapon (not a staff, not empty-handed).
             // A staff-wielding healer or a weaponless caster must NOT hoover up
             // the first sword on a corpse -- that is the "arbitrary-weapon vacuum"
-            // (marth). Their weapon-skill numbers are incidental, so BestWeaponClass
-            // alone is not a licence to arm them.
+            // (marth). Their weapon-skill numbers are incidental.
             const bool wieldsRealWeapon =
                 myWeap && WeaponClassOf(myWeap->GetWeaponType()) != WepClass::Other;
-            // Baseline to beat: our current weapon's damage ONLY if it is already
-            // in our best class; otherwise 0, so an in-class weapon upgrades over
-            // an off-class one we happen to hold (the two-hander-with-a-dagger case).
-            std::uint16_t baseDmg = (myWeap && WeaponClassOf(myWeap->GetWeaponType()) == myClass)
+
+            // THE ROLE WE UPGRADE IS THE ONE THEY ACTUALLY WIELD -- never a skill
+            // guess (marth). Upgrade a bow-user's BOW and a swordsman's SWORD in
+            // place; NEVER shove a melee weapon on an archer just because his
+            // One-Handed happens to be decent -- that forced a role change every
+            // loot and thrashed against his bow (the "switches weapons for no
+            // reason" bug). A follower keeps whatever weapon their gambits/AI put
+            // them on; the ONLY role switches come from an explicit equip-melee/
+            // equip-ranged gambit, or a cast freeing a hand. Skill (BestWeaponClass)
+            // no longer drives loot at all.
+            const WepClass wieldedClass = wieldsRealWeapon
+                ? WeaponClassOf(myWeap->GetWeaponType()) : WepClass::Other;
+            const bool wieldsMelee  = wieldedClass == WepClass::OneHand ||
+                                      wieldedClass == WepClass::TwoHand;
+            const bool wieldsRanged = wieldedClass == WepClass::Ranged;
+            using WT = RE::WEAPON_TYPE;
+            // WHAT the follower maintains is GAMBIT-DRIVEN (marth), not skill-guessed:
+            //   equip-melee present  -> keep/upgrade a MELEE weapon; the BEST MELEE
+            //                           SKILL (1H vs 2H) decides the class.
+            //   equip-ranged present -> keep/upgrade a BOW or CROSSBOW (by what they
+            //                           carry / their ammo); ranged is a primary too.
+            // With NEITHER gambit we only upgrade the role they ALREADY WIELD, in
+            // place -- a bow-user is never handed a melee weapon just because his
+            // One-Handed is decent (the "switches weapons for no reason" thrash).
+            const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
+            const bool wantsMelee  = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
+
+            // The MELEE class we loot/upgrade, or Other = "no melee role at all".
+            WepClass meleeTargetClass = WepClass::Other;
+            if (wantsMelee) {
+                // Best MELEE skill decides 1H vs 2H (archery is irrelevant here).
+                auto*       avo = a_follower->AsActorValueOwner();
+                const float one = avo ? avo->GetActorValue(RE::ActorValue::kOneHanded) : 0.0f;
+                const float two = avo ? avo->GetActorValue(RE::ActorValue::kTwoHanded) : 0.0f;
+                meleeTargetClass = (two > one) ? WepClass::TwoHand : WepClass::OneHand;
+            } else if (wieldsMelee) {
+                meleeTargetClass = wieldedClass;   // no gambit -> upgrade what they hold
+            }
+            // Ranged is a primary if a gambit wants it OR they already wield one.
+            const bool doRanged = wantsRanged || wieldsRanged;
+
+            // Baseline the MELEE upgrade must beat: our current weapon's damage
+            // only if it is already IN the target class; else 0, so the first real
+            // one wins (equip-melee picking up a 2H while we hold a 1H).
+            std::uint16_t baseDmg = (wieldsMelee && wieldedClass == meleeTargetClass)
                                     ? myWeap->GetAttackDamage() : 0;
 
             RE::TESBoundObject* bestArmor   = nullptr;
             RE::TESBoundObject* bestWeap    = nullptr;
             std::uint16_t       bestWeapDmg = baseDmg;
 
-            // RANGED ACQUISITION (marth): a follower whose gambits include "equip
-            // ranged" is MEANT to shoot -- so loot a ranged weapon even when they
-            // don't currently wield a real weapon and their best melee class isn't
-            // ranged (the wieldsRealWeapon/myClass gates would otherwise never let
-            // a swordsman or an empty-handed archer pick one up).
-            //
-            // BOW vs CROSSBOW must not be conflated: they feed different ammo, so
-            // a crossbow-user handed a bow (or vice versa) ends up with a weapon
-            // it has no ammo for. Pick the kind the follower can actually feed --
-            // whichever ranged weapon they already carry (better of the two), else
-            // by the ammo they hold (arrows -> bow, bolts -> crossbow), else bow
-            // by default. Loot only THAT kind; baseline is their current of it.
-            using WT = RE::WEAPON_TYPE;
-            const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
-            // A follower whose table says "equip melee" is MEANT to swing one, so
-            // loot a melee weapon of their best class even at poor skill / empty-
-            // handed (they'll use it occasionally) -- mirrors wantsRanged (marth).
-            const bool wantsMelee = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
+            // BOW vs CROSSBOW must not be conflated: they feed different ammo, so a
+            // crossbow-user handed a bow (or vice versa) has a weapon it can't feed.
+            // Pick the kind the follower can actually feed -- whichever ranged weapon
+            // they already carry (better of the two), else by the ammo they hold
+            // (arrows -> bow, bolts -> crossbow), else a bow. Loot only THAT kind;
+            // baseline is their current of it.
             bool          wantCrossbow = false;
             std::uint16_t myRangedDmg  = 0;
-            if (wantsRanged) {
+            if (doRanged) {
                 std::uint16_t bowDmg = 0, xbowDmg = 0;
                 int arrows = 0, bolts = 0;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -448,32 +477,28 @@ namespace MFO::Logistics {
                 if (Catalog::IsExcluded(obj->GetFormID())) continue;
 
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
-                    // A SHIELD needs a free off-hand; a two-hander or bow user has
-                    // none, so it's dead weight -- never loot one for them (marth:
-                    // Farkas, a two-hander, picked up a shield).
+                    // A SHIELD needs a free off-hand: only a ONE-HAND melee role can
+                    // use one. A 2H, ranged, or no-melee-role follower has no hand
+                    // for it -- dead weight (marth: Farkas, a two-hander, picked up
+                    // a shield).
                     const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                         & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
-                    const bool shieldUseless = isShield &&
-                        (myClass == WepClass::TwoHand || myClass == WepClass::Ranged);
+                    const bool shieldUseless = isShield && meleeTargetClass != WepClass::OneHand;
                     if (!bestArmor && !shieldUseless && ArmorIsBetter(a_follower, armo)) bestArmor = obj;
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
                     if (IsCreatureWeapon(weap)) continue;   // never equip automaton/creature gear
                     const WepClass wc = WeaponClassOf(weap->GetWeaponType());
-                    const bool meleeClass = (wc == WepClass::OneHand || wc == WepClass::TwoHand);
-                    // In the follower's best class (a weapon-fighter upgrading their
-                    // own weapon), OR -- if their table says "equip melee" -- ANY melee
-                    // weapon regardless of class. The wantsMelee arm is MELEE-ONLY
-                    // (Fable: it was matching crossbows for an archer whose myClass is
-                    // Ranged, handing them a bolt-less crossbow); ranged is exclusively
-                    // the kind-gated wantsRanged path below.
-                    if (((wieldsRealWeapon && wc == myClass) || (wantsMelee && meleeClass)) &&
+                    // MELEE upgrade: ONLY the target melee class -- the equip-melee
+                    // gambit's best-skill class, or the class they already wield. Never
+                    // cross-class, and never skill-forced onto a ranged user (that was
+                    // the thrash bug). meleeTargetClass == Other means no melee role.
+                    if (meleeTargetClass != WepClass::Other && wc == meleeTargetClass &&
                         weap->GetAttackDamage() > bestWeapDmg) {
                         bestWeapDmg = weap->GetAttackDamage();
                         bestWeap    = obj;
                     }
-                    // Ranged pickup -- ONLY the follower's kind (bow XOR crossbow),
-                    // independent of wieldsRealWeapon/myClass.
-                    if (wantsRanged) {
+                    // Ranged pickup -- ONLY the follower's kind (bow XOR crossbow).
+                    if (doRanged) {
                         const auto wt = weap->GetWeaponType();
                         const bool kindMatch = wantCrossbow ? (wt == WT::kCrossbow) : (wt == WT::kBow);
                         if (kindMatch && weap->GetAttackDamage() > bestRangedDmg) {
@@ -547,6 +572,27 @@ namespace MFO::Logistics {
             // re-entering here.
             if (auto* eq = RE::ActorEquipManager::GetSingleton())
                 eq->EquipObject(a_follower, best);
+
+            // [equip] DIAGNOSTIC: the weapon swap was INVISIBLE in the log --
+            // marth's "Erik switches melee weapons for no reason" could not be
+            // seen. Log WHAT we put on, over WHAT, and the class reasoning that
+            // chose it, so a soak shows a real upgrade vs a thrash (e.g. a bow-
+            // user whose skill-class is melee getting a melee weapon forced on).
+            if (auto* nw = best->As<RE::TESObjectWEAP>()) {
+                spdlog::info("[equip] {:08X}: LOOT weapon '{}' dmg={} class={} <- over '{}' "
+                             "dmg={} class={} | meleeTgt={} wantsMelee={} wantsRanged={} baseDmg={}",
+                             a_follower->GetFormID(),
+                             nw->GetFullName() ? nw->GetFullName() : "?", nw->GetAttackDamage(),
+                             static_cast<int>(WeaponClassOf(nw->GetWeaponType())),
+                             myWeap && myWeap->GetFullName() ? myWeap->GetFullName() : "(none)",
+                             myWeap ? myWeap->GetAttackDamage() : 0,
+                             myWeap ? static_cast<int>(WeaponClassOf(myWeap->GetWeaponType())) : -1,
+                             static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseDmg);
+            } else {
+                spdlog::info("[equip] {:08X}: LOOT armor '{}'", a_follower->GetFormID(),
+                             best->As<RE::TESFullName>() && best->As<RE::TESFullName>()->GetFullName()
+                                 ? best->As<RE::TESFullName>()->GetFullName() : "?");
+            }
 
             // Move the old piece's gems onto the new one when it becomes worn.
             // No-op if the old item had no gems (fromUid == 0) or MEO is absent.
