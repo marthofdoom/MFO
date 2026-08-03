@@ -121,6 +121,18 @@ namespace MFO::Eval {
             int         nonHostile = 0;   // brawl gate: foes skipped as non-hostile
             RE::FormID  lastNH     = 0;
 
+            // Compute the chase cap ONCE, and BEFORE taking the combat-group lock.
+            // ChaseRadius -> Confidence::Of -> CombatSense::FoeCount ALSO reads
+            // cc->combatGroup under that same lock (#23). Calling it inside the
+            // loop below (as this used to) would nest a read-lock inside the read
+            // lock we hold here -- benign only until the main thread's combat AI
+            // takes the WRITE lock between the two acquisitions, at which point
+            // both threads spin forever (worker holds read#1, waits on read#2;
+            // main holds the write bit, waits for readers to drain). Hoisting it
+            // out removes the nesting entirely -- and the cap is per-follower, not
+            // per-candidate, so this is also strictly less work.
+            const float chaseCap = Confidence::ChaseRadius(a_self);
+
             // The group is shared mutable engine state; read it under its own
             // lock, and do NOTHING but read inside.
             {
@@ -146,6 +158,15 @@ namespace MFO::Eval {
                     // a valid gambit target. IsHostileToActor is the engine's own
                     // relationship+combat read (proven available in Probe). Skips
                     // are counted and surfaced after the lock (see LogBrawlSkip).
+                    //
+                    // TRADE-OFF (kept deliberately): a real foe attacking only the
+                    // PLAYER can read non-hostile-to-follower for the brief window
+                    // before aggro propagates, so the follower may not pre-empt it.
+                    // That window self-corrects, and the alternative -- exempting
+                    // the "attacking player" selector from this gate -- would let a
+                    // follower join the player's BRAWL (the opponent is swinging at
+                    // the player too), which is the exact bug this closes. The
+                    // [brawl] log surfaces real passivity if the soak shows any.
                     if (!foe->IsHostileToActor(a_self)) {
                         ++nonHostile; lastNH = foe->GetFormID();
                         continue;
@@ -162,7 +183,7 @@ namespace MFO::Eval {
                     // distance on purpose.
                     if (a_op != Vocab::kCondFoeWithinRange &&
                         a_op != Vocab::kCondFoeBeyondRange &&
-                        dist > Confidence::ChaseRadius(a_self))
+                        dist > chaseCap)
                         continue;
 
                     float score = dist;   // default for the gate-style selectors

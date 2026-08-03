@@ -37,14 +37,16 @@ namespace MFO::Confidence {
         float c = 0.6f * hp + 0.2f * st + 0.2f * mg;
         // A live fight is less safe to wander off in than a lull -- and being
         // MOBBED is worse than a duel (#23). Each foe past the first tightens
-        // the multiplier; the curve is pinned so a TWO-foe fight lands on the
-        // old flat 0.65, leaving existing leash/chase tuning unchanged at the
-        // common case, and only diverges as the crowd grows (5 foes drops it
-        // under the 0.25 auto-retreat floor the Scheduler watches) or shrinks
-        // (a lone foe reads braver). Clamped so a swarm can't zero it out.
+        // the multiplier; the curve is pinned so a TWO-foe fight lands ~0.63
+        // (the old flat 0.65, so existing leash/chase tuning is unchanged at the
+        // common case), a lone foe reads braver, and a FIVE-foe pack drops to
+        // ~0.225 -- strictly UNDER the 0.25 auto-retreat floor the Scheduler
+        // watches, so a full-health follower still falls back when genuinely
+        // swarmed (at 0.13 it landed exactly ON 0.25 and never crossed the strict
+        // < gate). Clamped so a mob can't zero it out.
         if (a_follower->IsInCombat()) {
             const int   foes = std::max(1, CombatSense::FoeCount(a_follower));
-            const float mult = std::clamp(0.90f - 0.13f * static_cast<float>(foes),
+            const float mult = std::clamp(0.90f - 0.135f * static_cast<float>(foes),
                                           0.15f, 0.90f);
             c *= mult;
         }
