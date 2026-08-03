@@ -35,7 +35,11 @@ if [[ $# -ge 1 ]]; then
     fi
     echo "$NEWVER" > VERSION
     sed -i "s/^project(MFO VERSION [0-9.]*/project(MFO VERSION ${NEWVER}/" native/CMakeLists.txt
-    git add VERSION native/CMakeLists.txt
+    # Stamp the MCM Debug-page "Version" readout (MEO/MAO style). The `"value"`
+    # key is unique to that text element in config.json, so this hits nothing
+    # else. Keeps the in-game readout matching the built DLL for free.
+    sed -i "s/\"value\": \"v[0-9.]*\"/\"value\": \"v${NEWVER}\"/" out/MCM/Config/MFO/config.json
+    git add VERSION native/CMakeLists.txt out/MCM/Config/MFO/config.json
     git commit -q -m "Bump version to ${NEWVER}"
     git push -q origin main
     echo "Stamped ${NEWVER} and pushed. CI is rebuilding native/."
