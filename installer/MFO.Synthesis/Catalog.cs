@@ -8,7 +8,10 @@
 // a lookup in the DLL.
 //
 // Output schema (mfo_items.json), each entry = { plugin, id } + category fields:
-//   potions[] : restores = health|stamina|magicka
+//   potions[] : restores = health|stamina|magicka  (optional)
+//               cures    = poison|disease|both      (optional; cure potions)
+//               a potion row appears if it restores a resource OR cures -- some
+//               do both, some only cure (no restore ActorValue at all).
 //   ammo[]    : kind     = arrow|bolt
 //   jewelry[] : (amulets + rings)
 //   soulgems[]: (every SLGM record — the DLL treats membership as the category)
@@ -21,6 +24,7 @@
 // The DLL resolves each with LookupForm<T>(id, plugin) (MAO's mao_tiers scheme).
 
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mutagen.Bethesda;
 using Mutagen.Bethesda.Plugins;
 using Mutagen.Bethesda.Plugins.Cache;
@@ -34,7 +38,7 @@ static class Catalog
     // wants at runtime.
     sealed record Entry(string plugin, string id,
                         string? restores = null, string? kind = null, string? why = null,
-                        string? name = null, uint? value = null);
+                        string? name = null, uint? value = null, string? cures = null);
 
     static string Id(FormKey fk) => $"0x{fk.ID:X6}";
     // Canonical LOWERCASE plugin name. Mutagen can stringify the SAME master with
@@ -99,9 +103,10 @@ static class Catalog
         {
             if (p.Flags.HasFlag(Ingestible.Flag.FoodItem)) continue;   // food, not a potion
             var restores = ClassifyRestore(p, cache);
-            if (restores != null)
+            var cures    = ClassifyCure(p, cache);
+            if (restores != null || cures != null)
                 potions.Add(new Entry(Plugin(p.FormKey), Id(p.FormKey), restores: restores,
-                                      name: p.Name?.String, value: p.Value));
+                                      cures: cures, name: p.Name?.String, value: p.Value));
         }
 
         // ── AMMO ────────────────────────────────────────────────────────────
@@ -174,7 +179,16 @@ static class Catalog
             soulgems,
             exclude,
         };
-        var json = JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true });
+        // Omit null category fields (WhenWritingNull): a potion row that only
+        // restores no longer carries "cures": null, and vice versa. The DLL reads
+        // every field with a defaulted lookup, so an ABSENT key is safe -- but a
+        // present JSON null would throw its string conversion. This also keeps the
+        // catalog small and readable.
+        var json = JsonSerializer.Serialize(model, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        });
         File.WriteAllText(outPath, json);
 
         Console.WriteLine($"[MFO] catalog written: {potions.Count} potions, {ammo.Count} ammo, "
@@ -188,6 +202,32 @@ static class Catalog
     // rules out poisons; NOT-Recover rules out FORTIFY (a temporary buff whose
     // value is taken back when it ends) — leaving true restores, instant or over
     // time. The dominant (largest-magnitude) such effect names the potion.
+    // A potion CURES if any of its effects is a CurePoison or CureDisease
+    // archetype -- read from the magic effect record, so a modded cure potion
+    // (LoreRim/CACO) classifies the same as a vanilla one. These archetypes
+    // carry no restore ActorValue, so ClassifyRestore misses them entirely; the
+    // "cure poison / disease" gambit needs them recognised on their own.
+    static string? ClassifyCure(IIngestibleGetter p, ILinkCache cache)
+    {
+        bool poison = false, disease = false;
+        foreach (var e in p.Effects)
+        {
+            if (!e.BaseEffect.TryResolve(cache, out var m)) continue;
+            switch (m.Archetype.Type)
+            {
+                case MagicEffectArchetype.TypeEnum.CurePoison:  poison  = true; break;
+                case MagicEffectArchetype.TypeEnum.CureDisease: disease = true; break;
+            }
+        }
+        return (poison, disease) switch
+        {
+            (true,  true)  => "both",
+            (true,  false) => "poison",
+            (false, true)  => "disease",
+            _              => null,
+        };
+    }
+
     static string? ClassifyRestore(IIngestibleGetter p, ILinkCache cache)
     {
         string? best = null;
