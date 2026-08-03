@@ -203,8 +203,6 @@ namespace MFO::Board {
         { Vocab::kActEquipMelee,        "Equip melee weapon" },
         { Vocab::kActPowerAttack,       "Power attack (experimental)" },
         { Vocab::kActFlee,              "Flee to player" },
-        { Vocab::kActKeepDistance,      "Keep distance (experimental)" },
-        { Vocab::kActFleeTotal,         "Flee from foe (experimental)" },
     };
     inline constexpr VocabEntry kCondsLogi[] = {
         { Vocab::kCondAlways,              "Always",                ParamKind::None    },

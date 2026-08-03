@@ -13,7 +13,6 @@
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
 #include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
-#include "Actuation.h"    // #35: release a keep-distance/flee KeepOffset out of combat
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -160,13 +159,10 @@ namespace MFO::Logistics {
             std::vector<Ammo> body;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (auto* am = obj->As<RE::TESAmmo>(); am && AmmoIsBolt(am) == a_wantBolt) {
-                    if (a_peek) return true;
+                if (auto* am = obj->As<RE::TESAmmo>(); am && AmmoIsBolt(am) == a_wantBolt)
                     body.push_back({ obj, static_cast<std::int32_t>(data.first),
                                      am->GetRuntimeData().data.damage });
-                }
             }
-            if (a_peek) return false;
             if (body.empty()) return false;
 
             // The follower's OWN matching ammo, and its WORST damage. With none held
@@ -183,6 +179,15 @@ namespace MFO::Logistics {
                 }
             }
             if (held.empty()) worstHeld = -1.0f;
+
+            // PEEK: the eligibility check must agree with the TAKE below, or the
+            // follower walks back to a corpse holding only the junk it just shed and
+            // takes nothing, forever (Fable). Eligible only if a body arrow is a real
+            // upgrade over the follower's worst.
+            if (a_peek) {
+                for (auto& b : body) if (b.dmg > worstHeld) return true;
+                return false;
+            }
 
             // TAKE the body arrows BETTER than the follower's worst, best-first (so
             // the carry-weight gate drops iron, never ebony). Track the weakest we
@@ -352,7 +357,7 @@ namespace MFO::Logistics {
         // gambit => the follower is meant to use a bow/crossbow, so loot one.)
         bool TableHasAction(const std::vector<Gambit>& a_tab, const char* a_op) {
             for (const auto& g : a_tab)
-                if (g.actionOpcode == a_op) return true;
+                if (g.enabled && g.actionOpcode == a_op) return true;   // a toggled-OFF rule doesn't count (Fable)
             return false;
         }
 
@@ -453,10 +458,14 @@ namespace MFO::Logistics {
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
                     if (IsCreatureWeapon(weap)) continue;   // never equip automaton/creature gear
                     const WepClass wc = WeaponClassOf(weap->GetWeaponType());
-                    // In the follower's best class, and strictly harder-hitting
-                    // than what they effectively wield. A bow never beats a sword
-                    // for a swordsman; a greatsword beats a dagger for a 2h user.
-                    if ((wieldsRealWeapon || wantsMelee) && wc == myClass &&
+                    const bool meleeClass = (wc == WepClass::OneHand || wc == WepClass::TwoHand);
+                    // In the follower's best class (a weapon-fighter upgrading their
+                    // own weapon), OR -- if their table says "equip melee" -- ANY melee
+                    // weapon regardless of class. The wantsMelee arm is MELEE-ONLY
+                    // (Fable: it was matching crossbows for an archer whose myClass is
+                    // Ranged, handing them a bolt-less crossbow); ranged is exclusively
+                    // the kind-gated wantsRanged path below.
+                    if (((wieldsRealWeapon && wc == myClass) || (wantsMelee && meleeClass)) &&
                         weap->GetAttackDamage() > bestWeapDmg) {
                         bestWeapDmg = weap->GetAttackDamage();
                         bestWeap    = obj;
@@ -1788,24 +1797,39 @@ namespace MFO::Logistics {
                 // (Actor.cpp:445, null-deref on the InventoryChanges the worker tick
                 // may be mutating -- crash 2026-08-01), but the GetInventory snapshot
                 // is safe, so sum Gold001 (0x0000000F) straight from it.
-                // KEEP THE LOADOUT: a follower who fights with BOTH a bow and a melee
-                // weapon only ever has ONE worn at a time, so the sheathed other reads
-                // as unworn and was SOLD (marth). Protect the BEST weapon of EACH
-                // class -- melee and ranged -- from the sell list; only worse
-                // duplicates are junk. (IsWorn alone caught just the drawn one.)
-                RE::TESBoundObject* keepMelee  = nullptr; std::uint16_t keepMeleeDmg  = 0;
-                RE::TESBoundObject* keepRanged = nullptr; std::uint16_t keepRangedDmg = 0;
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
-                    auto* w = obj->As<RE::TESObjectWEAP>();
-                    if (!w || IsCreatureWeapon(w)) continue;
-                    const WepClass wc = WeaponClassOf(w->GetWeaponType());
-                    const std::uint16_t dmg = w->GetAttackDamage();
-                    if (wc == WepClass::Ranged) {
-                        if (!keepRanged || dmg >= keepRangedDmg) { keepRangedDmg = dmg; keepRanged = obj; }
-                    } else if (wc == WepClass::OneHand || wc == WepClass::TwoHand) {
-                        if (!keepMelee || dmg >= keepMeleeDmg)   { keepMeleeDmg  = dmg; keepMelee  = obj; }
+                // KEEP THE LOADOUT: a follower who fights with a bow AND a melee weapon
+                // only ever has ONE worn at a time, so the sheathed other reads unworn
+                // and was SOLD (marth). Protect the best weapon of EACH weapon CLASS --
+                // 1H, 2H, bow, crossbow, staff kept SEPARATELY (Fable: merging 1H+2H or
+                // bow+crossbow by raw damage let a junk greatsword/crossbow win the keep
+                // and the real weapon get sold). Only worse in-class duplicates are junk.
+                std::unordered_set<RE::TESBoundObject*> keepWeapons;
+                {
+                    // bucket: 1=1H 2=2H 3=bow 4=crossbow 5=staff; -1 = don't protect.
+                    auto bucketOf = [](RE::WEAPON_TYPE wt) -> int {
+                        using WT = RE::WEAPON_TYPE;
+                        switch (wt) {
+                            case WT::kBow:          return 3;
+                            case WT::kCrossbow:     return 4;
+                            case WT::kStaff:        return 5;
+                            case WT::kTwoHandSword:
+                            case WT::kTwoHandAxe:   return 2;
+                            case WT::kHandToHandMelee: return -1;   // never protect fists
+                            default:                return 1;      // 1h sword/dagger/axe/mace
+                        }
+                    };
+                    std::unordered_map<int, std::pair<RE::TESBoundObject*, std::uint16_t>> best;
+                    for (auto& [obj, data] : a_follower->GetInventory()) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* w = obj->As<RE::TESObjectWEAP>();
+                        if (!w || IsCreatureWeapon(w)) continue;
+                        const int b = bucketOf(w->GetWeaponType());
+                        if (b < 0) continue;
+                        auto& slot = best[b];
+                        if (!slot.first || w->GetAttackDamage() >= slot.second)
+                            slot = { obj, w->GetAttackDamage() };
                     }
+                    for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
                 }
 
                 std::vector<TradeBridge::SellRow> sell;
@@ -1816,7 +1840,7 @@ namespace MFO::Logistics {
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
-                    if (weap && (obj == keepMelee || obj == keepRanged)) continue;   // loadout, not junk
+                    if (weap && keepWeapons.count(obj)) continue;   // loadout weapon, not junk
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
@@ -2044,11 +2068,6 @@ namespace MFO::Logistics {
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
         g_svc = &a_state;   // loot code reads the gambit table through this (worker-sequential)
-
-        // Out of combat now -> release any keep-distance/flee KeepOffset the combat
-        // table set, so it never outlives the fight (#35). Same worker thread as
-        // Actuation::Fire, so the latch is single-threaded.
-        Actuation::ClearKeepOffsetIfLatched(a_follower);
 
 
         const auto id  = a_follower->GetFormID();

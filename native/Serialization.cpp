@@ -12,7 +12,6 @@
 #include "Packages.h"
 #include "Papyrus.h"
 #include "TradeBridge.h"
-#include "Actuation.h"
 #include "MEOBridge.h"
 #include "MainThread.h"
 #include "Probe.h"
@@ -264,6 +263,16 @@ namespace MFO {
                                 ++disabledRules;
                             }
                         }
+                        // MIGRATION (#35): "Equip torch" moved combat->logistics. A
+                        // legacy rule in the COMBAT table (t==0) would now hit the
+                        // fail-closed unknown-action path and, since combat has no
+                        // fall-through, WIN every tick and block every lower combat
+                        // rule. Redirect it into the logistics table instead of
+                        // dropping it, so the follower still lights up on schedule.
+                        if (t == 0 && g.actionOpcode == "act.equip_torch") {
+                            st.tables[1].push_back(std::move(g));
+                            continue;
+                        }
                         // NOTE: the read must CONSUME every gambit even when
                         // over the slot cap -- bailing early would desync the
                         // byte stream for everything after it.
@@ -384,7 +393,6 @@ namespace MFO {
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
         CasterConsent::ClearTransientState();
-        Actuation::ClearTransientState();   // #35: keep-distance/flee latch
         Board::ClearPendingEdits();
         // The alias fill is the one piece of MFO state the ENGINE persists for
         // us whether we want it or not, so revert cannot just forget it the way

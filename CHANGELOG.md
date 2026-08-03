@@ -1,3 +1,19 @@
+## v1.0.9 -- Fable review fixes for the gambit-v2 tags (#35)
+
+Two adversarial Fable passes over v1.0.1-v1.0.8 found real bugs; all fixed:
+LOOT: keep-set now protects the best of EACH weapon class (1H/2H/bow/crossbow/staff)
+separately -- merging them let a junk greatsword/crossbow win the keep and the real
+weapon get SOLD (staves were also unprotected). LootAmmo peek now agrees with the take
+(was walking followers back to corpses holding only shed junk, forever). TableHasAction
+respects the enabled flag (a toggled-OFF equip gambit no longer loots). The equip-melee
+loot arm is MELEE-ONLY (was handing archers bolt-less crossbows). Legacy COMBAT "equip
+torch" rules migrate to logistics on load (would otherwise block every lower combat rule).
+COMBAT: power-attack returns Fired only if the anim graph accepts it + requires a drawn
+melee weapon (no more passive burned windows); "foe attacking me: melee" excludes staff
+foes. REVERTED keep-distance / flee-from-foe (1.0.8): KeepOffsetFromActor's offset is in
+the FOE's frame, so "away from foe" is inexpressible -- it flanked instead. Needs a real
+travel-away package (deferred). Flee-to-player + power-attack (experimental) remain.
+
 ## v1.0.8 -- gambit v2 (4/n): keep-distance + flee-from-foe [EXPERIMENTAL] (#35)
 
 Two new combat actions via Actor.KeepOffsetFromActor (Papyrus dispatch): "Keep distance"

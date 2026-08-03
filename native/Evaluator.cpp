@@ -167,6 +167,10 @@ namespace MFO::Eval {
                         // Targeting the follower AND swinging steel (not a bow, not a
                         // spell) -- the "peel this one off me" rule for a mixed pack.
                         if (!FoeTargets(foe, a_self) || FoeIsRanged(foe) || FoeIsCaster(foe)) continue;
+                        // A staff is a ranged caster tool, not melee (Fable).
+                        if (auto* rw = foe->GetEquippedObject(false); rw)
+                            if (auto* w = rw->As<RE::TESObjectWEAP>();
+                                w && w->GetWeaponType() == RE::WEAPON_TYPE::kStaff) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingMeRanged) {
                         if (!FoeTargets(foe, a_self) || !FoeIsRanged(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeIsUndead) {

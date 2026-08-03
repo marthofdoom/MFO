@@ -111,8 +111,9 @@ namespace MFO::Vocab {
     inline constexpr const char* kActEquipMelee  = "act.equip_melee";
     inline constexpr const char* kActFlee         = "act.flee";          // disengage -> retreat to player
     inline constexpr const char* kActPowerAttack  = "act.power_attack";  // EXPERIMENTAL (anim event)
-    inline constexpr const char* kActKeepDistance = "act.keep_distance"; // EXPERIMENTAL (KeepOffset, back off foe)
-    inline constexpr const char* kActFleeTotal    = "act.flee_total";    // EXPERIMENTAL (KeepOffset, run from foe)
+    // keep_distance / flee_total (1.0.8) REMOVED: KeepOffsetFromActor's offset is in
+    // the FOE's local frame, so "away from foe" is inexpressible -- it flanked/circled
+    // instead (Fable). Needs a real travel-away package; deferred to #35.
     inline constexpr const char* kActEquipTorch  = "act.equip_torch";
 
     // ── LOGISTICS TABLE (DESIGN §4.8) ───────────────────────────────────────

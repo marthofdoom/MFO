@@ -130,35 +130,6 @@ namespace MFO::Papyrus {
         return ok;
     }
 
-    bool KeepOffset(RE::Actor* a_follower, RE::Actor* a_target, float a_dist) {
-        if (!a_follower || !a_target) { ++g_failures; return false; }
-        auto* vm = VM();
-        if (!vm) { ++g_failures; return false; }
-        RE::VMHandle handle{};
-        if (!HandleFor(a_follower, handle)) { ++g_failures; return false; }
-        // Offset in the target's local frame: 0 on X, -dist behind on Y, 0 on Z;
-        // a loose catch-up/follow radius so it isn't a rigid tether.
-        std::unique_ptr<RE::BSScript::IFunctionArguments> args{
-            RE::MakeFunctionArguments(std::move(a_target), 0.0f, -a_dist, 0.0f, 50.0f, a_dist * 0.5f) };
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
-        const bool ok = vm->DispatchMethodCall2(handle, "Actor", "KeepOffsetFromActor", args.get(), cb);
-        if (ok) ++g_dispatches; else ++g_failures;
-        return ok;
-    }
-
-    bool ClearKeepOffset(RE::Actor* a_follower) {
-        if (!a_follower) { ++g_failures; return false; }
-        auto* vm = VM();
-        if (!vm) { ++g_failures; return false; }
-        RE::VMHandle handle{};
-        if (!HandleFor(a_follower, handle)) { ++g_failures; return false; }
-        std::unique_ptr<RE::BSScript::IFunctionArguments> args{ RE::MakeFunctionArguments() };
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
-        const bool ok = vm->DispatchMethodCall2(handle, "Actor", "ClearKeepOffsetFromActor", args.get(), cb);
-        if (ok) ++g_dispatches; else ++g_failures;
-        return ok;
-    }
-
     std::uint32_t Dispatches() { return g_dispatches.load(); }
     std::uint32_t Failures()   { return g_failures.load(); }
 
