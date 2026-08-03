@@ -44,6 +44,12 @@ namespace MFO::Board {
         // title screen, loading screens and every vanilla menu.
         std::atomic<bool> g_hud{ false };      // compact readout -- passive, never takes input
         std::atomic<bool> g_wantClose{ false };
+        // Published by the RENDER thread each frame: is a list-picker popup / active
+        // widget open? The input hook (a DIFFERENT thread) must NOT call ImGui::
+        // IsPopupOpen itself -- the ImGui context belongs to the render thread and
+        // the cross-thread read returned false even with a picker open, so B closed
+        // the whole board instead of backing out one level (the cascaded-back bug).
+        std::atomic<bool> g_uiBusy{ false };
         std::atomic<bool> g_cursorInit{ false };
         std::atomic<float> g_cursorX{ 0.0f }, g_cursorY{ 0.0f };
         std::atomic<std::uint64_t> g_frame{ 0 };
@@ -956,7 +962,15 @@ namespace MFO::Board {
             // loaded) with the keyboard equivalent inline, so one strip serves
             // pad and keyboard. Drawn on the render thread between NewFrame and
             // Render, where IsAnyItemActive/IsPopupOpen are valid.
-            if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+            // PUBLISH the busy state for the input hook (which can't read the ImGui
+            // context safely from its own thread). Computed here, between NewFrame
+            // and Render, where IsPopupOpen/IsAnyItemActive are valid. This is what
+            // makes B a CASCADED back: busy -> B closes the innermost picker; not
+            // busy (root) -> B closes the board.
+            const bool popupBusy = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+            g_uiBusy.store(popupBusy || ImGui::IsAnyItemActive() || ImGui::GetIO().WantTextInput,
+                           std::memory_order_relaxed);
+            if (popupBusy)
                 ImGui::TextDisabled("[A]/E pick   [B]/Esc back   d-pad to move");
             else
                 ImGui::TextDisabled("[A]/E open list   [B]/Esc back-or-close   [LB]/[RB] follower   "
@@ -1230,10 +1244,13 @@ namespace MFO::Board {
                         // closed the entire board (the §6.5 controller-parity
                         // floor). Read under the io lock we already hold, so it
                         // is race-free against the render thread.
-                        const bool imguiBusy = io.WantTextInput ||
-                            ImGui::IsAnyItemActive() ||
-                            ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
-                                                        ImGuiPopupFlags_AnyPopupLevel);
+                        // Read the render thread's PUBLISHED busy flag. Calling
+                        // ImGui::IsPopupOpen/IsAnyItemActive here is cross-thread (the
+                        // ImGui context belongs to the render thread) and read FALSE
+                        // even with a picker open -- so B closed the whole board
+                        // instead of backing out one level. g_uiBusy is computed each
+                        // frame where those reads are valid (see the render publish).
+                        const bool imguiBusy = g_uiBusy.load(std::memory_order_relaxed);
 
                         switch (b->device.get()) {
                         case RE::INPUT_DEVICE::kMouse:
