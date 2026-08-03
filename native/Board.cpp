@@ -160,6 +160,8 @@ namespace MFO::Board {
         { Vocab::kCondFoeBeyondRange,"Foe beyond range",     ParamKind::Distance},
         { Vocab::kCondFoeAttackingPlayer,"Foe attacking player", ParamKind::None },
         { Vocab::kCondFoeAttackingMe,"Foe attacking me",     ParamKind::None    },
+        { Vocab::kCondFoeAttackingMeMelee, "Foe attacking me: melee",  ParamKind::None },
+        { Vocab::kCondFoeAttackingMeRanged,"Foe attacking me: ranged", ParamKind::None },
         { Vocab::kCondFoeIsUndead,   "Foe is undead",        ParamKind::None    },
         { Vocab::kCondFoeIsDragon,   "Foe is dragon",        ParamKind::None    },
         { Vocab::kCondFoeIsCaster,   "Foe is a spellcaster", ParamKind::None    },

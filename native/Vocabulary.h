@@ -74,6 +74,8 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeBeyondRange     = "cond.foe_beyond_range";   // param = units
     inline constexpr const char* kCondFoeAttackingPlayer = "cond.foe_attacking_player";
     inline constexpr const char* kCondFoeAttackingMe     = "cond.foe_attacking_me";
+    inline constexpr const char* kCondFoeAttackingMeMelee  = "cond.foe_attacking_me_melee";   // targets follower, melee
+    inline constexpr const char* kCondFoeAttackingMeRanged = "cond.foe_attacking_me_ranged";  // targets follower, bow/xbow
     inline constexpr const char* kCondFoeIsUndead        = "cond.foe_is_undead";
     inline constexpr const char* kCondFoeIsDragon        = "cond.foe_is_dragon";
     // Foe TRAIT selectors -- what the foe IS or is DOING right now (no param).

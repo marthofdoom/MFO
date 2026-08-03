@@ -17,6 +17,7 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeLowestHp   || a_op == Vocab::kCondFoeHighestHp ||
                    a_op == Vocab::kCondFoeWithinRange|| a_op == Vocab::kCondFoeBeyondRange ||
                    a_op == Vocab::kCondFoeAttackingPlayer || a_op == Vocab::kCondFoeAttackingMe ||
+                   a_op == Vocab::kCondFoeAttackingMeMelee || a_op == Vocab::kCondFoeAttackingMeRanged ||
                    a_op == Vocab::kCondFoeIsUndead   || a_op == Vocab::kCondFoeIsDragon ||
                    a_op == Vocab::kCondFoeIsCaster   || a_op == Vocab::kCondFoeIsRanged ||
                    a_op == Vocab::kCondFoeWeakerThanMe || a_op == Vocab::kCondFoeBlocking ||
@@ -162,6 +163,12 @@ namespace MFO::Eval {
                         if (!FoeTargets(foe, a_player)) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingMe) {
                         if (!FoeTargets(foe, a_self)) continue;
+                    } else if (a_op == Vocab::kCondFoeAttackingMeMelee) {
+                        // Targeting the follower AND swinging steel (not a bow, not a
+                        // spell) -- the "peel this one off me" rule for a mixed pack.
+                        if (!FoeTargets(foe, a_self) || FoeIsRanged(foe) || FoeIsCaster(foe)) continue;
+                    } else if (a_op == Vocab::kCondFoeAttackingMeRanged) {
+                        if (!FoeTargets(foe, a_self) || !FoeIsRanged(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeIsUndead) {
                         if (!RaceHasKeyword(foe, "ActorTypeUndead")) continue;
                     } else if (a_op == Vocab::kCondFoeIsDragon) {

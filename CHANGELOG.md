@@ -1,3 +1,9 @@
+## v1.0.5 -- gambit v2 (1/n): foe-attacking-me melee/ranged split (#35)
+
+New combat conditions "Foe attacking me: melee" and "Foe attacking me: ranged" --
+foe targeting the follower, filtered by weapon (steel vs bow/xbow), reusing the
+existing FoeTargets/FoeIsRanged/FoeIsCaster helpers. First slice of the vocab-v2 batch.
+
 ## v1.0.4 -- keep both weapons of a hybrid (bow+melee) follower (#35)
 
 A follower who uses both a bow and a melee weapon only has one WORN at a time, so
