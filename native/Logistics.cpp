@@ -2198,6 +2198,99 @@ namespace MFO::Logistics {
         }
     }
 
+    // SHED OFF-ROLE WEAPONS (marth). A follower carrying a weapon of a role they
+    // do NOT maintain -- a 2H on a 1H fighter, a crossbow on a bow user, any ranged
+    // on a melee-only fighter -- lets their game AI equip the wrong thing "of its
+    // own volition", and it is dead weight / a leftover from pre-1.0.12 skill-forced
+    // loot. Hand ONE such weapon back to the PLAYER per idle tick (recoverable,
+    // never destroyed). The role set is the SAME gambit-driven one LootEquipment
+    // uses (keep in sync), so MFO never sheds a class it would loot. NEVER sheds an
+    // in-role class, a SOCKETED weapon (gems), a catalog-excluded/quest weapon, a
+    // creature weapon, or a staff; never runs for a follower with NO weapon role (a
+    // caster); never leaves them with zero in-role weapons. Runs OUT of combat, so
+    // unequipping a worn off-role weapon is safe. RemoveItem-to-player is the same
+    // worker-safe move LootAmmo already uses.
+    bool ShedOffRoleWeapon(RE::Actor* a_follower, const FollowerState& a_state) {
+        using WT = RE::WEAPON_TYPE;
+        auto* eqW = a_follower->GetEquippedObject(false);
+        auto* myW = eqW ? eqW->As<RE::TESObjectWEAP>() : nullptr;
+        const WepClass wielded = (myW && WeaponClassOf(myW->GetWeaponType()) != WepClass::Other)
+                                 ? WeaponClassOf(myW->GetWeaponType()) : WepClass::Other;
+        const bool wieldsMelee  = wielded == WepClass::OneHand || wielded == WepClass::TwoHand;
+        const bool wieldsRanged = wielded == WepClass::Ranged;
+        const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
+        const bool wantsRanged = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
+
+        WepClass meleeRole = WepClass::Other;
+        if (wantsMelee) {
+            auto*       avo = a_follower->AsActorValueOwner();
+            const float one = avo ? avo->GetActorValue(RE::ActorValue::kOneHanded) : 0.0f;
+            const float two = avo ? avo->GetActorValue(RE::ActorValue::kTwoHanded) : 0.0f;
+            meleeRole = (two > one) ? WepClass::TwoHand : WepClass::OneHand;
+        } else if (wieldsMelee) {
+            meleeRole = wielded;
+        }
+        const bool doRanged = wantsRanged || wieldsRanged;
+        if (meleeRole == WepClass::Other && !doRanged) return false;   // no role -> not ours to judge
+
+        bool wantCrossbow = false;
+        if (doRanged) {
+            std::uint16_t bowDmg = 0, xbowDmg = 0; int arrows = 0, bolts = 0;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                    if (w->GetWeaponType() == WT::kBow)           bowDmg  = std::max(bowDmg,  w->GetAttackDamage());
+                    else if (w->GetWeaponType() == WT::kCrossbow) xbowDmg = std::max(xbowDmg, w->GetAttackDamage());
+                } else if (auto* am = obj->As<RE::TESAmmo>()) {
+                    (AmmoIsBolt(am) ? bolts : arrows) += data.first;
+                }
+            }
+            if (bowDmg > 0 && xbowDmg > 0)      wantCrossbow = (bolts != arrows) ? (bolts > arrows) : (xbowDmg > bowDmg);
+            else if (bowDmg > 0 || xbowDmg > 0) wantCrossbow = xbowDmg > bowDmg;
+            else                                wantCrossbow = bolts > arrows;
+        }
+
+        auto inRole = [&](const RE::TESObjectWEAP* w) {
+            const WepClass wc = WeaponClassOf(w->GetWeaponType());
+            if (wc == WepClass::OneHand || wc == WepClass::TwoHand) return wc == meleeRole;
+            if (wc == WepClass::Ranged) {
+                if (!doRanged) return false;
+                const auto t = w->GetWeaponType();
+                return wantCrossbow ? (t == WT::kCrossbow) : (t == WT::kBow);
+            }
+            return true;   // fists/other -> never a shed target
+        };
+        auto socketed = [](RE::InventoryEntryData* e) {
+            if (!e || !e->extraLists) return false;
+            for (auto* xl : *e->extraLists)
+                if (auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr; uid && uid->uniqueID != 0)
+                    return true;
+            return false;
+        };
+
+        RE::TESBoundObject* shed = nullptr; std::int32_t shedCount = 0; int inRoleWeapons = 0;
+        for (auto& [obj, data] : a_follower->GetInventory()) {
+            if (!obj || data.first <= 0) continue;
+            auto* w = obj->As<RE::TESObjectWEAP>();
+            if (!w || w->IsStaff()) continue;
+            if (inRole(w)) { ++inRoleWeapons; continue; }
+            if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
+            if (socketed(data.second.get())) continue;
+            if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
+        }
+        if (!shed || inRoleWeapons == 0) return false;   // don't disarm
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return false;
+        const char* nm = shed->GetName() ? shed->GetName() : "?";
+        a_follower->RemoveItem(shed, shedCount, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, player);
+        spdlog::info("[shed] {:08X}: off-role weapon '{}' x{} (class {}) -> player | meleeRole={} doRanged={} xbow={}",
+                     a_follower->GetFormID(), nm, shedCount,
+                     static_cast<int>(WeaponClassOf(shed->As<RE::TESObjectWEAP>()->GetWeaponType())),
+                     static_cast<int>(meleeRole), doRanged, wantCrossbow);
+        return true;
+    }
+
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
         g_svc = &a_state;   // loot code reads the gambit table through this (worker-sequential)
@@ -2257,6 +2350,10 @@ namespace MFO::Logistics {
         auto& due = g_nextTick[id];
         if (due.time_since_epoch().count() != 0 && now < due) return;
         due = now + kLogisticsInterval;
+
+        // Hand back one off-role weapon per idle tick (AI-usable wrong-role gear /
+        // pre-1.0.12 leftovers). Cheap when the pack is clean; stops on its own.
+        ShedOffRoleWeapon(a_follower, a_state);
 
         // ── BATCH EXCURSION driver. While THIS follower is on a loot excursion
         // (claimed at priority 60), drive it: walk to the current target, grab it
