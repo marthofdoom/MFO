@@ -10,7 +10,7 @@
 # beats guessing their type at runtime (Requiem-proof).
 cmake_minimum_required(VERSION 3.21)
 
-project(MFO VERSION 1.0.18 LANGUAGES CXX)
+project(MFO VERSION 1.0.19 LANGUAGES CXX)
 
 find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
