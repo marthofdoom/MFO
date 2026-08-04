@@ -12,6 +12,7 @@
 #undef GetObject
 
 #include <imgui.h>
+#include <imgui_internal.h>   // nav state (NavWindow/NavLayer/NavId) for the cascaded B back-out
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 
@@ -383,13 +384,13 @@ namespace MFO::Board {
             // swallowed -- no trailing edge to leak -- so it needs no grace.
             if (g_wantClose.exchange(false)) { g_open.store(false); return; }
 
-            // CASCADED BACK is decided at the END of this function (after we know
-            // whether a picker was drawn), on the render thread, off ImGui's own
-            // nav-cancel keypress -- see the comment there. s_prevPickerOpen carries
-            // last frame's ground truth (did any picker's BeginPopup return true);
-            // pickerDrawnThisFrame is set by every BeginPopup that opens below.
-            static bool s_prevPickerOpen = false;
-            bool        pickerDrawnThisFrame = false;
+            // CASCADED BACK is decided at the END of this function, on the render
+            // thread, off ImGui's OWN nav state (see the comment there). B steps
+            // back through whatever nav layer we're in and closes the board only at
+            // the true top. s_prevNavBusy carries last frame's "B has something to
+            // back out of" verdict.
+            static bool s_prevNavBusy = false;
+            bool        pickerDrawnThisFrame = false;   // still drives the footer hint
 
             auto& io = ImGui::GetIO();
 
@@ -399,7 +400,7 @@ namespace MFO::Board {
             // only edges fed while OPEN; the guard is belt-and-suspenders on top of
             // the fact that the opening DOWN was seen while closed and never fed.
             static bool s_r1Guard = false;
-            if (g_justOpened.exchange(false)) { s_r1Guard = true; s_prevPickerOpen = false; }
+            if (g_justOpened.exchange(false)) { s_r1Guard = true; s_prevNavBusy = true; }
             if (s_r1Guard && !ImGui::IsKeyDown(ImGuiKey_GamepadR1)) s_r1Guard = false;
             const bool r1Ready = !s_r1Guard;
 
@@ -991,23 +992,37 @@ namespace MFO::Board {
             // AND none opened this frame is a root back -> close the board. A cancel
             // press with a picker up is the picker-back ImGui just handled -> keep
             // the board. Same key, same thread as the close: they can't disagree.
-            // Authoritative popup state (valid on THIS, the render, thread): OR the
-            // BeginPopup flag with ImGui's own open-stack query, so the guard can't
-            // miss a picker. cancelPressed is the same nav-cancel key the backend
-            // fed for B; guard on last frame's state (this frame's may already be
-            // closed by nav-cancel).
-            const bool popupOpenNow = pickerDrawnThisFrame ||
-                ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+            // Everything B (nav-cancel) can back OUT of this frame, before it closes
+            // the board: an open picker popup, OR nav focus sitting inside the gambit
+            // table (a scrolling child region ImGui's nav-cancel exits to the parent).
+            // Read on THIS, the render, thread, where these are all valid. Guard the
+            // close on LAST frame's state -- this frame's may already be one level up,
+            // since NewFrame ran nav-cancel before us.
+            // Read ImGui's OWN nav state (valid on this, the render, thread). B has
+            // something to back OUT of when a popup is open, when nav sits inside a
+            // child window (any ScrollY table / BeginChild), or when nav is in the
+            // menu layer. Only when NONE of those hold is B a true top-level exit
+            // that closes the board. Guard on LAST frame's verdict, since NewFrame
+            // already ran nav-cancel for this frame's B before we get here.
+            ImGuiContext& gg = *ImGui::GetCurrentContext();
+            const bool navPopup = gg.OpenPopupStack.Size > 0;
+            const bool navChild = gg.NavWindow && (gg.NavWindow->Flags & ImGuiWindowFlags_ChildWindow);
+            const bool navMenu  = gg.NavLayer != ImGuiNavLayer_Main;
+            const bool navBusy  = navPopup || navChild || navMenu;
             const bool cancelPressed = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
                                        ImGui::IsKeyPressed(ImGuiKey_Escape, false);
             if (cancelPressed) {
-                const bool closing = !s_prevPickerOpen && !popupOpenNow;
-                spdlog::info("[bcancel] popupNow={} popupPrev={} pickerDrawn={} -> {}",
-                             popupOpenNow, s_prevPickerOpen, pickerDrawnThisFrame,
+                const bool closing = !s_prevNavBusy && !navBusy;
+                // DIAGNOSTIC: dump the full nav state so the exact "gambits portion"
+                // vs "true top" distinction is visible in the log (marth).
+                spdlog::info("[bcancel] busyNow={} busyPrev={} popup={} child={} menu={} "
+                             "navId={:08X} navWin=\"{}\" -> {}",
+                             navBusy, s_prevNavBusy, navPopup, navChild, navMenu,
+                             gg.NavId, gg.NavWindow ? gg.NavWindow->Name : "null",
                              closing ? "CLOSE BOARD" : "back out");
                 if (closing) CloseBoard();
             }
-            s_prevPickerOpen = popupOpenNow;   // ground truth for next frame
+            s_prevNavBusy = navBusy;   // ground truth for next frame
             if (pickerDrawnThisFrame)
                 ImGui::TextDisabled("[A]/E pick   [B]/Esc back   d-pad to move");
             else

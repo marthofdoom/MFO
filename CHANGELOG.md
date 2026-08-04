@@ -1,3 +1,11 @@
+## v1.0.18 -- B back-out reads ImGui's real nav state
+
+- BOARD: B now steps back through ImGui's actual nav layers -- an open picker, a
+  focused scrolling child/list, or the menu layer -- and closes the board only at
+  the true top, instead of the board's narrower popup-only guess (which exited the
+  whole board from the Gambits section). Also logs the full nav state ([bcancel])
+  on each B/Esc so any remaining "closes from the wrong level" case is pinned.
+
 ## v1.0.17 -- board close: no Tween leak; sturdier B back-out
 
 - BOARD: closing the board no longer pops Skyrim's Tween menu. The board is an
