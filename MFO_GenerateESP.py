@@ -43,12 +43,17 @@ FID_TRADE_QUEST    = OWN | 0x80E   # #21 econ: carries MFO_Trade (the merchant-r
 # 0x810+       reserved: player-side perks, if that is ever ruled in
 FID_CAST_PACKAGE   = OWN | 0x820   # M9: PACK instance riding vanilla UseMagic
 FID_POC_PACK_BASE  = OWN | 0x821   # M9 PoC: one PACK per probe, 0x821+
-FID_TRAVEL_PACKAGE = OWN | 0x828   # Option A: PACK riding vanilla Travel (walk to a loot ref)
+FID_TRAVEL_PACKAGE = OWN | 0x828   # Option A: PACK riding vanilla Travel (walk to a loot ref) -- slot 0
+# P7 multi-follower excursions: three more travel packages, one per extra loot
+# slot. Each is byte-identical to slot 0's but names its OWN target alias (3/5/7).
+FID_TRAVEL_PACKAGE_1 = OWN | 0x900  # P7: slot 1 (targets loot-quest alias 3)
+FID_TRAVEL_PACKAGE_2 = OWN | 0x901  # P7: slot 2 (targets loot-quest alias 5)
+FID_TRAVEL_PACKAGE_3 = OWN | 0x902  # P7: slot 3 (targets loot-quest alias 7)
 # 0x821+       reserved: one PACK per action verb (attack, travel, hold, activate)
 # 0x829-0x82F  reserved: probe-ladder headroom (FID_POC_PACK_BASE + idx - 1)
 FID_RETREAT_QUEST   = OWN | 0x830  # RETREAT PROBE: travel-to-player delivery route
 FID_RETREAT_PACKAGE = OWN | 0x831  # RETREAT PROBE: Travel + kIgnoreCombat -> alias 1 (the player)
-NEXT_OBJECT_ID     = 0x900         # first never-used local id
+NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x900-0x902 = P7 travel packages)
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -481,23 +486,31 @@ def make_loot_quest():
     body += subrec('FULL', zstr("MFO Loot"))
     body += subrec('DNAM', qust_dnam(0x0011, priority=LOOT_PRIORITY))
     body += subrec('NEXT', b'')
-    body += subrec('ANAM', struct.pack('<I', 2))
+    body += subrec('ANAM', struct.pack('<I', 8))   # P7: 4 loot slots x (actor + target)
 
-    # ── alias 0: the follower, carrying the travel package ──
-    body += subrec('ALST', struct.pack('<I', 0))
-    body += subrec('ALID', zstr("MFO_LootActor"))
-    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
-    body += subrec('ALPC', struct.pack('<I', FID_TRAVEL_PACKAGE))
-    body += subrec('VTCK', struct.pack('<I', 0))
-    body += subrec('ALED', b'')
-
-    # ── alias 1: the loot ref (destination). No packages, no authored fill --
-    # the DLL fills it with the chosen, legality-gated ref at runtime. ──
-    body += subrec('ALST', struct.pack('<I', 1))
-    body += subrec('ALID', zstr("MFO_LootTarget"))
-    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
-    body += subrec('VTCK', struct.pack('<I', 0))
-    body += subrec('ALED', b'')
+    # P7 multi-follower excursions: four (actor, target) alias PAIRS -- one slot
+    # per concurrent looter. INTERLEAVED so slot 0 is aliases 0/1, byte-identical
+    # to the shipped single-slot ESP (the DLL's old kAliasLootActor/Target 0/1
+    # still resolve). Even alias 2k = the follower, carrying slot k's travel
+    # package (each package walks to its OWN target alias). Odd alias 2k+1 = the
+    # loot ref, no package, DLL-filled at runtime with the legality-gated ref.
+    FNAM = struct.pack('<I', 0x0002 | 0x0008 | 0x0200)   # Optional | ... | AllowReserved
+    packages = [FID_TRAVEL_PACKAGE, FID_TRAVEL_PACKAGE_1, FID_TRAVEL_PACKAGE_2, FID_TRAVEL_PACKAGE_3]
+    for slot in range(4):
+        suffix = "" if slot == 0 else str(slot)          # slot 0 keeps the shipped names
+        # actor alias (2*slot): the follower, carrying this slot's travel package
+        body += subrec('ALST', struct.pack('<I', 2 * slot))
+        body += subrec('ALID', zstr("MFO_LootActor" + suffix))
+        body += subrec('FNAM', FNAM)
+        body += subrec('ALPC', struct.pack('<I', packages[slot]))
+        body += subrec('VTCK', struct.pack('<I', 0))
+        body += subrec('ALED', b'')
+        # target alias (2*slot+1): the loot ref the slot's package PLDT t8 points at
+        body += subrec('ALST', struct.pack('<I', 2 * slot + 1))
+        body += subrec('ALID', zstr("MFO_LootTarget" + suffix))
+        body += subrec('FNAM', FNAM)
+        body += subrec('VTCK', struct.pack('<I', 0))
+        body += subrec('ALED', b'')
     return record('QUST', FID_LOOT_QUEST, 0, body)
 
 
@@ -792,8 +805,14 @@ def make_travel_package():
     Radius 128 (~arm's reach) so the engine stops the follower ON the loot; the
     DLL then detects arrival by distance and runs the existing inventory transfer.
     """
-    return build_travel(FID_TRAVEL_PACKAGE, "MFO_TravelPackage",
-                        alias_idx=1, radius=128, qnam=FID_LOOT_QUEST)
+    # P7: one travel package per loot slot. Interleaved alias layout keeps slot 0
+    # on aliases 0/1 (byte-identical to the shipped single-slot ESP); slots 1-3
+    # each name their own target alias (3/5/7). Only the FormID, EDID and target
+    # alias index differ between them.
+    return (build_travel(FID_TRAVEL_PACKAGE,   "MFO_TravelPackage",  alias_idx=1, radius=128, qnam=FID_LOOT_QUEST)
+          + build_travel(FID_TRAVEL_PACKAGE_1, "MFO_TravelPackage1", alias_idx=3, radius=128, qnam=FID_LOOT_QUEST)
+          + build_travel(FID_TRAVEL_PACKAGE_2, "MFO_TravelPackage2", alias_idx=5, radius=128, qnam=FID_LOOT_QUEST)
+          + build_travel(FID_TRAVEL_PACKAGE_3, "MFO_TravelPackage3", alias_idx=7, radius=128, qnam=FID_LOOT_QUEST))
 
 
 def make_retreat_package():
@@ -894,7 +913,7 @@ def main():
     print(f"  QUST  0x{FID_STARTUP_QUEST & 0xFFF:03X}        MFO_StartupQuest (run once, no VMAD)")
     print(f"  QUST  0x{FID_MCM_QUEST & 0xFFF:03X}        MFO_MCMQuest (MFO_MCM script)")
     print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (2 aliases, DLL-filled)")
-    print(f"  QUST  0x{FID_LOOT_QUEST & 0xFFF:03X}        MFO_LootQuest (2 aliases, DLL-filled; static prio {LOOT_PRIORITY})")
+    print(f"  QUST  0x{FID_LOOT_QUEST & 0xFFF:03X}        MFO_LootQuest (8 aliases = 4 loot slots, DLL-filled; static prio {LOOT_PRIORITY})")
     print(f"  QUST  0x{FID_RETREAT_QUEST & 0xFFF:03X}        MFO_RetreatQuest (2 aliases, DLL-filled; static prio {RETREAT_PRIORITY})")
     print(f"  QUST  0x{FID_TRADE_QUEST & 0xFFF:03X}        MFO_TradeQuest (MFO_Trade script; econ bridge)")
     print(f"  PACK  0x{FID_CAST_PACKAGE & 0xFFF:03X}        MFO_CastPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X}"
