@@ -251,6 +251,7 @@ namespace MFO::Packages {
     // Who currently holds the retreat alias (0 when nobody), and for how long.
     RE::FormID RetreatHolder();
     float      RetreatSeconds();
+    RE::NiPoint3 RetreatStartPos();   // where she was when the retreat began (movement proof)
     // Evict a_id from the retreat alias if he occupies it -- the dismissal-path
     // twin of LootTravelEvictIf, same #55 tail: the fill is engine-serialized
     // and nothing reclaims a dismissed follower.

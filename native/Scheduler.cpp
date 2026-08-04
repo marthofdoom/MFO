@@ -241,15 +241,26 @@ namespace MFO::Scheduler {
                 const float secs  = Packages::RetreatSeconds();
                 auto*       cur   = f->GetCurrentPackage();
                 if (cur == Forms::g_retreatPackage) note.took = true;
+                // Re-disengage each tick: hostiles re-initiate combat, and while she
+                // holds a live target the combat behaviour out-competes the
+                // kIgnoreCombat travel (Auri: took=true but never moved). StopCombat
+                // every tick keeps the travel winning until she reaches you. Cheap;
+                // a no-op when she is not in combat.
+                f->StopCombat();
+                // Measure HER movement, not dPlayer -- dPlayer also closes when the
+                // PLAYER walks toward her (the Auri false-positive that made a
+                // stuck follower look like a successful retreat).
+                const float moved = f->GetPosition().GetDistance(Packages::RetreatStartPos());
 
                 if (pc && dPlayer <= kRetreatArriveDist) {
-                    spdlog::info("[retreat] {:08X}: reached player after {:.1f}s", id, secs);
+                    spdlog::info("[retreat] {:08X}: reached player after {:.1f}s (moved {:.0f})", id, secs, moved);
                     Packages::RetreatClear("arrived", f);
                 } else if (secs > kRetreatTimeout) {
-                    // Transition-only: one line when the fall-back gives up, with
-                    // enough to tell "controller never yielded" from "too slow".
-                    spdlog::info("[retreat] {:08X}: gave up after {:.1f}s (took={}, dPlayer={:.0f})",
-                                  id, secs, note.took, dPlayer);
+                    // Transition-only: one line when the fall-back gives up. moved
+                    // tells "she walked but too slow" (large) from "controller never
+                    // yielded" (near 0).
+                    spdlog::info("[retreat] {:08X}: gave up after {:.1f}s (took={}, moved={:.0f}, dPlayer={:.0f})",
+                                  id, secs, note.took, moved, dPlayer);
                     Packages::RetreatClear("timeout", f);
                 }
 

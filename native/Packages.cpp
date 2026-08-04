@@ -636,6 +636,7 @@ namespace MFO::Packages {
         struct RetreatHold {
             RE::FormID        actorID = 0;
             Clock::time_point startAt{};
+            RE::NiPoint3      startPos{};   // where she was when the retreat began (movement proof)
         };
         RetreatHold g_retreatHold;
 
@@ -1033,13 +1034,24 @@ namespace MFO::Packages {
             RetreatClear("actor fill failed");
             return false;
         }
+        // DISENGAGE so the travel actually MOVES her. Field (Auri, v1.0.22): the
+        // retreat package went active (took=true) but she never relocated -- an
+        // actor with a live combat target keeps fighting, and a kIgnoreCombat Travel
+        // package only lets the package RUN, it does not out-compete the combat
+        // behaviour driving her. StopCombat() clears HER target (not the group, so
+        // NOT resetAI) -> the travel wins; if foes re-aggro, kIgnoreCombat sustains
+        // the walk. (The old "0.36 reliable" read took=true + dPlayer closing as
+        // success, but dPlayer also closes when the PLAYER approaches -- it never
+        // proved she moved.) Called each retreat tick in the Scheduler too, since
+        // hostiles re-initiate combat.
+        a_follower->StopCombat();
         // Static 60 is already in the record; the fill IS the claim (0.36).
-        // (true, false): NEVER resetAI -- it clears the combat group, and this
-        // call happens IN COMBAT by design.
+        // (true, false): NEVER resetAI -- it clears the combat group.
         a_follower->EvaluatePackage(true, false);
         g_retreatHold.actorID = a_follower->GetFormID();
         g_retreatHold.startAt = Clock::now();
-        spdlog::info("[retreat] {:08X}: travel-to-player dispatched (quest prio={}, kIgnoreCombat)",
+        g_retreatHold.startPos = a_follower->GetPosition();   // measure HER movement, not dPlayer
+        spdlog::info("[retreat] {:08X}: dispatched + StopCombat (prio={}, kIgnoreCombat)",
                      a_follower->GetFormID(), static_cast<int>(quest->data.priority));
         return true;
     }
@@ -1063,6 +1075,7 @@ namespace MFO::Packages {
 
     RE::FormID RetreatHolder() { return g_retreatHold.actorID; }
     float      RetreatSeconds() { return Since(g_retreatHold.startAt); }
+    RE::NiPoint3 RetreatStartPos() { return g_retreatHold.startPos; }
 
     void RetreatEvictIf(RE::FormID a_id) {
         // The dismissal-path twin of LootTravelEvictIf: keyed to alias

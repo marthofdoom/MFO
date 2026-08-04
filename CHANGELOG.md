@@ -1,3 +1,13 @@
+## v1.0.24 -- retreat actually disengages (was firing but not moving)
+
+- Fix: auto-retreat fired but the follower kept fighting in place -- she never
+  walked back. A kIgnoreCombat travel package only lets the package run; an actor
+  with a live combat target keeps fighting and out-competes it. The retreat now
+  calls StopCombat (breaks HER target, not the group) on dispatch and each tick, so
+  the travel wins and she actually falls back to you. The [retreat] log now reports
+  moved= (her real displacement) instead of only dPlayer, which also closed when
+  YOU walked toward her (the false-positive that hid this).
+
 ## v1.0.23 -- MCM self-heal runs early (new settings bind on first load)
 
 - Fix: a new MCM setting added by an update (e.g. "Ignore weak potions") could show
