@@ -595,8 +595,16 @@ namespace MFO::Packages {
         }
 
         // ── OPTION A: loot-travel alias plumbing (DESIGN behaviour layer) ────
-        constexpr std::uint32_t kAliasLootActor  = 0;   // the follower (carries the travel package)
-        constexpr std::uint32_t kAliasLootTarget = 1;   // the loot ref the PLDT t8 points at
+        // P7: kMaxLootSlots concurrent excursions. The loot quest's aliases are
+        // INTERLEAVED per slot -- actor alias 2*slot (carries the slot's travel
+        // package), target alias 2*slot+1 (the loot ref the PLDT t8 points at).
+        // Slot 0 resolves to 0/1, byte-identical to the shipped single-slot route.
+        constexpr std::uint32_t LootActorAlias(int a_slot) {
+            return static_cast<std::uint32_t>(2 * a_slot);
+        }
+        constexpr std::uint32_t LootTargetAlias(int a_slot) {
+            return static_cast<std::uint32_t>(2 * a_slot + 1);
+        }
 
         // CLAIM MODEL: the loot quest ships at STATIC priority 60 (MFO_GenerateESP
         // .py QUEST_PRIORITY, above the follower framework's ~50). Engage = fill
@@ -788,15 +796,19 @@ namespace MFO::Packages {
         // -- to hand him back. Runs on kPreLoadGame / post-load reconcile /
         // kNewGame / revert, so this is the reset for every in-session load.
         if (auto* quest = Forms::g_lootQuest) {
-            RE::ObjectRefHandle h{};
-            quest->CreateRefHandleByAliasID(h, kAliasLootActor);
-            auto* held = h.get() ? h.get().get() : nullptr;
-            // Only evict if a FOLLOWER (not already the player) sits in the slot.
+            // P7: every slot's actor alias, not just slot 0 -- any of the four
+            // could hold a follower from a mid-travel save.
             auto* player = RE::PlayerCharacter::GetSingleton();
-            if (held && player && held != player) {
-                ForceRefToNative(quest, kAliasLootActor, player);
-                spdlog::info("[loot] {} -- loot alias held {:08X}; evicted to player", a_why,
-                             held->GetFormID());
+            for (int slot = 0; slot < kMaxLootSlots; ++slot) {
+                RE::ObjectRefHandle h{};
+                quest->CreateRefHandleByAliasID(h, LootActorAlias(slot));
+                auto* held = h.get() ? h.get().get() : nullptr;
+                // Only evict if a FOLLOWER (not already the player) sits in the slot.
+                if (held && player && held != player) {
+                    ForceRefToNative(quest, LootActorAlias(slot), player);
+                    spdlog::info("[loot] {} -- loot alias (slot {}) held {:08X}; evicted to player",
+                                 a_why, slot, held->GetFormID());
+                }
             }
         }
 
@@ -837,8 +849,9 @@ namespace MFO::Packages {
     }
 
     // ── OPTION A: loot travel ────────────────────────────────────────────────
-    bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref) {
+    bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, int a_slot) {
         if (!Config::g_lootTravel.load())          return false;
+        if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
         auto* quest = Forms::g_lootQuest;
         if (!a_follower || !a_ref || !quest)       return false;
         // The native ForceRefTo id is AE-only (see ForceRefToNative). Off AE we
@@ -860,21 +873,21 @@ namespace MFO::Packages {
         // re-arbitrated). TARGET (alias 1) first so the destination is resolved
         // when alias 0 instances the package -- no claimed-with-no-destination
         // (rooting) window.
-        if (!ForceRefToNative(quest, kAliasLootTarget, a_ref)) return false;
-        if (!ForceRefToNative(quest, kAliasLootActor, a_follower)) {
-            LootTravelClear("actor fill failed");
+        if (!ForceRefToNative(quest, LootTargetAlias(a_slot), a_ref)) return false;
+        if (!ForceRefToNative(quest, LootActorAlias(a_slot), a_follower)) {
+            LootTravelClear("actor fill failed", nullptr, a_slot);
             return false;
         }
         // Nudge the follower to evaluate now rather than wait for the engine's
         // own pass. (true, false): NEVER resetAI -- it clears the combat group.
         a_follower->EvaluatePackage(true, false);
-        spdlog::info("[loot] {:08X}: travel dispatched to {:08X} (quest prio={})",
-                     a_follower->GetFormID(), a_ref->GetFormID(),
+        spdlog::info("[loot] {:08X}: travel dispatched to {:08X} (slot {}, quest prio={})",
+                     a_follower->GetFormID(), a_ref->GetFormID(), a_slot,
                      static_cast<int>(quest->data.priority));
         return true;
     }
 
-    bool LootTravelRetarget(RE::Actor* a_follower, RE::TESObjectREFR* a_ref) {
+    bool LootTravelRetarget(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, int a_slot) {
         // A LEG BOUNDARY inside an ongoing excursion: point the follower at the
         // NEXT loot ref WITHOUT releasing. Only alias 1 (the destination) is
         // refilled; alias 0 (the follower) is left ALONE -- so he stays claimed
@@ -884,14 +897,15 @@ namespace MFO::Packages {
         // corpse-to-corpse); EvaluatePackage re-plans the running Travel package
         // to the new destination. A movement change, not a loot mutation.
         if (!Config::g_lootTravel.load())          return false;
+        if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
         auto* quest = Forms::g_lootQuest;
         if (!a_follower || !a_ref || !quest)       return false;
         if (!REL::Module::IsAE())                  return false;
         if (!quest->IsRunning())                   return false;
-        if (!ForceRefToNative(quest, kAliasLootTarget, a_ref)) return false;
+        if (!ForceRefToNative(quest, LootTargetAlias(a_slot), a_ref)) return false;
         a_follower->EvaluatePackage(true, false);
-        spdlog::info("[loot] {:08X}: leg -> {:08X} (excursion, prio={})",
-                     a_follower->GetFormID(), a_ref->GetFormID(),
+        spdlog::info("[loot] {:08X}: leg -> {:08X} (excursion, slot {}, prio={})",
+                     a_follower->GetFormID(), a_ref->GetFormID(), a_slot,
                      static_cast<int>(quest->data.priority));
         return true;
     }
@@ -933,7 +947,7 @@ namespace MFO::Packages {
         VerifyDetachedFrom(Forms::g_lootQuest, a_follower, "loot", "MFO_LootQuest", a_why);
     }
 
-    void LootTravelClear(const char* a_why, RE::Actor* a_follower) {
+    void LootTravelClear(const char* a_why, RE::Actor* a_follower, int a_slot) {
         // RELEASE BY EVICTION. The loot quest is STATIC priority 60 (> the
         // framework's 50), so a filled alias 0 ALWAYS claims the follower -- and
         // dropping the number does NOT un-claim him (the engine locks the owning
@@ -944,10 +958,11 @@ namespace MFO::Packages {
         // so the framework reclaims him and he follows. The player is not AI-
         // package-driven, so occupying the slot is inert; the next dispatch
         // replaces the player.
+        if (a_slot < 0 || a_slot >= kMaxLootSlots) return;
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
         if (auto* player = RE::PlayerCharacter::GetSingleton())
-            ForceRefToNative(quest, kAliasLootActor, player);   // no-op off AE, fine
+            ForceRefToNative(quest, LootActorAlias(a_slot), player);   // no-op off AE, fine
         // Re-evaluate NOW so the framework reclaims him this tick, not on the
         // engine's slow pass. (true,false) -- never resetAI. Without the follower
         // here the eviction still frees him on the next engine evaluation.
@@ -955,29 +970,35 @@ namespace MFO::Packages {
             a_follower->EvaluatePackage(true, false);
             VerifyDetached(a_follower, a_why);   // prove the eviction actually freed him
         }
-        spdlog::info("[loot] travel released ({}) -- evicted to player", a_why);
+        spdlog::info("[loot] travel released ({}) -- slot {} evicted to player", a_why, a_slot);
     }
 
     void LootTravelEvictIf(RE::FormID a_id) {
-        // Evict a_id from alias 0 IF he currently occupies it, keyed to alias
-        // OCCUPANCY. With release-by-eviction (LootTravelClear) the slot normally
-        // holds the PLAYER between excursions, so this now matters for ONE case:
-        // a follower dismissed DURING an excursion, before Clear ran. If he is
-        // still in alias 0 when he leaves the roster, his framework claim is gone,
-        // so MFO's static-60 claim is his sole one -- he'd walk to the stale
-        // corpse and re-latch on every load. Evict him (fill the player -- a real
-        // ForceRefTo; the null clear is a no-op, 0.34) so he detaches.
+        // Evict a_id from whichever slot's ACTOR alias he currently occupies, keyed
+        // to alias OCCUPANCY across ALL slots (not the caller's intent map -- the
+        // alias is never emptied, so occupancy is the authoritative state). With
+        // release-by-eviction (LootTravelClear) a slot normally holds the PLAYER
+        // between excursions, so this now matters for ONE case: a follower dismissed
+        // DURING an excursion, before Clear ran. If he is still in his actor alias
+        // when he leaves the roster, his framework claim is gone, so MFO's static-60
+        // claim is his sole one -- he'd walk to the stale corpse and re-latch on
+        // every load. Evict him (fill the player -- a real ForceRefTo; the null
+        // clear is a no-op, 0.34) so he detaches. Scans every slot because a
+        // dismissed follower could hold any of the four.
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
-        RE::ObjectRefHandle h{};
-        quest->CreateRefHandleByAliasID(h, kAliasLootActor);
-        auto* held = h.get() ? h.get().get() : nullptr;
-        if (!held || held->GetFormID() != a_id) return;   // a_id is not in the slot
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        for (int slot = 0; slot < kMaxLootSlots; ++slot) {
+            RE::ObjectRefHandle h{};
+            quest->CreateRefHandleByAliasID(h, LootActorAlias(slot));
+            auto* held = h.get() ? h.get().get() : nullptr;
+            if (!held || held->GetFormID() != a_id) continue;   // a_id is not in this slot
 
-        if (auto* player = RE::PlayerCharacter::GetSingleton())
-            ForceRefToNative(quest, kAliasLootActor, player);   // no-op off AE, fine
-        if (auto* actor = held->As<RE::Actor>())
-            VerifyDetached(actor, "dismissed");   // prove the ex-actor detached
+            if (player)
+                ForceRefToNative(quest, LootActorAlias(slot), player);   // no-op off AE, fine
+            if (auto* actor = held->As<RE::Actor>())
+                VerifyDetached(actor, "dismissed");   // prove the ex-actor detached
+        }
     }
 
     // ── RETREAT PROBE (see Packages.h) ───────────────────────────────────────

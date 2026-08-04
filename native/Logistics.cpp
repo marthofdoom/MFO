@@ -6,6 +6,7 @@
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
+#include <array>          // P7: fixed-size per-slot travel-intent table
 #include "Confidence.h"   // the confidence leash (core tenet)
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
@@ -897,11 +898,11 @@ namespace MFO::Logistics {
             }
         }
 
-        // OPTION A travel state -- a SINGLE traveller at a time (one loot quest,
-        // one alias pair). Worker-tick-only, NOT serialized: this just remembers
-        // the intent; the engine-side alias fill is cleared by Packages on load
-        // (#55). kArrivalDist ~= arm's reach: once the engine walks the follower
-        // this close, the existing inventory transfer runs.
+        // OPTION A travel state -- up to kMaxLootSlots travellers AT ONCE (one loot
+        // quest, four alias pairs; see g_travelSlots below). Worker-tick-only, NOT
+        // serialized: this just remembers the intent; the engine-side alias fill is
+        // cleared by Packages on load (#55). kArrivalDist ~= arm's reach: once the
+        // engine walks the follower this close, the existing inventory transfer runs.
         constexpr float kArrivalDist = 160.0f;
         // A BATCH EXCURSION, not a single trip. The follower stays claimed
         // (priority 60) across corpses: Walking = en route to `target`; Holding =
@@ -935,7 +936,39 @@ namespace MFO::Logistics {
             RE::FormID          acquireBase  = 0;   // its base object -- the inventory-delta key
             std::int32_t        acquirePre   = 0;   // follower's count of base BEFORE dispatch
         };
-        TravelIntent g_travel;
+        // P7 MULTI-SLOT: up to kMaxLootSlots concurrent loot excursions, one per
+        // slot. Slot i maps to the loot quest's alias PAIR (actor 2*i, target
+        // 2*i+1). Slot 0 is byte-identical to the shipped single-slot state.
+        // Logistics owns this follower->slot map; Packages is passed the slot.
+        std::array<TravelIntent, Packages::kMaxLootSlots> g_travelSlots{};
+
+        // The active slot whose intent belongs to a_follower (nullptr if none).
+        TravelIntent* SlotOf(RE::FormID a_follower) {
+            if (!a_follower) return nullptr;
+            for (auto& t : g_travelSlots)
+                if (t.active && t.follower == a_follower) return &t;
+            return nullptr;
+        }
+        // Index of a_follower's active slot, or -1.
+        int SlotIndexOf(RE::FormID a_follower) {
+            if (!a_follower) return -1;
+            for (int i = 0; i < Packages::kMaxLootSlots; ++i)
+                if (g_travelSlots[i].active && g_travelSlots[i].follower == a_follower)
+                    return i;
+            return -1;
+        }
+        // First free (inactive) slot, or -1 if all kMaxLootSlots are busy.
+        int FreeSlotIndex() {
+            for (int i = 0; i < Packages::kMaxLootSlots; ++i)
+                if (!g_travelSlots[i].active) return i;
+            return -1;
+        }
+        // Is ANY excursion in flight? Gates the global blocklist reassess.
+        bool AnyTravelActive() {
+            for (auto& t : g_travelSlots)
+                if (t.active) return true;
+            return false;
+        }
         constexpr float kMoveEps    = 50.0f;                  // real-movement threshold (units)
         // 7s, not 4: the deck showed reachable bodies transiently flagged
         // "unreachable" at 4s (a momentary stall while repositioning / the player
@@ -1644,6 +1677,11 @@ namespace MFO::Logistics {
                 // walkable -> RETARGET the excursion to it (movement, no release,
                 // no turn-around). Do NOT start a new fill and do NOT release.
                 if (a_mode == LootMode::kExcursion) {
+                    // P7: excursion mode means this follower is already claimed, so
+                    // a live slot must exist -- resolve it up front and drive it.
+                    const int s = SlotIndexOf(a_follower->GetFormID());
+                    if (s < 0) continue;   // no live slot: nothing to drive
+                    TravelIntent& tr = g_travelSlots[s];
                     if (df <= kArrivalDist && !LooseRef(ref)) {
                         if (LootHere(a_follower, ref, a_cat, a_potionWant)) return true;
                         continue;   // arm's-reach corpse was empty -- try the next
@@ -1658,12 +1696,12 @@ namespace MFO::Logistics {
                     // target, do NOT retarget: let the Walking-phase arrival/stall
                     // logic finish this leg, THEN the scan picks the next. Arm's-
                     // reach grabs (above) still fire; only the churn is stopped.
-                    if (g_travel.phase == TravelPhase::Walking) {
-                        auto  tptr = g_travel.target.get();
+                    if (tr.phase == TravelPhase::Walking) {
+                        auto  tptr = tr.target.get();
                         auto* cur  = tptr.get();
                         if (cur && !cur->IsDisabled() && !cur->IsMarkedForDeletion() &&
                             !TravelFailedRecently(cur->GetFormID(), a_now) &&
-                            a_now - g_travel.progressAt <= kNoProgress)
+                            a_now - tr.progressAt <= kNoProgress)
                             return false;   // stay the course
                     }
                     // A LOOSE ref (route 2b) falls through to RETARGET even at
@@ -1683,14 +1721,14 @@ namespace MFO::Logistics {
                                      a_follower->GetFormID(), rid);
                         continue;
                     }
-                    if (Packages::LootTravelRetarget(a_follower, ref)) {
-                        g_travel.target   = ref->GetHandle();
-                        g_travel.cat      = a_cat;
-                        g_travel.want     = a_potionWant;
-                        g_travel.deadline = TravelDeadline(df, a_now);
-                        g_travel.phase    = TravelPhase::Walking;
-                        g_travel.lastPos    = origin;   // reset no-progress tracker
-                        g_travel.progressAt = a_now;
+                    if (Packages::LootTravelRetarget(a_follower, ref, s)) {
+                        tr.target   = ref->GetHandle();
+                        tr.cat      = a_cat;
+                        tr.want     = a_potionWant;
+                        tr.deadline = TravelDeadline(df, a_now);
+                        tr.phase    = TravelPhase::Walking;
+                        tr.lastPos    = origin;   // reset no-progress tracker
+                        tr.progressAt = a_now;
                         return true;   // new leg -- the excursion continues at 60
                     }
                     continue;
@@ -1711,8 +1749,9 @@ namespace MFO::Logistics {
                     // next to -- you win the race for the corpse you're heading to.
                     if (playerPos.GetDistance(ref->GetPosition()) <= Config::g_playerBubble.load())
                         continue;
-                    // One traveller at a time (single loot alias).
-                    if (g_travel.active) continue;
+                    // P7: claim the first FREE slot; skip if all are busy.
+                    const int s = FreeSlotIndex();
+                    if (s < 0) continue;
                     // OFF-NAVMESH GATE (see the excursion path): no mesh near the
                     // ref -> no path -> freeze. Skip + blocklist before dispatch.
                     if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
@@ -1721,17 +1760,17 @@ namespace MFO::Logistics {
                                      a_follower->GetFormID(), rid);
                         continue;
                     }
-                    if (Packages::LootTravelFill(a_follower, ref)) {
-                        g_travel.active    = true;
-                        g_travel.follower  = a_follower->GetFormID();
-                        g_travel.target    = ref->GetHandle();
-                        g_travel.cat       = a_cat;
-                        g_travel.want      = a_potionWant;
-                        g_travel.deadline  = TravelDeadline(df, a_now);
-                        g_travel.phase     = TravelPhase::Walking;
-                        g_travel.startTime = a_now;   // excursion begins now
-                        g_travel.lastPos    = origin;  // reset no-progress tracker
-                        g_travel.progressAt = a_now;
+                    if (Packages::LootTravelFill(a_follower, ref, s)) {
+                        g_travelSlots[s].active    = true;
+                        g_travelSlots[s].follower  = a_follower->GetFormID();
+                        g_travelSlots[s].target    = ref->GetHandle();
+                        g_travelSlots[s].cat       = a_cat;
+                        g_travelSlots[s].want      = a_potionWant;
+                        g_travelSlots[s].deadline  = TravelDeadline(df, a_now);
+                        g_travelSlots[s].phase     = TravelPhase::Walking;
+                        g_travelSlots[s].startTime = a_now;   // excursion begins now
+                        g_travelSlots[s].lastPos    = origin;  // reset no-progress tracker
+                        g_travelSlots[s].progressAt = a_now;
                         return true;   // committed to the walk; transfer on arrival
                     }
                     // Travel UNAVAILABLE (off AE, records unresolved, quest not
@@ -1768,7 +1807,7 @@ namespace MFO::Logistics {
                                      PlayerIsConsidering(r0id),
                                      dP <= Config::g_playerBubble.load(), Config::g_playerBubble.load(),
                                      TravelFailedRecently(r0id, a_now),
-                                     (g_travel.active && g_travel.follower != a_follower->GetFormID()),
+                                     (FreeSlotIndex() < 0 && SlotIndexOf(a_follower->GetFormID()) < 0),
                                      NavmeshReach(a_follower, r0), Config::g_navmeshGate.load());
                     }
                 }
@@ -1959,7 +1998,7 @@ namespace MFO::Logistics {
             // PHASE 4 anti-thrash + don't-trade-mid-loot.
             // (a) A follower already walking to loot must not break off to trade --
             //     loot and trade never overlap; finish the excursion first.
-            if (g_travel.active && g_travel.follower == fid) return;
+            if (SlotOf(fid)) return;
             // (b) Per-follower TRADE cooldown: at most one trade dispatch per window,
             //     so a purchase SETTLES (the arrow/potion count updates) before the
             //     next scan re-evaluates the need. Without it a follower near two
@@ -2488,17 +2527,23 @@ namespace MFO::Logistics {
         // followers, so this backstop never runs for the one who matters. The
         // yield lives in the Scheduler's combat branch, ReleaseTravelOnCombat.)
         const bool off = !Config::g_logistics.load() || !Config::g_lootTravel.load();
-        const bool capped = g_travel.active &&
-            now > g_travel.startTime + std::chrono::seconds(
-                      static_cast<int>(Config::g_excursionMax.load()));
-        if (g_travel.active && (capped || off)) {
-            // On a cap hit blacklist the current target so it isn't re-picked
-            // immediately. NOT on toggle-off (that corpse never "failed").
-            if (!off) {
-                if (auto tp = g_travel.target.get()) MarkTravelFailed(tp->GetFormID(), now);
+        // P7: sweep EVERY slot -- each traveller has his own excursion cap, and a
+        // subsystem toggle-off must free them all. (Global backstop, keyed to no
+        // follower in particular; runs once per serviced follower, idempotent.)
+        for (int i = 0; i < Packages::kMaxLootSlots; ++i) {
+            auto& tr = g_travelSlots[i];
+            if (!tr.active) continue;
+            const bool capped = now > tr.startTime + std::chrono::seconds(
+                                          static_cast<int>(Config::g_excursionMax.load()));
+            if (capped || off) {
+                // On a cap hit blacklist the current target so it isn't re-picked
+                // immediately. NOT on toggle-off (that corpse never "failed").
+                if (!off) {
+                    if (auto tp = tr.target.get()) MarkTravelFailed(tp->GetFormID(), now);
+                }
+                Packages::LootTravelClear(off ? "subsystem off" : "excursion cap", nullptr, i);
+                tr = TravelIntent{};
             }
-            Packages::LootTravelClear(off ? "subsystem off" : "excursion cap");
-            g_travel = TravelIntent{};
         }
 
         if (!Config::g_logistics.load()) return;   // whole subsystem off by default (#45)
@@ -2520,10 +2565,11 @@ namespace MFO::Logistics {
         // he hoovers a batch instead of returning to the player after each corpse.
         // Release only on combat, the excursion cap, leaving the leash, or the
         // batch running dry (after a short dibs linger).
-        if (g_travel.active && g_travel.follower == id) {
+        if (const int slot = SlotIndexOf(id); slot >= 0) {
+            TravelIntent& tr = g_travelSlots[slot];
             auto* pc = RE::PlayerCharacter::GetSingleton();
             // HARD interrupts -> END the excursion.
-            const bool overCap = now > g_travel.startTime + std::chrono::seconds(
+            const bool overCap = now > tr.startTime + std::chrono::seconds(
                                           static_cast<int>(Config::g_excursionMax.load()));
             // HYSTERESIS on the leash (×1.15): a corpse near the leash edge puts
             // the follower in a thin band (>leash from player, still walking to an
@@ -2538,40 +2584,40 @@ namespace MFO::Logistics {
                 Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
                                           : (overCap ? "excursion cap"
                                           : (inHome ? "player home" : "left leash")),
-                                          a_follower);
-                g_travel = TravelIntent{};
+                                          a_follower, slot);
+                tr = TravelIntent{};
                 // fall through to a normal eval this tick (combat table / follow).
-            } else if (g_travel.acquirePending) {
+            } else if (tr.acquirePending) {
                 // ── ACQUIRE READBACK (route 2b probe). One tick after the
                 // Activate dispatch, observe what the VM call actually did --
                 // dispatch is asynchronous (Papyrus.h), so the previous tick's
                 // call has had its frame(s) by now. Ref gone / inventory up =
                 // the engine took it natively; ref standing with a flat count =
                 // the activation was a no-op.
-                g_travel.acquirePending = false;
-                auto aptr = g_travel.target.get();
+                tr.acquirePending = false;
+                auto aptr = tr.target.get();
                 auto* aref = aptr.get();
                 const bool refGone = !aref || aref->IsDeleted() || aref->IsDisabled();
                 std::int32_t post = 0;
                 for (auto& [obj, n] : a_follower->GetInventoryCounts())
-                    if (obj && obj->GetFormID() == g_travel.acquireBase) { post = n; break; }
-                const std::int32_t delta = post - g_travel.acquirePre;
+                    if (obj && obj->GetFormID() == tr.acquireBase) { post = n; break; }
+                const std::int32_t delta = post - tr.acquirePre;
                 if (refGone || delta != 0)
                     spdlog::info("[acquire] {:08X}: TOOK {:08X} -- ref {}, inv {:+}",
-                                 id, g_travel.acquireRefID,
+                                 id, tr.acquireRefID,
                                  refGone ? "gone" : "persists", delta);
                 else
                     spdlog::info("[acquire] {:08X}: ACTIVATE NO-OP -- ref persists, inv unchanged",
                                  id);
                 // Either way this leg is DONE: blocklist the ref (a persisting
                 // no-op must not be re-picked every tick) and continue the batch.
-                MarkTravelFailed(g_travel.acquireRefID, now);
-                g_travel.phase = TravelPhase::Holding;
-                g_travel.lingerUntil = now + std::chrono::seconds(
+                MarkTravelFailed(tr.acquireRefID, now);
+                tr.phase = TravelPhase::Holding;
+                tr.lingerUntil = now + std::chrono::seconds(
                                           static_cast<int>(Config::g_batchLinger.load()));
                 return;
-            } else if (g_travel.phase == TravelPhase::Walking) {
-                auto tptr  = g_travel.target.get();
+            } else if (tr.phase == TravelPhase::Walking) {
+                auto tptr  = tr.target.get();
                 auto* tref = tptr.get();
                 const float dist = tref ?
                     a_follower->GetPosition().GetDistance(tref->GetPosition()) : 1e9f;
@@ -2597,7 +2643,7 @@ namespace MFO::Logistics {
                         spdlog::info("[loot] {:08X} WALK->{:08X}: onTravelPkg={} curPkg={:08X} prio={} "
                                      "dist={:.0f} pathSpeed={:.1f} navdist={:.0f}",
                                      id, tref->GetFormID(),
-                                     cur == Forms::g_travelPackage,
+                                     Forms::IsTravelPackage(cur),
                                      cur ? cur->GetFormID() : 0u,
                                      Forms::g_lootQuest ? static_cast<int>(Forms::g_lootQuest->data.priority) : -1,
                                      dist, pathSpeed, NavmeshReach(a_follower, tref));
@@ -2606,9 +2652,9 @@ namespace MFO::Logistics {
                 // Track real movement for the no-progress check below (update on
                 // any >kMoveEps world move since the last note).
                 const RE::NiPoint3 fpos = a_follower->GetPosition();
-                if (tref && fpos.GetDistance(g_travel.lastPos) > kMoveEps) {
-                    g_travel.lastPos    = fpos;
-                    g_travel.progressAt = now;
+                if (tref && fpos.GetDistance(tr.lastPos) > kMoveEps) {
+                    tr.lastPos    = fpos;
+                    tr.progressAt = now;
                 }
                 const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
 
@@ -2643,18 +2689,18 @@ namespace MFO::Logistics {
                         if (Papyrus::DispatchActivate(tref, a_follower)) {
                             spdlog::info("[acquire] {:08X}: ACTIVATE dispatched for ref {:08X} ('{}' x{})",
                                          id, tref->GetFormID(), iname ? iname : "?", icount);
-                            g_travel.acquirePending = true;
-                            g_travel.acquireRefID   = tref->GetFormID();
-                            g_travel.acquireBase    = base ? base->GetFormID() : 0;
-                            g_travel.acquirePre     = pre;
+                            tr.acquirePending = true;
+                            tr.acquireRefID   = tref->GetFormID();
+                            tr.acquireBase    = base ? base->GetFormID() : 0;
+                            tr.acquirePre     = pre;
                             return;   // the dispatch IS this tick's action; readback next tick
                         }
                         // VM unreachable / no handle -- end the leg, batch continues.
                         spdlog::info("[acquire] {:08X}: ACTIVATE dispatch FAILED for ref {:08X}",
                                      id, tref->GetFormID());
                         MarkTravelFailed(tref->GetFormID(), now);
-                        g_travel.phase = TravelPhase::Holding;
-                        g_travel.lingerUntil = now + std::chrono::seconds(
+                        tr.phase = TravelPhase::Holding;
+                        tr.lingerUntil = now + std::chrono::seconds(
                                                   static_cast<int>(Config::g_batchLinger.load()));
                         return;
                     }
@@ -2664,8 +2710,8 @@ namespace MFO::Logistics {
                     // genuinely DONE and safe to blocklist.
                     const bool moved = StripCorpse(a_follower, a_state, tref, now);
                     MarkTravelFailed(tref->GetFormID(), now);   // fully stripped -> DONE
-                    g_travel.phase = TravelPhase::Holding;
-                    g_travel.lingerUntil = now + std::chrono::seconds(
+                    tr.phase = TravelPhase::Holding;
+                    tr.lingerUntil = now + std::chrono::seconds(
                                               static_cast<int>(Config::g_batchLinger.load()));
                     spdlog::info("[loot] {:08X}: arrived -- {} (batch continues)", id,
                                  moved ? "looted" : "nothing to take");
@@ -2674,8 +2720,8 @@ namespace MFO::Logistics {
 
                 // NOT arrived: leg fails on vanished target, no-progress (no path),
                 // or the leg deadline. Blacklist it and seek another leg THIS tick.
-                const bool stalled = tref && now - g_travel.progressAt > kNoProgress;
-                if (gone || stalled || now > g_travel.deadline) {
+                const bool stalled = tref && now - tr.progressAt > kNoProgress;
+                if (gone || stalled || now > tr.deadline) {
                     if (tref) {
                         // A stall (zero progress) is a reachability verdict -> strike
                         // toward sticky; a vanished target or a plain deadline is not.
@@ -2685,8 +2731,8 @@ namespace MFO::Logistics {
                     if (stalled && tref)
                         spdlog::info("[loot] {:08X} unreachable {:08X} (no progress, dist={:.0f}) -- skipping",
                                      id, tref->GetFormID(), dist);
-                    g_travel.phase = TravelPhase::Holding;
-                    g_travel.lingerUntil = now + std::chrono::seconds(
+                    tr.phase = TravelPhase::Holding;
+                    tr.lingerUntil = now + std::chrono::seconds(
                                               static_cast<int>(Config::g_batchLinger.load()));
                     // no return -- fall into Holding
                 } else {
@@ -2698,7 +2744,7 @@ namespace MFO::Logistics {
             // grab one within arm's reach. If nothing is actionable but loot is
             // still under the player's dibs, linger and re-scan; else the batch is
             // exhausted -> release and return to the player.
-            if (g_travel.active && g_travel.phase == TravelPhase::Holding) {
+            if (tr.active && tr.phase == TravelPhase::Holding) {
                 // The two loot bars (a ContainerMenu open, or the player sneaking)
                 // make LootNearby early-return BEFORE it scans, so the excursion
                 // scan would come back empty with g_scanSawWaiting false and be
@@ -2712,15 +2758,15 @@ namespace MFO::Logistics {
                 if (RunExcursionScan(a_follower, a_state, now)) {
                     // Retargeted (phase now Walking) or grabbed a cluster corpse
                     // (still Holding) -- productive, so extend the linger.
-                    if (g_travel.phase == TravelPhase::Holding)
-                        g_travel.lingerUntil = now + std::chrono::seconds(
+                    if (tr.phase == TravelPhase::Holding)
+                        tr.lingerUntil = now + std::chrono::seconds(
                                                   static_cast<int>(Config::g_batchLinger.load()));
                     return;
                 }
-                if (g_scanSawWaiting && now <= g_travel.lingerUntil)
+                if (g_scanSawWaiting && now <= tr.lingerUntil)
                     return;   // loot still under your dibs -- hold, re-scan next tick
-                Packages::LootTravelClear("batch done", a_follower);
-                g_travel = TravelIntent{};
+                Packages::LootTravelClear("batch done", a_follower, slot);
+                tr = TravelIntent{};
                 return;
             }
         }
@@ -2785,7 +2831,7 @@ namespace MFO::Logistics {
             // arrow corpses, or ones that were unreachable before he moved) get a
             // fresh assessment -- bounded to once per kReassessCooldown so a
             // genuinely-unreachable body can't drive a re-attempt loop.
-            if (!g_travel.active) {
+            if (!AnyTravelActive()) {
                 const int ic = ++g_idleCycles[id];
                 if (ic >= kIdleReassessCycles && !g_travelFailed.empty() &&
                     (g_lastBlocklistReassess.time_since_epoch().count() == 0 ||
@@ -2869,8 +2915,10 @@ namespace MFO::Logistics {
         g_econPair.clear();
         // Drop any in-flight travel intent and release the engine alias so a
         // revert/load never leaves a follower latched (#55).
-        if (g_travel.active) Packages::LootTravelClear("revert");
-        g_travel = TravelIntent{};
+        for (int i = 0; i < Packages::kMaxLootSlots; ++i) {
+            if (g_travelSlots[i].active) Packages::LootTravelClear("revert", nullptr, i);
+            g_travelSlots[i] = TravelIntent{};
+        }
         g_travelFailed.clear();
         g_travelUnreach.clear();
         g_stallStrikes.clear();
@@ -2880,13 +2928,14 @@ namespace MFO::Logistics {
 
     void ReleaseTravelOnCombat(RE::Actor* a_follower) {
         if (!a_follower) return;
-        if (g_travel.active && g_travel.follower == a_follower->GetFormID()) {
+        const int slot = SlotIndexOf(a_follower->GetFormID());
+        if (slot >= 0) {
             // EVICT him from the loot alias and re-evaluate NOW so the combat
             // table / his own AI takes over this tick, not on the engine's slow
             // pass. The corpse is not "failed" -- he can finish it after the
             // fight -- so no LRU mark.
-            Packages::LootTravelClear("combat", a_follower);
-            g_travel = TravelIntent{};
+            Packages::LootTravelClear("combat", a_follower, slot);
+            g_travelSlots[slot] = TravelIntent{};
         }
     }
 
@@ -2897,8 +2946,9 @@ namespace MFO::Logistics {
         // LootTravelEvictIf no-ops unless a_id is the current holder; between
         // excursions the slot holds the player, so this is normally a no-op.
         Packages::LootTravelEvictIf(a_id);
-        // Forget the live intent too, if he was the active traveller.
-        if (g_travel.active && g_travel.follower == a_id) g_travel = TravelIntent{};
+        // Forget the live intent too, if he was the active traveller (his slot).
+        if (const int slot = SlotIndexOf(a_id); slot >= 0)
+            g_travelSlots[slot] = TravelIntent{};
     }
 
 }

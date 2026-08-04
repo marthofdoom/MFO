@@ -97,6 +97,15 @@
 
 namespace MFO::Packages {
 
+    // P7 MULTI-FOLLOWER LOOT EXCURSIONS. Up to this many followers may loot-travel
+    // AT ONCE, one per SLOT. The loot quest (Forms::g_lootQuest) ships 8 aliases =
+    // 4 (actor, target) PAIRS, interleaved: slot k uses actor alias 2*k (carries
+    // slot k's travel package) and target alias 2*k+1 (the DLL-filled destination).
+    // Slot 0 = aliases 0/1, byte-identical to the shipped single-slot route. The
+    // claim model per slot is UNCHANGED (static priority 60, claim at alias fill,
+    // release by eviction). The RETREAT quest is a SEPARATE, still-single holder.
+    inline constexpr int kMaxLootSlots = 4;
+
     // The observed lifecycle of one commanded action. Advanced ONLY by Pump()
     // reading engine state -- see the asynchrony note above.
     enum class Phase : std::uint8_t {
@@ -191,33 +200,37 @@ namespace MFO::Packages {
     Status Get();
 
     // ── OPTION A: engine-pathed loot travel (DESIGN behaviour layer) ─────────
-    // Fill MFO_LootQuest's aliases so the engine WALKS a_follower to a_ref via
-    // the vanilla Travel package; the caller (Logistics) transfers on arrival.
-    // SINGLE holder -- one loot quest, one alias pair -- so the caller drives at
-    // most one traveller at a time. Returns false if bLootTravel is off, the
-    // records are unresolved, off AE, or the quest is not running.
+    // Fill MFO_LootQuest's SLOT a_slot aliases so the engine WALKS a_follower to
+    // a_ref via the vanilla Travel package; the caller (Logistics) transfers on
+    // arrival. Up to kMaxLootSlots followers travel concurrently, one per slot
+    // (a_slot in [0, kMaxLootSlots): actor alias 2*a_slot, target 2*a_slot+1).
+    // Logistics owns the follower->slot map and passes the owning slot down every
+    // call. Returns false if bLootTravel is off, the records are unresolved, off
+    // AE, or the quest is not running.
     //
     // The fill is SAVE-SERIALIZED (#55): the caller MUST LootTravelClear() on
-    // arrival, interrupt (combat), or timeout. ReleaseAll clears it on
+    // arrival, interrupt (combat), or timeout. ReleaseAll clears every slot on
     // load/revert/shutdown, so even a missed clear self-heals on the next load.
-    bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
+    bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, int a_slot);
     // A LEG BOUNDARY inside an ongoing batch excursion: retarget the follower to
-    // the next loot ref (refill alias 1 only) WITHOUT releasing -- priority and
-    // alias 0 are untouched, so no framework hand-back / turn-around. See .cpp.
-    bool LootTravelRetarget(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
+    // the next loot ref (refill this slot's TARGET alias only) WITHOUT releasing
+    // -- priority and the ACTOR alias are untouched, so no framework hand-back /
+    // turn-around. See .cpp.
+    bool LootTravelRetarget(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, int a_slot);
 
     // a_follower is optional: pass it to re-evaluate that follower immediately
     // (drops travel this tick); omit and the priority drop still frees them on
-    // the engine's next evaluation. Release is by QUEST PRIORITY (drop MFO below
-    // the follower framework so it reclaims), NOT by clearing the sticky,
-    // unclearable alias -- see the .cpp.
-    void LootTravelClear(const char* a_why, RE::Actor* a_follower = nullptr);
+    // the engine's next evaluation. Release is by EVICTION of a_slot's ACTOR alias
+    // (force-fill the player), NOT by clearing the sticky, unclearable alias --
+    // see the .cpp.
+    void LootTravelClear(const char* a_why, RE::Actor* a_follower = nullptr, int a_slot = 0);
 
-    // Evict a_id from the loot alias IF he currently occupies alias 0 (keyed to
-    // OCCUPANCY, not the live intent -- the alias is never emptied, so a follower
-    // dismissed any time after his last travel still holds it). Priority can't
-    // free a dismissed follower (nothing reclaims him); this force-fills alias 0
-    // with the player. No-op if a_id is not the current holder. See the .cpp.
+    // Evict a_id from the loot alias IF he currently occupies ANY slot's actor
+    // alias (keyed to OCCUPANCY across all slots, not the live intent -- the alias
+    // is never emptied, so a follower dismissed any time after his last travel
+    // still holds it). Priority can't free a dismissed follower (nothing reclaims
+    // him); this force-fills his slot's actor alias with the player. No-op if a_id
+    // holds no slot. See the .cpp.
     void LootTravelEvictIf(RE::FormID a_id);
 
     // ── RETREAT PROBE: travel-to-PLAYER under kIgnoreCombat ─────────────────

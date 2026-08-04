@@ -30,7 +30,14 @@ namespace MFO::Forms {
     inline constexpr RE::FormID kCommandQuest     = 0x80A;
     inline constexpr RE::FormID kLootQuest        = 0x80C;   // Option A: travel-to-loot delivery
     inline constexpr RE::FormID kCastPackage      = 0x820;
-    inline constexpr RE::FormID kTravelPackage    = 0x828;   // Option A: rides vanilla Travel
+    inline constexpr RE::FormID kTravelPackage    = 0x828;   // Option A: rides vanilla Travel (slot 0)
+    // P7 multi-follower loot: one travel package per concurrent slot. Each is
+    // byte-identical to slot 0's but names its OWN target alias (3/5/7). The
+    // native never fills BY these ids (the alias fill delivers the package); they
+    // are resolved ONLY for the WALK diagnostic (Forms::IsTravelPackage).
+    inline constexpr RE::FormID kTravelPackage1   = 0x900;   // slot 1
+    inline constexpr RE::FormID kTravelPackage2   = 0x901;   // slot 2
+    inline constexpr RE::FormID kTravelPackage3   = 0x902;   // slot 3
     // RETREAT PROBE: travel-to-player under kIgnoreCombat -- can an alias
     // Travel package pull a follower away from a live combat controller?
     inline constexpr RE::FormID kRetreatQuest     = 0x830;
@@ -48,7 +55,19 @@ namespace MFO::Forms {
     inline RE::TESQuest*   g_commandQuest = nullptr;
     inline RE::TESPackage* g_castPackage  = nullptr;
     inline RE::TESQuest*   g_lootQuest    = nullptr;   // Option A
-    inline RE::TESPackage* g_travelPackage = nullptr;  // Option A
+    inline RE::TESPackage* g_travelPackage  = nullptr; // Option A (slot 0)
+    inline RE::TESPackage* g_travelPackage1 = nullptr; // P7 slot 1
+    inline RE::TESPackage* g_travelPackage2 = nullptr; // P7 slot 2
+    inline RE::TESPackage* g_travelPackage3 = nullptr; // P7 slot 3
+
+    // WALK-diagnostic predicate: is a_pkg ANY of the (up to 4) loot-travel
+    // packages? A slot-k follower rides slot k's package, so the single-package
+    // comparison would read false for slots 1-3 and mislead. Never gates
+    // behaviour -- diagnostic only. Unresolved extras compare as nullptr (safe).
+    inline bool IsTravelPackage(const RE::TESPackage* a_pkg) {
+        return a_pkg && (a_pkg == g_travelPackage  || a_pkg == g_travelPackage1 ||
+                         a_pkg == g_travelPackage2 || a_pkg == g_travelPackage3);
+    }
     inline RE::TESQuest*   g_retreatQuest   = nullptr; // RETREAT PROBE
     inline RE::TESPackage* g_retreatPackage = nullptr; // RETREAT PROBE
     inline RE::TESQuest*   g_tradeQuest     = nullptr; // #21 econ bridge

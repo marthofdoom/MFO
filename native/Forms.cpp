@@ -32,7 +32,12 @@ namespace MFO::Forms {
         g_commandQuest = Look<RE::TESQuest>(kCommandQuest, "MFO_CommandQuest");
         g_castPackage  = Look<RE::TESPackage>(kCastPackage, "MFO_CastPackage");
         g_lootQuest    = Look<RE::TESQuest>(kLootQuest, "MFO_LootQuest");        // Option A
-        g_travelPackage = Look<RE::TESPackage>(kTravelPackage, "MFO_TravelPackage");  // Option A
+        g_travelPackage = Look<RE::TESPackage>(kTravelPackage, "MFO_TravelPackage");  // Option A (slot 0)
+        // P7 slots 1-3. Diagnostic-only (WALK readout); a missing extra disables
+        // nothing, so these use the same named-miss log without gating anything.
+        g_travelPackage1 = Look<RE::TESPackage>(kTravelPackage1, "MFO_TravelPackage1");  // P7 slot 1
+        g_travelPackage2 = Look<RE::TESPackage>(kTravelPackage2, "MFO_TravelPackage2");  // P7 slot 2
+        g_travelPackage3 = Look<RE::TESPackage>(kTravelPackage3, "MFO_TravelPackage3");  // P7 slot 3
         g_retreatQuest   = Look<RE::TESQuest>(kRetreatQuest, "MFO_RetreatQuest");        // RETREAT PROBE
         g_retreatPackage = Look<RE::TESPackage>(kRetreatPackage, "MFO_RetreatPackage");  // RETREAT PROBE
         g_tradeQuest     = Look<RE::TESQuest>(kTradeQuest, "MFO_TradeQuest");            // #21 econ bridge

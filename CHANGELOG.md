@@ -1,3 +1,11 @@
+## v1.0.22 -- multi-follower loot excursions (P7)
+
+- Up to FOUR followers now walk off to loot at the same time, instead of one at a
+  time while the rest waited. A post-fight battlefield reads like a competent party
+  sweeping it, not one looter with spectators. The loot quest carries four
+  independent excursion slots; each follower claims a free slot and the others keep
+  grabbing what is already at arm's reach. Single-follower behaviour is unchanged.
+
 ## v1.0.21 -- auto-retreat on by default (combat-sense 3)
 
 - Followers now fall back to your side by default when badly outmatched (low
