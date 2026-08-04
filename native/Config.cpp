@@ -223,7 +223,7 @@ namespace MFO::Config {
             g_lootTravel         = true;
             g_lootInPlayerHomes  = false;
             g_economy            = false;
-            g_autoRetreat        = false;
+            g_autoRetreat        = true;
             g_rapportToasts      = true;
             g_minPotionMag       = 0;
             g_travelRadius       = 4096.0f;
@@ -265,7 +265,7 @@ namespace MFO::Config {
             { "fAbandonDelay", "45.000000" },  { "fDepartRadius", "700.000000" },
             { "fPlayerBubble", "256.000000" }, { "fLootRadius", "3000.000000" },
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
-            { "bEconomy", "0" },               { "bAutoRetreat", "0" },
+            { "bEconomy", "0" },               { "bAutoRetreat", "1" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },
             { "iMinPotionMag", "0" },
             { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "4.000000" },

@@ -1,3 +1,11 @@
+## v1.0.21 -- auto-retreat on by default (combat-sense 3)
+
+- Followers now fall back to your side by default when badly outmatched (low
+  confidence -- foe count, level and health feed it) and far from you in combat,
+  the confidence leash taken to its conclusion. This is combat-sense 3's default
+  rule; the "Auto-retreat when outmatched" MCM toggle is the override -- turn it
+  OFF to require an authored fall-back rule instead. Fires once per fight.
+
 ## v1.0.20 -- logging efficiency + regression-guard probes
 
 - LOGGING: keep every line but stop flushing per-line. Info now batches to a 1s

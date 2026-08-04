@@ -224,12 +224,13 @@ namespace MFO::Config {
     // scan enabled while tuning. bEconomy.
     inline std::atomic<bool>  g_economy{ false };
 
-    // AUTO-RETREAT (leash safety). Default OFF: when ON, a follower who is badly
-    // outnumbered/hurt (confidence below threshold) AND far from you in combat
-    // falls back to your side under kIgnoreCombat travel -- the confidence leash
-    // taken to its conclusion. Off by default so a default install never acts
-    // without an authored rule (byte-identical-when-idle tenet). bAutoRetreat.
-    inline std::atomic<bool>  g_autoRetreat{ false };
+    // AUTO-RETREAT (combat-sense 3, the outnumbered DEFAULT rule). ON by default
+    // (marth): a follower who is badly outnumbered/hurt (confidence below the 0.25
+    // floor -- foe count feeds confidence) AND far from you in combat falls back to
+    // your side under kIgnoreCombat travel. This is the one place MFO acts without
+    // an authored rule; the MCM toggle is the override (turn OFF to require an
+    // authored fall-back rule instead). Fires once per fight. bAutoRetreat.
+    inline std::atomic<bool>  g_autoRetreat{ true };
 
     // LOW-POWER POTION FLOOR (marth: "ignore low power potions entirely, loot
     // strongest to weakest"). A restore potion whose magnitude is below this is
