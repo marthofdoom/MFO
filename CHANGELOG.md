@@ -1,3 +1,12 @@
+## v1.0.23 -- MCM self-heal runs early (new settings bind on first load)
+
+- Fix: a new MCM setting added by an update (e.g. "Ignore weak potions") could show
+  and set -1 -- unbindable -- because MFO seeded the MCM store at kDataLoaded, but
+  MCM Helper registers its settings at ITS kDataLoaded, which SKSE dispatched first.
+  The self-heal now runs at kInputLoaded (before ANY plugin's kDataLoaded), so the
+  key is in the store when MCM Helper reads it and the control binds on the first
+  launch -- no game restart needed for the next update's new settings.
+
 ## v1.0.22 -- multi-follower loot excursions (P7)
 
 - Up to FOUR followers now walk off to loot at the same time, instead of one at a

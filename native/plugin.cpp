@@ -255,14 +255,26 @@ namespace {
 
     void OnMessage(SKSE::MessagingInterface::Message* a_msg) {
         switch (a_msg->type) {
+        case SKSE::MessagingInterface::kInputLoaded:
+            // SEED THE MCM STORE HERE, not at kDataLoaded. MCM Helper registers its
+            // ModSettings from the store at ITS OWN kDataLoaded -- and SKSE dispatches
+            // kDataLoaded in plugin order, so seeding at MFO's kDataLoaded ran AFTER
+            // MCM Helper had already registered a new key UNBOUND (the slider stuck at
+            // -1, unsettable, until a reload). kInputLoaded is dispatched to EVERY
+            // plugin before ANY kDataLoaded, so the new key is in the store when MCM
+            // Helper reads it -> the control binds on the FIRST load, no reload. Pure
+            // file I/O, safe this early. (marth: iMinPotionMag showed/set -1.)
+            spdlog::info("[startup] kInputLoaded -- MCM self-heal");
+            MFO::Config::EnsureMcmDefaults();
+            break;
+
         case SKSE::MessagingInterface::kDataLoaded:
             // ARCHITECTURE.md §9 order: config -> forms -> sinks -> vocabulary.
             // Sinks must come AFTER form resolution or they fire against
             // unresolved forms.
             spdlog::info("[startup] kDataLoaded");
-            MFO::Config::EnsureMcmDefaults();  // seed any new toggle's key into the MCM
-                                               // store BEFORE reading it, so an update's
-                                               // toggle binds on an existing save (#32)
+            MFO::Config::EnsureMcmDefaults();  // idempotent belt-and-suspenders (the real
+                                               // seed ran at kInputLoaded, before MCM Helper)
             MFO::Config::Read();            // config first -- everything else reads it
             MFO::Forms::Resolve();          // then forms
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
