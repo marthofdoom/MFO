@@ -67,9 +67,19 @@ namespace {
 
         auto log = std::make_shared<spdlog::logger>("global", std::move(sink));
         log->set_level(spdlog::level::info);
-        log->flush_on(spdlog::level::info);   // flush every line: a CTD must not eat the last one
+        // DISK-WRITE EFFICIENCY (marth): keep EVERY line, but stop flushing per line.
+        // flush_on(info) did an fflush syscall on the game thread for every log line;
+        // in a combat/loot burst that is a lot of small writes and micro-stalls.
+        // Instead each line is a cheap buffered write, and the flush to disk happens
+        // on a 1s BACKGROUND timer -- except warn/err/critical, which flush AT ONCE so
+        // an error and the crash breadcrumbs around it always survive a CTD. Stays
+        // SYNCHRONOUS on purpose: an async queue would be lost with the process on a
+        // hard crash, defeating the [bc] crash-pin method. Trade-off: up to ~1s of
+        // trailing INFO lines can be lost on a hard CTD (errors are not).
+        log->flush_on(spdlog::level::warn);
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
+        spdlog::flush_every(std::chrono::seconds(1));
     }
 
     // Test seam, now `bSeedTestData` in MFO.ini and DEFAULT OFF.

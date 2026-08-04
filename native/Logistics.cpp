@@ -830,7 +830,36 @@ namespace MFO::Logistics {
                 if (!inCombat && mag + 0.5f >= deficit && mag < coverMag) { coverMag = mag; cover = alc; }
             }
             RE::AlchemyItem* best = (!inCombat && cover) ? cover : strong;
-            if (!best) return false;
+            if (!best) {
+                // REGRESSION GUARD [potprobe]: a wanted drink found no potion. If the
+                // follower carries alchemy anyway, a classifier regression (a mod
+                // reworking potion archetypes -> PotionRestores misreads them) is the
+                // suspect -- dump the raw archetype/AV so it is diagnosable. Silent
+                // when the follower simply has no alchemy. Rate-limited 15s/follower.
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextPotProbe;
+                auto& pn = s_nextPotProbe[a_follower->GetFormID()];
+                const auto tnow = std::chrono::steady_clock::now();
+                if (pn.time_since_epoch().count() == 0 || tnow >= pn) {
+                    pn = tnow + std::chrono::seconds(15);
+                    std::string dump;
+                    for (auto& [obj, data] : a_follower->GetInventory()) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* alc = obj->As<RE::AlchemyItem>();
+                        if (!alc || alc->IsFood() || alc->IsPoison()) continue;
+                        const auto* eff = alc->GetCostliestEffectItem();
+                        auto* mgef = eff ? eff->baseEffect : nullptr;
+                        dump += std::format(" [{} x{} arch={} primAV={} -> restores={}]",
+                            alc->GetFullName() ? alc->GetFullName() : "?", data.first,
+                            mgef ? static_cast<int>(mgef->data.archetype) : -1,
+                            mgef ? static_cast<int>(mgef->data.primaryAV) : -1,
+                            static_cast<int>(PotionRestores(alc)));
+                    }
+                    if (!dump.empty())
+                        spdlog::info("[potprobe] {:08X} want={} -- no match, but carries alchemy:{}",
+                                     a_follower->GetFormID(), static_cast<int>(a_which), dump);
+                }
+                return false;
+            }
 
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return false;
@@ -1395,10 +1424,24 @@ namespace MFO::Logistics {
                     // first (any explicit owner, including the player), then keep
                     // IsOffLimits() as the second bar for cell-owned/no-owner
                     // crime cases. No delay or waiver overrides this.
-                    // [ownprobe] removed: the field soak settled it -- every owned
-                    // drop was a shop/faction CONTAINER (deadActor=0), never a killed
-                    // corpse, so the gate is correct and not eating combat loot.
-                    if (ref->GetOwner()) { ++dOwned; return RE::BSContainer::ForEachResult::kContinue; }
+                    if (auto* owner = ref->GetOwner()) {
+                        ++dOwned;
+                        // REGRESSION GUARD [ownprobe]: the soak proved every owned drop
+                        // was a shop/faction container -- but a KILLED corpse must never
+                        // read as owned (that would silently eat combat loot). Log ONLY
+                        // that anomaly (dead actor), rate-limited -- silent normally.
+                        if (auto* act = ref->As<RE::Actor>(); act && act->IsDead()) {
+                            static std::unordered_map<RE::FormID, Clock::time_point> s_nextOP;
+                            auto& op = s_nextOP[ref->GetFormID()];
+                            if (op.time_since_epoch().count() == 0 || a_now >= op) {
+                                op = a_now + std::chrono::seconds(20);
+                                spdlog::info("[ownprobe] {:08X} CORPSE {:08X} dropped as OWNED (owner {:08X}) "
+                                             "-- ownership gate may be eating combat loot",
+                                             a_follower->GetFormID(), ref->GetFormID(), owner->GetFormID());
+                            }
+                        }
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
                     if (ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
                     // Locked -- UNLESS the follower's Lockpicking skill can open
                     // it. RemoveItem ignores locks, so without this a follower

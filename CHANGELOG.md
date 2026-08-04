@@ -1,3 +1,12 @@
+## v1.0.20 -- logging efficiency + regression-guard probes
+
+- LOGGING: keep every line but stop flushing per-line. Info now batches to a 1s
+  background flush (warn/err still flush at once), cutting per-line disk writes and
+  the micro-stalls they caused, with only a ~1s trailing-info risk on a hard CTD.
+- [ownprobe]/[potprobe] restored as LEAN regression guards: they fire only on the
+  anomaly (a killed corpse read as owned; a follower with alchemy but no drink
+  match), so proven features stay watched without log bloat.
+
 ## v1.0.19 -- looting competence pass (Fable review P1-P6) + potion rework
 
 - POTIONS: ignore low-power restore potions entirely, loot strongest-first, no cap.
