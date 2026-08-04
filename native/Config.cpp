@@ -166,7 +166,14 @@ namespace MFO::Config {
                 if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
                 const auto eq = line.find('=');
                 if (eq == std::string::npos) continue;
-                Apply(Trim(line.substr(0, eq)), Trim(line.substr(eq + 1)), a_path);
+                // Strip an INLINE comment from the value ("512.0  ; note" -> "512.0").
+                // The seed SKSE/Plugins/MFO.ini annotates its values this way, and
+                // ParseFloat/ParseInt reject any trailing non-space, so without this
+                // every annotated key warned and silently fell back to its default.
+                std::string val = Trim(line.substr(eq + 1));
+                if (const auto c = val.find_first_of(";#"); c != std::string::npos)
+                    val = Trim(val.substr(0, c));
+                Apply(Trim(line.substr(0, eq)), val, a_path);
                 ++applied;
             }
             spdlog::info("[config] read {} ({} key(s))", a_path, applied);
