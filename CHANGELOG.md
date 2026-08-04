@@ -12,7 +12,9 @@
 - STEALTH: crouch-walking no longer blocks all looting; a follower only holds off
   while you're actively stealthing (sneaking + weapon drawn or in combat).
 - Armor upgrades now pick the best piece, not the first found. Config ini inline
-  comments parse correctly. [ownprobe] diagnostic retired (its question is settled).
+  comments parse correctly. Out of combat a follower now drinks the WEAKEST potion
+  that covers the deficit (not its best), and tells you when it hands you an off-role
+  weapon. [ownprobe]/[potprobe] diagnostics retired (their questions are settled).
 
 ## v1.0.18 -- B back-out reads ImGui's real nav state
 

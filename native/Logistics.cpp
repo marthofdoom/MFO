@@ -803,56 +803,34 @@ namespace MFO::Logistics {
                 return false;
             }
 
-            RE::AlchemyItem* best = nullptr;
-            float bestMag = -1.0f;
+            // IN COMBAT drink the STRONGEST (survival first). OUT of combat, drink the
+            // WEAKEST potion that still covers the missing amount -- topping up with an
+            // Ultimate potion to heal a scratch is the wasteful "burns the best potion"
+            // tell (Fable P10). If nothing single-handedly covers the deficit, fall to
+            // the strongest to close the most gap.
+            const bool  inCombat = a_follower->IsInCombat();
+            float deficit = 0.0f;
+            if (!inCombat) {
+                if (auto* avo = a_follower->AsActorValueOwner())
+                    deficit = std::max(0.0f, avo->GetPermanentActorValue(a_which) -
+                                             avo->GetActorValue(a_which));
+            }
 
+            RE::AlchemyItem* strong = nullptr; float strongMag = -1.0f;
+            RE::AlchemyItem* cover  = nullptr; float coverMag  = std::numeric_limits<float>::max();
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* alc = obj->As<RE::AlchemyItem>();
                 if (!alc || PotionRestores(alc) != a_which) continue;
-
-                // Magnitude of the costliest effect -- the same effect
-                // PotionRestores classified on, so "best" is by the resource the
-                // potion is actually FOR.
+                // Magnitude of the costliest effect -- the same effect PotionRestores
+                // classified on, so ranking is by the resource the potion is FOR.
                 const auto* eff = alc->GetCostliestEffectItem();
                 const float mag = eff ? eff->GetMagnitude() : 0.0f;
-                if (mag > bestMag) { bestMag = mag; best = alc; }
+                if (mag > strongMag) { strongMag = mag; strong = alc; }
+                if (!inCombat && mag + 0.5f >= deficit && mag < coverMag) { coverMag = mag; cover = alc; }
             }
-            if (!best) {
-                // POTION PROBE (temp, v0.8.17). marth: "he has 5 health potions
-                // but won't drink." PotionRestores classifies by MGEF archetype
-                // (kValueModifier/kDualValueModifier) -- a REQUIREM rework may use
-                // a different archetype, so his health potions read as kNone and
-                // are invisible. Dump every alchemy item he carries with its raw
-                // archetype id + primaryAV + our verdict, so the classifier can be
-                // fixed to the EXACT archetype Requiem uses. Rate-limited per
-                // follower per 15s, only when a wanted drink found nothing.
-                static std::unordered_map<RE::FormID, Clock::time_point> s_nextPotProbe;
-                auto& pn = s_nextPotProbe[a_follower->GetFormID()];
-                const auto tnow = std::chrono::steady_clock::now();
-                if (pn.time_since_epoch().count() == 0 || tnow >= pn) {
-                    pn = tnow + std::chrono::seconds(15);
-                    std::string dump;
-                    for (auto& [obj, data] : a_follower->GetInventory()) {
-                        if (!obj || data.first <= 0) continue;
-                        auto* alc = obj->As<RE::AlchemyItem>();
-                        if (!alc) continue;
-                        const auto* eff = alc->GetCostliestEffectItem();
-                        auto* mgef = eff ? eff->baseEffect : nullptr;
-                        dump += std::format(
-                            " [{} x{} arch={} primAV={} food={} poison={} -> restores={}]",
-                            alc->GetFullName() ? alc->GetFullName() : "?", data.first,
-                            mgef ? static_cast<int>(mgef->data.archetype) : -1,
-                            mgef ? static_cast<int>(mgef->data.primaryAV) : -1,
-                            alc->IsFood() ? 1 : 0, alc->IsPoison() ? 1 : 0,
-                            static_cast<int>(PotionRestores(alc)));
-                    }
-                    spdlog::info("[potprobe] {:08X} want={} -- no match. carried alchemy:{}",
-                                 a_follower->GetFormID(), static_cast<int>(a_which),
-                                 dump.empty() ? " (none)" : dump);
-                }
-                return false;
-            }
+            RE::AlchemyItem* best = (!inCombat && cover) ? cover : strong;
+            if (!best) return false;
 
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return false;
@@ -1273,7 +1251,10 @@ namespace MFO::Logistics {
         // build that sneaks the whole dungeon never loots at all (Fable, P4).
         bool PlayerActivelyStealthing() {
             auto* pc = RE::PlayerCharacter::GetSingleton();
-            return pc && pc->IsSneaking() && (pc->IsWeaponDrawn() || pc->IsInCombat());
+            if (!pc || !pc->IsSneaking()) return false;
+            if (pc->IsInCombat()) return true;
+            auto* as = pc->AsActorState();
+            return as && as->GetWeaponState() >= RE::WEAPON_STATE::kDrawing;   // weapon out/coming out
         }
 
         bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
@@ -1291,8 +1272,7 @@ namespace MFO::Logistics {
             // sneak; a blanket block there means logistics looting effectively never
             // happens (Fable). Hold only when sneaking coincides with a drawn weapon
             // or combat -- the moments a follower breaking off would actually blow it.
-            if (auto* pc = RE::PlayerCharacter::GetSingleton();
-                pc && pc->IsSneaking() && (pc->IsWeaponDrawn() || pc->IsInCombat())) {
+            if (PlayerActivelyStealthing()) {
                 static Clock::time_point s_nextSneakLog{};
                 if (a_now >= s_nextSneakLog) {
                     s_nextSneakLog = a_now + std::chrono::seconds(10);
@@ -2415,6 +2395,11 @@ namespace MFO::Logistics {
         if (!player) return false;
         const char* nm = shed->GetName() ? shed->GetName() : "?";
         a_follower->RemoveItem(shed, shedCount, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, player);
+        // Tell the player where the weight went (P9): a silent hand-off looks like a
+        // mystery inventory gain. Reuses the HUD-notification toggle.
+        if (Config::g_rapportToasts.load())
+            RE::DebugNotification(std::format("{} hands you a {}.",
+                a_follower->GetName() ? a_follower->GetName() : "Your follower", nm).c_str());
         spdlog::info("[shed] {:08X}: off-role weapon '{}' x{} (class {}) -> player | meleeRole={} doRanged={} xbow={}",
                      a_follower->GetFormID(), nm, shedCount,
                      static_cast<int>(WeaponClassOf(shed->As<RE::TESObjectWEAP>()->GetWeaponType())),
