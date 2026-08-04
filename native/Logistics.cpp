@@ -106,13 +106,8 @@ namespace MFO::Logistics {
         // Iron/Steel/Ancient Nord arrows report IsBolt()==true here, so the arrow
         // gambit rejected every arrow on a corpse (deck arrowprobe, 000C5684).
         // Uncatalogued ammo falls back to IsBolt() (mod still runs with no patcher).
-        bool AmmoIsBolt(RE::TESAmmo* a_ammo) {
-            switch (Catalog::AmmoKind(a_ammo->GetFormID())) {
-            case Catalog::Ammo::kArrow: return false;
-            case Catalog::Ammo::kBolt:  return true;
-            default:                    return a_ammo->IsBolt();
-            }
-        }
+        // AmmoIsBolt is defined in the PUBLIC namespace (declared in Logistics.h) so
+        // the economy buy side shares it; anon-namespace callers resolve it there.
 
         // Ammo of one class (bolts vs arrows) the actor carries. NO bow gate:
         // the ACTION is dumb -- whether a follower should gather ammo is the
@@ -184,21 +179,26 @@ namespace MFO::Logistics {
 
             // PEEK: the eligibility check must agree with the TAKE below, or the
             // follower walks back to a corpse holding only the junk it just shed and
-            // takes nothing, forever (Fable). Eligible only if a body arrow is a real
-            // upgrade over the follower's worst.
+            // takes nothing, forever (Fable). RESTOCK, not upgrade-only: this action
+            // is gated by the gambit's own count condition ("arrows < N"), so it only
+            // fires WHILE the follower is short -- it must accept same-tier ammo (>=
+            // worst held), or a low archer stands over corpses full of the very arrows
+            // he's firing and never restocks. The condition self-limits the quantity
+            // (it stops firing once the follower is back above N), exactly like the
+            // potion path. Only STRICTLY worse ammo is passed over.
             if (a_peek) {
-                for (auto& b : body) if (b.dmg > worstHeld) return true;
+                for (auto& b : body) if (b.dmg >= worstHeld) return true;
                 return false;
             }
 
-            // TAKE the body arrows BETTER than the follower's worst, best-first (so
+            // TAKE the body arrows at-or-above the follower's worst, best-first (so
             // the carry-weight gate drops iron, never ebony). Track the weakest we
             // actually took, so the shed below never gives back something as good.
             std::sort(body.begin(), body.end(), [](const Ammo& a, const Ammo& b) { return a.dmg > b.dmg; });
             std::int32_t taken = 0;
             float minTaken = std::numeric_limits<float>::max();
             for (auto& b : body) {
-                if (b.dmg <= worstHeld) break;   // rest are not upgrades
+                if (b.dmg < worstHeld) break;   // strictly worse -> never downgrade
                 if (!FitsCarryWeight(a_follower, b.obj->GetWeight() * b.count)) continue;
                 a_src->RemoveItem(b.obj, b.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
                 taken   += b.count;
@@ -252,9 +252,7 @@ namespace MFO::Logistics {
             // is an explicit magnitude floor; 0 means use the auto floor derived from
             // the load order's weakest tier (g_autoPotionFloor). Fortify/cure carry
             // magnitude 0 here and are never filtered.
-            const float floor = Config::g_minPotionMag.load() > 0
-                                    ? static_cast<float>(Config::g_minPotionMag.load())
-                                    : g_autoPotionFloor;
+            const float floor = PotionLootFloor();
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* alc = obj->As<RE::AlchemyItem>();
@@ -506,6 +504,7 @@ namespace MFO::Logistics {
             }
 
             RE::TESBoundObject* bestArmor     = nullptr;
+            float               bestArmorRat  = 0.0f;   // best-first, like bestWeapDmg (marth's rule)
             RE::TESBoundObject* bestWeap      = nullptr;
             std::uint16_t       bestWeapDmg   = baseDmg;
             RE::TESBoundObject* bestRanged    = nullptr;
@@ -526,7 +525,14 @@ namespace MFO::Logistics {
                     const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                         & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
                     const bool shieldUseless = isShield && meleeTargetClass != WepClass::OneHand;
-                    if (!bestArmor && !shieldUseless && ArmorIsBetter(a_follower, armo)) bestArmor = obj;
+                    // Best-first: among the armour upgrades this body offers, keep the
+                    // HIGHEST-rated (not the first enumerated), so a carry-weight cutoff
+                    // can't strand the actually-best piece.
+                    if (!shieldUseless && ArmorIsBetter(a_follower, armo) &&
+                        armo->GetArmorRating() > bestArmorRat) {
+                        bestArmorRat = armo->GetArmorRating();
+                        bestArmor    = obj;
+                    }
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
                     if (IsCreatureWeapon(weap)) continue;   // never equip automaton/creature gear
                     const WepClass wc = WeaponClassOf(weap->GetWeaponType());
@@ -1081,9 +1087,11 @@ namespace MFO::Logistics {
             float             nearSecs = 0;  // accrued player near+visible time (fair chance)
             bool              everNear = false;   // player ever within chanceRadius (abandon backstop)
             bool              rejected = false;   // player engaged then moved on (R1: to another source)
+            Clock::time_point farSince{};    // player has been beyond departRadius since this (departure release)
         };
         std::unordered_map<RE::FormID, Claim> g_claim;
         constexpr float kTickSecs = 1.0f;   // ~kLogisticsInterval, the fair-chance accrual step
+        constexpr float kDepartRelease = 3.0f;   // player near then gone this long -> release Valuables (P3)
 
         // EvictOldest for the Claim map -- oldest by first-seen. The FormID/time
         // overload above cannot serve it (Claim has no operator<), so this is its
@@ -1260,6 +1268,14 @@ namespace MFO::Logistics {
             return base && !base->Is(RE::FormType::Container);
         }
 
+        // Hold looting only when the player is ACTIVELY stealthing -- sneaking AND
+        // (weapon drawn or in combat) -- not merely crouch-walking, else a stealth
+        // build that sneaks the whole dungeon never loots at all (Fable, P4).
+        bool PlayerActivelyStealthing() {
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            return pc && pc->IsSneaking() && (pc->IsWeaponDrawn() || pc->IsInCombat());
+        }
+
         bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                         RE::ActorValue a_potionWant = RE::ActorValue::kNone,
                         LootMode a_mode = LootMode::kNormal) {
@@ -1270,12 +1286,21 @@ namespace MFO::Logistics {
                 ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) {
                 return false;
             }
-            // BEHAVIOUR LAYER: don't loot while the PLAYER is sneaking -- a
-            // follower breaking off to grab loot blows your stealth (marth; the
-            // deferred FCL gate, §0.32). An invisible courtesy: crouch and they
-            // hold off.
-            if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && pc->IsSneaking())
+            // BEHAVIOUR LAYER: hold looting while the player is ACTIVELY stealthing,
+            // not merely crouched. A stealth build spends most of the dungeon in
+            // sneak; a blanket block there means logistics looting effectively never
+            // happens (Fable). Hold only when sneaking coincides with a drawn weapon
+            // or combat -- the moments a follower breaking off would actually blow it.
+            if (auto* pc = RE::PlayerCharacter::GetSingleton();
+                pc && pc->IsSneaking() && (pc->IsWeaponDrawn() || pc->IsInCombat())) {
+                static Clock::time_point s_nextSneakLog{};
+                if (a_now >= s_nextSneakLog) {
+                    s_nextSneakLog = a_now + std::chrono::seconds(10);
+                    spdlog::info("[loot] {:08X} holding -- player stealthing (sneak + armed/combat)",
+                                 a_follower->GetFormID());
+                }
                 return false;
+            }
             // PLAYER HOME: don't loot your own house unless opted in (default OFF).
             if (!Config::g_lootInPlayerHomes.load() && InPlayerHome())
                 return false;
@@ -1390,32 +1415,10 @@ namespace MFO::Logistics {
                     // first (any explicit owner, including the player), then keep
                     // IsOffLimits() as the second bar for cell-owned/no-owner
                     // crime cases. No delay or waiver overrides this.
-                    if (auto* owner = ref->GetOwner()) {
-                        ++dOwned;
-                        // OWNED PROBE (marth: "not sure potions are being looted").
-                        // The in-town soak showed EVERY potion source dropped as
-                        // owned -- but that log can't tell a legit shop container
-                        // from a killed corpse wrongly read as owned. Dump, rate-
-                        // limited per ref, WHAT was rejected: a dead hostile's
-                        // corpse should carry no owner; a shop barrel should. If
-                        // combat corpses show up here, the gate is eating real loot.
-                        if (a_cat == Category::Potions) {
-                            static std::unordered_map<RE::FormID, Clock::time_point> s_nextOP;
-                            auto& op = s_nextOP[ref->GetFormID()];
-                            if (op.time_since_epoch().count() == 0 || a_now >= op) {
-                                op = a_now + std::chrono::seconds(20);
-                                auto* act = ref->As<RE::Actor>();
-                                auto* fn  = owner->As<RE::TESFullName>();
-                                spdlog::info("[ownprobe] {:08X} dropped-owned ref={:08X} deadActor={} "
-                                             "owner={:08X} formType={} \"{}\"",
-                                             a_follower->GetFormID(), ref->GetFormID(),
-                                             (act && act->IsDead()) ? 1 : 0,
-                                             owner->GetFormID(), static_cast<int>(owner->GetFormType()),
-                                             (fn && fn->GetFullName()) ? fn->GetFullName() : "?");
-                            }
-                        }
-                        return RE::BSContainer::ForEachResult::kContinue;
-                    }
+                    // [ownprobe] removed: the field soak settled it -- every owned
+                    // drop was a shop/faction CONTAINER (deadActor=0), never a killed
+                    // corpse, so the gate is correct and not eating combat loot.
+                    if (ref->GetOwner()) { ++dOwned; return RE::BSContainer::ForEachResult::kContinue; }
                     if (ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
                     // Locked -- UNLESS the follower's Lockpicking skill can open
                     // it. RemoveItem ignores locks, so without this a follower
@@ -1514,11 +1517,15 @@ namespace MFO::Logistics {
                             ? kTickSecs
                             : std::min(std::chrono::duration<float>(a_now - cl.lastAccrue).count(), 2.0f);
                         cl.lastAccrue = a_now;
-                        if (dt > 0.0f &&
-                            playerPos.GetDistance(srcPos) <= Config::g_chanceRadius.load()) {
+                        const float pdist = playerPos.GetDistance(srcPos);
+                        if (dt > 0.0f && pdist <= Config::g_chanceRadius.load()) {
                             cl.everNear = true;
+                            cl.farSince = {};   // back in range -> the departure timer resets
                             if (PlayerIsConsidering(srcId))    cl.nearSecs += dt * 3.0f;
                             else if (PlayerFacing(pc, srcPos)) cl.nearSecs += dt;
+                        } else if (pdist > Config::g_departRadius.load() &&
+                                   cl.farSince.time_since_epoch().count() == 0) {
+                            cl.farSince = a_now;   // player has left the source's vicinity
                         }
                     }
 
@@ -1529,7 +1536,17 @@ namespace MFO::Logistics {
                                    std::chrono::duration<float>(a_now - cl.seen).count()
                                        >= Config::g_firstDibsDelay.load();   // gear grace
                     } else {                                     // Gold / Jewelry / SoulGems -> Valuables
-                        released = rejected ||
+                        // DEPARTURE release (P3): the player walked near this source
+                        // (everNear) but never took from it and has now left its
+                        // vicinity for kDepartRelease seconds -- the common "fight
+                        // near me, I loot the two I want, walk on" case. Without it,
+                        // everNear disabled the abandon backstop and the rest waited
+                        // forever. Complements: rejection, the 6s near+facing chance,
+                        // and the never-came-near abandon timer.
+                        const bool departed = cl.everNear &&
+                            cl.farSince.time_since_epoch().count() != 0 &&
+                            std::chrono::duration<float>(a_now - cl.farSince).count() >= kDepartRelease;
+                        released = rejected || departed ||
                                    cl.nearSecs >= Config::g_fairChance.load() ||
                                    (!cl.everNear &&
                                     std::chrono::duration<float>(a_now - cl.seen).count()
@@ -2028,6 +2045,7 @@ namespace MFO::Logistics {
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
                     if (entry && entry->IsWorn())                continue;   // never sell worn gear
+                    if (socketed(entry))                         continue;   // MEO-gemmed -> never sell (gems ride the item)
                     if (Catalog::IsExcluded(obj->GetFormID()))   continue;
                     if (!VendorTrades(vend, vv.notBuySell, kwf)) continue;
                     sell.push_back(TradeBridge::SellRow{
@@ -2174,6 +2192,20 @@ namespace MFO::Logistics {
             if (mag > best) best = mag;
         }
         return best;
+    }
+
+    bool AmmoIsBolt(RE::TESAmmo* a_ammo) {
+        switch (Catalog::AmmoKind(a_ammo->GetFormID())) {
+        case Catalog::Ammo::kArrow: return false;
+        case Catalog::Ammo::kBolt:  return true;
+        default:                    return a_ammo->IsBolt();
+        }
+    }
+
+    float PotionLootFloor() {
+        return Config::g_minPotionMag.load() > 0
+                   ? static_cast<float>(Config::g_minPotionMag.load())
+                   : g_autoPotionFloor;
     }
 
     void ComputeWeakPotionFloor() {
@@ -2565,7 +2597,7 @@ namespace MFO::Logistics {
                     // he can NEVER close on keep striking -> those go sticky (above).
                     g_stallStrikes.erase(tref->GetFormID());
                     // MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
-                    if (PlayerIsConsidering(tref->GetFormID()) || (pc && pc->IsSneaking()))
+                    if (PlayerIsConsidering(tref->GetFormID()) || PlayerActivelyStealthing())
                         return;   // arrived, holding under the bar -- retry next tick
                     // ── ACQUIRE PROBE (route 2b): a LOOSE ref has no inventory
                     // to transfer -- StripCorpse/LootHere would no-op on it.
@@ -2647,7 +2679,7 @@ namespace MFO::Logistics {
                 // gives -- don't let a menu/crouch gut the batch.
                 auto* ui = RE::UI::GetSingleton();
                 if ((ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) ||
-                    (pc && pc->IsSneaking()))
+                    PlayerActivelyStealthing())
                     return;   // hold, retry next tick
                 if (RunExcursionScan(a_follower, a_state, now)) {
                     // Retargeted (phase now Walking) or grabbed a cluster corpse

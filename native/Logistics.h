@@ -46,6 +46,15 @@ namespace MFO::Logistics {
     // auto floor LootPotions uses when iMinPotionMag is 0. Logs the tier ladder.
     void ComputeWeakPotionFloor();
 
+    // The effective low-power potion floor a restore potion must meet to be looted
+    // OR bought (iMinPotionMag if set, else the auto floor). Shared so the economy
+    // buy side applies the same "ignore low power" rule as looting.
+    float PotionLootFloor();
+
+    // Arrow vs bolt, catalog-first with an IsBolt() fallback (runtime IsBolt() alone
+    // is unreliable). Shared so the buy side classifies uncatalogued ammo too.
+    bool AmmoIsBolt(RE::TESAmmo* a_ammo);
+
     // Count of H/S/M restore potions of a_which resource in a_follower's OWN
     // inventory (#14 -- the named follower, never the player). Walks the
     // inventory, so it is a ~1 s logistics-tick read, not a combat one.

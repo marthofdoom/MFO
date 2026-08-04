@@ -49,19 +49,26 @@ namespace MFO::TradeBridge {
                 // then the archetype heuristic) -- catalog-only left the vendor's
                 // health potions unclassified, so a follower that NEEDED potions (its
                 // count uses this classifier) bought none (field: Arcadia, BUY 0).
-                switch (Logistics::PotionRestores(alc)) {
+                const auto rv = Logistics::PotionRestores(alc);
+                if (rv != RE::ActorValue::kHealth && rv != RE::ActorValue::kStamina &&
+                    rv != RE::ActorValue::kMagicka)
+                    return -1;
+                // IGNORE LOW POWER on the BUY side too (P5): loot skips weak restore
+                // potions, so buying them would contradict the rule. Same floor.
+                if (const float f = Logistics::PotionLootFloor();
+                    f > 0.0f && Logistics::PotionMagnitude(alc) > 0.0f &&
+                    Logistics::PotionMagnitude(alc) < f)
+                    return -1;
+                switch (rv) {
                     case RE::ActorValue::kHealth:  return NeedCat::kPotHealth;
                     case RE::ActorValue::kStamina: return NeedCat::kPotStamina;
-                    case RE::ActorValue::kMagicka: return NeedCat::kPotMagicka;
-                    default: return -1;
+                    default:                       return NeedCat::kPotMagicka;
                 }
             }
-            if (a_form->As<RE::TESAmmo>()) {
-                switch (Catalog::AmmoKind(id)) {
-                    case Catalog::Ammo::kArrow: return NeedCat::kArrows;
-                    case Catalog::Ammo::kBolt:  return NeedCat::kBolts;
-                    default: return -1;
-                }
+            if (auto* am = a_form->As<RE::TESAmmo>()) {
+                // Catalog-first, then the shared IsBolt() fallback -- so uncatalogued
+                // vendor ammo still classifies and gets bought (P5).
+                return Logistics::AmmoIsBolt(am) ? NeedCat::kBolts : NeedCat::kArrows;
             }
             return -1;
         }

@@ -1,3 +1,19 @@
+## v1.0.19 -- looting competence pass (Fable review P1-P6) + potion rework
+
+- POTIONS: ignore low-power restore potions entirely, loot strongest-first, no cap.
+  "Low power" auto-derives from your load order's weakest tier ([potfloor] at
+  startup); iMinPotionMag overrides. Applies to all restore types + the buy side.
+- ECONOMY (fix): followers no longer sell MEO-socketed weapons (gems were being
+  discarded with the sale). Also sell/buy honour the low-power floor and best-first.
+- AMMO: same-tier restock finally works -- "restock arrows if < N" was upgrade-only,
+  so a low archer never refilled from corpses full of his own arrows.
+- DIBS: gold/jewelry you walked past but never took now releases a few seconds after
+  you leave, instead of the follower waiting on it forever.
+- STEALTH: crouch-walking no longer blocks all looting; a follower only holds off
+  while you're actively stealthing (sneaking + weapon drawn or in combat).
+- Armor upgrades now pick the best piece, not the first found. Config ini inline
+  comments parse correctly. [ownprobe] diagnostic retired (its question is settled).
+
 ## v1.0.18 -- B back-out reads ImGui's real nav state
 
 - BOARD: B now steps back through ImGui's actual nav layers -- an open picker, a
