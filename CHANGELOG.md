@@ -1,3 +1,14 @@
+## v1.0.17 -- board close: no Tween leak; sturdier B back-out
+
+- BOARD: closing the board no longer pops Skyrim's Tween menu. The board is an
+  ImGui overlay with no game menu, so the button PRESS that closed it was leaking
+  its release to the game. Now a short input-swallow grace runs from the close
+  until that button is released, so nothing leaks.
+- BOARD: the B back-out guard now reads ImGui's authoritative open-popup state on
+  the render thread (not just our per-frame flag), so B can't misjudge a picker as
+  closed and exit the whole board. Added a [bcancel] log line on each B/Esc to
+  pin any remaining case.
+
 ## v1.0.16 -- B cascade fix, real root cause (single B path)
 
 - BOARD: found why the last two B fixes did nothing. ImGui's Win32 backend polls

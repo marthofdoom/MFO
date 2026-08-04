@@ -47,6 +47,11 @@ namespace MFO::Board {
         std::atomic<bool> g_cursorInit{ false };
         std::atomic<float> g_cursorX{ 0.0f }, g_cursorY{ 0.0f };
         std::atomic<std::uint64_t> g_frame{ 0 };
+        // CLOSE GRACE: the frame up to which the input hook keeps swallowing after a
+        // board close, so the button PRESS that closed the board doesn't leak its
+        // release (or a held edge) to the game and pop the Tween menu. Ends early on
+        // the first release; this is only the safety cap. Set by CloseBoard().
+        std::atomic<std::uint64_t> g_closeGrace{ 0 };
 
         // io.DisplaySize LIES under Proton/upscalers: the Win32 backend reads
         // GetClientRect, which can disagree with the backbuffer. Cache the real
@@ -365,8 +370,18 @@ namespace MFO::Board {
             return n;
         }
 
+        // Close the board AND open the input-swallow grace, so the button press
+        // that closed it can't leak its release to the game (Tween menu). The
+        // grace ends early on the first release; 30 frames is only the safety cap.
+        inline void CloseBoard() {
+            g_open.store(false);
+            g_closeGrace.store(g_frame.load() + 30);
+        }
+
         void DrawFieldKit(const Snapshot& snap) {
-            if (g_wantClose.exchange(false)) { g_open = false; return; }
+            // Shout-key close already fires on the key's RELEASE with both edges
+            // swallowed -- no trailing edge to leak -- so it needs no grace.
+            if (g_wantClose.exchange(false)) { g_open.store(false); return; }
 
             // CASCADED BACK is decided at the END of this function (after we know
             // whether a picker was drawn), on the render thread, off ImGui's own
@@ -976,11 +991,23 @@ namespace MFO::Board {
             // AND none opened this frame is a root back -> close the board. A cancel
             // press with a picker up is the picker-back ImGui just handled -> keep
             // the board. Same key, same thread as the close: they can't disagree.
+            // Authoritative popup state (valid on THIS, the render, thread): OR the
+            // BeginPopup flag with ImGui's own open-stack query, so the guard can't
+            // miss a picker. cancelPressed is the same nav-cancel key the backend
+            // fed for B; guard on last frame's state (this frame's may already be
+            // closed by nav-cancel).
+            const bool popupOpenNow = pickerDrawnThisFrame ||
+                ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
             const bool cancelPressed = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
                                        ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-            if (cancelPressed && !s_prevPickerOpen && !pickerDrawnThisFrame)
-                g_open = false;
-            s_prevPickerOpen = pickerDrawnThisFrame;   // ground truth for next frame
+            if (cancelPressed) {
+                const bool closing = !s_prevPickerOpen && !popupOpenNow;
+                spdlog::info("[bcancel] popupNow={} popupPrev={} pickerDrawn={} -> {}",
+                             popupOpenNow, s_prevPickerOpen, pickerDrawnThisFrame,
+                             closing ? "CLOSE BOARD" : "back out");
+                if (closing) CloseBoard();
+            }
+            s_prevPickerOpen = popupOpenNow;   // ground truth for next frame
             if (pickerDrawnThisFrame)
                 ImGui::TextDisabled("[A]/E pick   [B]/Esc back   d-pad to move");
             else
@@ -1227,6 +1254,20 @@ namespace MFO::Board {
                     }
                 }
 
+                // CLOSE GRACE: the board just closed (g_open false) but we are still
+                // inside the swallow window. Eat every event so the button PRESS that
+                // closed the board can't leak its release/held edge to the game and
+                // pop the Tween menu. End the grace the instant we see a release, so
+                // the dead window is only as long as the closing button is held.
+                if (a_events && !g_open.load() && g_frame.load() < g_closeGrace.load()) {
+                    for (auto* e = *a_events; e; e = e->next)
+                        if (e->eventType == RE::INPUT_EVENT_TYPE::kButton &&
+                            !static_cast<RE::ButtonEvent*>(e)->IsDown()) { g_closeGrace.store(0); break; }
+                    *a_events = nullptr;
+                    func(a_source, a_events);
+                    return;
+                }
+
                 if (!g_ready.load() || !g_open.load() || !a_events) {
                     func(a_source, a_events);
                     return;
@@ -1386,7 +1427,8 @@ namespace MFO::Board {
             g_cursorX = g_bbW * 0.5f;
             g_cursorY = g_bbH * 0.5f;
         }
-        g_open.store(now);
+        if (now) g_open.store(true);
+        else     CloseBoard();   // grace-swallow the release so it can't leak (Tween menu)
         spdlog::info("[board] {}", now ? "opened" : "closed");
     }
 
