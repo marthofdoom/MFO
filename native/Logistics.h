@@ -41,6 +41,11 @@ namespace MFO::Logistics {
     // that restores 50 flat and one that restores 5/sec both order correctly.
     float PotionMagnitude(RE::AlchemyItem* a_potion);
 
+    // Derive the "low power" potion cutoff from the load order (the weakest restore
+    // tier). Call once at kDataLoaded, after the data handler is ready. Feeds the
+    // auto floor LootPotions uses when iMinPotionMag is 0. Logs the tier ladder.
+    void ComputeWeakPotionFloor();
+
     // Count of H/S/M restore potions of a_which resource in a_follower's OWN
     // inventory (#14 -- the named follower, never the player). Walks the
     // inventory, so it is a ~1 s logistics-tick read, not a combat one.

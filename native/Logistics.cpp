@@ -230,6 +230,13 @@ namespace MFO::Logistics {
             return a_alc && !a_alc->IsPoison() && !a_alc->IsFood();
         }
 
+        // The "low power" cutoff derived from the load order at kDataLoaded: the
+        // floor of the SECOND magnitude tier of restore potions, so the weakest
+        // tier reads as low power. 0 until computed / when the list has < 2 tiers.
+        // ComputeWeakPotionFloor() fills it; LootPotions uses it when iMinPotionMag
+        // is 0 (auto). Written once before any loot tick, then read-only.
+        float g_autoPotionFloor = 0.0f;
+
         // a_want names WHICH restorative to take; kNone is the catch-all (any
         // drinkable). The gambit's condition still decides WHEN -- this decides
         // WHAT: kNone -> any potion (IsDrinkablePotion, incl. fortify/cure);
@@ -238,8 +245,16 @@ namespace MFO::Logistics {
         // condition (marth: the any-potion action never replaced per-type loot).
         bool LootPotions(RE::Actor* a_follower, RE::TESObjectREFR* a_src, RE::ActorValue a_want,
                          bool a_peek = false) {
-            struct Take { RE::TESBoundObject* obj; std::int32_t count; float mag; bool health; };
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; float mag; };
             std::vector<Take> takes;
+            // LOW-POWER FLOOR (marth: "ignore low power potions entirely"). A restore
+            // potion whose magnitude is below this is never looted. iMinPotionMag > 0
+            // is an explicit magnitude floor; 0 means use the auto floor derived from
+            // the load order's weakest tier (g_autoPotionFloor). Fortify/cure carry
+            // magnitude 0 here and are never filtered.
+            const float floor = Config::g_minPotionMag.load() > 0
+                                    ? static_cast<float>(Config::g_minPotionMag.load())
+                                    : g_autoPotionFloor;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* alc = obj->As<RE::AlchemyItem>();
@@ -248,34 +263,16 @@ namespace MFO::Logistics {
                 } else {
                     if (!alc || PotionRestores(alc) != a_want) continue;   // only this resource
                 }
-                const bool health = alc && PotionRestores(alc) == RE::ActorValue::kHealth;
-                takes.push_back({ obj, data.first, health ? PotionMagnitude(alc) : 0.0f, health });
+                const float mag = alc ? PotionMagnitude(alc) : 0.0f;
+                if (floor > 0.0f && mag > 0.0f && mag < floor) continue;   // low power -> ignore
+                takes.push_back({ obj, data.first, mag });
             }
 
-            // HEALING STOCK CAP (marth: "only loot the strongest 4 readily
-            // available healing potions"). Clamp the HEALTH potions in this body
-            // to what fits under the cap once the follower's current stock is
-            // counted, STRONGEST first -- so a body of weak potions is skipped
-            // once stocked, and a mixed body gives up its best. Only health is
-            // touched; stamina/magicka/fortify/cure pass through. Runs on the
-            // peek too, so a stocked follower never walks over for another.
-            if (const int cap = Config::g_healingStock.load(); cap > 0) {
-                std::vector<std::size_t> h;
-                for (std::size_t i = 0; i < takes.size(); ++i)
-                    if (takes[i].health) h.push_back(i);
-                if (!h.empty()) {
-                    std::sort(h.begin(), h.end(),
-                              [&](std::size_t a, std::size_t b) { return takes[a].mag > takes[b].mag; });
-                    int room = cap - CountPotions(a_follower, RE::ActorValue::kHealth);
-                    if (room < 0) room = 0;
-                    for (std::size_t idx : h) {
-                        const std::int32_t take = std::min<std::int32_t>(room, takes[idx].count);
-                        takes[idx].count = take;   // clamped to 0 -> pruned below
-                        room -= take;
-                    }
-                }
-            }
-            std::erase_if(takes, [](const Take& t) { return t.count <= 0; });
+            // BEST FIRST (marth's standing rule for threshold-gated supply): take the
+            // strongest potions first, so a carry-weight cutoff keeps the best, not
+            // whatever the inventory happened to enumerate first.
+            std::sort(takes.begin(), takes.end(),
+                      [](const Take& a, const Take& b) { return a.mag > b.mag; });
 
             if (a_peek) return !takes.empty();
             bool moved = false;
@@ -2177,6 +2174,34 @@ namespace MFO::Logistics {
             if (mag > best) best = mag;
         }
         return best;
+    }
+
+    void ComputeWeakPotionFloor() {
+        g_autoPotionFloor = 0.0f;
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (!dh) return;
+        std::vector<float> mags;
+        for (auto* alc : dh->GetFormArray<RE::AlchemyItem>()) {
+            if (!alc || alc->IsPoison() || alc->IsFood()) continue;
+            if (PotionRestores(alc) == RE::ActorValue::kNone) continue;   // restore potions only
+            if (const float m = PotionMagnitude(alc); m > 0.0f) mags.push_back(m);
+        }
+        if (mags.size() < 2) {
+            spdlog::info("[potfloor] {} restore potion(s) in load order -- no low-power floor", mags.size());
+            return;
+        }
+        std::sort(mags.begin(), mags.end());
+        // Tier boundary: a magnitude beyond 1.25x the weakest tier's floor starts a
+        // new tier; the SECOND tier's floor is the low-power cutoff (the weakest tier
+        // sits below it). Relative, so it adapts to the list's own potion scale.
+        const float t1 = mags.front();
+        for (float m : mags) if (m > t1 * 1.25f) { g_autoPotionFloor = m; break; }
+        std::string ladder; float last = -1.0f;   // distinct-ish tiers, for tuning transparency
+        for (float m : mags)
+            if (last < 0.0f || m > last * 1.25f) { ladder += std::to_string(static_cast<int>(m + 0.5f)); ladder += ' '; last = m; }
+        spdlog::info("[potfloor] restore-potion tiers: {}| auto low-power floor = {:.0f} "
+                     "(restore potions below this are ignored; iMinPotionMag overrides)",
+                     ladder, g_autoPotionFloor);
     }
 
     int CountPotions(RE::Actor* a_follower, RE::ActorValue a_which) {

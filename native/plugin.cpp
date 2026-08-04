@@ -257,6 +257,7 @@ namespace {
             MFO::Forms::Resolve();          // then forms
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
+            MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::Followers::ResolveQuirks();
             MFO::MainThread::Install();      // the main-thread pump (§0.37) -- the only real

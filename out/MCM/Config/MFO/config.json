@@ -221,16 +221,16 @@
           }
         },
         {
-          "id": "iHealingStock:General",
-          "text": "Healing potion stock",
+          "id": "iMinPotionMag:General",
+          "text": "Ignore weak potions (min power)",
           "type": "slider",
-          "help": "Cap how many HEALING potions a follower loots and keeps -- it takes the strongest available first and stops at this many, a small reserve of the best rather than a hoard of every weak potion. The loot scan honours it, so a stocked follower won't walk over for another. 0 = no limit. Only Restore-Health is capped; stamina/magicka loot as before.",
+          "help": "A restore potion below this magnitude is ignored entirely; the rest are looted strongest-first. 0 = AUTO: use your load order's weakest restore tier (logged as [potfloor] at startup, e.g. drops 'Minor' but keeps standard+). A positive value is an explicit floor across health/stamina/magicka. Fortify/cure potions are never filtered.",
           "valueOptions": {
             "min": 0,
-            "max": 20,
-            "step": 1,
+            "max": 500,
+            "step": 5,
             "sourceType": "ModSettingInt",
-            "defaultValue": 4
+            "defaultValue": 0
           }
         },
         {

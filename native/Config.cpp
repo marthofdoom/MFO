@@ -129,7 +129,7 @@ namespace MFO::Config {
             else if (a_key == "bEconomy")           setB(g_economy);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
             else if (a_key == "bRapportToasts")     setB(g_rapportToasts);
-            else if (a_key == "iHealingStock")      setI(g_healingStock, 0, 20);   // 0 = no cap
+            else if (a_key == "iMinPotionMag")      setI(g_minPotionMag, 0, 500);   // 0 = auto floor
             else if (a_key == "fTravelRadius")       setF(g_travelRadius,   64.0f, 8192.0f);   // match the MCM slider max
             else if (a_key == "fBatchLinger")        setF(g_batchLinger,     0.0f, 15.0f);
             else if (a_key == "fExcursionMax")       setF(g_excursionMax,    5.0f, 300.0f);
@@ -225,7 +225,7 @@ namespace MFO::Config {
             g_economy            = false;
             g_autoRetreat        = false;
             g_rapportToasts      = true;
-            g_healingStock       = 4;
+            g_minPotionMag       = 0;
             g_travelRadius       = 4096.0f;
             g_batchLinger        = 4.0f;
             g_excursionMax       = 60.0f;
@@ -267,7 +267,7 @@ namespace MFO::Config {
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
             { "bEconomy", "0" },               { "bAutoRetreat", "0" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },
-            { "iHealingStock", "4" },
+            { "iMinPotionMag", "0" },
             { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "4.000000" },
             { "fExcursionMax", "60.000000" },  { "fNavmeshGate", "300.000000" },
             { "fLeashMin", "512.000000" },     { "fLeashMax", "4000.000000" },
