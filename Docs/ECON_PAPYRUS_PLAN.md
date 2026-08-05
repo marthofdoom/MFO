@@ -293,7 +293,8 @@ math trivial in Papyrus.
                                                                         │      chest.RemoveItem(c,k,false,follower)
                                                                         │      follower.RemoveItem(Gold001,val*k,false,chest)
                             ◄── ReportTrade(token,soldVal,boughtN) ──── │ 12.
-                            13. evict alias (ForceRefTo player),
+                            13. evict alias (ForceRefTo the eviction
+                                marker — see §4.1 note; was "player"),
                                 free TradeOrder{token}   [native]
 ```
 
@@ -474,7 +475,10 @@ never checked into MFO's own tree). Mirror their layout exactly:
 ### 4.1 What native calls (into the engine / VM)
 
 - `RE::TESQuest::ForceRefTo(alias, follower)` — fill the trade alias (existing
-  machinery). Evict = `ForceRefTo(alias, player)` (the proven evict, `§0.36`).
+  machinery). Evict = `ForceRefTo(alias, <eviction marker>)` (the proven evict,
+  `§0.36`; the evicting ref was the player when this plan was written, but is
+  the non-actor XMarker since v1.0.25 — `§0.38`, an actor in a
+  package-carrying alias breaks furniture — use `Packages::EvictionRef()`).
 - `vm->DispatchMethodCall2(aliasHandle, "MFO_Trade", "RunTrade", args, {})` —
   fire-and-forget trigger (existing dispatch, custom class).
 - `SKSE::GetPapyrusInterface()->Register(RegisterFuncs)` — once, at load.

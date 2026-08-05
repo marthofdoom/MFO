@@ -5,12 +5,15 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v1.0.** Gambits execute — both tables. Follower detection, Rapport,
+**Status: v1.0.x, in active testing** (see [`VERSION`](VERSION) for the exact
+point release). Gambits execute — both tables. Follower detection, Rapport,
 the in-game board, and combat + logistics actuation are built and field-tested;
 followers cast (their own AI, animated, at chosen targets), attack, drink,
-restock, loot, *walk* to loot, and **trade at merchants** — selling their junk
-and buying the supplies they run short on. Build order and what's still deferred
-are in [`ROADMAP.md`](Docs/ROADMAP.md); the per-version history is in
+restock, loot, *walk* to loot — up to **four followers sweeping a battlefield
+at once** — fall back to your side on their own when badly outmatched, and
+**trade at merchants**: selling their junk and buying the supplies they run
+short on. Build order and what's still deferred are in
+[`ROADMAP.md`](Docs/ROADMAP.md); the per-version history is in
 [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
@@ -45,8 +48,9 @@ recruitment armour isn't something you have to micromanage.
 ```
 
 The vocabulary: drink and loot health/stamina/magicka potions (or **any**
-potion), loot arrows and bolts (separate gambits), loot gold, and **loot
-better equipment**. Equipment generalises by **category and metric, never by
+potion — low-power restore potions below your load order's own weakest useful
+tier are ignored, strongest looted first), loot arrows and bolts (separate
+gambits), loot gold, and **loot better equipment**. Equipment generalises by **category and metric, never by
 item** — a weapon upgrade is judged within the follower's dominant weapon-skill
 class (a two-hander takes the greatsword over a dagger, an archer won't swap to
 a mace), armour by rating on the slot **within the class they can use** — a
@@ -91,9 +95,11 @@ isn't a fixed follow distance — it's a live readout of how confident they are
 to survive on their own right now. Healthy in an easy zone, they push ahead and
 range out to loot; hurt, or in a hard fight, they pull back and fight at your
 side. You never see a number. You just feel a companion get bold clearing a
-bandit camp and wary in a dragon's lair. It tunes on the new **Behaviour Layer**
-config page, and it's the model for how MFO adds realism: hidden variables you
-read through behaviour, not sliders.
+bandit camp and wary in a dragon's lair. Taken to its conclusion, a follower
+who is badly outmatched and far from you **auto-retreats** to your side (on by
+default; a combat-sense rule can override it). It tunes on the **Behaviour
+Layer** config page, and it's the model for how MFO adds realism: hidden
+variables you read through behaviour, not sliders.
 
 **Reactions are human, not robotic.** A gambit decision is a *choice*
 reaction, which in people runs 300–600 ms, so responses are drawn from a
@@ -119,7 +125,7 @@ Rule **slots** are earned through **Rapport**, built by fighting alongside that
 specific follower. It's never pooled or transferable, and it survives dismissal
 — leave someone in Breezehome for two hundred hours and they're exactly as you
 left them. (Gating the *vocabulary* by rank — not just slot count — is designed
-and next on the roadmap.)
+but deferred; see the roadmap.)
 
 | Rank | Combat slots | Logistics slots | Reactions |
 |---|---|---|---|
@@ -170,11 +176,12 @@ leash and walk-to-loot.
   only for the optional follower economy (selling/buying); everything else runs
   without it. If it is absent, the economy stays off and MFO logs one line
   saying so.
-- **Synthesis** — MFO reads an item catalog (`mfo_items.json`) that a bundled
-  Synthesis patcher generates from *your* load order so gambit categories
-  (potions, ammo, gear classes) cover modded items with no per-mod patch. MFO
-  runs without it, falling back to a shipped catalog; run the patcher for full
-  modded-item coverage.
+- **Synthesis** — MFO reads an item catalog (`mfo_items.json`) that its
+  Synthesis patcher (added from this repo — see
+  [`installer/README.md`](installer/README.md)) generates from *your* load
+  order so gambit categories (potions, ammo, gear classes) cover modded items
+  with no per-mod patch. MFO runs without it, falling back to a shipped
+  catalog; run the patcher for full modded-item coverage.
 
 ## Installation
 
@@ -190,7 +197,9 @@ leash and walk-to-loot.
 Load order is not sensitive — MFO drives followers through runtime AI, not
 record edits, so it does not conflict with follower mods, AI overhauls, or
 combat mods. **Updating mid-playthrough is safe:** all state lives in the
-co-save and reverts cleanly on load.
+co-save and reverts cleanly on load. (Saves that ran versions ≤ 1.0.24 are
+additionally swept clean of a furniture-breaking alias latch on their first
+load under ≥ 1.0.26 — automatic, one load, nothing to do.)
 
 ---
 

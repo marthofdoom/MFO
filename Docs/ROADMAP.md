@@ -40,7 +40,9 @@ or threading. Not doc-only commits.
 
 ## M0 — CI green *(BLOCKING EVERYTHING)*
 
-**Status: in progress.** First cold vcpkg build was still in `Configure` at
+**Status: SHIPPED — green since v0.1.0 and load-bearing for every release
+since (release.sh refuses a DLL that isn't from a green run).** Historical
+notes below kept as written. First cold vcpkg build was still in `Configure` at
 26 min; vcpkg compiles CommonLibSSE-NG from source at cmake-configure time.
 Warm runs hit the archive cache at ~2 min.
 
@@ -53,7 +55,11 @@ on the string path, `std::clamp` template deduction on `uint8_t`.
 
 ---
 
-## M1 — P0 proof: the co-save round-trips *(DEFERRED — marth, 2026-07-21)*
+## M1 — P0 proof: the co-save round-trips *(CLOSED — populated round-trip
+proven in the field; the 1.0 line saves/loads follower records, rules, and
+Rapport every session)*
+
+Original deferral note kept as written:
 
 **Not being tested yet: no saving with MFO active until further along.** Safe,
 because the co-save callbacks only fire on save/load — with seeding off and no
@@ -118,7 +124,8 @@ entire Rapport ladder rests on (`BALANCE.md` §7).
 
 ---
 
-## M4 — The probe harness *(BUILT, unrun)*
+## M4 — The probe harness *(BUILT, in service — the Probe tab drove the M5–M9
+field sessions)*
 
 Became a **Probe tab in the Field Kit** rather than console commands, once the
 overlay existed. Pick a follower, press a primitive, watch what the engine
@@ -151,7 +158,7 @@ Linux-Native-Tools per the standing debt.
 
 ---
 
-## M5 — Evaluator + Tier A *(P2)* — **FIRST PLAYABLE**
+## M5 — Evaluator + Tier A *(P2)* — **FIRST PLAYABLE** *(SHIPPED)*
 
 - Scheduler: frame clock off the present hook with a `chrono` fallback,
   `max(4 frames, 133 ms)`, round-robin with K, jitter, **no catch-up**.
@@ -171,7 +178,8 @@ At this point the mod works. It just has no interface.
 
 ---
 
-## M6 — Logistics table *(§4.8)*
+## M6 — Logistics table *(§4.8)* *(SHIPPED — looting, restock, upgrades, the
+economy, and P7 multi-follower excursions are all field-tested on the 1.0 line)*
 
 Deliberately before the board, because it is console-testable and its
 mechanisms are independent.
@@ -190,7 +198,8 @@ snatches mid-QuickLoot.
 
 ---
 
-## M7 — The board *(P3)* — **FIRST SHAREABLE**
+## M7 — The board *(P3)* — **FIRST SHAREABLE** *(SHIPPED — four skins, full
+controller parity, plus the MCM after it)*
 
 The largest single chunk, and mostly transcription: MEO's `menuhook`
 namespace is ~900 lines and MFO re-skins it.
@@ -380,6 +389,12 @@ all in the field log:
    not just loot. Fix: a NATIVE clear — try `ForceRefTo(aliasID, nullptr)`, else
    wire `ResetQuest` (id 25014) — verified on the deck (a latched save must free
    on load). This is also the **recovery** for anyone who saved latched.
+   *(REFUTED as written — the null clear is a NO-OP on a scriptless alias
+   (ENGINE_NOTES §0.34). What shipped instead is release-by-EVICTION: force-fill
+   the alias with another ref. Evicting with the PLAYER then proved to be its
+   own bug — a player latched in a package-carrying alias breaks furniture —
+   so since v1.0.25/26 the evicting ref is a session-minted non-actor XMarker
+   and the load sweep un-latches the player from older saves.)*
 3. **Churn.** The stale-expiry flipped `active=false` and the same tick
    re-dispatched → permanent re-tasking.
 
@@ -428,7 +443,9 @@ follower has earned.** Tiers are already assigned in `GAMBIT_LIBRARY.md`
 set (rename to convey "unlock everything"). Watch: a co-saved rule using a
 now-locked opcode must still LOAD and RUN (don't strip authored rules on a
 rank drop) — the gate is only on ASSIGNING new ones in the picker. Deferred
-so marth can confirm v0.7.7 (MCM/looting/gambits) works in the field first.
+so marth can confirm v0.7.7 (MCM/looting/gambits) works in the field first —
+that confirmation has long since happened (the 1.0 line); this now simply
+waits its turn behind town errands (#31).
 
 ## Compatibility backlog *(not scheduled)*
 

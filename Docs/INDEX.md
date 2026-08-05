@@ -3,41 +3,35 @@
 This project is designed so any capable model or person can continue it from
 these docs alone. Load documents on demand, not all at once.
 
-**CURRENT STATE (v0.6.0, 2026-07-22).** Gambits execute. A follower with a rule
-list evaluates it ~7.5x/sec, one action per tick, first match wins, and acts.
+**CURRENT STATE (v1.0.26, 2026-08-05).** The 1.0 line is in active field
+testing and every planned milestone through M10 has shipped: gambits execute
+on both tables, the Field Orders board and MCM are live (four skins, full
+controller parity), logistics loots/restocks/upgrades — up to four followers
+on concurrent loot excursions (P7) — the follower economy trades at real
+merchants, auto-retreat is default-on, and Rapport gates slots. The 1.0.x
+patch line is field-fix driven; read `CHANGELOG.md` newest-first for what
+changed and why.
 
 **Proven in-game** (`ENGINE_NOTES.md` §0 carries dates and observed symptoms):
-follower detection and un-detection, form resolution, the **populated co-save
-round-trip** (M1, closed), Rapport crediting including boss multipliers, the
-evaluator firing and correctly refusing a spell the follower cannot afford
-(§5.3's competence gate), the `UpdateCombat` targeting hook installing, and
-`act.attack` latching a chosen foe.
+everything above, plus the claim model the walk-to behaviours ride on — alias
+fill at static priority 60 claims an actor, release is by EVICTION, and as of
+v1.0.25/26 the evicting ref is a session-minted non-actor XMarker, never the
+player (a player latched into a package-carrying alias breaks furniture; the
+v1.0.26 load sweep un-latches saves that predate the fix).
 
-**The headline finding: MFO does not cast.** It puts a spell in the follower's
-hand and their own AI casts it — animated, magicka-charged, correctly aimed,
-because it is the vanilla path (§0.15). Three cast *verbs* were refuted getting
-there: `CastSpellImmediate` (§0.8/§0.10), `Projectile::LaunchSpell` (#56), and
-`DoCombatSpellApply` (§0.14). Animation events cannot drive it either — the
-graph emits them (§0.17).
+**The headline finding stands: MFO does not cast.** It puts a spell in the
+follower's hand and their own AI casts it — animated, magicka-charged,
+correctly aimed, because it is the vanilla path (§0.15); where the AI declines
+a commanded action, the M9 ACTUATION LAYER (a package *is* the action) owns
+the action, never the follower. Three cast *verbs* were refuted getting there:
+`CastSpellImmediate` (§0.8/§0.10), `Projectile::LaunchSpell` (#56), and
+`DoCombatSpellApply` (§0.14).
 
-**The live constraint (§0.16):** that path is **AI-discretionary**. The RULE
-always fires and the effect always lands, but the ANIMATION only happens when
-the follower's AI independently judges the spell worth casting. For a weak heal
-it never did.
-
-**Next: M9, the ACTUATION LAYER** (DESIGN §4.5c, ruled 2026-07-22). A package
-*is* the action — for casting, attacking, moving, holding position, using items.
-Taking over the actor for an action's duration enforces that action's validity;
-it does not replace the follower's AI, which is what vanilla does when it casts.
-MFO owns the action, never the follower. It is the only mechanism that gives an uninterruptible commanded
-cast. Fully researched from ALYSLC's shipped ESP; §0.17 has the byte-level
-record layout. **One question decides its size and is not yet answered:** can a
-PACK instance point `PKCU.template` at a VANILLA template, or must one be
-authored? That is a read of `Skyrim.esm` and costs no play time.
-
-**Deferred:** M6 (logistics) — nobody can author those rules until the board
-exists. **M7 the board** is *first shareable*. MCM after it, because the board
-defines what is configurable.
+**Next: town errands (#31)** — followers autonomously walking to merchants and
+doors on their own business, generalising the loot-travel machinery
+(`Packages.*` + `Logistics.*`). Deferred but designed: vocabulary tiering by
+Rapport rank (ROADMAP), and the leveling-mod interop that is blocked on the
+other mod's missing API.
 
 **Source-selection rule (#64), the biggest lesson of the M5/M9 stretch:**
 *"Can I call X?"* is answered by CommonLibSSE headers. **"How does the game

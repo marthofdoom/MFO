@@ -82,6 +82,11 @@ its failure mode), or `ENGINE_NOTES.md` (if it is an engine fact).
   are immutable, and numbering *down* would read as a downgrade and trip the
   newer-save guard. Forward-only from 0.4.x, with the discipline applied from
   here: `0.5.0` = M5 (the evaluator), then `0.5.x` patches until M6/M7.
+- **Post-1.0 (the current line):** the milestones are shipped, so `1.0.x`
+  patches are FIELD-FIX driven — one shippable fix or one coherent feature
+  slice per patch, cut when the deck needs it, not batched. The next minor
+  (`1.1.0`) is reserved for the next real capability jump (town errands #31 or
+  vocabulary tiering), same milestone rule as ever.
 - A release **must** carry its CHANGELOG entry (the script enforces it), and
   the entry must state **save compatibility** and any **upgrade action**.
 - **FormIDs are forever once a build reaches a save. Never renumber.**
@@ -118,19 +123,22 @@ its failure mode), or `ENGINE_NOTES.md` (if it is an engine fact).
 
 ## Milestone state
 
+*(Table current as of v1.0.26 — every planned milestone has shipped and been
+field-tested; the historical review/violation notes below it stand as written.)*
+
 | # | Milestone | Change class | State | Gate |
 |---|---|---|---|---|
 | M0 | CI green | build only | ✅ | artifact downloads |
-| M1 | co-save round-trip | serialization | ⏳ **untested** | save/reload/load-order change |
+| M1 | co-save round-trip | serialization | ✅ field-proven (1.0 line saves/loads every session) | save/reload/load-order change |
 | M2 | ESP generator + form resolution | records | ✅ in-game | forms resolve to ESL band |
-| M3 | detection + Rapport | event sinks | ✅ detection tested; Rapport **untested** | award correctness matrix |
+| M3 | detection + Rapport | event sinks | ✅ both field-proven (boss mults included) | award correctness matrix |
 | — | Field Kit overlay | **code hooks ×3** | ✅ Fable-reviewed, v0.2.0 | HUD + panel + controller |
 | — | v0.3.0 field fixes | logic | ⚠️ shipped unreviewed, reviewed after | kills credit correctly |
 | — | scope cut + co-save v2 | schema | ✅ Fable-reviewed, v0.4.1 | schema verified clean |
-| M4 | probe harness | engine calls | ✅ Fable-reviewed, **unrun** | retention watch answers §4.7 |
-| M5 | evaluator + Tier A | hot path | — | perf budget, do-nothing guarantee |
-| M6 | logistics table | — | — | loot rules, first dibs |
-| M7 | board rule editing | UI | — | authorable on pad, no double-fire |
+| M4 | probe harness | engine calls | ✅ in service (drove the M5–M9 sessions) | retention watch answers §4.7 |
+| M5 | evaluator + Tier A | hot path | ✅ shipped (v0.5.x→) | perf budget, do-nothing guarantee |
+| M6 | logistics table | — | ✅ shipped (looting/economy/P7 excursions) | loot rules, first dibs |
+| M7 | board rule editing | UI | ✅ shipped (four skins, pad parity, MCM) | authorable on pad, no double-fire |
 
 **Honest accounting of process violations so far**, because a rule stated
 without its cost is not in the house style:

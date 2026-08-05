@@ -1514,8 +1514,11 @@ framework claim to reclaim him, so at priority 25 MFO's alias is his SOLE claim
 and he keeps travelling (and re-latches every load — the alias IS serialized).
 There, EVICT him: force-fill alias 0 with the PLAYER (a REAL `ForceRefTo`, which
 works — only the null clear is a no-op), removing his alias instance; the player
-is not AI-package-driven so the slot is inert. The churn LRU (arrival marks a
-DONE corpse) and walkable radius / scaled deadline / closest-first all stand.
+is not AI-package-driven so the slot is inert. *(The "inert" claim was later
+DISPROVEN — a player in a package-carrying alias breaks furniture; the evicting
+ref is a non-actor XMarker since v1.0.25, see §0.38.)* The churn LRU (arrival
+marks a DONE corpse) and walkable radius / scaled deadline / closest-first all
+stand.
 
 TAKEAWAY: you cannot reliably CLEAR a force-filled scriptless alias from native
 code with the natives we have — `ForceRefTo(None)` (25052) and `ResetQuest`
@@ -1526,7 +1529,8 @@ validity)**, the way to release is to drop MFO's quest BELOW the follower
 framework (25 < 50) so the framework reclaims him — the filled alias is then
 harmless. Do NOT gate the package to release: a claimed quest that supplies no
 valid package ROOTS the follower (§0.25, measured). For a DISMISSED follower
-(no framework to reclaim) evict alias 0 with a real `ForceRefTo` to the player.
+(no framework to reclaim) evict alias 0 with a real `ForceRefTo` — to the
+player as first shipped; to the non-actor marker since v1.0.25 (§0.38).
 The command-quest cast path's `ClearAlias` is latently broken the same way (VM
 Clear on a scriptless alias) — it should adopt priority-release too, not a gate.
 
@@ -1591,9 +1595,11 @@ The only difference was static-vs-runtime priority.
 
 **Fix (v0.8.8) — STATIC 60 + release by EVICTION.** Ship the loot quest at a
 static 60. ENGAGE by filling alias 0 with the follower (owner locked at 60 > 50 →
-MFO wins → travels). RELEASE by EVICTING him — `ForceRefTo(alias 0, PlayerRef)`,
-which replaces his instance so the framework reclaims him (dropping the number
-would not un-claim him either — the mirror of the same law). Rooting is BOUNDED,
+MFO wins → travels). RELEASE by EVICTING him — `ForceRefTo(alias 0, PlayerRef)`
+*(the evicting ref is the non-actor marker since v1.0.25 — PlayerRef in a
+package alias breaks furniture, §0.38)* — which replaces his instance so the
+framework reclaims him (dropping the number would not un-claim him either —
+the mirror of the same law). Rooting is BOUNDED,
 not impossible: alias 1 (corpse) fills before alias 0 (follower), so there is no
 claim without a destination; the only claimed-with-no-destination state is a
 corpse deleted mid-leg, caught on the next serviced tick (Holding → retarget or
@@ -1649,6 +1655,43 @@ handles and copies, not references — a frame passes before the fn runs.
 
 The living truth for behavior will always be `native/plugin.cpp`. When this
 file and the code disagree, the code is right.
+
+### 0.38 PROVEN: evicting with the PLAYER breaks furniture — displace with a non-actor XMarker, and sweep the player latch out of old saves (2026-08-05, v1.0.25/26)
+
+**Failure (deck, v1.0.24 line).** The player was ejected from furniture
+(chairs, mining, workbench) ~1/sec. Two stacked causes, both field-measured:
+
+1. **The eviction ref was the PLAYER.** Release-by-eviction (§0.36) displaces
+   the follower by force-filling the ACTOR alias with another ref — and we
+   used the player. But the alias CARRIES a travel/flee package, and an actor
+   in a package-carrying alias gets pulled out of furniture to run it. The
+   engine does this to the player exactly as it would an NPC.
+2. **Churn armed it ~1/sec.** Logistics' arm gate measured the CORPSE to the
+   player, but the release gate measured the FOLLOWER (leash ×1.15) — a
+   follower parked past the leash armed toward an in-leash corpse and was
+   instantly released "left leash", every tick (deck: 5× in 8 s).
+
+**Fix (v1.0.25):** displace with a session-minted, force-persisted, NON-ACTOR
+XMarker (base 0x3B, `PlaceObjectAtMe` at kPostLoadGame/kNewGame — main thread
+only). The follower is released identically (his alias instance is replaced),
+but nothing runs a package on a non-actor. Plus the churn guard: never ARM a
+new excursion when the follower is already beyond the release margin.
+
+**The second half (v1.0.26), and the bigger lesson:** the alias fill is
+ENGINE-SERIALIZED, so every save written by ≤1.0.24 already carried the player
+latched in up to five package aliases — and v1.0.25's sweep skipped the player
+(`held != player`), so the symptom survived the fix. Deck log signature of a
+standing latch vs live churn: **"marker minted, zero evictions all session,
+symptom persists."** The sweep now displaces ANY actor occupant including the
+player (only once a real marker exists to displace with) and proves it with
+the `VerifyDetachedFrom` readback on the player.
+
+TAKEAWAY: (a) never force ANY actor you don't intend to drive into a
+package-carrying alias — "the player is inert in the slot" was false; a
+non-actor is the only inert occupant. (b) A fix to future writes never cleans
+engine-serialized state old versions saved: stop writing it AND sweep it on
+load. (c) A stored `ObjectRefHandle` can resolve to a different ref after a
+cross-save load — validate the base form before trusting it.
 
 ---
 

@@ -8,40 +8,17 @@ need next is at the top and the history is at the bottom.
 ## Before you start — 30 seconds, skip it and the results are worthless
 
 **1. Check the binary is the one you think it is.**
-First line of `MFO.log`:
+First line of `MFO.log` must name the version you deployed (check `VERSION`
+in the repo — currently the 1.0.x line):
 
 ```
-=== MFO 0.5.1 loading — game 1-6-1170-0 ===
+=== MFO 1.0.26 loading — game 1-6-1170-0 ===
 ```
 
-### Cosnach cannot cast anything
-
-The last session's log said it outright:
-
-```
-[eval] 000198FA Cosnach knows no castable spell -- seeding Wait only
-```
-
-He is a Markarth brawler. **The animation half of this test needs a follower who
-actually knows a spell** — a court wizard, a Companions mage, anyone whose load
-line names a spell. If the seed line says "knows no castable spell", the
-targeting half still works, but nothing will ever cast.
-
-**The test build reports `0.5.1` too** — it is unreleased, so it carries the
-last released version number. Use these lines instead, which only the new build
-can print:
-
-```
-[target] UpdateCombat vfunc hook installed (Character vtbl idx 0xE4)
-[loadout] hit sink registered (shield restore)
-```
-
-No `[target]` line means you are running the old DLL, or `bCommandTarget = 0`.
-The state report also prints `evaluator:`, `loadout:` and `targeting:` lines
-that v0.5.1 never had.
-
-If the version is older than 0.5.1, **stop** — everything below is meaningless.
-This has bitten the sibling projects twice.
+If the version is older than the one just deployed, **stop** — everything
+below is meaningless. This has bitten the sibling projects twice, and MFO
+once more (v0.8.13: syncthing held a stale index while both sides reported
+clean — always verify the deck's DLL hash after a deploy).
 
 **2. Know where the log is.**
 
@@ -67,11 +44,47 @@ quirk.
 
 ---
 
-## THE NEXT SESSION — targeting, and animation for free
+## THE NEXT SESSION — the 1.0.26 soak: furniture stays fixed, looting stays alive
 
-This one session answers the two questions the whole mod is waiting on:
-**can we tell a follower who to fight**, and **does a follower ever cast with an
-animation**.
+The v1.0.25/26 pair changed the release machinery of every walk-to behaviour
+(evictions now displace with a non-actor marker, and the load sweep un-latches
+the PLAYER from old saves). This session proves the fix held and nothing
+regressed around it.
+
+### 1. The un-latch happened (first load of an old save only)
+
+On the FIRST load of any save that ran ≤ 1.0.24, `MFO.log` must show:
+
+```
+[loot] eviction marker minted <id>
+[loot] post-load reconcile -- loot alias (slot N) held 00000014 (the PLAYER, #48b); evicted (marker)
+[loot] 00000014 detached from loot alias (player sweep)
+```
+
+(The retreat twin may appear too.) `EVICT INCOMPLETE` anywhere = the un-latch
+failed — stop and send the log. A save that never ran ≤ 1.0.24 prints only the
+marker mint; that is correct, not a missing sweep.
+
+### 2. Furniture works, and KEEPS working
+
+Sit in a chair, mine a vein, use a workbench/enchanter — a few minutes each,
+with followers present and parked at a distance (the old churn trigger). You
+must never be stood up by an invisible hand. If you are ejected, note the
+clock time and send the log — the `[loot]`/`[retreat]` lines at that timestamp
+name the eviction that did it.
+
+### 3. Looting did not regress
+
+Clear a bandit camp, let the followers sweep it. Expect `travel dispatched` /
+`travel released (arrival|batch dry|excursion cap)` pairs — NOT `released
+(left leash)` repeating ~1/sec (the churn the guard now blocks). Arm's-reach
+grabs still fire while a follower is beyond the leash; only new walks are
+gated.
+
+---
+
+## Archived session — targeting, and animation for free *(M5-era; both
+questions answered and shipped — kept for the gotchas)*
 
 ### Set this in `MFO.ini`
 

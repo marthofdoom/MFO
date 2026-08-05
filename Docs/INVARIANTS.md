@@ -929,3 +929,28 @@ reached from the tick:
 
 This also retro-justifies the collect-then-act shape (#2) as a threading
 requirement, not just a re-entrancy nicety.
+
+### 73. Never force an actor you don't intend to DRIVE into a package-carrying alias — and a fix to future writes must also sweep old saves
+
+The furniture-ejection incident (v1.0.24 → fixed v1.0.25/26, ENGINE_NOTES
+§0.38). Release-by-eviction displaced followers by force-filling the loot/
+retreat ACTOR aliases with the PLAYER, on the belief that "the player is not
+AI-package-driven so the slot is inert". False: an actor in a package-carrying
+alias — the player included — is pulled out of furniture to run the package.
+The player was ejected from chairs/mining/workbenches ~1/sec.
+
+Two rules, both mandatory:
+
+- **The only inert alias occupant is a NON-ACTOR.** Evictions displace with
+  the session-minted XMarker (`Packages::EnsureEvictMarker`, main thread,
+  kPostLoadGame/kNewGame). Never the player, never any actor. The one
+  exception that LOOKS similar but isn't: a package-less TARGET alias (no
+  ALPC) may hold the player — it instances nothing.
+- **A bug that wrote ENGINE-SERIALIZED state (alias fills, co-save records)
+  is not fixed by stopping the writes.** Saves written by old versions still
+  carry the state, and a sweep that skips it (v1.0.25's `held != player`
+  guard) preserves the symptom forever. The fix ships in two halves: stop
+  writing it, AND displace/clean it in the load sweep — with a measured
+  readback (`VerifyDetachedFrom`) proving the clean actually happened. The
+  deck-log signature that distinguishes standing state from live churn:
+  "marker minted, zero evictions all session, symptom persists."
