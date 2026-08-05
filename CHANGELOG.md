@@ -1,3 +1,28 @@
+## v1.0.29 -- magic users loot like mages (school robes + a backup dagger)
+
+- New: a magic-user follower -- anyone with at least one enabled cast gambit;
+  role stays gambit-driven, never skill-guessed -- now loots SCHOOL-APPROPRIATE
+  apparel. Enchanted robes/hoods/gloves/boots that boost his most-cast school
+  (weighted across his cast gambits' spells, read from each spell's magic
+  effect at loot time -- no catalog regen needed) beat raw armor rating on
+  those slots, so a destruction mage finally upgrades into Destruction robes
+  the old rating gate could never even see (rating-0 clothing was rejected
+  outright). School match is the primary key; among matches the FANCIER piece
+  wins (gold value + fortify strength), so with MEO's finer enchanted stock in
+  the world the richer robe is the one he takes -- and his socketed gems carry
+  over to the new piece through the existing MEO gem transfer. Non-magic slots
+  keep the plain rating rules, and a plain piece can never strip worn school
+  gear (no loot thrash).
+- New: a magic user with no melee role of his own loots ONE one-handed melee
+  backup -- daggers only by default -- so when his magicka runs dry the
+  vanilla AI has something to draw instead of leaving him swinging fists.
+  Stocked in the pack (never equipped over his casting hands), never shed as
+  off-role, and never duplicated: one sidearm, not an armory.
+- New: two MCM toggles under Logistics, both ON by default: "Magic loadout
+  (school gear + backup)" (bMagicLoadout, the master switch) and "Mage backup:
+  daggers only" (bMageDaggersOnly; OFF = the best of any one-handed weapon).
+  Seeded and self-healed into the MCM store so they bind on existing saves.
+
 ## v1.0.28 -- cast gambits take full control (no more casting his own spell too)
 
 - Fix: v1.0.27 made the follower cast the gambit's spell, but he still cast his

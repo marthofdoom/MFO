@@ -245,6 +245,21 @@ namespace MFO::Config {
     // authored fall-back rule instead). Fires once per fight. bAutoRetreat.
     inline std::atomic<bool>  g_autoRetreat{ true };
 
+    // MAGIC LOADOUT (v1.0.29). A magic-user follower -- anyone with at least
+    // one ENABLED cast gambit; role is GAMBIT-DRIVEN here, never skill-guessed
+    // -- loots the gear a mage actually wants: enchanted apparel that boosts
+    // his most-cast school (a Destruction robe for a destruction mage, judged
+    // by school match then fanciness, never by the armor-rating gate that
+    // can't see rating-0 clothing), plus ONE one-handed melee backup for when
+    // his magicka runs dry -- vanilla AI draws a weapon at zero magicka, and a
+    // caster with nothing to draw just swings fists. Master switch for both;
+    // OFF restores the old rating-only loot for everyone. bMagicLoadout.
+    inline std::atomic<bool>  g_magicLoadout{ true };
+    // The mage backup is DAGGERS ONLY by default (a dagger reads as a caster's
+    // sidearm; a looted war axe turns him into a bad warrior). OFF opens the
+    // backup to the best of ANY one-handed weapon. bMageDaggersOnly.
+    inline std::atomic<bool>  g_mageDaggersOnly{ true };
+
     // LOW-POWER POTION FLOOR (marth: "ignore low power potions entirely, loot
     // strongest to weakest"). A restore potion whose magnitude is below this is
     // never looted; the rest are taken strongest-first. 0 = AUTO -- use the floor

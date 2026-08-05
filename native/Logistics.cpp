@@ -335,6 +335,191 @@ namespace MFO::Logistics {
             return overlapsAny;
         }
 
+        // ── MAGIC LOADOUT (v1.0.29): the mage's loot preferences ────────────
+        // A follower is a MAGIC USER iff he has at least one ENABLED cast
+        // gambit (act.cast_self / act.cast_target) in his combat table --
+        // GAMBIT-DRIVEN like every other role decision in this file (marth:
+        // role is what the table says, never a skill guess; a battlemage with
+        // only attack/equip gambits is NOT a magic user however high his
+        // Destruction). His TARGET SCHOOL is the most-represented school among
+        // those gambits' spells -- each spell's school read from its costliest
+        // effect's base MGEF "Magic Skill" field. Pure form-DATA reads (no
+        // 3D/physics), so this is safe on the logistics worker. No cast
+        // gambits -> a_castGambits stays 0 -> the whole feature is inert for
+        // him (unchanged behavior).
+        RE::ActorValue TargetMagicSchool(const FollowerState& a_state, int& a_castGambits) {
+            constexpr int kNumSchools = 5;
+            static constexpr RE::ActorValue kSchools[kNumSchools] = {
+                RE::ActorValue::kAlteration, RE::ActorValue::kConjuration,
+                RE::ActorValue::kDestruction, RE::ActorValue::kIllusion,
+                RE::ActorValue::kRestoration,
+            };
+            a_castGambits = 0;
+            int tally[kNumSchools] = {};
+            for (const auto& g : a_state.combat()) {
+                if (!g.enabled) continue;   // a toggled-OFF rule doesn't make a mage (same rule as TableHasAction)
+                if (g.actionOpcode != Vocab::kActCastSelf &&
+                    g.actionOpcode != Vocab::kActCastTarget) continue;
+                ++a_castGambits;   // counts even when the spell's school below is unreadable
+                auto* spell = g.actionParamForm
+                    ? RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm) : nullptr;
+                if (!spell) continue;
+                const auto* eff  = spell->GetCostliestEffectItem();
+                const auto* mgef = eff ? eff->baseEffect : nullptr;
+                if (!mgef) continue;
+                // data.associatedSkill IS the MGEF record's "Magic Skill" (the
+                // school); non-school spells (kNone) simply don't tally.
+                const auto school = mgef->data.associatedSkill;
+                for (int i = 0; i < kNumSchools; ++i)
+                    if (school == kSchools[i]) { ++tally[i]; break; }
+            }
+            // Most-represented school wins ("weighted by the gambits set" --
+            // marth); a tie goes to the first-listed, which is stable across
+            // ticks so the preference never flip-flops between two schools.
+            int best = -1, bestN = 0;
+            for (int i = 0; i < kNumSchools; ++i)
+                if (tally[i] > bestN) { bestN = tally[i]; best = i; }
+            return best >= 0 ? kSchools[best] : RE::ActorValue::kNone;
+        }
+
+        const char* SchoolName(RE::ActorValue a_school) {
+            using AV = RE::ActorValue;
+            switch (a_school) {
+            case AV::kAlteration:  return "Alteration";
+            case AV::kConjuration: return "Conjuration";
+            case AV::kDestruction: return "Destruction";
+            case AV::kIllusion:    return "Illusion";
+            case AV::kRestoration: return "Restoration";
+            default:               return "none";
+            }
+        }
+
+        // Does this actor value "boost the school"? Vanilla apparel does NOT
+        // fortify the skill AV itself: the "Fortify Destruction" enchantment
+        // (spells cost -X%) modifies <School>Modifier, and the "stronger
+        // spells" effects use <School>PowerModifier -- so all three AVs count.
+        // Mods use any of the three; matching by AV (never by name) is the
+        // §4.8.2 derived-vocabulary principle.
+        bool AVMatchesSchool(RE::ActorValue a_av, RE::ActorValue a_school) {
+            using AV = RE::ActorValue;
+            switch (a_school) {
+            case AV::kAlteration:  return a_av == AV::kAlteration  || a_av == AV::kAlterationModifier  || a_av == AV::kAlterationPowerModifier;
+            case AV::kConjuration: return a_av == AV::kConjuration || a_av == AV::kConjurationModifier || a_av == AV::kConjurationPowerModifier;
+            case AV::kDestruction: return a_av == AV::kDestruction || a_av == AV::kDestructionModifier || a_av == AV::kDestructionPowerModifier;
+            case AV::kIllusion:    return a_av == AV::kIllusion    || a_av == AV::kIllusionModifier    || a_av == AV::kIllusionPowerModifier;
+            case AV::kRestoration: return a_av == AV::kRestoration || a_av == AV::kRestorationModifier || a_av == AV::kRestorationPowerModifier;
+            default:               return false;
+            }
+        }
+
+        // How strongly this armor's BASE enchantment boosts the target school:
+        // the count of beneficial effects on a school AV (a_outMag sums their
+        // magnitudes -- the fanciness input below). A RUNTIME read of the
+        // candidate's own record, deliberately NOT a catalog field, so it works
+        // out-of-box on modded gear with no patcher run. Pure form data ->
+        // worker-safe. Player-enchanted INSTANCES carry their enchant in extra
+        // data, not the base form -- out of scope (world/corpse mage gear is
+        // base-enchanted).
+        int SchoolMatchScore(const RE::TESObjectARMO* a_armo, RE::ActorValue a_school,
+                             float* a_outMag = nullptr) {
+            if (a_outMag) *a_outMag = 0.0f;
+            if (!a_armo || a_school == RE::ActorValue::kNone) return 0;
+            const auto* ench = a_armo->formEnchanting;
+            if (!ench) return 0;
+            int score = 0;
+            for (const auto* e : ench->effects) {
+                const auto* mgef = e ? e->baseEffect : nullptr;
+                if (!mgef) continue;
+                using Flag = RE::EffectSetting::EffectSettingData::Flag;
+                // A curse ("Destruction costs MORE") must never read as a boost.
+                if (mgef->data.flags.any(Flag::kDetrimental) ||
+                    mgef->data.flags.any(Flag::kHostile)) continue;
+                if (!AVMatchesSchool(mgef->data.primaryAV, a_school)) continue;
+                ++score;
+                if (a_outMag) *a_outMag += e->GetMagnitude();
+            }
+            return score;
+        }
+
+        // The slots MAGE gear lives on: body robe, head hood (head+hair bits)
+        // or circlet, hands, feet. Deliberately NOT amulet/ring (jewellery is
+        // the player's Valuables tier, looted separately) and NOT shield/
+        // forearms/calves -- school apparel never occupies those, and scoping
+        // the preference here means a magic user's OTHER slots keep the plain
+        // rating rules (don't strip gear he legitimately uses).
+        using BipedSlot = RE::BGSBipedObjectForm::BipedObjectSlot;
+        constexpr BipedSlot kMageSlots[] = {
+            BipedSlot::kHead, BipedSlot::kHair, BipedSlot::kCirclet,
+            BipedSlot::kBody, BipedSlot::kHands, BipedSlot::kFeet,
+        };
+
+        // The mage-apparel ranking key. SCHOOL MATCH IS PRIMARY -- a fancy
+        // wrong-school robe must never beat a plain right-school one (marth);
+        // FANCINESS (base gold value + total fortify-school magnitude) ranks
+        // within a school tier, so with MEO's finer enchanted stock in the
+        // world the richer robe wins. Both are form-DATA reads, worker-safe.
+        // (MEO socket-capacity scoring was considered and rejected: MEO_API
+        // queries are main-thread-only per MEOBridge.h, and this runs on the
+        // worker -- value+magnitude already ranks MEO gear up, and the
+        // existing gem transfer below carries invested gems onto the upgrade.)
+        struct MageKey { int score = 0; float fancy = -1.0f; };
+        MageKey MageApparelKey(const RE::TESObjectARMO* a_armo, RE::ActorValue a_school) {
+            float mag = 0.0f;
+            const int score = SchoolMatchScore(a_armo, a_school, &mag);
+            const auto value = static_cast<float>(std::max<std::int32_t>(a_armo->GetGoldValue(), 0));
+            return { score, value + mag };
+        }
+        bool MageKeyBeats(const MageKey& a_cand, const MageKey& a_worn) {
+            return a_cand.score > a_worn.score ||
+                   (a_cand.score == a_worn.score && a_cand.fancy > a_worn.fancy);
+        }
+
+        // The school-scored apparel path -- the magic user's parallel to
+        // ArmorIsBetter, which rejects rating-0 clothing at its first line and
+        // so can never judge a robe. Same shape: a strict upgrade on at least
+        // one MAGE slot it covers, beaten on none. Rules:
+        //   - a school-MATCHING piece may replace anything on a mage slot
+        //     (the point of the feature: school beats raw rating there);
+        //   - a GENERIC piece (score 0 -- a plain fancy robe) only ever
+        //     replaces other rating-0 clothing (rags), NEVER real armor;
+        //   - a tie does NOT swap (stable -- no loot thrash).
+        bool MageApparelIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo,
+                                 RE::ActorValue a_school, const MageKey& a_key) {
+            if (a_key.score <= 0 && a_armo->GetArmorRating() > 0.0f)
+                return false;   // rated armor with no school match belongs to ArmorIsBetter
+            if (!ArmorClassSuits(a_follower, a_armo)) return false;   // wrong armor class for him
+            const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
+            bool overlapsAny = false;
+            for (const auto slot : kMageSlots) {
+                if (!(mask & static_cast<std::uint32_t>(slot))) continue;
+                overlapsAny = true;
+                auto* worn = a_follower->GetWornArmor(slot);
+                if (!worn) continue;   // open slot -> nothing to beat
+                if (a_key.score <= 0 && worn->GetArmorRating() > 0.0f)
+                    return false;      // a generic robe never strips real armor
+                if (!MageKeyBeats(a_key, MageApparelKey(worn, a_school)))
+                    return false;      // beaten (or tied) on a slot it would replace
+            }
+            return overlapsAny;
+        }
+
+        // Guard for the PLAIN rating path: a higher-rated plain piece must not
+        // strip a school-matching piece the mage already wears, or the two
+        // paths would thrash one slot (school puts the robe on, rating pulls
+        // it off, corpse after corpse -- the exact shape of the old weapon
+        // thrash bug, on armor).
+        bool WouldStripSchoolGear(RE::Actor* a_follower, RE::TESObjectARMO* a_armo,
+                                  RE::ActorValue a_school) {
+            if (a_school == RE::ActorValue::kNone) return false;
+            const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
+            for (const auto slot : kMageSlots) {
+                if (!(mask & static_cast<std::uint32_t>(slot))) continue;
+                auto* worn = a_follower->GetWornArmor(slot);
+                if (worn && SchoolMatchScore(worn, a_school) > 0) return true;
+            }
+            return false;
+        }
+
         // ── skill-aware weapon selection ────────────────────────────────────
         // marth: "loot equipment based on the follower's combat skills." A weapon
         // upgrade is judged WITHIN the follower's DOMINANT weapon-skill class, and
@@ -456,6 +641,27 @@ namespace MFO::Logistics {
             // Ranged is a primary if a gambit wants it OR they already wield one.
             const bool doRanged = wantsRanged || wieldsRanged;
 
+            // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
+            // Gambit-driven magic-user detection (TargetMagicSchool above). A
+            // magic user gets two parallel loot paths:
+            //  (1) SCHOOL-SCORED APPAREL on the mage slots -- bypasses
+            //      ArmorIsBetter's rating>0 gate, which can never judge a robe;
+            //  (2) ONE one-handed melee BACKUP (daggers by default). Vanilla AI
+            //      draws a weapon at zero magicka, and the wieldsRealWeapon
+            //      gate above deliberately keeps a staff/spell-handed caster
+            //      out of the weapon-upgrade role -- so without this path he
+            //      has nothing to draw and swings fists. Only when he
+            //      maintains NO melee role of his own (meleeTargetClass ==
+            //      Other): a battlemage with an equip-melee gambit already
+            //      loots real melee and needs no sidearm.
+            int castGambits = 0;
+            RE::ActorValue school = RE::ActorValue::kNone;
+            if (Config::g_magicLoadout.load() && g_svc)
+                school = TargetMagicSchool(*g_svc, castGambits);
+            const bool mageMode    = castGambits > 0;   // magic user AND master toggle on
+            const bool daggersOnly = Config::g_mageDaggersOnly.load();
+            const bool wantBackup  = mageMode && meleeTargetClass == WepClass::Other;
+
             // Baseline the MELEE upgrade must beat: the best in-target-class
             // weapon anywhere in the follower's OWN INVENTORY (the equipped one
             // is part of it). Equipped-only was the residual thrash hole: a
@@ -472,6 +678,7 @@ namespace MFO::Logistics {
             std::uint16_t baseDmg      = 0;
             bool          wantCrossbow = false;
             std::uint16_t myRangedDmg  = 0;
+            bool          hasBackup    = false;   // magic user already carries a qualifying sidearm
             {
                 std::uint16_t bowDmg = 0, xbowDmg = 0;
                 int arrows = 0, bolts = 0;
@@ -482,6 +689,13 @@ namespace MFO::Logistics {
                         if (meleeTargetClass != WepClass::Other &&
                             WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
                             baseDmg = std::max(baseDmg, w->GetAttackDamage());
+                        // ONE sidearm is the mage-backup contract: he restocks
+                        // only when he carries NONE, never accumulates an
+                        // armory (creature/excluded weapons already skipped
+                        // above -- an unusable weapon is not a backup).
+                        if (wantBackup && WeaponClassOf(w->GetWeaponType()) == WepClass::OneHand &&
+                            (!daggersOnly || w->GetWeaponType() == WT::kOneHandDagger))
+                            hasBackup = true;
                         if (w->GetWeaponType() == WT::kBow)           bowDmg  = std::max(bowDmg,  w->GetAttackDamage());
                         else if (w->GetWeaponType() == WT::kCrossbow) xbowDmg = std::max(xbowDmg, w->GetAttackDamage());
                     } else if (auto* am = obj->As<RE::TESAmmo>()) {
@@ -510,6 +724,10 @@ namespace MFO::Logistics {
             std::uint16_t       bestWeapDmg   = baseDmg;
             RE::TESBoundObject* bestRanged    = nullptr;
             std::uint16_t       bestRangedDmg = myRangedDmg;
+            RE::TESBoundObject* bestMage      = nullptr;   // school/fanciness apparel (magic user)
+            MageKey             bestMageKey{};             // {0, -1} so any real key beats it
+            RE::TESBoundObject* bestBackup    = nullptr;   // the mage's one melee sidearm
+            std::uint16_t       bestBackupDmg = 0;
 
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
@@ -526,11 +744,31 @@ namespace MFO::Logistics {
                     const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                         & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
                     const bool shieldUseless = isShield && meleeTargetClass != WepClass::OneHand;
+                    // MAGE APPAREL first (v1.0.29): for a magic user, pieces on
+                    // the mage slots are judged by school match then fanciness
+                    // (MageApparelIsBetter), never by armor rating. Shields
+                    // stay with the plain path -- school gear never lives there.
+                    MageKey mk{};
+                    if (mageMode && !isShield) {
+                        mk = MageApparelKey(armo, school);
+                        if (MageApparelIsBetter(a_follower, armo, school, mk) &&
+                            MageKeyBeats(mk, bestMageKey)) {
+                            bestMageKey = mk;
+                            bestMage    = obj;
+                        }
+                    }
+                    // The PLAIN rating path -- everything the mage path does
+                    // not claim. A school-MATCHING candidate is the mage
+                    // path's alone (never double-judged into bestArmor), and
+                    // for a magic user a plain piece may not strip worn school
+                    // gear (WouldStripSchoolGear -- the anti-thrash guard).
                     // Best-first: among the armour upgrades this body offers, keep the
                     // HIGHEST-rated (not the first enumerated), so a carry-weight cutoff
                     // can't strand the actually-best piece.
-                    if (!shieldUseless && ArmorIsBetter(a_follower, armo) &&
-                        armo->GetArmorRating() > bestArmorRat) {
+                    if (!(mageMode && mk.score > 0) &&
+                        !shieldUseless && ArmorIsBetter(a_follower, armo) &&
+                        armo->GetArmorRating() > bestArmorRat &&
+                        !(mageMode && WouldStripSchoolGear(a_follower, armo, school))) {
                         bestArmorRat = armo->GetArmorRating();
                         bestArmor    = obj;
                     }
@@ -555,14 +793,29 @@ namespace MFO::Logistics {
                             bestRanged    = obj;
                         }
                     }
+                    // MAGE BACKUP (v1.0.29): the sidearm a caster's own AI
+                    // draws when his magicka is gone. Daggers only by default
+                    // (bMageDaggersOnly); the toggle opens it to the best of
+                    // any one-hander. Only fires while he carries NONE -- one
+                    // sidearm, never an armory, and no upgrade churn to
+                    // re-trigger on every corpse.
+                    if (wantBackup && !hasBackup && wc == WepClass::OneHand &&
+                        (!daggersOnly || weap->GetWeaponType() == WT::kOneHandDagger) &&
+                        weap->GetAttackDamage() > bestBackupDmg) {
+                        bestBackupDmg = weap->GetAttackDamage();
+                        bestBackup    = obj;
+                    }
                 }
             }
 
             // Prefer the in-class weapon upgrade; then a ranged weapon they need
-            // for their equip-ranged gambit; then the better armor. One item this
-            // tick (§4.3).
-            RE::TESBoundObject* best = bestWeap ? bestWeap
+            // for their equip-ranged gambit; then the mage's missing sidearm
+            // (safety before wardrobe); then school apparel over plain armor
+            // (the point of the magic loadout). One item this tick (§4.3).
+            RE::TESBoundObject* best = bestWeap   ? bestWeap
                                      : bestRanged ? bestRanged
+                                     : bestBackup ? bestBackup
+                                     : bestMage   ? bestMage
                                                   : bestArmor;
             if (a_peek) return best != nullptr;   // just checking for an upgrade
             if (!best) return false;
@@ -595,8 +848,12 @@ namespace MFO::Logistics {
                     }
                 } else if (auto* newArmo = best->As<RE::TESObjectARMO>()) {
                     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+                    // kHair/kCirclet joined in v1.0.29: mage hoods occupy the
+                    // hair bit and circlets their own, and a school upgrade on
+                    // those slots must carry its gems like any other.
                     static constexpr Slot kSlots[] = {
-                        Slot::kHead, Slot::kBody, Slot::kHands, Slot::kForearms,
+                        Slot::kHead, Slot::kHair, Slot::kCirclet,
+                        Slot::kBody, Slot::kHands, Slot::kForearms,
                         Slot::kFeet, Slot::kCalves, Slot::kShield,
                     };
                     const auto mask = static_cast<std::uint32_t>(newArmo->GetSlotMask());
@@ -636,6 +893,13 @@ namespace MFO::Logistics {
                 equipIt = WeaponClassOf(myWeap->GetWeaponType()) == newRole &&
                           (newRole != WepClass::Ranged || myWeap->GetWeaponType() == newWt);
             }
+            // The mage BACKUP is STOCK-ONLY, even into an empty hand (the
+            // myWeap==nullptr case above would otherwise equip it): a caster's
+            // hands belong to his spells/staff, and vanilla AI draws the
+            // sidearm ITSELF at zero magicka -- equipping here would shove a
+            // dagger over his casting hand out of combat, the very thrash the
+            // equip-in-place rule exists to stop.
+            if (best == bestBackup) equipIt = false;
             if (equipIt)
                 if (auto* eq = RE::ActorEquipManager::GetSingleton())
                     eq->EquipObject(a_follower, best);
@@ -660,6 +924,33 @@ namespace MFO::Logistics {
                              best->As<RE::TESFullName>() && best->As<RE::TESFullName>()->GetFullName()
                                  ? best->As<RE::TESFullName>()->GetFullName() : "?");
             }
+
+            // MAGIC-LOADOUT diagnostics (v1.0.29): say WHY the mage item won,
+            // so a field soak shows the school reasoning, not just a transfer.
+            // Logged only on a TAKE (never during peeks), so it cannot spam.
+            if (best == bestMage || best == bestBackup) {
+                spdlog::info("[loot] {:08X} '{}' magic-user: target school {} (from {} cast gambit(s))",
+                             a_follower->GetFormID(),
+                             a_follower->GetName() ? a_follower->GetName() : "?",
+                             SchoolName(school), castGambits);
+            }
+            if (best == bestMage) {
+                auto* ma  = best->As<RE::TESObjectARMO>();
+                float mag = 0.0f;
+                const int sc = SchoolMatchScore(ma, school, &mag);
+                spdlog::info("[loot] robe {:08X} '{}' school {} score={} value={} mag={:.0f} -> best",
+                             best->GetFormID(), best->GetName() ? best->GetName() : "?",
+                             SchoolName(school), sc, ma->GetGoldValue(), mag);
+            }
+            if (best == bestBackup) {
+                auto* mw = best->As<RE::TESObjectWEAP>();
+                spdlog::info("[loot] mage backup {} {:08X} '{}' dmg={} -- stocked; his own AI draws it when the magicka runs out",
+                             daggersOnly ? "dagger" : "1h", best->GetFormID(),
+                             best->GetName() ? best->GetName() : "?",
+                             mw ? mw->GetAttackDamage() : 0);
+            }
+            if (best == bestMage && fromUid != 0)
+                spdlog::info("[loot] MEO gems carried to new robe (from {:08X} uid {})", fromBase, fromUid);
 
             // Move the old piece's gems onto the new one when it becomes worn.
             // No-op if the old item had no gems (fromUid == 0) or MEO is absent.
@@ -2431,6 +2722,19 @@ namespace MFO::Logistics {
         const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
         const bool wantsRanged = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
 
+        // MAGIC LOADOUT (v1.0.29): the mage's one-hand BACKUP is IN-ROLE. A
+        // magic user (>= 1 enabled cast gambit -- the SAME gambit-driven test
+        // the loot side uses, keep in sync) keeps his sidearm even though no
+        // equip-melee gambit authors a melee role for him; without this, a
+        // caster who ALSO has a ranged role would shed the dagger the loot
+        // pass just fetched, corpse after corpse (loot->shed thrash). A pure
+        // caster never reaches the shed at all (the no-role early-return
+        // below), so this only matters for the mixed roles.
+        int castGambits = 0;
+        if (Config::g_magicLoadout.load()) TargetMagicSchool(a_state, castGambits);
+        const bool magicUser   = castGambits > 0;
+        const bool daggersOnly = Config::g_mageDaggersOnly.load();
+
         WepClass meleeRole = WepClass::Other;
         if (wantsMelee) {
             auto*       avo = a_follower->AsActorValueOwner();
@@ -2462,6 +2766,9 @@ namespace MFO::Logistics {
 
         auto inRole = [&](const RE::TESObjectWEAP* w) {
             const WepClass wc = WeaponClassOf(w->GetWeaponType());
+            // The magic user's sidearm class is always his to keep (v1.0.29).
+            if (magicUser && wc == WepClass::OneHand &&
+                (!daggersOnly || w->GetWeaponType() == WT::kOneHandDagger)) return true;
             if (wc == WepClass::OneHand || wc == WepClass::TwoHand) return wc == meleeRole;
             if (wc == WepClass::Ranged) {
                 if (!doRanged) return false;

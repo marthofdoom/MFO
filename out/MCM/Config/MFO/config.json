@@ -264,6 +264,26 @@
           }
         },
         {
+          "id": "bMagicLoadout:General",
+          "text": "Magic loadout (school gear + backup)",
+          "type": "toggle",
+          "help": "ON (default): a follower with cast gambits (a magic user) loots enchanted apparel matching his most-cast magic school -- a Destruction robe for a destruction mage -- in preference to raw armor rating on those slots (school match first, then fanciness: gold value + fortify strength), plus one melee backup weapon for when his magicka runs out. OFF: everyone loots by armor rating only.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
+          "id": "bMageDaggersOnly:General",
+          "text": "Mage backup: daggers only",
+          "type": "toggle",
+          "help": "ON (default): the magic user's melee backup is a dagger -- a caster's sidearm. OFF: he takes the best of any one-handed weapon instead.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "id": "fLootRadius:General",
           "text": "Loot scan (units)",
           "type": "slider",
