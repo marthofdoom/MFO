@@ -85,6 +85,12 @@ reads score=0.
   set pieces) until the set is COMPLETE, then equips it all at once; with a
   piecemeal OVERRIDE when a single piece is a big enough upgrade to wear now.
   Stateful + save-persisted + economy sell-exemption → focused later build.
+- **#58 — Recognize framework followers (Kaidan, Inigo, Lucien).** Custom-framework
+  voiced followers with bespoke quest/AI systems, not the vanilla follower faction
+  path MFO detects. Reverse-engineer each one's active-follower signal from its
+  installed ESP + Papyrus scripts (read the source — they expose no API), assess
+  gambit/AI interop, document the mechanism in ENGINE_NOTES. Verify which are in
+  marth's modlist first (primary sources).
 
 ## Where knowledge goes
 
