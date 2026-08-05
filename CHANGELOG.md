@@ -1,3 +1,14 @@
+## v1.0.26 -- furniture fix part 2: un-latch the PLAYER from old saves
+
+- Fix: v1.0.25 stopped NEW releases from parking you in the package-carrying
+  aliases, but any save written by v1.0.24 or earlier already had you serialized
+  INTO them (up to five travel/flee alias packages on the player) -- and the load
+  sweep deliberately skipped the player, so the latch survived every load and
+  furniture stayed broken even with everything else idle (deck log: marker minted,
+  zero evictions all session, still ejected). The load sweep now displaces the
+  player with the eviction marker too, and proves the detach with the same
+  readback every follower release gets. One load on v1.0.26 cleans the save.
+
 ## v1.0.25 -- no more being yanked out of chairs (furniture ejection fix)
 
 - Fix: sitting, mining or smithing could eject you ~once per second. Releasing a

@@ -840,6 +840,12 @@ namespace MFO::Packages {
         }
     }
 
+    // Defined below (the loot-clear readback); the load sweep uses it on the
+    // PLAYER to prove the #48b un-latch actually stripped his alias packages.
+    static void VerifyDetachedFrom(RE::TESQuest* a_quest, RE::Actor* a_follower,
+                                   const char* a_tag, const char* a_questName,
+                                   const char* a_why);
+
     void ReleaseAll(const char* a_why) {
         // OPTION A first, and unconditionally, and LOAD-BEARING. The loot quest is
         // STATIC priority 60 and the alias is engine-SERIALIZED, so a save made
@@ -850,23 +856,40 @@ namespace MFO::Packages {
         // him out of furniture) -- to hand him back. Runs on kPreLoadGame /
         // post-load reconcile / kNewGame / revert, so this is the reset for
         // every in-session load.
+        //
+        // #48b: the PLAYER is swept too, and it is THE fix for saves written by
+        // <= 1.0.24, whose release-by-eviction parked HIM in these package-
+        // carrying aliases. The fill is engine-serialized, so he arrives every
+        // session already latched -- carrying up to five travel/flee alias
+        // packages -- and the old "held != player" guard skipped him FOREVER.
+        // That standing latch is what broke furniture even with everything
+        // else idle (deck 1.0.25: marker minted, zero evictions all session,
+        // still ejected -- the ancient engine quirk needs only the latch, not
+        // our churn). Displacing him requires a non-actor to displace WITH,
+        // so the player is only evicted once the marker exists (post-load
+        // reconcile runs after EnsureEvictMarker); a marker-less sweep keeps
+        // the old skip rather than pointlessly filling player-with-player.
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* ev = EvictionRef();
+        const bool haveMarker = ev && ev != player;   // a real non-actor to displace with
+        bool sweptPlayer = false;
         if (auto* quest = Forms::g_lootQuest) {
             // P7: every slot's actor alias, not just slot 0 -- any of the four
-            // could hold a follower from a mid-travel save.
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            auto* ev = EvictionRef();
+            // could hold a follower (or the player, #48b) from an old save.
             for (int slot = 0; slot < kMaxLootSlots; ++slot) {
                 RE::ObjectRefHandle h{};
                 quest->CreateRefHandleByAliasID(h, LootActorAlias(slot));
                 auto* held = h.get() ? h.get().get() : nullptr;
-                // Only evict if a FOLLOWER sits in the slot -- not the player,
-                // and not a marker parked there by a previous release (a PRIOR
-                // session's marker is a different REFR than this session's, so
-                // compare by actor-ness, not identity).
-                if (held && player && held != player && held->As<RE::Actor>()) {
+                // Evict any ACTOR occupant. Actor-ness, not identity, skips a
+                // marker parked by a previous release (a PRIOR session's marker
+                // is a different REFR than this session's).
+                if (held && player && held->As<RE::Actor>() &&
+                    (held != player || haveMarker)) {
                     ForceRefToNative(quest, LootActorAlias(slot), ev);
-                    spdlog::info("[loot] {} -- loot alias (slot {}) held {:08X}; evicted (marker)",
-                                 a_why, slot, held->GetFormID());
+                    spdlog::info("[loot] {} -- loot alias (slot {}) held {:08X}{}; evicted (marker)",
+                                 a_why, slot, held->GetFormID(),
+                                 held == player ? " (the PLAYER, #48b)" : "");
+                    if (held == player) sweptPlayer = true;
                 }
             }
         }
@@ -874,22 +897,31 @@ namespace MFO::Packages {
         // RETREAT PROBE: same eviction on load, same reason -- the retreat alias
         // is engine-serialized, so a save made mid-retreat loads with the
         // follower still claimed at static 60 and marching to the player's
-        // SAVED position through any fight in the way.
+        // SAVED position through any fight in the way. (The retreat TARGET alias
+        // also holds the player, but it carries no ALPC package -- inert, left
+        // alone. Only the ACTOR alias latches.)
         if (auto* quest = Forms::g_retreatQuest) {
             RE::ObjectRefHandle h{};
             quest->CreateRefHandleByAliasID(h, kAliasRetreatActor);
             auto* held = h.get() ? h.get().get() : nullptr;
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            auto* ev = EvictionRef();
-            // Actor-ness, not identity: a prior session's parked marker is a
-            // different REFR than this session's (see the loot sweep above).
-            if (held && player && held != player && held->As<RE::Actor>()) {
+            if (held && player && held->As<RE::Actor>() &&
+                (held != player || haveMarker)) {
                 ForceRefToNative(quest, kAliasRetreatActor, ev);
-                spdlog::info("[retreat] {} -- retreat alias held {:08X}; evicted (marker)",
-                             a_why, held->GetFormID());
+                spdlog::info("[retreat] {} -- retreat alias held {:08X}{}; evicted (marker)",
+                             a_why, held->GetFormID(),
+                             held == player ? " (the PLAYER, #48b)" : "");
+                if (held == player) sweptPlayer = true;
             }
         }
         g_retreatHold = RetreatHold{};
+
+        // #48b READBACK: if the player was displaced, prove he actually lost
+        // the alias package instances -- same measured-detach idiom as every
+        // follower release. "The alias now holds the marker" is not that proof.
+        if (sweptPlayer && player) {
+            VerifyDetachedFrom(Forms::g_lootQuest, player, "loot", "MFO_LootQuest", "player sweep");
+            VerifyDetachedFrom(Forms::g_retreatQuest, player, "retreat", "MFO_RetreatQuest", "player sweep");
+        }
 
         if (g_holder.phase == Phase::Idle) {
             // Clear anyway on the lifecycle edges: a fill from a PREVIOUS
