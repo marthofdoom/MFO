@@ -7,6 +7,7 @@
 #include "Followers.h"   // g_active -- the maintained teammate list (ally selector)
 #include "Config.h"      // g_sharedRadius -- "ally" locality
 #include "Confidence.h"  // ChaseRadius -- the combat chase cap (#22)
+#include "Sightline.h"   // LoS preference in PickFoe (worker-safe cached read)
 
 namespace MFO::Eval {
 
@@ -79,6 +80,22 @@ namespace MFO::Eval {
         // cond.foe_count_at_least gambit read the exact same tally.
         int FoeCount(RE::Actor* a_self) { return CombatSense::FoeCount(a_self); }
 
+        // Surface the ALL-OCCLUDED fallback (throttled, outside the lock): every
+        // qualified foe failed the LoS preference, so the selector fell back to
+        // the old distance/HP pick rather than going passive. One line per ~5 s
+        // per follower -- enough for the deck log to show the gate deciding,
+        // quiet enough not to drown it.
+        void LogOccludedFallback(RE::Actor* a_self, int a_count) {
+            static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_next;
+            const auto now = std::chrono::steady_clock::now();
+            auto& nxt = s_next[a_self->GetFormID()];
+            if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
+            nxt = now + std::chrono::seconds(5);
+            spdlog::info("[los] {:08X}: all {} candidate foe(s) occluded -- falling back to "
+                         "the unsighted pick (he still engages; the FORCED cast stays held)",
+                         a_self->GetFormID(), a_count);
+        }
+
         // Surface the brawl gate ONLY when it suppressed the entire candidate
         // set (a fist-fight opponent was the follower's only "foe"), so a field
         // test can tell "gambit did nothing" from "correctly held fire." Throttled
@@ -138,7 +155,21 @@ namespace MFO::Eval {
             // Lowest `score` wins. Distance for the nearest-style selectors, HP
             // for the HP ones (negated for "highest"). A gate `continue`s a foe
             // that does not qualify at all.
-            float bestScore = std::numeric_limits<float>::max();
+            //
+            // LoS PREFERENCE (soft, fail-open): two parallel bests -- the best
+            // SIGHTED candidate (verdict Visible or Unknown) and the best
+            // overall. The sighted one wins when it exists; when EVERY
+            // candidate is measured Occluded, fall back to the old pick so the
+            // follower still engages (repositioning is the AI's job; only the
+            // FORCED cast requires sight, in Actuation). Unknown counts as
+            // sighted on purpose: a cold cache or a runtime that cannot
+            // raycast must behave exactly like today, not go passive.
+            float bestScore    = std::numeric_limits<float>::max();
+            float bestVisScore = std::numeric_limits<float>::max();
+            RE::ActorHandle bestVis;
+            int   qualified    = 0;       // candidates that passed every gate
+            std::vector<RE::FormID> wantLoS;   // measured NEXT tick, on main
+            const auto selfID  = a_self->GetFormID();
             const auto selfPos = a_self->GetPosition();
             int         nonHostile = 0;   // brawl gate: foes skipped as non-hostile
             RE::FormID  lastNH     = 0;
@@ -251,8 +282,30 @@ namespace MFO::Eval {
                         if (!IsWeakTo(foe, RE::ActorValue::kResistShock)) continue;
                     }
 
+                    // Every gate passed -- a real candidate. Queue its LoS
+                    // measurement (runs on the MAIN thread next frame, #72:
+                    // collect ids here, act after the lock) and read the
+                    // CACHED verdict for this tick's preference.
+                    ++qualified;
+                    wantLoS.push_back(foe->GetFormID());
+                    if (Sightline::Check(selfID, foe->GetFormID()) !=
+                        Sightline::Verdict::Occluded) {
+                        if (score < bestVisScore) { bestVisScore = score; bestVis = t.targetHandle; }
+                    }
+
                     if (score < bestScore) { bestScore = score; best = t.targetHandle; }
                 }
+            }
+            // OUTSIDE the group lock: ask the main thread to (re)measure LoS
+            // for this tick's candidates so the next tick reads warm verdicts.
+            if (!wantLoS.empty()) Sightline::Want(selfID, std::move(wantLoS));
+
+            // The sighted best wins; the unsighted overall best is the
+            // fallback so an all-occluded pack never reads as "no foe".
+            if (bestVis) {
+                best = bestVis;
+            } else if (best && qualified > 0) {
+                LogOccludedFallback(a_self, qualified);
             }
             // Held fire in a brawl: the only "foes" were non-hostile and nothing
             // real was selected. Log outside the group lock (throttled).

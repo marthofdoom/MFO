@@ -107,6 +107,7 @@ namespace MFO::Config {
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
             else if (a_key == "bDriveCaster")       setB(g_driveCaster);
             else if (a_key == "bUsePackages")       setB(g_usePackages);
+            else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "bCommandCast")       setB(g_commandCast);
@@ -199,7 +200,8 @@ namespace MFO::Config {
             g_suppressWindow     = 1.5f;
             g_casterHook         = true;
             g_casterMode         = 1;
-            g_usePackages        = false;
+            g_usePackages        = true;    // v1.0.27: the forced-cast delivery route
+            g_forceCastOnMiss    = true;
             g_castSource         = 3;
             g_equipToCast        = true;
             g_aiCastGrace        = 3.0f;
@@ -258,6 +260,7 @@ namespace MFO::Config {
             { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
             { "bAllowSummons", "0" },          { "bEquipToCast", "1" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
+            { "bForceCastOnMiss", "1" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },
             { "fMagickaReserve", "0.000000" }, { "bLogistics", "1" },
             { "fFirstDibsDelay", "4.000000" }, { "fQuickLootWaiver", "4.000000" },

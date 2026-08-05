@@ -35,6 +35,19 @@ namespace MFO::CasterConsent {
     void Clear(RE::FormID a_follower);
     void ClearAll();
 
+    // THE MISS DETECTOR (hybrid forced-cast). The [cast] sink reports every
+    // spell a tracked follower fires; while a follower is LATCHED, a cast of a
+    // DIFFERENT spell is the AI overruling the gambit -- Marcurio casting his
+    // own Chain Lightning instead of the configured Firebolt. That swap also
+    // re-equips and RESETS the grace clock, so without this flag the grace
+    // window never elapses and the miss is invisible to Actuation. NoteCast is
+    // called from the sink's queued task (the same serialized SKSE task queue
+    // the evaluator tick drains, plus the map's own lock); OtherCastSeen is
+    // read by Actuation on the next tick and is erased with the latch by
+    // Clear/ClearAll -- no flag outlives the rule that armed it.
+    void NoteCast(RE::FormID a_follower, RE::FormID a_spell);
+    bool OtherCastSeen(RE::FormID a_follower);
+
     // Probe instrumentation (§0.28's decisive measurement).
     struct Stats {
         std::uint32_t seen    = 0;   // CheckStartCast calls for a tracked follower

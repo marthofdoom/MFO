@@ -7,8 +7,11 @@
 #include "CasterConsent.h"
 #include "Targeting.h"
 #include "Logistics.h"
-#include "Packages.h"    // #35: act.flee reuses the retreat package
+#include "Packages.h"    // #35: act.flee reuses the retreat package; hybrid forced cast
+#include "Sightline.h"   // LoS gate on the forced cast -- no firebolts into walls
 #include "Temperament.h" // flair #1: per-follower timing seed (grace offset)
+
+#include <optional>      // ForceCast's tri-state return -- not in the PCH
 
 namespace MFO::Actuation {
 
@@ -20,6 +23,81 @@ namespace MFO::Actuation {
             case Vocab::Subject::Self:
             default:                     return a_follower;
             }
+        }
+
+        // THE HYBRID'S FORCE HALF. The AI-first grace (below, in CastOn) stays
+        // the preferred path because it is MOBILE -- the follower strafes and
+        // closes while casting, which no package cast does (§0.27 roots him).
+        // But when the AI MISSED -- it cast a DIFFERENT spell during the grace
+        // (Marcurio's Chain-Lightning-over-Firebolt, the swap that also resets
+        // the grace clock forever), or the grace elapsed with no cast of ours
+        // -- the configured spell is FORCED through the proven-but-unwired
+        // package route (§0.21-0.23: animated, targeted, every axis proven).
+        //
+        // Returns nullopt when the package route is unavailable/declined
+        // structurally, so CastOn falls through to the legacy silent apply --
+        // never a regression, exactly the old grace-expiry behaviour.
+        std::optional<Outcome> ForceCast(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                         RE::Actor* a_target, bool a_aiCastOther) {
+            if (!Config::g_forceCastOnMiss.load()) return std::nullopt;
+            if (!Packages::Available())            return std::nullopt;
+
+            const auto id   = a_follower->GetFormID();
+            const bool self = !a_target || a_target == a_follower;
+
+            // LINE OF SIGHT, required for the forced shot only. The AI path
+            // repositions on its own; a package cast fires from where he
+            // stands, so an OCCLUDED verdict holds the force and lets the
+            // rules below (attack -> the AI closes/repositions) run instead.
+            // TRANSPARENT: a wall between him and the foe must not wall off
+            // the rest of his list too. Unknown passes -- fail-open, so a
+            // runtime where the raycast cannot run (VR: no main-thread pump)
+            // degrades to today's behaviour instead of an inert forced cast.
+            if (!self) {
+                const auto v = Sightline::Check(id, a_target->GetFormID());
+                if (v == Sightline::Verdict::Occluded) {
+                    spdlog::debug("[cast] {:08X}: forced cast HELD -- no line of sight to {:08X}",
+                                  id, a_target->GetFormID());
+                    return Outcome{ Result::NoOp, "forced cast held (no line of sight)", true };
+                }
+            }
+
+            const auto d = self ? Packages::CastSelf(a_follower, a_spell)
+                                : Packages::CastAt(a_follower, a_spell, a_target);
+            if (d == Packages::Decline::None) {
+                // The decision line the deck log needs: WHICH miss branch fired.
+                spdlog::info("[cast] {:08X} {} FORCED {} ({:08X}) {} -- {} (LoS {})",
+                             id, a_follower->GetName() ? a_follower->GetName() : "?",
+                             a_spell->GetName() ? a_spell->GetName() : "?",
+                             a_spell->GetFormID(),
+                             self ? std::string("on self")
+                                  : std::format("at {:08X}", a_target->GetFormID()),
+                             a_aiCastOther ? "their AI cast a DIFFERENT spell"
+                                           : "grace elapsed, no cast",
+                             self ? "n/a"
+                                  : Sightline::VerdictName(
+                                        Sightline::Check(id, a_target->GetFormID())));
+                // The package carries the spell itself; the hand latch has done
+                // its job. Clear consent (the AI is out of this cast now), give
+                // the hand back on the cooldown, and re-arm the grace so the
+                // NEXT firing of this rule offers the AI a fresh window.
+                CasterConsent::Clear(id);
+                Loadout::ArmGrace(id);
+                Loadout::StartCooldown(id);
+                return Outcome{ Result::Fired,
+                                a_aiCastOther ? "forced cast (AI cast its own spell)"
+                                              : "forced cast (grace elapsed)" };
+            }
+            if (d == Packages::Decline::Busy) {
+                // Another follower holds the single cast alias -- a seconds-
+                // long wait during which this one FIGHTS; transparent so the
+                // rules below run (same shape as the loadout debounce).
+                return Outcome{ Result::NoOp, "cast package busy", true };
+            }
+            // Contention / no record / quest stopped: structural. Fall through
+            // to the silent path rather than dropping the rule -- the decline
+            // was already logged with its reason by Packages.
+            return std::nullopt;
         }
 
         Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target) {
@@ -149,7 +227,19 @@ namespace MFO::Actuation {
                     // follower; the reason string (the dedup key) is unchanged.
                     const float grace = Config::g_aiCastGrace.load() *
                         (0.87f + 0.26f * Temperament(a_follower->GetFormID()));
-                    if (held < grace) {
+
+                    // THE MISS DETECTOR. "The AI cast a different spell" ends
+                    // the grace EARLY: that cast swapped the equipped spell,
+                    // MFO re-equipped it this tick, and SecondsSinceEquip
+                    // restarted -- so without this flag the grace clock resets
+                    // forever and the configured spell is never cast (the
+                    // Marcurio/Firebolt field report). A cast of OUR spell is
+                    // the success path and never reaches here: the sink clears
+                    // consent and starts the cooldown, so Prepare() debounces
+                    // the next tick.
+                    const bool aiCastOther =
+                        CasterConsent::OtherCastSeen(a_follower->GetFormID());
+                    if (held < grace && !aiCastOther) {
                         // A STABLE reason string. The transition logger compares
                         // reasons, so embedding the elapsed time here would make
                         // every tick a "new" reason and log at 7.5 Hz.
@@ -157,6 +247,14 @@ namespace MFO::Actuation {
                         // happening -- firing lower rules mid-grace risks
                         // disturbing the AI's cast (the §0.6 confound).
                         return { Result::NoOp, "waiting for their AI to cast it" };
+                    }
+
+                    // THE AI MISSED -- grace spent with nothing, or spent on
+                    // its own spell. Force the CONFIGURED spell through the
+                    // package route; only a structural decline falls through
+                    // to the silent apply below (never a regression).
+                    if (auto forced = ForceCast(a_follower, spell, a_target, aiCastOther)) {
+                        return *forced;
                     }
                     break;
                 }

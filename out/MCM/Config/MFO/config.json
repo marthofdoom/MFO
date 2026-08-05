@@ -138,6 +138,16 @@
           }
         },
         {
+          "id": "bForceCastOnMiss:General",
+          "text": "Force the chosen spell",
+          "type": "toggle",
+          "help": "ON (default): if a follower's own AI casts a different spell (or nothing) during the grace window, the gambit's configured spell is force-cast at the chosen target -- with line of sight required. OFF: the old behaviour (the AI decides, silent fallback).",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "id": "bCommandTarget:General",
           "text": "Commanded targeting",
           "type": "toggle",

@@ -9,6 +9,7 @@
 #include "Loadout.h"
 #include "Targeting.h"
 #include "CasterConsent.h"
+#include "Sightline.h"
 #include "Packages.h"
 #include "Papyrus.h"
 #include "TradeBridge.h"
@@ -393,6 +394,8 @@ namespace MFO {
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
         CasterConsent::ClearTransientState();
+        Sightline::ClearTransientState();   // LoS cache keys are this-session
+                                            // FormID pairs -- same rule as the latch
         Board::ClearPendingEdits();
         // The alias fill is the one piece of MFO state the ENGINE persists for
         // us whether we want it or not, so revert cannot just forget it the way

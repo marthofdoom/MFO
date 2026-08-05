@@ -194,6 +194,15 @@ namespace MFO::Packages {
     // dismissal path must call this BEFORE the record leaves the active set.
     void Release(RE::FormID a_actorID);
 
+    // The Claim-and-Release pop's completion signal: the [cast] sink observed
+    // a_actorID fire a_spellID. If that is the current holder casting the
+    // commanded spell, Pump releases him one short linger later instead of
+    // waiting for the package's own Cooldown cycle or the hard timeout --
+    // §0.23's "the action must then END and hand him back", made real. Called
+    // from the sink's queued task (the same serialized queue Pump runs on);
+    // a no-op for anything but the live holder+spell pair.
+    void NotifyCast(RE::FormID a_actorID, RE::FormID a_spellID);
+
     // Unconditional release. Revert, kPreLoadGame, and shutdown.
     void ReleaseAll(const char* a_why);
 

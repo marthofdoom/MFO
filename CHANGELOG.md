@@ -1,3 +1,28 @@
+## v1.0.27 -- cast gambits cast YOUR spell (hybrid forced cast) + line of sight
+
+- Fix: "cast Firebolt at nearest foe" finally means Firebolt. The old path only
+  EQUIPPED the chosen spell and waited ~3 s for the follower's own AI to cast it
+  -- and a mage with his own favorites (Marcurio) cast Chain Lightning instead,
+  which swapped the equipped spell, forced a re-equip, and RESET the grace clock
+  forever; the configured spell was ~never cast. The AI-first window stays (it is
+  the mobile, animated path when the follower cooperates), but a MISS -- the AI
+  cast a DIFFERENT spell during the grace, or cast nothing by grace end -- now
+  forces the configured spell through the field-proven cast package
+  (MFO_CastPackage, animated, aimed at the rule's chosen target). New
+  "Force the chosen spell" MCM toggle, ON by default.
+- New: the cast package's Claim-and-Release pop. Nothing previously ENDED a cast
+  package -- it rooted the follower while it owned him. The commanded cast is now
+  observed by the [cast] sink and the follower is handed back a moment later
+  (backstopped by a 12 s hard timeout); release evicts the alias with the
+  non-actor marker (never the player -- the furniture lesson), and the load sweep
+  now evicts the cast alias too with the same measured detach readback, so a save
+  written mid-cast self-heals on load.
+- New: line-of-sight gating. Foe selectors now prefer a foe the follower can
+  actually SEE (nearest sighted wins; if every candidate is occluded he still
+  engages, as before), and the FORCED cast requires sight -- no more firebolts
+  into walls. The raycast runs on the main thread only (the worker reads a
+  cached verdict), per the job-thread invariant.
+
 ## v1.0.26 -- furniture fix part 2: un-latch the PLAYER from old saves
 
 - Fix: v1.0.25 stopped NEW releases from parking you in the package-carrying

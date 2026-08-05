@@ -6,6 +6,14 @@
 
 namespace MFO::Packages {
 
+    // Defined at the bottom of the file (the loot-clear readback); forward-
+    // declared HERE, above the anonymous namespace, because the cast-package
+    // release (ClearAlias) now runs the same measured-detach proof as every
+    // loot/retreat eviction.
+    static void VerifyDetachedFrom(RE::TESQuest* a_quest, RE::Actor* a_follower,
+                                   const char* a_tag, const char* a_questName,
+                                   const char* a_why);
+
     namespace {
 
         // ── LAYOUT: the two package-data classes CommonLib does NOT define ──
@@ -107,8 +115,24 @@ namespace MFO::Packages {
         // §4.5c: an action is BOUNDED. Both halves -- a completion condition
         // and a hard timeout -- or a stuck package is a follower MFO has
         // quietly taken away from the player forever.
+        //
+        // 12 s, not the old 20: the cast package now fires MID-COMBAT (the
+        // hybrid forced cast), and the package ROOTS the actor while it owns
+        // him (§0.27). A cast takes a few seconds to start (§0.21) plus a
+        // couple to charge and release; a follower still rooted at 12 s is a
+        // follower the fight has moved past, and holding him another 8 makes
+        // the backstop worse than the failure it bounds.
         constexpr float kFillTimeout = 3.0f;    // Requested -> Filled
-        constexpr float kRunTimeout  = 20.0f;   // Filled/Running -> Done
+        constexpr float kRunTimeout  = 12.0f;   // Filled/Running -> Done
+
+        // CLAIM-AND-RELEASE POP (the §0.23 gap): once the cast is OBSERVED
+        // (the [cast] sink saw the holder fire OUR spell), hold this long for
+        // the release animation to finish, then hand the follower back. The
+        // engine's own Running -> Done edge (package no longer current) still
+        // releases too -- this is the EARLIER of the two, so a package whose
+        // CastTime/Cooldown inputs would keep him another cycle lets go at
+        // one cast, which is what a gambit asked for.
+        constexpr float kPostCastLinger = 1.0f;
 
         using Clock = std::chrono::steady_clock;
 
@@ -122,6 +146,11 @@ namespace MFO::Packages {
             RE::FormID        spellID    = 0;
             Clock::time_point phaseAt{};
             Clock::time_point startAt{};
+            // The pop's completion condition: the [cast] sink observed the
+            // holder fire OUR spell (NotifyCast). Pump releases kPostCastLinger
+            // after -- the "cast happened, hand him back" edge §0.23 lacked.
+            bool              castSeen   = false;
+            Clock::time_point castSeenAt{};
         };
         Holder g_holder;
 
@@ -506,17 +535,50 @@ namespace MFO::Packages {
             g_holder = Holder{};
         }
 
-        // Clear the alias. Safe to call in any phase.
+        // Defined below with the eviction-marker machinery (#48); declared here
+        // because the cast release now evicts too.
+        RE::TESObjectREFR* EvictMarkerRef();
+
+        // RELEASE the cast alias. Safe to call in any phase.
+        //
+        // BY EVICTION, exactly like LootTravelClear/RetreatClear (#48/#73):
+        // force-fill alias 0 with the non-actor XMarker so the follower's alias
+        // instance is REPLACED and the framework reclaims him. The old VM
+        // Clear() stays only as the off-AE / marker-less fallback -- MFO's
+        // aliases carry no script, which is exactly why the loot quest's VM
+        // Clear silently failed (v0.8.2 lesson, Config.h bLootTravel note), so
+        // it cannot be the primary release for a package that now fires every
+        // missed cast. NEVER the player: alias 0 carries the UseMagic ALPC,
+        // and an actor parked in a package-carrying alias is the furniture-
+        // ejection bug (v1.0.25/26).
         void ClearAlias(const char* a_why) {
-            const auto id = g_holder.actorID;
-            if (!DispatchAlias("Clear", nullptr)) {
-                // The fill is SERIALIZED INTO THE SAVE. A clear we could not
-                // dispatch is not a cosmetic miss -- it is a follower who comes
-                // back latched on every subsequent load.
-                spdlog::error("[pkg] {:08X}: Clear() DISPATCH FAILED ({}) -- the alias fill "
-                              "persists in the save; the follower may reload latched", id, a_why);
-            } else {
-                spdlog::info("[pkg] {:08X}: released ({})", id, a_why);
+            const auto id    = g_holder.actorID;
+            auto*      quest = Forms::g_commandQuest;
+            auto*      mark  = EvictMarkerRef();   // marker or null -- no player fallback here
+
+            bool released = false;
+            if (quest && mark && ForceRefToNative(quest, kAliasCommandActor, mark)) {
+                spdlog::info("[pkg] {:08X}: released ({}) -- evicted (marker)", id, a_why);
+                released = true;
+            } else if (DispatchAlias("Clear", nullptr)) {
+                spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear (no marker/off-AE)",
+                             id, a_why);
+                released = true;
+            }
+            if (!released) {
+                // The fill is SERIALIZED INTO THE SAVE. A release we could not
+                // perform is not a cosmetic miss -- it is a follower who comes
+                // back latched on every subsequent load. The ReleaseAll load
+                // sweep is the self-heal.
+                spdlog::error("[pkg] {:08X}: RELEASE FAILED on both routes ({}) -- the alias "
+                              "fill persists in the save; the load sweep will evict it", id, a_why);
+            }
+            // Measured readback, same idiom as every loot/retreat release:
+            // "the alias now holds the marker" is not proof the follower
+            // detached. Re-evaluate so the framework reclaims him THIS tick.
+            if (auto* actor = HolderActor()) {
+                actor->EvaluatePackage(true, false);   // never resetAI -- combat group
+                VerifyDetachedFrom(quest, actor, "pkg", "MFO_CommandQuest", a_why);
             }
             ResetHolder();
         }
@@ -565,6 +627,27 @@ namespace MFO::Packages {
             }
 
             if (!SetInputs(a_spell, a_target)) return Decline::BadInputs;
+
+            // FOE ROUTE: fill the TARGET alias (1) with the victim BEFORE the
+            // actor alias, the same no-rooting order as loot/retreat -- the
+            // package's t4 target must resolve when alias 0 instances it.
+            //
+            // THIS FILL WAS MISSING when the route had zero callers: SetInputs
+            // points the package at alias 1, but nothing ever put the victim
+            // IN alias 1 (the old probe ESP force-filled it with the player,
+            // and the shipped ESP authors no fill at all). An empty target
+            // alias resolves nothing -- the §0.19 stall class -- and a stale
+            // one casts at the WRONG actor. Native-only: alias 1 has no VM
+            // fallback machinery, so off AE the foe route declines and the
+            // caller falls back, exactly like loot/retreat travel.
+            if (a_target) {
+                if (!REL::Module::IsAE()) return Decline::NoVM;
+                if (!ForceRefToNative(quest, kAliasCommandTarget, a_target)) {
+                    spdlog::error("[pkg] {:08X}: TARGET alias {} fill failed -- refusing to "
+                                  "cast at a stale target", id, kAliasCommandTarget);
+                    return Decline::NoVM;
+                }
+            }
 
             // Native first -- synchronous, so the alias is filled when this
             // returns. VM only if the native is unavailable (SE).
@@ -774,7 +857,13 @@ namespace MFO::Packages {
             break;
 
         case Phase::Filled:
-            if (running) {
+            // The pop's completion condition can beat the Running observation:
+            // the [cast] sink fires the instant the spell releases, while
+            // GetCurrentPackage is only sampled here at tick cadence.
+            if (g_holder.castSeen && Since(g_holder.castSeenAt) > kPostCastLinger) {
+                SetPhase(Phase::Done, "cast observed -- releasing");
+                ++g_completions;
+            } else if (running) {
                 SetPhase(Phase::Running, "package is the actor's current package");
             } else if (!filled) {
                 // Someone else cleared or stole the alias under us.
@@ -791,7 +880,15 @@ namespace MFO::Packages {
             break;
 
         case Phase::Running:
-            if (!running) {
+            // THE POP (§0.23's missing release): the cast we commanded was
+            // OBSERVED -- one linger for the release animation, then hand the
+            // follower back rather than letting the package's own Cooldown/
+            // NumToCast keep him rooted for another cycle. The natural
+            // "package no longer current" edge stays as the other half.
+            if (g_holder.castSeen && Since(g_holder.castSeenAt) > kPostCastLinger) {
+                SetPhase(Phase::Done, "cast observed -- releasing");
+                ++g_completions;
+            } else if (!running) {
                 SetPhase(Phase::Done, "package no longer current");
                 ++g_completions;
             } else if (Since(g_holder.startAt) > kRunTimeout) {
@@ -819,6 +916,20 @@ namespace MFO::Packages {
         if (g_holder.phase == Phase::Idle) return;
         if (g_holder.actorID != a_actorID) return;
         ClearAlias("released");
+    }
+
+    void NotifyCast(RE::FormID a_actorID, RE::FormID a_spellID) {
+        // The completion signal for the pop: the [cast] sink saw the holder
+        // fire the commanded spell. Runs on the same serialized SKSE task
+        // queue as Pump (both are AddTask drains), so no lock -- the same
+        // single-writer discipline as every other g_holder touch.
+        if (g_holder.phase == Phase::Idle || g_holder.phase == Phase::Done) return;
+        if (g_holder.actorID != a_actorID || g_holder.spellID != a_spellID)  return;
+        if (g_holder.castSeen) return;
+        g_holder.castSeen   = true;
+        g_holder.castSeenAt = Clock::now();
+        spdlog::info("[pkg] {:08X}: commanded cast OBSERVED ({:08X}) -- releasing in {:.1f}s",
+                     a_actorID, a_spellID, kPostCastLinger);
     }
 
     void EnsureEvictMarker() {
@@ -915,31 +1026,45 @@ namespace MFO::Packages {
         }
         g_retreatHold = RetreatHold{};
 
+        // CAST-PACKAGE sweep (#73's second half, applied to the hybrid forced
+        // cast): the command alias fill is engine-serialized like loot's and
+        // retreat's, so a save written MID-CAST loads with the follower still
+        // claimed at static 60 by a UseMagic alias package -- rooted, aimed at
+        // a stale alias-1 target, on every subsequent load. This sweep runs
+        // whether or not this session's holder mirror knows anything (a
+        // PREVIOUS session's latch is exactly the case the mirror cannot see).
+        // Evict any ACTOR occupant, the player included (#48b); the VM Clear
+        // is the off-AE fallback only.
+        if (auto* quest = Forms::g_commandQuest) {
+            RE::ObjectRefHandle h{};
+            quest->CreateRefHandleByAliasID(h, kAliasCommandActor);
+            auto* held = h.get() ? h.get().get() : nullptr;
+            if (held && player && held->As<RE::Actor>() &&
+                (held != player || haveMarker)) {
+                if (!ForceRefToNative(quest, kAliasCommandActor, ev))
+                    DispatchAlias("Clear", nullptr);   // off-AE: scriptless-alias
+                                                       // Clear may no-op; AE never
+                                                       // reaches this arm
+                spdlog::info("[pkg] {} -- cast alias held {:08X}{}; evicted (marker)",
+                             a_why, held->GetFormID(),
+                             held == player ? " (the PLAYER, #48b)" : "");
+                if (held == player) sweptPlayer = true;
+            }
+        }
+
         // #48b READBACK: if the player was displaced, prove he actually lost
         // the alias package instances -- same measured-detach idiom as every
         // follower release. "The alias now holds the marker" is not that proof.
         if (sweptPlayer && player) {
             VerifyDetachedFrom(Forms::g_lootQuest, player, "loot", "MFO_LootQuest", "player sweep");
             VerifyDetachedFrom(Forms::g_retreatQuest, player, "retreat", "MFO_RetreatQuest", "player sweep");
+            VerifyDetachedFrom(Forms::g_commandQuest, player, "pkg", "MFO_CommandQuest", "player sweep");
         }
 
-        if (g_holder.phase == Phase::Idle) {
-            // Clear anyway on the lifecycle edges: a fill from a PREVIOUS
-            // session is in the save and this module has no memory of it, so
-            // "we think we hold nothing" is not evidence the alias is empty.
-            if (Forms::g_commandQuest && CommandAlias() && VM()) {
-                RE::ObjectRefHandle handle{};
-                Forms::g_commandQuest->CreateRefHandleByAliasID(handle, kAliasCommandActor);
-                if (handle.get()) {
-                    spdlog::warn("[pkg] {} -- alias 0 was filled with {:08X} and MFO did not put "
-                                 "it there. A previous session's latch, restored from the save. "
-                                 "Clearing.", a_why, handle.get()->GetFormID());
-                    DispatchAlias("Clear", nullptr);
-                }
-            }
-            return;
-        }
-        ClearAlias(a_why);
+        // The alias itself was swept above regardless of phase; ClearAlias here
+        // is what resets the holder mirror and runs the measured readback on a
+        // follower THIS session commanded.
+        if (g_holder.phase != Phase::Idle) ClearAlias(a_why);
     }
 
     // ── OPTION A: loot travel ────────────────────────────────────────────────

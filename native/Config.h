@@ -118,12 +118,25 @@ namespace MFO::Config {
     // with a follower so the engine instances MFO_CastPackage onto them --
     // vanilla's own follower mechanism, pointed at one action.
     //
-    // DEFAULT OFF, and #45 is the reason: this is one new engine mechanism,
-    // and it is not trusted until it is measured. It also writes state the
-    // engine SERIALIZES INTO THE SAVE (an alias fill), which is a strictly
-    // higher class of risk than anything else behind these flags -- a bug here
-    // outlives the session rather than ending with it.
-    inline std::atomic<bool>  g_usePackages{ false };
+    // NOW DEFAULT ON (v1.0.27): the mechanism #45 demanded be measured first
+    // HAS been -- every target/castingType/delivery axis is field-proven
+    // (§0.21-0.23), and it is the delivery route for the hybrid forced cast
+    // below, which is inert without it. The save-serialization risk that kept
+    // it off is now owned end-to-end: release is by marker eviction (never the
+    // player, #73) and ReleaseAll's load sweep evicts a mid-cast save's latch
+    // with a measured VerifyDetachedFrom readback. Neither shipped INI pins
+    // this key, so the default is what runs.
+    inline std::atomic<bool>  g_usePackages{ true };
+
+    // THE HYBRID FORCED CAST (v1.0.27, the Marcurio/Firebolt fix). AI-first
+    // stays: equip + consent + fAiCastGrace, the mobile animated path. But
+    // when the AI MISSES -- casts a DIFFERENT spell during the grace (which
+    // also resets the grace clock forever, so the miss was self-concealing),
+    // or lets the grace elapse -- the CONFIGURED spell is forced through the
+    // proven cast package at the rule's chosen target. ON by default: this is
+    // what makes "cast Firebolt" mean Firebolt. The forced shot additionally
+    // requires line of sight (Sightline) so it never fires into a wall.
+    inline std::atomic<bool>  g_forceCastOnMiss{ true };
 
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc

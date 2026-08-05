@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include <unordered_set>   // g_otherCast -- NOT in the PCH (the v1.0.8/9 CI lesson)
 #include "CasterConsent.h"
 #include "Config.h"
 #include "Followers.h"
@@ -14,6 +15,11 @@ namespace MFO::CasterConsent {
         std::shared_mutex g_mx;
         std::unordered_map<RE::FormID, RE::FormID> g_want;   // follower -> spell it may cast
         std::atomic<std::size_t> g_wantCount{ 0 };           // fast-path: skip the lock when empty
+
+        // Followers whose AI cast a DIFFERENT spell while latched -- the miss
+        // signal the hybrid forced-cast consumes (see NoteCast in the header).
+        // Same lock as g_want: the two are read and erased together.
+        std::unordered_set<RE::FormID> g_otherCast;
 
         std::atomic<bool> g_hooked{ false };
         std::atomic<std::uint32_t> g_seen{ 0 }, g_vetoed{ 0 }, g_forced{ 0 };
@@ -180,12 +186,28 @@ namespace MFO::CasterConsent {
     void Clear(RE::FormID a_follower) {
         std::unique_lock lk(g_mx);
         g_want.erase(a_follower);
+        g_otherCast.erase(a_follower);   // the miss flag dies with the latch
         g_wantCount.store(g_want.size(), std::memory_order_relaxed);
     }
     void ClearAll() {
         std::unique_lock lk(g_mx);
         g_want.clear();
+        g_otherCast.clear();
         g_wantCount.store(0, std::memory_order_relaxed);
+    }
+
+    void NoteCast(RE::FormID a_follower, RE::FormID a_spell) {
+        std::unique_lock lk(g_mx);
+        const auto w = g_want.find(a_follower);
+        if (w == g_want.end()) return;       // not latched -- not our business
+        if (w->second == a_spell) return;    // OUR spell -- that is the success
+                                             // path, handled by the sink's Clear
+        g_otherCast.insert(a_follower);
+    }
+
+    bool OtherCastSeen(RE::FormID a_follower) {
+        std::shared_lock lk(g_mx);
+        return g_otherCast.contains(a_follower);
     }
 
     Stats GetStats() {

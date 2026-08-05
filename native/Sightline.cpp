@@ -1,0 +1,121 @@
+#include "PCH.h"
+#include "Sightline.h"
+#include "MainThread.h"
+
+namespace MFO::Sightline {
+
+    namespace {
+
+        using Clock = std::chrono::steady_clock;
+
+        // A verdict is trusted this long, then reads as Unknown. ~5 evaluator
+        // ticks: long enough that the 133 ms cadence always finds a warm entry
+        // while the pump keeps refreshing, short enough that a foe stepping
+        // through a doorway is not "occluded" for a whole fight.
+        constexpr float kFreshSeconds = 1.0f;
+
+        // Per-viewer floor between Post()s. PickFoe runs once per RULE per
+        // tick, so one follower with five foe selectors would otherwise queue
+        // five identical measurement batches into the same frame.
+        constexpr float kRepostSeconds = 0.3f;
+
+        struct Entry {
+            bool              los = false;
+            Clock::time_point at{};
+        };
+
+        // Written by the MAIN thread (the measurement), read by the WORKER
+        // (the evaluator) -- cross-thread by design, so a real lock (#4).
+        // This mutex is a LEAF: nothing is called while holding it, so it can
+        // never participate in an inversion with MainThread's queue mutex or
+        // the combat-group lock the caller may be inside.
+        std::mutex g_mx;
+        std::unordered_map<std::uint64_t, Entry> g_cache;
+        std::unordered_map<RE::FormID, Clock::time_point> g_lastPost;
+
+        constexpr std::uint64_t Key(RE::FormID a_viewer, RE::FormID a_target) {
+            return (static_cast<std::uint64_t>(a_viewer) << 32) | a_target;
+        }
+
+        float Since(Clock::time_point a_t) {
+            if (a_t.time_since_epoch().count() == 0) return 1.0e9f;
+            return std::chrono::duration<float>(Clock::now() - a_t).count();
+        }
+
+        // MAIN THREAD ONLY -- the actual raycast. Resolves ids fresh (a handle
+        // captured on the worker could be a different actor by the time the
+        // frame runs it) and refuses anything without loaded 3D: a raycast
+        // against an unloaded ref answers nothing and asks the havok world
+        // about geometry that is not there.
+        void Measure(RE::FormID a_viewer, const std::vector<RE::FormID>& a_targets) {
+            auto* vf = RE::TESForm::LookupByID<RE::Actor>(a_viewer);
+            if (!vf || vf->IsDead() || !vf->Is3DLoaded()) return;
+
+            for (const auto tid : a_targets) {
+                auto* tf = RE::TESForm::LookupByID<RE::Actor>(tid);
+                if (!tf || tf->IsDead() || !tf->Is3DLoaded()) continue;
+
+                // The engine's own combat-AI LoS read. a_arg2 is an out-param
+                // the engine sets alongside the answer; only the return is the
+                // verdict. Verified against the pinned NG rev: this thunks
+                // RELOCATION_ID(53029, 53829) -- no VR id, but this function
+                // is only ever reached through MainThread::Post, which is a
+                // documented no-op on VR (pump refused), so VR never gets here.
+                bool arg2 = false;
+                const bool los = vf->HasLineOfSight(tf, arg2);
+
+                std::lock_guard lk(g_mx);
+                auto& e = g_cache[Key(a_viewer, tid)];
+                // Transition-only logging (#22j): a stable verdict at pump
+                // cadence would be a 7.5 Hz flood per follower-foe pair.
+                const bool fresh = Since(e.at) <= kFreshSeconds;
+                if (!fresh || e.los != los) {
+                    spdlog::info("[los] {:08X} -> {:08X}: {}", a_viewer, tid,
+                                 los ? "VISIBLE" : "OCCLUDED");
+                }
+                e.los = los;
+                e.at  = Clock::now();
+            }
+        }
+
+    }
+
+    const char* VerdictName(Verdict a_v) {
+        switch (a_v) {
+        case Verdict::Visible:  return "visible";
+        case Verdict::Occluded: return "occluded";
+        default:                return "unknown";
+        }
+    }
+
+    Verdict Check(RE::FormID a_viewer, RE::FormID a_target) {
+        std::lock_guard lk(g_mx);
+        const auto it = g_cache.find(Key(a_viewer, a_target));
+        if (it == g_cache.end()) return Verdict::Unknown;
+        if (Since(it->second.at) > kFreshSeconds) return Verdict::Unknown;
+        return it->second.los ? Verdict::Visible : Verdict::Occluded;
+    }
+
+    void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets) {
+        if (!a_viewer || a_targets.empty()) return;
+        {
+            std::lock_guard lk(g_mx);
+            auto& last = g_lastPost[a_viewer];
+            if (Since(last) < kRepostSeconds) return;
+            last = Clock::now();
+        }
+        // Post OUTSIDE our lock (leaf-mutex discipline; MainThread has its own
+        // queue mutex). Capture by value: FormIDs, never handles or pointers,
+        // so the frame that runs this re-resolves against the live world.
+        MainThread::Post([a_viewer, targets = std::move(a_targets)]() {
+            Measure(a_viewer, targets);
+        });
+    }
+
+    void ClearTransientState() {
+        std::lock_guard lk(g_mx);
+        g_cache.clear();
+        g_lastPost.clear();
+    }
+
+}

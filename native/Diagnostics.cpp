@@ -165,6 +165,21 @@ namespace MFO::Diagnostics {
                             // exactly like MFO's own, or the limiter only
                             // governs the half of the casting MFO does.
                             if (ours) { Loadout::StartCooldown(casterID); CasterConsent::Clear(casterID); }
+
+                            // HYBRID SIGNALS (real SPELLS only -- this sink
+                            // also catches potions, §0.16's Ale, and a drink
+                            // during the grace is not the AI overruling the
+                            // gambit):
+                            //  * NoteCast -- if this follower is LATCHED and
+                            //    this is NOT the latched spell, the AI went
+                            //    its own way; Actuation forces next tick.
+                            //  * NotifyCast -- if this is the cast PACKAGE's
+                            //    holder firing the commanded spell, the pop
+                            //    releases him a moment later (Packages::Pump).
+                            if (form && form->Is(RE::FormType::Spell)) {
+                                CasterConsent::NoteCast(casterID, spellID);
+                                Packages::NotifyCast(casterID, spellID);
+                            }
                         });
                     }
                     return RE::BSEventNotifyControl::kContinue;
