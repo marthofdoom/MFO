@@ -43,6 +43,11 @@ rules, first match wins — authored live, in game, per follower:
     skilled enough for, leave fresh corpses to you for a few seconds, never
     take owned goods, hold off while you sneak, and stay out of player homes
     unless you opt in.
+  * Magic users dress like mages: a follower with cast gambits prefers
+    enchanted apparel boosting his most-cast school (a Destruction robe over
+    a higher-rated helmet; the finer robe among matches) and keeps one
+    backup dagger for when his magicka runs dry. Both MCM toggles, on by
+    default.
   * Followers trade at merchants (off by default): they sell unworn junk and
     buy what they've run short on, from their own purse, from what that
     vendor actually stocks.

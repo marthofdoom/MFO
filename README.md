@@ -57,6 +57,15 @@ a mace), armour by rating on the slot **within the class they can use** — a
 light-armour follower won't pick up plate they have no skill in. Modded gear
 works with no patch, and a caster won't hoover up a random sword.
 
+**Magic users dress like mages.** A follower with cast gambits loots
+**school-appropriate apparel**: enchanted robes, hoods, gloves and boots that
+boost his most-cast school (weighted across his cast gambits' spells, read from
+the enchantment itself at loot time) beat raw armour rating on those slots — a
+destruction mage upgrades into Destruction robes; among matches the finer piece
+wins. He also stocks **one melee backup** (daggers by default, any one-hander
+via MCM) so the vanilla AI has something to draw when his magicka runs dry.
+Both behaviours are MCM toggles under Logistics, on by default.
+
 **Followers loot like people, not vacuums:**
 
 - **They walk to it.** A follower paths to the loot and picks it up — they
