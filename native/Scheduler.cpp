@@ -195,6 +195,17 @@ namespace MFO::Scheduler {
             g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
             g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
 
+            // v1.0.30: the cast-control latch dies with the fight. The [cast]
+            // sink no longer clears it on a successful cast (the latch must
+            // span cast cooldowns -- the between-casts leak), so combat end is
+            // now an explicit release point. Without it, a latch from the last
+            // fight lingers and denies the follower's own casting at the start
+            // of the NEXT fight before his first service, wanting a spell no
+            // rule may still name. Cheap and idempotent out of combat: no
+            // combat caster runs the hook, and Clear on an unlatched id is an
+            // uncontended erase-miss.
+            CasterConsent::Clear(id);
+
             Logistics::ServiceFollower(f, it->second);
             g_lastTickMs = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t0).count();

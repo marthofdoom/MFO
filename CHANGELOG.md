@@ -1,3 +1,26 @@
+## v1.0.30 -- cast control holds through the pause between casts
+
+- Fix: v1.0.28's exclusive cast control had a between-casts leak. The moment the
+  gambit's spell fired, the suppression latch was dropped and only came back
+  when that follower's next service tick re-asserted it -- and during the cast
+  cooldown it never came back at all, so for that whole window (over half a
+  second in a full party, the entire cooldown in the worst case) his AI was
+  free to slip in its own spell: Chain Lightning between two commanded
+  Firebolts. Suppression now persists CONTINUOUSLY for exactly as long as the
+  cast gambit keeps winning: the latch holds through the cast and its cooldown
+  and releases only when the rule stops winning, combat ends, the follower is
+  dismissed, or the game reverts (dismissal and combat end are new explicit
+  release points -- a latch must never outlive the fight or the party slot
+  that armed it). Nothing but the gambit's spell ever leaves his hands, even
+  between the paced casts. Spell choice, cast pacing (fCastCooldown), the
+  AI-first grace, the miss detector, force-on-miss, melee fallback when out of
+  magicka, and observe/log mode are all unchanged -- this closes the gaps; it
+  does not add casts.
+- New log, throttled to cast cadence: "[consent] holding exclusive control
+  through the cast cooldown" (one line per gambit cast), and the DENIED line's
+  dedup now resets each cast so a suppressed own-spell logs once per cooldown
+  window -- the deck log shows the gap staying closed without tick-rate spam.
+
 ## v1.0.29 -- magic users loot like mages (school robes + a backup dagger)
 
 - New: a magic-user follower -- anyone with at least one enabled cast gambit;

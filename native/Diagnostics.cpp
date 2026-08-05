@@ -158,13 +158,34 @@ namespace MFO::Diagnostics {
                                          ours ? "  *** MFO GAMBIT SPELL -- THE ANIMATED PATH ***"
                                               : "  (their own spell, not ours)");
 
-                            // Their AI just cast. Restart the window so MFO does
-                            // not double-cast on top of an animation still
-                            // playing -- an animated heal takes about a second.
-                            // Their AI cast it. That is a real cast -- pace it
-                            // exactly like MFO's own, or the limiter only
-                            // governs the half of the casting MFO does.
-                            if (ours) { Loadout::StartCooldown(casterID); CasterConsent::Clear(casterID); }
+                            // Their AI just cast OUR spell. That is a real cast
+                            // -- pace it exactly like MFO's own (StartCooldown),
+                            // or the limiter only governs the half of the
+                            // casting MFO does.
+                            //
+                            // v1.0.30: the latch is KEPT, not cleared. Clearing
+                            // here was the between-casts LEAK: the deny dropped
+                            // the instant the cast fired, and until the next
+                            // service tick re-Want()ed -- a full cooldown when
+                            // the spell got yanked, since the Debounced branch
+                            // never re-latched -- his AI was free to slip in
+                            // its own Chain Lightning between two gambit casts.
+                            // Exclusive control must span the PAUSE between
+                            // paced casts; the latch now lives exactly as long
+                            // as the cast rule keeps winning, and the scheduler
+                            // H3 release / combat end / dismissal end it.
+                            // NoteOurCast retires only the per-cast transients
+                            // (miss flag, deny-log dedup); it returns false when
+                            // the rule already released, so the hold line below
+                            // cannot claim control nobody has. One line per
+                            // gambit cast -- cast cadence, never tick cadence.
+                            if (ours) {
+                                Loadout::StartCooldown(casterID);
+                                if (CasterConsent::NoteOurCast(casterID)) {
+                                    spdlog::info("[consent] {:08X} holding exclusive control "
+                                                 "through the cast cooldown", casterID);
+                                }
+                            }
 
                             // HYBRID SIGNALS (real SPELLS only -- this sink
                             // also catches potions, §0.16's Ale, and a drink

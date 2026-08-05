@@ -77,11 +77,17 @@ namespace MFO::Actuation {
                              self ? "n/a"
                                   : Sightline::VerdictName(
                                         Sightline::Check(id, a_target->GetFormID())));
-                // The package carries the spell itself; the hand latch has done
-                // its job. Clear consent (the AI is out of this cast now), give
-                // the hand back on the cooldown, and re-arm the grace so the
-                // NEXT firing of this rule offers the AI a fresh window.
-                CasterConsent::Clear(id);
+                // The package carries the spell itself, but the latch stays
+                // (v1.0.30): clearing consent here re-opened the same
+                // between-casts gap the sink's Clear did -- until the next
+                // service re-Want()ed, the AI could answer the forced cast
+                // with a cast of its OWN. NoteOurCast retires the miss flag
+                // (it was just consumed -- kept, it would short-circuit the
+                // re-armed grace below into an instant re-force) and keeps
+                // the deny standing. Give the hand back on the cooldown, and
+                // re-arm the grace so the NEXT firing of this rule offers the
+                // AI a fresh window.
+                CasterConsent::NoteOurCast(id);
                 Loadout::ArmGrace(id);
                 Loadout::StartCooldown(id);
                 return Outcome{ Result::Fired,
@@ -234,9 +240,10 @@ namespace MFO::Actuation {
                     // restarted -- so without this flag the grace clock resets
                     // forever and the configured spell is never cast (the
                     // Marcurio/Firebolt field report). A cast of OUR spell is
-                    // the success path and never reaches here: the sink clears
-                    // consent and starts the cooldown, so Prepare() debounces
-                    // the next tick.
+                    // the success path and never reaches here: the sink starts
+                    // the cooldown and retires the miss flag -- keeping the
+                    // latch (v1.0.30) -- so Prepare() debounces the next tick
+                    // with the deny still standing.
                     const bool aiCastOther =
                         CasterConsent::OtherCastSeen(a_follower->GetFormID());
                     if (held < grace && !aiCastOther) {
@@ -261,6 +268,19 @@ namespace MFO::Actuation {
                 case Loadout::Ready::Debounced:
                     // NOT a rule failure -- the follower is willing and able,
                     // MFO is declining to thrash their gear.
+                    //
+                    // RE-ASSERT THE LATCH FIRST (v1.0.30). The rule is still
+                    // WINNING -- this wait is part of the cast's own pacing --
+                    // so exclusive control must hold through it. The sink no
+                    // longer drops the latch on a cast, but this branch is
+                    // still reachable UNLATCHED: the condition can flicker off
+                    // (H3 releases) and back on mid-cooldown, and a cooldown
+                    // stamped in the LAST fight survives into the next one.
+                    // Without this line, either case left the deny off for the
+                    // rest of the cooldown -- the residual leak. Idempotent
+                    // overwrite, same call the Ready path makes; observe-only
+                    // in log mode, exactly like every other Want.
+                    CasterConsent::Want(a_follower->GetFormID(), spell->GetFormID());
                     // TRANSPARENT (marth, GAMBIT_FLOWS §7.1): cast cooldown /
                     // two-handed debounce / gear debt are seconds-long waits
                     // during which the follower FIGHTS -- the rules below run.

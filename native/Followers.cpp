@@ -2,6 +2,7 @@
 #include "Followers.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "CasterConsent.h"   // v1.0.30: dismissal releases the cast latch too
 #include "Packages.h"
 #include "Logistics.h"
 #include "Forms.h"
@@ -276,6 +277,14 @@ namespace MFO::Followers {
                 // left behind keeps redirecting an ex-follower AND keeps every
                 // Character in combat worldwide off the fast path.
                 Targeting::Clear(id);
+                // And the cast-consent latch -- the SAME shape as the target
+                // latch, and (v1.0.30) a sharper obligation now that the
+                // [cast] sink no longer clears it on a cast: the H3 release
+                // only runs for tracked followers, so a latch left here would
+                // DENY an ex-follower's own casting for the rest of the
+                // session and keep every combat caster off the hook's
+                // fast-out.
+                CasterConsent::Clear(id);
                 // And the package alias -- the SAME obligation as the two
                 // above, but with a longer tail. #55 says restore before you
                 // stop tracking; here the thing to restore is an alias fill

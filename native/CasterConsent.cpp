@@ -243,8 +243,21 @@ namespace MFO::CasterConsent {
         const auto w = g_want.find(a_follower);
         if (w == g_want.end()) return;       // not latched -- not our business
         if (w->second == a_spell) return;    // OUR spell -- that is the success
-                                             // path, handled by the sink's Clear
+                                             // path, handled by the sink's
+                                             // NoteOurCast (latch KEPT, v1.0.30)
         g_otherCast.insert(a_follower);
+    }
+
+    bool NoteOurCast(RE::FormID a_follower) {
+        std::unique_lock lk(g_mx);
+        if (!g_want.contains(a_follower)) return false;   // rule already released
+        // KEEP g_want -- that is the whole point (see the header). Retire only
+        // the per-cast transients: the miss flag is consumed by this cast, and
+        // the deny-log dedup entry resets so the next cooldown's first denied
+        // own-spell logs once more. Same nested lock order as Clear().
+        g_otherCast.erase(a_follower);
+        { std::lock_guard<std::mutex> dl(g_denyLogMx); g_lastDenied.erase(a_follower); }
+        return true;
     }
 
     bool OtherCastSeen(RE::FormID a_follower) {

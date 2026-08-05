@@ -29,11 +29,35 @@ namespace MFO::CasterConsent {
     bool IsHooked();
 
     // MFO wants this follower to cast this spell. While latched, CheckStartCast
-    // returns true for that follower+spell. Cleared when the cast fires or the
-    // rule stops winning. MAIN THREAD.
+    // returns true for that follower+spell -- and, in FORCE mode, false for
+    // every OTHER spell (v1.0.28's exclusive control). v1.0.30: the latch is
+    // deliberately NOT cleared when the cast fires. It used to be, and that
+    // opened a between-casts LEAK: for the whole cast cooldown -- up to a full
+    // service interval times the party size before the next Want() -- the deny
+    // was off and the AI slipped its own spell in between two gambit casts.
+    // The latch now spans the cast AND its cooldown, so suppression is
+    // continuous for exactly as long as the cast rule keeps winning (the same
+    // lifetime the scheduler's castSeen/H3 release already tracks). It ends
+    // ONLY at the H3 release (the rule stopped winning), at combat end, on
+    // dismissal, or on revert. MAIN THREAD.
     void Want(RE::FormID a_follower, RE::FormID a_spell);
     void Clear(RE::FormID a_follower);
     void ClearAll();
+
+    // OUR spell just fired -- the [cast] sink watched the gambit's own spell
+    // leave the follower's hands (AI-driven or package-forced). v1.0.30: this
+    // does NOT clear the latch (see Want above); it retires the PER-CAST
+    // transients that must not outlive the cast they described:
+    //  * the miss flag -- consumed, or a stale "AI cast a different spell"
+    //    would short-circuit the NEXT grace window into an instant re-force
+    //    (with the package declined, that loop is a silent cast every service
+    //    tick -- the pacing the cooldown exists to prevent);
+    //  * the deny-log dedup entry -- reset, so the FIRST denied own-cast of
+    //    the NEXT cooldown window logs again: the once-per-cycle line that
+    //    proves the gap stays closed, at cast cadence, never tick cadence.
+    // Returns whether the follower was actually latched, so the caller can log
+    // the hold transition without taking a second lock. MAIN THREAD.
+    bool NoteOurCast(RE::FormID a_follower);
 
     // THE MISS DETECTOR (hybrid forced-cast). The [cast] sink reports every
     // spell a tracked follower fires; while a follower is LATCHED, a cast of a
