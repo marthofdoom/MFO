@@ -1,3 +1,37 @@
+## v1.0.31 -- pure casters: no armor looting, and school robes that actually register
+
+- Fix: a magic user no longer loots RATED armor at all -- heavy OR light
+  (marth: PURE CASTER). v1.0.29's mage-apparel gate handed any "no school
+  match but rated" piece back to the plain by-rating path, which is exactly
+  how Marcurio, a correctly detected Destruction user, looted a Dwarven Heavy
+  Cuirass and Chitin Heavy Boots. The whole rating path is now skipped for a
+  magic user: his loot is clothing/robes (rating 0) only. Armor he ALREADY
+  wears is untouched -- nothing strips gear; it simply stops being replaced
+  by more armor, and a valid school robe naturally displaces it on that slot
+  once one is found (the MEO gem carry-over on that swap is unchanged).
+- Fix: school-robe detection now recognises modded/enchanted robes. v1.0.29
+  matched only each effect's primary AV against the vanilla school-modifier
+  AVs, so LoreRim's re-authored robe enchantments scored 0 and a genuine
+  Destruction robe read as junk -- never preferred, which is why Marcurio
+  would not switch to his robe and a plain circlet won as "best". The school
+  is now the FIRST read that resolves: primary AV; then the MGEF's "Magic
+  Skill" (associatedSkill -- the same field the spell side already trusts);
+  then the secondary AV on value-modifier archetypes (Value/DualValue/
+  PeakValue, where the second AV is a real target); then a keyword naming the
+  school on the MGEF, the enchantment, or the armor record itself. Curses
+  (Detrimental/Hostile effects) still never read as a boost.
+- Fix: no junk picks. A score-0 plain piece must now be a GENUINE upgrade:
+  dress a bare clothing slot (head/body/hands/feet) or strictly beat worn
+  rating-0 rags on value. It never fills an empty circlet/hair bit (a plain
+  circlet is jewellery -- the player's Valuables tier) and never replaces
+  real worn gear, so with nothing valid on the corpse the follower keeps
+  what he wears.
+- New diagnostics: every apparel candidate a magic user evaluates dumps its
+  real record data once per base form + target school ("[loot] apparel ...
+  primAV/assocSkill/secAV/arch/mag/kw -> school"), so if detection still
+  misses a robe the next fix comes from the log, not another guess. Deduped
+  session-wide -- no per-tick spam.
+
 ## v1.0.30 -- cast control holds through the pause between casts
 
 - Fix: v1.0.28's exclusive cast control had a between-casts leak. The moment the

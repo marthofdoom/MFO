@@ -7,6 +7,8 @@
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
 #include <array>          // P7: fixed-size per-slot travel-intent table
+#include <cctype>         // std::tolower: keyword-name school match (v1.0.31)
+#include <utility>        // std::pair: the school-name keyword table (v1.0.31)
 #include "Confidence.h"   // the confidence leash (core tenet)
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
@@ -394,50 +396,143 @@ namespace MFO::Logistics {
             }
         }
 
-        // Does this actor value "boost the school"? Vanilla apparel does NOT
-        // fortify the skill AV itself: the "Fortify Destruction" enchantment
-        // (spells cost -X%) modifies <School>Modifier, and the "stronger
-        // spells" effects use <School>PowerModifier -- so all three AVs count.
-        // Mods use any of the three; matching by AV (never by name) is the
-        // §4.8.2 derived-vocabulary principle.
-        bool AVMatchesSchool(RE::ActorValue a_av, RE::ActorValue a_school) {
+        // Which SCHOOL does this actor value boost, if any? Vanilla apparel
+        // does NOT fortify the skill AV itself: the "Fortify Destruction"
+        // enchantment (spells cost -X%) modifies <School>Modifier, and the
+        // "stronger spells" effects use <School>PowerModifier -- so all three
+        // AVs map back to the school. Mods use any of the three; matching by
+        // AV (never by name) is the §4.8.2 derived-vocabulary principle.
+        RE::ActorValue SchoolOfBoostAV(RE::ActorValue a_av) {
             using AV = RE::ActorValue;
-            switch (a_school) {
-            case AV::kAlteration:  return a_av == AV::kAlteration  || a_av == AV::kAlterationModifier  || a_av == AV::kAlterationPowerModifier;
-            case AV::kConjuration: return a_av == AV::kConjuration || a_av == AV::kConjurationModifier || a_av == AV::kConjurationPowerModifier;
-            case AV::kDestruction: return a_av == AV::kDestruction || a_av == AV::kDestructionModifier || a_av == AV::kDestructionPowerModifier;
-            case AV::kIllusion:    return a_av == AV::kIllusion    || a_av == AV::kIllusionModifier    || a_av == AV::kIllusionPowerModifier;
-            case AV::kRestoration: return a_av == AV::kRestoration || a_av == AV::kRestorationModifier || a_av == AV::kRestorationPowerModifier;
-            default:               return false;
+            switch (a_av) {
+            case AV::kAlteration:  case AV::kAlterationModifier:  case AV::kAlterationPowerModifier:  return AV::kAlteration;
+            case AV::kConjuration: case AV::kConjurationModifier: case AV::kConjurationPowerModifier: return AV::kConjuration;
+            case AV::kDestruction: case AV::kDestructionModifier: case AV::kDestructionPowerModifier: return AV::kDestruction;
+            case AV::kIllusion:    case AV::kIllusionModifier:    case AV::kIllusionPowerModifier:    return AV::kIllusion;
+            case AV::kRestoration: case AV::kRestorationModifier: case AV::kRestorationPowerModifier: return AV::kRestoration;
+            default:               return AV::kNone;
             }
         }
 
-        // How strongly this armor's BASE enchantment boosts the target school:
-        // the count of beneficial effects on a school AV (a_outMag sums their
-        // magnitudes -- the fanciness input below). A RUNTIME read of the
-        // candidate's own record, deliberately NOT a catalog field, so it works
-        // out-of-box on modded gear with no patcher run. Pure form data ->
-        // worker-safe. Player-enchanted INSTANCES carry their enchant in extra
-        // data, not the base form -- out of scope (world/corpse mage gear is
-        // base-enchanted).
+        // Case-insensitive ASCII substring -- keyword editorIDs are plain
+        // ASCII ("MagicSchool_Destruction", "MAG_DestructionRobes", ...). No
+        // locale, no allocation.
+        bool ContainsNoCase(const char* a_hay, const char* a_needle) {
+            if (!a_hay || !a_needle || !*a_needle) return false;
+            for (const char* h = a_hay; *h; ++h) {
+                const char* a = h;
+                const char* b = a_needle;
+                while (*a && *b &&
+                       std::tolower(static_cast<unsigned char>(*a)) ==
+                       std::tolower(static_cast<unsigned char>(*b))) { ++a; ++b; }
+                if (!*b) return true;
+            }
+            return false;
+        }
+
+        // LAST-DITCH school read: a keyword whose editorID NAMES a school.
+        // Some mods tag their robes/effects ("MagicSchool_Destruction",
+        // "DestructionRobes") instead of -- or as well as -- wiring school
+        // AVs, and the school names are distinctive enough that a substring
+        // match is safe (nothing vanilla or common collides with e.g.
+        // "conjuration" outside actual school tagging). Keyword arrays are
+        // static form DATA -> worker-safe. This bends §4.8.2's never-by-name
+        // rule deliberately and LAST: every AV read gets first refusal, and a
+        // robe we'd otherwise misjudge as junk is worse than a name match.
+        RE::ActorValue SchoolFromKeywords(const RE::BGSKeywordForm* a_kwf) {
+            if (!a_kwf || !a_kwf->keywords) return RE::ActorValue::kNone;
+            static constexpr std::pair<const char*, RE::ActorValue> kNames[] = {
+                { "alteration",  RE::ActorValue::kAlteration  },
+                { "conjuration", RE::ActorValue::kConjuration },
+                { "destruction", RE::ActorValue::kDestruction },
+                { "illusion",    RE::ActorValue::kIllusion    },
+                { "restoration", RE::ActorValue::kRestoration },
+            };
+            for (std::uint32_t i = 0; i < a_kwf->numKeywords; ++i) {
+                const auto* kw = a_kwf->keywords[i];
+                const char* ed = kw ? kw->GetFormEditorID() : nullptr;
+                if (!ed) continue;
+                for (const auto& [name, school] : kNames)
+                    if (ContainsNoCase(ed, name)) return school;
+            }
+            return RE::ActorValue::kNone;
+        }
+
+        // Comma-join a form's keyword editorIDs for the diagnostic dump below.
+        std::string KeywordCsv(const RE::BGSKeywordForm* a_kwf) {
+            std::string out;
+            if (!a_kwf || !a_kwf->keywords) return out;
+            for (std::uint32_t i = 0; i < a_kwf->numKeywords; ++i) {
+                const auto* kw = a_kwf->keywords[i];
+                const char* ed = kw ? kw->GetFormEditorID() : nullptr;
+                if (!ed || !*ed) continue;
+                if (!out.empty()) out += ',';
+                out += ed;
+            }
+            return out;
+        }
+
+        // The school ONE beneficial effect boosts, or kNone -- the v1.0.31
+        // detection chain. v1.0.29 read ONLY data.primaryAV, which is where
+        // VANILLA fortify-school enchantments put the AV -- but marth's
+        // modlist (LoreRim) re-authors robe enchantments, and the deck log
+        // showed Marcurio's valid Destruction robe scoring 0 (never preferred)
+        // while a plain circlet won as "best". The school is now the FIRST of
+        // these that resolves (all pure form-DATA reads, worker-safe):
+        //   (a) primaryAV                -- the vanilla wiring (unchanged);
+        //   (b) associatedSkill          -- the MGEF "Magic Skill" field, the
+        //       SAME read TargetMagicSchool already trusts on the spell side;
+        //   (c) secondaryAV, only when the archetype really modifies values
+        //       (Value/DualValue/PeakValue Modifier -- there the second AV is
+        //       a genuine target, elsewhere it is noise);
+        //   (d) an MGEF keyword naming the school (SchoolFromKeywords above).
+        RE::ActorValue EffectBoostSchool(const RE::EffectSetting* a_mgef) {
+            if (!a_mgef) return RE::ActorValue::kNone;
+            if (auto s = SchoolOfBoostAV(a_mgef->data.primaryAV); s != RE::ActorValue::kNone) return s;
+            if (auto s = SchoolOfBoostAV(a_mgef->data.associatedSkill); s != RE::ActorValue::kNone) return s;
+            using Arch = RE::EffectArchetypes::ArchetypeID;
+            const auto arch = a_mgef->data.archetype;
+            if (arch == Arch::kValueModifier || arch == Arch::kDualValueModifier ||
+                arch == Arch::kPeakValueModifier)
+                if (auto s = SchoolOfBoostAV(a_mgef->data.secondaryAV); s != RE::ActorValue::kNone) return s;
+            return SchoolFromKeywords(a_mgef);
+        }
+
+        // How strongly this armor boosts the target school: the count of
+        // beneficial fortify-<school> effects on its BASE enchantment (a_outMag
+        // sums their magnitudes -- the fanciness input below), with a
+        // keyword-tag last resort for gear whose school lives nowhere in its
+        // effects. A RUNTIME read of the candidate's own record, deliberately
+        // NOT a catalog field, so it works out-of-box on modded gear with no
+        // patcher run. Pure form data -> worker-safe. Player-enchanted
+        // INSTANCES carry their enchant in extra data, not the base form --
+        // out of scope (world/corpse mage gear is base-enchanted).
         int SchoolMatchScore(const RE::TESObjectARMO* a_armo, RE::ActorValue a_school,
                              float* a_outMag = nullptr) {
             if (a_outMag) *a_outMag = 0.0f;
             if (!a_armo || a_school == RE::ActorValue::kNone) return 0;
-            const auto* ench = a_armo->formEnchanting;
-            if (!ench) return 0;
             int score = 0;
-            for (const auto* e : ench->effects) {
-                const auto* mgef = e ? e->baseEffect : nullptr;
-                if (!mgef) continue;
-                using Flag = RE::EffectSetting::EffectSettingData::Flag;
-                // A curse ("Destruction costs MORE") must never read as a boost.
-                if (mgef->data.flags.any(Flag::kDetrimental) ||
-                    mgef->data.flags.any(Flag::kHostile)) continue;
-                if (!AVMatchesSchool(mgef->data.primaryAV, a_school)) continue;
-                ++score;
-                if (a_outMag) *a_outMag += e->GetMagnitude();
+            const auto* ench = a_armo->formEnchanting;
+            if (ench) {
+                for (const auto* e : ench->effects) {
+                    const auto* mgef = e ? e->baseEffect : nullptr;
+                    if (!mgef) continue;
+                    using Flag = RE::EffectSetting::EffectSettingData::Flag;
+                    // A curse ("Destruction costs MORE") must never read as a boost.
+                    if (mgef->data.flags.any(Flag::kDetrimental) ||
+                        mgef->data.flags.any(Flag::kHostile)) continue;
+                    if (EffectBoostSchool(mgef) != a_school) continue;
+                    ++score;
+                    if (a_outMag) *a_outMag += e->GetMagnitude();
+                }
+                // The effects said nothing but the ENCHANTMENT record itself
+                // is school-tagged -- count it once (magnitude unknown, so the
+                // fanciness rank falls back to gold value alone).
+                if (score == 0 && SchoolFromKeywords(ench) == a_school) score = 1;
             }
+            // ...and the ARMO record's own tags, for robes whose school is
+            // authored only as an item keyword.
+            if (score == 0 && SchoolFromKeywords(a_armo) == a_school) score = 1;
             return score;
         }
 
@@ -474,50 +569,106 @@ namespace MFO::Logistics {
                    (a_cand.score == a_worn.score && a_cand.fancy > a_worn.fancy);
         }
 
-        // The school-scored apparel path -- the magic user's parallel to
-        // ArmorIsBetter, which rejects rating-0 clothing at its first line and
-        // so can never judge a robe. Same shape: a strict upgrade on at least
-        // one MAGE slot it covers, beaten on none. Rules:
+        // ── per-candidate apparel diagnostics (v1.0.31) ─────────────────────
+        // The v1.0.29 field failure was INVISIBLE: Marcurio's valid Destruction
+        // robe scored 0 (its LoreRim enchantment wired no vanilla school AV)
+        // and the log only ever showed the winner, so there was nothing to
+        // debug from -- just "circlet -> best" and a wrong guess. Dump the
+        // REAL record data for every apparel candidate a magic user evaluates:
+        // if the broadened chain STILL misses on some robe, the next fix comes
+        // from this log, not another guess. Throttled by a session-scope
+        // dedupe (one dump per base form + target school): corpses repeat the
+        // same base records endlessly and peek passes re-walk them every tick,
+        // so without the dedupe this would spam. Touched only from the
+        // logistics worker (sequential, like g_svc) -> no lock needed.
+        void LogMageApparelDiag(RE::TESObjectARMO* a_armo, RE::ActorValue a_school) {
+            static std::unordered_set<std::uint64_t> s_seen;
+            const auto key = static_cast<std::uint64_t>(a_armo->GetFormID()) |
+                             (static_cast<std::uint64_t>(a_school) << 32);
+            if (s_seen.size() > 512) s_seen.clear();   // bounded; worst case is a re-dump
+            if (!s_seen.insert(key).second) return;
+
+            float     mag   = 0.0f;
+            const int score = SchoolMatchScore(a_armo, a_school, &mag);
+            const auto* ench = a_armo->formEnchanting;
+            spdlog::info("[loot] apparel {:08X} '{}' rating={:.0f} value={} ench={:08X} kw=[{}] -> school {} score={} mag={:.0f}",
+                         a_armo->GetFormID(),
+                         a_armo->GetFullName() ? a_armo->GetFullName() : "?",
+                         a_armo->GetArmorRating(), a_armo->GetGoldValue(),
+                         ench ? ench->GetFormID() : 0, KeywordCsv(a_armo),
+                         SchoolName(a_school), score, mag);
+            if (!ench) return;
+            int i = 0;
+            for (const auto* e : ench->effects) {
+                const auto* mgef = e ? e->baseEffect : nullptr;
+                if (!mgef) { ++i; continue; }
+                using Flag = RE::EffectSetting::EffectSettingData::Flag;
+                const bool det = mgef->data.flags.any(Flag::kDetrimental) ||
+                                 mgef->data.flags.any(Flag::kHostile);
+                spdlog::info("[loot] apparel {:08X} eff#{} mgef={:08X} '{}' primAV={} assocSkill={} secAV={} arch={} mag={:.1f} kw=[{}] -> {}",
+                             a_armo->GetFormID(), i, mgef->GetFormID(),
+                             mgef->GetFullName() ? mgef->GetFullName() : "?",
+                             static_cast<int>(mgef->data.primaryAV),
+                             static_cast<int>(mgef->data.associatedSkill),
+                             static_cast<int>(mgef->data.secondaryAV),
+                             static_cast<int>(mgef->data.archetype),
+                             e->GetMagnitude(), KeywordCsv(mgef),
+                             det ? "curse" : SchoolName(EffectBoostSchool(mgef)));
+                ++i;
+            }
+        }
+
+        // The school-scored apparel path -- since v1.0.31 the magic user's
+        // ONLY apparel path (ArmorIsBetter never runs for him; see the loot
+        // loop). Same shape as it: a strict upgrade on at least one MAGE slot
+        // it covers, beaten on none. Rules (marth, v1.0.31 -- PURE CASTER):
+        //   - RATED armor -- heavy OR light, school-enchanted or not -- is
+        //     NEVER mage loot. v1.0.29's first line handed "score 0 but
+        //     rated" back to the rating path, which is exactly how Marcurio,
+        //     a detected Destruction user, looted a Dwarven Heavy Cuirass. A
+        //     magic user takes clothing/robes (rating 0) ONLY. Armor he
+        //     ALREADY wears is never force-stripped: it just stops being
+        //     replaced by more armor, until a school robe displaces it;
         //   - a school-MATCHING piece may replace anything on a mage slot
         //     (the point of the feature: school beats raw rating there);
-        //   - a GENERIC piece (score 0 -- a plain fancy robe) only ever
-        //     replaces other rating-0 clothing (rags), NEVER real armor;
+        //   - a GENERIC piece (score 0 -- plain clothing) must be a GENUINE
+        //     upgrade: it may dress a BARE clothing slot (head/body/hands/
+        //     feet) or strictly beat worn rating-0 rags on value. It never
+        //     fills an empty kHair/kCirclet bit -- a plain circlet is
+        //     jewellery, the player's Valuables tier, and "Copper and
+        //     Moonstone Circlet -> best" (deck log, v1.0.30) was junk, not an
+        //     upgrade -- and it NEVER replaces real worn armor;
         //   - a tie does NOT swap (stable -- no loot thrash).
+        // (No ArmorClassSuits call anymore: everything past the rating gate
+        // is clothing, which that check passes unconditionally.)
         bool MageApparelIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo,
                                  RE::ActorValue a_school, const MageKey& a_key) {
-            if (a_key.score <= 0 && a_armo->GetArmorRating() > 0.0f)
-                return false;   // rated armor with no school match belongs to ArmorIsBetter
-            if (!ArmorClassSuits(a_follower, a_armo)) return false;   // wrong armor class for him
+            if (a_armo->GetArmorRating() > 0.0f)
+                return false;   // PURE CASTER: rated armor is never mage loot
             const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
             bool overlapsAny = false;
+            bool genuine     = a_key.score > 0;   // school gear justifies itself
             for (const auto slot : kMageSlots) {
                 if (!(mask & static_cast<std::uint32_t>(slot))) continue;
                 overlapsAny = true;
                 auto* worn = a_follower->GetWornArmor(slot);
-                if (!worn) continue;   // open slot -> nothing to beat
+                if (!worn) {
+                    // Open slot -> nothing to beat. A GENERIC piece only earns
+                    // its take here when it actually DRESSES him: a bare
+                    // clothing slot, never a bare circlet/hair bit.
+                    if (a_key.score <= 0 &&
+                        (slot == BipedSlot::kHead  || slot == BipedSlot::kBody ||
+                         slot == BipedSlot::kHands || slot == BipedSlot::kFeet))
+                        genuine = true;
+                    continue;
+                }
                 if (a_key.score <= 0 && worn->GetArmorRating() > 0.0f)
-                    return false;      // a generic robe never strips real armor
+                    return false;      // a generic piece never strips real armor
                 if (!MageKeyBeats(a_key, MageApparelKey(worn, a_school)))
                     return false;      // beaten (or tied) on a slot it would replace
+                if (a_key.score <= 0) genuine = true;   // strictly beats worn rags
             }
-            return overlapsAny;
-        }
-
-        // Guard for the PLAIN rating path: a higher-rated plain piece must not
-        // strip a school-matching piece the mage already wears, or the two
-        // paths would thrash one slot (school puts the robe on, rating pulls
-        // it off, corpse after corpse -- the exact shape of the old weapon
-        // thrash bug, on armor).
-        bool WouldStripSchoolGear(RE::Actor* a_follower, RE::TESObjectARMO* a_armo,
-                                  RE::ActorValue a_school) {
-            if (a_school == RE::ActorValue::kNone) return false;
-            const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
-            for (const auto slot : kMageSlots) {
-                if (!(mask & static_cast<std::uint32_t>(slot))) continue;
-                auto* worn = a_follower->GetWornArmor(slot);
-                if (worn && SchoolMatchScore(worn, a_school) > 0) return true;
-            }
-            return false;
+            return overlapsAny && genuine;
         }
 
         // ── skill-aware weapon selection ────────────────────────────────────
@@ -744,31 +895,38 @@ namespace MFO::Logistics {
                     const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                         & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
                     const bool shieldUseless = isShield && meleeTargetClass != WepClass::OneHand;
-                    // MAGE APPAREL first (v1.0.29): for a magic user, pieces on
-                    // the mage slots are judged by school match then fanciness
+                    // MAGE APPAREL (v1.0.29; EXCLUSIVE since v1.0.31): a magic
+                    // user's apparel is judged by school match then fanciness
                     // (MageApparelIsBetter), never by armor rating. Shields
-                    // stay with the plain path -- school gear never lives there.
-                    MageKey mk{};
+                    // are skipped outright for him -- a shield is rated armor,
+                    // and school gear never lives there.
                     if (mageMode && !isShield) {
-                        mk = MageApparelKey(armo, school);
+                        LogMageApparelDiag(armo, school);   // one dump per form+school (deduped inside)
+                        const MageKey mk = MageApparelKey(armo, school);
                         if (MageApparelIsBetter(a_follower, armo, school, mk) &&
                             MageKeyBeats(mk, bestMageKey)) {
                             bestMageKey = mk;
                             bestMage    = obj;
                         }
                     }
-                    // The PLAIN rating path -- everything the mage path does
-                    // not claim. A school-MATCHING candidate is the mage
-                    // path's alone (never double-judged into bestArmor), and
-                    // for a magic user a plain piece may not strip worn school
-                    // gear (WouldStripSchoolGear -- the anti-thrash guard).
+                    // The PLAIN rating path is for NON-magic users ONLY
+                    // (marth, v1.0.31: PURE CASTER). v1.0.29 ran it for mages
+                    // too and let their "no school match but rated" pieces
+                    // fall through to it -- which is exactly how Marcurio, a
+                    // detected Destruction user, looted a Dwarven Heavy
+                    // Cuirass and Chitin Heavy Boots by raw rating. Skipping
+                    // the whole path means a magic user can never LOOT armor
+                    // at all; armor he already wears stays on (nothing here
+                    // strips gear) until a school robe displaces it on equip.
+                    // This also retires the WouldStripSchoolGear guard: with
+                    // no rating path for mages there is nothing left to
+                    // thrash against their robes.
                     // Best-first: among the armour upgrades this body offers, keep the
                     // HIGHEST-rated (not the first enumerated), so a carry-weight cutoff
                     // can't strand the actually-best piece.
-                    if (!(mageMode && mk.score > 0) &&
+                    if (!mageMode &&
                         !shieldUseless && ArmorIsBetter(a_follower, armo) &&
-                        armo->GetArmorRating() > bestArmorRat &&
-                        !(mageMode && WouldStripSchoolGear(a_follower, armo, school))) {
+                        armo->GetArmorRating() > bestArmorRat) {
                         bestArmorRat = armo->GetArmorRating();
                         bestArmor    = obj;
                     }
