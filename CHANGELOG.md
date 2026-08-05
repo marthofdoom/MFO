@@ -1,3 +1,18 @@
+## v1.0.25 -- no more being yanked out of chairs (furniture ejection fix)
+
+- Fix: sitting, mining or smithing could eject you ~once per second. Releasing a
+  follower from a loot/retreat excursion works by force-filling the quest's ACTOR
+  alias with another ref to displace him -- and that ref was YOU. The alias carries
+  a travel/flee package, and forcing the player into a package-carrying alias makes
+  the engine pull you out of furniture to run it. Releases now displace with a
+  non-actor XMarker (minted once per session): the follower is freed identically,
+  but nothing runs a package on a marker, so nothing ejects you.
+- Fix: the churn that fired it -- the arm gate measured the CORPSE to the player,
+  the release gate measured the FOLLOWER (leash x1.15). A follower parked past the
+  leash armed an excursion toward an in-leash corpse, was judged "left leash", and
+  released -- every tick. A new excursion no longer arms when the follower is
+  already beyond the release margin; arm's-reach grabs are unaffected.
+
 ## v1.0.24 -- retreat actually disengages (was firing but not moving)
 
 - Fix: auto-retreat fired but the follower kept fighting in place -- she never

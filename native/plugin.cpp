@@ -335,6 +335,11 @@ namespace {
                     "Load an older save, or reinstall the newer MFO before saving.");
             }
             MFO::Probe::ReleaseAll();   // nothing the probe did outlives a session
+            // Mint the eviction marker (#48) BEFORE the reconcile below, so its
+            // evictions displace with the marker, not the player. Main-thread
+            // here (PlaceObjectAtMe), player guaranteed in-world; the once-
+            // guard makes the repeat call free.
+            MFO::Packages::EnsureEvictMarker();
             // Sweep an alias fill restored FROM the save we just loaded. The
             // kPreLoadGame release above only covers saves this session wrote;
             // a save from an earlier session, or from a build before the

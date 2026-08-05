@@ -197,6 +197,14 @@ namespace MFO::Packages {
     // Unconditional release. Revert, kPreLoadGame, and shutdown.
     void ReleaseAll(const char* a_why);
 
+    // Mint the session's EVICTION MARKER (#48): the non-actor XMarker that
+    // release-by-eviction force-fills into the loot/retreat ACTOR aliases in
+    // place of the player -- forcing the PLAYER into a package-carrying alias
+    // yanked him out of furniture. MAIN THREAD ONLY (PlaceObjectAtMe); call
+    // from kPostLoadGame/kNewGame, where the player is in-world. Idempotent --
+    // one marker per session. Until it runs, evictions fall back to the player.
+    void EnsureEvictMarker();
+
     Status Get();
 
     // ── OPTION A: engine-pathed loot travel (DESIGN behaviour layer) ─────────
@@ -221,16 +229,16 @@ namespace MFO::Packages {
     // a_follower is optional: pass it to re-evaluate that follower immediately
     // (drops travel this tick); omit and the priority drop still frees them on
     // the engine's next evaluation. Release is by EVICTION of a_slot's ACTOR alias
-    // (force-fill the player), NOT by clearing the sticky, unclearable alias --
-    // see the .cpp.
+    // (force-fill the eviction marker), NOT by clearing the sticky, unclearable
+    // alias -- see the .cpp.
     void LootTravelClear(const char* a_why, RE::Actor* a_follower = nullptr, int a_slot = 0);
 
     // Evict a_id from the loot alias IF he currently occupies ANY slot's actor
     // alias (keyed to OCCUPANCY across all slots, not the live intent -- the alias
     // is never emptied, so a follower dismissed any time after his last travel
     // still holds it). Priority can't free a dismissed follower (nothing reclaims
-    // him); this force-fills his slot's actor alias with the player. No-op if a_id
-    // holds no slot. See the .cpp.
+    // him); this force-fills his slot's actor alias with the eviction marker.
+    // No-op if a_id holds no slot. See the .cpp.
     void LootTravelEvictIf(RE::FormID a_id);
 
     // ── RETREAT PROBE: travel-to-PLAYER under kIgnoreCombat ─────────────────

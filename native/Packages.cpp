@@ -609,7 +609,8 @@ namespace MFO::Packages {
         // CLAIM MODEL: the loot quest ships at STATIC priority 60 (MFO_GenerateESP
         // .py QUEST_PRIORITY, above the follower framework's ~50). Engage = fill
         // alias 0 with the follower (claims him at 60 -> travels). Release = EVICT
-        // him from alias 0 by force-filling the player. A runtime priority flip
+        // him from alias 0 by force-filling the eviction marker (a non-actor:
+        // never the player, #48 furniture-ejection). A runtime priority flip
         // does NOT re-arbitrate the claim (deck-proven, ENGINE_NOTES 0.35b), so
         // the number is never touched at runtime -- the alias occupancy is.
 
@@ -639,6 +640,38 @@ namespace MFO::Packages {
             RE::NiPoint3      startPos{};   // where she was when the retreat began (movement proof)
         };
         RetreatHold g_retreatHold;
+
+        // EVICTION MARKER (#48 furniture-ejection). Releasing a follower from a
+        // package-carrying ACTOR alias means forcing some OTHER ref into that
+        // alias to displace him. We used the PLAYER -- but the alias runs a
+        // travel/flee PACKAGE, and forcing the player into a package alias makes
+        // the engine pull him OUT OF FURNITURE (chairs, workbench, mining) to
+        // run it. The Logistics "left leash" re-arm churn fired that eviction
+        // ~1/sec (deck: 5x "evicted (left leash)" in 8s). Fix: displace with a
+        // NON-ACTOR XMarker -- it releases the follower identically (he loses
+        // the alias package and reverts to follow), but nothing runs a package
+        // on a non-actor, so nothing is ejected. Minted once per session on the
+        // MAIN THREAD (kPostLoadGame/kNewGame); force-persisted so the handle
+        // survives cell unloads. EvictionRef() falls back to the player only if
+        // the marker was never minted, so a follower is never left stranded on
+        // the package.
+        RE::ObjectRefHandle g_evictMarker{};
+
+        RE::TESObjectREFR* EvictMarkerRef() {
+            auto ptr = g_evictMarker.get();
+            auto* m = ptr.get();
+            // Handle-table indices are rebuilt per load, so a handle minted in a
+            // PREVIOUS save can resolve to a different ref entirely. Only trust
+            // it if it still resolves to our XMarker base (0x3B).
+            if (m && m->GetBaseObject() && m->GetBaseObject()->GetFormID() == 0x3B)
+                return m;
+            return nullptr;
+        }
+
+        RE::TESObjectREFR* EvictionRef() {
+            if (auto* m = EvictMarkerRef()) return m;
+            return RE::PlayerCharacter::GetSingleton();
+        }
 
     }  // namespace
 
@@ -788,26 +821,51 @@ namespace MFO::Packages {
         ClearAlias("released");
     }
 
+    void EnsureEvictMarker() {
+        // MAIN THREAD ONLY (PlaceObjectAtMe mutates the cell); called from the
+        // kPostLoadGame/kNewGame messaging handler, which is. One per session --
+        // the once-guard makes the per-load call free.
+        if (EvictMarkerRef()) return;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+        auto* base = RE::TESForm::LookupByID<RE::TESObjectSTAT>(0x0000003B);   // vanilla XMarker
+        if (!base) {
+            spdlog::warn("[loot] XMarker 0x3B missing -- eviction falls back to player");
+            return;
+        }
+        auto ref = player->PlaceObjectAtMe(base, true);   // force-persist: handle must survive cell unload
+        if (ref) {
+            g_evictMarker = ref->GetHandle();
+            spdlog::info("[loot] eviction marker minted {:08X}", ref->GetFormID());
+        }
+    }
+
     void ReleaseAll(const char* a_why) {
         // OPTION A first, and unconditionally, and LOAD-BEARING. The loot quest is
         // STATIC priority 60 and the alias is engine-SERIALIZED, so a save made
         // mid-travel loads with the follower still filled into alias 0 -> claimed
         // at 60 -> stranded (walks to a stale corpse). Priority is static, so we
-        // cannot "lower" our way out; EVICT -- force-fill alias 0 with the player
-        // -- to hand him back. Runs on kPreLoadGame / post-load reconcile /
-        // kNewGame / revert, so this is the reset for every in-session load.
+        // cannot "lower" our way out; EVICT -- force-fill alias 0 with the
+        // eviction marker (never the player: #48, the alias package would yank
+        // him out of furniture) -- to hand him back. Runs on kPreLoadGame /
+        // post-load reconcile / kNewGame / revert, so this is the reset for
+        // every in-session load.
         if (auto* quest = Forms::g_lootQuest) {
             // P7: every slot's actor alias, not just slot 0 -- any of the four
             // could hold a follower from a mid-travel save.
             auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* ev = EvictionRef();
             for (int slot = 0; slot < kMaxLootSlots; ++slot) {
                 RE::ObjectRefHandle h{};
                 quest->CreateRefHandleByAliasID(h, LootActorAlias(slot));
                 auto* held = h.get() ? h.get().get() : nullptr;
-                // Only evict if a FOLLOWER (not already the player) sits in the slot.
-                if (held && player && held != player) {
-                    ForceRefToNative(quest, LootActorAlias(slot), player);
-                    spdlog::info("[loot] {} -- loot alias (slot {}) held {:08X}; evicted to player",
+                // Only evict if a FOLLOWER sits in the slot -- not the player,
+                // and not a marker parked there by a previous release (a PRIOR
+                // session's marker is a different REFR than this session's, so
+                // compare by actor-ness, not identity).
+                if (held && player && held != player && held->As<RE::Actor>()) {
+                    ForceRefToNative(quest, LootActorAlias(slot), ev);
+                    spdlog::info("[loot] {} -- loot alias (slot {}) held {:08X}; evicted (marker)",
                                  a_why, slot, held->GetFormID());
                 }
             }
@@ -822,9 +880,12 @@ namespace MFO::Packages {
             quest->CreateRefHandleByAliasID(h, kAliasRetreatActor);
             auto* held = h.get() ? h.get().get() : nullptr;
             auto* player = RE::PlayerCharacter::GetSingleton();
-            if (held && player && held != player) {
-                ForceRefToNative(quest, kAliasRetreatActor, player);
-                spdlog::info("[retreat] {} -- retreat alias held {:08X}; evicted to player",
+            auto* ev = EvictionRef();
+            // Actor-ness, not identity: a prior session's parked marker is a
+            // different REFR than this session's (see the loot sweep above).
+            if (held && player && held != player && held->As<RE::Actor>()) {
+                ForceRefToNative(quest, kAliasRetreatActor, ev);
+                spdlog::info("[retreat] {} -- retreat alias held {:08X}; evicted (marker)",
                              a_why, held->GetFormID());
             }
         }
@@ -913,8 +974,8 @@ namespace MFO::Packages {
 
     // READBACK for the one unmeasured sub-step of the whole claim model: does the
     // ex-actor actually LOSE his MFO_LootQuest alias instance when we evict him
-    // (fill alias 0 with the player)? The quest-side "alias holds the player" is
-    // NOT proof the follower detached. Walk his ExtraAliasInstanceArray (same
+    // (fill alias 0 with the eviction marker)? The quest-side "alias holds the
+    // marker" is NOT proof the follower detached. Walk his ExtraAliasInstanceArray (same
     // reader as ForeignOwnerBlocks) -- if an MFO_LootQuest package remains, the
     // eviction did NOT free him, and "released" is a lie. Run on EVERY release
     // now (Clear is the hot path), so the first deck run settles it either way.
@@ -937,7 +998,7 @@ namespace MFO::Packages {
         }
         if (stillClaimed)
             spdlog::error("[{}] EVICT INCOMPLETE ({}) -- {:08X} STILL carries an "
-                          "{} alias package after player-displace", a_tag, a_why,
+                          "{} alias package after displace", a_tag, a_why,
                           a_follower->GetFormID(), a_questName);
         else
             spdlog::info("[{}] {:08X} detached from {} alias ({})",
@@ -954,16 +1015,17 @@ namespace MFO::Packages {
         // dropping the number does NOT un-claim him (the engine locks the owning
         // quest at ALIAS-FILL time; the runtime raise/drop never re-arbitrates --
         // deck WALK diagnostic, ENGINE_NOTES 0.36). So to release, EVICT him:
-        // force-fill alias 0 with the PLAYER -- a real ForceRefTo (works; the null
-        // clear is a no-op, 0.34) -- which replaces the follower's alias instance
-        // so the framework reclaims him and he follows. The player is not AI-
-        // package-driven, so occupying the slot is inert; the next dispatch
-        // replaces the player.
+        // force-fill alias 0 with the eviction MARKER -- a real ForceRefTo
+        // (works; the null clear is a no-op, 0.34) -- which replaces the
+        // follower's alias instance so the framework reclaims him and he
+        // follows. A non-actor never runs the alias package, so occupying the
+        // slot is inert (#48: the player here got yanked out of furniture); the
+        // next dispatch replaces the marker.
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return;
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
-        if (auto* player = RE::PlayerCharacter::GetSingleton())
-            ForceRefToNative(quest, LootActorAlias(a_slot), player);   // no-op off AE, fine
+        if (auto* ev = EvictionRef())
+            ForceRefToNative(quest, LootActorAlias(a_slot), ev);   // no-op off AE, fine
         // Re-evaluate NOW so the framework reclaims him this tick, not on the
         // engine's slow pass. (true,false) -- never resetAI. Without the follower
         // here the eviction still frees him on the next engine evaluation.
@@ -971,32 +1033,31 @@ namespace MFO::Packages {
             a_follower->EvaluatePackage(true, false);
             VerifyDetached(a_follower, a_why);   // prove the eviction actually freed him
         }
-        spdlog::info("[loot] travel released ({}) -- slot {} evicted to player", a_why, a_slot);
+        spdlog::info("[loot] travel released ({}) -- slot {} evicted (marker)", a_why, a_slot);
     }
 
     void LootTravelEvictIf(RE::FormID a_id) {
         // Evict a_id from whichever slot's ACTOR alias he currently occupies, keyed
         // to alias OCCUPANCY across ALL slots (not the caller's intent map -- the
         // alias is never emptied, so occupancy is the authoritative state). With
-        // release-by-eviction (LootTravelClear) a slot normally holds the PLAYER
+        // release-by-eviction (LootTravelClear) a slot normally holds the MARKER
         // between excursions, so this now matters for ONE case: a follower dismissed
         // DURING an excursion, before Clear ran. If he is still in his actor alias
         // when he leaves the roster, his framework claim is gone, so MFO's static-60
         // claim is his sole one -- he'd walk to the stale corpse and re-latch on
-        // every load. Evict him (fill the player -- a real ForceRefTo; the null
+        // every load. Evict him (fill the marker -- a real ForceRefTo; the null
         // clear is a no-op, 0.34) so he detaches. Scans every slot because a
         // dismissed follower could hold any of the four.
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
-        auto* player = RE::PlayerCharacter::GetSingleton();
         for (int slot = 0; slot < kMaxLootSlots; ++slot) {
             RE::ObjectRefHandle h{};
             quest->CreateRefHandleByAliasID(h, LootActorAlias(slot));
             auto* held = h.get() ? h.get().get() : nullptr;
             if (!held || held->GetFormID() != a_id) continue;   // a_id is not in this slot
 
-            if (player)
-                ForceRefToNative(quest, LootActorAlias(slot), player);   // no-op off AE, fine
+            if (auto* ev = EvictionRef())
+                ForceRefToNative(quest, LootActorAlias(slot), ev);   // no-op off AE, fine
             if (auto* actor = held->As<RE::Actor>())
                 VerifyDetached(actor, "dismissed");   // prove the ex-actor detached
         }
@@ -1058,19 +1119,21 @@ namespace MFO::Packages {
 
     void RetreatClear(const char* a_why, RE::Actor* a_follower) {
         // RELEASE BY EVICTION, verbatim from LootTravelClear: force-fill alias 0
-        // with the PLAYER (a real ForceRefTo -- the null clear is a no-op, 0.34;
-        // a priority flip never re-arbitrates, 0.36), then prove the detach with
-        // the same ExtraAliasInstanceArray readback. NEVER a VM Clear.
+        // with the eviction MARKER (a real ForceRefTo -- the null clear is a
+        // no-op, 0.34; a priority flip never re-arbitrates, 0.36; never the
+        // player, #48 -- the flee package would yank him out of furniture),
+        // then prove the detach with the same ExtraAliasInstanceArray readback.
+        // NEVER a VM Clear.
         auto* quest = Forms::g_retreatQuest;
         if (!quest) return;
-        if (auto* player = RE::PlayerCharacter::GetSingleton())
-            ForceRefToNative(quest, kAliasRetreatActor, player);   // no-op off AE, fine
+        if (auto* ev = EvictionRef())
+            ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op off AE, fine
         if (a_follower) {
             a_follower->EvaluatePackage(true, false);   // reclaim THIS tick; never resetAI
             VerifyDetachedFrom(quest, a_follower, "retreat", "MFO_RetreatQuest", a_why);
         }
         g_retreatHold = RetreatHold{};
-        spdlog::info("[retreat] travel released ({}) -- evicted to player", a_why);
+        spdlog::info("[retreat] travel released ({}) -- evicted (marker)", a_why);
     }
 
     RE::FormID RetreatHolder() { return g_retreatHold.actorID; }
@@ -1081,7 +1144,7 @@ namespace MFO::Packages {
         // The dismissal-path twin of LootTravelEvictIf: keyed to alias
         // OCCUPANCY, no-op unless a_id is in the slot. A follower dismissed
         // mid-retreat has no framework claim left, so MFO's static-60 claim is
-        // his sole one -- evict (fill the player; the null clear is a no-op,
+        // his sole one -- evict (fill the marker; the null clear is a no-op,
         // 0.34) so he detaches instead of re-latching on every load.
         auto* quest = Forms::g_retreatQuest;
         if (!quest) return;
@@ -1090,8 +1153,8 @@ namespace MFO::Packages {
         auto* held = h.get() ? h.get().get() : nullptr;
         if (!held || held->GetFormID() != a_id) return;
 
-        if (auto* player = RE::PlayerCharacter::GetSingleton())
-            ForceRefToNative(quest, kAliasRetreatActor, player);   // no-op off AE, fine
+        if (auto* ev = EvictionRef())
+            ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op off AE, fine
         if (auto* actor = held->As<RE::Actor>())
             VerifyDetachedFrom(quest, actor, "retreat", "MFO_RetreatQuest", "dismissed");
         if (g_retreatHold.actorID == a_id) g_retreatHold = RetreatHold{};

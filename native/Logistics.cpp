@@ -1655,6 +1655,18 @@ namespace MFO::Logistics {
                     return da < db;
                 });
 
+            // CHURN GUARD (#48): never ARM a new excursion the release gate
+            // (the excursion driver's x1.15 "left leash" margin) would kill on
+            // the very next tick. The arm gate below measures the CORPSE to the
+            // player, the release gate measures the FOLLOWER -- so a follower
+            // parked past the leash would arm toward an in-leash corpse, be
+            // judged "left leash", release (evicting into the actor alias),
+            // then re-arm ~1/sec (deck: 5x in 8s, each eviction ejecting the
+            // player from furniture pre-marker). Arm's-reach grabs are
+            // unaffected -- they need no travel, so they are outside this guard.
+            const bool followerBeyondLeash =
+                origin.GetDistance(playerPos) > leash * 1.15f;
+
             // Act after the walk. Re-resolve each handle at act time (#2); stop at
             // the first successful action -- one loot action per tick (§4.8.3).
             for (auto& h : candidates) {
@@ -1740,6 +1752,11 @@ namespace MFO::Logistics {
                 // in-place transfer for it, the acquire is the driver's arrival
                 // Activate -- so it must claim/walk even from arm's reach.
                 if ((df > kArrivalDist || LooseRef(ref)) && Config::g_lootTravel.load()) {
+                    // CHURN GUARD (#48, computed above): he's already past the
+                    // release margin -- an arm now dies "left leash" next tick.
+                    // Skip the candidate entirely: it is far (or loose), so
+                    // there is no in-place transfer to fall through to.
+                    if (followerBeyondLeash) continue;
                     // Too far to WALK without abandoning the player -- leave it
                     // (following brings them closer later; also fairer to you).
                     if (df > walkLimit) continue;
