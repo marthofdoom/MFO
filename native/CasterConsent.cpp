@@ -28,6 +28,14 @@ namespace MFO::CasterConsent {
         // originals are keyed by the vtable pointer we read off `this`.
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_orig;
 
+        // Throttle for the EXCLUSIVE-CONTROL deny log. The thunk runs at
+        // caster-tick frequency, so a suppressed own-spell is logged only when
+        // the (follower, denied-spell) pair CHANGES -- not every tick. Its own
+        // leaf mutex, taken only on the rare deny path (the one latched
+        // follower whose AI wants a different spell), never on the hot fast-out.
+        std::mutex g_denyLogMx;
+        std::unordered_map<RE::FormID, RE::FormID> g_lastDenied;
+
         // The 14 concrete CombatMagicCaster vtables. All share the
         // CheckStartCast(CombatController*) signature at index 0x06.
         // (VTABLE_CombatMagicCasterArmor is a symbol with NO class -- excluded,
@@ -54,6 +62,20 @@ namespace MFO::CasterConsent {
         static_assert(offsetof(RE::CombatController, attackerHandle) < 0x68,
                       "attackerHandle is past the AE layout divergence point "
                       "(0x68) -- its compiled offset is WRONG on AE runtimes");
+
+        // Log a suppressed own-spell cast, deduped per (follower, denied spell)
+        // so the combat-thread thunk cannot spam it. Leaf mutex, deny-path only.
+        void DenyLog(RE::FormID a_fid, RE::Actor* a_actor,
+                     RE::FormID a_denied, RE::FormID a_wanted) {
+            {
+                std::lock_guard<std::mutex> lk(g_denyLogMx);
+                auto it = g_lastDenied.find(a_fid);
+                if (it != g_lastDenied.end() && it->second == a_denied) return;
+                g_lastDenied[a_fid] = a_denied;
+            }
+            spdlog::info("[consent] {:08X} {} DENIED own spell {:08X} while latched for {:08X}",
+                         a_fid, a_actor->GetName() ? a_actor->GetName() : "?", a_denied, a_wanted);
+        }
 
         using CheckStartCast_t = bool (*)(RE::CombatMagicCaster*, RE::CombatController*);
 
@@ -105,9 +127,27 @@ namespace MFO::CasterConsent {
                 wantSpell = w->second;
             }
 
-            // Only now, for the one latched follower, read the spell.
+            // Only now, for the one latched follower, read the spell in hand.
             auto* mi = a_this->magicItem;
-            if (!mi || mi->GetFormID() != wantSpell) return aiSaysYes;
+            const bool isWanted = mi && mi->GetFormID() == wantSpell;
+
+            // EXCLUSIVE CONTROL (marth: the follower cast BOTH his own spell AND
+            // the forced one -- "an improvement, but not the control the mod's
+            // premise dictates"). While a follower is latched, the gambit's
+            // spell is the ONLY spell he may cast. If the AI is about to cast a
+            // DIFFERENT one (his own Chain Lightning), DENY it -- so nothing but
+            // the dictated spell ever leaves his hands; the hybrid then supplies
+            // the gambit spell on the grace timeout (Actuation's force-cast).
+            // This is the twin of Want()'s FORCE-YES: that adds the gambit spell,
+            // this removes every competing one, and together they make casting
+            // fully gambit-driven. Cast-only: a follower out of magicka still
+            // falls back to melee (that path never reaches CheckStartCast). LOG
+            // mode still only observes -- suppression is a FORCE-mode act.
+            if (!isWanted) {
+                if (Config::g_casterMode.load() == 0) return aiSaysYes;   // observe-only
+                DenyLog(fid, actor, mi ? mi->GetFormID() : 0, wantSpell);
+                return false;
+            }
 
             ++g_seen;
             if (!aiSaysYes) ++g_vetoed;
@@ -188,12 +228,14 @@ namespace MFO::CasterConsent {
         g_want.erase(a_follower);
         g_otherCast.erase(a_follower);   // the miss flag dies with the latch
         g_wantCount.store(g_want.size(), std::memory_order_relaxed);
+        { std::lock_guard<std::mutex> dl(g_denyLogMx); g_lastDenied.erase(a_follower); }
     }
     void ClearAll() {
         std::unique_lock lk(g_mx);
         g_want.clear();
         g_otherCast.clear();
         g_wantCount.store(0, std::memory_order_relaxed);
+        { std::lock_guard<std::mutex> dl(g_denyLogMx); g_lastDenied.clear(); }
     }
 
     void NoteCast(RE::FormID a_follower, RE::FormID a_spell) {

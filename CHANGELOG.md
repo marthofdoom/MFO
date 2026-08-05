@@ -1,3 +1,14 @@
+## v1.0.28 -- cast gambits take full control (no more casting his own spell too)
+
+- Fix: v1.0.27 made the follower cast the gambit's spell, but he still cast his
+  OWN spell alongside it -- an improvement, not the control the premise dictates.
+  While a cast gambit owns him, MFO now SUPPRESSES every other spell: the AI is
+  denied its own casts (Chain Lightning, favourites) so the gambit's spell is the
+  only thing that ever leaves his hands. The AI-first animated path is unchanged
+  when he casts the RIGHT spell; only competing casts are cut. Melee fallback when
+  he is out of magicka is untouched (that is not a cast), and this only acts while
+  MFO is actively driving casting -- observe/log mode still just watches.
+
 ## v1.0.27 -- cast gambits cast YOUR spell (hybrid forced cast) + line of sight
 
 - Fix: "cast Firebolt at nearest foe" finally means Firebolt. The old path only
