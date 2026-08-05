@@ -3,7 +3,12 @@
 This project is designed so any capable model or person can continue it from
 these docs alone. Load documents on demand, not all at once.
 
-**CURRENT STATE (v1.0.26, 2026-08-05).** The 1.0 line is in active field
+> **START HERE to continue work: [`STATUS.md`](STATUS.md)** — the living handoff
+> (latest version, what shipped, what's awaiting marth's field test, ranked open
+> issues, backlog, and the workflow in one screen). It is kept current with every
+> release/issue change; this INDEX is the map, STATUS is the "you are here."
+
+**CURRENT STATE (v1.0.31, 2026-08-05).** The 1.0 line is in active field
 testing and every planned milestone through M10 has shipped: gambits execute
 on both tables, the Field Orders board and MCM are live (four skins, full
 controller parity), logistics loots/restocks/upgrades — up to four followers

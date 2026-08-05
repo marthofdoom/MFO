@@ -183,3 +183,6 @@ cat "$DEST/MANIFEST.txt"
 echo
 echo "Released -> $DEST/$ZIP"
 echo "Push the tag when ready:  git push origin v${VER}"
+echo "REMINDER: update Docs/STATUS.md — bump the version, move this release to"
+echo "          'shipped', and refresh field-test status / open issues. Keep the"
+echo "          living handoff current or the next session inherits a stale map."
