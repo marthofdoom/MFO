@@ -151,10 +151,14 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 
 - **NEXT WEEK — does the economy sell SOCKETED items?** (marth parked 2026-08-06.)
   Concern: the economy selling gem-socketed gear would lose the gems (MEO socket
-  data). Couldn't answer from the v1.0.33 field session — `bEconomy` was OFF, zero
-  `[econ]`/sell events in the log. Needs a session with the economy actually
-  selling to observe. Related: #57 (sets must not sell in-progress pieces), the
-  MEO gem-transfer interface (active: "[meo] follower gem transfer enabled").
+  data). Economy IS ON (marth confirms; the `[trade]` sell+buy bridge registered).
+  Couldn't answer from the v1.0.33 field session: it was a single ~28-min launch
+  with ZERO `[econ]`/sell events, so any socketed-item sale was a PRIOR run —
+  already gone (MFO.log truncates every launch). **To catch it:** either add the
+  offered `MFO.log.prev` backup-on-load (small, safe — do this so the prior
+  session survives), or reproduce a sale in-session and pull the log before
+  relaunch. Related: #57 (sets must not sell in-progress pieces); the MEO
+  gem-transfer interface is active ("[meo] follower gem transfer enabled").
 - **#56 — Combat overlay X/Y position adjuster** (now folded into the mage cut) —
   MCM sliders (or live drag) into the overlay's ImGui window pos (Board.cpp);
   controller nudge per the family rule.
