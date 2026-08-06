@@ -149,8 +149,15 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 
 ## Backlog (captured, not scheduled)
 
-- **#56 — Combat overlay X/Y position adjuster** — MCM sliders (or live drag) into
-  the overlay's ImGui window pos (Board.cpp); controller nudge per the family rule.
+- **NEXT WEEK — does the economy sell SOCKETED items?** (marth parked 2026-08-06.)
+  Concern: the economy selling gem-socketed gear would lose the gems (MEO socket
+  data). Couldn't answer from the v1.0.33 field session — `bEconomy` was OFF, zero
+  `[econ]`/sell events in the log. Needs a session with the economy actually
+  selling to observe. Related: #57 (sets must not sell in-progress pieces), the
+  MEO gem-transfer interface (active: "[meo] follower gem transfer enabled").
+- **#56 — Combat overlay X/Y position adjuster** (now folded into the mage cut) —
+  MCM sliders (or live drag) into the overlay's ImGui window pos (Board.cpp);
+  controller nudge per the family rule.
 - **#57 — Matching armor sets (MCM toggle, default OFF).** NOT per-piece: a
   set-COLLECTION state machine — the follower collects a better set's pieces
   (holds them, doesn't wear piecemeal, and the economy must NOT sell in-progress
