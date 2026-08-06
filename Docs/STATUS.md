@@ -6,13 +6,15 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-05 · **Latest shipped:** v1.0.31
+> **Last updated:** 2026-08-05 · **Latest shipped:** v1.0.31 · **In flight:** v1.0.32 (CI)
 
 ---
 
 ## Continue in one screen
 
-- **Latest shipped & deployed:** **v1.0.31** — deck-verified, GitHub Release = Latest.
+- **Latest shipped & deployed:** **v1.0.31**. **v1.0.32** ("mage fixes") is
+  BUILT and pushed; CI run 31072217444 in progress — NOT yet deployed or
+  published. When CI is green: phase 2 → deploy → tag → main agent publishes.
 - **Compile is CI-only.** No local MSVC. The DLL only ever comes from a GREEN
   GitHub Actions `native` run whose `native/` tree matches HEAD. Never trust
   "it built" without `gh run list --workflow=native --status=success` + a
@@ -43,6 +45,7 @@
 | v1.0.29 | Magic-user loadout — school robes + backup dagger + 2 MCM toggles (bMagicLoadout, bMageDaggersOnly) | superseded in part by v1.0.31; MCM toggles BROKEN (see #55) |
 | v1.0.30 | Cast latch persistence — suppression holds through the cast cooldown, not just the fire (closes the between-casts leak) | **pending** — watch `[consent] … holding exclusive control through the cast cooldown`; no `(their own spell, not ours)` while a cast rule wins |
 | v1.0.31 | Pure casters: mages loot NO rated armor (heavy or light), robes/clothing only; broadened school-robe detection; per-candidate apparel diagnostics; no junk picks | **pending** — watch `[loot] apparel …` diag lines; is Marcurio switching to his valid robe / out of heavy armor? |
+| v1.0.32 | **Mage fixes** — forced casts actually fire (FindInput template-map fallback + static uids; CastAt only, cast_self stays barred: QNAM+t6 zero-precedent cell); cooldown-consulted permit (`permitAfter` on the latch — no more 4-casts-in-2.2s bursts); potion-exempt deny (only formType Spell is ever denied); flicker-proof latch (deny holds for the combat's duration; releases only on combat end/dismissal/revert); + INI-gated P1 combat-style probe (`bProbeCastStyle`, default OFF, new CSTY 0x832 `MFO_CastStyle`) | **pending** — watch `[cast] … FORCED … at …` (real animated force, no more `template input 'Spell'` errors), `[consent] … pacing` once per window, no suppressed combat drinking, `DENIED own spell` continuity across flickers; probe (only if armed): `[probe cstyle]` |
 
 ## Awaiting marth's field test (deck log watch items)
 
@@ -55,15 +58,18 @@ reads score=0.
 ## Open issues (ranked)
 
 0. **HEADLINE — casting overhaul (next Nexus = "mage fixes").** Research (task #59)
-   found the v1.0.27 forced cast has **never fired on deck** — it errors
-   `template input 'Spell' is not declared on FE090820` and silently falls to the
-   invisible `CastSpellImmediate`. **v1.0.32 (task #60), building now:** fixes the
-   dead forced cast (Packages.cpp `FindInput` — try template nameMap on a MISS not
-   just null; static uid fallback Spell=3/Target=4; scope to CastAt, NOT CastSelf's
-   CTD-class t6+QNAM cell), cooldown-consulted permit (kills burst cadence),
-   potion-exempt deny (only deny formType==Spell), flicker-proof latch, + an
-   INI-gated **P1 combat-style probe** (`bProbeCastStyle`, default OFF) to de-risk
-   Stage 2. **Stage 2 (#59, the headline toggle `bFullCastControl`, default OFF):**
+   found the v1.0.27 forced cast had **never fired on deck** — it errored
+   `template input 'Spell' is not declared on FE090820` and silently fell to the
+   invisible `CastSpellImmediate`. **v1.0.32 BUILT + in CI (task #60), not yet
+   deployed/published:** fixed the
+   dead forced cast (Packages.cpp `FindInput` — template nameMap on a MISS not
+   just null; static uid fallback Spell=3/Target=4; scoped to CastAt — CastSelf
+   stays barred via `Decline::SelfRoute`, the CTD-class t6+QNAM cell), cooldown-
+   consulted permit (`permitAfter` on the latch), potion-exempt deny (only
+   formType==Spell), flicker-proof latch (combat-duration hold), + the INI-gated
+   **P1 combat-style probe** (`bProbeCastStyle`, default OFF; CSTY 0x832) to
+   de-risk Stage 2. Field test pending (watch items in the table above).
+   **Stage 2 (#59, the headline toggle `bFullCastControl`, default OFF):**
    own every decision the AI's cast machinery consults (deny-all + spell-scoring
    0x0C + CalcCastMagicChance 0x08 + swap combatStyle 0x38 to an MFO caster CSTY) →
    100% vanilla-animated+mobile, MFO owns what/when/whom. Depends on the P1 probe
