@@ -19,6 +19,7 @@ echo "MFO ${VER} — test package"
 # 1. ESP + SEQ, always regenerated so the zip can never contain a stale plugin.
 python3 MFO_GenerateESP.py out >/dev/null
 python3 tools/audit_esp.py            # PASS is a merge gate; fail here stops the package
+python3 tools/audit_mcm.py          # #55 gate: every MCM toggle wired in all 5 places
 echo
 
 # 2. DLL from the latest successful CI run.

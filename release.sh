@@ -89,6 +89,7 @@ fi
 # 2. ESP + SEQ, always regenerated so a zip can never carry a stale plugin.
 python3 MFO_GenerateESP.py out >/dev/null
 python3 tools/audit_esp.py          # PASS is a merge gate; a FAIL stops the release
+python3 tools/audit_mcm.py          # #55 gate: every MCM toggle wired in all 5 places; FAIL stops the release
 echo
 
 # 2b. Papyrus, always recompiled (Wine + Nemesis compiler) so the shipped .pex
@@ -144,8 +145,18 @@ cp "$STAGE/dll/MFO.dll"    "$STAGE/pkg/SKSE/Plugins/"
 # ship or the quest silently fails to become an MCM (2026-07-28 root cause --
 # every zip before this one shipped neither file).
 cp out/MCM/Config/MFO/config.json "$STAGE/pkg/MCM/Config/MFO/"
-# Initial MCM Helper settings store -- WITHOUT it every ModSetting control reads
-# back -1 (no value to bind to), so the whole MCM shows -1 (2026-07-28).
+# THE DEFAULTS FILE -- how MCM Helper REGISTERS every ModSetting at plugin-load
+# (its LoadDefaults() reads MCM/Config/<mod>/settings.ini). This is the #55 fix:
+# without it, registration depended entirely on the mutable user store, which
+# MO2 shadows with a STALE overwrite copy from earlier play -- so a NEW toggle
+# added in an update never registered on an existing install and drew as an
+# empty/unresponsive checkbox. Config/ is author-shipped and never written to,
+# so MO2 can't shadow it; every control now binds on any save, no relaunch.
+# (Primary source: SkyUI/Precision/TDM/TrueHUD all ship this; MFO/MEO/MAO were
+# the only omitters. audit_mcm.py gates that this stays in sync with config.json.)
+cp out/MCM/Config/MFO/settings.ini "$STAGE/pkg/MCM/Config/MFO/"
+# Initial MCM Helper USER store -- still shipped for fresh installs so values are
+# complete on first launch (defaults file registers; user store overrides).
 cp out/MCM/Settings/MFO.ini       "$STAGE/pkg/MCM/Settings/"
 cp out/Scripts/MFO_MCM.pex        "$STAGE/pkg/Scripts/"
 # #21 econ bridge: MFO_Trade.pex MUST ship or MFO_TradeQuest's VMAD references a

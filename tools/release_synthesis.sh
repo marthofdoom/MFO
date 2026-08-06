@@ -47,6 +47,7 @@ echo "DLL: $(stat -c '%s bytes' "$STAGE/SKSE/Plugins/MFO.dll")"
 echo "== regenerate ESP + SEQ =="
 python3 MFO_GenerateESP.py out >/dev/null
 python3 tools/audit_esp.py
+python3 tools/audit_mcm.py          # #55 gate: every MCM toggle wired in all 5 places
 
 cp out/MFO.esp              "$STAGE/"
 cp out/SEQ/MFO.seq          "$STAGE/SEQ/"
@@ -55,6 +56,7 @@ cp -r out/SKSE/Plugins/MFO  "$STAGE/SKSE/Plugins/"    # baked board fonts (MEO p
 # MCM Helper config + its binding script + initial settings store. All THREE or
 # the MCM never appears / every control reads -1 (2026-07-28 root cause).
 cp out/MCM/Config/MFO/config.json "$STAGE/MCM/Config/MFO/"
+cp out/MCM/Config/MFO/settings.ini "$STAGE/MCM/Config/MFO/"   # #55: the DEFAULTS file MCM Helper registers from
 cp out/MCM/Settings/MFO.ini       "$STAGE/MCM/Settings/"
 cp out/Scripts/MFO_MCM.pex        "$STAGE/Scripts/"
 cp THIRD-PARTY-NOTICES.md   "$STAGE/"    # ships with every build, INVARIANTS #42a
@@ -74,7 +76,7 @@ EOF
 for req in "SKSE/Plugins/MFO.dll" "SKSE/Plugins/MFO.ini" \
            "SKSE/Plugins/MFO/fonts/head.ttf" "SKSE/Plugins/MFO/fonts/body.ttf" \
            "MFO.esp" "SEQ/MFO.seq" \
-           "MCM/Config/MFO/config.json" "MCM/Settings/MFO.ini" \
+           "MCM/Config/MFO/config.json" "MCM/Config/MFO/settings.ini" "MCM/Settings/MFO.ini" \
            "Scripts/MFO_MCM.pex" "fomod/info.xml" "THIRD-PARTY-NOTICES.md"; do
     [[ -f "$STAGE/$req" ]] || { echo "ERROR: release incomplete — missing $req" >&2; exit 1; }
 done
