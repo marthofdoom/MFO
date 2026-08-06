@@ -139,10 +139,11 @@ namespace MFO::Board {
     // table's condition/action vocabulary. Cycle* remain for any legacy caller.
     enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
                                          CycleCond, CycleAct, SetParam, SetSpell,
-                                         SetCond, SetAct };
+                                         SetCond, SetAct, TeachSpell };
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
         RE::FormID spell = 0;
+        RE::FormID book  = 0;   // #4 TeachSpell: the spellbook to consume
     };
     std::mutex          g_editMx;
     std::vector<EditCmd> g_edits;
@@ -851,28 +852,52 @@ namespace MFO::Board {
                                         track();
                                         if (!rv.fail.empty() && ImGui::IsItemHovered())
                                             ImGui::SetTooltip("last: %s", rv.fail.c_str());
-                                        if (who->knownSpells.empty()) {
-                                            ImGui::SetNextWindowPos(
-                                                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                                                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-                                            if (ImGui::BeginPopup("##spell")) {
-                                                pickerDrawnThisFrame = true;
-                                                ImGui::TextDisabled("follower knows no spells");
-                                                ImGui::EndPopup();
-                                            }
-                                        } else {
-                                            int curS = -1;
-                                            for (int k = 0; k < (int)who->knownSpells.size(); ++k)
-                                                if (who->knownSpells[k].first == rv.spell) { curS = k; break; }
-                                            listPopup("##spell", "Spell", (int)who->knownSpells.size(),
-                                                [&](int k) { return who->knownSpells[k].second.c_str(); },
-                                                curS,
-                                                [&](int k) {
-                                                    EditCmd e{ EditKind::SetSpell, sel, selTable,
-                                                               rv.uid, 0 };
+                                        // #4: known spells (click = pick) PLUS
+                                        // teachable-from-spellbook spells (a second
+                                        // click confirms and CONSUMES the book).
+                                        // Drawn by hand rather than listPopup so both
+                                        // groups fit one gamepad-navigable popup.
+                                        ImGui::SetNextWindowPos(
+                                            ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                                        if (ImGui::BeginPopup("##spell")) {
+                                            pickerDrawnThisFrame = true;
+                                            if (who->knownSpells.empty() && who->teachableSpells.empty())
+                                                ImGui::TextDisabled("no spells known, no spellbooks carried");
+                                            for (int k = 0; k < (int)who->knownSpells.size(); ++k) {
+                                                const bool curSel = who->knownSpells[k].first == rv.spell;
+                                                if (ImGui::Selectable(who->knownSpells[k].second.c_str(), curSel)) {
+                                                    EditCmd e{ EditKind::SetSpell, sel, selTable, rv.uid, 0 };
                                                     e.spell = who->knownSpells[k].first;
                                                     QueueEdit(e);
-                                                });
+                                                }
+                                            }
+                                            if (!who->teachableSpells.empty()) {
+                                                ImGui::Separator();
+                                                ImGui::TextDisabled("Teach from spellbook (consumes it):");
+                                                static RE::FormID s_teachArmed = 0;
+                                                for (const auto& t : who->teachableSpells) {
+                                                    const bool armed = (s_teachArmed == t.book);
+                                                    if (armed) ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
+                                                    const std::string lbl = armed
+                                                        ? (t.name + "  -- teach? DESTROYS the book")
+                                                        : (t.name + "  (spellbook)");
+                                                    if (ImGui::Selectable(lbl.c_str(), false,
+                                                                          ImGuiSelectableFlags_DontClosePopups)) {
+                                                        if (armed) {
+                                                            EditCmd e{ EditKind::TeachSpell, sel, selTable, rv.uid, 0 };
+                                                            e.spell = t.spell; e.book = t.book;
+                                                            QueueEdit(e);
+                                                            s_teachArmed = 0;
+                                                            ImGui::CloseCurrentPopup();
+                                                        } else {
+                                                            s_teachArmed = t.book;   // arm: show the warning first
+                                                        }
+                                                    }
+                                                    if (armed) ImGui::PopStyleColor();
+                                                }
+                                            }
+                                            ImGui::EndPopup();
                                         }
                                     }
                                 }
@@ -1542,6 +1567,25 @@ namespace MFO::Board {
                 tab[i].actionOpcode = t[n].op; break; }
             case EditKind::SetParam: tab[i].conditionParam = c.param; break;
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
+            case EditKind::TeachSpell: {
+                // #4: teach the spell (AddSpell) and CONSUME one spellbook from
+                // the player, then set it as the gambit's spell. Main thread, so
+                // the actor + inventory mutations are safe. Re-check HasSpell on
+                // the live actor -- a stale snapshot could double-queue a teach,
+                // and we must not eat a second book for a spell already learned.
+                auto* follower = c.fid ? RE::TESForm::LookupByID<RE::Actor>(c.fid) : nullptr;
+                auto* spell    = c.spell ? RE::TESForm::LookupByID<RE::SpellItem>(c.spell) : nullptr;
+                auto* book     = c.book ? RE::TESForm::LookupByID<RE::TESBoundObject>(c.book) : nullptr;
+                if (follower && spell && !follower->HasSpell(spell)) {
+                    follower->AddSpell(spell);
+                    if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && book)
+                        pc->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                    spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}",
+                                 c.fid, c.spell, c.book);
+                }
+                tab[i].actionParamForm = c.spell;   // set as the gambit spell regardless
+                break;
+            }
             case EditKind::SetCond: {
                 // Absolute pick by index into THIS table's condition vocabulary
                 // (writes the frozen opcode string, exactly as CycleCond does).
@@ -1640,6 +1684,24 @@ namespace MFO::Board {
                     }
                 } vis; vis.out = &r.knownSpells;
                 a->VisitSpells(vis);
+
+                // #4: teachable spells -- books in the PLAYER's pack whose spell
+                // this follower does not yet know. Offered in the picker as
+                // "Name (spellbook)"; teaching consumes the book. Read-only here
+                // (a snapshot); the actual AddSpell + book consume runs in
+                // ApplyEdits on the main thread.
+                if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
+                    for (auto& [obj, data] : pc->GetInventory()) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* book = obj->As<RE::TESObjectBOOK>();
+                        if (!book || !book->TeachesSpell()) continue;
+                        auto* sp = book->data.teaches.spell;
+                        if (!sp || !MFO::Vocab::IsCastableSpell(sp)) continue;
+                        if (a->HasSpell(sp)) continue;   // already known -> not teachable
+                        r.teachableSpells.push_back({ sp->GetFormID(), book->GetFormID(),
+                                                      sp->GetName() ? sp->GetName() : "?" });
+                    }
+                }
             }
             r.combatSlots    = SlotsForRank(r.rank, Table::Combat);
             r.logisticsSlots = SlotsForRank(r.rank, Table::Logistics);

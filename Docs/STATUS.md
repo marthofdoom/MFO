@@ -149,6 +149,12 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 
 ## Backlog (captured, not scheduled)
 
+- **POST-MAGE-UPDATE — add armor/weapon BUY to the economy** (marth 2026-08-06).
+  The economy currently BUYS only consumables (potions/arrows/bolts — Logistics
+  `addNeed` covers kPotHealth/Stamina/Magicka, kArrows, kBolts); it never buys
+  armor or weapons. Add gear-buy needs + TradeBridge matching. When added, gate
+  it behind #61 fashionrim (`bDollsMode` blocks armor ACQUISITION — buy included).
+
 - **~~Economy selling socketed items~~ — NON-ISSUE (resolved 2026-08-06).** It was
   marth using a `resurrect` console command, not the economy selling. No bug; the
   log correctly showed zero `[econ]`/sell events. (Kept as a note so it isn't

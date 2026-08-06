@@ -53,6 +53,11 @@ namespace MFO::Board {
         float         distance = 0.0f;
         std::vector<RuleView> combat, logistics;
         std::vector<std::pair<RE::FormID, std::string>> knownSpells;
+        // #4: spells the PLAYER carries a spellbook for that this follower does
+        // NOT yet know -- offered in the picker as "Name (spellbook)", teachable
+        // (consumes the book) on confirm.
+        struct Teachable { RE::FormID spell = 0; RE::FormID book = 0; std::string name; };
+        std::vector<Teachable> teachableSpells;
     };
 
     struct Snapshot {
