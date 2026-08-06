@@ -3,6 +3,7 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
+#include "Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -3288,6 +3289,27 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootSoulGems)       acted = LootNearby(a_follower, Category::SoulGems, now);
             else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, now);
             else if (op == Vocab::kActEquipTorch)         acted = EquipTorch(a_follower);   // #35: torch is upkeep
+            else if (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget) {
+                // CAST IN LOGISTICS (mage update): out-of-combat gambit casting --
+                // self-buffs, candlelight, out-of-combat heals. Reuses the full
+                // combat cast path (affordability, reserve, equip-to-cast, forced
+                // package) via Actuation::Fire. Out of combat there is no consent-
+                // hook pacing, so skip re-casting a SELF buff whose effect is
+                // still active (heals/attacks are gated by the rule's condition
+                // instead). "acted" iff a cast really fired this tick.
+                if (op == Vocab::kActCastSelf) {
+                    if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam)) {
+                        const auto* ei   = sp->GetCostliestEffectItem();
+                        const auto* mgef = ei ? ei->baseEffect : nullptr;
+                        auto* mt = a_follower->AsMagicTarget();
+                        if (mgef && mt && mt->HasMagicEffect(mgef)) {
+                            start = choice.ruleIndex + 1;   // buff still up -> next rule
+                            continue;
+                        }
+                    }
+                }
+                acted = Actuation::Fire(a_follower, choice).result == Actuation::Result::Fired;
+            }
             else if (op == Vocab::kActWait) {
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.
             }

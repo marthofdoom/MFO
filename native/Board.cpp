@@ -253,6 +253,11 @@ namespace MFO::Board {
         { Vocab::kActLootSoulGems,       "Loot soul gems" },
         { Vocab::kActLootLockpicks,      "Loot lockpicks" },
         { Vocab::kActEquipTorch,         "Equip torch" },
+        // Cast in logistics (mage update): out-of-combat casting -- self-buffs,
+        // candlelight, out-of-combat heals. Same opcodes as combat; the
+        // logistics scan dispatches them through Actuation::Fire.
+        { Vocab::kActCastSelf,           "Cast on self" },
+        { Vocab::kActCastTarget,         "Cast at foe/ally" },
         { Vocab::kActWait,               "Wait" },   // gate lower rules, e.g. "carry weight > 90% -> Wait"
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
