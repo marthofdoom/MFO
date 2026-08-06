@@ -1693,6 +1693,76 @@ engine-serialized state old versions saved: stop writing it AND sweep it on
 load. (c) A stored `ObjectRefHandle` can resolve to a different ref after a
 cross-save load — validate the base form before trusting it.
 
+### 0.39 A runtime package instance's nameMap carries TYPES, not names — the v1.0.27 forced cast NEVER fired (2026-08-05, v1.0.32)
+
+**Field finding (deck, v1.0.30/31, Marcurio session 15:14–15:33).** Every
+force-on-miss died with
+
+```
+[error] [pkg] template input 'Spell' is not declared on package FE090820
+```
+
+~12+ times in 19 minutes, zero `[cast] … FORCED` lines ever — and each error
+was followed by `[eval] fired rule N`, i.e. the miss fell through to the
+INVISIBLE `CastSpellImmediate` apply. **The hybrid's force half was dead in
+the field from the day v1.0.27 shipped**; the runtime input-mutation surface
+was flagged "verify before building" in §0.17 and never was (#57's shape,
+again).
+
+**Root cause.** `FindInput` resolved the input NAME ("Spell") through
+whichever nameMap it found FIRST, falling back to the template's map only
+when the instance's map POINTER was null. At runtime the instance's map is
+NON-null but carries the ESP instance's `ANAM` strings — which are input
+**TYPES** ("TargetSelector", "SingleRef", "Bool"), not names; the names
+("Spell" = uid 3, "Target" = uid 4) live only on the vanilla UseMagic
+template `000504F5` (§0.17's dump). Miss ≠ missing map, and the fallback
+never ran.
+
+**Fix (v1.0.32):** instance map first, template map **on a lookup miss**,
+statically-known template uids (Spell=3, Target=4) as last resort with a
+one-time dump of what both maps really held — the dump line is the next deck
+session's confirmation of the runtime shape. A wrong uid cannot silently
+stomp: `ReadTarget` validates the resolved slot's reported type name before
+anything is written (the guard doing exactly the job it was built for).
+
+**Three adjacent findings, same session:**
+
+1. **The permit needed pacing, not just the deny.** v1.0.30's
+   cooldown-spanning latch kept the DENY up but also the force-YES:
+   `fCastCooldown` only ever gated the re-EQUIP (`Loadout::Prepare`), and
+   with the spell still in hand the AI machine-gunned it — deck: **4 gambit
+   casts in 2.2 s** (15:32:13–15). v1.0.32 stamps `permitAfter` onto the
+   latch entry (`NoteCooldown`, from `Loadout::StartCooldown`); within the
+   window the thunk denies the WANTED spell too. Deny and permit are two
+   dials on one latch.
+2. **The deny was suppressing combat potions.** `CombatMagicCasterRestore`
+   is also the drink-potion caster (§0.29 scope fact, now load-bearing): the
+   unconditional !isWanted deny covered a latched follower's own combat
+   drinking. v1.0.32 denies only `formType == Spell`.
+3. **H3 release flicker was a sub-tick leak.** The [cast]-then-DENIED pairs
+   10 ms apart (15:29:06.876/.887, 15:30:36.179/.189) were casts slipping
+   through single-service-tick latch drops (condition flicker) and
+   in-flight releases. The consent latch now holds for the COMBAT'S
+   duration once armed; H3 still releases the SPELL (hand occupancy is
+   pacing), but the deny releases only at combat end / dismissal / revert.
+
+**Deliberately NOT armed: the package self route.** Fixing FindInput would
+have armed `CastSelf`'s runtime mutation for the first time — writing
+`targType 6` into the shipped record, which carries an **authored QNAM**
+(its authored target is t4 → alias 1). QNAM on a record none of whose live
+inputs names an alias is the rev-4 CTD's surviving suspect (§0.22), a
+zero-precedent cell. `Begin()` now declines self (`Decline::SelfRoute`) and
+cast_self misses stay on the silent fallback until a dedicated probe (P4)
+clears QNAM+t6.
+
+**UNPROVEN until the next deck soak:** the fixed foe-route force actually
+casting (watch `[cast] … FORCED … at …` with no `template input` errors);
+the static-uid last resort ever running (the dump line); `[consent] …
+pacing` once per window; and the P1 combat-style probe (`bProbeCastStyle`,
+`MFO_CastStyle` 0x832 — `CombatController::combatStyle` at 0x38, below the
+§0.29 divergence, pinned-header-verified) answering whether a caster-forward
+style raises the CheckStartCast ask rate. Promotion waits on the log (#57).
+
 ---
 
 ## 1. Actor control — Tier A primitives
