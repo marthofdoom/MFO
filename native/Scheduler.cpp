@@ -6,6 +6,7 @@
 #include "Config.h"
 #include "Loadout.h"
 #include "CasterConsent.h"
+#include "CombatStyle.h"
 #include "Packages.h"
 #include "Vocabulary.h"
 #include "Logistics.h"
@@ -169,7 +170,16 @@ namespace MFO::Scheduler {
         g_lastServiced = id;
 
         // Cheap disqualifiers before any evaluation.
-        if (f->IsDead() || f->IsDisabled()) return;
+        if (f->IsDead() || f->IsDisabled()) {
+            // A follower who dies/leaves mid-fight never reaches the combat-exit
+            // teardown below, so drop weapon-stance ownership here too: otherwise
+            // AnyActive() stays true (every combatant pays the per-tick lookup)
+            // and a resurrection re-owns the stale stance on the fresh
+            // controller without an equip win. The live CSTY already died with
+            // the controller. Idempotent erase-miss when unowned.
+            CombatStyle::Clear(id);
+            return;
+        }
 
         // A cast/drink/loot issued into a paused game resolves strangely on
         // unpause, and menus are exactly when the player is editing the list
@@ -205,6 +215,11 @@ namespace MFO::Scheduler {
             // combat caster runs the hook, and Clear on an unlatched id is an
             // uncontended erase-miss.
             CasterConsent::Clear(id);
+            // Weapon-stance ownership dies with the fight too. The live CSTY
+            // already reverted when the per-combat controller was destroyed;
+            // this drops the stale bookkeeping so the next fight re-baselines.
+            // Idempotent out of combat (uncontended erase-miss when unowned).
+            CombatStyle::Clear(id);
 
             Logistics::ServiceFollower(f, it->second);
             g_lastTickMs = std::chrono::duration<double, std::milli>(
@@ -330,6 +345,7 @@ namespace MFO::Scheduler {
 
         bool castSeen   = false;   // H3: some cast rule's condition held this tick
         int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
+        int  wantStance = 0;       // combat-style ownership: the equip stance that won
         bool stopped    = false;   // scan ended on a Fired / opaque hold
         bool suppressed = false;   // scan stopped at the suppression window
         std::string chain;         // 1.4: skip-chain, e.g. "0(no potion),2(satisfied)"
@@ -437,7 +453,7 @@ namespace MFO::Scheduler {
                 // its reason in the chain and the scan moves on.
                 const bool satisfiedEquip =
                     isEquip && outcome.result == Actuation::Result::NoOp;
-                if (satisfiedEquip) handClaim = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                if (satisfiedEquip) handClaim = wantStance = (op == Vocab::kActEquipRanged) ? 2 : 1;
                 chain += std::format("{}{}({})", chain.empty() ? "" : ",",
                                      choice.ruleIndex,
                                      satisfiedEquip ? "satisfied" : outcome.reason.c_str());
@@ -445,9 +461,25 @@ namespace MFO::Scheduler {
                 continue;
             }
 
+            // A FIRED equip is the winning stance too (the satisfied case above
+            // handles an already-correct hand; this is the real swap).
+            if (isEquip && outcome.result == Actuation::Result::Fired)
+                wantStance = (op == Vocab::kActEquipRanged) ? 2 : 1;
+
             stopped = true;                    // Fired or opaque hold -> done
             break;
         }
+
+        // COMBAT-STYLE OWNERSHIP (v1.0.33). Whichever equip gambit claimed the
+        // hand this tick owns the follower's combat style until battle end or
+        // the next equip flips it -- the actual write happens on the combat
+        // thread (CombatStyle::ApplyTick from the UpdateCombat hook), never from
+        // this job-worker tick. Only UPDATE on an equip win; a one-tick heal
+        // above the equip must not drop the stance (that is the "hold until
+        // another equip triggers" contract), so no Want on wantStance==0.
+        if (wantStance)
+            CombatStyle::Want(id, wantStance == 2 ? CombatStyle::Stance::Ranged
+                                                  : CombatStyle::Stance::Melee);
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
         // aware). A gambit spell stays in the follower's hand only while some

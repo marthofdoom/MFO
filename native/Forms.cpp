@@ -45,6 +45,12 @@ namespace MFO::Forms {
         // probe -- ProbeStyleTick refuses to swap on a null pointer and says
         // nothing else about it, per the "one feature, named log line" rule.
         g_probeCastStyle = Look<RE::TESCombatStyle>(kProbeCastStyle, "MFO_CastStyle");   // P1 probe
+        // Stance-ownership CSTYs (bWeaponStyleControl, default ON). A miss
+        // disables ONLY that stance's swap -- CombatStyle::ApplyTick refuses to
+        // swap on a null target and says nothing else, per "one feature, one
+        // named line".
+        g_meleeStyle  = Look<RE::TESCombatStyle>(kMeleeStyle,  "MFO_MeleeStyle");
+        g_rangedStyle = Look<RE::TESCombatStyle>(kRangedStyle, "MFO_RangedStyle");
 
         // ANSWER THE RECORD QUESTIONS AT LOAD, not when behaviour depends on
         // them. Three things can be wrong with a hand-authored PACK and each

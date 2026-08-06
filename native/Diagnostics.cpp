@@ -13,6 +13,7 @@
 #include "Targeting.h"
 #include "Packages.h"
 #include "CasterConsent.h"
+#include "CombatStyle.h"
 
 // The M3 test instrument.
 //
@@ -311,6 +312,9 @@ namespace MFO::Diagnostics {
                          t.latched, t.asserts, t.drifts, t.passes,
                          t.conflictMod ? "  [SmartNPCTargetSelector ALSO LOADED]" : "");
         }
+        spdlog::info("  weapon-style: {} | {} follower(s) own a stance",
+                     Config::g_weaponStyleControl.load() ? "ON" : "off",
+                     CombatStyle::OwnedCount());
         // WHO IS ACTUALLY IN THE ALIAS.
         //
         // Added because a field test could not distinguish "the alias never

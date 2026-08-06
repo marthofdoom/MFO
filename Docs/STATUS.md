@@ -6,16 +6,22 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-06 · **Latest shipped:** v1.0.32
+> **Last updated:** 2026-08-06 · **Latest shipped:** v1.0.33
 
 ---
 
 ## Continue in one screen
 
-- **Latest shipped & deployed:** **v1.0.32** ("mage fixes") — deck-verified
-  (DLL 1542ab83…), GitHub Release = Latest. First CI attempt FAILED (a
-  two-agent collision dropped the `g_mx` declaration in CasterConsent.cpp; CI
-  caught it, fix in 269e80b). Field test pending — watch items in the table.
+- **Latest shipped:** **v1.0.33** ("weapon-stance ownership") — the Auri melee
+  fix. When an equip gambit wins a follower's hand, MFO swaps their LIVE per-
+  combat `combatStyle` (0x38) to `MFO_MeleeStyle`/`MFO_RangedStyle` on the combat
+  thread from the UpdateCombat hook, so the engine stops re-drawing the weapon
+  MFO didn't pick (the bow<->mace ping-pong). Default ON (`bWeaponStyleControl`,
+  INI-only, no MCM). Fable-reviewed pre-commit. Field test pending — watch
+  `[wstyle]` lines.
+- **v1.0.32** ("mage fixes") — deck-verified (DLL 1542ab83…), GitHub Release =
+  Latest. marth reports casting "drastically improved" in the field (v1.0.32
+  validating; confirm the pacing/potion watch-items still hold).
 - **Compile is CI-only.** No local MSVC. The DLL only ever comes from a GREEN
   GitHub Actions `native` run whose `native/` tree matches HEAD. Never trust
   "it built" without `gh run list --workflow=native --status=success` + a
@@ -46,6 +52,7 @@
 | v1.0.29 | Magic-user loadout — school robes + backup dagger + 2 MCM toggles (bMagicLoadout, bMageDaggersOnly) | superseded in part by v1.0.31; MCM toggles BROKEN (see #55) |
 | v1.0.30 | Cast latch persistence — suppression holds through the cast cooldown, not just the fire (closes the between-casts leak) | **pending** — watch `[consent] … holding exclusive control through the cast cooldown`; no `(their own spell, not ours)` while a cast rule wins |
 | v1.0.31 | Pure casters: mages loot NO rated armor (heavy or light), robes/clothing only; broadened school-robe detection; per-candidate apparel diagnostics; no junk picks | **pending** — watch `[loot] apparel …` diag lines; is Marcurio switching to his valid robe / out of heavy armor? |
+| v1.0.33 | **Weapon-stance ownership** — equip gambits own the follower's live per-combat `combatStyle` (melee/ranged CSTY 0x833/0x834), applied on the combat thread from the UpdateCombat hook; reverts at battle end, hands off melee↔ranged. Stance follows the winning gambit, not the class (mage-melee / mage-ranged work). Default ON, `bWeaponStyleControl` INI kill-switch. | **pending** — watch `[wstyle] … OWNED/HANDOFF`; does Auri now hold the mace and stop plinking? Does she stop the bow↔mace flicker? |
 | v1.0.32 | **Mage fixes** — forced casts actually fire (FindInput template-map fallback + static uids; CastAt only, cast_self stays barred: QNAM+t6 zero-precedent cell); cooldown-consulted permit (`permitAfter` on the latch — no more 4-casts-in-2.2s bursts); potion-exempt deny (only formType Spell is ever denied); flicker-proof latch (deny holds for the combat's duration; releases only on combat end/dismissal/revert); + INI-gated P1 combat-style probe (`bProbeCastStyle`, default OFF, new CSTY 0x832 `MFO_CastStyle`) | **pending** — watch `[cast] … FORCED … at …` (real animated force, no more `template input 'Spell'` errors), `[consent] … pacing` once per window, no suppressed combat drinking, `DENIED own spell` continuity across flickers; probe (only if armed): `[probe cstyle]` |
 
 ## Open field threads (awaiting marth's deck — pull the log, then diagnose)
@@ -59,19 +66,22 @@ reproduce it in the CURRENT session, then pull the log before the next launch.
 lost — small, safe; do it if marth confirms.) Deck may be ASLEEP → SSH timeout,
 just retry ([[deck-sleeps-ssh-timeout]]).
 
-1. **Auri won't switch to melee at close range.** MFO does the switch via a
-   "foe within range X → equip melee" gambit that reads her CURRENT combat
-   target's distance (Evaluator.cpp ~139). Leading causes (need the log to pick):
-   (a) she carries NO melee weapon → `EquipWeapon(melee)` no-ops ("no melee
-   weapon carried"); (b) no current combat target → within-range condition false,
-   rule never fires; (c) her gambits aren't a within/beyond PAIR on the same foe,
-   so a ranged rule claims the hand (H2). Quick check: does Auri carry a melee
-   weapon? Log line to find: `[eval] Auri … act.equip_melee …` fired/failed/skip.
-2. **P1 combat-style probe (de-risks Stage-2 full cast control, #59).** Arm by
-   setting `bProbeCastStyle = 1` in `Data/SKSE/Plugins/MFO.ini` (default 0),
-   full restart, fight with a mage follower who has a cast gambit, then read
-   `[probe cstyle]` lines: did the caster-CSTY swap HOLD, and did his
-   CheckStartCast ask-rate go UP (casts more / moves)? That answer gates Stage 2.
+1. **Auri melee switch — DIAGNOSED + FIXED in v1.0.33 (pending field confirm).**
+   The deck log showed it was NOT the STATUS hypotheses: she carries a Glass Mace
+   (dmg 84), `rule 1 act.equip_melee` fires, and she DID equip melee 6× — but
+   the equips were *real* re-equips (a bow↔mace tug-of-war with her own ranged-
+   weighted AI), so she flickered and never attacked. Fixed by weapon-stance
+   ownership (v1.0.33): the melee gambit now swaps her live combat style so the
+   AI stops re-drawing the bow. Confirm on deck: `[wstyle]` shows OWNED melee,
+   she holds the mace, no flicker.
+2. **P1 combat-style probe — largely OBVIATED by v1.0.33.** The probe's core
+   MECHANICAL question ("does writing `combatStyle` on the live per-combat
+   controller HOLD, or does the engine re-derive it?") is now answered for free
+   by the v1.0.33 weapon-stance feature, which does exactly that swap on the
+   RELIABLE UpdateCombat hook (all combatants) and logs re-derives explicitly
+   (`[wstyle] … engine RE-DERIVED …`). So `bProbeCastStyle` need not be run
+   separately for that. The probe's OTHER question (does a caster-forward style
+   make him cast MORE / mobile) is cast-specific and folds into Stage 2 below.
 3. **v1.0.31/1.0.32 field confirms** — see the shipped table's watch items
    (Marcurio switching to robes; forced casts firing animated, paced, potions
    flowing, no mid-flicker leak).
@@ -89,11 +99,24 @@ just retry ([[deck-sleeps-ssh-timeout]]).
    formType==Spell), flicker-proof latch (combat-duration hold), + the INI-gated
    **P1 combat-style probe** (`bProbeCastStyle`, default OFF; CSTY 0x832) to
    de-risk Stage 2. Field test pending (watch items in the table above).
-   **Stage 2 (#59, the headline toggle `bFullCastControl`, default OFF):**
-   own every decision the AI's cast machinery consults (deny-all + spell-scoring
-   0x0C + CalcCastMagicChance 0x08 + swap combatStyle 0x38 to an MFO caster CSTY) →
-   100% vanilla-animated+mobile, MFO owns what/when/whom. Depends on the P1 probe
-   result + 5 open design questions for marth (see task #59).
+   **Stage 2 (#59, the headline toggle `bFullCastControl`, default OFF) — NEXT,
+   IN PROGRESS.** marth green-lit it 2026-08-06 ("just in case people want very
+   tight control of casters"), to build right after v1.0.33 deploys. Own every
+   decision the AI's cast machinery consults (deny-all + spell-scoring 0x0C +
+   CalcCastMagicChance 0x08 + swap combatStyle 0x38 to an MFO caster CSTY) →
+   100% vanilla-animated+mobile, MFO owns what/when/whom. **The combatStyle-swap
+   leg now rides the PROVEN v1.0.33 rails:** extend the unified CombatStyle
+   ownership with an `MFO_CastStyle` stance driven by CAST gambits on the
+   UpdateCombat hook, instead of the fragile CheckStartCast-driven probe. Still
+   gated on 5 open design questions for marth (force the exact gambit spell vs
+   bias-to-cast; caster-CSTY aggressiveness; override target selection too; etc.
+   — see task #59).
+   **Also folded into this mage update (marth, 2026-08-06):** **#61 fashionrim**
+   (armor-only dolls toggle — disables armor looting, the mage school-robe
+   loadout, armor auto-equip, MEO gem transfer, armor buy/sell; weapons
+   untouched). #61 is specified as an MCM toggle and **depends on #55** (broken
+   MCM registration) or it's a dead checkbox — so the mage cut must either fix
+   #55 first or ship #61 INI-gated like `bWeaponStyleControl`/`bFullCastControl`.
 
 1. **#55 — MCM new toggles = empty, unresponsive checkboxes on existing saves.**
    RECURRING ("as per usual"). All file touch points verified correct (atomic,

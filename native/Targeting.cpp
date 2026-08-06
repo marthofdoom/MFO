@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Targeting.h"
 #include "Config.h"
+#include "CombatStyle.h"
 
 // ONE Win32 symbol, declared by hand.
 //
@@ -41,8 +42,26 @@ namespace MFO::Targeting {
                 // choice; it never replaces the engine's bookkeeping.
                 func(a_this);
 
-                if (g_latchCount.load(std::memory_order_relaxed) == 0) return;
-                if (!a_this || !Config::g_commandTarget.load()) return;
+                // This hook is the ONE engine callback that hands a LIVE per-
+                // combat controller to us every combat tick for every combatant,
+                // so it drives TWO concerns: combat-style ownership and the
+                // target redirect. Style must run even when no target is latched
+                // (an archer given a melee gambit has no target override), so it
+                // gets its own lock-free gate alongside the targeting one.
+                const bool anyStyle  = CombatStyle::AnyActive();
+                const bool anyTarget = g_latchCount.load(std::memory_order_relaxed) != 0;
+                if (!anyStyle && !anyTarget) return;
+                if (!a_this) return;
+
+                auto& rt = a_this->GetActorRuntimeData();
+
+                // COMBAT-STYLE OWNERSHIP (bWeaponStyleControl, default ON). Re-
+                // assert the stance the winning equip gambit claimed on the live
+                // controller (combatStyle 0x38 -- below the §0.29 AE divergence).
+                // ApplyTick no-ops for any actor without an owned stance.
+                if (anyStyle) CombatStyle::ApplyTick(a_this, rt.combatController);
+
+                if (!anyTarget || !Config::g_commandTarget.load()) return;
 
                 RE::ActorHandle wanted;
                 {
@@ -58,8 +77,6 @@ namespace MFO::Targeting {
                 auto targetPtr = wanted.get();
                 auto* target = targetPtr.get();
                 if (!target || target->IsDead() || target->IsDisabled()) return;
-
-                auto& rt = a_this->GetActorRuntimeData();
 
                 // ONLY REDIRECT WHEN THE ENGINE ALREADY HAS A TARGET.
                 //
@@ -96,8 +113,15 @@ namespace MFO::Targeting {
     }
 
     void InstallHook() {
-        if (!Config::g_commandTarget.load()) {
-            spdlog::info("[target] bCommandTarget=0 -- hook NOT installed");
+        // The UpdateCombat hook now drives TWO features: the target redirect
+        // (bCommandTarget) and weapon-stance ownership (bWeaponStyleControl,
+        // default ON). Either one alone justifies the hook -- install if EITHER
+        // is enabled, or the default-ON stance swap would be silently dead the
+        // moment someone turns target commanding off. The thunk gates each
+        // concern independently, so a disabled feature still does nothing.
+        if (!Config::g_commandTarget.load() && !Config::g_weaponStyleControl.load()) {
+            spdlog::info("[target] bCommandTarget=0 and bWeaponStyleControl=0 -- "
+                         "UpdateCombat hook NOT installed");
             return;
         }
         // 0xE4 IS THE SE/AE INDEX. UpdateCombat is SKYRIM_REL_VR_VIRTUAL, so on

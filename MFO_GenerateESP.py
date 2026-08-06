@@ -55,6 +55,9 @@ FID_RETREAT_QUEST   = OWN | 0x830  # RETREAT PROBE: travel-to-player delivery ro
 FID_RETREAT_PACKAGE = OWN | 0x831  # RETREAT PROBE: Travel + kIgnoreCombat -> alias 1 (the player)
 FID_CAST_STYLE      = OWN | 0x832  # P1 PROBE: caster-forward CSTY the DLL swaps onto a
                                    # latched follower's live CombatController (bProbeCastStyle)
+FID_MELEE_STYLE     = OWN | 0x833  # melee-dominant CSTY: swapped in when act.equip_melee
+                                   # wins the hand so the AI stops re-drawing the bow (v1.0.33)
+FID_RANGED_STYLE    = OWN | 0x834  # ranged-dominant CSTY: swapped in for act.equip_ranged
 NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x900-0x902 = P7 travel packages)
 
 # Vanilla refs
@@ -863,50 +866,55 @@ def make_pack():
     return group('PACK', body)
 
 
-# ── CSTY: the P1 combat-style probe record ─────────────────────────────────
-def make_csty():
-    """MFO_CastStyle -- ONE caster-forward combat style (P1 probe, v1.0.32).
+# ── CSTY: MFO's combat styles (stance ownership) ───────────────────────────
+def _csty_record(edid, fid, csgd_floats):
+    """One CSTY record. Byte shape MIRRORED from vanilla csHumanMagic (0003BE1C),
+    dumped from Skyrim.esm per doctrine (never format docs): EDID, CSGD 40 bytes
+    (10 floats, the CommonLibSSE-NG CombatStyleGeneralData layout), CSME 28 bytes
+    (7 floats -- the on-disk record carries one float FEWER than the runtime
+    struct's 8; mirror the disk, the loader zero-fills), CSCR 16, CSLR 4, CSFL 28
+    (same 7-of-8 truncation), DATA 4 (flags, 1 = dueling).
 
-    The DLL (CasterConsent, bProbeCastStyle=1 only) swaps this onto a latched
-    follower's LIVE CombatController -- the per-combat instance pointer, never
-    the actor's base record -- to measure §0.28's melee-bias lever: does a
-    magic-inclined style make his own AI cast more, and mobile?
-
-    Byte shape MIRRORED from vanilla csHumanMagic (0003BE1C), dumped from
-    Skyrim.esm per doctrine (never format docs): EDID, CSGD 40 bytes
-    (10 floats, the CommonLibSSE-NG CombatStyleGeneralData layout), CSME 28
-    bytes (7 floats -- the on-disk record carries one float FEWER than the
-    runtime struct's 8; mirror the disk, the loader zero-fills), CSCR 16,
-    CSLR 4, CSFL 28 (same 7-of-8 truncation), DATA 4 (flags, 1 = dueling).
-
-    ONLY the CSGD scoring axis deviates from the exemplar -- that IS the
-    experiment; every behavioural multiplier below it stays verbatim
-    csHumanMagic so the measurement has one moving part:
-      magicScoreMult 10.0 (csHumanMagic: 4.05)  -- strongly prefer the magic branch
-      meleeScoreMult  0.1 (csHumanMagic: 0.76)  -- and starve the melee one
-      rangedScoreMult 0.2, unarmedScoreMult 0.1 -- no sideways escape into bows/fists
-    """
-    csgd = struct.pack('<10f',
-                       1.0,    # offensiveMult      -- attack over turtling
-                       0.5,    # defensiveMult      -- csHumanMagic's value
-                       1.0,    # groupOffensiveMult
-                       0.1,    # meleeScoreMult     <- the lever, starved
-                       10.0,   # magicScoreMult     <- the lever, dominant
-                       0.2,    # rangedScoreMult
-                       1.0,    # shoutScoreMult
-                       0.1,    # unarmedScoreMult
-                       1.0,    # staffScoreMult
-                       0.2)    # avoidThreatChance  -- csHumanMagic's value
-    # Everything below: byte-verbatim csHumanMagic.
+    ONLY the CSGD scoring axis varies between MFO's styles -- every behavioural
+    multiplier below it stays byte-verbatim csHumanMagic, so each style has one
+    moving part (the weapon-selection scoring)."""
+    csgd = struct.pack('<10f', *csgd_floats)
     csme = struct.pack('<7f', 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
     cscr = struct.pack('<4f', 0.3, 0.5, 0.2, 0.2)
     cslr = struct.pack('<f', 0.2)
     csfl = struct.pack('<7f', 0.33, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5)
-    body = (subrec('EDID', zstr("MFO_CastStyle"))
+    body = (subrec('EDID', zstr(edid))
             + subrec('CSGD', csgd) + subrec('CSME', csme) + subrec('CSCR', cscr)
             + subrec('CSLR', cslr) + subrec('CSFL', csfl)
             + subrec('DATA', struct.pack('<I', 1)))
-    return group('CSTY', record('CSTY', FID_CAST_STYLE, 0, body))
+    return record('CSTY', fid, 0, body)
+
+
+def make_csty():
+    """MFO's three combat styles, ONE CSTY group. The DLL swaps one onto a
+    follower's LIVE per-combat CombatController (offset 0x38 -- never the base
+    record) so the engine stops fighting MFO over which weapon the follower
+    holds; the swap reverts with the controller at battle end (CombatStyle.cpp).
+
+    CSGD field order: offensiveMult, defensiveMult, groupOffensiveMult,
+    meleeScoreMult, magicScoreMult, rangedScoreMult, shoutScoreMult,
+    unarmedScoreMult, staffScoreMult, avoidThreatChance.
+
+    - MFO_CastStyle  (0x832, P1 probe, bProbeCastStyle-gated): magic dominant.
+    - MFO_MeleeStyle (0x833): melee dominant, ranged/magic starved,
+      avoidThreatChance 0 -- swapped in when act.equip_melee wins the hand so an
+      archer's own AI stops re-drawing the bow and instead closes and swings.
+    - MFO_RangedStyle(0x834): ranged dominant, avoidThreatChance up -- swapped in
+      for act.equip_ranged so a follower (even a mage handed a bow) kites/shoots.
+    The stance follows the winning EQUIP gambit, not the follower's class, so
+    "make my mage melee" / "make my mage shoot" fall out for free."""
+    cast   = _csty_record("MFO_CastStyle",   FID_CAST_STYLE,
+                          (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2))
+    melee  = _csty_record("MFO_MeleeStyle",  FID_MELEE_STYLE,
+                          (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0))
+    ranged = _csty_record("MFO_RangedStyle", FID_RANGED_STYLE,
+                          (1.0, 0.5, 1.0, 0.1, 0.1, 10.0, 1.0, 0.1, 0.1, 0.5))
+    return group('CSTY', cast + melee + ranged)
 
 
 def make_qust():
@@ -972,6 +980,8 @@ def main():
     print(f"  PACK  0x{FID_TRAVEL_PACKAGE & 0xFFF:03X}        MFO_TravelPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X}")
     print(f"  PACK  0x{FID_RETREAT_PACKAGE & 0xFFF:03X}        MFO_RetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat")
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
+    print(f"  CSTY  0x{FID_MELEE_STYLE & 0xFFF:03X}        MFO_MeleeStyle (equip_melee stance -- default ON)")
+    print(f"  CSTY  0x{FID_RANGED_STYLE & 0xFFF:03X}        MFO_RangedStyle (equip_ranged stance -- default ON)")
     if POC_ENABLED:
         print(f"  GLOB  0x{FID_PROBE_GLOB & 0xFFF:03X}        MFO_ProbeSelect (console: set MFO_ProbeSelect to N; 0 = all probes off)")
         for idx, sp, label, (tkind, tval) in POC_PROBES:

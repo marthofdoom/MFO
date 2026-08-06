@@ -51,6 +51,11 @@ REQUIRED = {
     # P1 probe: the caster-forward style the DLL swaps onto a latched follower's
     # live CombatController (bProbeCastStyle). CSGD is the record's whole point.
     0x832: ('CSTY', "MFO_CastStyle",        ['EDID', 'CSGD']),
+    # Stance-ownership styles (bWeaponStyleControl, default ON): swapped onto a
+    # follower's live CombatController when an equip gambit wins the hand. CSGD
+    # (the weapon-scoring axis) is each record's whole point.
+    0x833: ('CSTY', "MFO_MeleeStyle",       ['EDID', 'CSGD']),
+    0x834: ('CSTY', "MFO_RangedStyle",      ['EDID', 'CSGD']),
 }
 
 # Quests that are start-game-enabled but NOT run-once must appear in the SEQ or

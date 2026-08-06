@@ -9,6 +9,7 @@
 #include "Loadout.h"
 #include "Targeting.h"
 #include "CasterConsent.h"
+#include "CombatStyle.h"
 #include "Sightline.h"
 #include "Packages.h"
 #include "Papyrus.h"
@@ -394,6 +395,8 @@ namespace MFO {
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
         CasterConsent::ClearTransientState();
+        CombatStyle::ClearAll();            // owned stances are this-session,
+                                            // per-combat controller identities
         Sightline::ClearTransientState();   // LoS cache keys are this-session
                                             // FormID pairs -- same rule as the latch
         Board::ClearPendingEdits();

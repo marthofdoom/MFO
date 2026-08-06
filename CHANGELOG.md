@@ -1,3 +1,29 @@
+## v1.0.33 -- weapon-stance ownership: followers hold the stance their gambit picked
+
+- Fix: an archer told to switch to melee at close range (Auri) would flicker
+  bow<->mace and never attack -- "switch back and forth without doing anything."
+  Root cause was a tug-of-war: MFO's act.equip_melee gambit forced the mace into
+  her hands, but her OWN combat AI -- weighted ranged -- re-drew the bow the
+  instant the equip's suppression window lapsed, so every action window was
+  eaten by a re-equip and she never reached the attack rule. A one-shot
+  EquipObject cannot win against a ranged-forward combat style.
+- New: WEAPON-STANCE OWNERSHIP (bWeaponStyleControl, default ON). When an equip
+  gambit wins a follower's hand, MFO swaps their LIVE per-combat combat style
+  (CombatController::combatStyle, never the base record) to a stance-matched
+  style -- MFO_MeleeStyle (bow starved, avoidThreat 0, so the AI closes and
+  swings) or MFO_RangedStyle (keeps distance and shoots). The engine stops
+  fighting MFO over which weapon the follower holds. The swap is applied on the
+  ENGINE COMBAT THREAD from the UpdateCombat hook (the one callback that hands a
+  live controller to every combatant every tick -- an archer's own AI barely
+  touches the caster hook), and it reverts with the per-combat controller at
+  battle end. Held until battle end or the next equip gambit flips it.
+- The stance follows the WINNING GAMBIT, not the follower's class: tell a mage
+  to melee and they get the melee stance; hand a mage a bow with a ranged gambit
+  and they keep distance and shoot. No per-follower special-casing.
+- Debug kill-switch only: set bWeaponStyleControl = 0 in Data/SKSE/Plugins/
+  MFO.ini to disable. Not exposed in the MCM -- this is expected behaviour, not
+  a setting. Watch "[wstyle]" in MFO.log.
+
 ## v1.0.32 -- mage fixes: forced casts actually fire, paced, and potions flow again
 
 - Fix: the v1.0.27 force-on-miss had NEVER fired -- every forced cast died on

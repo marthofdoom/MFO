@@ -165,6 +165,17 @@ namespace MFO::Config {
     // marth armed it: bProbeCastStyle = 1 in Data/SKSE/Plugins/MFO.ini (the
     // seed file; sections are cosmetic to the parser), then a full restart.
     inline std::atomic<bool>  g_probeCastStyle{ false };
+
+    // WEAPON-STANCE OWNERSHIP (v1.0.33), DEFAULT ON -- a standard feature, not a
+    // probe, so no MCM toggle (#55); INI-only as a debug kill-switch. When an
+    // equip gambit wins a follower's hand, the DLL swaps their LIVE
+    // CombatController::combatStyle (0x38 -- below the §0.29 AE divergence,
+    // never the base record) to a stance-matched MFO CSTY, applied on the
+    // combat thread from the UpdateCombat hook. Stops the engine re-drawing the
+    // weapon MFO didn't pick (the Auri bow<->mace ping-pong). Reverts with the
+    // per-combat controller at battle end. Set bWeaponStyleControl = 0 in
+    // Data/SKSE/Plugins/MFO.ini to disable. See CombatStyle.cpp.
+    inline std::atomic<bool>  g_weaponStyleControl{ true };
     // Seconds a two-handed wielder must go between weapon swaps. The off-hand
     // swap is free and ungated; stowing a greatsword is not.
     inline std::atomic<float> g_twoHandedDebounce{ 6.0f };

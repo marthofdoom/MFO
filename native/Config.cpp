@@ -107,6 +107,7 @@ namespace MFO::Config {
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
             else if (a_key == "bDriveCaster")       setB(g_driveCaster);
             else if (a_key == "bProbeCastStyle")    setB(g_probeCastStyle);   // P1 probe, dev-only
+            else if (a_key == "bWeaponStyleControl") setB(g_weaponStyleControl); // default ON, debug kill-switch
             else if (a_key == "bUsePackages")       setB(g_usePackages);
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
             else if (a_key == "bCasterHook")        setB(g_casterHook);
@@ -212,6 +213,7 @@ namespace MFO::Config {
             g_castCooldown       = 4.0f;
             g_driveCaster        = false;
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
+            g_weaponStyleControl = true;    // v1.0.33: standard feature -- ON by default
             g_commandCast        = false;
             g_commandTarget      = true;
             g_focusKey           = 0x2B;

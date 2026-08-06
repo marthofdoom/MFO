@@ -50,6 +50,11 @@ namespace MFO::Forms {
     // magic-inclined style makes his own AI cast more -- §0.28's melee-bias
     // lever, promoted to a gated experiment.
     inline constexpr RE::FormID kProbeCastStyle   = 0x832;
+    // Stance-ownership CSTYs (bWeaponStyleControl, default ON). The DLL swaps
+    // one onto a follower's LIVE CombatController when an equip gambit wins the
+    // hand, so the engine stops re-drawing the weapon MFO didn't pick.
+    inline constexpr RE::FormID kMeleeStyle       = 0x833;
+    inline constexpr RE::FormID kRangedStyle      = 0x834;
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -82,6 +87,11 @@ namespace MFO::Forms {
     // data-handler lookup itself. TESCombatStyle is concrete, so the template
     // Look<> is safe (see the LOOKUP TRAP note above).
     inline RE::TESCombatStyle* g_probeCastStyle = nullptr;
+    // Stance-ownership CSTYs. Resolved at kDataLoaded (main thread) so the
+    // combat-thread apply only ever READS settled pointers. A miss disables
+    // that one stance with a named log line -- never a crash.
+    inline RE::TESCombatStyle* g_meleeStyle  = nullptr;
+    inline RE::TESCombatStyle* g_rangedStyle = nullptr;
 
     // Resolve at kDataLoaded. Returns false if anything required is missing.
     // A missing form disables ONE feature with a named log line -- never a
