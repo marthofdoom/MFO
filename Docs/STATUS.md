@@ -106,6 +106,12 @@ reads score=0.
   set pieces) until the set is COMPLETE, then equips it all at once; with a
   piecemeal OVERRIDE when a single piece is a big enough upgrade to wear now.
   Stateful + save-persisted + economy sell-exemption → focused later build.
+- **#61 — "fashionrim" / my-followers-are-dolls debug toggle** (rolls into the mage
+  update). Default-OFF Debug MCM toggle that disables ALL follower equipment
+  decisions (loot gear/ammo, mage loadout, equip melee/ranged weapon-switching,
+  shed, MEO gem transfer, gear buy/sell) — player dresses them, MFO never touches
+  gear. Ships with MASSIVE warnings (breaks weapon-switching, upgrades, etc.).
+  Depends on #55 (MCM registration fix) or it's a dead checkbox too.
 - **#58 — Recognize framework followers (Kaidan, Inigo, Lucien).** Custom-framework
   voiced followers with bespoke quest/AI systems, not the vanilla follower faction
   path MFO detects. Reverse-engineer each one's active-follower signal from its
