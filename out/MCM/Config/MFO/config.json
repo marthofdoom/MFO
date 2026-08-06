@@ -605,7 +605,7 @@
           "id": "bDollsMode:General",
           "text": "Fashionrim (dress armor by hand)",
           "type": "toggle",
-          "help": "When ON, MFO stops ALL armor automation -- armor looting, the mage robe loadout, armor auto-equip, gem transfer on armor swaps, and armor buy/sell -- so you dress followers yourself. Weapons are unaffected (weapon switching, looting, ammo, trade all still work).",
+          "help": "When ON, MFO stops acquiring and fitting armor -- armor looting, the mage robe loadout, armor auto-equip, gem transfer on armor swaps, and armor buying -- so you dress followers yourself. Selling still works (worn and gem-socketed gear is never sold). Weapons are unaffected (switching, looting, ammo, buy/sell all still work).",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 0

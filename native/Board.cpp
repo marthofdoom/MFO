@@ -860,28 +860,46 @@ namespace MFO::Board {
                                         ImGui::SetNextWindowPos(
                                             ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                                        ImGui::SetNextWindowSize(
+                                            ImVec2(std::max(360.0f, io.DisplaySize.x * 0.30f),
+                                                   io.DisplaySize.y * 0.55f), ImGuiCond_Appearing);
                                         if (ImGui::BeginPopup("##spell")) {
                                             pickerDrawnThisFrame = true;
+                                            static RE::FormID s_teachArmed = 0;
+                                            if (ImGui::IsWindowAppearing()) s_teachArmed = 0;   // never open pre-armed
+                                            ImGui::PushFont(g_fontHead);
+                                            ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                                            ImGui::TextUnformatted("Spell");
+                                            ImGui::PopStyleColor();
+                                            ImGui::PopFont();
+                                            ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
+                                            ImGui::Separator();
                                             if (who->knownSpells.empty() && who->teachableSpells.empty())
                                                 ImGui::TextDisabled("no spells known, no spellbooks carried");
                                             for (int k = 0; k < (int)who->knownSpells.size(); ++k) {
                                                 const bool curSel = who->knownSpells[k].first == rv.spell;
+                                                ImGui::PushID((int)who->knownSpells[k].first);   // dup names -> unique IDs
                                                 if (ImGui::Selectable(who->knownSpells[k].second.c_str(), curSel)) {
                                                     EditCmd e{ EditKind::SetSpell, sel, selTable, rv.uid, 0 };
                                                     e.spell = who->knownSpells[k].first;
                                                     QueueEdit(e);
                                                 }
+                                                if (curSel) {
+                                                    ImGui::SetItemDefaultFocus();
+                                                    if (ImGui::IsWindowAppearing()) ImGui::SetScrollHereY(0.5f);
+                                                }
+                                                ImGui::PopID();
                                             }
                                             if (!who->teachableSpells.empty()) {
                                                 ImGui::Separator();
                                                 ImGui::TextDisabled("Teach from spellbook (consumes it):");
-                                                static RE::FormID s_teachArmed = 0;
                                                 for (const auto& t : who->teachableSpells) {
                                                     const bool armed = (s_teachArmed == t.book);
                                                     if (armed) ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
                                                     const std::string lbl = armed
                                                         ? (t.name + "  -- teach? DESTROYS the book")
                                                         : (t.name + "  (spellbook)");
+                                                    ImGui::PushID((int)t.book);   // dup names -> unique IDs
                                                     if (ImGui::Selectable(lbl.c_str(), false,
                                                                           ImGuiSelectableFlags_DontClosePopups)) {
                                                         if (armed) {
@@ -894,6 +912,7 @@ namespace MFO::Board {
                                                             s_teachArmed = t.book;   // arm: show the warning first
                                                         }
                                                     }
+                                                    ImGui::PopID();
                                                     if (armed) ImGui::PopStyleColor();
                                                 }
                                             }
@@ -1070,10 +1089,14 @@ namespace MFO::Board {
             const auto& io = ImGui::GetIO();
             // #56: margins from the top-right corner are MCM-adjustable so the
             // overlay can dodge another mod's HUD (default 12/12 = unchanged).
-            ImGui::SetNextWindowPos(
-                ImVec2(io.DisplaySize.x - static_cast<float>(Config::g_overlayX.load()),
-                       static_cast<float>(Config::g_overlayY.load())),
-                ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+            // Clamp to the display so a big slider value can't push it off-screen
+            // (the right pivot would otherwise vanish it on a narrow Deck screen).
+            const float mx = std::clamp(static_cast<float>(Config::g_overlayX.load()),
+                                        0.0f, std::max(0.0f, io.DisplaySize.x - 16.0f));
+            const float my = std::clamp(static_cast<float>(Config::g_overlayY.load()),
+                                        0.0f, std::max(0.0f, io.DisplaySize.y - 16.0f));
+            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - mx, my),
+                                    ImGuiCond_Always, ImVec2(1.0f, 0.0f));
             ImGui::SetNextWindowBgAlpha(0.42f);
             const auto flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
@@ -1569,21 +1592,36 @@ namespace MFO::Board {
             case EditKind::SetSpell: tab[i].actionParamForm = c.spell; break;
             case EditKind::TeachSpell: {
                 // #4: teach the spell (AddSpell) and CONSUME one spellbook from
-                // the player, then set it as the gambit's spell. Main thread, so
-                // the actor + inventory mutations are safe. Re-check HasSpell on
-                // the live actor -- a stale snapshot could double-queue a teach,
-                // and we must not eat a second book for a spell already learned.
+                // the player, then set it as the gambit's spell. Runs where every
+                // board edit runs -- the same task the evaluator drains, so
+                // RemoveItem is the blessed worker-safe inventory path (§0.32) and
+                // AddSpell is the same mutation class as the equips already issued
+                // here. GUARD against a stale snapshot: teach ONLY if the follower
+                // still lacks the spell AND the player still carries the book, so
+                // a double-queued edit never eats a second book or grants a free
+                // spell after the book was consumed/sold.
                 auto* follower = c.fid ? RE::TESForm::LookupByID<RE::Actor>(c.fid) : nullptr;
                 auto* spell    = c.spell ? RE::TESForm::LookupByID<RE::SpellItem>(c.spell) : nullptr;
                 auto* book     = c.book ? RE::TESForm::LookupByID<RE::TESBoundObject>(c.book) : nullptr;
-                if (follower && spell && !follower->HasSpell(spell)) {
-                    follower->AddSpell(spell);
-                    if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && book)
+                auto* pc       = RE::PlayerCharacter::GetSingleton();
+                bool hasBook = false;
+                if (pc && book)
+                    for (auto& [o, d] : pc->GetInventory())
+                        if (o == book && d.first > 0) { hasBook = true; break; }
+                if (follower && spell) {
+                    if (follower->HasSpell(spell)) {
+                        // already learned (a prior edit taught it) -> just assign,
+                        // never consume a second book.
+                        tab[i].actionParamForm = c.spell;
+                    } else if (hasBook) {
+                        follower->AddSpell(spell);
                         pc->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                    spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}",
-                                 c.fid, c.spell, c.book);
+                        spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}",
+                                     c.fid, c.spell, c.book);
+                        tab[i].actionParamForm = c.spell;
+                    }
+                    // else: book gone AND spell unknown -> do NOT set an uncastable spell.
                 }
-                tab[i].actionParamForm = c.spell;   // set as the gambit spell regardless
                 break;
             }
             case EditKind::SetCond: {

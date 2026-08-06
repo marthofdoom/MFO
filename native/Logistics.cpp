@@ -3304,8 +3304,8 @@ namespace MFO::Logistics {
                 // instead). "acted" iff a cast really fired this tick.
                 if (op == Vocab::kActCastSelf) {
                     if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam)) {
-                        const auto* ei   = sp->GetCostliestEffectItem();
-                        const auto* mgef = ei ? ei->baseEffect : nullptr;
+                        auto* ei   = sp->GetCostliestEffectItem();
+                        auto* mgef = ei ? ei->baseEffect : nullptr;   // non-const: HasMagicEffect takes EffectSetting*
                         auto* mt = a_follower->AsMagicTarget();
                         if (mgef && mt && mt->HasMagicEffect(mgef)) {
                             start = choice.ruleIndex + 1;   // buff still up -> next rule

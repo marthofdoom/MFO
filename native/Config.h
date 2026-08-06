@@ -174,10 +174,11 @@ namespace MFO::Config {
     inline std::atomic<int>   g_overlayY{ 12 };
 
     // #61 FASHIONRIM / "my followers are dolls" (mage update). Default OFF.
-    // ARMOR-ONLY debug toggle: when on, MFO stops all ARMOR automation -- armor
-    // looting, the mage school-robe loadout, armor auto-equip, MEO gem transfer
-    // on armor swaps, and armor buy/sell -- so the player dresses followers by
-    // hand. WEAPONS are untouched (weapon switching/looting/ammo/trade all work).
+    // ARMOR-ONLY debug toggle: when on, MFO stops ARMOR ACQUISITION + fitting --
+    // armor looting, the mage school-robe loadout, armor auto-equip, MEO gem
+    // transfer on armor swaps, and armor BUYING -- so the player dresses
+    // followers by hand. SELLING is unaffected (marth: skip acquisition only;
+    // worn + MEO-socketed gear is never sold anyway). WEAPONS untouched entirely.
     inline std::atomic<bool>  g_dollsMode{ false };
 
     // CAST CONTROL SLIDER (mage update). How tightly a follower's OWN spell
