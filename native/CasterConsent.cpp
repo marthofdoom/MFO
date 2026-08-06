@@ -29,6 +29,8 @@ namespace MFO::CasterConsent {
         // whole lifetime, permit opens once per cooldown. One store, under the
         // existing g_mx -- the thunk never calls Loadout's non-atomic maps
         // from the combat thread.
+        std::shared_mutex g_mx;   // guards g_want + g_otherCast; the hook reads
+                                  // (shared), the main thread writes (unique).
         struct Want {
             RE::FormID        spell = 0;
             Clock::time_point permitAfter{};   // epoch (default) = permit now
