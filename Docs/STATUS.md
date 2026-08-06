@@ -12,13 +12,16 @@
 
 ## Continue in one screen
 
-- **Latest shipped:** **v1.0.33** ("weapon-stance ownership") — the Auri melee
-  fix. When an equip gambit wins a follower's hand, MFO swaps their LIVE per-
-  combat `combatStyle` (0x38) to `MFO_MeleeStyle`/`MFO_RangedStyle` on the combat
-  thread from the UpdateCombat hook, so the engine stops re-drawing the weapon
-  MFO didn't pick (the bow<->mace ping-pong). Default ON (`bWeaponStyleControl`,
-  INI-only, no MCM). Fable-reviewed pre-commit. Field test pending — watch
-  `[wstyle]` lines.
+- **Latest shipped & deployed:** **v1.0.33** ("weapon-stance ownership") — the
+  Auri melee fix. When an equip gambit wins a follower's hand, MFO swaps their
+  LIVE per-combat `combatStyle` (0x38) to `MFO_MeleeStyle`/`MFO_RangedStyle` on
+  the combat thread from the UpdateCombat hook, so the engine stops re-drawing
+  the weapon MFO didn't pick (the bow<->mace ping-pong). Default ON
+  (`bWeaponStyleControl`, INI-only, no MCM). Fable-reviewed pre-commit.
+  **Deck-verified (DLL e954b7bc…), GitHub Release = Latest** (CI run 31127627267;
+  the push didn't auto-fire the workflow — transient Actions hiccup — so it was
+  `gh workflow run`-dispatched, still HEAD's native tree). Field test pending —
+  watch `[wstyle] … OWNED/HANDOFF`; does Auri hold the mace, no flicker?
 - **v1.0.32** ("mage fixes") — deck-verified (DLL 1542ab83…), GitHub Release =
   Latest. marth reports casting "drastically improved" in the field (v1.0.32
   validating; confirm the pacing/potion watch-items still hold).
