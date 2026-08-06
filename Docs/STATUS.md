@@ -54,6 +54,21 @@ reads score=0.
 
 ## Open issues (ranked)
 
+0. **HEADLINE — casting overhaul (next Nexus = "mage fixes").** Research (task #59)
+   found the v1.0.27 forced cast has **never fired on deck** — it errors
+   `template input 'Spell' is not declared on FE090820` and silently falls to the
+   invisible `CastSpellImmediate`. **v1.0.32 (task #60), building now:** fixes the
+   dead forced cast (Packages.cpp `FindInput` — try template nameMap on a MISS not
+   just null; static uid fallback Spell=3/Target=4; scope to CastAt, NOT CastSelf's
+   CTD-class t6+QNAM cell), cooldown-consulted permit (kills burst cadence),
+   potion-exempt deny (only deny formType==Spell), flicker-proof latch, + an
+   INI-gated **P1 combat-style probe** (`bProbeCastStyle`, default OFF) to de-risk
+   Stage 2. **Stage 2 (#59, the headline toggle `bFullCastControl`, default OFF):**
+   own every decision the AI's cast machinery consults (deny-all + spell-scoring
+   0x0C + CalcCastMagicChance 0x08 + swap combatStyle 0x38 to an MFO caster CSTY) →
+   100% vanilla-animated+mobile, MFO owns what/when/whom. Depends on the P1 probe
+   result + 5 open design questions for marth (see task #59).
+
 1. **#55 — MCM new toggles = empty, unresponsive checkboxes on existing saves.**
    RECURRING ("as per usual"). All file touch points verified correct (atomic,
    parse, ResetToDefaults, kMcmDefaults heal table, config.json control, Settings
