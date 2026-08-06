@@ -44,6 +44,12 @@ namespace MFO::Forms {
     inline constexpr RE::FormID kRetreatPackage   = 0x831;
     // #21 econ bridge: carries MFO_Trade (VMAD), dispatched by the DLL.
     inline constexpr RE::FormID kTradeQuest       = 0x80E;
+    // P1 PROBE (bProbeCastStyle, default OFF): the caster-forward CSTY the
+    // consent hook swaps onto a latched follower's LIVE CombatController
+    // (per-combat instance, never the base record) to measure whether a
+    // magic-inclined style makes his own AI cast more -- §0.28's melee-bias
+    // lever, promoted to a gated experiment.
+    inline constexpr RE::FormID kProbeCastStyle   = 0x832;
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -71,6 +77,11 @@ namespace MFO::Forms {
     inline RE::TESQuest*   g_retreatQuest   = nullptr; // RETREAT PROBE
     inline RE::TESPackage* g_retreatPackage = nullptr; // RETREAT PROBE
     inline RE::TESQuest*   g_tradeQuest     = nullptr; // #21 econ bridge
+    // P1 probe. Resolved at kDataLoaded (main thread) so the combat-thread
+    // consent hook only ever READS a settled pointer -- it must never run a
+    // data-handler lookup itself. TESCombatStyle is concrete, so the template
+    // Look<> is safe (see the LOOKUP TRAP note above).
+    inline RE::TESCombatStyle* g_probeCastStyle = nullptr;
 
     // Resolve at kDataLoaded. Returns false if anything required is missing.
     // A missing form disables ONE feature with a named log line -- never a

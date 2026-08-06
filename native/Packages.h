@@ -130,6 +130,7 @@ namespace MFO::Packages {
         Busy,          // another follower already holds the single alias slot
         Contention,    // a higher-or-equal-priority quest owns the alias layer
         BadInputs,     // the package's data inputs could not be located by name
+        SelfRoute,     // cast_self barred from the package route -- see Begin()
     };
 
     const char* DeclineName(Decline a_reason);
@@ -154,18 +155,19 @@ namespace MFO::Packages {
 
     // Command a follower to cast a spell ON THEMSELVES.
     //
-    // SHAPE (field-proven, probe 6): Target input = PTDA **targType 6**, value
-    // 0 -- the engine's own "self" target type. NO QNAM, because nothing here
-    // names an alias.
+    // CURRENTLY ALWAYS DECLINES (Decline::SelfRoute, v1.0.32) -- deliberately.
+    // targType 6 alone is field-proven (probe 6), but probe 6's record carried
+    // NO QNAM; the shipped MFO_CastPackage carries an AUTHORED QNAM (its
+    // authored Target is t4 -> alias 1), and writing t6 into a QNAM-carrying
+    // record at runtime is the rev-4 CTD's surviving zero-precedent cell
+    // (§0.20/§0.22 -- the crash was re-explained as the QNAM, not the t6).
+    // Until a dedicated probe clears QNAM+t6, cast_self misses fall through
+    // to Actuation's silent apply, exactly the pre-v1.0.32 behaviour.
     //
-    // This header previously described `targType 4 -> alias 0`, reasoning that
-    // the carrier alias IS the follower. That shape was FIELD-REFUTED: it
-    // stalls, owning the actor while resolving nothing (§0.19, #65). An alias
-    // indirection back to the DELIVERING alias is the failure; self-targeting
-    // is fine, it just has its own type.
-    //
-    // Returns Decline::None when the fill was DISPATCHED -- NOT when the spell
-    // fired, and NOT when the alias was filled. Watch Status().phase for that.
+    // When it is eventually armed: Target input = PTDA **targType 6**, value 0.
+    // NOT targType 4 -> alias 0 -- an alias indirection back to the DELIVERING
+    // alias is FIELD-REFUTED (§0.19, #65): it stalls, owning the actor while
+    // resolving nothing.
     Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
     // Command a follower to cast at another actor.

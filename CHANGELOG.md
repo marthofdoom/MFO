@@ -1,3 +1,45 @@
+## v1.0.32 -- mage fixes: forced casts actually fire, paced, and potions flow again
+
+- Fix: the v1.0.27 force-on-miss had NEVER fired -- every forced cast died on
+  "[pkg] template input 'Spell' is not declared" and fell silently to the
+  invisible apply, which is why "cast Firebolt at nearest" still felt ignored.
+  Root cause was a package-input name lookup: the live instance's name map is
+  non-null but carries input TYPES ("TargetSelector"/"SingleRef"), while the
+  input NAMES ("Spell"/"Target") live on the vanilla UseMagic template -- and
+  the code only consulted the template when the instance map was MISSING, not
+  when the lookup missed. The search now tries the instance, then the template,
+  then falls back to the template's statically-known input ids (safe: the slot
+  type is still independently verified before anything is written). A miss on
+  a cast-at-foe gambit now produces a real, animated "[cast] ... FORCED ... at"
+  package cast of the CONFIGURED spell. cast_self stays on the silent fallback
+  deliberately: its runtime shape (targType 6 on a QNAM-carrying record) is a
+  zero-precedent cell of the class that CTD'd in the field, and it stays barred
+  until a dedicated probe clears it.
+- Fix: cast cadence is now actually paced by fCastCooldown. The consent hook's
+  force-permit had no cooldown consult -- with the spell still in hand it said
+  YES on every caster tick, so casts came in bursts (deck: 4 in ~2.2s). The
+  cooldown deadline now rides the latch itself (stamped on every cast, read on
+  the combat thread under the hook's own lock) and the gambit spell is held
+  until due; the deny of competing spells is untouched -- exclusivity and
+  pacing are separate dials. One "[consent] ... pacing" line per window.
+- Fix: a latched follower's own combat potion-drinking is no longer suppressed.
+  The deny hook also fires on the combat POTION caster (CombatMagicCasterRestore
+  drives drinking too), so exclusive cast control was silently vetoing his
+  emergency drinks. The hook now only ever denies actual SPELLS; potions,
+  scrolls, and anything else get the AI's own answer.
+- Fix: the AI can no longer slip its own spell in through a condition flicker.
+  The suppression latch used to drop on any single service tick where the cast
+  condition momentarily didn't hold -- a sub-tick window the combat casters,
+  ticking far faster than the scheduler, happily used. Once a cast rule has
+  been winning, exclusive control now holds for the combat's duration and
+  releases only at combat end, dismissal, or revert/load -- never later.
+- New (dev probe, DEFAULT OFF): bProbeCastStyle swaps a latched follower's
+  live per-combat style to a new caster-forward MFO_CastStyle record (magic
+  branch strongly preferred, melee starved) and restores it on release, to
+  measure whether a magic-inclined disposition makes his own AI cast more --
+  and mobile -- ahead of the full cast-control work. INI-only, off everywhere
+  by default, inert unless armed; "[probe cstyle]" lines carry the data.
+
 ## v1.0.31 -- pure casters: no armor looting, and school robes that actually register
 
 - Fix: a magic user no longer loots RATED armor at all -- heavy OR light

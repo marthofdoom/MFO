@@ -291,44 +291,106 @@ namespace MFO::Packages {
             return skyrim_cast<RE::TESCustomPackageData*>(a_pkg->data);
         }
 
+        // The statically-known UNAM uids of the two inputs we mutate, on the
+        // vanilla UseMagic template 000504F5 (dumped in ENGINE_NOTES §0.17:
+        // input 3 "Spell", input 4 "Target"). LAST-RESORT ONLY -- used when
+        // BOTH name maps miss the name (below). Safe even if wrong: ReadTarget
+        // independently validates the resolved slot's reported TYPE NAME
+        // before anything is written through it, so a bad uid resolves to a
+        // slot that declines loudly rather than a silent stomp.
+        constexpr std::int8_t kUidSpellUseMagic  = 3;
+        constexpr std::int8_t kUidTargetUseMagic = 4;
+
+        // One diagnostic dump of what a name map ACTUALLY contains -- emitted
+        // only on the both-maps-missed path, once per session, so the next
+        // deck log settles the runtime shape instead of leaving us to infer it.
+        void DumpNameMap(const char* a_which, RE::BGSPackageDataNameMap* a_maps) {
+            if (!a_maps) {
+                spdlog::error("[pkg]   {} name map: NULL", a_which);
+                return;
+            }
+            std::string names;
+            for (const auto& nm : a_maps->nameMap) {
+                names += std::format("{}'{}'={}", names.empty() ? "" : ", ",
+                                     nm.name.empty() ? "<empty>" : nm.name.c_str(),
+                                     static_cast<int>(nm.uid));
+            }
+            spdlog::error("[pkg]   {} name map ({} entr{}): {}", a_which,
+                          a_maps->nameMap.size(),
+                          a_maps->nameMap.size() == 1 ? "y" : "ies",
+                          names.empty() ? "<none>" : names);
+        }
+
         // Resolve a template input NAME to the live IPackageData* that fills
         // it. Two indirections, both of which are the engine's own:
         //
         //   nameMap : BNAM name  -> UNAM uid   (the TEMPLATE's declaration)
         //   uids[i] : slot i     -> UNAM uid   (which input THIS instance fills)
         //
-        // so name -> uid -> slot -> data[slot]. The instance emits no
-        // declarations of its own (it inherits them through PKCU.template), so
-        // the name map may live on the template's data instead -- hence the
-        // fallback.
+        // so name -> uid -> slot -> data[slot].
+        //
+        // THE v1.0.27-31 BUG, fixed here: the instance's nameMap is NON-NULL
+        // at runtime yet does NOT declare "Spell" -- the ESP instance's ANAM
+        // subrecords carry input TYPES ("TargetSelector", "SingleRef"), while
+        // the human input NAMES live only on the vanilla UseMagic template
+        // (000504F5). The old code fell back to the template's map ONLY when
+        // the instance map POINTER was null, so every force-on-miss errored
+        // "template input 'Spell' is not declared" and silently fell to the
+        // invisible CastSpellImmediate path -- the forced cast NEVER fired.
+        // Now: a name-lookup MISS (not just a missing map) also consults the
+        // template's map; only when BOTH miss does the static-uid last resort
+        // run, with a one-time dump of what each map really held.
         RE::IPackageData* FindInput(RE::TESPackage* a_pkg, std::string_view a_name) {
             auto* cpd = CustomData(a_pkg);
             if (!cpd) return nullptr;
 
-            // Find the uid the template declared for this name.
-            std::int8_t uid  = -1;
-            auto*       maps = cpd->nameMap.get();
-            if (!maps && cpd->templateParent) {
+            auto lookup = [&](RE::BGSPackageDataNameMap* a_maps) -> std::int8_t {
+                if (!a_maps) return -1;
+                for (const auto& nm : a_maps->nameMap) {
+                    if (!nm.name.empty() && a_name == std::string_view(nm.name.c_str())) {
+                        return nm.uid;
+                    }
+                }
+                return -1;
+            };
+
+            auto* instMaps = cpd->nameMap.get();
+            RE::BGSPackageDataNameMap* tplMaps = nullptr;
+            if (cpd->templateParent) {
                 if (auto* tpl = CustomData(cpd->templateParent)) {
-                    maps = tpl->nameMap.get();
+                    tplMaps = tpl->nameMap.get();
                 }
             }
-            if (!maps) {
-                spdlog::error("[pkg] package {:08X} has no name map on the instance OR its "
-                              "template -- inputs cannot be resolved by name",
-                              a_pkg->GetFormID());
-                return nullptr;
-            }
-            for (const auto& nm : maps->nameMap) {
-                if (!nm.name.empty() && a_name == std::string_view(nm.name.c_str())) {
-                    uid = nm.uid;
-                    break;
-                }
-            }
+
+            // Instance first, then the template ON A MISS -- not only on a
+            // null pointer. The instance inherits its declarations through
+            // PKCU.template, so the template's map is authoritative for names.
+            std::int8_t uid = lookup(instMaps);
+            if (uid < 0) uid = lookup(tplMaps);
+
             if (uid < 0) {
-                spdlog::error("[pkg] template input '{}' is not declared on package {:08X}",
-                              a_name, a_pkg->GetFormID());
-                return nullptr;
+                // BOTH missed. Say exactly what each map held -- once -- so
+                // the next deck session confirms the runtime shape, then fall
+                // back to the statically-known template uids. ReadTarget's
+                // type-name guard keeps a wrong uid from ever being written
+                // through (it declines loudly instead).
+                static std::atomic<bool> s_dumped{ false };
+                if (!s_dumped.exchange(true)) {
+                    spdlog::error("[pkg] input '{}' missing from BOTH name maps on package "
+                                  "{:08X} -- falling back to static template uids "
+                                  "(Spell={}, Target={}). Maps as found:",
+                                  a_name, a_pkg->GetFormID(),
+                                  kUidSpellUseMagic, kUidTargetUseMagic);
+                    DumpNameMap("instance", instMaps);
+                    DumpNameMap("template", tplMaps);
+                }
+                if      (a_name == kInputSpell)  uid = kUidSpellUseMagic;
+                else if (a_name == kInputTarget) uid = kUidTargetUseMagic;
+                else {
+                    spdlog::error("[pkg] template input '{}' is not declared on package {:08X} "
+                                  "and has no static fallback uid", a_name, a_pkg->GetFormID());
+                    return nullptr;
+                }
             }
 
             // Find which of OUR value slots carries that uid.
@@ -420,13 +482,13 @@ namespace MFO::Packages {
                 targetTarget->target.aliasID = kAliasCommandTarget;
                 targetTarget->value          = 0;
             } else {
-                // SELF ROUTE, field-proven (probe 6): targType 6, no operand.
-                //
-                // NOT targType 4 -> alias 0. That was the original design and
-                // it is FIELD-REFUTED (§0.19, #65): an alias indirection back
-                // to the DELIVERING alias stalls -- the package owns the actor
-                // and resolves nothing, spending no magicka and playing no
-                // animation.
+                // SELF ROUTE -- UNREACHABLE from Begin() (v1.0.32), kept only
+                // as defence in depth should a future caller bypass the bar.
+                // targType 6 itself is field-proven (probe 6) but ONLY on a
+                // record with NO QNAM; the shipped MFO_CastPackage carries an
+                // authored QNAM, and QNAM + t6 is the rev-4 CTD's surviving
+                // zero-precedent cell (§0.22). Begin() declines SelfRoute
+                // before SetInputs can be reached with a null target.
                 targetTarget->targType      = kTargTypeSelf;
                 targetTarget->target.object = nullptr;
                 targetTarget->value         = 0;
@@ -587,6 +649,26 @@ namespace MFO::Packages {
                       RE::TESObjectREFR* a_target) {
             if (!Config::g_usePackages.load()) return Decline::Disabled;
             if (!a_follower || !a_spell)       return Decline::NoRecord;
+
+            // THE SELF ROUTE IS BARRED from the package -- deliberately, and
+            // this must hold even now that FindInput works (v1.0.32). For a
+            // self-cast SetInputs writes targType 6 into a record that CARRIES
+            // AN AUTHORED QNAM (the shipped MFO_CastPackage names the command
+            // quest because its authored Target is t4 -> alias 1). QNAM on a
+            // record none of whose inputs names an alias is the rev-4 CTD's
+            // surviving suspect (§0.22 re-explained the crash as the QNAM, not
+            // the t6): probe 6's clean t6 cast had NO QNAM, and QNAM+t6 is a
+            // ZERO-PRECEDENT cell nothing has ever probed. Before v1.0.32 the
+            // FindInput bug made this decline moot (every Begin died at
+            // BadInputs); fixing that bug must not silently arm an unprobed
+            // CTD-class shape, so cast_self stays on the silent fallback --
+            // today's behaviour -- until a dedicated probe clears the cell.
+            if (!a_target) {
+                spdlog::debug("[pkg] {:08X}: cast_self declined -- package self route "
+                              "barred (QNAM + targType 6 is an unprobed zero-precedent "
+                              "cell); silent fallback instead", a_follower->GetFormID());
+                return Decline::SelfRoute;
+            }
 
             auto* quest = Forms::g_commandQuest;
             auto* pkg   = Forms::g_castPackage;
@@ -779,6 +861,7 @@ namespace MFO::Packages {
         case Decline::Busy:         return "alias held by another follower";
         case Decline::Contention:   return "alias layer owned at >= our priority";
         case Decline::BadInputs:    return "package inputs unresolvable";
+        case Decline::SelfRoute:    return "self route barred (QNAM+t6 unprobed)";
         default:                    return "?";
         }
     }

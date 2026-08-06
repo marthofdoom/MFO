@@ -36,13 +36,35 @@ namespace MFO::CasterConsent {
     // service interval times the party size before the next Want() -- the deny
     // was off and the AI slipped its own spell in between two gambit casts.
     // The latch now spans the cast AND its cooldown, so suppression is
-    // continuous for exactly as long as the cast rule keeps winning (the same
-    // lifetime the scheduler's castSeen/H3 release already tracks). It ends
-    // ONLY at the H3 release (the rule stopped winning), at combat end, on
-    // dismissal, or on revert. MAIN THREAD.
+    // continuous.
+    //
+    // v1.0.32: the latch holds for the COMBAT'S DURATION once armed. The
+    // v1.0.30 lifetime still dropped it on the scheduler's H3 release -- a
+    // SINGLE service tick where the cast condition momentarily didn't hold --
+    // and the engine's combat casters tick many times inside one service
+    // interval, so a condition flicker opened a sub-tick window the AI used to
+    // slip its own spell in. The release points are now ONLY: combat end, the
+    // follower's dismissal, and revert/load (never past combat end -- the
+    // scheduler's non-combat branch clears every serviced follower). MAIN
+    // THREAD.
     void Want(RE::FormID a_follower, RE::FormID a_spell);
     void Clear(RE::FormID a_follower);
     void ClearAll();
+
+    // COOLDOWN-CONSULTED PERMIT (v1.0.32). fCastCooldown used to gate only the
+    // EQUIP debounce (Loadout::Prepare) -- the thunk's force-YES had no
+    // cooldown consult, so while the spell stayed in the follower's hand the
+    // permit fired every caster tick and casts BURST (deck: 4 in ~2.2s).
+    // Loadout::StartCooldown now stamps the next-allowed-cast time onto the
+    // latch entry itself (under the hook's own lock), and the combat-thread
+    // thunk DENIES the wanted spell until it is due -- the deny of OTHER
+    // spells is unaffected; exclusivity is separate from pacing. Deny and
+    // permit are two dials on one latch: deny spans the rule's lifetime, the
+    // permit opens once per cooldown. The pace dies with the latch (a fresh
+    // fight's first cast is prompt). No-op for an unlatched follower. Written
+    // from the task queue (every StartCooldown call site), read from the
+    // combat thread -- the thunk never calls Loadout's non-atomic maps.
+    void NoteCooldown(RE::FormID a_follower, float a_seconds);
 
     // OUR spell just fired -- the [cast] sink watched the gambit's own spell
     // leave the follower's hands (AI-driven or package-forced). v1.0.30: this

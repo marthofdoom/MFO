@@ -152,6 +152,19 @@ namespace MFO::Config {
     // then let the engine advance it. marth's principle -- if the game code can
     // trigger a real cast, so can we; the question is which call the AI makes.
     inline std::atomic<bool>  g_driveCaster{ false };
+
+    // P1 PROBE (v1.0.32), DEFAULT OFF -- dev opt-in ONLY, INI-only (no MCM;
+    // it is an experiment, not a setting). While a cast rule is latched, the
+    // consent hook swaps the follower's LIVE CombatController::combatStyle
+    // (per-combat instance, offset 0x38 -- below the §0.29 AE divergence;
+    // never the base record) to MFO_CastStyle, a caster-forward CSTY, and
+    // restores it on latch release / combat end. Measures the single unknown
+    // full cast control depends on: does a magic-inclined style make his own
+    // AI cast MORE, and mobile (§0.28's melee bias)? Carries CTD risk by
+    // nature of touching a live combat structure -- it must never run unless
+    // marth armed it: bProbeCastStyle = 1 in Data/SKSE/Plugins/MFO.ini (the
+    // seed file; sections are cosmetic to the parser), then a full restart.
+    inline std::atomic<bool>  g_probeCastStyle{ false };
     // Seconds a two-handed wielder must go between weapon swaps. The off-hand
     // swap is free and ungated; stowing a greatsword is not.
     inline std::atomic<float> g_twoHandedDebounce{ 6.0f };

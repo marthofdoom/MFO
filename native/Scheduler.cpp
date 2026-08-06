@@ -457,7 +457,21 @@ namespace MFO::Scheduler {
         // suppressed-in-window) even when a lower rule ended up acting --
         // releasing on "the final winner is not a cast" would yank the spell
         // mid-grace every time a skipped cast let a lower rule run (D6).
-        if (!castSeen) { Loadout::ReleaseSpell(id); CasterConsent::Clear(id); }
+        //
+        // v1.0.32: the CONSENT latch is deliberately NOT released here any
+        // more. H3 fires on a SINGLE service tick where no cast condition
+        // held -- but the engine's combat casters tick many times inside one
+        // service interval, so a momentary condition flicker (foe HP hovering
+        // on a threshold, a target swap) dropped the deny for a whole
+        // service-to-service gap and the AI slipped its OWN spell in through
+        // it -- the sub-tick leak v1.0.30's cooldown-spanning latch still
+        // had. Once a cast rule has been winning, exclusive control now holds
+        // for the COMBAT'S DURATION; the release points are combat end (the
+        // non-combat branch above, so it can never outlive the fight),
+        // dismissal (Followers::Refresh), and revert/load (ClearTransient-
+        // State). The SPELL still releases on H3 -- hand occupancy is pacing,
+        // and their AI cannot cast what they are not holding either way.
+        if (!castSeen) Loadout::ReleaseSpell(id);
 
         const char* name = f->GetName() ? f->GetName() : "?";   // flair #11
 

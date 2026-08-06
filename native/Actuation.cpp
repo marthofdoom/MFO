@@ -272,13 +272,15 @@ namespace MFO::Actuation {
                     // RE-ASSERT THE LATCH FIRST (v1.0.30). The rule is still
                     // WINNING -- this wait is part of the cast's own pacing --
                     // so exclusive control must hold through it. The sink no
-                    // longer drops the latch on a cast, but this branch is
-                    // still reachable UNLATCHED: the condition can flicker off
-                    // (H3 releases) and back on mid-cooldown, and a cooldown
-                    // stamped in the LAST fight survives into the next one.
-                    // Without this line, either case left the deny off for the
-                    // rest of the cooldown -- the residual leak. Idempotent
-                    // overwrite, same call the Ready path makes; observe-only
+                    // longer drops the latch on a cast, and (v1.0.32) neither
+                    // does an H3 condition flicker -- but this branch is still
+                    // reachable UNLATCHED: combat end clears the latch while a
+                    // cooldown stamped in the LAST fight survives into the
+                    // next one, so the first services of a new fight can land
+                    // here with no latch standing. Without this line that
+                    // left the deny off for the rest of the cooldown -- the
+                    // residual leak. Idempotent overwrite (spell only, never
+                    // the pace), same call the Ready path makes; observe-only
                     // in log mode, exactly like every other Want.
                     CasterConsent::Want(a_follower->GetFormID(), spell->GetFormID());
                     // TRANSPARENT (marth, GAMBIT_FLOWS §7.1): cast cooldown /

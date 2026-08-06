@@ -106,6 +106,7 @@ namespace MFO::Config {
             else if (a_key == "fMagickaReserve")    setF(g_magickaReserve, 0.0f, 0.9f);
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
             else if (a_key == "bDriveCaster")       setB(g_driveCaster);
+            else if (a_key == "bProbeCastStyle")    setB(g_probeCastStyle);   // P1 probe, dev-only
             else if (a_key == "bUsePackages")       setB(g_usePackages);
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
             else if (a_key == "bCasterHook")        setB(g_casterHook);
@@ -210,6 +211,7 @@ namespace MFO::Config {
             g_magickaReserve     = 0.0f;
             g_castCooldown       = 4.0f;
             g_driveCaster        = false;
+            g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
             g_commandCast        = false;
             g_commandTarget      = true;
             g_focusKey           = 0x2B;

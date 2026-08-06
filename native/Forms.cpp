@@ -41,6 +41,10 @@ namespace MFO::Forms {
         g_retreatQuest   = Look<RE::TESQuest>(kRetreatQuest, "MFO_RetreatQuest");        // RETREAT PROBE
         g_retreatPackage = Look<RE::TESPackage>(kRetreatPackage, "MFO_RetreatPackage");  // RETREAT PROBE
         g_tradeQuest     = Look<RE::TESQuest>(kTradeQuest, "MFO_TradeQuest");            // #21 econ bridge
+        // P1 probe style. A miss disables ONLY the (default-off) style-swap
+        // probe -- ProbeStyleTick refuses to swap on a null pointer and says
+        // nothing else about it, per the "one feature, named log line" rule.
+        g_probeCastStyle = Look<RE::TESCombatStyle>(kProbeCastStyle, "MFO_CastStyle");   // P1 probe
 
         // ANSWER THE RECORD QUESTIONS AT LOAD, not when behaviour depends on
         // them. Three things can be wrong with a hand-authored PACK and each

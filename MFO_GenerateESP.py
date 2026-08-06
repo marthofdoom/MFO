@@ -53,6 +53,8 @@ FID_TRAVEL_PACKAGE_3 = OWN | 0x902  # P7: slot 3 (targets loot-quest alias 7)
 # 0x829-0x82F  reserved: probe-ladder headroom (FID_POC_PACK_BASE + idx - 1)
 FID_RETREAT_QUEST   = OWN | 0x830  # RETREAT PROBE: travel-to-player delivery route
 FID_RETREAT_PACKAGE = OWN | 0x831  # RETREAT PROBE: Travel + kIgnoreCombat -> alias 1 (the player)
+FID_CAST_STYLE      = OWN | 0x832  # P1 PROBE: caster-forward CSTY the DLL swaps onto a
+                                   # latched follower's live CombatController (bProbeCastStyle)
 NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x900-0x902 = P7 travel packages)
 
 # Vanilla refs
@@ -861,6 +863,52 @@ def make_pack():
     return group('PACK', body)
 
 
+# ── CSTY: the P1 combat-style probe record ─────────────────────────────────
+def make_csty():
+    """MFO_CastStyle -- ONE caster-forward combat style (P1 probe, v1.0.32).
+
+    The DLL (CasterConsent, bProbeCastStyle=1 only) swaps this onto a latched
+    follower's LIVE CombatController -- the per-combat instance pointer, never
+    the actor's base record -- to measure §0.28's melee-bias lever: does a
+    magic-inclined style make his own AI cast more, and mobile?
+
+    Byte shape MIRRORED from vanilla csHumanMagic (0003BE1C), dumped from
+    Skyrim.esm per doctrine (never format docs): EDID, CSGD 40 bytes
+    (10 floats, the CommonLibSSE-NG CombatStyleGeneralData layout), CSME 28
+    bytes (7 floats -- the on-disk record carries one float FEWER than the
+    runtime struct's 8; mirror the disk, the loader zero-fills), CSCR 16,
+    CSLR 4, CSFL 28 (same 7-of-8 truncation), DATA 4 (flags, 1 = dueling).
+
+    ONLY the CSGD scoring axis deviates from the exemplar -- that IS the
+    experiment; every behavioural multiplier below it stays verbatim
+    csHumanMagic so the measurement has one moving part:
+      magicScoreMult 10.0 (csHumanMagic: 4.05)  -- strongly prefer the magic branch
+      meleeScoreMult  0.1 (csHumanMagic: 0.76)  -- and starve the melee one
+      rangedScoreMult 0.2, unarmedScoreMult 0.1 -- no sideways escape into bows/fists
+    """
+    csgd = struct.pack('<10f',
+                       1.0,    # offensiveMult      -- attack over turtling
+                       0.5,    # defensiveMult      -- csHumanMagic's value
+                       1.0,    # groupOffensiveMult
+                       0.1,    # meleeScoreMult     <- the lever, starved
+                       10.0,   # magicScoreMult     <- the lever, dominant
+                       0.2,    # rangedScoreMult
+                       1.0,    # shoutScoreMult
+                       0.1,    # unarmedScoreMult
+                       1.0,    # staffScoreMult
+                       0.2)    # avoidThreatChance  -- csHumanMagic's value
+    # Everything below: byte-verbatim csHumanMagic.
+    csme = struct.pack('<7f', 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+    cscr = struct.pack('<4f', 0.3, 0.5, 0.2, 0.2)
+    cslr = struct.pack('<f', 0.2)
+    csfl = struct.pack('<7f', 0.33, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5)
+    body = (subrec('EDID', zstr("MFO_CastStyle"))
+            + subrec('CSGD', csgd) + subrec('CSME', csme) + subrec('CSCR', cscr)
+            + subrec('CSLR', cslr) + subrec('CSFL', csfl)
+            + subrec('DATA', struct.pack('<I', 1)))
+    return group('CSTY', record('CSTY', FID_CAST_STYLE, 0, body))
+
+
 def make_qust():
     return group('QUST', make_startup_quest() + make_mcm_quest()
                  + make_command_quest() + make_loot_quest() + make_retreat_quest()
@@ -881,6 +929,9 @@ def main():
     data += make_spel()
     data += make_qust()
     data += make_pack()
+    # CSTY after PACK -- vanilla's own top-group order (Skyrim.esm: ... QUST,
+    # IDLE, PACK, CSTY, LSCR ...), verified by walking the shipped master.
+    data += make_csty()
 
     out_path = os.path.join(out_dir, "MFO.esp")
     with open(out_path, 'wb') as f:
@@ -920,6 +971,7 @@ def main():
           + ("  [NOT attached under POC]" if POC_ENABLED else ""))
     print(f"  PACK  0x{FID_TRAVEL_PACKAGE & 0xFFF:03X}        MFO_TravelPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X}")
     print(f"  PACK  0x{FID_RETREAT_PACKAGE & 0xFFF:03X}        MFO_RetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat")
+    print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
     if POC_ENABLED:
         print(f"  GLOB  0x{FID_PROBE_GLOB & 0xFFF:03X}        MFO_ProbeSelect (console: set MFO_ProbeSelect to N; 0 = all probes off)")
         for idx, sp, label, (tkind, tval) in POC_PROBES:

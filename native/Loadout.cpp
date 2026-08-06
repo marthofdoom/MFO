@@ -2,6 +2,7 @@
 #include "Loadout.h"
 #include "Config.h"
 #include "Followers.h"
+#include "CasterConsent.h"   // v1.0.32: StartCooldown mirrors into the hook's permit
 
 namespace MFO::Loadout {
 
@@ -295,6 +296,14 @@ namespace MFO::Loadout {
         if (cd <= 0.0f) return;
         g_coolUntil[a_actorID] = std::chrono::steady_clock::now() +
                                  std::chrono::milliseconds(static_cast<int>(cd * 1000.0f));
+        // MIRROR INTO THE CONSENT HOOK (v1.0.32). "Taking the spell back" was
+        // never the whole rate limit: ReleaseSpell's minimum hold (the grace)
+        // leaves the spell in hand for seconds after a cast, and the thunk's
+        // force-YES was firing on every caster tick of that window -- the
+        // deck's 4-casts-in-2.2s burst. The permit itself must know the
+        // deadline; the thunk reads this mirror under its own lock (never
+        // Loadout's non-atomic maps from the combat thread).
+        CasterConsent::NoteCooldown(a_actorID, cd);
         // Taking the spell back IS the rate limit -- they cannot cast what they
         // are not holding. Leaving it in hand and merely declining to re-equip
         // would pace MFO and do nothing about their AI.
