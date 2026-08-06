@@ -6,15 +6,16 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-05 · **Latest shipped:** v1.0.31 · **In flight:** v1.0.32 (CI)
+> **Last updated:** 2026-08-06 · **Latest shipped:** v1.0.32
 
 ---
 
 ## Continue in one screen
 
-- **Latest shipped & deployed:** **v1.0.31**. **v1.0.32** ("mage fixes") is
-  BUILT and pushed; CI run 31072217444 in progress — NOT yet deployed or
-  published. When CI is green: phase 2 → deploy → tag → main agent publishes.
+- **Latest shipped & deployed:** **v1.0.32** ("mage fixes") — deck-verified
+  (DLL 1542ab83…), GitHub Release = Latest. First CI attempt FAILED (a
+  two-agent collision dropped the `g_mx` declaration in CasterConsent.cpp; CI
+  caught it, fix in 269e80b). Field test pending — watch items in the table.
 - **Compile is CI-only.** No local MSVC. The DLL only ever comes from a GREEN
   GitHub Actions `native` run whose `native/` tree matches HEAD. Never trust
   "it built" without `gh run list --workflow=native --status=success` + a
@@ -60,8 +61,7 @@ reads score=0.
 0. **HEADLINE — casting overhaul (next Nexus = "mage fixes").** Research (task #59)
    found the v1.0.27 forced cast had **never fired on deck** — it errored
    `template input 'Spell' is not declared on FE090820` and silently fell to the
-   invisible `CastSpellImmediate`. **v1.0.32 BUILT + in CI (task #60), not yet
-   deployed/published:** fixed the
+   invisible `CastSpellImmediate`. **v1.0.32 SHIPPED (task #60), deck-verified:** fixed the
    dead forced cast (Packages.cpp `FindInput` — template nameMap on a MISS not
    just null; static uid fallback Spell=3/Target=4; scoped to CastAt — CastSelf
    stays barred via `Decline::SelfRoute`, the CTD-class t6+QNAM cell), cooldown-
