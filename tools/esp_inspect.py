@@ -1272,19 +1272,29 @@ def mode_selftest(args):
         res.add(mfo)
         ck('MFO masters == [Skyrim.esm]', mfo.masters, ['Skyrim.esm'])
         pk = [r for r in mfo.by_sig.get('PACK', [])]
-        # 2 PACKs in a release build (cast 0x820 + travel 0x828, Option A);
-        # 2 + however many probes the ladder defines under MFO_POC=1. Pinning an
-        # exact count trained people to loosen assertions instead of read them,
-        # so this bounds loosely and the EXISTENCE of each production package is
-        # pinned separately below.
-        ck('MFO PACK count is 2 (release) or 2+probes (POC)',
-           len(pk) == 2 or len(pk) >= 7, True)
-        # Option A's travel package exists and rides the vanilla Travel template.
-        tp = mfo.by_fid.get(0x01000828)
-        ck('MFO_TravelPackage 01000828 exists', tp is not None, True)
-        if tp is not None:
-            ck('MFO_TravelPackage rides vanilla Travel 00016FAA',
-               f'{pack_template_of(tp):08X}', '00016FAA')
+        # 6 PACKs in a release build: cast 0x820; Option-A travel 0x828 plus
+        # the P7 slots 0x900-0x902; retreat 0x831. Or 6 + however many probes
+        # the ladder defines under MFO_POC=1. Pinning an exact count trained
+        # people to loosen assertions instead of read them, so this bounds
+        # loosely and the EXISTENCE of each production package is pinned
+        # separately below. (The previous "2 (release)" expectation went stale
+        # when P7 and the retreat probe landed and FAILED on both v1.0.31 and
+        # v1.0.32 -- an assertion nobody reran; keep this one honest.)
+        ck('MFO PACK count is 6 (release) or 6+probes (POC)',
+           len(pk) == 6 or len(pk) >= 7, True)
+        # The production travel/retreat packages exist and ride the vanilla
+        # Travel template -- one pin per record, so a generator regression
+        # names the missing package instead of shifting a count.
+        for fid_, nm_ in ((0x01000828, 'MFO_TravelPackage'),
+                          (0x01000900, 'MFO_TravelPackage1'),
+                          (0x01000901, 'MFO_TravelPackage2'),
+                          (0x01000902, 'MFO_TravelPackage3'),
+                          (0x01000831, 'MFO_RetreatPackage')):
+            tp = mfo.by_fid.get(fid_)
+            ck(f'{nm_} {fid_:08X} exists', tp is not None, True)
+            if tp is not None:
+                ck(f'{nm_} rides vanilla Travel 00016FAA',
+                   f'{pack_template_of(tp):08X}', '00016FAA')
 
         # THE TWO HARD RULES, ASSERTED OVER MFO'S OWN RECORDS.
         # They were only ever checked against Skyrim.esm -- i.e. the tool
