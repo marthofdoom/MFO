@@ -69,7 +69,12 @@ reproduce it in the CURRENT session, then pull the log before the next launch.
 lost — small, safe; do it if marth confirms.) Deck may be ASLEEP → SSH timeout,
 just retry ([[deck-sleeps-ssh-timeout]]).
 
-1. **Auri melee switch — DIAGNOSED + FIXED in v1.0.33 (pending field confirm).**
+1. **Auri melee switch — FIXED + FIELD-VALIDATED (v1.0.33, 2026-08-06).** Deck
+   log: clean `OWNED -> ranged`, `HANDOFF -> melee`, `HANDOFF -> ranged` — she
+   holds the stance, no more 6×/fight bow↔mace thrash. **`RE-DERIVED: 0`** — the
+   live `combatStyle` swap HOLDS on 1.6.1170, engine never stomps it. That
+   field-proves the CSTY-swap rails for Stage 2 (caster style swap) and makes the
+   P1 probe fully unnecessary. History below:
    The deck log showed it was NOT the STATUS hypotheses: she carries a Glass Mace
    (dmg 84), `rule 1 act.equip_melee` fires, and she DID equip melee 6× — but
    the equips were *real* re-equips (a bow↔mace tug-of-war with her own ranged-
