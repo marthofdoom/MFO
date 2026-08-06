@@ -889,6 +889,11 @@ namespace MFO::Logistics {
                 if (Catalog::IsExcluded(obj->GetFormID())) continue;
 
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
+                    // #61 FASHIONRIM: armor-only dolls mode -- skip EVERY armor
+                    // candidate (plain-rated AND mage school-robe) so MFO never
+                    // loots or swaps a follower's armor; the player dresses them
+                    // by hand. Weapons fall to the else-branch below, untouched.
+                    if (Config::g_dollsMode.load()) continue;
                     // A SHIELD needs a free off-hand: only a ONE-HAND melee role can
                     // use one. A 2H, ranged, or no-melee-role follower has no hand
                     // for it -- dead weight (marth: Farkas, a two-hander, picked up

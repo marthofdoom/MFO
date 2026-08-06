@@ -572,8 +572,44 @@
           }
         },
         {
+          "id": "iOverlayX:General",
+          "text": "Combat HUD: right margin (px)",
+          "type": "slider",
+          "help": "How far the combat overlay sits from the right screen edge. 12 = default; raise it to clear another mod's HUD.",
+          "valueOptions": {
+            "min": 0,
+            "max": 2560,
+            "step": 4,
+            "sourceType": "ModSettingInt",
+            "defaultValue": 12
+          }
+        },
+        {
+          "id": "iOverlayY:General",
+          "text": "Combat HUD: top margin (px)",
+          "type": "slider",
+          "help": "How far the combat overlay sits from the top screen edge. 12 = default.",
+          "valueOptions": {
+            "min": 0,
+            "max": 1440,
+            "step": 4,
+            "sourceType": "ModSettingInt",
+            "defaultValue": 12
+          }
+        },
+        {
           "text": "Debug",
           "type": "header"
+        },
+        {
+          "id": "bDollsMode:General",
+          "text": "Fashionrim (dress armor by hand)",
+          "type": "toggle",
+          "help": "When ON, MFO stops ALL armor automation -- armor looting, the mage robe loadout, armor auto-equip, gem transfer on armor swaps, and armor buy/sell -- so you dress followers yourself. Weapons are unaffected (weapon switching, looting, ammo, trade all still work).",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
         },
         {
           "text": "Version",

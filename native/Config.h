@@ -166,6 +166,20 @@ namespace MFO::Config {
     // seed file; sections are cosmetic to the parser), then a full restart.
     inline std::atomic<bool>  g_probeCastStyle{ false };
 
+    // #56 COMBAT-OVERLAY POSITION (mage update). The compact combat HUD
+    // (Board::DrawHud) is pinned to the top-right with a top-right pivot; these
+    // are its margins in PIXELS from the right edge (X) and the top (Y), so a
+    // player can move it clear of another mod's HUD. Default 12/12 = unchanged.
+    inline std::atomic<int>   g_overlayX{ 12 };
+    inline std::atomic<int>   g_overlayY{ 12 };
+
+    // #61 FASHIONRIM / "my followers are dolls" (mage update). Default OFF.
+    // ARMOR-ONLY debug toggle: when on, MFO stops all ARMOR automation -- armor
+    // looting, the mage school-robe loadout, armor auto-equip, MEO gem transfer
+    // on armor swaps, and armor buy/sell -- so the player dresses followers by
+    // hand. WEAPONS are untouched (weapon switching/looting/ammo/trade all work).
+    inline std::atomic<bool>  g_dollsMode{ false };
+
     // CAST CONTROL SLIDER (mage update). How tightly a follower's OWN spell
     // picks are overridden toward the gambit's spell, graduated (marth):
     //   0 off              -- no control (observe only)

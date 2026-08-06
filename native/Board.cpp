@@ -1043,8 +1043,12 @@ namespace MFO::Board {
         // frame and takes NO input, so it can sit on screen during combat.
         void DrawHud(const Snapshot& snap) {
             const auto& io = ImGui::GetIO();
-            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 12.0f, 12.0f), ImGuiCond_Always,
-                                    ImVec2(1.0f, 0.0f));
+            // #56: margins from the top-right corner are MCM-adjustable so the
+            // overlay can dodge another mod's HUD (default 12/12 = unchanged).
+            ImGui::SetNextWindowPos(
+                ImVec2(io.DisplaySize.x - static_cast<float>(Config::g_overlayX.load()),
+                       static_cast<float>(Config::g_overlayY.load())),
+                ImGuiCond_Always, ImVec2(1.0f, 0.0f));
             ImGui::SetNextWindowBgAlpha(0.42f);
             const auto flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |

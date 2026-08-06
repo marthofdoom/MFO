@@ -113,6 +113,9 @@ namespace MFO::Config {
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "iCastControl")       setI(g_castControl, 0, 4);
+            else if (a_key == "iOverlayX")          setI(g_overlayX, 0, 2560);
+            else if (a_key == "iOverlayY")          setI(g_overlayY, 0, 1440);
+            else if (a_key == "bDollsMode")         setB(g_dollsMode);
             else if (a_key == "bCommandCast")       setB(g_commandCast);
             else if (a_key == "bCommandTarget")     setB(g_commandTarget);
             else if (a_key == "iFocusKey")          setI(g_focusKey, 0, 255);
@@ -216,6 +219,9 @@ namespace MFO::Config {
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
             g_weaponStyleControl = true;    // v1.0.33: standard feature -- ON by default
             g_castControl        = 2;       // mage update: cast-control slider -- center (ignore heals)
+            g_overlayX           = 12;      // #56 combat-overlay margins (px from top-right)
+            g_overlayY           = 12;
+            g_dollsMode          = false;   // #61 fashionrim -- OFF by default
             g_commandCast        = false;
             g_commandTarget      = true;
             g_focusKey           = 0x2B;
@@ -271,6 +277,8 @@ namespace MFO::Config {
             { "bAllowSummons", "0" },          { "bEquipToCast", "1" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
             { "bForceCastOnMiss", "1" },       { "iCastControl", "2" },
+            { "iOverlayX", "12" },             { "iOverlayY", "12" },
+            { "bDollsMode", "0" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },
             { "fMagickaReserve", "0.000000" }, { "bLogistics", "1" },
             { "fFirstDibsDelay", "4.000000" }, { "fQuickLootWaiver", "4.000000" },
