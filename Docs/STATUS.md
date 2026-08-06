@@ -6,25 +6,46 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-06 · **Latest shipped:** v1.0.33
+> **Last updated:** 2026-08-06 · **Latest shipped:** v1.0.34
 
 ---
 
 ## Continue in one screen
 
-- **Latest shipped & deployed:** **v1.0.33** ("weapon-stance ownership") — the
-  Auri melee fix. When an equip gambit wins a follower's hand, MFO swaps their
-  LIVE per-combat `combatStyle` (0x38) to `MFO_MeleeStyle`/`MFO_RangedStyle` on
-  the combat thread from the UpdateCombat hook, so the engine stops re-drawing
-  the weapon MFO didn't pick (the bow<->mace ping-pong). Default ON
-  (`bWeaponStyleControl`, INI-only, no MCM). Fable-reviewed pre-commit.
-  **Deck-verified (DLL e954b7bc…), GitHub Release = Latest** (CI run 31127627267;
-  the push didn't auto-fire the workflow — transient Actions hiccup — so it was
-  `gh workflow run`-dispatched, still HEAD's native tree). Field test pending —
-  watch `[wstyle] … OWNED/HANDOFF`; does Auri hold the mace, no flicker?
-- **v1.0.32** ("mage fixes") — deck-verified (DLL 1542ab83…), GitHub Release =
-  Latest. marth reports casting "drastically improved" in the field (v1.0.32
-  validating; confirm the pacing/potion watch-items still hold).
+- **Latest shipped & deployed:** **v1.0.34 — "the mage update"** — deck-verified
+  (DLL 6f8f64ef…), GitHub Release = Latest (CI run 31130000975; auto-trigger kept
+  flaking so runs were `gh workflow run`-dispatched, and GitHub concurrency
+  cancelled several — the release poll now re-dispatches on a cancel). SEVEN
+  pieces in one cut:
+  1. **Cast-control slider** (`iCastControl`, MCM, default 2 "ignore heals"):
+     off → ignore buffs+heals → ignore heals → ignore self-heals → exact. The
+     consent hook classifies the AI's own spell by the deliberating caster's
+     vtable (Offense/Buff/Heal, heal split self/other by Delivery) and denies
+     only the non-exempt categories. `CasterConsent::CastExempt`.
+  2. **`MFO_CastStyle` cast stance** (reuses CSTY 0x832): a cast-latched follower
+     is swapped to pure-mage; magicka-dry → pure MELEE, back on regen. Driven by
+     the scheduler on the CombatStyle/UpdateCombat rails (v1.0.33's).
+  3. **Cast in logistics** — `act.cast_*` runs in the logistics table too
+     (out-of-combat self-buffs/candlelight/heals) via `Actuation::Fire`; a still-
+     active self-buff is skipped (HasMagicEffect).
+  4. **Teach spells from spellbooks** — the picker lists player-carried teachable
+     spells "Name (spellbook)"; a 2nd click (DESTROYS-book warning) AddSpells +
+     consumes the book (`EditKind::TeachSpell`, main-task ApplyEdits).
+  5. **#56** combat-HUD X/Y margin sliders (clamped on-screen).
+  6. **#61** fashionrim `bDollsMode` (armor acquisition+fitting off; sell stays).
+  7. **#55 MCM fix** — ships `MCM/Config/MFO/settings.ini` (the defaults file MCM
+     Helper registers from) + `audit_mcm.py` 5-touchpoint release gate.
+  Fable-reviewed pre-release (caught a compile blocker + 4 picker MAJORs, all
+  fixed). A4 (act.attack casts the set magic attack) SKIPPED per marth. **Field
+  test pending** — watch items below.
+- Field-test watch (v1.0.34): the cast slider at each stop (does a mage keep
+  healing at "ignore heals" but cast the gambit for offense?); `[wstyle] … cast`
+  + the dry→melee swap; a cast gambit in the LOGISTICS table firing out of
+  combat; teaching a spell from a book (book consumed, spell set); fashionrim
+  stops armor loot/robes but weapons still work; HUD sliders move the overlay.
+- **v1.0.33** ("weapon-stance ownership") — Auri melee fix, deck-verified + FIELD-
+  VALIDATED (combatStyle swap holds, 0 re-derives). **v1.0.32** ("mage fixes") —
+  casting "drastically improved" per marth.
 - **Compile is CI-only.** No local MSVC. The DLL only ever comes from a GREEN
   GitHub Actions `native` run whose `native/` tree matches HEAD. Never trust
   "it built" without `gh run list --workflow=native --status=success` + a
@@ -96,7 +117,12 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 
 ## Open issues (ranked)
 
-0. **HEADLINE — casting overhaul (next Nexus = "mage fixes").** Research (task #59)
+0. **✅ SHIPPED in v1.0.34 (the mage update) — casting overhaul + full cast
+   control.** Stage 2 landed as the graduated `iCastControl` SLIDER (not the
+   single `bFullCastControl` toggle first sketched) + the `MFO_CastStyle` stance
+   with magicka-dry→melee. Field test pending (watch items in "Continue"). Only
+   the act.attack-casts-set-magic half was cut (marth). Historical detail below.
+   HEADLINE — casting overhaul (next Nexus = "mage fixes"). Research (task #59)
    found the v1.0.27 forced cast had **never fired on deck** — it errored
    `template input 'Spell' is not declared on FE090820` and silently fell to the
    invisible `CastSpellImmediate`. **v1.0.32 SHIPPED (task #60), deck-verified:** fixed the
@@ -126,7 +152,14 @@ just retry ([[deck-sleeps-ssh-timeout]]).
    MCM registration) or it's a dead checkbox — so the mage cut must either fix
    #55 first or ship #61 INI-gated like `bWeaponStyleControl`/`bFullCastControl`.
 
-1. **#55 — MCM new toggles = empty, unresponsive checkboxes on existing saves.**
+1. **✅ FIXED in v1.0.34 — #55 MCM new toggles = empty checkboxes on existing
+   saves.** Root cause: MFO never shipped `MCM/Config/MFO/settings.ini` (the
+   author defaults file MCM Helper REGISTERS from); it shipped only the mutable
+   user store, which MO2 shadowed with a stale copy. Now ships the defaults file
+   + `audit_mcm.py` release gate (every control wired in all 5 places or the
+   build fails). Verified against SkyUI/Precision/TDM/TrueHUD (which ship it).
+   Historical detail below.
+   #55 — MCM new toggles = empty, unresponsive checkboxes on existing saves.**
    RECURRING ("as per usual"). All file touch points verified correct (atomic,
    parse, ResetToDefaults, kMcmDefaults heal table, config.json control, Settings
    ini, seed ini); live deck store has the keys = 1 under `[General]`; no MCM
