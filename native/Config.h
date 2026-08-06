@@ -166,6 +166,17 @@ namespace MFO::Config {
     // seed file; sections are cosmetic to the parser), then a full restart.
     inline std::atomic<bool>  g_probeCastStyle{ false };
 
+    // CAST CONTROL SLIDER (mage update). How tightly a follower's OWN spell
+    // picks are overridden toward the gambit's spell, graduated (marth):
+    //   0 off              -- no control (observe only)
+    //   1 ignore buffs+heals -- MFO forces the gambit for OFFENSE; AI keeps buffs+heals
+    //   2 ignore heals (DEFAULT/center) -- MFO takes offense+buffs; AI keeps heals
+    //   3 ignore self-heals -- MFO takes offense+buffs+heal-others; AI keeps self-heals
+    //   4 exact            -- only the gambit spell is ever cast (deny all else)
+    // "ignore X" = MFO EXEMPTS category X, leaving it to the AI; tighter toward
+    // exact. Applied in the CheckStartCast consent hook (CasterConsent).
+    inline std::atomic<int>   g_castControl{ 2 };
+
     // WEAPON-STANCE OWNERSHIP (v1.0.33), DEFAULT ON -- a standard feature, not a
     // probe, so no MCM toggle (#55); INI-only as a debug kill-switch. When an
     // equip gambit wins a follower's hand, the DLL swaps their LIVE

@@ -92,6 +92,10 @@ namespace MFO::Forms {
     // that one stance with a named log line -- never a crash.
     inline RE::TESCombatStyle* g_meleeStyle  = nullptr;
     inline RE::TESCombatStyle* g_rangedStyle = nullptr;
+    // The Cast stance's pure-mage style. Reuses the existing MFO_CastStyle CSTY
+    // (0x832) -- magic-dominant, melee/ranged starved -- the same record the P1
+    // probe swaps; here it is a shipped feature driven by cast gambits.
+    inline RE::TESCombatStyle* g_castStyle   = nullptr;
 
     // Resolve at kDataLoaded. Returns false if anything required is missing.
     // A missing form disables ONE feature with a named log line -- never a

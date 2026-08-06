@@ -148,6 +148,23 @@
           }
         },
         {
+          "id": "iCastControl:General",
+          "text": "Cast control",
+          "type": "enum",
+          "help": "How tightly a follower's own spellcasting is overridden toward the gambit's chosen spell. Off: no control. Ignore buffs & heals: force the gambit for offense, let them buff/heal freely. Ignore heals: also take over buffs. Ignore self-heals: also take over healing others. Exact spell: only the gambit spell is ever cast.",
+          "valueOptions": {
+            "sourceType": "ModSettingInt",
+            "options": [
+              "Off",
+              "Ignore buffs & heals",
+              "Ignore heals",
+              "Ignore self-heals",
+              "Exact spell"
+            ],
+            "defaultValue": 2
+          }
+        },
+        {
           "id": "bCommandTarget:General",
           "text": "Commanded targeting",
           "type": "toggle",

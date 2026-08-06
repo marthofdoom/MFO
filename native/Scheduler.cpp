@@ -470,16 +470,41 @@ namespace MFO::Scheduler {
             break;
         }
 
-        // COMBAT-STYLE OWNERSHIP (v1.0.33). Whichever equip gambit claimed the
-        // hand this tick owns the follower's combat style until battle end or
-        // the next equip flips it -- the actual write happens on the combat
-        // thread (CombatStyle::ApplyTick from the UpdateCombat hook), never from
-        // this job-worker tick. Only UPDATE on an equip win; a one-tick heal
-        // above the equip must not drop the stance (that is the "hold until
-        // another equip triggers" contract), so no Want on wantStance==0.
-        if (wantStance)
-            CombatStyle::Want(id, wantStance == 2 ? CombatStyle::Stance::Ranged
-                                                  : CombatStyle::Stance::Melee);
+        // COMBAT-STYLE OWNERSHIP. The actual combatStyle write happens on the
+        // combat thread (CombatStyle::ApplyTick from the UpdateCombat hook); this
+        // job-worker tick only records the desired stance. PRIORITY:
+        //   1. An equip gambit that claimed the hand this tick -> weapon stance
+        //      (v1.0.33), gated by bWeaponStyleControl. Held until battle end or
+        //      the next equip flips it.
+        //   2. Otherwise, a follower a CAST gambit owns (latched) -> the CASTER
+        //      stance (mage update), gated by iCastControl>0 -- swapped to pure
+        //      MELEE when he cannot afford the gambit spell (magicka dry), back
+        //      to caster when it regenerates (marth: cast-till-dry-then-melee).
+        // Only UPDATE on a real signal; a one-tick heal above must not drop the
+        // stance (the "hold until it changes" contract), so no Want otherwise.
+        CombatStyle::Stance stance = CombatStyle::Stance::None;
+        if (wantStance) {
+            if (Config::g_weaponStyleControl.load())
+                stance = (wantStance == 2) ? CombatStyle::Stance::Ranged
+                                           : CombatStyle::Stance::Melee;
+        } else if (Config::g_castControl.load() > 0) {
+            if (const RE::FormID cs = CasterConsent::WantedSpell(id)) {
+                float cost = 0.0f;
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(cs))
+                    cost = sp->CalculateMagickaCost(f);   // marth: cast till DRY, no reserve floor
+                const float mag = f->AsActorValueOwner()->GetActorValue(RE::ActorValue::kMagicka);
+                if (mag >= cost) {
+                    stance = CombatStyle::Stance::Cast;
+                } else if (Config::g_weaponStyleControl.load()) {
+                    // Magicka dry -> pure melee until it regenerates. This writes
+                    // MFO_MeleeStyle, so it honours the weapon-style kill-switch:
+                    // with it off, leave the stance to the AI (None -> no update).
+                    stance = CombatStyle::Stance::Melee;
+                }
+            }
+        }
+        if (stance != CombatStyle::Stance::None)
+            CombatStyle::Want(id, stance);
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
         // aware). A gambit spell stays in the follower's hand only while some

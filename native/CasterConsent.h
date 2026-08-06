@@ -51,6 +51,12 @@ namespace MFO::CasterConsent {
     void Clear(RE::FormID a_follower);
     void ClearAll();
 
+    // The gambit spell this follower is latched to cast, or 0 if unlatched. The
+    // scheduler reads it to drive the CASTER combat stance (CombatStyle) and its
+    // magicka-dry -> melee fallback. Locked shared read; safe off the job-worker
+    // tick, cheap when nothing is latched (the map is empty).
+    RE::FormID WantedSpell(RE::FormID a_follower);
+
     // COOLDOWN-CONSULTED PERMIT (v1.0.32). fCastCooldown used to gate only the
     // EQUIP debounce (Loadout::Prepare) -- the thunk's force-YES had no
     // cooldown consult, so while the spell stayed in the follower's hand the

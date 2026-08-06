@@ -31,7 +31,9 @@
 
 namespace MFO::CombatStyle {
 
-    enum class Stance : std::uint8_t { None = 0, Melee = 1, Ranged = 2 };
+    // Cast = the pure-mage caster style (MFO_CastStyle) driven by cast gambits;
+    // the scheduler flips a dry caster to Melee until magicka returns.
+    enum class Stance : std::uint8_t { None = 0, Melee = 1, Ranged = 2, Cast = 3 };
 
     // The winning equip gambit wants this follower in this stance. Locked map
     // write; touches no CombatController, so it is safe from the job-worker

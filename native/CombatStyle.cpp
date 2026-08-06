@@ -40,6 +40,7 @@ namespace MFO::CombatStyle {
             switch (a_stance) {
                 case Stance::Melee:  return Forms::g_meleeStyle;
                 case Stance::Ranged: return Forms::g_rangedStyle;
+                case Stance::Cast:   return Forms::g_castStyle;
                 default:             return nullptr;
             }
         }
@@ -48,6 +49,7 @@ namespace MFO::CombatStyle {
             switch (a_stance) {
                 case Stance::Melee:  return "melee";
                 case Stance::Ranged: return "ranged";
+                case Stance::Cast:   return "cast";
                 default:             return "none";
             }
         }
@@ -59,7 +61,9 @@ namespace MFO::CombatStyle {
 
     void Want(RE::FormID a_follower, Stance a_stance) {
         if (a_stance == Stance::None) return;
-        if (!Config::g_weaponStyleControl.load(std::memory_order_relaxed)) return;
+        // NOTE: the FEATURE gate lives at the call site now, not here -- weapon
+        // stances (Melee/Ranged) are gated by bWeaponStyleControl, the Cast
+        // stance by iCastControl. Want only records intent.
         std::lock_guard<std::mutex> lk(g_mx);
         // Only the desire is set here; cc/saved are filled in on the combat
         // thread by ApplyTick against the live controller. A stance CHANGE on an

@@ -112,6 +112,7 @@ namespace MFO::Config {
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
+            else if (a_key == "iCastControl")       setI(g_castControl, 0, 4);
             else if (a_key == "bCommandCast")       setB(g_commandCast);
             else if (a_key == "bCommandTarget")     setB(g_commandTarget);
             else if (a_key == "iFocusKey")          setI(g_focusKey, 0, 255);
@@ -214,6 +215,7 @@ namespace MFO::Config {
             g_driveCaster        = false;
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
             g_weaponStyleControl = true;    // v1.0.33: standard feature -- ON by default
+            g_castControl        = 2;       // mage update: cast-control slider -- center (ignore heals)
             g_commandCast        = false;
             g_commandTarget      = true;
             g_focusKey           = 0x2B;
@@ -268,7 +270,7 @@ namespace MFO::Config {
             { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
             { "bAllowSummons", "0" },          { "bEquipToCast", "1" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
-            { "bForceCastOnMiss", "1" },
+            { "bForceCastOnMiss", "1" },       { "iCastControl", "2" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },
             { "fMagickaReserve", "0.000000" }, { "bLogistics", "1" },
             { "fFirstDibsDelay", "4.000000" }, { "fQuickLootWaiver", "4.000000" },

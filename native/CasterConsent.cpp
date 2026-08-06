@@ -50,6 +50,30 @@ namespace MFO::CasterConsent {
         // originals are keyed by the vtable pointer we read off `this`.
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_orig;
 
+        // CAST-CONTROL SLIDER classification. Which concrete CombatMagicCaster
+        // vtable is deliberating IS the engine's own category for the spell in
+        // hand -- Restore = a heal/restoration, Offensive/Stagger/Paralyze/... =
+        // an attack, Ward/Cloak/Light/Bound/Summon/... = a defensive buff. We
+        // record that category per vtable at install so the thunk classifies in
+        // O(1) without parsing effects. Heal is split self/other by the spell's
+        // Delivery at runtime (only the self-heal level needs the distinction).
+        enum class SpellKind : std::uint8_t { Offense, Buff, Heal };
+        std::unordered_map<std::uintptr_t, SpellKind> g_category;
+
+        // Does the AI KEEP this spell at slider level `lvl` (i.e. MFO exempts
+        // it)? "ignore X" = leave category X to the follower's AI; tighter
+        // toward exact. lvl 1 ignore buffs+heals, 2 ignore heals (default),
+        // 3 ignore self-heals; lvl>=4 (exact) exempts nothing; lvl<=0 handled
+        // before this is ever called.
+        bool CastExempt(SpellKind a_kind, bool a_selfHeal, int a_lvl) {
+            switch (a_lvl) {
+                case 1:  return a_kind != SpellKind::Offense;            // keep buffs + all heals
+                case 2:  return a_kind == SpellKind::Heal;               // keep all heals
+                case 3:  return a_kind == SpellKind::Heal && a_selfHeal; // keep self-heals only
+                default: return false;                                   // exact: exempt nothing
+            }
+        }
+
         // Throttle for the EXCLUSIVE-CONTROL deny log. The thunk runs at
         // caster-tick frequency, so a suppressed own-spell is logged only when
         // the (follower, denied-spell) pair CHANGES -- not every tick. Its own
@@ -329,23 +353,35 @@ namespace MFO::CasterConsent {
             if (!mi || !mi->Is(RE::FormType::Spell)) return aiSaysYes;
             const bool isWanted = mi->GetFormID() == wantSpell;
 
-            // EXCLUSIVE CONTROL (marth: the follower cast BOTH his own spell AND
-            // the forced one -- "an improvement, but not the control the mod's
-            // premise dictates"). While a follower is latched, the gambit's
-            // spell is the ONLY spell he may cast. If the AI is about to cast a
-            // DIFFERENT one (his own Chain Lightning), DENY it -- so nothing but
-            // the dictated spell ever leaves his hands; the hybrid then supplies
-            // the gambit spell on the grace timeout (Actuation's force-cast).
-            // This is the twin of Want()'s FORCE-YES: that adds the gambit spell,
-            // this removes every competing one, and together they make casting
-            // fully gambit-driven. Cast-only: a follower out of magicka still
-            // falls back to melee (that path never reaches CheckStartCast). LOG
-            // mode still only observes -- suppression is a FORCE-mode act.
-            // Deliberately NOT cooldown-gated: exclusivity is separate from
-            // pacing, so a competing spell is denied whether or not a gambit
-            // cast is currently due.
+            // CAST-CONTROL SLIDER (mage update, iCastControl). Level 0 = OFF:
+            // do nothing -- never deny, never force, no instrumentation -- so a
+            // player who wants none of this keeps fully vanilla casting. Levels
+            // 1..4 tighten control; the FORCE-YES of the gambit spell below runs
+            // at every level >= 1.
+            const int castLvl = Config::g_castControl.load();
+            if (castLvl <= 0) return aiSaysYes;
+
+            // GRADUATED EXCLUSIVITY (marth's slider). While a follower is
+            // latched, a spell that is NOT the gambit's is denied ONLY if its
+            // category is not exempt at the current level: exact (4) denies
+            // every competing spell (the old exclusive-control behaviour);
+            // level 3 leaves self-heals to the AI; level 2 (default) leaves all
+            // heals; level 1 leaves buffs+heals and only forces offense. "ignore
+            // X" = leave category X to the follower's own AI. The category comes
+            // from the deliberating caster's vtable (g_category); heal is split
+            // self/other by the spell's Delivery. Denies are NOT cooldown-gated:
+            // exclusivity is separate from pacing. LOG mode still only observes.
             if (!isWanted) {
-                if (Config::g_casterMode.load() == 0) return aiSaysYes;   // observe-only
+                if (Config::g_casterMode.load() == 0) return aiSaysYes;   // dev observe-only
+                if (castLvl < 4) {
+                    SpellKind kind = SpellKind::Offense;
+                    if (auto cit = g_category.find(vt); cit != g_category.end())
+                        kind = cit->second;
+                    const bool selfHeal = kind == SpellKind::Heal &&
+                        mi->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+                    if (CastExempt(kind, selfHeal, castLvl))
+                        return aiSaysYes;   // this category is the AI's to keep
+                }
                 DenyLog(fid, actor, mi->GetFormID(), wantSpell);
                 return false;
             }
@@ -417,24 +453,37 @@ namespace MFO::CasterConsent {
         // NOTE (ENGINE_NOTES §0.29): CombatMagicCasterRestore is ALSO the
         // caster for combat potion-drinking, so this hook fires on potion
         // deliberation too -- expected, and layout-safe since the fix above.
-        const REL::VariantID kVtables[] = {
-            RE::VTABLE_CombatMagicCasterOffensive[0],  RE::VTABLE_CombatMagicCasterRestore[0],
-            RE::VTABLE_CombatMagicCasterWard[0],       RE::VTABLE_CombatMagicCasterSummon[0],
-            RE::VTABLE_CombatMagicCasterStagger[0],    RE::VTABLE_CombatMagicCasterDisarm[0],
-            RE::VTABLE_CombatMagicCasterCloak[0],      RE::VTABLE_CombatMagicCasterLight[0],
-            RE::VTABLE_CombatMagicCasterInvisibility[0],RE::VTABLE_CombatMagicCasterBoundItem[0],
-            RE::VTABLE_CombatMagicCasterTargetEffect[0],
-            RE::VTABLE_CombatMagicCasterParalyze[0],   RE::VTABLE_CombatMagicCasterScript[0],
-            RE::VTABLE_CombatMagicCasterReanimate[0],
+        // Each vtable pairs with the cast-control CATEGORY of the spells it
+        // deliberates (the slider's classifier). Restore = Heal; the offensive-
+        // control casters (Offensive/Stagger/Disarm/Paralyze/TargetEffect/Script)
+        // = Offense; the defensive/support casters (Ward/Summon/Cloak/Light/
+        // Invisibility/BoundItem/Reanimate) = Buff.
+        struct Hooked { REL::VariantID id; SpellKind kind; };
+        const Hooked kVtables[] = {
+            { RE::VTABLE_CombatMagicCasterOffensive[0],    SpellKind::Offense },
+            { RE::VTABLE_CombatMagicCasterRestore[0],      SpellKind::Heal    },
+            { RE::VTABLE_CombatMagicCasterWard[0],         SpellKind::Buff    },
+            { RE::VTABLE_CombatMagicCasterSummon[0],       SpellKind::Buff    },
+            { RE::VTABLE_CombatMagicCasterStagger[0],      SpellKind::Offense },
+            { RE::VTABLE_CombatMagicCasterDisarm[0],       SpellKind::Offense },
+            { RE::VTABLE_CombatMagicCasterCloak[0],        SpellKind::Buff    },
+            { RE::VTABLE_CombatMagicCasterLight[0],        SpellKind::Buff    },
+            { RE::VTABLE_CombatMagicCasterInvisibility[0], SpellKind::Buff    },
+            { RE::VTABLE_CombatMagicCasterBoundItem[0],    SpellKind::Buff    },
+            { RE::VTABLE_CombatMagicCasterTargetEffect[0], SpellKind::Offense },
+            { RE::VTABLE_CombatMagicCasterParalyze[0],     SpellKind::Offense },
+            { RE::VTABLE_CombatMagicCasterScript[0],       SpellKind::Offense },
+            { RE::VTABLE_CombatMagicCasterReanimate[0],    SpellKind::Buff    },
         };
 
         int n = 0;
-        for (const auto& id : kVtables) {
+        for (const auto& [id, kind] : kVtables) {
             REL::Relocation<std::uintptr_t> vt{ id };
             // write_vfunc returns the previous entry -- store it under this
             // vtable's address so the thunk can dispatch to the right original.
             const std::uintptr_t orig = vt.write_vfunc(kCheckStartCast, &thunk);
-            g_orig[vt.address()] = orig;
+            g_orig[vt.address()]     = orig;
+            g_category[vt.address()] = kind;   // the slider's classifier
             ++n;
         }
         spdlog::info("[consent] CheckStartCast hooked on {} caster vtable(s), mode={}",
@@ -442,6 +491,12 @@ namespace MFO::CasterConsent {
     }
 
     bool IsHooked() { return g_hooked.load(); }
+
+    RE::FormID WantedSpell(RE::FormID a_follower) {
+        std::shared_lock lk(g_mx);
+        const auto it = g_want.find(a_follower);
+        return it != g_want.end() ? it->second.spell : 0;
+    }
 
     void Want(RE::FormID a_follower, RE::FormID a_spell) {
         std::unique_lock lk(g_mx);

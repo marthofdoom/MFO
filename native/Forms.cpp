@@ -51,6 +51,7 @@ namespace MFO::Forms {
         // named line".
         g_meleeStyle  = Look<RE::TESCombatStyle>(kMeleeStyle,  "MFO_MeleeStyle");
         g_rangedStyle = Look<RE::TESCombatStyle>(kRangedStyle, "MFO_RangedStyle");
+        g_castStyle   = g_probeCastStyle;   // Cast stance reuses the pure-mage CSTY (0x832)
 
         // ANSWER THE RECORD QUESTIONS AT LOAD, not when behaviour depends on
         // them. Three things can be wrong with a hand-authored PACK and each
