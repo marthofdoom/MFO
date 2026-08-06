@@ -149,11 +149,20 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 
 ## Backlog (captured, not scheduled)
 
-- **POST-MAGE-UPDATE — add armor/weapon BUY to the economy** (marth 2026-08-06).
-  The economy currently BUYS only consumables (potions/arrows/bolts — Logistics
-  `addNeed` covers kPotHealth/Stamina/Magicka, kArrows, kBolts); it never buys
-  armor or weapons. Add gear-buy needs + TradeBridge matching. When added, gate
-  it behind #61 fashionrim (`bDollsMode` blocks armor ACQUISITION — buy included).
+- **TOWN UPDATE (next after the mage cut) — headline #31 autonomous town errands
+  + economy gear BUY.** marth 2026-08-06: the mage update is the current cut; the
+  next is the Town Update (walk-to-merchant/door nav, #31) and gear-buying at
+  vendors folds in naturally (buying IS a town errand).
+  - **Economy armor/weapon BUY:** the economy currently BUYS only consumables
+    (Logistics `addNeed`: kPotHealth/Stamina/Magicka, kArrows, kBolts); selling
+    already covers weapons+armor. Buying is NATIVE-ONLY (Papyrus hands all stock
+    to `PlanBuy`) but must buy UPGRADES only, "same restrictions/features as
+    looting" (marth) — so factor the loot-upgrade predicates out of the
+    monolithic `LootNearby` loop (weapon-class match; `ArmorIsBetter`; the mage
+    school-robe path via `MageApparelIsBetter`+school), add NeedCat kWeapon/kArmor
+    + `ClassifyBuy` cases, gate armor buy behind #61 `bDollsMode`, and generate
+    gear buy-needs from the loot_equipment gambit. Own Fable review + CI (touches
+    shared loot code).
 
 - **~~Economy selling socketed items~~ — NON-ISSUE (resolved 2026-08-06).** It was
   marth using a `resurrect` console command, not the economy selling. No bug; the

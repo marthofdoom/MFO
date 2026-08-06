@@ -1,3 +1,35 @@
+## v1.0.34 -- the mage update: full cast control, casting out of combat, spell teaching
+
+- New: CAST CONTROL SLIDER (MCM, "Cast control", default "Ignore heals"). Graduates
+  how tightly a follower's own spellcasting is overridden toward the gambit's spell:
+  Off (no control) -> Ignore buffs & heals (force the gambit for offense, let them
+  buff/heal) -> Ignore heals -> Ignore self-heals -> Exact spell (only the gambit
+  spell is ever cast). The consent hook classifies each of the AI's own spells by
+  the engine's own caster category and denies just the ones your slider level says.
+- New: MFO_CastStyle -- while a cast gambit owns a follower, MFO swaps their live
+  combat style to a pure-mage one so their AI actually casts (and stays mobile),
+  and swaps them to pure MELEE the moment magicka runs dry, back to caster when it
+  regenerates. Cast till dry, then steel. Rides the same proven combat-style rails
+  as v1.0.33's weapon stances.
+- New: CAST IN LOGISTICS -- cast gambits (cast on self / at foe-ally) now run in the
+  logistics table too, so a follower can self-buff, light a candle, or heal out of
+  combat as upkeep. A still-active self-buff is not re-cast.
+- New: TEACH SPELLS FROM SPELLBOOKS -- the gambit spell picker now also lists spells
+  you carry a spellbook for that the follower does not know, as "Name (spellbook)".
+  A second click (warned: it DESTROYS the book) teaches the spell and sets it as the
+  gambit's spell in one step.
+- New: MCM "Fashionrim" toggle (default off) -- stop MFO acquiring and fitting ARMOR
+  (armor looting, mage robe loadout, auto-equip, gem transfer, armor buying) so you
+  dress followers by hand. Selling still works (worn/socketed gear is never sold);
+  weapons are entirely unaffected.
+- New: MCM combat-HUD position sliders -- nudge the combat overlay clear of another
+  mod's HUD (right/top margin in pixels), clamped on-screen.
+- Fix (#55): MCM toggles added in an update now REGISTER on existing saves. MFO now
+  ships the MCM Helper defaults file (MCM/Config/MFO/settings.ini) it always should
+  have -- the mutable user store MO2 was shadowing with a stale copy was never the
+  registration source. A new release gate (audit_mcm.py) blocks shipping any MCM
+  control that isn't wired in all five places.
+
 ## v1.0.33 -- weapon-stance ownership: followers hold the stance their gambit picked
 
 - Fix: an archer told to switch to melee at close range (Auri) would flicker
