@@ -48,13 +48,33 @@
 | v1.0.31 | Pure casters: mages loot NO rated armor (heavy or light), robes/clothing only; broadened school-robe detection; per-candidate apparel diagnostics; no junk picks | **pending** — watch `[loot] apparel …` diag lines; is Marcurio switching to his valid robe / out of heavy armor? |
 | v1.0.32 | **Mage fixes** — forced casts actually fire (FindInput template-map fallback + static uids; CastAt only, cast_self stays barred: QNAM+t6 zero-precedent cell); cooldown-consulted permit (`permitAfter` on the latch — no more 4-casts-in-2.2s bursts); potion-exempt deny (only formType Spell is ever denied); flicker-proof latch (deny holds for the combat's duration; releases only on combat end/dismissal/revert); + INI-gated P1 combat-style probe (`bProbeCastStyle`, default OFF, new CSTY 0x832 `MFO_CastStyle`) | **pending** — watch `[cast] … FORCED … at …` (real animated force, no more `template input 'Spell'` errors), `[consent] … pacing` once per window, no suppressed combat drinking, `DENIED own spell` continuity across flickers; probe (only if armed): `[probe cstyle]` |
 
-## Awaiting marth's field test (deck log watch items)
+## Open field threads (awaiting marth's deck — pull the log, then diagnose)
 
 The deck runs the game; MFO.log is at
 `deck@marthdeck:~/Games/custom-modlist/overwrite/SKSE/Plugins/MFO.log`.
-The v1.0.31 `[loot] apparel {id} … primAV/assocSkill/secAV/arch/mag/kw -> school`
-lines are the channel to fix robe-detection *from data* if a valid robe still
-reads score=0.
+**CAVEAT: MFO.log is TRUNCATED every game launch** (one file, no backup) — the
+session with a bug is gone after a relaunch. To catch something, marth must
+reproduce it in the CURRENT session, then pull the log before the next launch.
+(Offered but undecided: add an `MFO.log.prev` backup-on-load so sessions aren't
+lost — small, safe; do it if marth confirms.) Deck may be ASLEEP → SSH timeout,
+just retry ([[deck-sleeps-ssh-timeout]]).
+
+1. **Auri won't switch to melee at close range.** MFO does the switch via a
+   "foe within range X → equip melee" gambit that reads her CURRENT combat
+   target's distance (Evaluator.cpp ~139). Leading causes (need the log to pick):
+   (a) she carries NO melee weapon → `EquipWeapon(melee)` no-ops ("no melee
+   weapon carried"); (b) no current combat target → within-range condition false,
+   rule never fires; (c) her gambits aren't a within/beyond PAIR on the same foe,
+   so a ranged rule claims the hand (H2). Quick check: does Auri carry a melee
+   weapon? Log line to find: `[eval] Auri … act.equip_melee …` fired/failed/skip.
+2. **P1 combat-style probe (de-risks Stage-2 full cast control, #59).** Arm by
+   setting `bProbeCastStyle = 1` in `Data/SKSE/Plugins/MFO.ini` (default 0),
+   full restart, fight with a mage follower who has a cast gambit, then read
+   `[probe cstyle]` lines: did the caster-CSTY swap HOLD, and did his
+   CheckStartCast ask-rate go UP (casts more / moves)? That answer gates Stage 2.
+3. **v1.0.31/1.0.32 field confirms** — see the shipped table's watch items
+   (Marcurio switching to robes; forced casts firing animated, paced, potions
+   flowing, no mid-flicker leak).
 
 ## Open issues (ranked)
 
