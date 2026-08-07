@@ -224,7 +224,34 @@ now obeys "ignore buffs & heals". Design detail below.
    (point-near-segment). INI kill-switch `bFriendlyFireHold` default ON.
    (Drop the earlier wrong idea of "ignore allies in the LoS raycast".)
 
-## v1.0.37 — NEXT: serious LINE-OF-SIGHT review (marth flagged 2026-08-06)
+## ⚠️ TOP PRIORITY NEXT — CRASH INVESTIGATION (marth: strong suspicion MFO causes the memory/graphics CTDs, 2026-08-06)
+
+Crashes trump features. Start here. MFO's plausible crash surfaces, ranked:
+1. **The ImGui/Field-Kit overlay (Board.cpp) — #1 GRAPHICS suspect.** Three RENDER-
+   thread hooks (D3DInit, DXGIPresent, InputDispatch) + an every-frame overlay +
+   baked fonts + the ImGui Win32 backend polling XInput ([[imgui-backend-polls-
+   xinput-itself]]). Graphics/device-lost/present crashes usually live here.
+2. **Off-main engine MUTATIONS added v1.0.35-37 (memory-corruption/UAF suspects).**
+   The CheckCast hook (ActorMagicCaster vtable[0] idx 0x0A) fires on a NON-main
+   thread (confirmed in the deck log) and calls GetCasterAsActor + ShouldDeny on
+   EVERY cast; `CombatStyle::ApplyTick` writes cc->combatStyle on the UpdateCombat
+   thread; cast-in-logistics calls CastSpellImmediate + RestoreActorValue + a
+   PLAYER `HasMagicEffect` walk from the job-WORKER tick (§0.30). Any off-main
+   engine write/list-walk racing the main thread = corruption.
+3. **The vtable hooks written at load** — UpdateCombat 0xE4, CheckStartCast 0x06,
+   CheckCast 0x0A. A layout/index mismatch would corrupt (Fable already caught the
+   VTABLE_ActorMagicCaster[1]/[2] clobber; verify none like it remain).
+
+METHOD (don't guess — [[getgoldamount-ctds-count-gold-from-getinventory]] has the
+CI-PDB + `[bc]` breadcrumb crash-pinning recipe): (a) have marth install/keep a
+crash logger (Crash Logger SSE / .NET SF) and grab the crash .txt; symbolicate the
+top frames against the CI-shipped MFO.pdb. (b) BISECT via INI kill-switches to
+localise the subsystem before reading code: `bShowHud=0` (overlay off), `bCasterHook
+=0` (CheckStartCast+CheckCast off), `bWeaponStyleControl=0` + `iCastControl=0`
+(combatStyle swaps off), `bLogistics=0` (OOC casts/loot off). If a kill-switch
+combo stops the CTD, that subsystem is it. (c) THEN read the pinned frames' code.
+
+## v1.0.38 — LINE-OF-SIGHT review (after the crash hunt) (marth flagged 2026-08-06)
 
 Two separate LoS problems, NOT fixed by v1.0.36 (which only fixes which spell is
 cast, not aim/LoS):
