@@ -363,7 +363,8 @@ namespace MFO::Scheduler {
             if (choice.ruleIndex < 0) break;          // nothing (more) matched
 
             const auto& op = choice.actionOpcode;
-            const bool isCast  = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget;
+            const bool isCast  = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
+                                 op == Vocab::kActCastPlayer;
             const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged;
 
             // SUPPRESSION IS POSITIONAL, NEVER ABSOLUTE (INVARIANTS #26) --

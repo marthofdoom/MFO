@@ -362,7 +362,8 @@ namespace MFO::Logistics {
             for (const auto& g : a_state.combat()) {
                 if (!g.enabled) continue;   // a toggled-OFF rule doesn't make a mage (same rule as TableHasAction)
                 if (g.actionOpcode != Vocab::kActCastSelf &&
-                    g.actionOpcode != Vocab::kActCastTarget) continue;
+                    g.actionOpcode != Vocab::kActCastTarget &&
+                    g.actionOpcode != Vocab::kActCastPlayer) continue;
                 ++a_castGambits;   // counts even when the spell's school below is unreadable
                 auto* spell = g.actionParamForm
                     ? RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm) : nullptr;
@@ -3294,28 +3295,34 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootSoulGems)       acted = LootNearby(a_follower, Category::SoulGems, now);
             else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, now);
             else if (op == Vocab::kActEquipTorch)         acted = EquipTorch(a_follower);   // #35: torch is upkeep
-            else if (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget) {
-                // CAST IN LOGISTICS: out-of-combat gambit casting -- candlelight,
-                // magelight, self-buffs, out-of-combat heals. OUT OF COMBAT the
-                // follower's AI never casts on its own, so the combat AI-grace +
-                // force-on-miss path never fired (deck 2026-08-06: Marcurio would
-                // NOT cast Candlelight at night, though Auri's torch fired on the
-                // SAME is_night rule -- so the condition was fine, the cast path
-                // was not). FORCE the cast straight through the package (the proven
-                // animated route), for fire-and-forget AND concentration spells.
+            else if (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
+                     op == Vocab::kActCastPlayer) {
+                // CAST IN LOGISTICS: out-of-combat gambit casting -- candlelight on
+                // SELF or on the PLAYER (light follows you), magelight, self-buffs,
+                // out-of-combat heals. Out of combat the follower's AI never casts
+                // on its own, so the combat AI-grace path never fired (deck
+                // 2026-08-06). SELF and PLAYER go through CastSpellImmediate (the
+                // package route bars self-delivery, Decline::SelfRoute; the immediate
+                // route applies the effect to any target). A FOE target goes through
+                // the animated package (CastAt).
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
                 if (!sp || !a_follower->HasSpell(sp)) {
                     start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
                 }
-                // Skip a SELF buff still on the caster (candlelight up), then pace
-                // re-casts by the spell's own DURATION (a 60s light is refreshed as
-                // it expires, not re-cast every tick; a 3s floor stops instant
-                // spells from firing every ~1s tick -- heals stay condition-gated).
-                if (op == Vocab::kActCastSelf) {
+                // Resolve the EFFECT target: self, the player, or the current foe.
+                RE::Actor* tgt = a_follower;
+                if (op == Vocab::kActCastPlayer)      tgt = RE::PlayerCharacter::GetSingleton();
+                else if (op == Vocab::kActCastTarget) { if (auto p = choice.target.get(); p.get()) tgt = p.get(); }
+                if (!tgt) { start = choice.ruleIndex + 1; continue; }
+                const bool immediate = (op != Vocab::kActCastTarget);   // self/player -> immediate route
+                // Skip re-casting a buff still on the TARGET (candlelight up on him
+                // or the player), then pace by the spell's DURATION (a 60s light
+                // refreshes as it expires; a 3s floor keeps instant spells off the
+                // ~1s tick -- heals stay condition-gated).
+                if (immediate) {
                     auto* ei   = sp->GetCostliestEffectItem();
                     auto* mgef = ei ? ei->baseEffect : nullptr;
-                    if (auto* mt = a_follower->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
-                        spdlog::info("[logistics] {:08X} OOC cast skipped: buff still active", id);
+                    if (auto* mt = tgt->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
                         start = choice.ruleIndex + 1; continue;
                     }
                 }
@@ -3323,24 +3330,17 @@ namespace MFO::Logistics {
                 if (auto it = s_logiCastUntil.find(id); it != s_logiCastUntil.end() && now < it->second) {
                     start = choice.ruleIndex + 1; continue;   // within the last cast's window
                 }
-                // cast_self -> self; cast_target -> the foe if any (rare OOC), else self.
-                RE::Actor* tgt = a_follower;
-                if (op == Vocab::kActCastTarget) { if (auto p = choice.target.get(); p.get()) tgt = p.get(); }
-                const bool self = (tgt == a_follower);
-                if (self) {
-                    // cast_self is BARRED from the package route (Decline::SelfRoute
-                    // -- the QNAM+t6 CTD cell). Use CastSpellImmediate, the proven
-                    // self-delivery route (deck 2026-08-06: the package declined
-                    // reason=8 every tick). No charge animation, but the light/buff/
-                    // heal effect applies -- fine for upkeep. It spends no magicka,
-                    // so gate on affordability and deduct the cost by hand.
+                if (immediate) {
+                    // CastSpellImmediate applies the effect to `tgt` for any delivery.
+                    // No charge animation, but the light/buff/heal lands. Spends no
+                    // magicka, so gate on affordability and deduct the cost by hand.
                     const float cost = sp->CalculateMagickaCost(a_follower);
                     auto* avo = a_follower->AsActorValueOwner();
                     if (avo && avo->GetActorValue(RE::ActorValue::kMagicka) < cost) {
                         start = choice.ruleIndex + 1; continue;   // can't afford it
                     }
                     if (auto* caster = a_follower->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant)) {
-                        caster->CastSpellImmediate(sp, false, a_follower, 1.0f, false, 0.0f, a_follower);
+                        caster->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, a_follower);
                         if (avo) avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                                         RE::ActorValue::kMagicka, -cost);
                         acted = true;
@@ -3353,8 +3353,11 @@ namespace MFO::Logistics {
                     const float dur = std::max(3.0f, ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f);
                     s_logiCastUntil[id] = now + std::chrono::duration_cast<Clock::duration>(
                                                     std::chrono::duration<float>(dur));
+                    const char* route = op == Vocab::kActCastPlayer ? "player (immediate)"
+                                      : immediate                   ? "self (immediate)"
+                                                                    : "target (package)";
                     spdlog::info("[logistics] {:08X} OOC cast {:08X} ({}), refresh in {:.0f}s",
-                                 id, sp->GetFormID(), self ? "self (immediate)" : "target (package)", dur);
+                                 id, sp->GetFormID(), route, dur);
                 }
             }
             else if (op == Vocab::kActWait) {

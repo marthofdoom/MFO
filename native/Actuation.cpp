@@ -572,6 +572,9 @@ namespace MFO::Actuation {
         if (op == Vocab::kActCastSelf) {
             return CastOn(a_follower, a_choice.actionParam, a_follower);
         }
+        if (op == Vocab::kActCastPlayer) {
+            return CastOn(a_follower, a_choice.actionParam, RE::PlayerCharacter::GetSingleton());
+        }
         if (op == Vocab::kActCastTarget) {
             // A foe selector already named someone; prefer that over the static
             // self/player subject, or "Foe: lowest HP -> Cast Firebolt" would

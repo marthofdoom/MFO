@@ -103,6 +103,7 @@ namespace MFO::Vocab {
     inline constexpr const char* kActWait      = "act.wait";
     inline constexpr const char* kActCastSelf  = "act.cast_self";    // param = SpellItem
     inline constexpr const char* kActCastTarget= "act.cast_target";  // param = SpellItem, subject = target
+    inline constexpr const char* kActCastPlayer= "act.cast_player";  // param = SpellItem, effect applied to the PLAYER
     inline constexpr const char* kActAttack    = "act.attack";       // target = the chosen foe
     // Tier-A equip actions: equip best-in-category from the follower's OWN
     // inventory (ActorEquipManager, §4.5 Tier A). Idempotent -- no-op if already

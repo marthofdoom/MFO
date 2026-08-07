@@ -215,6 +215,7 @@ namespace MFO::Board {
         { Vocab::kActWait,              "Wait" },
         { Vocab::kActCastSelf,          "Cast on self" },
         { Vocab::kActCastTarget,        "Cast at foe/ally" },
+        { Vocab::kActCastPlayer,        "Cast on player" },
         { Vocab::kActAttack,            "Attack" },
         { Vocab::kActDrinkHealthPotion, "Drink health potion" },
         { Vocab::kActDrinkStaminaPotion,"Drink stamina potion" },
@@ -259,6 +260,7 @@ namespace MFO::Board {
         // logistics scan dispatches them through Actuation::Fire.
         { Vocab::kActCastSelf,           "Cast on self" },
         { Vocab::kActCastTarget,         "Cast at foe/ally" },
+        { Vocab::kActCastPlayer,         "Cast on player" },
         { Vocab::kActWait,               "Wait" },   // gate lower rules, e.g. "carry weight > 90% -> Wait"
     };
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
@@ -842,7 +844,8 @@ namespace MFO::Board {
                                 ImGui::TableNextColumn();
                                 {
                                     const bool isCast = (rv.actOp == Vocab::kActCastSelf ||
-                                                         rv.actOp == Vocab::kActCastTarget);
+                                                         rv.actOp == Vocab::kActCastTarget ||
+                                                         rv.actOp == Vocab::kActCastPlayer);
                                     if (!isCast) {
                                         ImGui::TextDisabled("-");
                                     } else {
@@ -977,7 +980,8 @@ namespace MFO::Board {
                                 }
                                 std::string act = labelFor(rv.actOp, actTab, actN);
                                 if ((rv.actOp == Vocab::kActCastSelf ||
-                                     rv.actOp == Vocab::kActCastTarget) && !rv.spellName.empty())
+                                     rv.actOp == Vocab::kActCastTarget ||
+                                     rv.actOp == Vocab::kActCastPlayer) && !rv.spellName.empty())
                                     act += " (" + rv.spellName + ")";
                                 if (!rv.enabled) {
                                     ImGui::PushStyleColor(ImGuiCol_Text,
