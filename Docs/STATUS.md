@@ -227,6 +227,19 @@ cast, not aim/LoS):
    off-main hook reads; do the AoE/line check against the snapshot.
 Both want a focused review + Fable pass (touches the raycast + threading).
 
+- **BUG: cast-in-logistics never fires out of combat** (marth 2026-08-06, deck).
+  Marcurio would not cast Magelight/Candlelight on an "At night" (cond.is_night)
+  logistics rule. Verified GOOD: is_night is implemented right (Evaluator.cpp:362,
+  Calendar::GetHour 20-6h), is_night IS in kCondsLogi ("At night"), and the cast
+  dispatch is wired (Logistics.cpp:3297 -> Actuation::Fire). But the deck log shows
+  the logistics cast NEVER attempts (no [cast]/[pkg] for a light spell). Suspect:
+  Actuation::Fire->CastOn's AI-first-grace + force-on-miss (ForceCast/Packages::
+  CastSelf) was built for COMBAT and doesn't trigger out of combat (the AI never
+  casts -> grace should elapse -> force, but it doesn't). Also check: the cast_self
+  buff-active skip (HasMagicEffect) for Candlelight, and whether cast_target
+  (Magelight) can resolve a target with no foe. NEXT: add a log line in the
+  logistics cast dispatch (rule reached? Fire's Result?) then fix the OOC force path.
+
 ## Backlog (captured, not scheduled)
 
 - **TOWN UPDATE (next after the mage cut) — headline #31 autonomous town errands
