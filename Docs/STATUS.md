@@ -227,20 +227,13 @@ cast, not aim/LoS):
    off-main hook reads; do the AoE/line check against the snapshot.
 Both want a focused review + Fable pass (touches the raycast + threading).
 
-- **BUG: cast-in-logistics never fires out of combat** (marth 2026-08-06, deck).
-  Marcurio would not cast Magelight/Candlelight on an "At night" (cond.is_night)
-  logistics rule. Verified GOOD: is_night is implemented right (Evaluator.cpp:362,
-  Calendar::GetHour 20-6h), is_night IS in kCondsLogi ("At night"), and the cast
-  dispatch is wired (Logistics.cpp:3297 -> Actuation::Fire). But the deck log shows
-  the logistics cast NEVER attempts (no [cast]/[pkg] for a light spell). CONFIRMED
-  the CONDITION is fine: Auri's equip_torch fires on the SAME is_night rule at
-  night (deck log), so the bug is 100% the out-of-combat CAST, not is_night. Suspect:
-  Actuation::Fire->CastOn's AI-first-grace + force-on-miss (ForceCast/Packages::
-  CastSelf) was built for COMBAT and doesn't trigger out of combat (the AI never
-  casts -> grace should elapse -> force, but it doesn't). Also check: the cast_self
-  buff-active skip (HasMagicEffect) for Candlelight, and whether cast_target
-  (Magelight) can resolve a target with no foe. NEXT: add a log line in the
-  logistics cast dispatch (rule reached? Fire's Result?) then fix the OOC force path.
+- **~~BUG: cast-in-logistics OOC~~ — DIAGNOSED + FIXED (2026-08-06, pending field-test).**
+  Root cause: the package route DECLINES cast_self with reason=8 (Decline::SelfRoute
+  -- the QNAM+t6 CTD cell it was barred from), so Candlelight was refused every
+  tick (deck diag: `OOC cast DECLINED by package reason=8, self`). FIX: route
+  cast_self through CastSpellImmediate (Actuation's proven self-delivery path) --
+  effect applies, no charge animation; affordability-gated + cost deducted by hand.
+  cast_target keeps the package (CastAt) route. Deployed as a test DLL.
 - **ENH: add cond.is_dark (ambient light level), better than is_night** (marth):
   a dark dungeon by day needs light; a lit town at night does not. A light-level
   read (interior ambient / GetLightingRun-style) beats the clock. Pairs with the
