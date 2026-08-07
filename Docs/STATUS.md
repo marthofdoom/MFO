@@ -210,6 +210,23 @@ now obeys "ignore buffs & heals". Design detail below.
    (point-near-segment). INI kill-switch `bFriendlyFireHold` default ON.
    (Drop the earlier wrong idea of "ignore allies in the LoS raycast".)
 
+## v1.0.37 — NEXT: serious LINE-OF-SIGHT review (marth flagged 2026-08-06)
+
+Two separate LoS problems, NOT fixed by v1.0.36 (which only fixes which spell is
+cast, not aim/LoS):
+1. **Shooting walls/floors.** Sightline uses the engine's `Actor::HasLineOfSight`
+   (Sightline.cpp:65), which fails-open on "unknown" and only holds on a confirmed
+   "occluded" (Actuation.cpp:56-63). An unreliable/unknown verdict lets a forced
+   cast fire into terrain. FIX: a real geometry raycast (caster eyes -> target),
+   not the engine boolean — treat a solid hit before the target as occluded.
+2. **Hitting teammates on occasion.** The friendly-fire hold (v1.0.35, in the
+   cast hook) is gated OFF because CheckCast/SpellCast fire on a NON-main thread
+   ("[consent] ... fires on a NON-main thread"), so the highActorHandles walk is
+   skipped (UAF-safe fail-open). FIX: snapshot teammate positions on the main
+   thread (the MainThread pump / evaluator tick) into a lock-free structure the
+   off-main hook reads; do the AoE/line check against the snapshot.
+Both want a focused review + Fable pass (touches the raycast + threading).
+
 ## Backlog (captured, not scheduled)
 
 - **TOWN UPDATE (next after the mage cut) — headline #31 autonomous town errands
