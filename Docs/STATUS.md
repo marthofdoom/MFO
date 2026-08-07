@@ -180,7 +180,17 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 5. **#29 — MEO v1.0.8** finalize (strip `[wdiag]`, bump, release) — *different mod*
    (marth's Equipment Overhaul), same dev flow.
 
-## v1.0.35 — IN PROGRESS (started 2026-08-06, field bugs from the v1.0.34 soak)
+## v1.0.35 — BUILT + DECK-DEPLOYED FOR FIELD TEST, PUBLIC RELEASE HELD
+
+**Deployed to deck 2026-08-06 (DLL d09e1a72, CI run 31137713645). NOT tag-pushed
+/ NOT gh-release'd** — this is a high-risk cast-abort hook; the GitHub release
+waits on marth's freeze/CTD field-test. To publish once he confirms:
+`git push origin v1.0.35` + `gh release create v1.0.35 …` (main agent). Fable-
+reviewed twice (2 blockers + majors fixed). **Field-test watch:** no follower
+freeze/CTD; `[consent] SpellCast fires on the MAIN/NON-main thread` (one-shot —
+tells if friendly-fire is active); `HARD-ABORTED … (exclusive)` in "exact";
+`HARD-ABORTED … (friendly fire)` instead of Fireballs-in-the-back; Absorb Health
+now obeys "ignore buffs & heals". Design detail below.
 
 1. **HARD cast suppression ("the hard way", marth).** CheckStartCast (0x06) is
    advisory — a denied non-gambit spell still fires (deck: Marcurio cast Icy
