@@ -1,3 +1,21 @@
+## v1.0.35 -- casters obey "exact", and stop firing into your allies' backs
+
+- Fix: "Cast control: Exact spell" (and the other levels) now actually STOPS a
+  follower's own spells. The old hook only ADVISED the AI not to cast -- it still
+  slipped spells through (a latched mage cast Icy Shard / Mage Armor in "exact").
+  MFO now hard-aborts a denied cast at the moment it fires, via the engine's own
+  interrupt (magicka refunded, no freeze). Watch "[consent] ... HARD-ABORTED".
+- Fix: Absorb Health (and other drain/absorb spells) count as OFFENSE, not heals,
+  so they obey "ignore buffs & heals". Spell category is now read from the spell's
+  own effects -- anything that harms a target is offense -- instead of guessing
+  from which caster the engine happened to use.
+- New: friendly-fire hold (default ON, INI bFriendlyFireHold). Followers no longer
+  fire offensive spells into a teammate standing in the line or blast -- the mage
+  holds the cast instead (the game's line-of-sight check ignores allies, so this
+  was firing Fireballs into a follower's back in a corridor). A decay valve lets a
+  shot through after several holds so a mage in a tight formation can't be muted.
+  The gambit's own chosen spell is never held. Watch "... (friendly fire)".
+
 ## v1.0.34 -- the mage update: full cast control, casting out of combat, spell teaching
 
 - New: CAST CONTROL SLIDER (MCM, "Cast control", default "Ignore heals"). Graduates
