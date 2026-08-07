@@ -3304,13 +3304,8 @@ namespace MFO::Logistics {
                 // was not). FORCE the cast straight through the package (the proven
                 // animated route), for fire-and-forget AND concentration spells.
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
-                // DIAGNOSTIC (temp): pin why an OOC cast rule that matched doesn't fire.
-                spdlog::info("[logistics] {:08X} OOC cast rule reached: op={} param={:08X} "
-                             "spellResolved={} known={} pkgAvail={}",
-                             id, op, choice.actionParam, sp != nullptr,
-                             sp && a_follower->HasSpell(sp), Packages::Available());
-                if (!sp || !a_follower->HasSpell(sp) || !Packages::Available()) {
-                    start = choice.ruleIndex + 1; continue;   // unknown/unavailable -> next rule
+                if (!sp || !a_follower->HasSpell(sp)) {
+                    start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
                 }
                 // Skip a SELF buff still on the caster (candlelight up), then pace
                 // re-casts by the spell's own DURATION (a 60s light is refreshed as
@@ -3326,27 +3321,40 @@ namespace MFO::Logistics {
                 }
                 static std::unordered_map<RE::FormID, Clock::time_point> s_logiCastUntil;
                 if (auto it = s_logiCastUntil.find(id); it != s_logiCastUntil.end() && now < it->second) {
-                    spdlog::info("[logistics] {:08X} OOC cast skipped: within last cast's duration window", id);
-                    start = choice.ruleIndex + 1; continue;
+                    start = choice.ruleIndex + 1; continue;   // within the last cast's window
                 }
-                // cast_self -> self; cast_target -> the foe if any (rare OOC), else
-                // self so a light with no foe lands on the follower.
+                // cast_self -> self; cast_target -> the foe if any (rare OOC), else self.
                 RE::Actor* tgt = a_follower;
                 if (op == Vocab::kActCastTarget) { if (auto p = choice.target.get(); p.get()) tgt = p.get(); }
                 const bool self = (tgt == a_follower);
-                const auto d = self ? Packages::CastSelf(a_follower, sp)
-                                    : Packages::CastAt(a_follower, sp, tgt);
-                acted = (d == Packages::Decline::None);
+                if (self) {
+                    // cast_self is BARRED from the package route (Decline::SelfRoute
+                    // -- the QNAM+t6 CTD cell). Use CastSpellImmediate, the proven
+                    // self-delivery route (deck 2026-08-06: the package declined
+                    // reason=8 every tick). No charge animation, but the light/buff/
+                    // heal effect applies -- fine for upkeep. It spends no magicka,
+                    // so gate on affordability and deduct the cost by hand.
+                    const float cost = sp->CalculateMagickaCost(a_follower);
+                    auto* avo = a_follower->AsActorValueOwner();
+                    if (avo && avo->GetActorValue(RE::ActorValue::kMagicka) < cost) {
+                        start = choice.ruleIndex + 1; continue;   // can't afford it
+                    }
+                    if (auto* caster = a_follower->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant)) {
+                        caster->CastSpellImmediate(sp, false, a_follower, 1.0f, false, 0.0f, a_follower);
+                        if (avo) avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                        RE::ActorValue::kMagicka, -cost);
+                        acted = true;
+                    }
+                } else if (Packages::Available()) {
+                    acted = (Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None);
+                }
                 if (acted) {
                     auto* ei = sp->GetCostliestEffectItem();
                     const float dur = std::max(3.0f, ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f);
                     s_logiCastUntil[id] = now + std::chrono::duration_cast<Clock::duration>(
                                                     std::chrono::duration<float>(dur));
-                    spdlog::info("[logistics] {:08X} forced OOC cast {:08X} ({}), refresh in {:.0f}s",
-                                 id, sp->GetFormID(), self ? "self" : "target", dur);
-                } else {
-                    spdlog::info("[logistics] {:08X} OOC cast DECLINED by package (reason={}, {})",
-                                 id, static_cast<int>(d), self ? "self" : "target");
+                    spdlog::info("[logistics] {:08X} OOC cast {:08X} ({}), refresh in {:.0f}s",
+                                 id, sp->GetFormID(), self ? "self (immediate)" : "target (package)", dur);
                 }
             }
             else if (op == Vocab::kActWait) {
