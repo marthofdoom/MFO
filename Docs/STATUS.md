@@ -180,6 +180,26 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 5. **#29 — MEO v1.0.8** finalize (strip `[wdiag]`, bump, release) — *different mod*
    (marth's Equipment Overhaul), same dev flow.
 
+## v1.0.35 — IN PROGRESS (started 2026-08-06, field bugs from the v1.0.34 soak)
+
+1. **HARD cast suppression ("the hard way", marth).** CheckStartCast (0x06) is
+   advisory — a denied non-gambit spell still fires (deck: Marcurio cast Icy
+   Shard/Turn Undead/Mage Armor while latched in "exact"). FIX: also hook
+   `MagicCaster::SpellCast` (VTABLE_ActorMagicCaster[0..2] idx 0x09) — the real
+   cast-execution — and ABORT (don't call original) when a latched follower's
+   spell is denied. Shared decision with CheckStartCast.
+2. **Effect-based spell classification** (replaces the caster-vtable category).
+   Classify by the spell's effects: any hostile/detrimental effect → Offense
+   (fixes marth's Absorb Health complaint — it was tagged Heal by the Restore
+   caster); else beneficial Health effect → Heal (self via Delivery); else Buff.
+   `EffectSetting::IsHostile()/IsDetrimental()`, `data.primaryAV==kHealth`.
+3. **Friendly-fire hold.** The engine's HasLineOfSight passes THROUGH allies, so
+   MFO fired Fireballs into Auri's back in a hallway. FIX: in the SpellCast hook,
+   for an OFFENSIVE spell, abort if a teammate (`IsPlayerTeammate`) is within the
+   spell's AoE (`GetLargestArea()`) of the target OR on the caster→target line
+   (point-near-segment). INI kill-switch `bFriendlyFireHold` default ON.
+   (Drop the earlier wrong idea of "ignore allies in the LoS raycast".)
+
 ## Backlog (captured, not scheduled)
 
 - **TOWN UPDATE (next after the mage cut) — headline #31 autonomous town errands

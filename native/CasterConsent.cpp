@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include <unordered_set>   // g_otherCast -- NOT in the PCH (the v1.0.8/9 CI lesson)
+#include <thread>          // g_mainThread: std::this_thread::get_id (FF world-walk gate)
 #include "CasterConsent.h"
 #include "Config.h"
 #include "Followers.h"
@@ -50,15 +51,27 @@ namespace MFO::CasterConsent {
         // originals are keyed by the vtable pointer we read off `this`.
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_orig;
 
-        // CAST-CONTROL SLIDER classification. Which concrete CombatMagicCaster
-        // vtable is deliberating IS the engine's own category for the spell in
-        // hand -- Restore = a heal/restoration, Offensive/Stagger/Paralyze/... =
-        // an attack, Ward/Cloak/Light/Bound/Summon/... = a defensive buff. We
-        // record that category per vtable at install so the thunk classifies in
-        // O(1) without parsing effects. Heal is split self/other by the spell's
-        // Delivery at runtime (only the self-heal level needs the distinction).
+        // CAST-CONTROL SLIDER classification -- BY THE SPELL'S EFFECTS, not the
+        // deliberating caster's vtable (v1.0.35). The vtable category mislabelled
+        // dual-purpose spells: Absorb Health deliberates through the Restore
+        // caster (it heals the caster) so it read as a Heal and slipped past
+        // "ignore buffs & heals", even though it is an ATTACK. The rule marth
+        // wants is "does it harm a foe": ANY hostile/detrimental effect -> Offense;
+        // else a beneficial Health effect -> Heal (self via Delivery); else Buff.
         enum class SpellKind : std::uint8_t { Offense, Buff, Heal };
-        std::unordered_map<std::uintptr_t, SpellKind> g_category;
+        SpellKind ClassifySpell(RE::MagicItem* a_mi) {
+            if (!a_mi) return SpellKind::Offense;
+            bool restoresHealth = false;
+            for (auto* eff : a_mi->effects) {
+                auto* base = eff ? eff->baseEffect : nullptr;
+                if (!base) continue;
+                if (base->IsHostile() || base->IsDetrimental())
+                    return SpellKind::Offense;   // harms a target -> offense, whatever else it does
+                if (base->data.primaryAV == RE::ActorValue::kHealth)
+                    restoresHealth = true;       // beneficial health effect -> a heal
+            }
+            return restoresHealth ? SpellKind::Heal : SpellKind::Buff;
+        }
 
         // Does the AI KEEP this spell at slider level `lvl` (i.e. MFO exempts
         // it)? "ignore X" = leave category X to the follower's AI; tighter
@@ -368,15 +381,15 @@ namespace MFO::CasterConsent {
             // level 3 leaves self-heals to the AI; level 2 (default) leaves all
             // heals; level 1 leaves buffs+heals and only forces offense. "ignore
             // X" = leave category X to the follower's own AI. The category comes
-            // from the deliberating caster's vtable (g_category); heal is split
-            // self/other by the spell's Delivery. Denies are NOT cooldown-gated:
-            // exclusivity is separate from pacing. LOG mode still only observes.
+            // from the SPELL'S EFFECTS (v1.0.35 ClassifySpell -- hostile => offense,
+            // so Absorb Health counts as offense); heal is split self/other by
+            // Delivery. Denies are NOT cooldown-gated: exclusivity is separate
+            // from pacing. LOG mode still only observes. NOTE: this is only the
+            // ADVISORY half -- the SpellCast hook hard-aborts what slips through.
             if (!isWanted) {
                 if (Config::g_casterMode.load() == 0) return aiSaysYes;   // dev observe-only
                 if (castLvl < 4) {
-                    SpellKind kind = SpellKind::Offense;
-                    if (auto cit = g_category.find(vt); cit != g_category.end())
-                        kind = cit->second;
+                    const SpellKind kind = ClassifySpell(mi);
                     const bool selfHeal = kind == SpellKind::Heal &&
                         mi->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
                     if (CastExempt(kind, selfHeal, castLvl))
@@ -427,6 +440,206 @@ namespace MFO::CasterConsent {
             return true;
         }
 
+        // ── v1.0.35: the HARD-abort half + friendly-fire ────────────────────
+        //
+        // CheckStartCast (0x06) is ADVISORY -- returning false makes the AI skip
+        // a cast attempt, but the deck proved a denied spell still fires (Marcurio
+        // cast Icy Shard / Mage Armor while latched in "exact"). MagicCaster::
+        // SpellCast (VTABLE_ActorMagicCaster, index 0x09) is the ACTUAL cast
+        // execution and carries the MagicItem being cast, so aborting it (via
+        // InterruptCast) is a true abort. The abort/deny path is caster-local and
+        // safe on whatever thread the release fires on; only the friendly-fire
+        // WORLD walk needs the main thread, which it gates on explicitly (below).
+        std::unordered_map<std::uintptr_t, std::uintptr_t> g_castOrig;
+        std::atomic<bool> g_castHooked{ false };
+        constexpr std::size_t kSpellCast = 0x09;
+        // Captured at install (kDataLoaded = main thread). The friendly-fire world
+        // walk only runs when SpellCast fires on this thread; off-main it is
+        // skipped (fail-open) so a jobified anim-graph release can never iterate
+        // highActorHandles concurrently with a main-thread resize (§0.30).
+        std::thread::id g_mainThread;
+
+        // Shared deny decision (SpellCast side): should this LATCHED follower be
+        // denied from casting this NON-gambit spell right now, per the slider?
+        // Mirrors the CheckStartCast thunk's logic; outputs the gambit spell for
+        // the log. Wanted spell / pacing / forcing stay in CheckStartCast.
+        bool ShouldDeny(RE::FormID a_fid, RE::MagicItem* a_mi, RE::FormID& a_wantOut) {
+            a_wantOut = 0;
+            if (!a_mi) return false;
+            const int lvl = Config::g_castControl.load();
+            if (lvl <= 0 || Config::g_casterMode.load() == 0) return false;
+            {
+                std::shared_lock lk(g_mx);
+                const auto w = g_want.find(a_fid);
+                if (w == g_want.end()) return false;   // not latched -> never our deny
+                a_wantOut = w->second.spell;
+            }
+            if (a_mi->GetFormID() == a_wantOut) return false;   // the gambit spell -> allow
+            if (lvl >= 4) return true;                          // exact -> deny all non-gambit
+            const SpellKind k = ClassifySpell(a_mi);
+            const bool selfHeal = k == SpellKind::Heal &&
+                a_mi->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+            return !CastExempt(k, selfHeal, lvl);
+        }
+
+        // Distance from point p to segment [a,b] -- but only when p projects
+        // BETWEEN the endpoints (an ally behind the caster or past the target is
+        // not in the line of fire). Returns +inf otherwise.
+        float SegDist(const RE::NiPoint3& p, const RE::NiPoint3& a, const RE::NiPoint3& b) {
+            const RE::NiPoint3 ab = b - a, ap = p - a;
+            const float len2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+            if (len2 <= 1.0f) return ap.Length();
+            const float t = (ap.x * ab.x + ap.y * ab.y + ap.z * ab.z) / len2;
+            if (t < 0.0f || t > 1.0f) return std::numeric_limits<float>::max();
+            const RE::NiPoint3 proj{ a.x + ab.x * t, a.y + ab.y * t, a.z + ab.z * t };
+            return (p - proj).Length();
+        }
+
+        // Would an OFFENSIVE cast by this follower catch one of the player's OWN
+        // teammates -- in the AoE blast at the target, or on the projectile line
+        // between caster and target? The hallway case: Auri stood between
+        // Marcurio and the foe and ate his Fireballs. Aim point = the caster's
+        // current combat target. Main-thread read of highActorHandles.
+        bool WouldHitTeammate(RE::Actor* a_caster, RE::MagicItem* a_mi) {
+            auto tp = a_caster->GetActorRuntimeData().currentCombatTarget.get();
+            auto* tgt = tp.get();
+            if (!tgt) return false;                       // no aim -> can't judge, allow
+            const auto cpos = a_caster->GetPosition();
+            const auto tpos = tgt->GetPosition();
+            const float area = static_cast<float>(a_mi->GetLargestArea());
+            const float aoe  = area > 0.0f ? area + 64.0f : 0.0f;   // blast + a body
+            constexpr float kLinePad = 80.0f;                        // ~a body off the line
+            auto* pl = RE::ProcessLists::GetSingleton();
+            if (!pl) return false;
+            for (auto& h : pl->highActorHandles) {
+                auto ap = h.get();
+                auto* a = ap.get();
+                if (!a || a == a_caster || a == tgt) continue;
+                if (a->IsDead() || a->IsDisabled()) continue;
+                if (!a->IsPlayerTeammate()) continue;     // only our OWN allies matter
+                const auto p = a->GetPosition();
+                if (aoe > 0.0f && p.GetDistance(tpos) <= aoe) return true;   // in the blast
+                if (SegDist(p, cpos, tpos) <= kLinePad)      return true;    // on the firing line
+            }
+            return false;
+        }
+
+        // Deduped log for the hard aborts (per follower+spell), same idea as
+        // DenyLog. Cleared with the latch (Clear/ClearAll) so a later fight's
+        // first abort logs again.
+        std::mutex g_abortLogMx;
+        std::unordered_map<RE::FormID, RE::FormID> g_lastAbort;
+        void AbortLog(RE::FormID a_fid, RE::Actor* a_actor, RE::FormID a_spell, const char* a_why) {
+            {
+                std::lock_guard<std::mutex> lk(g_abortLogMx);
+                auto it = g_lastAbort.find(a_fid);
+                if (it != g_lastAbort.end() && it->second == a_spell) return;
+                g_lastAbort[a_fid] = a_spell;
+            }
+            spdlog::info("[consent] {:08X} {} HARD-ABORTED cast of {:08X} ({})",
+                         a_fid, a_actor->GetName() ? a_actor->GetName() : "?", a_spell, a_why);
+        }
+
+        // Friendly-fire DECAY. Holding a follower's every offensive cast in a
+        // tight formation would soft-mute them; after kMaxFFHolds consecutive
+        // holds, let one through (accept a hit) so they never freeze. Reset on
+        // any cast that passes.
+        constexpr int kMaxFFHolds = 3;
+        std::mutex g_ffMx;
+        std::unordered_map<RE::FormID, int> g_ffHold;
+        bool FFHold(RE::FormID a_fid) {   // true = hold this cast, false = decay-release
+            std::lock_guard<std::mutex> lk(g_ffMx);
+            int& c = g_ffHold[a_fid];
+            if (++c > kMaxFFHolds) { c = 0; return false; }
+            return true;
+        }
+        void FFReset(RE::FormID a_fid) {
+            std::lock_guard<std::mutex> lk(g_ffMx);
+            g_ffHold.erase(a_fid);
+        }
+
+        using SpellCast_t = void (*)(RE::MagicCaster*, bool, std::uint32_t, RE::MagicItem*);
+
+        void SpellCastThunk(RE::MagicCaster* a_this, bool a_doCast, std::uint32_t a_arg2,
+                            RE::MagicItem* a_spell) {
+            const auto vt  = *reinterpret_cast<std::uintptr_t*>(a_this);
+            const auto oit = g_castOrig.find(vt);
+            if (oit == g_castOrig.end()) return;   // not one of ours -> benign no-op
+            const auto orig = reinterpret_cast<SpellCast_t>(oit->second);
+            auto pass = [&] { orig(a_this, a_doCast, a_arg2, a_spell); };
+
+            // FAST OUT: nothing latched AND friendly-fire off -> pure passthrough.
+            const bool ff = Config::g_friendlyFireHold.load(std::memory_order_relaxed);
+            if (g_wantCount.load(std::memory_order_relaxed) == 0 && !ff) { pass(); return; }
+            if (!a_doCast || !a_spell) { pass(); return; }
+            // ONE-SHOT thread probe -- so the soak can tell "FF works" from "FF
+            // permanently gated off-main". Logs the first thunk entry's thread.
+            static std::atomic<bool> s_threadLogged{ false };
+            if (!s_threadLogged.exchange(true))
+                spdlog::info("[consent] SpellCast fires on {} thread",
+                             std::this_thread::get_id() == g_mainThread ? "the MAIN" : "a NON-main");
+            // NORMAL SPELLS ONLY -- SpellCast also fires for staves (Enchantment),
+            // scrolls, weapon-enchant procs (all non-Spell forms), and for shouts /
+            // powers / abilities (SpellItems, but not GetSpellType()==kSpell). MFO
+            // governs none of those.
+            if (!a_spell->Is(RE::FormType::Spell) ||
+                a_spell->GetSpellType() != RE::MagicSystem::SpellType::kSpell) { pass(); return; }
+            auto* actor = a_this->GetCasterAsActor();
+            if (!actor) { pass(); return; }
+            const auto fid = actor->GetFormID();
+
+            // HARD EXCLUSIVE CONTROL: a latched follower's denied spell -> ABORT via
+            // the engine's own InterruptCast (refunds the charged magicka + resets
+            // the caster state machine -- a bare return would wedge it at kCasting).
+            // Caster-local, so safe on whatever thread the release fires on.
+            RE::FormID want = 0;
+            if (ShouldDeny(fid, a_spell, want)) {
+                AbortLog(fid, actor, a_spell->GetFormID(), "exclusive");
+                a_this->InterruptCast(true);
+                return;
+            }
+
+            // FRIENDLY FIRE: hold an OFFENSIVE, non-gambit, non-self cast by OUR
+            // follower that would catch a teammate. The gambit spell (want) is
+            // EXEMPT -- forcing then aborting it would loop forever (no cast event
+            // -> permit stays open -> re-request). World walk is main-thread-only.
+            // The decay counter is touched ONLY on casts this branch actually
+            // evaluates -- a heal/buff between shots must not reset it, or a mage
+            // weaving spells in a hallway would be muted forever (never reaching
+            // the consecutive-hold valve).
+            if (ff && actor->IsPlayerTeammate() &&
+                a_spell->GetFormID() != want &&
+                a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
+                std::this_thread::get_id() == g_mainThread &&
+                ClassifySpell(a_spell) == SpellKind::Offense) {
+                if (WouldHitTeammate(actor, a_spell)) {
+                    if (FFHold(fid)) {          // hold, until the decay valve frees one
+                        AbortLog(fid, actor, a_spell->GetFormID(), "friendly fire");
+                        a_this->InterruptCast(true);
+                        return;
+                    }
+                    // decay released this one (FFHold reset the count) -> let it fire
+                } else {
+                    FFReset(fid);              // clear shot -> reset the hold chain
+                }
+            }
+            pass();
+        }
+
+        void InstallSpellCastHook() {
+            if (g_castHooked.exchange(true)) return;
+            if (REL::Module::IsVR()) return;   // same VR guard as InstallHook
+            g_mainThread = std::this_thread::get_id();   // InstallHook runs at kDataLoaded (main)
+            // ONLY vtable [0]. VTABLE_ActorMagicCaster's three entries are the three
+            // BASE-SUBOBJECT vtables of ONE class (MagicCaster @0, the anim-graph
+            // holder @0x48, the BSTEventSink @0x60) -- NOT separate casters. Every
+            // casting source dispatches SpellCast through [0]; patching [1]/[2] at
+            // index 0x09 would clobber unrelated engine vtables (Fable, 2026-08-06).
+            REL::Relocation<std::uintptr_t> vt{ RE::VTABLE_ActorMagicCaster[0] };
+            g_castOrig[vt.address()] = vt.write_vfunc(kSpellCast, &SpellCastThunk);
+            spdlog::info("[consent] SpellCast hard-abort hooked (ActorMagicCaster vtable[0])");
+        }
+
     }
 
     void InstallHook() {
@@ -453,39 +666,30 @@ namespace MFO::CasterConsent {
         // NOTE (ENGINE_NOTES §0.29): CombatMagicCasterRestore is ALSO the
         // caster for combat potion-drinking, so this hook fires on potion
         // deliberation too -- expected, and layout-safe since the fix above.
-        // Each vtable pairs with the cast-control CATEGORY of the spells it
-        // deliberates (the slider's classifier). Restore = Heal; the offensive-
-        // control casters (Offensive/Stagger/Disarm/Paralyze/TargetEffect/Script)
-        // = Offense; the defensive/support casters (Ward/Summon/Cloak/Light/
-        // Invisibility/BoundItem/Reanimate) = Buff.
-        struct Hooked { REL::VariantID id; SpellKind kind; };
-        const Hooked kVtables[] = {
-            { RE::VTABLE_CombatMagicCasterOffensive[0],    SpellKind::Offense },
-            { RE::VTABLE_CombatMagicCasterRestore[0],      SpellKind::Heal    },
-            { RE::VTABLE_CombatMagicCasterWard[0],         SpellKind::Buff    },
-            { RE::VTABLE_CombatMagicCasterSummon[0],       SpellKind::Buff    },
-            { RE::VTABLE_CombatMagicCasterStagger[0],      SpellKind::Offense },
-            { RE::VTABLE_CombatMagicCasterDisarm[0],       SpellKind::Offense },
-            { RE::VTABLE_CombatMagicCasterCloak[0],        SpellKind::Buff    },
-            { RE::VTABLE_CombatMagicCasterLight[0],        SpellKind::Buff    },
-            { RE::VTABLE_CombatMagicCasterInvisibility[0], SpellKind::Buff    },
-            { RE::VTABLE_CombatMagicCasterBoundItem[0],    SpellKind::Buff    },
-            { RE::VTABLE_CombatMagicCasterTargetEffect[0], SpellKind::Offense },
-            { RE::VTABLE_CombatMagicCasterParalyze[0],     SpellKind::Offense },
-            { RE::VTABLE_CombatMagicCasterScript[0],       SpellKind::Offense },
-            { RE::VTABLE_CombatMagicCasterReanimate[0],    SpellKind::Buff    },
+        // The slider's classifier is now spell-effect-based (ClassifySpell), so
+        // the vtable list no longer carries a category -- it is just the set of
+        // caster vtables whose CheckStartCast we advise on.
+        const REL::VariantID kVtables[] = {
+            RE::VTABLE_CombatMagicCasterOffensive[0],  RE::VTABLE_CombatMagicCasterRestore[0],
+            RE::VTABLE_CombatMagicCasterWard[0],       RE::VTABLE_CombatMagicCasterSummon[0],
+            RE::VTABLE_CombatMagicCasterStagger[0],    RE::VTABLE_CombatMagicCasterDisarm[0],
+            RE::VTABLE_CombatMagicCasterCloak[0],      RE::VTABLE_CombatMagicCasterLight[0],
+            RE::VTABLE_CombatMagicCasterInvisibility[0],RE::VTABLE_CombatMagicCasterBoundItem[0],
+            RE::VTABLE_CombatMagicCasterTargetEffect[0],
+            RE::VTABLE_CombatMagicCasterParalyze[0],   RE::VTABLE_CombatMagicCasterScript[0],
+            RE::VTABLE_CombatMagicCasterReanimate[0],
         };
 
         int n = 0;
-        for (const auto& [id, kind] : kVtables) {
+        for (const auto& id : kVtables) {
             REL::Relocation<std::uintptr_t> vt{ id };
             // write_vfunc returns the previous entry -- store it under this
             // vtable's address so the thunk can dispatch to the right original.
             const std::uintptr_t orig = vt.write_vfunc(kCheckStartCast, &thunk);
-            g_orig[vt.address()]     = orig;
-            g_category[vt.address()] = kind;   // the slider's classifier
+            g_orig[vt.address()] = orig;
             ++n;
         }
+        InstallSpellCastHook();   // v1.0.35: the HARD-abort half
         spdlog::info("[consent] CheckStartCast hooked on {} caster vtable(s), mode={}",
                      n, Config::g_casterMode.load() == 0 ? "LOG" : "FORCE");
     }
@@ -517,6 +721,8 @@ namespace MFO::CasterConsent {
             g_lastDenied.erase(a_follower);
             g_lastPacedWindow.erase(a_follower);
         }
+        { std::lock_guard<std::mutex> al(g_abortLogMx); g_lastAbort.erase(a_follower); }
+        FFReset(a_follower);   // v1.0.35: drop the friendly-fire decay counter
         // An outstanding P1 style swap is NOT touched here: restore needs the
         // live CombatController, which only the combat thread's thunk holds.
         // The swap-count mirror keeps the thunk past its fast-out until the
@@ -532,6 +738,8 @@ namespace MFO::CasterConsent {
             g_lastDenied.clear();
             g_lastPacedWindow.clear();
         }
+        { std::lock_guard<std::mutex> al(g_abortLogMx); g_lastAbort.clear(); }
+        { std::lock_guard<std::mutex> fl(g_ffMx); g_ffHold.clear(); }
         // P1 probe: on a session reset every combat controller is gone (or
         // about to be); the swaps died with them. Drop the mirror so the
         // fast-out goes fully quiet again -- nothing is dereferenced.

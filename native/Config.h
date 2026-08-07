@@ -192,6 +192,13 @@ namespace MFO::Config {
     // exact. Applied in the CheckStartCast consent hook (CasterConsent).
     inline std::atomic<int>   g_castControl{ 2 };
 
+    // FRIENDLY-FIRE HOLD (v1.0.35), DEFAULT ON. In the SpellCast hook, hold a
+    // follower's OFFENSIVE cast when one of the player's own teammates is in the
+    // AoE blast at the target or on the caster->target projectile line -- the
+    // engine's HasLineOfSight passes through allies, so without this a mage
+    // fires into a teammate's back in a hallway. INI kill-switch (no MCM yet).
+    inline std::atomic<bool>  g_friendlyFireHold{ true };
+
     // WEAPON-STANCE OWNERSHIP (v1.0.33), DEFAULT ON -- a standard feature, not a
     // probe, so no MCM toggle (#55); INI-only as a debug kill-switch. When an
     // equip gambit wins a follower's hand, the DLL swaps their LIVE
