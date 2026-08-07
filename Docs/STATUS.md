@@ -6,12 +6,26 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-06 · **Latest shipped:** v1.0.34
+> **Last updated:** 2026-08-06 · **Latest shipped:** v1.0.37
 
 ---
 
 ## Continue in one screen
 
+- **Latest shipped & deployed: v1.0.37** ("mage follow-up") — deck-verified (DLL
+  b0602fa2…), GitHub Release = Latest. Bundles the field-fixes over the v1.0.34
+  mage update: (1) cast control that STICKS — deny the wrong spell PRE-charge via
+  the MagicCaster::CheckCast hook (0x0A, ActorMagicCaster vtable[0]; the v1.0.35
+  SpellCast/0x09 release-abort was reverted — it animated + wedged the caster) +
+  Loadout::Prepare keeps the GAMBIT spell in hand (spell→spell swap); (2) effect-
+  based spell classification (any hostile effect → Offense, fixes Absorb Health);
+  (3) cast-in-logistics FIXED — self-casts via CastSpellImmediate (package bars
+  self-delivery, Decline::SelfRoute), foe-casts via CastAt; per-(follower,spell)
+  pace; (4) NEW `act.cast_player` (logistics-only). Fable-reviewed (3 MAJORs fixed:
+  per-spell pace key, skip empty cast_target, cast_player-not-in-combat). Field:
+  candlelight OOC confirmed working; the CheckCast hook fires NON-main (so the
+  friendly-fire hold is inert -> the v1.0.37-below LoS review). **v1.0.35/1.0.36
+  were TEST-DEPLOYS only (never public) — superseded by v1.0.37.**
 - **Latest shipped & deployed:** **v1.0.34 — "the mage update"** — deck-verified
   (DLL 6f8f64ef…), GitHub Release = Latest (CI run 31130000975; auto-trigger kept
   flaking so runs were `gh workflow run`-dispatched, and GitHub concurrency
