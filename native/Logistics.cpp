@@ -3304,6 +3304,11 @@ namespace MFO::Logistics {
                 // was not). FORCE the cast straight through the package (the proven
                 // animated route), for fire-and-forget AND concentration spells.
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
+                // DIAGNOSTIC (temp): pin why an OOC cast rule that matched doesn't fire.
+                spdlog::info("[logistics] {:08X} OOC cast rule reached: op={} param={:08X} "
+                             "spellResolved={} known={} pkgAvail={}",
+                             id, op, choice.actionParam, sp != nullptr,
+                             sp && a_follower->HasSpell(sp), Packages::Available());
                 if (!sp || !a_follower->HasSpell(sp) || !Packages::Available()) {
                     start = choice.ruleIndex + 1; continue;   // unknown/unavailable -> next rule
                 }
@@ -3315,12 +3320,14 @@ namespace MFO::Logistics {
                     auto* ei   = sp->GetCostliestEffectItem();
                     auto* mgef = ei ? ei->baseEffect : nullptr;
                     if (auto* mt = a_follower->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
+                        spdlog::info("[logistics] {:08X} OOC cast skipped: buff still active", id);
                         start = choice.ruleIndex + 1; continue;
                     }
                 }
                 static std::unordered_map<RE::FormID, Clock::time_point> s_logiCastUntil;
                 if (auto it = s_logiCastUntil.find(id); it != s_logiCastUntil.end() && now < it->second) {
-                    start = choice.ruleIndex + 1; continue;   // within the last cast's window
+                    spdlog::info("[logistics] {:08X} OOC cast skipped: within last cast's duration window", id);
+                    start = choice.ruleIndex + 1; continue;
                 }
                 // cast_self -> self; cast_target -> the foe if any (rare OOC), else
                 // self so a light with no foe lands on the follower.
