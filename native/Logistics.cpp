@@ -3344,6 +3344,9 @@ namespace MFO::Logistics {
                                                     std::chrono::duration<float>(dur));
                     spdlog::info("[logistics] {:08X} forced OOC cast {:08X} ({}), refresh in {:.0f}s",
                                  id, sp->GetFormID(), self ? "self" : "target", dur);
+                } else {
+                    spdlog::info("[logistics] {:08X} OOC cast DECLINED by package (reason={}, {})",
+                                 id, static_cast<int>(d), self ? "self" : "target");
                 }
             }
             else if (op == Vocab::kActWait) {
