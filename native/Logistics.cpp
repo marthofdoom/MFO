@@ -3311,8 +3311,17 @@ namespace MFO::Logistics {
                 }
                 // Resolve the EFFECT target: self, the player, or the current foe.
                 RE::Actor* tgt = a_follower;
-                if (op == Vocab::kActCastPlayer)      tgt = RE::PlayerCharacter::GetSingleton();
-                else if (op == Vocab::kActCastTarget) { if (auto p = choice.target.get(); p.get()) tgt = p.get(); }
+                if (op == Vocab::kActCastPlayer) {
+                    tgt = RE::PlayerCharacter::GetSingleton();
+                } else if (op == Vocab::kActCastTarget) {
+                    // Foe selectors never fill the target out of combat -- an empty
+                    // handle must SKIP, not fall back to self (a package cast at
+                    // self is not barred and would fire a hostile spell at the
+                    // follower). cast on self/player is what the immediate route is for.
+                    auto p = choice.target.get();
+                    if (!p.get()) { start = choice.ruleIndex + 1; continue; }
+                    tgt = p.get();
+                }
                 if (!tgt) { start = choice.ruleIndex + 1; continue; }
                 const bool immediate = (op != Vocab::kActCastTarget);   // self/player -> immediate route
                 // Skip re-casting a buff still on the TARGET (candlelight up on him
@@ -3326,9 +3335,13 @@ namespace MFO::Logistics {
                         start = choice.ruleIndex + 1; continue;
                     }
                 }
-                static std::unordered_map<RE::FormID, Clock::time_point> s_logiCastUntil;
-                if (auto it = s_logiCastUntil.find(id); it != s_logiCastUntil.end() && now < it->second) {
-                    start = choice.ruleIndex + 1; continue;   // within the last cast's window
+                // Pace per (follower, SPELL) -- keying on the follower alone would
+                // let one cast's window starve a sibling cast rule (candlelight
+                // blocking an OOC heal). Composite key like g_drinkUntil.
+                static std::unordered_map<std::uint64_t, Clock::time_point> s_logiCastUntil;
+                const std::uint64_t castKey = (static_cast<std::uint64_t>(id) << 32) | sp->GetFormID();
+                if (auto it = s_logiCastUntil.find(castKey); it != s_logiCastUntil.end() && now < it->second) {
+                    start = choice.ruleIndex + 1; continue;   // within this spell's window
                 }
                 if (immediate) {
                     // CastSpellImmediate applies the effect to `tgt` for any delivery.
@@ -3351,8 +3364,8 @@ namespace MFO::Logistics {
                 if (acted) {
                     auto* ei = sp->GetCostliestEffectItem();
                     const float dur = std::max(3.0f, ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f);
-                    s_logiCastUntil[id] = now + std::chrono::duration_cast<Clock::duration>(
-                                                    std::chrono::duration<float>(dur));
+                    s_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(
+                                                        std::chrono::duration<float>(dur));
                     const char* route = op == Vocab::kActCastPlayer ? "player (immediate)"
                                       : immediate                   ? "self (immediate)"
                                                                     : "target (package)";

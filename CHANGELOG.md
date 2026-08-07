@@ -16,6 +16,22 @@
   shot through after several holds so a mage in a tight formation can't be muted.
   The gambit's own chosen spell is never held. Watch "... (friendly fire)".
 
+## v1.0.37 -- mage follow-up: cast control that sticks, out-of-combat casting that works
+
+- Fix: "Cast control" now actually STOPS a follower's own spells at the level you
+  set. The wrong spell is denied BEFORE it charges (no wrong-spell cast animation),
+  and MFO keeps the gambit spell in their hand so they cast what you told them --
+  no more standing there with the wrong spell in hand doing nothing.
+- Fix: Absorb Health (and other drain/absorb spells) count as OFFENSE, not heals,
+  so they obey "ignore buffs & heals". Spell category is read from the spell's own
+  effects now, not guessed from which caster the engine happened to use.
+- Fix: cast-in-logistics (out-of-combat cast gambits) now fires. Self casts apply
+  the effect directly (the forced-package route can't deliver self-only spells);
+  a foe target uses the animated package. Candlelight/Magelight at night and
+  out-of-combat self-buffs/heals all work now, paced by the spell's own duration.
+- New: "Cast on player" logistics action -- the follower applies a spell's effect
+  to YOU (e.g. Candlelight, so the light follows the player).
+
 ## v1.0.34 -- the mage update: full cast control, casting out of combat, spell teaching
 
 - New: CAST CONTROL SLIDER (MCM, "Cast control", default "Ignore heals"). Graduates

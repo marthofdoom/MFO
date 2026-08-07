@@ -215,7 +215,9 @@ namespace MFO::Board {
         { Vocab::kActWait,              "Wait" },
         { Vocab::kActCastSelf,          "Cast on self" },
         { Vocab::kActCastTarget,        "Cast at foe/ally" },
-        { Vocab::kActCastPlayer,        "Cast on player" },
+        // cast_player is LOGISTICS-ONLY for now: in combat CastOn's package/grace
+        // path delivers a self-delivery buff to the follower, not the player
+        // (Fable, 2026-08-06). Combat player-casts are a follow-up.
         { Vocab::kActAttack,            "Attack" },
         { Vocab::kActDrinkHealthPotion, "Drink health potion" },
         { Vocab::kActDrinkStaminaPotion,"Drink stamina potion" },
