@@ -178,12 +178,27 @@ namespace MFO::Loadout {
 
         auto existing = g_debt.find(id);
 
-        // A follower already holding a spell is left alone. Swapping one spell
-        // for another would ORPHAN the first ledger entry -- the shield we owe
-        // would be overwritten by a SpellItem and then "restored" as an item,
-        // which is not even the right engine call.
+        // Already holding a DIFFERENT spell (alreadyHolding was false above, so
+        // it is NOT the gambit spell). Historically MFO left their hands alone
+        // to avoid orphaning a gear ledger entry -- but that left a cast-control
+        // follower standing there with their AI's OWN spell in hand, denied/
+        // aborted, inactive (deck 2026-08-06, "wrong spell equipped, doing
+        // nothing"). A spell->spell swap displaces NO gear, so there is no ledger
+        // to orphan: when cast control is engaged, REPLACE their spell with the
+        // gambit's so their AI casts what the gambit dictates (active, right
+        // animation, nothing to suppress). EquipSpell is a no-op once it sticks,
+        // so this only re-fires while the AI keeps swapping back. (v1.0.36.)
         if (hands.grip == Grip::Caster) {
-            g_equipClock.try_emplace(id, now);   // their own spell -- same window
+            if (Config::g_castControl.load() > 0) {
+                if (auto* m = RE::ActorEquipManager::GetSingleton()) {
+                    m->EquipSpell(a_actor, a_spell, LeftHandSlot());
+                    a_actor->DrawWeaponMagicHands(true);
+                    g_equipClock.try_emplace(id, now);
+                    a_why = "replaced their own spell with the gambit spell";
+                    return Ready::AlreadyReady;
+                }
+            }
+            g_equipClock.try_emplace(id, now);   // control off -> leave their hands alone
             a_why = "already holding a spell -- not rearranging their hands";
             return Ready::AlreadyReady;
         }

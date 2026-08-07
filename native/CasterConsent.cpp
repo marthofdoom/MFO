@@ -440,19 +440,24 @@ namespace MFO::CasterConsent {
             return true;
         }
 
-        // ── v1.0.35: the HARD-abort half + friendly-fire ────────────────────
+        // ── v1.0.36: pre-charge deny (CheckCast) + friendly-fire ────────────
         //
         // CheckStartCast (0x06) is ADVISORY -- returning false makes the AI skip
         // a cast attempt, but the deck proved a denied spell still fires (Marcurio
-        // cast Icy Shard / Mage Armor while latched in "exact"). MagicCaster::
-        // SpellCast (VTABLE_ActorMagicCaster, index 0x09) is the ACTUAL cast
-        // execution and carries the MagicItem being cast, so aborting it (via
-        // InterruptCast) is a true abort. The abort/deny path is caster-local and
-        // safe on whatever thread the release fires on; only the friendly-fire
-        // WORLD walk needs the main thread, which it gates on explicitly (below).
+        // cast Icy Shard / Mage Armor while latched in "exact"). v1.0.35 hooked
+        // MagicCaster::SpellCast (0x09, the release) and aborted with InterruptCast
+        // -- functionally correct but the follower PLAYED the whole cast animation
+        // + sound before it fizzled, and stood there holding the wrong spell
+        // (marth: "wrong spell equipped, doing nothing"). v1.0.36 instead hooks
+        // MagicCaster::CheckCast (0x0A) -- the "can I cast this?" gate consulted
+        // BEFORE the charge -- and returns false, so the wrong spell never
+        // animates. The real fix for the wrong spell in hand is keeping the
+        // GAMBIT spell equipped (Loadout::Prepare's spell->spell swap); this is
+        // the clean backstop. Caster-local; only the friendly-fire WORLD walk
+        // needs the main thread, which it gates on explicitly (below).
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_castOrig;
         std::atomic<bool> g_castHooked{ false };
-        constexpr std::size_t kSpellCast = 0x09;
+        constexpr std::size_t kCheckCast = 0x0A;   // the "can I cast this?" gate, PRE-charge
         // Captured at install (kDataLoaded = main thread). The friendly-fire world
         // walk only runs when SpellCast fires on this thread; off-main it is
         // skipped (fail-open) so a jobified anim-graph release can never iterate
@@ -558,86 +563,82 @@ namespace MFO::CasterConsent {
             g_ffHold.erase(a_fid);
         }
 
-        using SpellCast_t = void (*)(RE::MagicCaster*, bool, std::uint32_t, RE::MagicItem*);
+        using CheckCast_t = bool (*)(RE::MagicCaster*, RE::MagicItem*, bool, float*,
+                                     RE::MagicSystem::CannotCastReason*, bool);
 
-        void SpellCastThunk(RE::MagicCaster* a_this, bool a_doCast, std::uint32_t a_arg2,
-                            RE::MagicItem* a_spell) {
+        // CheckCast (0x0A) is the AI's "can I cast this?" gate, consulted BEFORE
+        // the charge -- returning false here means the wrong spell NEVER animates
+        // (unlike the release-level SpellCast abort, which played the whole cast
+        // animation + sound before fizzling). The primary fix for "wrong spell
+        // equipped" is keeping the gambit spell in hand (Loadout::Prepare); this
+        // is the clean backstop for any wrong spell the AI still tries to charge.
+        bool CheckCastThunk(RE::MagicCaster* a_this, RE::MagicItem* a_spell, bool a_dual,
+                            float* a_alch, RE::MagicSystem::CannotCastReason* a_reason,
+                            bool a_useBase) {
             const auto vt  = *reinterpret_cast<std::uintptr_t*>(a_this);
             const auto oit = g_castOrig.find(vt);
-            if (oit == g_castOrig.end()) return;   // not one of ours -> benign no-op
-            const auto orig = reinterpret_cast<SpellCast_t>(oit->second);
-            auto pass = [&] { orig(a_this, a_doCast, a_arg2, a_spell); };
+            if (oit == g_castOrig.end()) return true;   // not ours -> allow (benign)
+            const auto orig = reinterpret_cast<CheckCast_t>(oit->second);
+            const bool aiOK = orig(a_this, a_spell, a_dual, a_alch, a_reason, a_useBase);
+            if (!aiOK) return false;   // the AI itself already can't cast -> nothing to do
 
-            // FAST OUT: nothing latched AND friendly-fire off -> pure passthrough.
-            const bool ff = Config::g_friendlyFireHold.load(std::memory_order_relaxed);
-            if (g_wantCount.load(std::memory_order_relaxed) == 0 && !ff) { pass(); return; }
-            if (!a_doCast || !a_spell) { pass(); return; }
-            // ONE-SHOT thread probe -- so the soak can tell "FF works" from "FF
-            // permanently gated off-main". Logs the first thunk entry's thread.
             static std::atomic<bool> s_threadLogged{ false };
             if (!s_threadLogged.exchange(true))
-                spdlog::info("[consent] SpellCast fires on {} thread",
+                spdlog::info("[consent] CheckCast fires on {} thread",
                              std::this_thread::get_id() == g_mainThread ? "the MAIN" : "a NON-main");
-            // NORMAL SPELLS ONLY -- SpellCast also fires for staves (Enchantment),
-            // scrolls, weapon-enchant procs (all non-Spell forms), and for shouts /
-            // powers / abilities (SpellItems, but not GetSpellType()==kSpell). MFO
-            // governs none of those.
-            if (!a_spell->Is(RE::FormType::Spell) ||
-                a_spell->GetSpellType() != RE::MagicSystem::SpellType::kSpell) { pass(); return; }
+
+            const bool ff = Config::g_friendlyFireHold.load(std::memory_order_relaxed);
+            if (g_wantCount.load(std::memory_order_relaxed) == 0 && !ff) return aiOK;
+            // NORMAL SPELLS ONLY -- not staves/scrolls (non-Spell forms) nor
+            // shouts/powers/abilities (SpellItems, but not GetSpellType()==kSpell).
+            if (!a_spell || !a_spell->Is(RE::FormType::Spell) ||
+                a_spell->GetSpellType() != RE::MagicSystem::SpellType::kSpell) return aiOK;
             auto* actor = a_this->GetCasterAsActor();
-            if (!actor) { pass(); return; }
+            if (!actor) return aiOK;
             const auto fid = actor->GetFormID();
 
-            // HARD EXCLUSIVE CONTROL: a latched follower's denied spell -> ABORT via
-            // the engine's own InterruptCast (refunds the charged magicka + resets
-            // the caster state machine -- a bare return would wedge it at kCasting).
-            // Caster-local, so safe on whatever thread the release fires on.
+            // HARD EXCLUSIVE CONTROL: refuse a latched follower's non-gambit spell
+            // at the gate -> no charge, no animation, the engine fizzles cleanly.
             RE::FormID want = 0;
             if (ShouldDeny(fid, a_spell, want)) {
                 AbortLog(fid, actor, a_spell->GetFormID(), "exclusive");
-                a_this->InterruptCast(true);
-                return;
+                return false;
             }
 
-            // FRIENDLY FIRE: hold an OFFENSIVE, non-gambit, non-self cast by OUR
-            // follower that would catch a teammate. The gambit spell (want) is
-            // EXEMPT -- forcing then aborting it would loop forever (no cast event
-            // -> permit stays open -> re-request). World walk is main-thread-only.
-            // The decay counter is touched ONLY on casts this branch actually
-            // evaluates -- a heal/buff between shots must not reset it, or a mage
-            // weaving spells in a hallway would be muted forever (never reaching
-            // the consecutive-hold valve).
+            // FRIENDLY FIRE: refuse an OFFENSIVE, non-gambit, non-self cast that
+            // would catch a teammate. Gambit-exempt (no force loop); the world
+            // walk is main-thread-only; decay counter touched only on evaluated
+            // offensive casts (a heal between shots must not reset it).
             if (ff && actor->IsPlayerTeammate() &&
                 a_spell->GetFormID() != want &&
                 a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
                 std::this_thread::get_id() == g_mainThread &&
                 ClassifySpell(a_spell) == SpellKind::Offense) {
                 if (WouldHitTeammate(actor, a_spell)) {
-                    if (FFHold(fid)) {          // hold, until the decay valve frees one
+                    if (FFHold(fid)) {
                         AbortLog(fid, actor, a_spell->GetFormID(), "friendly fire");
-                        a_this->InterruptCast(true);
-                        return;
+                        return false;
                     }
-                    // decay released this one (FFHold reset the count) -> let it fire
+                    // decay released this one (FFHold reset the count) -> allow
                 } else {
-                    FFReset(fid);              // clear shot -> reset the hold chain
+                    FFReset(fid);
                 }
             }
-            pass();
+            return aiOK;
         }
 
-        void InstallSpellCastHook() {
+        void InstallCheckCastHook() {
             if (g_castHooked.exchange(true)) return;
             if (REL::Module::IsVR()) return;   // same VR guard as InstallHook
             g_mainThread = std::this_thread::get_id();   // InstallHook runs at kDataLoaded (main)
             // ONLY vtable [0]. VTABLE_ActorMagicCaster's three entries are the three
             // BASE-SUBOBJECT vtables of ONE class (MagicCaster @0, the anim-graph
             // holder @0x48, the BSTEventSink @0x60) -- NOT separate casters. Every
-            // casting source dispatches SpellCast through [0]; patching [1]/[2] at
-            // index 0x09 would clobber unrelated engine vtables (Fable, 2026-08-06).
+            // caster dispatches CheckCast through [0]; patching [1]/[2] would clobber
+            // unrelated engine vtables (Fable, 2026-08-06).
             REL::Relocation<std::uintptr_t> vt{ RE::VTABLE_ActorMagicCaster[0] };
-            g_castOrig[vt.address()] = vt.write_vfunc(kSpellCast, &SpellCastThunk);
-            spdlog::info("[consent] SpellCast hard-abort hooked (ActorMagicCaster vtable[0])");
+            g_castOrig[vt.address()] = vt.write_vfunc(kCheckCast, &CheckCastThunk);
+            spdlog::info("[consent] CheckCast deny hooked (ActorMagicCaster vtable[0], pre-charge)");
         }
 
     }
@@ -689,7 +690,7 @@ namespace MFO::CasterConsent {
             g_orig[vt.address()] = orig;
             ++n;
         }
-        InstallSpellCastHook();   // v1.0.35: the HARD-abort half
+        InstallCheckCastHook();   // v1.0.36: pre-charge deny (no wrong-spell animation)
         spdlog::info("[consent] CheckStartCast hooked on {} caster vtable(s), mode={}",
                      n, Config::g_casterMode.load() == 0 ? "LOG" : "FORCE");
     }
