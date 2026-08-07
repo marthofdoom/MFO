@@ -232,13 +232,19 @@ Both want a focused review + Fable pass (touches the raycast + threading).
   logistics rule. Verified GOOD: is_night is implemented right (Evaluator.cpp:362,
   Calendar::GetHour 20-6h), is_night IS in kCondsLogi ("At night"), and the cast
   dispatch is wired (Logistics.cpp:3297 -> Actuation::Fire). But the deck log shows
-  the logistics cast NEVER attempts (no [cast]/[pkg] for a light spell). Suspect:
+  the logistics cast NEVER attempts (no [cast]/[pkg] for a light spell). CONFIRMED
+  the CONDITION is fine: Auri's equip_torch fires on the SAME is_night rule at
+  night (deck log), so the bug is 100% the out-of-combat CAST, not is_night. Suspect:
   Actuation::Fire->CastOn's AI-first-grace + force-on-miss (ForceCast/Packages::
   CastSelf) was built for COMBAT and doesn't trigger out of combat (the AI never
   casts -> grace should elapse -> force, but it doesn't). Also check: the cast_self
   buff-active skip (HasMagicEffect) for Candlelight, and whether cast_target
   (Magelight) can resolve a target with no foe. NEXT: add a log line in the
   logistics cast dispatch (rule reached? Fire's Result?) then fix the OOC force path.
+- **ENH: add cond.is_dark (ambient light level), better than is_night** (marth):
+  a dark dungeon by day needs light; a lit town at night does not. A light-level
+  read (interior ambient / GetLightingRun-style) beats the clock. Pairs with the
+  cast-in-logistics fix above (the motivating use: auto candlelight/magelight).
 
 ## Backlog (captured, not scheduled)
 
