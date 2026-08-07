@@ -3295,25 +3295,49 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, now);
             else if (op == Vocab::kActEquipTorch)         acted = EquipTorch(a_follower);   // #35: torch is upkeep
             else if (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget) {
-                // CAST IN LOGISTICS (mage update): out-of-combat gambit casting --
-                // self-buffs, candlelight, out-of-combat heals. Reuses the full
-                // combat cast path (affordability, reserve, equip-to-cast, forced
-                // package) via Actuation::Fire. Out of combat there is no consent-
-                // hook pacing, so skip re-casting a SELF buff whose effect is
-                // still active (heals/attacks are gated by the rule's condition
-                // instead). "acted" iff a cast really fired this tick.
+                // CAST IN LOGISTICS: out-of-combat gambit casting -- candlelight,
+                // magelight, self-buffs, out-of-combat heals. OUT OF COMBAT the
+                // follower's AI never casts on its own, so the combat AI-grace +
+                // force-on-miss path never fired (deck 2026-08-06: Marcurio would
+                // NOT cast Candlelight at night, though Auri's torch fired on the
+                // SAME is_night rule -- so the condition was fine, the cast path
+                // was not). FORCE the cast straight through the package (the proven
+                // animated route), for fire-and-forget AND concentration spells.
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
+                if (!sp || !a_follower->HasSpell(sp) || !Packages::Available()) {
+                    start = choice.ruleIndex + 1; continue;   // unknown/unavailable -> next rule
+                }
+                // Skip a SELF buff still on the caster (candlelight up), then pace
+                // re-casts by the spell's own DURATION (a 60s light is refreshed as
+                // it expires, not re-cast every tick; a 3s floor stops instant
+                // spells from firing every ~1s tick -- heals stay condition-gated).
                 if (op == Vocab::kActCastSelf) {
-                    if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam)) {
-                        auto* ei   = sp->GetCostliestEffectItem();
-                        auto* mgef = ei ? ei->baseEffect : nullptr;   // non-const: HasMagicEffect takes EffectSetting*
-                        auto* mt = a_follower->AsMagicTarget();
-                        if (mgef && mt && mt->HasMagicEffect(mgef)) {
-                            start = choice.ruleIndex + 1;   // buff still up -> next rule
-                            continue;
-                        }
+                    auto* ei   = sp->GetCostliestEffectItem();
+                    auto* mgef = ei ? ei->baseEffect : nullptr;
+                    if (auto* mt = a_follower->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
+                        start = choice.ruleIndex + 1; continue;
                     }
                 }
-                acted = Actuation::Fire(a_follower, choice).result == Actuation::Result::Fired;
+                static std::unordered_map<RE::FormID, Clock::time_point> s_logiCastUntil;
+                if (auto it = s_logiCastUntil.find(id); it != s_logiCastUntil.end() && now < it->second) {
+                    start = choice.ruleIndex + 1; continue;   // within the last cast's window
+                }
+                // cast_self -> self; cast_target -> the foe if any (rare OOC), else
+                // self so a light with no foe lands on the follower.
+                RE::Actor* tgt = a_follower;
+                if (op == Vocab::kActCastTarget) { if (auto p = choice.target.get(); p.get()) tgt = p.get(); }
+                const bool self = (tgt == a_follower);
+                const auto d = self ? Packages::CastSelf(a_follower, sp)
+                                    : Packages::CastAt(a_follower, sp, tgt);
+                acted = (d == Packages::Decline::None);
+                if (acted) {
+                    auto* ei = sp->GetCostliestEffectItem();
+                    const float dur = std::max(3.0f, ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f);
+                    s_logiCastUntil[id] = now + std::chrono::duration_cast<Clock::duration>(
+                                                    std::chrono::duration<float>(dur));
+                    spdlog::info("[logistics] {:08X} forced OOC cast {:08X} ({}), refresh in {:.0f}s",
+                                 id, sp->GetFormID(), self ? "self" : "target", dur);
+                }
             }
             else if (op == Vocab::kActWait) {
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.
