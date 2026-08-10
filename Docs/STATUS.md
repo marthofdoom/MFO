@@ -129,6 +129,26 @@ just retry ([[deck-sleeps-ssh-timeout]]).
    (Marcurio switching to robes; forced casts firing animated, paced, potions
    flowing, no mid-flicker leak).
 
+## Active priority list (marth 2026-08-09) — tasks #62–#67
+
+1. **#62 P1 HIGHEST — follower HEAD DISAPPEARS on armor equip.** MFO auto-equips
+   head/hair-slot armor (kSlots incl. kHead Logistics.cpp:323; mage loadout
+   equips kHead/kHair/kCirclet :549/:1019). Suspect wrong-gender or a head-slot
+   piece hiding the head. Likely fix: stop auto-equipping head/hair armor +/or a
+   gender/mesh safety check. Needs a deck repro of the exact item. START HERE.
+2. **#63 — followers turning hostile toward OTHER followers.** Check PickFoe /
+   Targeting never latches a teammate/another follower as a foe.
+3. **#64 — don't break custom follower packages (Lucien/Inigo/Kaidan).** "Good so
+   far" — regression-watch that alias claims/evictions/cast+style changes don't
+   clobber their bespoke packages. Ties to #58.
+4. **#65 — per-follower combat-type override: a DROPDOWN on the board** right of
+   the combat/logistics selector. Promote the P1 combat-style swap (#59, CSTY @
+   combatController 0x38) to a user-facing, per-follower, persisted setting.
+5. **#66 — LOTD: followers loot the museum drop-off crates.** Exclude LOTD museum
+   containers from the loot scan (by keyword/quest/faction, not hardcoded FormID).
+6. **#67 P6 LOWEST — spell casting CTD on SE 1.5.97.** Gate the cast path's
+   AE-only/vtable bits so SE degrades gracefully (like the VR guard).
+
 ## Open issues (ranked)
 
 0. **✅ SHIPPED in v1.0.34 (the mage update) — casting overhaul + full cast
