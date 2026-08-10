@@ -6,29 +6,38 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **On deck (test): v1.0.38**
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **On deck (test): v1.0.39**
 
 ---
 
 ## Continue in one screen
 
-- **v1.0.38 — BUILT + DECK-DEPLOYED FOR FIELD TEST, PUBLIC RELEASE HELD**
-  (2026-08-10). DLL `ab6d2a8f…`, CI run 31352196564 green, packaged
-  `releases/v1.0.38/`. Tag `v1.0.38` exists LOCALLY (not pushed); NO GitHub
-  release. **The #62 invisible-head fix:** MFO equipped looted armor/weapons on
-  the AddTask job WORKER; EquipObject rebuilds the biped head/neck 3D, so off-main
-  it races the render thread → head node torn down, not rebuilt = invisible head
-  (reproduces with a GOOD item like chainmail — it's the equip, not the meshes).
-  Fix = marshal the loot equip to the main thread via `MainThread::Post`
-  (Logistics.cpp ~1068); VR falls back to direct via new `MainThread::IsInstalled()`.
-  marth confirmed his UnequipAll+self-reequip test was ALSO off-main, consistent.
-  **Field test:** load up, let a follower (e.g. Inigo) loot/equip a chest piece —
-  head must stay; watch `[equip] … LOOT armor … -> equip queued to main thread`.
-  If it STILL drops on a MAIN-thread equip, the second cause is a missing 3D/
-  facegen node rebuild (add QueueNiNodeUpdate/Reset3D after equip) — see #62.
-  To publish once confirmed: `git push origin v1.0.38` + `gh release create` (main
-  agent). Same-root follow-ups (off-main): EquipBack shield restore (Loadout.cpp:91),
-  HealExcludedWeapon + torch, combat equip gambit (Actuation ~500).
+- **v1.0.39 — BUILT + DECK-DEPLOYED FOR FIELD TEST, PUBLIC RELEASE HELD**
+  (2026-08-10). DLL `36eb2064…`, CI run 31356812558 green, packaged
+  `releases/v1.0.39/`. Tag `v1.0.39` LOCAL only (not pushed); NO GitHub release.
+  **The #62 invisible-head fix, in TWO layers** (see [[off-main-equip-invisible-head]]):
+  1. **v1.0.38 — off-main equip.** MFO equipped looted gear on the AddTask job
+     WORKER; EquipObject rebuilds biped 3D off-main → races the render thread.
+     Fix: marshal the loot equip to the main thread via `MainThread::Post`
+     (Logistics.cpp doEquip ~1068); VR falls back to direct via new
+     `MainThread::IsInstalled()`.
+  2. **v1.0.39 — BEAST-RACE headless (the DOMINANT cause).** marth: broken EVERY
+     load; even a WEAPON re-equip drops the head; reproduced across beast
+     followers (Khajiit/Argonian). Beast heads detach on ANY scripted equip. Fix:
+     after the main-thread equip, force `Actor::DoReset3D(false)` (deferred one
+     frame via a 2nd Post, since EquipObject is queued) to reattach the head.
+     Beast-gated (`IsBeastRace`: identity + armorParentRace chain + EDID; NOT
+     bodyPartData — all races share DefaultBodyPartData 0x1D). INI `bBeastHeadFix`
+     (default ON). Fable-reviewed twice (killed a form-data over-block approach;
+     caught the bodyPartData false-positive + equip-ordering race).
+  **Field test:** full restart; let a BEAST follower loot/equip a weapon or armor
+  — head must stay; watch `[beasthead] … 3D reset after equip`. If a beast head is
+  STILL broken immediately ON LOAD (before MFO acts), the follow-up is a load-time
+  beast-head sweep (DoReset3D on beast teammates at load, furniture-sweep shape).
+  To publish once confirmed: `git push origin v1.0.39` + `gh release create` (main
+  agent). Same off-main class NOT yet beast-reset (do NOT DoReset3D mid-combat —
+  flicker): EquipBack shield restore (Loadout.cpp:91), HealExcludedWeapon + torch,
+  combat equip gambit (Actuation ~500).
 - **Latest shipped & deployed: v1.0.37** ("mage follow-up") — deck-verified (DLL
   b0602fa2…), GitHub Release = Latest. Bundles the field-fixes over the v1.0.34
   mage update: (1) cast control that STICKS — deny the wrong spell PRE-charge via
