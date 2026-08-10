@@ -6,12 +6,29 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-06 · **Latest shipped:** v1.0.37
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **On deck (test): v1.0.38**
 
 ---
 
 ## Continue in one screen
 
+- **v1.0.38 — BUILT + DECK-DEPLOYED FOR FIELD TEST, PUBLIC RELEASE HELD**
+  (2026-08-10). DLL `ab6d2a8f…`, CI run 31352196564 green, packaged
+  `releases/v1.0.38/`. Tag `v1.0.38` exists LOCALLY (not pushed); NO GitHub
+  release. **The #62 invisible-head fix:** MFO equipped looted armor/weapons on
+  the AddTask job WORKER; EquipObject rebuilds the biped head/neck 3D, so off-main
+  it races the render thread → head node torn down, not rebuilt = invisible head
+  (reproduces with a GOOD item like chainmail — it's the equip, not the meshes).
+  Fix = marshal the loot equip to the main thread via `MainThread::Post`
+  (Logistics.cpp ~1068); VR falls back to direct via new `MainThread::IsInstalled()`.
+  marth confirmed his UnequipAll+self-reequip test was ALSO off-main, consistent.
+  **Field test:** load up, let a follower (e.g. Inigo) loot/equip a chest piece —
+  head must stay; watch `[equip] … LOOT armor … -> equip queued to main thread`.
+  If it STILL drops on a MAIN-thread equip, the second cause is a missing 3D/
+  facegen node rebuild (add QueueNiNodeUpdate/Reset3D after equip) — see #62.
+  To publish once confirmed: `git push origin v1.0.38` + `gh release create` (main
+  agent). Same-root follow-ups (off-main): EquipBack shield restore (Loadout.cpp:91),
+  HealExcludedWeapon + torch, combat equip gambit (Actuation ~500).
 - **Latest shipped & deployed: v1.0.37** ("mage follow-up") — deck-verified (DLL
   b0602fa2…), GitHub Release = Latest. Bundles the field-fixes over the v1.0.34
   mage update: (1) cast control that STICKS — deny the wrong spell PRE-charge via
