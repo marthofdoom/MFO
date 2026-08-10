@@ -346,11 +346,10 @@ namespace MFO::Logistics {
         // HEADLESS when equipment is changed by a scripted EquipObject: beast head
         // parts attach during the full 3D BUILD, not during an armor-addon swap,
         // so a script equip leaves the head detached (marth: confirmed across
-        // beast followers; even a WEAPON re-equip drops the head). The remedy is a
-        // full 3D rebuild (Actor::DoReset3D) AFTER the equip, on the main thread --
-        // done at the equip site below. This just answers "is this a beast race",
-        // so the rebuild fires ONLY for beasts (a human follower never eats the
-        // 1-frame refresh). No clean signal exists (verified: no RACE_DATA beast
+        // beast followers; even a WEAPON re-equip drops the head). The remedy is
+        // RepairBeastHead below (head-presence-gated Update3DModel). This just
+        // answers "is this a beast race", so the repair is even considered ONLY for
+        // beasts. No clean signal exists (verified: no RACE_DATA beast
         // bit, no vanilla beast keyword), so match the race against the two base
         // beast races by identity or the armorParentRace (RNAM) chain, plus an
         // EDID substring -- which catches the vampire variants (whose RNAM is
@@ -382,28 +381,26 @@ namespace MFO::Logistics {
             return false;
         }
 
-        // #62 DIAGNOSTIC: when a beast head reset does NOT visibly fix the head,
-        // we need to know WHETHER a worn armor piece has no ArmorAddon for the
-        // follower's race (GetArmorAddon(race)==null -> that slot renders nothing
-        // -> hides the head/body). If any worn piece logs raceARMA=NULL, the fix
-        // is to UNEQUIP it (DoReset3D rebuilds WITH it and can't help); if all are
-        // present, the reset itself is the weak link. Cheap form-data reads.
-        void LogBeastWornArma(RE::Actor* a_actor) {
-            auto* race = a_actor->GetRace();
-            if (!race) return;
-            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-            static constexpr Slot kSlots[] = { Slot::kHead, Slot::kHair, Slot::kCirclet,
-                                               Slot::kBody, Slot::kHands, Slot::kFeet };
-            static constexpr const char* kNames[] = { "head","hair","circlet","body","hands","feet" };
-            for (int i = 0; i < 6; ++i) {
-                auto* worn = a_actor->GetWornArmor(kSlots[i]);
-                if (!worn) continue;
-                auto* arma = worn->GetArmorAddon(race);
-                spdlog::info("[beasthead-diag] {:08X} slot={} worn '{}' ({:08X}) raceARMA={}",
-                             a_actor->GetFormID(), kNames[i],
-                             worn->GetFullName() ? worn->GetFullName() : "?",
-                             worn->GetFormID(), arma ? "present" : "NULL(won't render)");
-            }
+        // #62 BEAST-HEAD REPAIR -- the community-proven NPC-Fixer mechanism
+        // (arifkulpu/Invisible-and-naked-NPC-fixer, VisibilityFixer.cpp). A beast
+        // follower's FaceGen head can fail to re-attach after a scripted equip /
+        // partial biped rebuild (trade re-dress, MFO loot, AI auto-equip): the head
+        // is a BSFaceGenNiNode built only by the FULL Load3D, so an incremental
+        // re-equip can leave it detached. DETECT it -- the actor's 3D root exists
+        // but its "FaceGenNiNode" child is gone -- then do the LIGHT reattach:
+        // Update3DModel + UpdateAnimation(0). This is NOT DoReset3D: that rebuilds
+        // WITH the head-hiders on and re-triggers the same drop (field-proven to
+        // fail here). Head-presence-GATED, so a HEALTHY follower is never touched
+        // (no flicker, no churn) -- and it fixes the head no matter what dropped it,
+        // without removing any of the follower's items. Main-thread only (3D).
+        void RepairBeastHead(RE::Actor* a_actor, const char* a_where) {
+            auto* root = a_actor->Get3D();
+            if (!root) return;                                   // not loaded / ghosted
+            if (root->GetObjectByName("FaceGenNiNode")) return;  // head present -> healthy, do nothing
+            a_actor->Update3DModel();
+            a_actor->UpdateAnimation(0.0f);
+            spdlog::info("[beasthead] {:08X}: headless -> Update3DModel reattach ({})",
+                         a_actor->GetFormID(), a_where);
         }
 
         // ── MAGIC LOADOUT (v1.0.29): the mage's loot preferences ────────────
@@ -2743,18 +2740,17 @@ namespace MFO::Logistics {
         }
 
         // ── #62 BEAST-RACE HEAD FIX sink ────────────────────────────────────
-        // A beast-race follower (Khajiit/Argonian) goes HEADLESS on ANY scripted
-        // equip -- MFO's loot equip, the player TRADING them gear, OR their own AI
-        // re-dressing -- because beast head parts attach during the full 3D build,
-        // not an armor-addon swap. Catching it at the EQUIP EVENT (fires on the
-        // MAIN thread for every equip, whatever the source) covers all routes
-        // uniformly, which a per-MFO-equip reset could not: marth's field test had
-        // MFO's loot equip FIXED but TRADING a weapon still broke the head. On a
-        // qualifying equip, force Actor::DoReset3D to reattach the head. Scoped to
-        // the player's beast TEAMMATES (not every beast NPC), and to OUT OF COMBAT
-        // (a rebuild on every in-combat weapon swap would flicker; the reported
-        // cases -- trade/loot/dressing -- are all out of combat). DoReset3D fires
-        // no equip event, so it cannot re-trigger this sink.
+        // A beast-race follower (Khajiit/Argonian) can go HEADLESS on ANY scripted
+        // equip -- MFO's loot equip, the player TRADING them gear (their AI re-dons
+        // it), OR their own AI re-dressing -- because the FaceGen head attaches only
+        // during the FULL 3D build; a partial re-equip can leave it detached.
+        // Catching it at the EQUIP EVENT (fires main-thread for every equip route)
+        // covers all of them. On a qualifying equip we POST the head-presence-gated
+        // RepairBeastHead (Update3DModel reattach) one frame later -- it does
+        // nothing unless the head is actually gone, so a healthy follower is never
+        // touched and NO item is ever removed. Scoped to beast TEAMMATES, out of
+        // combat, armor/weapon equips only, debounced ~1s. Update3DModel fires no
+        // equip event, so it cannot re-trigger this sink.
         class BeastHeadSink final : public RE::BSTEventSink<RE::TESEquipEvent> {
         public:
             static BeastHeadSink* GetSingleton() { static BeastHeadSink s; return &s; }
@@ -2777,9 +2773,8 @@ namespace MFO::Logistics {
                 if (!IsBeastRace(actor->GetRace()))
                     return RE::BSEventNotifyControl::kContinue;
                 // DEBOUNCE (~1s/follower): coalesces a full-set trade's burst of
-                // equip events into ONE rebuild, and -- should DoReset3D ever fire
-                // an equip event -- breaks any re-entrant loop. Equip events are
-                // main-thread, so the static map needs no lock.
+                // equip events into one repair check. Equip events are main-thread,
+                // so the static map needs no lock.
                 static std::unordered_map<RE::FormID, Clock::time_point> s_lastReset;
                 const auto       now = Clock::now();
                 const RE::FormID id  = actor->GetFormID();
@@ -2787,10 +2782,14 @@ namespace MFO::Logistics {
                     it != s_lastReset.end() && now - it->second < std::chrono::seconds(1))
                     return RE::BSEventNotifyControl::kContinue;
                 s_lastReset[id] = now;
-                // Equip events run on the main thread, so the 3D rebuild is safe
-                // inline; it reattaches the detached beast head.
-                actor->DoReset3D(true);   // full rebuild (incl. weight/facegen); (false) did not reattach beast heads
-                spdlog::info("[beasthead] {:08X}: 3D reset on equip event (reattach head)", id);
+                // DEFER one frame (Post): the head can be legitimately absent for a
+                // frame during the engine's OWN post-equip rebuild, so checking next
+                // frame avoids a needless refresh. RepairBeastHead is head-presence-
+                // gated, so it only acts if the head is actually gone.
+                MainThread::Post([id]() {
+                    if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
+                        RepairBeastHead(a, "equip event");
+                });
                 return RE::BSEventNotifyControl::kContinue;
             }
         };
@@ -3639,44 +3638,26 @@ namespace MFO::Logistics {
         spdlog::info("[logistics] player-looted waiver + beast-head equip sinks installed");
     }
 
-    // #62 ON-LOAD beast-head sweep. A beast follower can come up from a save with
-    // an already-detached head -- broken by a pre-fix build, or by any earlier
-    // scripted equip that never got a rebuild. So on every load, rebuild each
-    // beast-race TEAMMATE's 3D once, so the save loads with heads already correct
-    // and a user need not trade/loot to trigger the fix (makes "the issue is
-    // fixed" obvious on Nexus). Called from kPostLoadGame/kNewGame. Posts to the
-    // main thread (DoReset3D is 3D work) and RETRIES up to ~2s so followers that
-    // finish loading a few frames later -- or before Followers::Refresh populates
-    // g_active -- are still caught; each teammate is reset at most once. Gated on
-    // bBeastHeadFix. No-op on new games (no broken heads to fix).
+    // #62 ON-LOAD beast-head repair. A beast follower can come up from a save with
+    // a detached FaceGen head (dropped by a scripted equip before the save). So for
+    // ~2s after load, run the head-presence-gated RepairBeastHead on every loaded
+    // beast teammate each frame -- the window catches followers that finish loading
+    // a few frames late (or before Followers::Refresh populates g_active) and any
+    // head that drops while the scene settles. RepairBeastHead is gated, so a
+    // healthy head is never touched. Called from kPostLoadGame/kNewGame; main
+    // thread. Gated on bBeastHeadFix.
     void SweepBeastHeadsOnLoad() {
         if (!Config::g_beastHeadFix.load()) return;
-        auto done  = std::make_shared<std::unordered_set<RE::FormID>>();
-        auto tries = std::make_shared<int>(120);   // ~2s ceiling; stops early once done
+        auto tries = std::make_shared<int>(120);   // ~2s of periodic gated repair
         auto self  = std::make_shared<std::function<void()>>();
-        *self = [done, tries, self]() {
-            int remaining = 0;                       // beast teammates not yet loaded/reset
+        *self = [tries, self]() {
             for (const auto& h : Followers::g_active) {
                 auto* a = h.get().get();
-                if (!a || !a->IsPlayerTeammate()) continue;
-                const RE::FormID id = a->GetFormID();
-                if (done->count(id)) continue;
-                if (!IsBeastRace(a->GetRace())) { done->insert(id); continue; }   // mark so we don't recheck
-                if (!a->Is3DLoaded()) { ++remaining; continue; }                  // not ready -> retry
-                LogBeastWornArma(a);      // #62 diag: does a worn piece lack a race ARMA?
-                a->DoReset3D(true);       // full rebuild (incl. weight/facegen); (false) did not reattach
-                done->insert(id);
-                spdlog::info("[beasthead] {:08X}: 3D reset on load (reattach head)", id);
+                if (!a || !a->IsPlayerTeammate() || !a->Is3DLoaded()) continue;
+                if (IsBeastRace(a->GetRace())) RepairBeastHead(a, "load");   // gated -> no-op if head present
             }
-            // Retry while g_active is still unpopulated OR a beast teammate has yet
-            // to finish loading; stop once all are handled or the ceiling is hit.
-            if ((Followers::g_active.empty() || remaining > 0) && --(*tries) > 0) {
-                MainThread::Post(*self);
-            } else {
-                // Break the self-capture cycle so the closure (+ its done set) frees.
-                // Safe: the running fn is the pump's COPY, not this heap object.
-                *self = nullptr;
-            }
+            if (--(*tries) > 0) MainThread::Post(*self);
+            else                *self = nullptr;   // break the self-capture cycle (running fn is the pump's copy)
         };
         MainThread::Post(*self);
     }

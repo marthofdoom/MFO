@@ -1,3 +1,13 @@
+## v1.0.43 -- beast-race headless: the real fix (light repair, never a forced rebuild)
+
+- Fix: beast-race followers (Khajiit/Argonian, incl. custom ones like Inigo) going
+  headless. Root cause: MFO was FORCING a heavy 3D rebuild on equip, which is
+  exactly what detaches a beast follower's head (vanilla never does this, which is
+  why it was an MFO-only problem). MFO now does the opposite -- it only acts when a
+  head is ALREADY missing, and then uses the light reattach the community headless-
+  NPC fixer uses (no forced rebuild, no items touched, healthy followers untouched).
+  Runs on load and after equips. Toggle bBeastHeadFix.
+
 ## v1.0.42 -- followers stop fighting each other; stronger beast-head rebuild
 
 - New: followers no longer fight EACH OTHER. If one follower ever aggros another
