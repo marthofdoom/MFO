@@ -1,3 +1,13 @@
+## v1.0.42 -- followers stop fighting each other; stronger beast-head rebuild
+
+- New: followers no longer fight EACH OTHER. If one follower ever aggros another
+  (usually from a stray area-of-effect spell), MFO immediately ends that fight on
+  both sides. Toggle bQuashAllyCombat.
+- Fix: strengthened the beast-race head rebuild (a v1.0.41 follow-up) -- the reset
+  now does a full rebuild, which the lighter one didn't. Plus a diagnostic that
+  logs whether a worn piece lacks a mesh for the follower's race, to pin any
+  remaining case.
+
 ## v1.0.41 -- beast heads fix themselves on load; stop looting creature "skins"
 
 - Fix: a beast-race follower who loads a save with a broken/invisible head now has

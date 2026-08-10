@@ -382,6 +382,30 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // #62 DIAGNOSTIC: when a beast head reset does NOT visibly fix the head,
+        // we need to know WHETHER a worn armor piece has no ArmorAddon for the
+        // follower's race (GetArmorAddon(race)==null -> that slot renders nothing
+        // -> hides the head/body). If any worn piece logs raceARMA=NULL, the fix
+        // is to UNEQUIP it (DoReset3D rebuilds WITH it and can't help); if all are
+        // present, the reset itself is the weak link. Cheap form-data reads.
+        void LogBeastWornArma(RE::Actor* a_actor) {
+            auto* race = a_actor->GetRace();
+            if (!race) return;
+            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            static constexpr Slot kSlots[] = { Slot::kHead, Slot::kHair, Slot::kCirclet,
+                                               Slot::kBody, Slot::kHands, Slot::kFeet };
+            static constexpr const char* kNames[] = { "head","hair","circlet","body","hands","feet" };
+            for (int i = 0; i < 6; ++i) {
+                auto* worn = a_actor->GetWornArmor(kSlots[i]);
+                if (!worn) continue;
+                auto* arma = worn->GetArmorAddon(race);
+                spdlog::info("[beasthead-diag] {:08X} slot={} worn '{}' ({:08X}) raceARMA={}",
+                             a_actor->GetFormID(), kNames[i],
+                             worn->GetFullName() ? worn->GetFullName() : "?",
+                             worn->GetFormID(), arma ? "present" : "NULL(won't render)");
+            }
+        }
+
         // ── MAGIC LOADOUT (v1.0.29): the mage's loot preferences ────────────
         // A follower is a MAGIC USER iff he has at least one ENABLED cast
         // gambit (act.cast_self / act.cast_target) in his combat table --
@@ -2765,7 +2789,7 @@ namespace MFO::Logistics {
                 s_lastReset[id] = now;
                 // Equip events run on the main thread, so the 3D rebuild is safe
                 // inline; it reattaches the detached beast head.
-                actor->DoReset3D(false);   // false = skip weight-morph recompute
+                actor->DoReset3D(true);   // full rebuild (incl. weight/facegen); (false) did not reattach beast heads
                 spdlog::info("[beasthead] {:08X}: 3D reset on equip event (reattach head)", id);
                 return RE::BSEventNotifyControl::kContinue;
             }
@@ -3639,7 +3663,8 @@ namespace MFO::Logistics {
                 if (done->count(id)) continue;
                 if (!IsBeastRace(a->GetRace())) { done->insert(id); continue; }   // mark so we don't recheck
                 if (!a->Is3DLoaded()) { ++remaining; continue; }                  // not ready -> retry
-                a->DoReset3D(false);
+                LogBeastWornArma(a);      // #62 diag: does a worn piece lack a race ARMA?
+                a->DoReset3D(true);       // full rebuild (incl. weight/facegen); (false) did not reattach
                 done->insert(id);
                 spdlog::info("[beasthead] {:08X}: 3D reset on load (reattach head)", id);
             }
