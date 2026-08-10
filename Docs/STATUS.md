@@ -131,11 +131,25 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 
 ## Active priority list (marth 2026-08-09) — tasks #62–#67
 
-1. **#62 P1 HIGHEST — follower HEAD DISAPPEARS on armor equip.** MFO auto-equips
-   head/hair-slot armor (kSlots incl. kHead Logistics.cpp:323; mage loadout
-   equips kHead/kHair/kCirclet :549/:1019). Suspect wrong-gender or a head-slot
-   piece hiding the head. Likely fix: stop auto-equipping head/hair armor +/or a
-   gender/mesh safety check. Needs a deck repro of the exact item. START HERE.
+1. **#62 P1 HIGHEST — follower HEAD DISAPPEARS on armor equip. DIAGNOSED + FIXED
+   (2026-08-10, in CI as of run 31350989371; field test pending).** ROOT CAUSE is
+   NOT form data — it's the EQUIP MECHANISM running OFF the main thread. The loot
+   tick runs on the SKSE AddTask worker (Scheduler::Tick <- Diagnostics sleeper
+   AddTask, BSJobs::JobThread), and it called `EquipObject` directly there;
+   EquipObject rebuilds the biped 3D (head/neck partition, even for a plain CHEST
+   piece), so off-main it races the render thread and the head node is torn down
+   but not rebuilt. Proven by marth: reproduces with a GOOD item (chainmail), so
+   it's the equip, not the meshes. A Fable pass empirically killed the first
+   (form-data) approach: it would over-block ~760 legit vanilla armors, and a
+   blank female mesh is NOT invisible (engine falls back to male model).
+   FIX (Logistics.cpp ~1068): capture FormIDs, re-resolve on the frame, EquipObject
+   via `MainThread::Post`; VR falls back to direct via new `MainThread::IsInstalled()`.
+   MEO gem transfer unaffected (QueueGemMove already deferred). See
+   [[off-main-equip-invisible-head]]. FIELD TEST: watch `[equip] … LOOT armor …
+   -> equip queued to main thread`; hand a follower chainmail / let them loot a
+   chest piece — head must stay. FOLLOW-UPS (same off-main class, likely also part
+   of the crash hunt): EquipBack shield restore (Loadout.cpp:91), HealExcludedWeapon
+   + torch (Logistics 2822/2863), combat equip gambit (Actuation ~500).
 2. **#63 — followers turning hostile toward OTHER followers.** Check PickFoe /
    Targeting never latches a teammate/another follower as a foe.
 3. **#64 — don't break custom follower packages (Lucien/Inigo/Kaidan).** "Good so
