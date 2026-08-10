@@ -1,3 +1,13 @@
+## v1.0.38 -- fix: followers no longer lose their head when they equip armor
+
+- Fix: a follower's HEAD (or body) disappearing after MFO put a piece of armor on
+  them. MFO was equipping looted gear from a background thread, and the engine's
+  head/body 3D rebuild has to happen on the main thread -- off it, the head node
+  was torn down and never rebuilt. It happened with perfectly good armor (even
+  plain chainmail), because the bug was in HOW the armor was equipped, not the
+  armor itself. MFO now equips looted armor and weapons on the main thread.
+  (This also removes one likely source of graphics/memory crashes.)
+
 ## v1.0.35 -- casters obey "exact", and stop firing into your allies' backs
 
 - Fix: "Cast control: Exact spell" (and the other levels) now actually STOPS a
