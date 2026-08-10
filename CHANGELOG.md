@@ -1,11 +1,13 @@
-## v1.0.47 -- LOTD museum crates left alone; SE 1.5.97 cast-control crash gated
+## v1.0.48 -- LOTD drop-off boxes left alone (towns/inns/museum); SE 1.5.97 cast-control crash gated
 
-- Fix (#66): followers no longer loot from Legacy of the Dragonborn museum
-  drop-off / storage crates. MFO now leaves any container in the player's OWN
-  space untouched -- detected generically by the museum cells' LocTypePlayerHouse
-  location tag + player ownership (no hardcoded LOTD FormIDs), which also covers
-  every vanilla/Hearthfire/mod player home. Governed by the existing
-  bLootInPlayerHomes toggle (default OFF), so it's protected out of the box.
+- Fix (#66): followers no longer loot from Legacy of the Dragonborn drop-off /
+  income / sell / shipment boxes. The reported case -- the drop-off boxes in
+  TOWNS and INNS -- is matched by the container base form (they sit in ordinary
+  public cells with no owner/keyword, so nothing else caught them) and skipped
+  UNCONDITIONALLY; inert if LOTD isn't installed. Separately, containers in the
+  player's own space (the museum halls + every vanilla/Hearthfire/mod player
+  home) are skipped too, detected by LocTypePlayerHouse + player ownership and
+  governed by the existing bLootInPlayerHomes toggle (default OFF).
 - Fix (#67): a crash on Skyrim Special Edition 1.5.97 when the cast-control slider
   was in use. The mage cast-control path is AE-developed and faulted on SE 1.5.97
   (crash log pinned it to the follower service tick -> Fire -> CastOn); it's now

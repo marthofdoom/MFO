@@ -1769,6 +1769,39 @@ namespace MFO::Logistics {
             }
             return false;
         }
+
+        // #66 (the real bug -- marth: the drop-off boxes in TOWNS and INNS, not the
+        // museum). Legacy of the Dragonborn scatters "drop-off" / income / sell /
+        // shipment containers across public cities and inns so you can deposit
+        // museum items on the go. They are ref-UNOWNED and carry NO keyword/faction
+        // (headless plugin parse), so neither the GetOwner() bar nor the
+        // LocTypePlayerHouse check above catches them -- and they sit in ordinary
+        // town/inn cells, so they must be skipped UNCONDITIONALLY (not behind the
+        // player-home toggle). The only stable signal is the container BASE form.
+        // These are a handful of container TYPES (not placed instances), resolved
+        // once by local FormID within LegacyoftheDragonborn.esm; if LOTD is not in
+        // the load order every lookup returns null and the set is empty -> inert.
+        bool IsLOTDDropOff(RE::TESObjectREFR* a_ref) {
+            static const std::unordered_set<RE::FormID> s_bases = [] {
+                std::unordered_set<RE::FormID> s;
+                if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                    // DBM_AutoSortDropOff (Display Drop-off, the town/inn box),
+                    // DBMMuseumShipmentsCrateIncoming, DBM_SalesBox (Sales Income),
+                    // DBM_Incomebox (Donations), DBM_SellStorage.
+                    for (const RE::FormID local :
+                         { 0x07EEFDu, 0x1772A6u, 0x166349u, 0x0BE533u, 0x11CC99u }) {
+                        if (auto* f = dh->LookupForm<RE::TESObjectCONT>(local, "LegacyoftheDragonborn.esm"))
+                            s.insert(f->GetFormID());
+                    }
+                }
+                if (!s.empty())
+                    spdlog::info("[loot] LOTD drop-off/storage guard active ({} container bases)", s.size());
+                return s;
+            }();
+            if (s_bases.empty()) return false;
+            auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
+            return base && s_bases.count(base->GetFormID()) != 0;
+        }
         bool PlayerIsConsidering(RE::FormID a_sourceID) {
             if (auto* ui = RE::UI::GetSingleton();
                 ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) return true;   // vanilla menu
@@ -2110,14 +2143,23 @@ namespace MFO::Logistics {
                     if (!lootable) return RE::BSContainer::ForEachResult::kContinue;
                     ++dLootable;
 
-                    // #66: never loot the player's OWN storage -- LOTD museum
-                    // drop-off crates and player-home chests (RefInPlayerStorage:
-                    // LocTypePlayerHouse location or player/PlayerFaction-owned
-                    // cell). CONTAINER-only: a corpse that happens to lie in a home
-                    // is still fair loot, and the ref-level GetOwner() bar below
-                    // never fires on these crates (they are ref-unowned). Gated by
-                    // the same bLootInPlayerHomes opt-in as InPlayerHome, so a
-                    // player who wants followers tidying their storage still can.
+                    // #66 (the reported bug): LOTD drop-off / income / sell boxes
+                    // in TOWNS and INNS -- ALWAYS skipped, regardless of the
+                    // player-home toggle (they sit in ordinary public cells, so
+                    // they'd otherwise be fair game). Matched by container base
+                    // (IsLOTDDropOff); inert if LOTD is not installed.
+                    if (!loose && IsLOTDDropOff(ref)) {
+                        ++dOffLimits;
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
+                    // #66 (home storage): also skip containers in the player's OWN
+                    // space -- LOTD museum halls + every vanilla/Hearthfire/mod
+                    // player home (RefInPlayerStorage: LocTypePlayerHouse location
+                    // or player/PlayerFaction-owned cell). CONTAINER-only: a corpse
+                    // in a home is still fair loot, and the ref-level GetOwner() bar
+                    // below never fires on these (ref-unowned). This half IS gated
+                    // by bLootInPlayerHomes, so a player who wants followers tidying
+                    // their own chests still can (the town/inn boxes above are not).
                     if (!loose && !Config::g_lootInPlayerHomes.load()) {
                         auto* cbase = ref->GetBaseObject();
                         if (cbase && cbase->Is(RE::FormType::Container) && RefInPlayerStorage(ref)) {
