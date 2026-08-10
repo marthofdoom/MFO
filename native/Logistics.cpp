@@ -1065,9 +1065,31 @@ namespace MFO::Logistics {
             // dagger over his casting hand out of combat, the very thrash the
             // equip-in-place rule exists to stop.
             if (best == bestBackup) equipIt = false;
-            if (equipIt)
-                if (auto* eq = RE::ActorEquipManager::GetSingleton())
-                    eq->EquipObject(a_follower, best);
+            if (equipIt) {
+                // #62 EQUIP ON THE MAIN THREAD -- the invisible-head fix. This whole
+                // loot path runs on the AddTask JOB WORKER (Scheduler::Tick <- the
+                // Diagnostics sleeper's AddTask, which drains on BSJobs::JobThread --
+                // MainThread.h/§0.37). EquipObject rebuilds the actor's biped 3D, and
+                // that rebuild touches the HEAD/NECK partition even for a plain CHEST
+                // piece; doing it off the main thread races the render thread and the
+                // head node is torn down but not rebuilt -> the "head disappears on
+                // armor equip" bug. It reproduces with a perfectly good item like
+                // chainmail (marth), which proves it is the EQUIP mechanism, not the
+                // item's meshes. 3D mutation is exactly what MainThread::Post exists
+                // to marshal. Capture FormIDs (never the worker's Actor*/item, which
+                // may be stale next frame) and re-resolve on the frame that runs.
+                const RE::FormID folID  = a_follower->GetFormID();
+                const RE::FormID itemID = best->GetFormID();
+                auto doEquip = [folID, itemID]() {
+                    auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
+                    auto* form = RE::TESForm::LookupByID(itemID);
+                    auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
+                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
+                        eq->EquipObject(fol, item);
+                };
+                if (MainThread::IsInstalled()) MainThread::Post(doEquip);
+                else                           doEquip();   // VR: pump is a no-op, keep the direct path
+            }
 
             // [equip] DIAGNOSTIC: the weapon swap was INVISIBLE in the log --
             // marth's "Erik switches melee weapons for no reason" could not be
@@ -1085,9 +1107,12 @@ namespace MFO::Logistics {
                              myWeap ? static_cast<int>(WeaponClassOf(myWeap->GetWeaponType())) : -1,
                              static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseDmg);
             } else {
-                spdlog::info("[equip] {:08X}: LOOT armor '{}'", a_follower->GetFormID(),
+                // #62: armor now equips on the MAIN thread (queued via the pump when
+                // live), so the biped/head rebuild never races the render thread.
+                spdlog::info("[equip] {:08X}: LOOT armor '{}' -> equip {}", a_follower->GetFormID(),
                              best->As<RE::TESFullName>() && best->As<RE::TESFullName>()->GetFullName()
-                                 ? best->As<RE::TESFullName>()->GetFullName() : "?");
+                                 ? best->As<RE::TESFullName>()->GetFullName() : "?",
+                             MainThread::IsInstalled() ? "queued to main thread" : "direct (VR/no-pump)");
             }
 
             // MAGIC-LOADOUT diagnostics (v1.0.29): say WHY the mage item won,

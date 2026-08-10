@@ -31,6 +31,11 @@ namespace MFO::MainThread {
     // in that case Post() becomes a documented no-op rather than a leak.
     void Install();
 
+    // True once the pump is LIVE (hook installed and not the VR no-op path), so a
+    // Post() will actually run. A caller whose work MUST still happen on VR -- where
+    // Post is a documented no-op -- checks this and falls back to a direct call.
+    bool IsInstalled();
+
     // Drop every queued closure without running it. Called on revert: a fn posted
     // before a load re-resolves its captured handle against the NEXT session's
     // handle table (handles are reused), so draining it post-load could run on the
