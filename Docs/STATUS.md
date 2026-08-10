@@ -6,28 +6,29 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **Tagged: v1.0.41 · Packaged (deploy pending): v1.0.43**
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **Tagged: v1.0.41 · v1.0.46 pushed to CI (deploy pending green)**
 
-> **DEPLOY v1.0.43 TO TUXBORN when the deck is up (was down 2026-08-10).** DLL
-> `ce69c624`, CI run 31413781454 green, `releases/v1.0.43/`. Command:
-> `scp releases/v1.0.43/MFO-v1.0.43.zip deck@marthdeck:/tmp/ && ssh deck@marthdeck 'unzip -o /tmp/MFO-v1.0.43.zip -d /home/deck/Games/Tuxbornrc1/mods/MFO && sha256sum .../MFO.dll'`
-> (verify == `ce69c624…`; deploy overwrites MFO.ini so `bBeastHeadFix` returns to 1).
+> **#62 invisible head — ROOT-CAUSED & FIXED (v1.0.46), record-verified. The whole
+> v1.0.39-45 line was WRONG** ([[off-main-equip-invisible-head]]). It is NOT a 3D
+> rebuild / beast-race problem. **MFO looted a NON-PLAYABLE creature item (a draugr
+> helmet, DraugrHelmet01 0x1FD77) off a corpse and equipped it** — it renders on no
+> playable race → invisible head. The ARMOR twin of the creature-WEAPON bug
+> (IsCreatureWeapon). Proven headless: Inigo is STOCK KhajiitRace (not custom), has
+> no outfit; the "Ancient Nord Helmet" was a worn draugr helmet (count 2). Vanilla
+> never loots creature gear onto a follower → that's why it never happens without
+> MFO. **Fix:** `KeepHeadClear` rewritten (Logistics.cpp ~380) — one pass over worn
+> armor: renders-on-race → keep; own-plugin non-rendering → keep (#64); foreign
+> NON-PLAYABLE → DELETE; foreign playable non-rendering HEAD item → hand back to
+> player. Runs on load (all teammates) + equip-event (catches trades). Prevention
+> (IsCreatureArmor loot skip) already shipped v1.0.41. `IsBeastRace`/DoReset3D/
+> Update3DModel all removed. Fable-reviewed PASS. Watch `[evict]` in MFO.log.
 >
-> **#62 beast-head — THE REAL FIX (v1.0.43), after a long thrash
-> ([[off-main-equip-invisible-head]]):** the head detaches when something FORCES a
-> 3D rebuild on a beast follower — and MFO's own `DoReset3D` (v1.0.39-42) was doing
-> exactly that on the trade equip event (vanilla never forces it → MFO-only bug).
-> RIPPED OUT DoReset3D. New `RepairBeastHead` = the NPC-Fixer mechanism: DETECT
-> headless (`Get3D()` root exists but `GetObjectByName("FaceGenNiNode")` null) →
-> LIGHT reattach `Update3DModel()+UpdateAnimation(0)`, head-presence-GATED (healthy
-> heads untouched, NO items removed). Fires from the equip-event sink (posted +1
-> frame) and a ~2s post-load periodic sweep. **Field test (Tuxborn — Inigo=6E008AE9,
-> Xelzaz=710893E1, Lucien=4F00591F):** load → head OK/self-repairs; TRADE Inigo gear
-> (the case that broke) → must hold; watch `[beasthead] … headless -> Update3DModel
-> reattach` (fires only on a real catch). Fable edge note: the single +1-frame
-> post-equip check could miss a drop that lands a frame later — if survivors, add
-> 2-3 spaced re-checks. **#63 quash** (inter-follower hostility, StopCombat both,
-> `[peace]`, `bQuashAllyCombat`) rides in v1.0.42+ — still untested.
+> **DEPLOY v1.0.46 TO TUXBORN when CI is green** (marth loads a broken Inigo=6E008AE9
+> until then; the load sweep should evict the draugr helmet on first load).
+> `scp releases/v1.0.46/MFO-v1.0.46.zip deck@marthdeck:/tmp/ && ssh deck@marthdeck 'unzip -o /tmp/MFO-v1.0.46.zip -d /home/deck/Games/Tuxbornrc1/mods/MFO && sha256sum /home/deck/Games/Tuxbornrc1/mods/MFO/SKSE/Plugins/MFO.dll'`
+> (verify hash == releases/v1.0.46 DLL; deploy overwrites MFO.ini so `bBeastHeadFix`
+> returns to 1). **#63 quash** (inter-follower hostility, `[peace]`,
+> `bQuashAllyCombat`) rides in v1.0.42+ — still field-untested.
 
 ---
 

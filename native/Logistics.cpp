@@ -341,85 +341,120 @@ namespace MFO::Logistics {
             return overlapsAny;
         }
 
-        // ── #62 BEAST-RACE HEAD FIX ──────────────────────────────────────────
-        // Beast races (Khajiit/Argonian, incl. custom followers like Inigo) go
-        // HEADLESS when equipment is changed by a scripted EquipObject: beast head
-        // parts attach during the full 3D BUILD, not during an armor-addon swap,
-        // so a script equip leaves the head detached (marth: confirmed across
-        // beast followers; even a WEAPON re-equip drops the head). The remedy is
-        // KeepHeadClear below (clears foreign non-rendering head items). This just
-        // answers "is this a beast race", so the fix is even considered ONLY for
-        // beasts. No clean signal exists (verified: no RACE_DATA beast
-        // bit, no vanilla beast keyword), so match the race against the two base
-        // beast races by identity or the armorParentRace (RNAM) chain, plus an
-        // EDID substring -- which catches the vampire variants (whose RNAM is
-        // null) and most custom beast followers. TESRace keeps its editor ID
-        // natively, so the EDID test is reliable (not po3-Tweaks-dependent).
-        // (bodyPartData is NOT usable as a discriminator: every playable race
-        // shares DefaultBodyPartData 0x1D -- verified in Skyrim.esm.)
-        // Main-thread only (TESDataHandler lookup); called from the posted equip.
-        bool IsBeastRace(RE::TESRace* a_race) {
-            if (!a_race) return false;
-            static RE::TESRace* s_khajiit  = nullptr;
-            static RE::TESRace* s_argonian = nullptr;
-            static bool s_inited = [] {
-                if (auto* dh = RE::TESDataHandler::GetSingleton()) {
-                    s_khajiit  = dh->LookupForm<RE::TESRace>(0x00013745, "Skyrim.esm");
-                    s_argonian = dh->LookupForm<RE::TESRace>(0x00013740, "Skyrim.esm");
-                }
-                return true;
-            }();
-            (void)s_inited;
-            int guard = 0;
-            for (RE::TESRace* r = a_race; r && guard < 8; r = r->armorParentRace, ++guard)
-                if (r == s_khajiit || r == s_argonian) return true;
-            if (const char* edid = a_race->GetFormEditorID(); edid && *edid) {
-                std::string_view id{ edid };
-                if (id.find("Khajiit") != std::string_view::npos ||
-                    id.find("Argonian") != std::string_view::npos) return true;
-            }
-            return false;
-        }
-
-        // #62 PHANTOM HEAD-ITEM CLEANER (proper feature, marth). The invisible head
-        // is a worn HEAD-slot item that has NO ArmorAddon for the follower's race
-        // (GetArmorAddon(race)==null): it hides the head partition but renders
-        // nothing. Field-proven on Inigo -- a vanilla 'Ancient Nord Helmet'
-        // (0001FD77) that resolves NULL on his custom Khajiit race AND is NOT in his
-        // inventory (a phantom worn item). We must SEPARATE this bug from a custom
-        // follower's INTENTIONAL invisible native gear (also non-rendering, also
-        // maybe phantom -- but by design). The clean separator is PLUGIN OWNERSHIP:
-        // a non-rendering head item from the follower's OWN plugin is intentional
-        // (leave it, #64); a FOREIGN one (different plugin -- e.g. Skyrim.esm helmet
-        // on an Inigo.esp Khajiit) is a stuck/mismatched item hiding the head ->
-        // UNEQUIP it (clears the worn slot even for a phantom; RemoveItem can't, as
-        // there's no inventory entry). The inventory count is logged to confirm the
-        // phantom. Main-thread only. PluginKey handles light (ESL/FE) plugins: a
-        // full plugin is FormID>>24 (0x00-0xFD); a light plugin (top byte 0xFE) is
-        // FormID>>12, keeping the FE prefix + 12-bit light index -- so two ESLs are
-        // distinguished and a light vs full id can never collide.
+        // ── #62 BROKEN-GEAR EVICTION (root-caused 2026-08-10) ────────────────
+        // The invisible-head bug is MFO having equipped an item that renders on
+        // NO playable body. VERIFIED root cause (headless save + load-order plugin
+        // parse, Linux-Native-Tools): Inigo -- who is STOCK KhajiitRace 0x13745,
+        // NOT a custom race -- was wearing DraugrHelmet01 (0001FD77), a
+        // NON-PLAYABLE draugr helmet whose single ArmorAddon is race-locked to
+        // DraugrRace with no coverage for ANY playable race (not even Nords). A
+        // pre-v1.0.41 MFO looted it off a draugr corpse and equipped it -- the
+        // ARMOR twin of the old creature-WEAPON bug (IsCreatureWeapon, v0.8.34).
+        // Such a piece hides the head partition but draws nothing. Vanilla never
+        // does this: only MFO's looting put creature gear on a follower, which is
+        // exactly why the bug never happens without MFO. So it is NOT beast-
+        // specific -- a non-playable helmet blanks any race's head.
+        //
+        // FIX (marth): do away with items that shouldn't be equippable; leave
+        // proper-race selection to the engine. There is nothing to "swap to the
+        // Khajiit version" for a draugr helmet -- no playable variant exists -- so
+        // it is DELETED. Standard armor is a single ARMO that auto-selects the
+        // right ArmorAddon per race (the ARMA system IS the swap), so MFO looting
+        // only playable gear (the IsCreatureArmor loot filter, below) already
+        // guarantees proper-race rendering going forward. This routine is the
+        // CLEANUP for gear a pre-fix MFO stuck on, plus a trade that hands a bad
+        // piece over. NEVER a 3D reset (the v1.0.39-43 dead end: forcing a
+        // rebuild is what actually dropped the head).
+        //
+        // One pass over the follower's WORN armor (all slots). A piece that draws
+        // on his race (ArmorAddon match up the armorParentRace chain) is fine and
+        // kept. What renders NOTHING is triaged:
+        //   - his OWN-plugin non-rendering gear -> KEEP (intentional invisible
+        //     native gear, e.g. a custom follower's design; #64).
+        //   - a foreign NON-PLAYABLE piece -> DELETE. Creature/draugr gear, no
+        //     valid playable variant, worthless to the player. Fixes Inigo.
+        //   - a foreign PLAYABLE wrong-race piece IN A HEAD SLOT -> HAND BACK to
+        //     the player. May still be a real item he wants (we can't fabricate a
+        //     race-correct variant), so it goes to his pack, not the void. Scoped
+        //     to head slots (the invisible-HEAD symptom) so a custom-race
+        //     follower's rings/amulets/body aren't stripped on a null-resolve.
+        // Main-thread only (equip + inventory mutation). PluginKey handles ESL/FE
+        // light plugins (top byte 0xFE -> id>>12, else id>>24).
         void KeepHeadClear(RE::Actor* a_actor) {
-            auto* race = a_actor->GetRace();
-            auto* eq   = RE::ActorEquipManager::GetSingleton();
-            if (!race || !eq) return;
+            auto* race   = a_actor->GetRace();
+            auto* eq     = RE::ActorEquipManager::GetSingleton();
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!race || !eq || !player) return;
             auto pluginKey = [](RE::FormID a_id) -> std::uint32_t {
                 return ((a_id >> 24) == 0xFEu) ? (a_id >> 12) : (a_id >> 24);
             };
             const std::uint32_t actorKey = pluginKey(a_actor->GetFormID());
-            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-            static constexpr Slot kHead[] = { Slot::kHead, Slot::kHair, Slot::kCirclet };
-            for (const auto slot : kHead) {
-                auto* worn = a_actor->GetWornArmor(slot);
-                if (!worn) continue;
-                if (worn->GetArmorAddon(race)) continue;    // renders on this race -> fine, keep it
-                if (pluginKey(worn->GetFormID()) == actorKey) continue;  // follower's OWN plugin -> intentional (#64)
-                std::int32_t inv = 0;                        // confirm the phantom: is it in inventory at all?
-                for (auto& [obj, data] : a_actor->GetInventory())
-                    if (obj == worn) { inv = data.first; break; }
-                const char* nm = worn->GetFullName();
-                eq->UnequipObject(a_actor, worn);           // clear the (phantom) foreign worn head slot
-                spdlog::info("[phantom] {:08X}: cleared FOREIGN non-rendering head '{}' ({:08X}) invCount={} phantom={}",
-                             a_actor->GetFormID(), nm ? nm : "?", worn->GetFormID(), inv, inv == 0 ? "YES" : "no");
+            // The NonPlayable record flag (bit 2) -- same read as IsCreatureArmor
+            // (defined below with the loot filter); inlined here to avoid a forward
+            // reference across the anonymous namespace.
+            auto isNonPlayable = [](const RE::TESObjectARMO* a) {
+                return a && (a->GetFormFlags() & (1u << 2)) != 0;
+            };
+            // Occupies a HEAD-region slot (head/hair/circlet). Used to scope the
+            // hand-back branch to the invisible-HEAD symptom (see below).
+            auto isHeadSlot = [](RE::TESObjectARMO* a) {
+                using S = RE::BGSBipedObjectForm::BipedObjectSlot;
+                const auto m = static_cast<std::uint32_t>(a->GetSlotMask());
+                return (m & (static_cast<std::uint32_t>(S::kHead) |
+                             static_cast<std::uint32_t>(S::kHair) |
+                             static_cast<std::uint32_t>(S::kCirclet))) != 0;
+            };
+            // Renders on the race IFF some ArmorAddon matches the race OR a race up
+            // its armorParentRace (RNAM) chain -- the SAME resolution the engine
+            // uses to build the biped. Walking the chain means a genuinely custom-
+            // race follower whose gear renders via its parent is NOT a false hit;
+            // the draugr helmet still resolves null (its one ARMA is DraugrRace,
+            // reachable from no playable race).
+            auto rendersOn = [](RE::TESObjectARMO* a_armo, RE::TESRace* a_race) {
+                int guard = 0;
+                for (RE::TESRace* r = a_race; r && guard < 8; r = r->armorParentRace, ++guard)
+                    if (a_armo->GetArmorAddon(r)) return true;
+                return false;
+            };
+
+            // ONE pass over the WORN inventory (all slots, deduped). A piece that
+            // renders on his race is fine; his OWN-plugin non-rendering gear is
+            // INTENTIONAL invisible native gear (#64) and kept. What's left renders
+            // nothing and isn't his: NON-PLAYABLE -> DELETE (creature/draugr junk,
+            // no valid variant, worthless to the player); otherwise a foreign
+            // playable wrong-race piece -> HAND BACK to the player (may be a real
+            // item; we can't fabricate a race-correct variant). Either way it leaves
+            // his ownership so the AI can't re-equip it. Snapshot first -- RemoveItem
+            // mutates the inventory map.
+            struct Hit { RE::TESObjectARMO* armo; std::int32_t count; bool del; const char* why; };
+            std::vector<Hit> hits;
+            for (auto& [obj, data] : a_actor->GetInventory()) {
+                if (!data.second || !data.second->IsWorn()) continue;
+                auto* armo = obj ? obj->As<RE::TESObjectARMO>() : nullptr;
+                if (!armo) continue;
+                if (rendersOn(armo, race)) continue;                        // draws on his race -> keep
+                if (pluginKey(armo->GetFormID()) == actorKey) continue;     // his OWN plugin -> intentional (#64)
+                if (isNonPlayable(armo))
+                    hits.push_back({ armo, data.first, true,  "NON-PLAYABLE creature armor" });   // DELETE, any slot
+                else if (isHeadSlot(armo))
+                    hits.push_back({ armo, data.first, false, "FOREIGN non-rendering head item" }); // HAND BACK, head only
+                // else: a foreign PLAYABLE non-rendering piece in a NON-head slot is
+                // LEFT ALONE. Scoping hand-back to head slots (the invisible-HEAD
+                // symptom) avoids stripping a genuinely custom-race follower's rings/
+                // amulets/body whose ArmorAddon can resolve null here even though the
+                // engine renders them via a parent race (Fable review). Non-playable
+                // creature junk is still deleted in any slot above.
+            }
+            for (auto& h : hits) {
+                const char* nm = h.armo->GetFullName();
+                eq->UnequipObject(a_actor, h.armo);
+                if (h.count > 0) {
+                    if (h.del) a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                    else       a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, player);
+                }
+                spdlog::info("[evict] {:08X}: {} {} '{}' ({:08X}) count={}",
+                             a_actor->GetFormID(), h.del ? "DELETED" : "returned-to-player",
+                             h.why, nm ? nm : "?", h.armo->GetFormID(), h.count);
             }
         }
 
@@ -1186,10 +1221,12 @@ namespace MFO::Logistics {
                     auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
                     auto* form = RE::TESForm::LookupByID(itemID);
                     auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                    // #62 beast-race head reattach is handled by BeastHeadSink on
-                    // the TESEquipEvent this equip fires -- there, not here, so the
-                    // SAME reset also covers the player TRADING gear and the AI
-                    // re-dressing (not just MFO's own equip). Keep this to the equip.
+                    // #62 broken-gear eviction is handled by BeastHeadSink on the
+                    // TESEquipEvent this equip fires -- there, not here, so the same
+                    // check also covers the player TRADING gear over and the AI
+                    // re-dressing, not just MFO's own equip. Keep this to the equip.
+                    // (MFO's own loot never reaches here with creature gear: the
+                    // IsCreatureArmor filter skips it at selection.)
                     if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
                         eq->EquipObject(fol, item);
                 };
@@ -2759,14 +2796,15 @@ namespace MFO::Logistics {
             }   // for (living vendors)
         }
 
-        // ── #62 BEAST-RACE HEAD FIX sink ────────────────────────────────────
-        // A trade / AI equip on a beast follower can leave (or re-assert) a foreign
-        // non-rendering head item -> invisible head. This sink catches such equips at
-        // the EQUIP EVENT and posts KeepHeadClear, which clears that item (see its
-        // definition -- plugin-ownership separation keeps the follower's own native
-        // gear). Scoped to beast TEAMMATES, out of combat, NAMED armor/weapon equips
-        // only (a cheap trigger gate), debounced ~1s. KeepHeadClear only unequips, so
-        // its unequip event (equipped=false) is ignored by this sink -- no cascade.
+        // ── #62 BROKEN-GEAR sink ────────────────────────────────────────────
+        // A trade / AI equip can put (or re-assert) a non-playable creature item or
+        // a foreign non-rendering head piece on a follower -> invisible head. This
+        // sink catches such equips at the EQUIP EVENT and posts KeepHeadClear, which
+        // DELETES the creature junk and hands back the wrong-race piece (see its
+        // definition -- plugin-ownership keeps the follower's own native gear).
+        // Scoped to any TEAMMATE, out of combat, NAMED armor/weapon equips only (a
+        // cheap trigger gate), debounced ~1s. KeepHeadClear's own unequip fires an
+        // equipped=false event, ignored below -- no cascade.
         class BeastHeadSink final : public RE::BSTEventSink<RE::TESEquipEvent> {
         public:
             static BeastHeadSink* GetSingleton() { static BeastHeadSink s; return &s; }
@@ -2790,8 +2828,6 @@ namespace MFO::Logistics {
                 auto* actor = a_ev->actor->As<RE::Actor>();
                 if (!actor || !actor->IsPlayerTeammate() || actor->IsInCombat())
                     return RE::BSEventNotifyControl::kContinue;
-                if (!IsBeastRace(actor->GetRace()))
-                    return RE::BSEventNotifyControl::kContinue;
                 // DEBOUNCE (~1s/follower): coalesces a full-set trade's burst of
                 // equip events. Main-thread, so the static map needs no lock.
                 static std::unordered_map<RE::FormID, Clock::time_point> s_lastReset;
@@ -2802,7 +2838,7 @@ namespace MFO::Logistics {
                     return RE::BSEventNotifyControl::kContinue;
                 s_lastReset[id] = now;
                 // A trade/AI equip can leave (or re-assert) a non-rendering head item
-                // on a beast follower. Post KeepHeadClear (next frame, after the
+                // on a follower. Post KeepHeadClear (next frame, after the
                 // equip settles): it takes OFF any worn head-slot piece with no mesh
                 // for his race -- the invisible-head cause -- and leaves everything
                 // else, including his hidden native gear, untouched.
@@ -3658,13 +3694,14 @@ namespace MFO::Logistics {
         spdlog::info("[logistics] player-looted waiver + beast-head equip sinks installed");
     }
 
-    // #62 ON-LOAD phantom head-item clean. A beast follower can come up from a save
-    // already wearing a foreign non-rendering (phantom) head item -> invisible head.
-    // So on load, run KeepHeadClear once per loaded beast teammate. Retries ~2s so a
-    // follower that finishes loading a few frames late (or before Followers::Refresh
-    // populates g_active) is still caught; a `done` set makes it fire once per
-    // follower. The follower's own native gear is left untouched. Called from
-    // kPostLoadGame/kNewGame; main thread. Gated on bBeastHeadFix.
+    // #62 ON-LOAD broken-gear clean. A follower can come up from a save already
+    // wearing non-playable creature gear (the verified Inigo/draugr-helmet case) or
+    // a foreign non-rendering head item -> invisible head. So on load, run
+    // KeepHeadClear once per loaded teammate. Retries ~2s so a follower that finishes
+    // loading a few frames late (or before Followers::Refresh populates g_active) is
+    // still caught; a `done` set makes it fire once per follower. The follower's own
+    // native gear is left untouched. Called from kPostLoadGame/kNewGame; main thread.
+    // Gated on bBeastHeadFix.
     void SweepBeastHeadsOnLoad() {
         if (!Config::g_beastHeadFix.load()) return;
         auto done  = std::make_shared<std::unordered_set<RE::FormID>>();
@@ -3676,7 +3713,6 @@ namespace MFO::Logistics {
                 if (!a || !a->IsPlayerTeammate() || !a->Is3DLoaded()) continue;
                 const RE::FormID id = a->GetFormID();
                 if (done->count(id)) continue;
-                if (!IsBeastRace(a->GetRace())) { done->insert(id); continue; }
                 KeepHeadClear(a);
                 done->insert(id);
             }

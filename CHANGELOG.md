@@ -1,3 +1,20 @@
+## v1.0.46 -- invisible head: the ROOT CAUSE (creature/draugr armor eviction)
+
+- Fix: a follower's head (or another slot) going invisible. ROOT CAUSE, this time
+  verified at the save + plugin-record level: MFO had looted a NON-PLAYABLE
+  creature item off a corpse -- e.g. a draugr's helmet -- and equipped it. Those
+  items render on no playable race, so they hide the slot but draw nothing (Inigo's
+  "Ancient Nord Helmet" was in fact a draugr helmet, count 2, worn). It's the armor
+  version of the old creature-WEAPON bug, is NOT beast-specific, and has nothing to
+  do with 3D rebuilds -- the whole v1.0.39-45 line of fixes was chasing the wrong
+  layer. MFO now, on load and after any equip/trade, takes OFF worn gear that
+  renders nothing on the follower's race: creature/draugr junk is DELETED, a
+  foreign wrong-race helmet is HANDED BACK to you, and a custom follower's OWN
+  intentional invisible gear is left untouched. (Prevention was already in place --
+  MFO stopped looting non-playable armor back in v1.0.41 -- so this is the cleanup
+  for gear a pre-fix build stuck on, plus trades.) Toggle bBeastHeadFix. Watch
+  "[evict]" in MFO.log.
+
 ## v1.0.45 -- phantom head-item cleaner (fixes beast-race headless)
 
 - New: MFO now identifies and clears "phantom" head gear -- a worn head-slot item
