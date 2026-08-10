@@ -1,3 +1,12 @@
+## v1.0.40 -- beast-race head fix now covers TRADING and AI re-equips, not just looting
+
+- Fix: a beast-race follower (Khajiit/Argonian, e.g. Inigo) still lost their head
+  when you TRADED them a weapon/armor, even though MFO's own looting no longer
+  broke it (v1.0.39). The head rebuild now fires on the equip EVENT itself, so it
+  covers every way gear gets equipped -- MFO looting, you handing/trading gear, or
+  the follower's own AI re-dressing. Runs out of combat only (no in-combat
+  flicker), just for beast-race followers. Still toggleable with bBeastHeadFix.
+
 ## v1.0.39 -- fix: beast-race followers (Khajiit/Argonian) no longer go headless
 
 - Fix: Khajiit/Argonian followers (including custom ones like Inigo) losing their

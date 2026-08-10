@@ -1125,28 +1125,12 @@ namespace MFO::Logistics {
                     auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
                     auto* form = RE::TESForm::LookupByID(itemID);
                     auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                    auto* eq   = RE::ActorEquipManager::GetSingleton();
-                    if (!fol || !item || !eq) return;
-                    eq->EquipObject(fol, item);
-                    // #62: beast-race followers go HEADLESS on a scripted equip
-                    // (weapon OR armor) -- a full 3D rebuild (DoReset3D) reattaches
-                    // the head. TWO subtleties: (1) DoReset3D is a 3D mutation, so
-                    // gate on IsInstalled() -- only the main-thread pump path does it;
-                    // the VR direct-call fallback (worker) skips it. (2) EquipObject
-                    // above is QUEUED (applyNow=false), so DEFER the reset one frame
-                    // via a second Post -- a same-frame reset could rebuild before the
-                    // equip applies (missing the item) or be undone when the queued
-                    // equip re-detaches the head. Beast-gated; INI kill bBeastHeadFix.
-                    if (Config::g_beastHeadFix.load() && MainThread::IsInstalled() &&
-                        IsBeastRace(fol->GetRace())) {
-                        MainThread::Post([folID]() {
-                            if (auto* a = RE::TESForm::LookupByID<RE::Actor>(folID)) {
-                                a->DoReset3D(false);   // false = skip weight-morph recompute
-                                spdlog::info("[beasthead] {:08X}: 3D reset after equip (reattach head)",
-                                             folID);
-                            }
-                        });
-                    }
+                    // #62 beast-race head reattach is handled by BeastHeadSink on
+                    // the TESEquipEvent this equip fires -- there, not here, so the
+                    // SAME reset also covers the player TRADING gear and the AI
+                    // re-dressing (not just MFO's own equip). Keep this to the equip.
+                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
+                        eq->EquipObject(fol, item);
                 };
                 if (MainThread::IsInstalled()) MainThread::Post(doEquip);
                 else                           doEquip();   // VR: pump is a no-op, keep the direct path
@@ -2714,6 +2698,59 @@ namespace MFO::Logistics {
             }   // for (living vendors)
         }
 
+        // ── #62 BEAST-RACE HEAD FIX sink ────────────────────────────────────
+        // A beast-race follower (Khajiit/Argonian) goes HEADLESS on ANY scripted
+        // equip -- MFO's loot equip, the player TRADING them gear, OR their own AI
+        // re-dressing -- because beast head parts attach during the full 3D build,
+        // not an armor-addon swap. Catching it at the EQUIP EVENT (fires on the
+        // MAIN thread for every equip, whatever the source) covers all routes
+        // uniformly, which a per-MFO-equip reset could not: marth's field test had
+        // MFO's loot equip FIXED but TRADING a weapon still broke the head. On a
+        // qualifying equip, force Actor::DoReset3D to reattach the head. Scoped to
+        // the player's beast TEAMMATES (not every beast NPC), and to OUT OF COMBAT
+        // (a rebuild on every in-combat weapon swap would flicker; the reported
+        // cases -- trade/loot/dressing -- are all out of combat). DoReset3D fires
+        // no equip event, so it cannot re-trigger this sink.
+        class BeastHeadSink final : public RE::BSTEventSink<RE::TESEquipEvent> {
+        public:
+            static BeastHeadSink* GetSingleton() { static BeastHeadSink s; return &s; }
+
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESEquipEvent* a_ev,
+                                                  RE::BSTEventSource<RE::TESEquipEvent>*) override {
+                if (!a_ev || !a_ev->equipped || !a_ev->actor)
+                    return RE::BSEventNotifyControl::kContinue;
+                if (!Config::g_beastHeadFix.load())
+                    return RE::BSEventNotifyControl::kContinue;
+                // Only WORN gear (armor or weapon) can drop the head -- ignore
+                // spells/shouts/torches/ammo, so a beast MAGE teammate swapping
+                // spells out of combat doesn't spin up pointless 3D rebuilds.
+                auto* base = a_ev->baseObject ? RE::TESForm::LookupByID(a_ev->baseObject) : nullptr;
+                if (!base || (!base->Is(RE::FormType::Armor) && !base->Is(RE::FormType::Weapon)))
+                    return RE::BSEventNotifyControl::kContinue;
+                auto* actor = a_ev->actor->As<RE::Actor>();
+                if (!actor || !actor->IsPlayerTeammate() || actor->IsInCombat())
+                    return RE::BSEventNotifyControl::kContinue;
+                if (!IsBeastRace(actor->GetRace()))
+                    return RE::BSEventNotifyControl::kContinue;
+                // DEBOUNCE (~1s/follower): coalesces a full-set trade's burst of
+                // equip events into ONE rebuild, and -- should DoReset3D ever fire
+                // an equip event -- breaks any re-entrant loop. Equip events are
+                // main-thread, so the static map needs no lock.
+                static std::unordered_map<RE::FormID, Clock::time_point> s_lastReset;
+                const auto       now = Clock::now();
+                const RE::FormID id  = actor->GetFormID();
+                if (auto it = s_lastReset.find(id);
+                    it != s_lastReset.end() && now - it->second < std::chrono::seconds(1))
+                    return RE::BSEventNotifyControl::kContinue;
+                s_lastReset[id] = now;
+                // Equip events run on the main thread, so the 3D rebuild is safe
+                // inline; it reattaches the detached beast head.
+                actor->DoReset3D(false);   // false = skip weight-morph recompute
+                spdlog::info("[beasthead] {:08X}: 3D reset on equip event (reattach head)", id);
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
         // ── the player-looted waiver sink (#22h) ────────────────────────────
         class ContainerSink final : public RE::BSTEventSink<RE::TESContainerChangedEvent> {
         public:
@@ -3554,7 +3591,8 @@ namespace MFO::Logistics {
             return;
         }
         holder->AddEventSink<RE::TESContainerChangedEvent>(ContainerSink::GetSingleton());
-        spdlog::info("[logistics] player-looted waiver sink installed");
+        holder->AddEventSink<RE::TESEquipEvent>(BeastHeadSink::GetSingleton());   // #62 beast-head reattach
+        spdlog::info("[logistics] player-looted waiver + beast-head equip sinks installed");
     }
 
     void ClearTransientState() {
