@@ -317,6 +317,17 @@ namespace MFO::Config {
     // backup to the best of ANY one-handed weapon. bMageDaggersOnly.
     inline std::atomic<bool>  g_mageDaggersOnly{ true };
 
+    // #62 BEAST-RACE HEAD FIX, DEFAULT ON -- a debug kill-switch (INI-only, like
+    // bWeaponStyleControl). Beast-race followers (Khajiit/Argonian, incl. custom
+    // ones like Inigo) go HEADLESS when MFO equips looted gear on them: beast head
+    // parts attach during the full 3D build, not during a scripted armor-addon
+    // swap, so the head is left detached. When ON, MFO forces a 3D rebuild
+    // (Actor::DoReset3D) on the MAIN thread right after equipping on a beast-race
+    // follower, which reattaches the head. Beast-gated so human followers never
+    // eat the rebuild. Set bBeastHeadFix = 0 in Data/SKSE/Plugins/MFO.ini to
+    // disable (e.g. if the rebuild's 1-frame refresh is unwanted). See Logistics.cpp.
+    inline std::atomic<bool>  g_beastHeadFix{ true };
+
     // LOW-POWER POTION FLOOR (marth: "ignore low power potions entirely, loot
     // strongest to weakest"). A restore potion whose magnitude is below this is
     // never looted; the rest are taken strongest-first. 0 = AUTO -- use the floor

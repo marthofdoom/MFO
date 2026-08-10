@@ -338,6 +338,47 @@ namespace MFO::Logistics {
             return overlapsAny;
         }
 
+        // ── #62 BEAST-RACE HEAD FIX ──────────────────────────────────────────
+        // Beast races (Khajiit/Argonian, incl. custom followers like Inigo) go
+        // HEADLESS when equipment is changed by a scripted EquipObject: beast head
+        // parts attach during the full 3D BUILD, not during an armor-addon swap,
+        // so a script equip leaves the head detached (marth: confirmed across
+        // beast followers; even a WEAPON re-equip drops the head). The remedy is a
+        // full 3D rebuild (Actor::DoReset3D) AFTER the equip, on the main thread --
+        // done at the equip site below. This just answers "is this a beast race",
+        // so the rebuild fires ONLY for beasts (a human follower never eats the
+        // 1-frame refresh). No clean signal exists (verified: no RACE_DATA beast
+        // bit, no vanilla beast keyword), so match the race against the two base
+        // beast races by identity or the armorParentRace (RNAM) chain, plus an
+        // EDID substring -- which catches the vampire variants (whose RNAM is
+        // null) and most custom beast followers. TESRace keeps its editor ID
+        // natively, so the EDID test is reliable (not po3-Tweaks-dependent).
+        // (bodyPartData is NOT usable as a discriminator: every playable race
+        // shares DefaultBodyPartData 0x1D -- verified in Skyrim.esm.)
+        // Main-thread only (TESDataHandler lookup); called from the posted equip.
+        bool IsBeastRace(RE::TESRace* a_race) {
+            if (!a_race) return false;
+            static RE::TESRace* s_khajiit  = nullptr;
+            static RE::TESRace* s_argonian = nullptr;
+            static bool s_inited = [] {
+                if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                    s_khajiit  = dh->LookupForm<RE::TESRace>(0x00013745, "Skyrim.esm");
+                    s_argonian = dh->LookupForm<RE::TESRace>(0x00013740, "Skyrim.esm");
+                }
+                return true;
+            }();
+            (void)s_inited;
+            int guard = 0;
+            for (RE::TESRace* r = a_race; r && guard < 8; r = r->armorParentRace, ++guard)
+                if (r == s_khajiit || r == s_argonian) return true;
+            if (const char* edid = a_race->GetFormEditorID(); edid && *edid) {
+                std::string_view id{ edid };
+                if (id.find("Khajiit") != std::string_view::npos ||
+                    id.find("Argonian") != std::string_view::npos) return true;
+            }
+            return false;
+        }
+
         // ── MAGIC LOADOUT (v1.0.29): the mage's loot preferences ────────────
         // A follower is a MAGIC USER iff he has at least one ENABLED cast
         // gambit (act.cast_self / act.cast_target) in his combat table --
@@ -1084,8 +1125,28 @@ namespace MFO::Logistics {
                     auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
                     auto* form = RE::TESForm::LookupByID(itemID);
                     auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
-                        eq->EquipObject(fol, item);
+                    auto* eq   = RE::ActorEquipManager::GetSingleton();
+                    if (!fol || !item || !eq) return;
+                    eq->EquipObject(fol, item);
+                    // #62: beast-race followers go HEADLESS on a scripted equip
+                    // (weapon OR armor) -- a full 3D rebuild (DoReset3D) reattaches
+                    // the head. TWO subtleties: (1) DoReset3D is a 3D mutation, so
+                    // gate on IsInstalled() -- only the main-thread pump path does it;
+                    // the VR direct-call fallback (worker) skips it. (2) EquipObject
+                    // above is QUEUED (applyNow=false), so DEFER the reset one frame
+                    // via a second Post -- a same-frame reset could rebuild before the
+                    // equip applies (missing the item) or be undone when the queued
+                    // equip re-detaches the head. Beast-gated; INI kill bBeastHeadFix.
+                    if (Config::g_beastHeadFix.load() && MainThread::IsInstalled() &&
+                        IsBeastRace(fol->GetRace())) {
+                        MainThread::Post([folID]() {
+                            if (auto* a = RE::TESForm::LookupByID<RE::Actor>(folID)) {
+                                a->DoReset3D(false);   // false = skip weight-morph recompute
+                                spdlog::info("[beasthead] {:08X}: 3D reset after equip (reattach head)",
+                                             folID);
+                            }
+                        });
+                    }
                 };
                 if (MainThread::IsInstalled()) MainThread::Post(doEquip);
                 else                           doEquip();   // VR: pump is a no-op, keep the direct path

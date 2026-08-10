@@ -1,3 +1,13 @@
+## v1.0.39 -- fix: beast-race followers (Khajiit/Argonian) no longer go headless
+
+- Fix: Khajiit/Argonian followers (including custom ones like Inigo) losing their
+  HEAD when MFO equipped looted gear on them. Beast-race heads detach when
+  equipment is changed by a script and have to be explicitly rebuilt; MFO now
+  forces that head rebuild right after equipping on a beast-race follower. Only
+  beast races are touched (human followers are unaffected), and it can be turned
+  off with bBeastHeadFix = 0 in the INI. Builds on the v1.0.38 main-thread equip
+  fix below.
+
 ## v1.0.38 -- fix: followers no longer lose their head when they equip armor
 
 - Fix: a follower's HEAD (or body) disappearing after MFO put a piece of armor on

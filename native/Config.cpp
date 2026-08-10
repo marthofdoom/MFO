@@ -138,6 +138,7 @@ namespace MFO::Config {
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
             else if (a_key == "bMagicLoadout")      setB(g_magicLoadout);
             else if (a_key == "bMageDaggersOnly")   setB(g_mageDaggersOnly);
+            else if (a_key == "bBeastHeadFix")       setB(g_beastHeadFix);   // #62 default ON, debug kill-switch
             else if (a_key == "bRapportToasts")     setB(g_rapportToasts);
             else if (a_key == "iMinPotionMag")      setI(g_minPotionMag, 0, 500);   // 0 = auto floor
             else if (a_key == "fTravelRadius")       setF(g_travelRadius,   64.0f, 8192.0f);   // match the MCM slider max
@@ -290,6 +291,7 @@ namespace MFO::Config {
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
             { "bEconomy", "0" },               { "bAutoRetreat", "1" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
+            { "bBeastHeadFix", "1" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },
             { "iMinPotionMag", "0" },
             { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "4.000000" },
