@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **Tagged: v1.0.41 · v1.0.46 pushed to CI (deploy pending green)**
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **Tagged: v1.0.46 · DEPLOYED to Tuxborn (DLL 5bd89e17, run 31431532355) — FIELD TEST PENDING**
 
 > **#62 invisible head — ROOT-CAUSED & FIXED (v1.0.46), record-verified. The whole
 > v1.0.39-45 line was WRONG** ([[off-main-equip-invisible-head]]). It is NOT a 3D
@@ -23,11 +23,13 @@
 > (IsCreatureArmor loot skip) already shipped v1.0.41. `IsBeastRace`/DoReset3D/
 > Update3DModel all removed. Fable-reviewed PASS. Watch `[evict]` in MFO.log.
 >
-> **DEPLOY v1.0.46 TO TUXBORN when CI is green** (marth loads a broken Inigo=6E008AE9
-> until then; the load sweep should evict the draugr helmet on first load).
-> `scp releases/v1.0.46/MFO-v1.0.46.zip deck@marthdeck:/tmp/ && ssh deck@marthdeck 'unzip -o /tmp/MFO-v1.0.46.zip -d /home/deck/Games/Tuxbornrc1/mods/MFO && sha256sum /home/deck/Games/Tuxbornrc1/mods/MFO/SKSE/Plugins/MFO.dll'`
-> (verify hash == releases/v1.0.46 DLL; deploy overwrites MFO.ini so `bBeastHeadFix`
-> returns to 1). **#63 quash** (inter-follower hostility, `[peace]`,
+> **v1.0.46 DEPLOYED to Tuxborn** (DLL `5bd89e17`, deck-verified). **FIELD TEST:**
+> load a broken Inigo (6E008AE9) → the on-load sweep should DELETE the worn draugr
+> helmet and his head returns; then TRADE gear (the case that broke) → must hold.
+> Watch `[evict] … DELETED NON-PLAYABLE creature armor` in MFO.log (deck path per
+> [[deploy-workflow]]). Deploy overwrote MFO.ini so `bBeastHeadFix` is back to 1.
+> This is race-agnostic — any Khajiit/Argonian/human follower with stuck creature
+> gear is fixed the same way. **#63 quash** (inter-follower hostility, `[peace]`,
 > `bQuashAllyCombat`) rides in v1.0.42+ — still field-untested.
 
 ---
