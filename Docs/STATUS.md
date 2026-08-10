@@ -6,35 +6,36 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **Packaged, NOT yet deployed: v1.0.40**
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **On Tuxborn (test) + TAGGED: v1.0.41**
 
 ---
 
 ## Continue in one screen
 
-- **🚀 FIRST THING NEXT SESSION — DEPLOY v1.0.40 TO TUXBORN + field-test #62.**
-  v1.0.40 is BUILT + PACKAGED (DLL `196cc90d`, CI run 31360668325 green,
-  `releases/v1.0.40/`) but **NOT deployed** — marth's Deck/Tuxborn was down
-  (2026-08-10). **⚠️ marth field-tests in the `Tuxbornrc1` modlist, NOT
-  custom-modlist, and Tuxborn is NOT syncthing-linked — deploy DIRECTLY over SSH**
-  ([[deploy-workflow]]). Deploy command:
-  ```
-  scp releases/v1.0.40/MFO-v1.0.40.zip deck@marthdeck:/tmp/
-  ssh deck@marthdeck 'unzip -o /tmp/MFO-v1.0.40.zip -d /home/deck/Games/Tuxbornrc1/mods/MFO && sha256sum /home/deck/Games/Tuxbornrc1/mods/MFO/SKSE/Plugins/MFO.dll'
-  ```
-  Verify DLL == `196cc90d5560d721b1e42549fba624f88e755d35fc796ab6be32dea0a7cfe1b4`.
-  Then marth FULLY QUITS + relaunches (SKSE loads the DLL only at exe start — a
-  save-load keeps the old one; confirm the log header reads `MFO 1.0.40 loading`).
-  Tuxborn log: `/home/deck/Games/Tuxbornrc1/overwrite/SKSE/Plugins/MFO.log`.
-  **#62 field-test state (the mid-fix results, [[off-main-equip-invisible-head]]):**
-  v1.0.39 on Tuxborn CONFIRMED — beast head holds when MFO LOOTS/equips; but
-  TRADING a weapon still broke it (vanilla AI equip, MFO's per-equip reset didn't
-  cover it). v1.0.40 moves the reattach to a `TESEquipEvent` sink (BeastHeadSink)
-  that fires for ALL equip routes (loot/trade/AI). **Test: trade a weapon/armor to
-  a beast follower (Inigo) out of combat → head must hold; watch `[beasthead] …
-  3D reset on equip event`.** If it holds, this is publishable (`git push origin
-  v1.0.40` + `gh release create` — main agent). Remaining known gap: IN-COMBAT
-  equips are not reset (flicker-avoidance) — revisit only if reported.
+- **v1.0.41 — DEPLOYED TO TUXBORN + TAG PUSHED (`v1.0.41`), field-test PENDING; NO
+  GitHub/Nexus release yet.** DLL `746b491a`, CI run 31401481609 green,
+  `releases/v1.0.41/`, deck-verified on Tuxborn. **⚠️ marth field-tests in
+  `Tuxbornrc1`, NOT custom-modlist, and Tuxborn is NOT syncthing-linked — deploy
+  DIRECTLY over SSH** ([[deploy-workflow]]); Tuxborn log
+  `/home/deck/Games/Tuxbornrc1/overwrite/SKSE/Plugins/MFO.log`. **#62 fix is now in
+  FOUR layers** ([[off-main-equip-invisible-head]]): v1.0.38 main-thread equip →
+  v1.0.39 beast `DoReset3D` (loot CONFIRMED) → v1.0.40 equip-event sink
+  (covers TRADE/AI, field-test pending) → v1.0.41 ON-LOAD sweep (heads fix
+  themselves on load, no trigger needed) **+ creature-skin armor filter**
+  (`IsCreatureArmor` = NonPlayable flag; stops looting MNC "BearBrownSoft").
+  **Field test (Tuxborn):** load a save with a headless beast follower → head
+  fixed on load (`[beasthead] … 3D reset on load`); trade a weapon to a beast
+  follower → holds (`… on equip event`); confirm no `BearBrownSoft`-type creature
+  armor looted. If clean, publishable (`gh release create v1.0.41` — main agent).
+  Known gap: IN-COMBAT equips not reset (flicker-avoidance). Off-main siblings
+  still un-reset: EquipBack (Loadout.cpp:91), HealExcludedWeapon, torch.
+- **NOW IN PROGRESS — #63 follower-vs-follower hostility.** First finding: `PickFoe`
+  (Evaluator.cpp:223) already skips any non-`IsHostileToActor(self)` target, so MFO
+  never SELECTS a friendly teammate as a foe → the bug is upstream: a follower
+  genuinely BECOMES hostile to another, prime suspect FRIENDLY FIRE from forced
+  casts/attacks hitting a teammate (ties to the parked friendly-fire-hold, gated
+  off because the cast hook runs off-main). Investigate the forced-cast/attack
+  target + AoE path next.
 - **#62 history (superseded by v1.0.40 above; full detail in
   [[off-main-equip-invisible-head]] + CHANGELOG):** v1.0.38 = loot equip moved to
   the main thread (`MainThread::Post`); v1.0.39 = beast `DoReset3D` after MFO's
