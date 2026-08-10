@@ -107,6 +107,21 @@ namespace MFO::Actuation {
         }
 
         Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target) {
+            // #67 SE/VR GUARD (mirrors the CasterConsent hook guards). The mage
+            // cast-control path CRASHES on Skyrim SE 1.5.97: a reporter's crash log
+            // pinned an EXCEPTION_ACCESS_VIOLATION to Scheduler::Tick -> Actuation::
+            // Fire -> CastOn on the SKSE job worker (byte read off a poisoned
+            // pointer), an SE-only divergence in the equip/cost work below. The
+            // forced-cast PACKAGE route already declines off AE, but CastOn's own
+            // Loadout::Prepare (spell equip) + CalculateMagickaCost run FIRST and
+            // are what fault. This whole feature is AE-developed and AE-tested, so
+            // off AE we decline the cast rule TRANSPARENTLY -- the follower's own
+            // vanilla AI keeps casting (mobile, animated), exactly the graceful
+            // degradation the VR guards already give. Gate here (not just the
+            // package route) so no cast-control code runs at all off AE.
+            if (!REL::Module::IsAE())
+                return { Result::FailedOther,
+                         "cast control is AE-only (SE/VR use the follower's own AI casting)", true };
             // TRANSPARENT (GAMBIT_FLOWS §2): a cast that provably cannot run this
             // tick must not wall off the rules below it -- FFXII skips an
             // unaffordable gambit and runs the next line.

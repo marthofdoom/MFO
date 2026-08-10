@@ -6,7 +6,16 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.46 (GitHub release cut) · **#62 FIXED & field-confirmed by marth**
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.46 · **v1.0.47 pushed to CI (#66 LOTD + #67 SE-cast-CTD)** · **#62 FIXED & field-confirmed**
+
+> **PRIORITY LIST STATUS (#62-67):** #62 ✅ shipped+confirmed (v1.0.46). #63 ✅
+> coded (v1.0.42+, in v1.0.46), field-test pending. #64 ✅ audit-clean — Packages
+> is additive-by-design, CombatStyle overrides only the per-combat controller (base
+> style untouched); nothing to fix. #65 = per-follower combat-type DROPDOWN, the one
+> remaining real feature build. #66 ✅ v1.0.47 (LOTD museum crates + player homes via
+> LocTypePlayerHouse 000FC1A3 / player-owned cell, gated by bLootInPlayerHomes).
+> #67 ✅ v1.0.47 (cast-control gated AE-only in Actuation::CastOn; SE 1.5.97 crash
+> was Scheduler->Fire->CastOn on the job worker, pinned via CI PDB + llvm-symbolizer).
 
 > **#62 invisible head — ROOT-CAUSED & FIXED (v1.0.46), record-verified. The whole
 > v1.0.39-45 line was WRONG** ([[off-main-equip-invisible-head]]). It is NOT a 3D

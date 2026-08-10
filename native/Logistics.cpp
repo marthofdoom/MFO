@@ -1733,6 +1733,42 @@ namespace MFO::Logistics {
             auto* loc = pc->GetCurrentLocation();
             return loc && loc->HasKeyword(kHouse);
         }
+
+        // #66: is a_ref inside the player's OWN space -- a location tagged
+        // LocTypePlayerHouse, or a cell owned by the player / PlayerFaction? This
+        // is the signal that catches LOTD museum drop-off / storage crates. Those
+        // crates are UNOWNED at the REF level (so the GetOwner() bar below misses
+        // them) and carry NO container keyword/faction -- a headless plugin parse
+        // of Legacy of the Dragonborn confirmed the only stable signal lives on
+        // the museum CELL/LOCATION: every DBM museum/storeroom/safehouse/airship/
+        // Deepholme/field-station cell carries LocTypePlayerHouse and is
+        // PlayerFaction-owned. Checking that here ALSO covers every vanilla/
+        // Hearthfire/mod player home -- semantically the same "don't ransack my
+        // storage" case -- with no LOTD dependency and no hardcoded container
+        // FormID. Pure Skyrim.esm forms (stable index 00): LocTypePlayerHouse
+        // 000FC1A3, PlayerFaction 000DB1, Player 00000007. (NB: this is the
+        // CORRECT player-home keyword; InPlayerHome above uses the broader
+        // LocTypeHouse 01CB85 for its coarse player-location gate -- left as-is.)
+        bool RefInPlayerStorage(RE::TESObjectREFR* a_ref) {
+            if (!a_ref) return false;
+            static RE::BGSKeyword* kwPlayerHouse =
+                RE::TESForm::LookupByID<RE::BGSKeyword>(0x000FC1A3);   // LocTypePlayerHouse
+            if (kwPlayerHouse) {
+                int guard = 0;
+                for (auto* loc = a_ref->GetCurrentLocation(); loc && guard < 8;
+                     loc = loc->parentLoc, ++guard)
+                    if (loc->HasKeyword(kwPlayerHouse)) return true;
+            }
+            // Cell-level ownership: a player-owned cell with no location tag (LOTD's
+            // haunted safehouse copy; some player-home mods). Player 0x7 / PlayerFaction.
+            if (auto* cell = a_ref->GetParentCell()) {
+                if (auto* owner = cell->GetOwner()) {
+                    const auto oid = owner->GetFormID();
+                    if (oid == 0x00000007 || oid == 0x000DB1) return true;
+                }
+            }
+            return false;
+        }
         bool PlayerIsConsidering(RE::FormID a_sourceID) {
             if (auto* ui = RE::UI::GetSingleton();
                 ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) return true;   // vanilla menu
@@ -2073,6 +2109,22 @@ namespace MFO::Logistics {
                     }
                     if (!lootable) return RE::BSContainer::ForEachResult::kContinue;
                     ++dLootable;
+
+                    // #66: never loot the player's OWN storage -- LOTD museum
+                    // drop-off crates and player-home chests (RefInPlayerStorage:
+                    // LocTypePlayerHouse location or player/PlayerFaction-owned
+                    // cell). CONTAINER-only: a corpse that happens to lie in a home
+                    // is still fair loot, and the ref-level GetOwner() bar below
+                    // never fires on these crates (they are ref-unowned). Gated by
+                    // the same bLootInPlayerHomes opt-in as InPlayerHome, so a
+                    // player who wants followers tidying their storage still can.
+                    if (!loose && !Config::g_lootInPlayerHomes.load()) {
+                        auto* cbase = ref->GetBaseObject();
+                        if (cbase && cbase->Is(RE::FormType::Container) && RefInPlayerStorage(ref)) {
+                            ++dOffLimits;
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        }
+                    }
 
                     // OWNERSHIP IS ABSOLUTE (#22e). IsOffLimits() is ONLY a crime
                     // check (IsCrimeToActivate) -- and taking from a PLAYER-owned

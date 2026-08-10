@@ -1,3 +1,18 @@
+## v1.0.47 -- LOTD museum crates left alone; SE 1.5.97 cast-control crash gated
+
+- Fix (#66): followers no longer loot from Legacy of the Dragonborn museum
+  drop-off / storage crates. MFO now leaves any container in the player's OWN
+  space untouched -- detected generically by the museum cells' LocTypePlayerHouse
+  location tag + player ownership (no hardcoded LOTD FormIDs), which also covers
+  every vanilla/Hearthfire/mod player home. Governed by the existing
+  bLootInPlayerHomes toggle (default OFF), so it's protected out of the box.
+- Fix (#67): a crash on Skyrim Special Edition 1.5.97 when the cast-control slider
+  was in use. The mage cast-control path is AE-developed and faulted on SE 1.5.97
+  (crash log pinned it to the follower service tick -> Fire -> CastOn); it's now
+  gated to AE only, mirroring the existing VR guards. On SE/VR, mage followers
+  cast through their own vanilla AI instead -- no crash, graceful fallback. AE
+  (the primary target) is unaffected.
+
 ## v1.0.46 -- invisible head: the ROOT CAUSE (creature/draugr armor eviction)
 
 - Fix: a follower's head (or another slot) going invisible. ROOT CAUSE, this time
