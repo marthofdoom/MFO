@@ -18,6 +18,9 @@
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
+#include "Followers.h"    // #62 on-load beast-head sweep iterates g_active (main thread)
+#include <functional>     // #62 self-reposting on-load sweep closure
+#include <memory>         // std::shared_ptr for that closure
 #include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
@@ -775,6 +778,18 @@ namespace MFO::Logistics {
             return a_w && (a_w->GetFormFlags() & (1u << 2)) != 0;
         }
 
+        // Same NonPlayable record flag (bit 2), for ARMOR. Creature/critter body
+        // "skins" (e.g. More Nasty Critters' "BearBrownSoft") are ARMO records with
+        // an armor RATING and a biped slot -- hidden OR regular -- but marked
+        // Non-Playable because they're the creature's invisible body, not gear a
+        // humanoid can wear. They passed the rating gate (marth: BearBrownSoft got
+        // looted) since ArmorIsBetter only saw rating>0. This is the ARMO analog of
+        // IsCreatureWeapon: a direct flag read, so the loot filter works off the DLL
+        // alone, independent of the catalog's nonplayable exclusion.
+        bool IsCreatureArmor(const RE::TESObjectARMO* a_armo) {
+            return a_armo && (a_armo->GetFormFlags() & (1u << 2)) != 0;
+        }
+
         bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             // Generalized by CATEGORY, never by item (§4.8.2). One better piece
             // per CALL (one action per tick, §4.3; StripCorpse drains by calling
@@ -931,6 +946,11 @@ namespace MFO::Logistics {
                 if (Catalog::IsExcluded(obj->GetFormID())) continue;
 
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
+                    // Never loot a NON-PLAYABLE creature "skin" armor (MNC's
+                    // BearBrownSoft et al.): armor-rated but the creature's own
+                    // invisible body, useless/broken on a follower. Same flag as
+                    // IsCreatureWeapon -- this is what BearBrownSoft slipped past.
+                    if (IsCreatureArmor(armo)) continue;
                     // #61 FASHIONRIM: armor-only dolls mode -- skip EVERY armor
                     // candidate (plain-rated AND mage school-robe) so MFO never
                     // loots or swaps a follower's armor; the player dresses them
@@ -3593,6 +3613,47 @@ namespace MFO::Logistics {
         holder->AddEventSink<RE::TESContainerChangedEvent>(ContainerSink::GetSingleton());
         holder->AddEventSink<RE::TESEquipEvent>(BeastHeadSink::GetSingleton());   // #62 beast-head reattach
         spdlog::info("[logistics] player-looted waiver + beast-head equip sinks installed");
+    }
+
+    // #62 ON-LOAD beast-head sweep. A beast follower can come up from a save with
+    // an already-detached head -- broken by a pre-fix build, or by any earlier
+    // scripted equip that never got a rebuild. So on every load, rebuild each
+    // beast-race TEAMMATE's 3D once, so the save loads with heads already correct
+    // and a user need not trade/loot to trigger the fix (makes "the issue is
+    // fixed" obvious on Nexus). Called from kPostLoadGame/kNewGame. Posts to the
+    // main thread (DoReset3D is 3D work) and RETRIES up to ~2s so followers that
+    // finish loading a few frames later -- or before Followers::Refresh populates
+    // g_active -- are still caught; each teammate is reset at most once. Gated on
+    // bBeastHeadFix. No-op on new games (no broken heads to fix).
+    void SweepBeastHeadsOnLoad() {
+        if (!Config::g_beastHeadFix.load()) return;
+        auto done  = std::make_shared<std::unordered_set<RE::FormID>>();
+        auto tries = std::make_shared<int>(120);   // ~2s ceiling; stops early once done
+        auto self  = std::make_shared<std::function<void()>>();
+        *self = [done, tries, self]() {
+            int remaining = 0;                       // beast teammates not yet loaded/reset
+            for (const auto& h : Followers::g_active) {
+                auto* a = h.get().get();
+                if (!a || !a->IsPlayerTeammate()) continue;
+                const RE::FormID id = a->GetFormID();
+                if (done->count(id)) continue;
+                if (!IsBeastRace(a->GetRace())) { done->insert(id); continue; }   // mark so we don't recheck
+                if (!a->Is3DLoaded()) { ++remaining; continue; }                  // not ready -> retry
+                a->DoReset3D(false);
+                done->insert(id);
+                spdlog::info("[beasthead] {:08X}: 3D reset on load (reattach head)", id);
+            }
+            // Retry while g_active is still unpopulated OR a beast teammate has yet
+            // to finish loading; stop once all are handled or the ceiling is hit.
+            if ((Followers::g_active.empty() || remaining > 0) && --(*tries) > 0) {
+                MainThread::Post(*self);
+            } else {
+                // Break the self-capture cycle so the closure (+ its done set) frees.
+                // Safe: the running fn is the pump's COPY, not this heap object.
+                *self = nullptr;
+            }
+        };
+        MainThread::Post(*self);
     }
 
     void ClearTransientState() {

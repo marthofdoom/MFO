@@ -88,6 +88,11 @@ namespace MFO::Logistics {
     // they came from. Registered once at kDataLoaded, after form resolution.
     void RegisterSinks();
 
+    // #62 ON-LOAD beast-head sweep: rebuild each beast-race teammate's 3D once on
+    // load so a save comes up with heads already reattached (no trade/loot needed).
+    // Main-thread, self-retrying, gated on bBeastHeadFix. Call at kPostLoadGame.
+    void SweepBeastHeadsOnLoad();
+
     // Save-scoped: the cadence clocks and the two loot LRUs. RevertCallback
     // clears them -- they describe a live session, and a stale entry keyed by
     // FormID would apply the previous save's timers to this one.

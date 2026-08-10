@@ -1,3 +1,13 @@
+## v1.0.41 -- beast heads fix themselves on load; stop looting creature "skins"
+
+- Fix: a beast-race follower who loads a save with a broken/invisible head now has
+  it rebuilt automatically on load -- no need to trade or loot to trigger the fix.
+  So an existing save with a headless follower comes up correct.
+- Fix: MFO no longer loots non-playable creature "skin" armor (e.g. More Nasty
+  Critters' "BearBrownSoft") -- these carry an armor rating and a body slot but are
+  a creature's invisible body, not gear a follower can wear. Same non-playable
+  check the mod already uses for creature weapons.
+
 ## v1.0.40 -- beast-race head fix now covers TRADING and AI re-equips, not just looting
 
 - Fix: a beast-race follower (Khajiit/Argonian, e.g. Inigo) still lost their head

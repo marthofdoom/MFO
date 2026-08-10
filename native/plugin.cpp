@@ -350,6 +350,7 @@ namespace {
             MFO::Followers::Refresh();
             SeedTestData();
             SeedEvaluatorRules();   // after Refresh(): it iterates g_active
+            MFO::Logistics::SweepBeastHeadsOnLoad();   // #62: reattach beast heads on load (self-retries)
             MFO::Loadout::Reconcile();  // undo a save taken mid-cast
             MFO::Board::SetHud(MFO::Config::g_showHud.load());
             MFO::Diagnostics::StartPump();
