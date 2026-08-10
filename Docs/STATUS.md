@@ -6,7 +6,19 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **On Tuxborn (test) + TAGGED: v1.0.41**
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **Tagged: v1.0.41 · On Tuxborn (test): v1.0.42**
+
+> **v1.0.42 (DLL `7f1b09ec`, run 31404924137) — ON TUXBORN, field-test PENDING.**
+> Carries **#63 quash inter-follower hostility** (detect + StopCombat both, event +
+> tick backstop, `[peace]`, INI `bQuashAllyCombat`) AND **beast-head v2**: v1.0.41's
+> on-load sweep FIRED but the head stayed broken (Tuxborn log: `3D reset on load`
+> ran, no visible fix). Two candidates, INSTRUMENTED to resolve in one cycle:
+> `DoReset3D(false)→(true)` (full rebuild, what UnequipAll effectively does) +
+> `LogBeastWornArma` → `[beasthead-diag] … raceARMA=NULL` names any worn piece that
+> lacks a mesh for the race. **NEXT: pull the Tuxborn log after marth loads —**
+> if a worn piece is `raceARMA=NULL`, the fix is UNEQUIP it (DoReset3D can't help,
+> it rebuilds WITH it); if all `present`, the reset path is the weak link. Beast
+> follower under test: 6E008AE9 (also 710893E1).
 
 ---
 
