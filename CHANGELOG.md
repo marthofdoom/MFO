@@ -1,3 +1,11 @@
+## v1.0.44 -- beast-race headless: route trade-equips through MFO's safe path
+
+- Fix: beast-race followers (Khajiit/Argonian, e.g. Inigo) going headless when you
+  TRADE them gear. MFO's own looting already equips on a safe path that never drops
+  the head; the trade path didn't get that treatment. MFO now re-does a traded
+  piece's equip through that same safe path. Inventory-hidden native items (a custom
+  follower's own invisible gear) are left completely untouched. Toggle bBeastHeadFix.
+
 ## v1.0.43 -- beast-race headless: the real fix (light repair, never a forced rebuild)
 
 - Fix: beast-race followers (Khajiit/Argonian, incl. custom ones like Inigo) going
