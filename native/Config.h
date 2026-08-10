@@ -199,6 +199,18 @@ namespace MFO::Config {
     // fires into a teammate's back in a hallway. INI kill-switch (no MCM yet).
     inline std::atomic<bool>  g_friendlyFireHold{ true };
 
+    // #63 QUASH ALLY COMBAT, DEFAULT ON. Followers must never fight EACH OTHER.
+    // Friendly fire (a forced offensive cast catching a teammate) can aggro one
+    // follower onto another; the built-in friendly-fire hold above is inert on
+    // this runtime (its hook runs off-main), so rather than only PREVENT the
+    // induction we DETECT AND QUASH the result: whenever a player teammate enters
+    // combat with -- or is actively targeting -- another player teammate, MFO ends
+    // that combat on both sides (StopCombat). Event-driven (TESCombatEvent, catches
+    // the start) plus a per-follower tick backstop (catches crossfire when both
+    // were already fighting). Self-heals regardless of what induced the aggro.
+    // INI kill-switch bQuashAllyCombat. Watch "[peace]" in MFO.log.
+    inline std::atomic<bool>  g_quashAllyCombat{ true };
+
     // WEAPON-STANCE OWNERSHIP (v1.0.33), DEFAULT ON -- a standard feature, not a
     // probe, so no MCM toggle (#55); INI-only as a debug kill-switch. When an
     // equip gambit wins a follower's hand, the DLL swaps their LIVE

@@ -114,6 +114,7 @@ namespace MFO::Config {
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "iCastControl")       setI(g_castControl, 0, 4);
             else if (a_key == "bFriendlyFireHold")  setB(g_friendlyFireHold);
+            else if (a_key == "bQuashAllyCombat")    setB(g_quashAllyCombat);   // #63 default ON
             else if (a_key == "iOverlayX")          setI(g_overlayX, 0, 2560);
             else if (a_key == "iOverlayY")          setI(g_overlayY, 0, 1440);
             else if (a_key == "bDollsMode")         setB(g_dollsMode);

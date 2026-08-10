@@ -248,6 +248,22 @@ namespace MFO::Scheduler {
             }
         }
 
+        // #63 QUASH ALLY COMBAT -- tick backstop. The TESCombatEvent quash
+        // (Rapport) catches a follower ENTERING combat against a teammate; but if
+        // BOTH were already fighting foes when friendly fire crossed them, no
+        // enter-event fires for the crossfire. So each combat tick, if the serviced
+        // follower is actively targeting a player TEAMMATE, end it on both sides.
+        // StopCombat here matches the auto-retreat's worker-side StopCombat below.
+        if (Config::g_quashAllyCombat.load()) {
+            auto tp = f->GetActorRuntimeData().currentCombatTarget.get();
+            if (auto* tgt = tp.get(); tgt && tgt != f && tgt->IsPlayerTeammate()) {
+                f->StopCombat();
+                tgt->StopCombat();
+                spdlog::info("[peace] {:08X} targeting teammate {:08X} -- quashed (StopCombat both)",
+                             id, tgt->GetFormID());
+            }
+        }
+
         // ── AUTO-RETREAT (leash safety, opt-in via bAutoRetreat) ─────────────
         // The confidence leash taken to its conclusion: a follower who is badly
         // outmatched (confidence below threshold -- by the leash tenet he WANTS

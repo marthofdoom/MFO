@@ -268,6 +268,28 @@ namespace MFO::Rapport {
 
                 ++g_combatEvents;
 
+                // #63 QUASH ALLY COMBAT. Followers must NEVER fight each other.
+                // When a teammate ENTERS/updates combat (newState != kNone) against
+                // a target that is ALSO a player teammate -- friendly fire from a
+                // forced offensive cast is the usual inducer, and the friendly-fire
+                // hold is inert on this runtime -- end that fight on BOTH sides so
+                // neither keeps the other latched. Combat events fire on the main
+                // thread, so StopCombat is safe inline. StopCombat re-fires a kNone
+                // event, which lands in the branch below, not here (no loop). The
+                // Scheduler tick backstops the case where BOTH were already in
+                // combat (no enter-event fires for the crossfire).
+                if (Config::g_quashAllyCombat.load() &&
+                    a_event->newState != RE::ACTOR_COMBAT_STATE::kNone &&
+                    a_event->targetActor) {
+                    if (auto* tgt = a_event->targetActor->As<RE::Actor>();
+                        tgt && tgt != actor && tgt->IsPlayerTeammate()) {
+                        actor->StopCombat();
+                        tgt->StopCombat();
+                        spdlog::info("[peace] {:08X} entered combat vs teammate {:08X} -- quashed (StopCombat both)",
+                                     actor->GetFormID(), tgt->GetFormID());
+                    }
+                }
+
                 // COMBAT ENDED -> RELEASE THE LATCH.
                 //
                 // A commanded target that outlives its fight is not just stale,
