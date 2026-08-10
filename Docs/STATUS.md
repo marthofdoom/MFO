@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.37 · **Tagged: v1.0.46 · DEPLOYED to Tuxborn (DLL 5bd89e17, run 31431532355) — FIELD TEST PENDING**
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.46 (GitHub release cut) · **#62 FIXED & field-confirmed by marth**
 
 > **#62 invisible head — ROOT-CAUSED & FIXED (v1.0.46), record-verified. The whole
 > v1.0.39-45 line was WRONG** ([[off-main-equip-invisible-head]]). It is NOT a 3D
