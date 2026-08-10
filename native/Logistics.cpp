@@ -347,7 +347,7 @@ namespace MFO::Logistics {
         // parts attach during the full 3D BUILD, not during an armor-addon swap,
         // so a script equip leaves the head detached (marth: confirmed across
         // beast followers; even a WEAPON re-equip drops the head). The remedy is
-        // RelaunderWornGear below (re-equip via MFO's safe path). This just
+        // KeepHeadClear below (clears foreign non-rendering head items). This just
         // answers "is this a beast race", so the fix is even considered ONLY for
         // beasts. No clean signal exists (verified: no RACE_DATA beast
         // bit, no vanilla beast keyword), so match the race against the two base
@@ -381,32 +381,45 @@ namespace MFO::Logistics {
             return false;
         }
 
-        // #62 RE-LAUNDER WORN GEAR (marth's model). A beast follower's head drops
-        // when gear is equipped by the TRADE / AI path, but NOT by MFO's own safe
-        // main-thread loot EquipObject. So RE-DO each worn piece's equip through the
-        // safe path -- unequip then EquipObject -- which rebuilds the biped the way
-        // the loot path does, without the detach. LEAVE inventory-HIDDEN gear
-        // untouched: a custom follower's own invisible native items (Inigo's) have
-        // no name, and disturbing them is the #64 breakage (marth + community
-        // practice). Used on load (all worn gear) and, per-item, from the equip
-        // sink. Main-thread only. Its EquipObjects re-fire equip events -> the sink
-        // debounce (1s) keeps that from cascading.
-        void RelaunderWornGear(RE::Actor* a_actor) {
-            auto* eq = RE::ActorEquipManager::GetSingleton();
-            if (!eq) return;
+        // #62 PHANTOM HEAD-ITEM CLEANER (proper feature, marth). The invisible head
+        // is a worn HEAD-slot item that has NO ArmorAddon for the follower's race
+        // (GetArmorAddon(race)==null): it hides the head partition but renders
+        // nothing. Field-proven on Inigo -- a vanilla 'Ancient Nord Helmet'
+        // (0001FD77) that resolves NULL on his custom Khajiit race AND is NOT in his
+        // inventory (a phantom worn item). We must SEPARATE this bug from a custom
+        // follower's INTENTIONAL invisible native gear (also non-rendering, also
+        // maybe phantom -- but by design). The clean separator is PLUGIN OWNERSHIP:
+        // a non-rendering head item from the follower's OWN plugin is intentional
+        // (leave it, #64); a FOREIGN one (different plugin -- e.g. Skyrim.esm helmet
+        // on an Inigo.esp Khajiit) is a stuck/mismatched item hiding the head ->
+        // UNEQUIP it (clears the worn slot even for a phantom; RemoveItem can't, as
+        // there's no inventory entry). The inventory count is logged to confirm the
+        // phantom. Main-thread only. PluginKey handles light (ESL/FE) plugins: a
+        // full plugin is FormID>>24 (0x00-0xFD); a light plugin (top byte 0xFE) is
+        // FormID>>12, keeping the FE prefix + 12-bit light index -- so two ESLs are
+        // distinguished and a light vs full id can never collide.
+        void KeepHeadClear(RE::Actor* a_actor) {
+            auto* race = a_actor->GetRace();
+            auto* eq   = RE::ActorEquipManager::GetSingleton();
+            if (!race || !eq) return;
+            auto pluginKey = [](RE::FormID a_id) -> std::uint32_t {
+                return ((a_id >> 24) == 0xFEu) ? (a_id >> 12) : (a_id >> 24);
+            };
+            const std::uint32_t actorKey = pluginKey(a_actor->GetFormID());
             using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-            static constexpr Slot kSlots[] = { Slot::kHead, Slot::kHair, Slot::kCirclet,
-                                               Slot::kBody, Slot::kHands, Slot::kForearms,
-                                               Slot::kFeet, Slot::kCalves, Slot::kShield };
-            for (const auto slot : kSlots) {
+            static constexpr Slot kHead[] = { Slot::kHead, Slot::kHair, Slot::kCirclet };
+            for (const auto slot : kHead) {
                 auto* worn = a_actor->GetWornArmor(slot);
                 if (!worn) continue;
+                if (worn->GetArmorAddon(race)) continue;    // renders on this race -> fine, keep it
+                if (pluginKey(worn->GetFormID()) == actorKey) continue;  // follower's OWN plugin -> intentional (#64)
+                std::int32_t inv = 0;                        // confirm the phantom: is it in inventory at all?
+                for (auto& [obj, data] : a_actor->GetInventory())
+                    if (obj == worn) { inv = data.first; break; }
                 const char* nm = worn->GetFullName();
-                if (!nm || !*nm) continue;   // inventory-hidden / no-name -> leave untouched
-                eq->UnequipObject(a_actor, worn);
-                eq->EquipObject(a_actor, worn);
-                spdlog::info("[beasthead] {:08X}: re-laundered worn '{}' ({:08X}) via MFO's safe path",
-                             a_actor->GetFormID(), nm, worn->GetFormID());
+                eq->UnequipObject(a_actor, worn);           // clear the (phantom) foreign worn head slot
+                spdlog::info("[phantom] {:08X}: cleared FOREIGN non-rendering head '{}' ({:08X}) invCount={} phantom={}",
+                             a_actor->GetFormID(), nm ? nm : "?", worn->GetFormID(), inv, inv == 0 ? "YES" : "no");
             }
         }
 
@@ -2747,13 +2760,13 @@ namespace MFO::Logistics {
         }
 
         // ── #62 BEAST-RACE HEAD FIX sink ────────────────────────────────────
-        // A beast-race follower drops the head when gear is equipped by the TRADE /
-        // AI path, but NOT by MFO's own safe main-thread loot EquipObject (marth's
-        // model). This sink catches the trade/AI equip at the EQUIP EVENT and RE-DOES
-        // it through the safe path -- unequip then EquipObject on the main thread
-        // (below). Scoped to beast TEAMMATES, out of combat, NAMED armor/weapon only
-        // (inventory-HIDDEN native gear is left untouched -- #64), debounced ~1s. The
-        // re-equip re-fires an event, but the debounce swallows it, so no cascade.
+        // A trade / AI equip on a beast follower can leave (or re-assert) a foreign
+        // non-rendering head item -> invisible head. This sink catches such equips at
+        // the EQUIP EVENT and posts KeepHeadClear, which clears that item (see its
+        // definition -- plugin-ownership separation keeps the follower's own native
+        // gear). Scoped to beast TEAMMATES, out of combat, NAMED armor/weapon equips
+        // only (a cheap trigger gate), debounced ~1s. KeepHeadClear only unequips, so
+        // its unequip event (equipped=false) is ignored by this sink -- no cascade.
         class BeastHeadSink final : public RE::BSTEventSink<RE::TESEquipEvent> {
         public:
             static BeastHeadSink* GetSingleton() { static BeastHeadSink s; return &s; }
@@ -2768,10 +2781,9 @@ namespace MFO::Logistics {
                 auto* base = a_ev->baseObject ? RE::TESForm::LookupByID(a_ev->baseObject) : nullptr;
                 if (!base || (!base->Is(RE::FormType::Armor) && !base->Is(RE::FormType::Weapon)))
                     return RE::BSEventNotifyControl::kContinue;
-                // LEAVE INVENTORY-HIDDEN items UNTOUCHED (marth / community practice):
-                // a custom follower's own invisible native gear (e.g. Inigo's) has no
-                // name -- MFO must never unequip/re-equip it, that is the #64 breakage.
-                // Only NAMED, player-facing gear gets re-laundered below.
+                // TRIGGER only on NAMED gear equips (a cheap gate to avoid firing on
+                // a follower's own hidden native-gear churn). The actual keep/clear
+                // separation is done by plugin ownership inside KeepHeadClear.
                 auto* named = base->As<RE::TESFullName>();
                 if (!named || !named->GetFullName() || !*named->GetFullName())
                     return RE::BSEventNotifyControl::kContinue;
@@ -2783,29 +2795,20 @@ namespace MFO::Logistics {
                 // DEBOUNCE (~1s/follower): coalesces a full-set trade's burst of
                 // equip events. Main-thread, so the static map needs no lock.
                 static std::unordered_map<RE::FormID, Clock::time_point> s_lastReset;
-                const auto       now    = Clock::now();
-                const RE::FormID id     = actor->GetFormID();
-                const RE::FormID itemID = a_ev->baseObject;
+                const auto       now = Clock::now();
+                const RE::FormID id  = actor->GetFormID();
                 if (auto it = s_lastReset.find(id);
                     it != s_lastReset.end() && now - it->second < std::chrono::seconds(1))
                     return RE::BSEventNotifyControl::kContinue;
                 s_lastReset[id] = now;
-                // APPLY THE LOOT FIX TO TRADE (marth): MFO's own loot equip goes
-                // through a safe main-thread EquipObject and never drops the head; the
-                // TRADE path (the AI re-donning given gear) does. So RE-DO the equip
-                // through MFO's safe path -- unequip the just-equipped piece, then
-                // EquipObject it on the main thread. Posted (next frame) so it runs
-                // after the trade's own equip settles.
-                MainThread::Post([id, itemID]() {
-                    auto* a    = RE::TESForm::LookupByID<RE::Actor>(id);
-                    auto* form = RE::TESForm::LookupByID(itemID);
-                    auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                    auto* eq   = RE::ActorEquipManager::GetSingleton();
-                    if (!a || !item || !eq) return;
-                    eq->UnequipObject(a, item);
-                    eq->EquipObject(a, item);
-                    spdlog::info("[beasthead] {:08X}: re-equipped {:08X} via MFO's safe path (trade launder)",
-                                 id, itemID);
+                // A trade/AI equip can leave (or re-assert) a non-rendering head item
+                // on a beast follower. Post KeepHeadClear (next frame, after the
+                // equip settles): it takes OFF any worn head-slot piece with no mesh
+                // for his race -- the invisible-head cause -- and leaves everything
+                // else, including his hidden native gear, untouched.
+                MainThread::Post([id]() {
+                    if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
+                        KeepHeadClear(a);
                 });
                 return RE::BSEventNotifyControl::kContinue;
             }
@@ -3655,13 +3658,12 @@ namespace MFO::Logistics {
         spdlog::info("[logistics] player-looted waiver + beast-head equip sinks installed");
     }
 
-    // #62 ON-LOAD beast-head repair. A beast follower can come up from a save with
-    // a detached FaceGen head (dropped by a TRADE/AI equip before the save). So on
-    // load, re-launder each loaded beast teammate's worn gear ONCE through MFO's
-    // safe equip path (RelaunderWornGear). Retries ~2s so a follower that finishes
-    // loading a few frames late (or before Followers::Refresh populates g_active) is
-    // still caught; a `done` set makes it fire once per follower (a re-dress every
-    // frame would be a strobe). Hidden native gear is left untouched. Called from
+    // #62 ON-LOAD phantom head-item clean. A beast follower can come up from a save
+    // already wearing a foreign non-rendering (phantom) head item -> invisible head.
+    // So on load, run KeepHeadClear once per loaded beast teammate. Retries ~2s so a
+    // follower that finishes loading a few frames late (or before Followers::Refresh
+    // populates g_active) is still caught; a `done` set makes it fire once per
+    // follower. The follower's own native gear is left untouched. Called from
     // kPostLoadGame/kNewGame; main thread. Gated on bBeastHeadFix.
     void SweepBeastHeadsOnLoad() {
         if (!Config::g_beastHeadFix.load()) return;
@@ -3675,7 +3677,7 @@ namespace MFO::Logistics {
                 const RE::FormID id = a->GetFormID();
                 if (done->count(id)) continue;
                 if (!IsBeastRace(a->GetRace())) { done->insert(id); continue; }
-                RelaunderWornGear(a);
+                KeepHeadClear(a);
                 done->insert(id);
             }
             if (--(*tries) > 0) MainThread::Post(*self);

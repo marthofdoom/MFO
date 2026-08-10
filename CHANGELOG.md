@@ -1,3 +1,12 @@
+## v1.0.45 -- phantom head-item cleaner (fixes beast-race headless)
+
+- New: MFO now identifies and clears "phantom" head gear -- a worn head-slot item
+  that renders nothing on the follower's race and doesn't belong to the follower's
+  own mod (e.g. a stuck vanilla helmet on a custom Khajiit). That's the invisible-
+  head cause. A custom follower's OWN intentional invisible gear is identified by
+  plugin ownership and left completely untouched. Runs on load and after equips,
+  beast-race followers, toggle bBeastHeadFix. Watch "[phantom]" in MFO.log.
+
 ## v1.0.44 -- beast-race headless: route trade-equips through MFO's safe path
 
 - Fix: beast-race followers (Khajiit/Argonian, e.g. Inigo) going headless when you
