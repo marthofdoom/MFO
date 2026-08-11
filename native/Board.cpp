@@ -26,6 +26,8 @@
 #include "Forms.h"
 #include "State.h"
 #include "Probe.h"
+#include "ProgProbe.h"
+#include "MainThread.h"
 #include "Vocabulary.h"
 #include "Scheduler.h"
 
@@ -1476,6 +1478,25 @@ namespace MFO::Board {
                             if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
                             if (static_cast<int>(b->GetIDCode()) != fk) continue;
                             SKSE::GetTaskInterface()->AddTask([]() { Probe::FocusOnCrosshair(); });
+                        }
+                    }
+
+                    // PROGRESSION PROBE HOTKEY (dev-only, bProgProbe=0 for
+                    // everyone else). Same shape as the focus key above, but
+                    // the probe MUTATES engine state (AddPerk/SetBaseActorValue)
+                    // so it rides MainThread::Post, never AddTask — AddTask
+                    // drains on a job worker in this runtime (§0.37).
+                    if (Config::g_progProbe.load()) {
+                        const int pk = Config::g_progProbeKey.load();
+                        if (pk != 0) {
+                            for (auto* e = *a_events; e; e = e->next) {
+                                if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) continue;
+                                auto* b = static_cast<RE::ButtonEvent*>(e);
+                                if (!b->IsDown()) continue;                 // edge only
+                                if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
+                                if (static_cast<int>(b->GetIDCode()) != pk) continue;
+                                MainThread::Post([]() { ProgProbe::OnHotkey(); });
+                            }
                         }
                     }
                 }

@@ -107,6 +107,8 @@ namespace MFO::Config {
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
             else if (a_key == "bDriveCaster")       setB(g_driveCaster);
             else if (a_key == "bProbeCastStyle")    setB(g_probeCastStyle);   // P1 probe, dev-only
+            else if (a_key == "bProgProbe")         setB(g_progProbe);        // progression sinker probe, dev-only
+            else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
             else if (a_key == "bWeaponStyleControl") setB(g_weaponStyleControl); // default ON, debug kill-switch
             else if (a_key == "bUsePackages")       setB(g_usePackages);
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
@@ -221,6 +223,8 @@ namespace MFO::Config {
             g_castCooldown       = 4.0f;
             g_driveCaster        = false;
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
+            g_progProbe          = false;   // progression sinker probe -- OFF everywhere by default
+            g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
             g_weaponStyleControl = true;    // v1.0.33: standard feature -- ON by default
             g_castControl        = 2;       // mage update: cast-control slider -- center (ignore heals)
             g_friendlyFireHold   = true;    // v1.0.35: hold offensive casts that would hit a teammate

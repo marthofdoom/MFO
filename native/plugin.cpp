@@ -9,6 +9,7 @@
 #include "Board.h"
 #include "ItemCatalog.h"
 #include "Probe.h"
+#include "ProgProbe.h"
 #include "Vocabulary.h"
 #include "Loadout.h"
 #include "Targeting.h"
@@ -352,6 +353,7 @@ namespace {
             SeedEvaluatorRules();   // after Refresh(): it iterates g_active
             MFO::Logistics::SweepBeastHeadsOnLoad();   // #62: reattach beast heads on load (self-retries)
             MFO::Loadout::Reconcile();  // undo a save taken mid-cast
+            MFO::ProgProbe::OnPostLoad();   // P3 guarded reapply — no-op unless bProgProbe armed + probe ran
             MFO::Board::SetHud(MFO::Config::g_showHud.load());
             MFO::Diagnostics::StartPump();
             MFO::Diagnostics::DumpReport("load");

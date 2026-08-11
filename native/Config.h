@@ -166,6 +166,20 @@ namespace MFO::Config {
     // seed file; sections are cosmetic to the parser), then a full restart.
     inline std::atomic<bool>  g_probeCastStyle{ false };
 
+    // FOLLOWER-PROGRESSION SINKER PROBE (design doc §13 P1/P2/P3), DEFAULT
+    // OFF — dev opt-in ONLY, INI-only (an experiment, not a setting; the
+    // bProbeCastStyle precedent). Arms ProgProbe: a LOG-ONLY throwaway that
+    // adds one real perk to a follower's BASE via the SPID pattern, writes a
+    // known base-AV allocation, and verifies the guarded reapply at
+    // kPostLoadGame. Mutates one perk + one skill on ONE follower when the
+    // hotkey is pressed — nothing is serialized by MFO, but the actor's AV
+    // write lands in any save taken after. bProgProbe = 1 in
+    // Data/SKSE/Plugins/MFO.ini, then trigger with iProgProbeKey below.
+    inline std::atomic<bool>  g_progProbe{ false };
+    // DIK code for the probe trigger. 0x27 is semicolon — unbound in vanilla
+    // (the focus key holds 0x2B backslash). 0 disables the trigger.
+    inline std::atomic<int>   g_progProbeKey{ 0x27 };
+
     // #56 COMBAT-OVERLAY POSITION (mage update). The compact combat HUD
     // (Board::DrawHud) is pinned to the top-right with a top-right pivot; these
     // are its margins in PIXELS from the right edge (X) and the top (Y), so a
