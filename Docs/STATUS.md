@@ -6,7 +6,24 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest:** v1.0.59 (controller board back/close fix; deploying to Tuxborn, public HELD pending marth's Deck field test — controller behavior is unverifiable in CI) · **Latest public:** v1.0.58 (concentration-freeze fix + bounded concentration casting) · field-confirmed: #63 peace, #65 class dropdown, #68 cond.dark, loose-loot pickup. Next: TOWN UPDATE (#31).
+> **Last updated:** 2026-08-11 · **Latest:** v1.0.60 (#73 creature-weapon loot fix — giant clubs; building) · **Latest public:** v1.0.59 (controller board back/close fix — FIELD-CONFIRMED by marth, released) · prior v1.0.58 (concentration-freeze + bounded casting). Next: TOWN UPDATE (#31).
+
+> **v1.0.60 — #73 CREATURE-WEAPON LOOT FIX** (Fable-built, dotnet-selftested). User
+> report: a follower looted a Giant's Club. ROOT: CrGiantClub (skyrim.esm 0x0461DA)
+> + variants are creature weapons Bethesda left UN-flagged (record flags 0), 60 dmg
+> vanilla / 200 under Requiem, byte-indistinguishable from a greatsword (kTwoHandSword/
+> EitherHand/normal kwds) — MFO's flag-based IsCreatureWeapon + patcher both missed it.
+> THREE parts: (1) DLL `IsKnownCreatureWeapon` — magic-static curated set (7 vanilla
+> formkeys: 3 giant clubs, 2 sphere crossbows, DLC1FrostGiantClub, DLC2BenthicLurker)
+> via LookupForm, OR'd into IsCreatureWeapon. (2) Patcher (Catalog.cs) general rule:
+> creature-only-wielded AND creature-convention (Cr[UPPER] EDID or actors\ mesh), hard
+> guard refusing Draugr*/AncientNord*, assertion, containers=humanoid evidence, Traits-
+> shells skipped — marth's draugr-loot concern PROVABLY handled (dotnet-built + selftest
+> vs 123-plugin Requiem: 0 false positives). (3) Fallback mfo_items.json (7 excludes)
+> shipped at out/SKSE/Plugins/MFO/ — catalog SUPPLEMENTS heuristics (Loaded() unused).
+> Corrections: vanilla flags NO weapon NonPlayable (old DLL comment was wrong, fixed);
+> under Requiem the club EDID→REQ_Creature_Giant_Club so the curated list is load-bearing.
+> DLL is CI-compiled (green pending); patcher local-built OK. Field-test/public pending.
 
 > **v1.0.59 — CONTROLLER board back/close fix** (Fable-built). Field bug (Deck):
 > the Field Orders board broke on controller after a keyboard↔gamepad input-mode

@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "note": "BUNDLED FALLBACK catalog -- only the known vanilla creature-weapon exclusions, so a user who never runs the MFO.Synthesis patcher still can't loot a Giant's Club. The catalog SUPPLEMENTS the DLL's runtime heuristics (every lookup falls through on a miss), so the empty categories here disable nothing. Run the MFO.Synthesis patcher to replace this file with a full load-order catalog (potions, ammo, jewelry, soul gems, quest/unique exclusions).",
+  "potions": [],
+  "ammo": [],
+  "jewelry": [],
+  "soulgems": [],
+  "exclude": [
+    { "plugin": "skyrim.esm", "id": "0x0461DA", "why": "creature", "name": "Giant's Club (CrGiantClub)" },
+    { "plugin": "skyrim.esm", "id": "0x0C334F", "why": "creature", "name": "Giant's Club (DA06GiantClub)" },
+    { "plugin": "skyrim.esm", "id": "0x0CDEC9", "why": "creature", "name": "Giant's Club (C00GiantClub)" },
+    { "plugin": "skyrim.esm", "id": "0x07F6DF", "why": "creature", "name": "Dwarven Sphere Crossbow (crDwarvenSphereCrossbow)" },
+    { "plugin": "skyrim.esm", "id": "0x10EC8A", "why": "creature", "name": "Dwarven Sphere Crossbow (crDwarvenSphereCrossbow02)" },
+    { "plugin": "dawnguard.esm", "id": "0x012D14", "why": "creature", "name": "Giant's Club (DLC1FrostGiantClub)" },
+    { "plugin": "dragonborn.esm", "id": "0x01E112", "why": "creature", "name": "Benthic Lurker Weapon (DLC2CrBenthicLurkerWeapon)" }
+  ]
+}

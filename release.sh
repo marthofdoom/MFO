@@ -137,7 +137,7 @@ mkdir -p "$STAGE/pkg/SKSE/Plugins" "$STAGE/pkg/SEQ" \
 cp out/MFO.esp             "$STAGE/pkg/"
 cp out/SEQ/MFO.seq         "$STAGE/pkg/SEQ/"
 cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
-cp -r out/SKSE/Plugins/MFO   "$STAGE/pkg/SKSE/Plugins/"   # baked board fonts (MEO parity)
+cp -r out/SKSE/Plugins/MFO   "$STAGE/pkg/SKSE/Plugins/"   # board fonts + fallback mfo_items.json
 cp "$STAGE/dll/MFO.dll"    "$STAGE/pkg/SKSE/Plugins/"
 # MCM Helper config + its binding script. WITHOUT BOTH the MCM never appears:
 # config.json alone registers the config but renders nothing, and the ESP's
@@ -165,9 +165,14 @@ cp out/Scripts/MFO_MCM.pex        "$STAGE/pkg/Scripts/"
 cp out/Scripts/MFO_Trade.pex      "$STAGE/pkg/Scripts/"
 cp THIRD-PARTY-NOTICES.md  "$STAGE/pkg/"    # ships with every build, INVARIANTS #42a
 cp OFL.txt                 "$STAGE/pkg/"    # SIL OFL 1.1 for the board fonts (RC#1); OFL 2 requires it travel
-# SYNTHESIS ONBOARDING (#19): the item catalog (mfo_items.json) is load-order-
-# specific, so it is NEVER pre-built/shipped -- the user generates it with the MFO
-# Synthesis patcher. Ship the one-import .synth (adds the public git patcher to
+# SYNTHESIS ONBOARDING (#19): the FULL item catalog (mfo_items.json) is load-
+# order-specific, so the user generates it with the MFO Synthesis patcher. A
+# MINIMAL fallback ships regardless (out/SKSE/Plugins/MFO/mfo_items.json via the
+# cp -r above): just the known vanilla creature-weapon exclusions -- giant clubs
+# et al. are UN-flagged records the DLL heuristics can't see -- so a no-Synthesis
+# install still refuses them (the catalog supplements, never replaces, the
+# heuristics). The patcher's own output supersedes it in MO2 priority order.
+# Ship the one-import .synth (adds the public git patcher to
 # their pipeline) + the how-to, so a downloader can wire it up without hunting.
 cp assets/MFO.synth        "$STAGE/pkg/"                          # import in Synthesis -> patcher added
 cp installer/README.md     "$STAGE/pkg/MFO-Synthesis-README.md"   # how to build the catalog

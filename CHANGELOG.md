@@ -1,3 +1,15 @@
+## v1.0.60 -- followers stop looting creature weapons (giant clubs et al.)
+
+- Fixed followers looting weapons only creatures use -- the reported case was a
+  giant's club, which Skyrim leaves un-flagged so it reads as a huge two-handed
+  "upgrade" (and would be invisible/broken in a follower's hands). Known vanilla
+  offenders (the giant clubs, the Dwarven Sphere's built-in crossbow, the Benthic
+  Lurker's fist) are now refused outright by the DLL, so even a no-Synthesis
+  install is covered. With the Synthesis patcher, MFO additionally detects
+  creature weapons across your whole load order -- conservatively, requiring both
+  creature-only usage AND a creature record convention, so genuine dungeon loot
+  (Ancient Nord / draugr weapons, Falmer gear) is provably never affected.
+
 ## v1.0.59 -- controller: Field Orders back/close fixed
 
 - Fixed the Field Orders board breaking on a controller when the game switches

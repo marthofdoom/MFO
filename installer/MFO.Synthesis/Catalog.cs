@@ -40,6 +40,27 @@ static class Catalog
                         string? restores = null, string? kind = null, string? why = null,
                         string? name = null, uint? value = null, string? cures = null);
 
+    // ActorTypeNPC keyword: present on every humanoid race (playable or follower
+    // variant), absent on creature races (GiantRace, DwarvenSphereRace, DraugrRace,
+    // ...). The race-side half of the creature-weapon rule below.
+    static readonly FormKey ActorTypeNpc = FormKey.Factory("013794:Skyrim.esm");
+
+    // KNOWN vanilla creature weapons whose NonPlayable flag Bethesda left CLEAR
+    // (verified at the record level against the vanilla masters: flags==00000000,
+    // wielded only by creature-race NPCs). Belt-and-suspenders alongside the
+    // two-signal rule -- DLC1FrostGiantClub and the two quest clubs carry neither
+    // a Cr* EDID nor an actors\ model, so the general rule alone would miss them.
+    static readonly FormKey[] KnownCreatureWeapons =
+    {
+        FormKey.Factory("0461DA:Skyrim.esm"),     // CrGiantClub (the reported loot)
+        FormKey.Factory("0C334F:Skyrim.esm"),     // DA06GiantClub
+        FormKey.Factory("0CDEC9:Skyrim.esm"),     // C00GiantClub
+        FormKey.Factory("07F6DF:Skyrim.esm"),     // crDwarvenSphereCrossbow
+        FormKey.Factory("10EC8A:Skyrim.esm"),     // crDwarvenSphereCrossbow02
+        FormKey.Factory("012D14:Dawnguard.esm"),  // DLC1FrostGiantClub
+        FormKey.Factory("01E112:Dragonborn.esm"), // DLC2CrBenthicLurkerWeapon
+    };
+
     static string Id(FormKey fk) => $"0x{fk.ID:X6}";
     // Canonical LOWERCASE plugin name. Mutagen can stringify the SAME master with
     // different casing across records (seen on the cc* files under a case-sensitive
@@ -151,6 +172,12 @@ static class Catalog
         }
 
         // ── WEAPONS: exclusions only (looted as "equipment") ────────────────
+        // CREATURE-ONLY weapons the NonPlayable flag misses (field-caught: a
+        // follower looted a Giant's Club -- CrGiantClub has record flags 0, is
+        // kTwoHandSword/EitherHand like any greatsword, and 200 dmg under Requiem
+        // made it the "top upgrade"). Computed up front, applied in the loop.
+        var creatureOnly   = CreatureOnlyWeapons(lo, cache);
+        var knownCreature  = new HashSet<FormKey>(KnownCreatureWeapons);
         foreach (var w in lo.PriorityOrder.Weapon().WinningOverrides())
         {
             // NON-PLAYABLE = creature/automaton gear (a Dwarven Sphere's built-in
@@ -163,6 +190,30 @@ static class Catalog
                 if (excluded.Add(w.FormKey))
                     exclude.Add(new Entry(Plugin(w.FormKey), Id(w.FormKey), why: "nonplayable",
                                           name: w.Name?.String, value: w.BasicStats?.Value ?? 0));
+                continue;
+            }
+            // Creature-only wielded + creature convention (rule below), or on the
+            // curated known-vanilla list: never loot -- invisible/broken on a
+            // follower, exactly like the flagged case above.
+            if (creatureOnly.Contains(w.FormKey) || knownCreature.Contains(w.FormKey))
+            {
+                // ASSERTION for the hard guarantee: CreatureConvention refuses
+                // Draugr*/AncientNord* outright and the curated list is vanilla-
+                // audited, so ancient-nord dungeon loot can never land here. If
+                // it ever does, the rule is broken -- fail the run loudly rather
+                // than silently blacklist half of every barrow.
+                if (w.EditorID is { } we &&
+                    (we.StartsWith("Draugr", StringComparison.OrdinalIgnoreCase) ||
+                     we.StartsWith("AncientNord", StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception(
+                        $"MFO invariant broken: {we} ({w.FormKey}) classified as a creature weapon");
+                if (excluded.Add(w.FormKey))
+                {
+                    exclude.Add(new Entry(Plugin(w.FormKey), Id(w.FormKey), why: "creature",
+                                          name: w.Name?.String, value: w.BasicStats?.Value ?? 0));
+                    Console.WriteLine($"[MFO]   creature weapon excluded: "
+                                    + $"{w.EditorID} \"{w.Name?.String}\" ({w.FormKey})");
+                }
                 continue;
             }
             MaybeExclude(w.FormKey, Scripted(w), /*special:*/ !w.Template.IsNull, w.ObjectEffect,
@@ -250,6 +301,99 @@ static class Catalog
             if (mag > bestMag) { bestMag = mag; best = res; }
         }
         return best;
+    }
+
+    // ── CREATURE-ONLY WEAPON DETECTION ──────────────────────────────────────
+    // Two signals, BOTH required, deliberately UNDER-exclusive:
+    //   (1) RACE USAGE: the weapon is reachable from the inventory/outfit of at
+    //       least one creature-race NPC (race lacks ActorTypeNPC) and from NO
+    //       humanoid NPC and NO container (leveled lists expanded transitively).
+    //   (2) RECORD CONVENTION: the weapon itself follows a creature convention --
+    //       a Cr/cr EDID prefix or a model under meshes\actors\.
+    // Signal (1) ALONE is provably unsafe: draugr, skeletons, falmer and dragon
+    // priests are creature races, so race usage alone blacklists Ancient Nord
+    // swords, Falmer bows and dragon-priest staves -- legitimate loot a follower
+    // should use (measured against the vanilla masters). And the record barely
+    // separates them otherwise: the giant club's reach equals an iron
+    // greatsword's, and damage is rebalance-fragile, so neither is used. When in
+    // doubt the weapon stays lootable: occasionally looting a creature weapon is
+    // the lesser evil vs never looting real dungeon loot.
+    static HashSet<FormKey> CreatureOnlyWeapons(
+        ILoadOrderGetter<IModListingGetter<ISkyrimModGetter>> lo, ILinkCache cache)
+    {
+        var creature = new HashSet<FormKey>(); var seenC = new HashSet<FormKey>();
+        var humanoid = new HashSet<FormKey>(); var seenH = new HashSet<FormKey>();
+
+        // Every weapon reachable from a form: the weapon itself, or a leveled
+        // list expanded transitively (cycle-guarded by `seen`).
+        void Harvest(FormKey fk, HashSet<FormKey> into, HashSet<FormKey> seen)
+        {
+            if (fk.IsNull || !seen.Add(fk)) return;
+            if (cache.TryResolve<IWeaponGetter>(fk, out var w)) { into.Add(w.FormKey); return; }
+            if (cache.TryResolve<ILeveledItemGetter>(fk, out var ll) && ll.Entries != null)
+                foreach (var e in ll.Entries)
+                    if (e.Data is { } d) Harvest(d.Reference.FormKey, into, seen);
+        }
+
+        foreach (var npc in lo.PriorityOrder.Npc().WinningOverrides())
+        {
+            // Traits-templated NPCs (leveled-character shells) carry a PLACEHOLDER
+            // race in their own record -- the CK default is FoxRace, seen on dozens
+            // of vanilla shells -- so their race field proves nothing. Skip them as
+            // evidence entirely; the base NPCs they template from carry the real
+            // race + inventory.
+            if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Traits))
+                continue;
+            // An unresolvable race counts as HUMANOID: its weapons become
+            // un-excludable (under-exclude on any doubt).
+            bool isHumanoid = true;
+            if (npc.Race.TryResolve(cache, out var race))
+                isHumanoid = race.Keywords?.Any(k => k.FormKey == ActorTypeNpc) ?? false;
+            var into = isHumanoid ? humanoid : creature;
+            var seen = isHumanoid ? seenH : seenC;
+            if (npc.Items != null)
+                foreach (var it in npc.Items) Harvest(it.Item.Item.FormKey, into, seen);
+            if (npc.DefaultOutfit.TryResolve(cache, out var outfit) && outfit.Items != null)
+                foreach (var ol in outfit.Items) Harvest(ol.FormKey, into, seen);
+        }
+        // Anything reachable from a CONTAINER (boss chests, merchant stock) is
+        // player-facing loot -- humanoid evidence, whoever else wields it.
+        foreach (var c in lo.PriorityOrder.Container().WinningOverrides())
+            if (c.Items != null)
+                foreach (var it in c.Items) Harvest(it.Item.Item.FormKey, humanoid, seenH);
+
+        var result = new HashSet<FormKey>();
+        foreach (var fk in creature)
+            if (!humanoid.Contains(fk) &&
+                cache.TryResolve<IWeaponGetter>(fk, out var w) && CreatureConvention(w))
+                result.Add(fk);
+        return result;
+    }
+
+    // The record-side half: does the weapon ITSELF follow a creature convention?
+    static bool CreatureConvention(IWeaponGetter w)
+    {
+        var e = w.EditorID;
+        // HARD GUARANTEE: draugr/ancient-nord gear is real dungeon loot wielded
+        // almost solely by creature races -- never excludable, whatever else
+        // matches (a modded "DraugrCrusher" with an actors\ mesh stays lootable).
+        if (e != null && (e.StartsWith("Draugr", StringComparison.OrdinalIgnoreCase) ||
+                          e.StartsWith("AncientNord", StringComparison.OrdinalIgnoreCase)))
+            return false;
+        // Cr/cr prefix followed by an UPPERCASE word start: CrGiantClub,
+        // crDwarvenSphereCrossbow. The case gate means Crossbow*/Crescent* (third
+        // char lowercase) can never match.
+        if (e != null && e.Length >= 3 && (e[0] == 'C' || e[0] == 'c') && e[1] == 'r' &&
+            char.IsUpper(e[2]))
+            return true;
+        // Weapon mesh under meshes\actors\ -- creature character assets, where no
+        // playable weapon model lives (DLC2CrBenthicLurkerWeapon: Actors\DLC02\
+        // Giant_fishman\...). Folder names under Weapons\ prove NOTHING: the giant
+        // club lives in Weapons\Giant, but Ancient Nord swords live in
+        // Weapons\Draugr the same way.
+        var m = w.Model?.File.GivenPath;
+        return m != null &&
+               m.Replace('/', '\\').Contains("actors\\", StringComparison.OrdinalIgnoreCase);
     }
 
     // Jewellery = worn on the amulet or ring biped slot, and NOTHING else. Some

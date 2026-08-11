@@ -922,13 +922,49 @@ namespace MFO::Logistics {
             return roles;
         }
 
+        // KNOWN creature weapons Bethesda left UN-flagged (record flags 0, so the
+        // NonPlayable gate below never fires): the giant clubs are kTwoHandSword /
+        // EitherHand with normal weapon keywords -- byte-indistinguishable from a
+        // real greatsword -- and their huge base damage makes them a "top upgrade"
+        // (field-caught: a follower looted a Giant's Club). Curated against the
+        // vanilla masters at the record level; every row verified flags==0 and
+        // wielded only by creature races. Resolved through TESDataHandler ONCE so
+        // the DLC rows survive any load order (Skyrim.esm is always index 00, but
+        // one mechanism for all masters beats two).
+        bool IsKnownCreatureWeapon(RE::FormID a_fid) {
+            // Magic static: built on the first call, which is always a logistics/
+            // equip-gate tick -- long after kDataLoaded, so the handler exists.
+            static const std::unordered_set<RE::FormID> s_known = [] {
+                std::unordered_set<RE::FormID> s;
+                auto* dh = RE::TESDataHandler::GetSingleton();
+                if (!dh) return s;
+                constexpr struct { RE::FormID id; const char* plugin; } kRows[] = {
+                    { 0x0461DA, "Skyrim.esm" },      // CrGiantClub (the reported loot)
+                    { 0x0C334F, "Skyrim.esm" },      // DA06GiantClub
+                    { 0x0CDEC9, "Skyrim.esm" },      // C00GiantClub
+                    { 0x07F6DF, "Skyrim.esm" },      // crDwarvenSphereCrossbow (dummy mesh)
+                    { 0x10EC8A, "Skyrim.esm" },      // crDwarvenSphereCrossbow02
+                    { 0x012D14, "Dawnguard.esm" },   // DLC1FrostGiantClub
+                    { 0x01E112, "Dragonborn.esm" },  // DLC2CrBenthicLurkerWeapon
+                };
+                for (const auto& r : kRows)
+                    if (auto* f = dh->LookupForm(r.id, r.plugin)) s.insert(f->GetFormID());
+                return s;
+            }();
+            return s_known.contains(a_fid);
+        }
+
         // A NON-PLAYABLE weapon (record-header flag bit 2 == Mutagen
-        // Weapon.MajorFlag.NonPlayable, confirmed set on the Dwarven Sphere Crossbow)
-        // is creature/automaton gear with no humanoid mesh -- invisible if a follower
-        // equips it, though it still fires. Direct check so the loot filter + heal
-        // work off the DLL alone, independent of the catalog's nonplayable exclusion.
+        // Weapon.MajorFlag.NonPlayable) is creature/automaton gear with no humanoid
+        // mesh -- invisible if a follower equips it, though it still fires. Direct
+        // check so the loot filter + heal work off the DLL alone, independent of
+        // the catalog's nonplayable exclusion. NOTE: vanilla sets this flag on NO
+        // weapon at all (measured: zero flagged WEAPs across the five masters);
+        // it catches modded/overridden records, while the curated set above kills
+        // the vanilla un-flagged ones (giant clubs, sphere crossbows, lurker fist).
         bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w) {
-            return a_w && (a_w->GetFormFlags() & (1u << 2)) != 0;
+            return a_w && ((a_w->GetFormFlags() & (1u << 2)) != 0 ||
+                           IsKnownCreatureWeapon(a_w->GetFormID()));
         }
 
         // Same NonPlayable record flag (bit 2), for ARMOR. Creature/critter body
