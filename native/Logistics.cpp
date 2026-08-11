@@ -3278,8 +3278,9 @@ namespace MFO::Logistics {
     // Crossbow off an automaton corpse) before the catalog excluded that class. It
     // still FIRES, so combat looks fine, but there's no humanoid mesh. Swap it for
     // the follower's best carried PLAYABLE weapon (or just take it off if they carry
-    // none). Reuses Catalog::IsExcluded, which now flags nonplayable weapons; a
-    // no-op once healed, so it's safe to poll. Requires the regenerated catalog.
+    // none). Fires on IsCreatureWeapon (works off the DLL alone -- curated set +
+    // NonPlayable flag, no catalog needed) OR Catalog::IsExcluded (quest/unique,
+    // needs the regenerated catalog). A no-op once healed, so it's safe to poll.
     void HealExcludedWeapon(RE::Actor* a_follower) {
         auto* em = RE::ActorEquipManager::GetSingleton();
         if (!em) return;
@@ -3301,23 +3302,32 @@ namespace MFO::Logistics {
             } else {
                 em->UnequipObject(a_follower, bad);  // nothing real carried -- just take it off
             }
-            // CRITICAL: un-equipping alone leaves the creature weapon in the pack, and
-            // the engine re-wields it as "best weapon" within seconds -- the poll then
-            // just churns forever (field-caught: same 'Dwarven Sphere Crossbow' re-healed
-            // 3 min apart). Evict it to the player so nothing can re-select it. Count the
-            // copies so a stack leaves entirely.
+            // CRITICAL: un-equipping alone leaves the weapon in the pack, and the
+            // engine re-wields it as "best weapon" within seconds -- the poll then
+            // just churns forever (field-caught: same 'Dwarven Sphere Crossbow'
+            // re-healed 3 min apart). So it has to LEAVE the follower. Which way
+            // follows the ARMOR fix's rule (KeepHeadClear): a CREATURE weapon is
+            // non-playable -- invisible/broken on the PLAYER too, so handing it over
+            // is just useless clutter -- DELETE it. A merely catalog-excluded weapon
+            // is a real playable quest/unique item -> return it to the player. Count
+            // the copies so a stack leaves entirely.
+            const bool creature = IsCreatureWeapon(bad);
             std::int32_t haveBad = 0;
             for (auto& [obj, data] : a_follower->GetInventory())
                 if (obj == bad) { haveBad = data.first; break; }
             if (haveBad > 0) {
-                if (auto* player = RE::PlayerCharacter::GetSingleton())
+                if (creature)
+                    a_follower->RemoveItem(bad, haveBad, RE::ITEM_REMOVE_REASON::kRemove,
+                                           nullptr, nullptr);
+                else if (auto* player = RE::PlayerCharacter::GetSingleton())
                     a_follower->RemoveItem(bad, haveBad, RE::ITEM_REMOVE_REASON::kStoreInContainer,
                                            nullptr, player);
             }
-            spdlog::info("[heal] {:08X} excluded '{}' -> {}, evicted {}x to player",
+            spdlog::info("[heal] {:08X} excluded '{}' -> {}, {} {}x",
                          a_follower->GetFormID(),
                          bad->GetName() ? bad->GetName() : "?",
                          best ? (best->GetName() ? best->GetName() : "?") : "(bare hands)",
+                         creature ? "DELETED" : "returned-to-player",
                          haveBad);
             return;   // one hand per call
         }

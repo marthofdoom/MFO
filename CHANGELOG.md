@@ -1,3 +1,12 @@
+## v1.0.61 -- creature weapons are deleted, not handed to you
+
+- Follow-up to v1.0.60: when MFO relieves a follower of a creature weapon (a
+  giant's club, a Dwarven Sphere's crossbow, etc.), it's now DELETED rather than
+  handed to you -- it's non-playable, so it would just be invisible, unusable
+  clutter in your inventory (the same rule the armor fix already uses: creature
+  junk is deleted, a real wrong-fit piece is handed back). A genuine playable
+  quest/unique weapon MFO can't use is still returned to you, as before.
+
 ## v1.0.60 -- followers stop looting creature weapons (giant clubs et al.)
 
 - Fixed followers looting weapons only creatures use -- the reported case was a

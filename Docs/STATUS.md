@@ -6,7 +6,14 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest public:** v1.0.60 (#73 creature-weapon loot fix — giant clubs; released) · prior public: v1.0.59 (controller board back/close fix — field-confirmed), v1.0.58 (concentration-freeze + bounded casting). Next: TOWN UPDATE (#31).
+> **Last updated:** 2026-08-11 · **Latest:** v1.0.61 (creature weapons DELETED not handed to player — follow-up to #73; building) · **Latest public:** v1.0.60 (#73 creature-weapon loot fix) · prior public: v1.0.59 (controller fix, field-confirmed), v1.0.58 (concentration freeze). Next: FOLLOWER-PROGRESSION ESL ADDON (#74), then town update (#31).
+
+> **v1.0.61 — creature weapons DELETED, not handed to player** (marth: a creature
+> weapon is non-playable, useless clutter on the player too). `HealExcludedWeapon`
+> (Logistics.cpp ~3304) now splits eviction like the v1.0.46 ARMOR fix: `IsCreatureWeapon`
+> → `RemoveItem(kRemove)` DELETE; `Catalog::IsExcluded`-only (playable quest/unique)
+> → `kStoreInContainer` hand-back as before. Also fixed the now-stale "Requires the
+> regenerated catalog" comment (IsCreatureWeapon works off the DLL alone). CI-compiled.
 
 > **v1.0.60 — #73 CREATURE-WEAPON LOOT FIX** (Fable-built, dotnet-selftested). User
 > report: a follower looted a Giant's Club. ROOT: CrGiantClub (skyrim.esm 0x0461DA)
