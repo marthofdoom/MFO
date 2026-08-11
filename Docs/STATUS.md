@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest:** v1.0.53 (CSTY combat-pathfinding fix, deploying to Tuxborn) · **Latest public:** v1.0.52 (GitHub release — bundles v1.0.49-52) · field-confirmed: #63 peace, #65 class dropdown, #68 cond.dark, loose-loot pickup. Nexus kit prep in progress. inruo/#71 tester build out. Next: TOWN UPDATE (#31).
+> **Last updated:** 2026-08-11 · **Latest public:** v1.0.53 (GitHub release CUT — CSTY combat-pathing fix; also deployed to Tuxborn, field-test pending) · prior public v1.0.52 (bundled v1.0.49-52) · field-confirmed: #63 peace, #65 class dropdown, #68 cond.dark, loose-loot pickup. Nexus kit prep in progress. inruo/#71 tester build out. Next: TOWN UPDATE (#31).
 
 > **v1.0.53 — DEPLOYED to Tuxborn** (DLL `75bb3c00`, ESP `a05c1b1d`, both deck-verified; tag `v1.0.53` pushed). Field-test PENDING marth: melee/ranged followers should hold ground / keep bowman spacing instead of back-pedalling like casters. CSTY combat-pathfinding fix. MFO's three combat-style records
 > (MFO_MeleeStyle/RangedStyle/CastStyle) were copying their close-range positioning
