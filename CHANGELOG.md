@@ -1,3 +1,14 @@
+## v1.0.52 -- loose loot: followers actually PICK IT UP now
+
+- Fix: a follower who walks to loose gold/ammo now actually collects it. The
+  pickup was dispatched through a Papyrus VM Activate call that silently failed on
+  every gold pile (field: the follower reached the gold, logged `ACTIVATE dispatch
+  FAILED` nine times, and never grabbed any). MFO now uses the engine's NATIVE
+  activate -- the exact thing that happens when YOU press the activate key -- run
+  on the main thread so it stays safe off the worker. (v1.0.50 raised the pickup
+  reach so he gets close enough; this makes the grab itself work. Tunable
+  fLooseAcquireDist still applies.)
+
 ## v1.0.51 -- un-equippable-gear eviction now covers ALL slots + weapons (not just heads)
 
 - Fix (#62 follow-up): the "take off gear that can't be equipped" fix now covers

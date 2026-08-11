@@ -3591,23 +3591,33 @@ namespace MFO::Logistics {
                         std::int32_t pre = 0;
                         for (auto& [obj, n] : a_follower->GetInventoryCounts())
                             if (obj && base && obj->GetFormID() == base->GetFormID()) { pre = n; break; }
-                        if (Papyrus::DispatchActivate(tref, a_follower)) {
-                            spdlog::info("[acquire] {:08X}: ACTIVATE dispatched for ref {:08X} ('{}' x{})",
-                                         id, tref->GetFormID(), iname ? iname : "?", icount);
-                            tr.acquirePending = true;
-                            tr.acquireRefID   = tref->GetFormID();
-                            tr.acquireBase    = base ? base->GetFormID() : 0;
-                            tr.acquirePre     = pre;
-                            return;   // the dispatch IS this tick's action; readback next tick
-                        }
-                        // VM unreachable / no handle -- end the leg, batch continues.
-                        spdlog::info("[acquire] {:08X}: ACTIVATE dispatch FAILED for ref {:08X}",
-                                     id, tref->GetFormID());
-                        MarkTravelSticky(tref->GetFormID(), now);   // reached but unacquirable -> abandon, don't loop
-                        tr.phase = TravelPhase::Holding;
-                        tr.lingerUntil = now + std::chrono::seconds(
-                                                  static_cast<int>(Config::g_batchLinger.load()));
-                        return;
+                        // NATIVE activate on the MAIN THREAD (loose-loot fix, marth:
+                        // "it's simple -- check other looting mods"). The VM
+                        // ObjectReference.Activate dispatch returned false for EVERY
+                        // gold pile (field: Xelzaz reached them, `ACTIVATE dispatch
+                        // FAILED` x9, never picked up). TESObjectREFR::ActivateRef is
+                        // the exact call the engine runs when the PLAYER presses
+                        // activate -- the reliable path loot mods use -- marshalled
+                        // to the main thread via MainThread::Post so it stays off the
+                        // §0.30 job worker (no PickUpObject/AddTask; the same hop
+                        // #62's equip uses). Fire-and-forget: the readback next tick
+                        // (inventory delta) decides took vs no-op.
+                        const RE::FormID refID = tref->GetFormID();
+                        const RE::FormID folID = a_follower->GetFormID();
+                        auto doActivate = [refID, folID]() {
+                            auto* r = RE::TESForm::LookupByID<RE::TESObjectREFR>(refID);
+                            auto* f = RE::TESForm::LookupByID<RE::Actor>(folID);
+                            if (r && f) r->ActivateRef(f, 0, nullptr, 1, false);   // full processing = the pickup
+                        };
+                        if (MainThread::IsInstalled()) MainThread::Post(doActivate);
+                        else                           doActivate();
+                        spdlog::info("[acquire] {:08X}: ACTIVATE (native/main-thread) ref {:08X} ('{}' x{})",
+                                     id, tref->GetFormID(), iname ? iname : "?", icount);
+                        tr.acquirePending = true;
+                        tr.acquireRefID   = tref->GetFormID();
+                        tr.acquireBase    = base ? base->GetFormID() : 0;
+                        tr.acquirePre     = pre;
+                        return;   // the activate IS this tick's action; readback next tick
                     }
                     // Take EVERYTHING his gambits want in this one visit, not just
                     // the category the trip was for -- else gold trips strand the
