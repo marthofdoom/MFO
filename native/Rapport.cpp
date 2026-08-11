@@ -4,6 +4,7 @@
 #include "Followers.h"
 #include "Config.h"
 #include "State.h"
+#include "MainThread.h"   // #63 quash runs on the pump, never in the dispatch
 
 namespace MFO::Rapport {
 
@@ -273,9 +274,17 @@ namespace MFO::Rapport {
                 // a target that is ALSO a player teammate -- friendly fire from a
                 // forced offensive cast is the usual inducer, and the friendly-fire
                 // hold is inert on this runtime -- end that fight on BOTH sides so
-                // neither keeps the other latched. Combat events fire on the main
-                // thread, so StopCombat is safe inline. StopCombat re-fires a kNone
-                // event, which lands in the branch below, not here (no loop). The
+                // neither keeps the other latched. NEVER INLINE (v1.0.53 deck
+                // freeze): StopCombat itself re-fires combat events, so calling
+                // it from INSIDE this dispatch re-enters the event source that
+                // is mid-dispatch -- while the Scheduler backstop was firing the
+                // same pair of StopCombats concurrently from the worker tick.
+                // Re-entrant event lock + cross-thread combat mutation on the
+                // same actors = 94 threads parked, hard freeze; the old "no
+                // loop" claim here was simply wrong. QuashAllyPair DEFERS the
+                // work out of this dispatch (main-thread pump; SKSE task queue
+                // on VR) and holds a shared per-pair ~2 s cooldown, so the
+                // every-180ms re-quash churn cannot come back either. The
                 // Scheduler tick backstops the case where BOTH were already in
                 // combat (no enter-event fires for the crossfire).
                 if (Config::g_quashAllyCombat.load() &&
@@ -283,10 +292,10 @@ namespace MFO::Rapport {
                     a_event->targetActor) {
                     if (auto* tgt = a_event->targetActor->As<RE::Actor>();
                         tgt && tgt != actor && tgt->IsPlayerTeammate()) {
-                        actor->StopCombat();
-                        tgt->StopCombat();
-                        spdlog::info("[peace] {:08X} entered combat vs teammate {:08X} -- quashed (StopCombat both)",
-                                     actor->GetFormID(), tgt->GetFormID());
+                        if (QuashAllyPair(actor->GetFormID(), tgt->GetFormID())) {
+                            spdlog::info("[peace] {:08X} entered combat vs teammate {:08X} -- quashed (StopCombat both)",
+                                         actor->GetFormID(), tgt->GetFormID());
+                        }
                     }
                 }
 
@@ -311,6 +320,81 @@ namespace MFO::Rapport {
 
     }
 
+    // ── #63 QUASH -- the thread-safe half (v1.0.53 deck freeze) ──────────────
+    namespace {
+        // Per-PAIR cooldown ledger. A streamed concentration cast re-aggroed
+        // the same pair every frame, so the quash re-fired every ~180 ms from
+        // two threads at once; the cooldown makes one quash per pair per
+        // window, whichever site (event sink or tick backstop) gets there
+        // first. LEAF mutex (Sightline's rule): nothing is called while it is
+        // held, and the Post below happens strictly OUTSIDE it.
+        std::mutex g_quashMx;
+        std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_quashNext;
+        constexpr auto kQuashPairCooldown = std::chrono::seconds(2);
+    }
+
+    bool QuashAllyPair(RE::FormID a_actor, RE::FormID a_target) {
+        // Canonical key -- (A,B) and (B,A) share one cooldown entry.
+        const auto lo  = a_actor < a_target ? a_actor : a_target;
+        const auto hi  = a_actor < a_target ? a_target : a_actor;
+        const auto key = (static_cast<std::uint64_t>(lo) << 32) | hi;
+        {
+            std::lock_guard lk(g_quashMx);
+            const auto now = std::chrono::steady_clock::now();
+            // Opportunistic prune: an expired window is dead weight, and the
+            // map otherwise grows by one entry per unique pair per session.
+            // (This may drop THIS pair's expired entry too; the lookup below
+            // then recreates it at epoch, which reads as "never quashed" --
+            // the same verdict its expired window would have produced.)
+            std::erase_if(g_quashNext, [&](const auto& e) { return now >= e.second; });
+            auto& next = g_quashNext[key];
+            if (next.time_since_epoch().count() != 0 && now < next) return false;
+            next = now + kQuashPairCooldown;
+        }
+
+        // The WORK runs on a DEFERRED stack -- the main thread next frame
+        // (non-VR), or the SKSE task queue's worker (VR) -- never inside the
+        // TESCombatEvent dispatch (StopCombat re-fires combat events).
+        // FormIDs, never pointers: whatever runs this later re-resolves
+        // against the live world (Sightline's rule).
+        auto work = [a_actor, a_target]() {
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(a_actor);
+            auto* b = RE::TESForm::LookupByID<RE::Actor>(a_target);
+            if (a) a->StopCombat();
+            if (b) b->StopCombat();
+            // Best-effort de-aggro: if either still holds the OTHER as combat
+            // target, drop it (the same fields Targeting's thunk writes --
+            // both below the §0.29 AE layout divergence), so the next combat
+            // update does not instantly re-acquire the ally.
+            auto drop = [](RE::Actor* a_x, RE::Actor* a_other) {
+                if (!a_x || !a_other) return;
+                auto& rt = a_x->GetActorRuntimeData();
+                auto curPtr = rt.currentCombatTarget.get();   // HOLD the NiPointer
+                if (curPtr.get() != a_other) return;
+                rt.currentCombatTarget = RE::ActorHandle{};
+                if (auto* cc = rt.combatController) cc->targetHandle = RE::ActorHandle{};
+            };
+            drop(a, b);
+            drop(b, a);
+        };
+        // Defer OUT of the caller's stack on EVERY runtime -- an inline call
+        // from the event sink would still run StopCombat inside the combat-
+        // event dispatch, which is the re-entrancy half of the freeze; the
+        // pair cooldown caps CHURN, it does nothing for re-entrancy. Non-VR:
+        // the main-thread pump (branch on VR, not IsInstalled() -- pre-
+        // Install Post queues safely and drains once live, while
+        // IsInstalled() is false then). VR: the pump is a documented no-op,
+        // so defer via the SKSE task queue instead -- a WORKER, not main
+        // ([[skse-addtask-runs-on-job-worker]]), but a deferred stack all the
+        // same: the sink returns before any StopCombat runs. The cooldown
+        // also means only ONE site fires per window, so VR gets a single
+        // deferred worker-side StopCombat -- the same exposure class as the
+        // long-shipped auto-retreat path.
+        if (REL::Module::IsVR()) SKSE::GetTaskInterface()->AddTask(work);
+        else                     MainThread::Post(std::move(work));
+        return true;
+    }
+
     std::uint32_t CombatEventCount() { return g_combatEvents.load(); }
     std::uint32_t SessionKills()     { return g_sessionKills.load(); }
     std::uint32_t SessionRapport()   { return g_sessionRapport.load(); }
@@ -328,6 +412,10 @@ namespace MFO::Rapport {
         g_combatEvents   = 0;
         g_sessionStart   = std::chrono::steady_clock::now();
         { std::scoped_lock lk(g_lastKillMx); g_lastKill = {}; }
+        // The quash cooldown ledger is transient too: steady_clock survives a
+        // load, so a stale entry from the LAST save would silently swallow the
+        // next session's first quash of that pair for up to the window.
+        { std::scoped_lock lk(g_quashMx); g_quashNext.clear(); }
     }
 
     double SessionMinutes() {

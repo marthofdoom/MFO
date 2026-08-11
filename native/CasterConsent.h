@@ -23,6 +23,15 @@
 
 namespace MFO::CasterConsent {
 
+    // The cast-control taxonomy, BY THE SPELL'S EFFECTS (v1.0.35): any
+    // hostile/detrimental effect -> Offense, whatever else it does; else a
+    // beneficial Health effect -> Heal; else Buff (utility). Public so the
+    // concentration-hold policy (Actuation) classifies off the SAME rule the
+    // slider's exemptions use -- hostile streams get the 1-4s hold, heals
+    // stream until the target tops off, utility gets the capped hold.
+    enum class SpellKind : std::uint8_t { Offense, Buff, Heal };
+    SpellKind ClassifySpell(RE::MagicItem* a_mi);
+
     // Install the CheckStartCast hook across the concrete caster vtables. Once,
     // at kDataLoaded. No-op when bCasterHook is off.
     void InstallHook();

@@ -6,7 +6,27 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest public:** v1.0.53 (GitHub release CUT — CSTY combat-pathing fix; also deployed to Tuxborn, field-test pending) · prior public v1.0.52 (bundled v1.0.49-52) · field-confirmed: #63 peace, #65 class dropdown, #68 cond.dark, loose-loot pickup. Nexus kit prep in progress. inruo/#71 tester build out. Next: TOWN UPDATE (#31).
+> **Last updated:** 2026-08-11 · **Latest public:** v1.0.58 (concentration-freeze fix + bounded concentration casting; deployed to Tuxborn + GitHub release) · prior v1.0.53 (CSTY pathing), v1.0.52 (bundled v1.0.49-52) · field-confirmed: #63 peace, #65 class dropdown, #68 cond.dark, loose-loot pickup. Next: TOWN UPDATE (#31).
+
+> **v1.0.58 — CONCENTRATION FREEZE FIX + bounded concentration casting** (jumped
+> 53→58 per marth). ROOT (deck-diagnosed live: all threads parked, log dead, no
+> crash): Lucien force-cast concentration Flames (00012FCD) as a permanent held
+> stream → sprayed teammate Xelzaz → friendly-fire ally combat → the #63 quash
+> called StopCombat re-entrantly from the TESCombatEvent dispatch AND from the
+> job-worker → lock-inversion deadlock. TWO fixes (Fable-built, adversarially
+> reviewed, all findings repaired): (A) `Rapport::QuashAllyPair` — both quash
+> sites now route StopCombat through the main-thread pump (SKSE AddTask on VR) with
+> a per-pair 2s cooldown + best-effort combat-target drop; never inline in the
+> dispatch, never worker-side. (B) concentration spells no longer force-streamed:
+> `Actuation::ConcentrationCast` package-drives a BOUNDED hold (hostile 1-4s via
+> Temperament / heal until ≥95% HP cap 6s / utility 4s cap) + explicit release
+> (marker-evict + InterruptCast all sources), gated by `Sightline::TeammateInFireLine`
+> (no ally in the beam, pre-cast AND mid-stream). `CasterConsent::ConcUnboundedDeny`
+> closes the AI channel so nothing streams unbounded — **EXACT-ONLY (marth's call):
+> fires only at cast-control 4; levels 1-3 leave a follower's own AI concentration
+> alone (vanilla-safe/self-bounded).** Principle recorded: [[exact-bounding-covers-all-spells]].
+> kRunTimeout(12s) backstops every exit; no new co-save fields. VR re-entrancy also
+> closed (M1). Field-test pending marth.
 
 > **v1.0.53 — DEPLOYED to Tuxborn** (DLL `75bb3c00`, ESP `a05c1b1d`, both deck-verified; tag `v1.0.53` pushed). Field-test PENDING marth: melee/ranged followers should hold ground / keep bowman spacing instead of back-pedalling like casters. CSTY combat-pathfinding fix. MFO's three combat-style records
 > (MFO_MeleeStyle/RangedStyle/CastStyle) were copying their close-range positioning

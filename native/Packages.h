@@ -170,6 +170,24 @@ namespace MFO::Packages {
     // resolving nothing.
     Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
+    // A CONCENTRATION HOLD (v1.0.53 deck freeze -> bounded streams). A
+    // fire-and-forget package cast ends itself: the [cast] sink observes the
+    // release and Pump lets go one linger later. A CONCENTRATION cast has no
+    // release to observe -- the stream runs for as long as the package owns
+    // the actor -- so the caller states the bound UP FRONT and Pump enforces
+    // it: release when holdSeconds elapse after the stream is observed, OR
+    // earlier when the healWatch actor's health tops off (heal streams), OR
+    // earlier when a teammate crosses the caster->target line (ffWatch,
+    // hostile streams -- Sightline::TeammateInFireLine each tick). Every
+    // release also InterruptCasts the stream so the beam dies with the
+    // package. holdSeconds == 0 (the default) is the unchanged
+    // fire-and-forget lifecycle.
+    struct CastHold {
+        float      holdSeconds = 0.0f;   // 0 = fire-and-forget (linger release)
+        RE::FormID healWatch   = 0;      // release early when this actor tops off
+        bool       ffWatch     = false;  // release early on a teammate in the line
+    };
+
     // Command a follower to cast at another actor.
     //
     // SHAPE (field-proven, probe 5): fill ALIAS 1 with the victim, and the
@@ -182,7 +200,16 @@ namespace MFO::Packages {
     // is also proven (probes 1-3) but names the actor at author time, so it
     // cannot express "whoever the rule picked this tick".
     Decline CastAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                   RE::TESObjectREFR* a_target);
+                   RE::TESObjectREFR* a_target, const CastHold& a_hold = {});
+
+    // Is MFO's bounded concentration stream for exactly this follower+spell
+    // live right now? Callable from ANY thread (a single relaxed atomic --
+    // the consent hooks consult it from the engine's caster threads, where
+    // the single-writer holder state may not be read). True from the moment
+    // a CastHold request is accepted until its release; the consent hooks
+    // allow the AI channel for a concentration spell ONLY while this is true,
+    // so the bounded package stream passes and everything else is denied.
+    bool StreamLive(RE::FormID a_actor, RE::FormID a_spell);
 
     // Observe engine state and advance the phase. MAIN THREAD, once per tick.
     // This is the ONLY function that moves the state machine.

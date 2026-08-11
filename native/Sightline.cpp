@@ -1,6 +1,8 @@
 #include "PCH.h"
 #include "Sightline.h"
 #include "MainThread.h"
+#include "Followers.h"   // TeammateInFireLine walks the maintained party list
+#include <limits>        // SegDist's +inf sentinel -- NOT in the PCH (the v1.0.8/9 CI lesson)
 
 namespace MFO::Sightline {
 
@@ -116,6 +118,61 @@ namespace MFO::Sightline {
         std::lock_guard lk(g_mx);
         g_cache.clear();
         g_lastPost.clear();
+    }
+
+    namespace {
+
+        // Distance from point p to segment [a,b] -- but only when p projects
+        // BETWEEN the endpoints (an ally behind the caster or past the target
+        // is not in the line of fire). Returns +inf otherwise. Same math as
+        // CasterConsent's SegDist (its copy is private to the CheckCast hook).
+        float SegDist(const RE::NiPoint3& p, const RE::NiPoint3& a, const RE::NiPoint3& b) {
+            const RE::NiPoint3 ab = b - a, ap = p - a;
+            const float len2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+            if (len2 <= 1.0f) return ap.Length();
+            const float t = (ap.x * ab.x + ap.y * ab.y + ap.z * ab.z) / len2;
+            if (t < 0.0f || t > 1.0f) return std::numeric_limits<float>::max();
+            const RE::NiPoint3 proj{ a.x + ab.x * t, a.y + ab.y * t, a.z + ab.z * t };
+            return (p - proj).Length();
+        }
+
+        // ~a body off the line, CasterConsent's kLinePad.
+        constexpr float kFireLinePad = 80.0f;
+
+    }
+
+    // NOTE on g_active: rebuilt by Followers::Refresh on the MAIN thread and
+    // read here on the worker with no guard -- the same inherited, unguarded
+    // pattern Scheduler::Tick, Actuation's NearestAlly and the [cast] sink's
+    // IsTracked already use (there is no snapshot idiom to borrow). This adds
+    // a reader to an existing pattern, not a new one.
+    bool TeammateInFireLine(RE::FormID a_caster, RE::FormID a_target) {
+        if (!a_caster || !a_target || a_caster == a_target) return false;
+        auto* cf = RE::TESForm::LookupByID<RE::Actor>(a_caster);
+        auto* tf = RE::TESForm::LookupByID<RE::Actor>(a_target);
+        if (!cf || !tf) return false;   // fail open -- see the header
+        const auto cpos = cf->GetPosition();
+        const auto tpos = tf->GetPosition();
+
+        // THE PLAYER FIRST. The CheckCast hook's WouldHitTeammate walks
+        // highActorHandles, which never contains the player -- a beam swept
+        // across the player was invisible to it. A stream is exactly the
+        // spell shape that catches the player, so the player is checked here
+        // by name (and skipped when the player IS the intended target: a
+        // heal stream aimed at the player must not hold on the player).
+        if (auto* pc = RE::PlayerCharacter::GetSingleton();
+            pc && pc != tf && pc != cf &&
+            SegDist(pc->GetPosition(), cpos, tpos) <= kFireLinePad) {
+            return true;
+        }
+        for (const auto& h : Followers::g_active) {
+            auto ptr = h.get();   // HOLD the NiPointer (Targeting rule)
+            auto* ally = ptr.get();
+            if (!ally || ally == cf || ally == tf) continue;
+            if (ally->IsDead() || !ally->Is3DLoaded()) continue;
+            if (SegDist(ally->GetPosition(), cpos, tpos) <= kFireLinePad) return true;
+        }
+        return false;
     }
 
 }

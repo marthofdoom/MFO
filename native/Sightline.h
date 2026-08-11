@@ -49,6 +49,18 @@ namespace MFO::Sightline {
     // frame later -- callers read Check(), never a return value.
     void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets);
 
+    // LINE OF FIRE (concentration streams). True when the PLAYER or any
+    // active teammate -- other than the caster and the intended target --
+    // stands within ~a body's width of the caster->target segment. Pure
+    // GEOMETRY over the maintained party list (Followers::g_active + the
+    // player singleton): no raycast, no main-thread hop, so unlike Check()
+    // it answers synchronously and is callable straight from the worker
+    // tick -- both as the pre-dispatch gate on a hostile stream and as the
+    // mid-stream watch that cuts the beam when an ally walks into it.
+    // Unresolvable ids fail OPEN (false): this is a hold on friendly fire,
+    // never a wall that silently disables the cast rule.
+    bool TeammateInFireLine(RE::FormID a_caster, RE::FormID a_target);
+
     // Session teardown, same shape as every sibling module: the cache keys are
     // this-session FormID pairs and must not survive a revert.
     void ClearTransientState();

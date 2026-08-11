@@ -36,6 +36,19 @@ namespace MFO::Rapport {
     };
     LastKill GetLastKill();
 
+    // #63 ally-combat quash, the THREAD-SAFE half (v1.0.53 deck freeze).
+    // Defers StopCombat on BOTH actors (plus a best-effort combat-target
+    // drop) OUT of the caller's stack -- to the main-thread pump, or to the
+    // SKSE task queue on VR where the pump is a no-op -- so it never runs
+    // inline in a TESCombatEvent dispatch and never on the caller's worker
+    // tick: the two call stacks whose collision froze the game. A per-PAIR
+    // ~2 s cooldown (canonical key, so (A,B) and (B,A) share one entry) kills
+    // the re-quash churn. Returns true when the quash was dispatched, false
+    // while the pair is still cooling -- callers log their [peace] line only
+    // on true, so field logs keep meaning "one line per actual quash".
+    // Callable from any thread.
+    bool QuashAllyPair(RE::FormID a_actor, RE::FormID a_target);
+
     // Save-scoped; called from RevertCallback.
     void ResetSessionCounters();
 

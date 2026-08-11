@@ -15,6 +15,7 @@
 #include "Forms.h"        // retreat probe: g_retreatPackage for the onPkg readout
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
 #include "Temperament.h"  // flair #1: per-follower timing seed
+#include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
 
 namespace MFO::Scheduler {
 
@@ -253,14 +254,18 @@ namespace MFO::Scheduler {
         // BOTH were already fighting foes when friendly fire crossed them, no
         // enter-event fires for the crossfire. So each combat tick, if the serviced
         // follower is actively targeting a player TEAMMATE, end it on both sides.
-        // StopCombat here matches the auto-retreat's worker-side StopCombat below.
+        // Via Rapport::QuashAllyPair (v1.0.53 deck freeze): the StopCombat runs
+        // on the MAIN-thread pump, never here on the worker -- the old inline
+        // pair here raced the event-sink quash mutating the SAME actors'
+        // combat state mid-dispatch -- and the shared per-pair cooldown keeps
+        // this backstop and the sink from ping-ponging every tick.
         if (Config::g_quashAllyCombat.load()) {
             auto tp = f->GetActorRuntimeData().currentCombatTarget.get();
             if (auto* tgt = tp.get(); tgt && tgt != f && tgt->IsPlayerTeammate()) {
-                f->StopCombat();
-                tgt->StopCombat();
-                spdlog::info("[peace] {:08X} targeting teammate {:08X} -- quashed (StopCombat both)",
-                             id, tgt->GetFormID());
+                if (Rapport::QuashAllyPair(id, tgt->GetFormID())) {
+                    spdlog::info("[peace] {:08X} targeting teammate {:08X} -- quashed (StopCombat both)",
+                                 id, tgt->GetFormID());
+                }
             }
         }
 
@@ -288,6 +293,11 @@ namespace MFO::Scheduler {
                 // kIgnoreCombat travel (Auri: took=true but never moved). StopCombat
                 // every tick keeps the travel winning until she reaches you. Cheap;
                 // a no-op when she is not in combat.
+                // TODO(v1.0.53 freeze follow-up): worker-side StopCombat -- the
+                // same cross-thread concern the #63 quash just moved onto the
+                // main-thread pump (Rapport::QuashAllyPair). Migrate this one
+                // too when auto-retreat is next touched; left alone now
+                // (opt-in feature, no field freeze attributed to it).
                 f->StopCombat();
                 // Measure HER movement, not dPlayer -- dPlayer also closes when the
                 // PLAYER walks toward her (the Auri false-positive that made a

@@ -5,8 +5,33 @@
 #include "Config.h"
 #include "Followers.h"
 #include "Forms.h"         // P1 probe: the MFO caster-forward combat style
+#include "Packages.h"      // StreamLive -- the concentration bound is latch-independent
 
 namespace MFO::CasterConsent {
+
+    // CAST-CONTROL SLIDER classification -- BY THE SPELL'S EFFECTS, not the
+    // deliberating caster's vtable (v1.0.35). The vtable category mislabelled
+    // dual-purpose spells: Absorb Health deliberates through the Restore
+    // caster (it heals the caster) so it read as a Heal and slipped past
+    // "ignore buffs & heals", even though it is an ATTACK. The rule marth
+    // wants is "does it harm a foe": ANY hostile/detrimental effect -> Offense;
+    // else a beneficial Health effect -> Heal (self via Delivery); else Buff.
+    // PUBLIC since the concentration hold: Actuation picks the bounded-stream
+    // policy (hostile 1-4s / heal until-topped / utility capped) off the same
+    // taxonomy the slider's exemptions use, so the two can never disagree.
+    SpellKind ClassifySpell(RE::MagicItem* a_mi) {
+        if (!a_mi) return SpellKind::Offense;
+        bool restoresHealth = false;
+        for (auto* eff : a_mi->effects) {
+            auto* base = eff ? eff->baseEffect : nullptr;
+            if (!base) continue;
+            if (base->IsHostile() || base->IsDetrimental())
+                return SpellKind::Offense;   // harms a target -> offense, whatever else it does
+            if (base->data.primaryAV == RE::ActorValue::kHealth)
+                restoresHealth = true;       // beneficial health effect -> a heal
+        }
+        return restoresHealth ? SpellKind::Heal : SpellKind::Buff;
+    }
 
     namespace {
 
@@ -51,28 +76,6 @@ namespace MFO::CasterConsent {
         // originals are keyed by the vtable pointer we read off `this`.
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_orig;
 
-        // CAST-CONTROL SLIDER classification -- BY THE SPELL'S EFFECTS, not the
-        // deliberating caster's vtable (v1.0.35). The vtable category mislabelled
-        // dual-purpose spells: Absorb Health deliberates through the Restore
-        // caster (it heals the caster) so it read as a Heal and slipped past
-        // "ignore buffs & heals", even though it is an ATTACK. The rule marth
-        // wants is "does it harm a foe": ANY hostile/detrimental effect -> Offense;
-        // else a beneficial Health effect -> Heal (self via Delivery); else Buff.
-        enum class SpellKind : std::uint8_t { Offense, Buff, Heal };
-        SpellKind ClassifySpell(RE::MagicItem* a_mi) {
-            if (!a_mi) return SpellKind::Offense;
-            bool restoresHealth = false;
-            for (auto* eff : a_mi->effects) {
-                auto* base = eff ? eff->baseEffect : nullptr;
-                if (!base) continue;
-                if (base->IsHostile() || base->IsDetrimental())
-                    return SpellKind::Offense;   // harms a target -> offense, whatever else it does
-                if (base->data.primaryAV == RE::ActorValue::kHealth)
-                    restoresHealth = true;       // beneficial health effect -> a heal
-            }
-            return restoresHealth ? SpellKind::Heal : SpellKind::Buff;
-        }
-
         // Does the AI KEEP this spell at slider level `lvl` (i.e. MFO exempts
         // it)? "ignore X" = leave category X to the follower's AI; tighter
         // toward exact. lvl 1 ignore buffs+heals, 2 ignore heals (default),
@@ -94,6 +97,66 @@ namespace MFO::CasterConsent {
         // follower whose AI wants a different spell), never on the hot fast-out.
         std::mutex g_denyLogMx;
         std::unordered_map<RE::FormID, RE::FormID> g_lastDenied;
+
+        // Same dedup for the CONCENTRATION denies below (one line per
+        // follower+spell, not per caster tick). Shares g_denyLogMx and the
+        // same clear points as g_lastDenied; shared by the latched and the
+        // latch-independent deny so a latch flap does not double-log.
+        std::unordered_map<RE::FormID, RE::FormID> g_lastConcDeny;
+
+        // ── THE CONCENTRATION BOUND, latch-independent (v1.0.53 follow-up) ──
+        // "Exact spell bounding must affect all spells, or it may as well not
+        // exist" (marth). Actuation's ConcentrationCast early bails --
+        // packages off, self route barred, cooling, LoS occluded, teammate in
+        // the line of fire -- all return UNLATCHED, and an unlatched
+        // follower's own AI would otherwise stream the very spell MFO just
+        // refused to (the teammate-in-line bail would come straight back as
+        // AI friendly fire). So this deny keys on the SPELL and the SLIDER,
+        // never the latch: a tracked follower may run a concentration spell
+        // of a BOUNDED category on the AI channel ONLY while MFO's own
+        // bounded stream for exactly that follower+spell is live (the
+        // package cast reads live and passes these same gates). Exempt
+        // categories stay the AI's to keep; castControl<=0 and log mode stay
+        // fully hands-off; non-concentration spells fall straight through.
+        // Ordered cheap-first: two atomics, then immutable form reads, and
+        // the g_active walk (Followers::IsTracked -- the [cast] sink's
+        // event-thread precedent) only ever runs for a concentration spell.
+        bool ConcUnboundedDeny(RE::FormID a_fid, RE::MagicItem* a_mi) {
+            const int lvl = Config::g_castControl.load();
+            // EXACT-ONLY (marth). The latch-independent AI-channel bound fires
+            // ONLY at Exact (4). At levels 1-3 a follower's OWN AI concentration
+            // is vanilla-safe (self-bounded -- the freeze was MFO force-HOLDING
+            // a stream, never the AI casting one), so it is left alone; a gambit
+            // follower stays bounded there via the latched deny + package stream.
+            if (lvl < 4 || Config::g_casterMode.load() == 0) return false;
+            if (!a_mi || !a_mi->Is(RE::FormType::Spell)) return false;
+            auto* sp = a_mi->As<RE::SpellItem>();
+            if (!sp || sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration)
+                return false;
+            if (!Followers::IsTracked(a_fid)) return false;   // world casters: not ours
+            if (Packages::StreamLive(a_fid, a_mi->GetFormID()))
+                return false;                                 // OUR bounded stream -> pass
+            const SpellKind k = ClassifySpell(a_mi);
+            const bool selfHeal = k == SpellKind::Heal &&
+                a_mi->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+            return !CastExempt(k, selfHeal, lvl);             // bounded category -> deny
+        }
+
+        // Deduped, legible log for the latch-independent suppression. The
+        // packages-off case is named explicitly -- at a bounding slider level
+        // that spell is UNBOUNDABLE and never casts, which must read as a
+        // decision, not a mystery.
+        void ConcSuppressLog(RE::FormID a_fid, RE::Actor* a_actor, RE::FormID a_spell) {
+            std::lock_guard<std::mutex> dl(g_denyLogMx);
+            auto& last = g_lastConcDeny[a_fid];
+            if (last == a_spell) return;
+            last = a_spell;
+            spdlog::info("[cast] {:08X} {} concentration {:08X} suppressed -- no live bounded "
+                         "stream to ride{}",
+                         a_fid, a_actor->GetName() ? a_actor->GetName() : "?", a_spell,
+                         Config::g_usePackages.load()
+                             ? "" : " (packages OFF: unboundable at this slider level)");
+        }
 
         // Same throttle idea for the PACING deny (v1.0.32): one info line per
         // cooldown WINDOW, keyed on the window's expiry -- a window is denied
@@ -320,7 +383,9 @@ namespace MFO::CasterConsent {
             const auto fid = actor->GetFormID();
 
             // Is this follower latched? Decide BEFORE touching the caster's
-            // spell -- for every non-latched actor we never read magicItem.
+            // spell -- for a non-latched actor, magicItem is only ever read
+            // behind ConcUnboundedDeny's two atomic gates (the latch-
+            // independent concentration bound), never on the plain fast-out.
             // The permit deadline rides the same latch entry and the same
             // shared lock (v1.0.32, the "existing locks" rule): the thunk must
             // not call Loadout's non-atomic maps from the combat thread.
@@ -349,7 +414,18 @@ namespace MFO::CasterConsent {
                 g_styleSwapCount.load(std::memory_order_relaxed) != 0) {
                 ProbeStyleTick(fid, actor, a_cc, latched);
             }
-            if (!latched) return aiSaysYes;
+            if (!latched) {
+                // LATCH-INDEPENDENT concentration bound (see ConcUnboundedDeny):
+                // ConcentrationCast's early bails return unlatched, and the AI
+                // channel must not reopen there. The helper is ordered cheap-
+                // first (magicItem is only read past two atomic gates), so the
+                // worldwide unlatched fast-out stays effectively free.
+                if (ConcUnboundedDeny(fid, a_this->magicItem)) {
+                    ConcSuppressLog(fid, actor, a_this->magicItem->GetFormID());
+                    return false;
+                }
+                return aiSaysYes;
+            }
 
             // Only now, for the one latched follower, read the item in hand.
             //
@@ -407,6 +483,33 @@ namespace MFO::CasterConsent {
                              "(mode=log)", fid, actor->GetName() ? actor->GetName() : "?",
                              wantSpell, aiSaysYes ? "YES" : "NO");
                 return aiSaysYes;
+            }
+
+            // CONCENTRATION IS NEVER FORCE-YESED (v1.0.53 deck freeze). The
+            // force-YES below means "cast the spell in your hand NOW" -- and
+            // for a concentration spell the combat AI then HOLDS the channel,
+            // with the standing latch re-permitting it every cooldown. That
+            // was the permanent Flames stream: Lucien streaming through
+            // Xelzaz, friendly fire re-aggroing the pair every frame. The
+            // bounded stream is PACKAGE-driven (Actuation's concentration
+            // hold; a package cast never deliberates through this hook), so
+            // the AI's own attempt at the wanted spell is denied outright --
+            // exact-mode bounding with no unbounded channel left. AFTER the
+            // log-mode return above: LOG mode still only observes. mi passed
+            // the Is(Spell) gate above, so As<SpellItem>() resolves.
+            if (auto* sp = mi->As<RE::SpellItem>();
+                sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                {
+                    std::lock_guard<std::mutex> dl(g_denyLogMx);
+                    auto& last = g_lastConcDeny[fid];
+                    if (last != wantSpell) {
+                        last = wantSpell;
+                        spdlog::info("[consent] {:08X} {} concentration {:08X} -- AI cast "
+                                     "denied (stream is package-bounded)", fid,
+                                     actor->GetName() ? actor->GetName() : "?", wantSpell);
+                    }
+                }
+                return false;
             }
 
             // PACING (v1.0.32). The force-YES below used to have no cooldown
@@ -588,7 +691,15 @@ namespace MFO::CasterConsent {
                              std::this_thread::get_id() == g_mainThread ? "the MAIN" : "a NON-main");
 
             const bool ff = Config::g_friendlyFireHold.load(std::memory_order_relaxed);
-            if (g_wantCount.load(std::memory_order_relaxed) == 0 && !ff) return aiOK;
+            // The fast-out stays open unless cast control is at EXACT (4): the
+            // latch-independent concentration bound (below) runs only at Exact
+            // now (marth's exact-only scope), and ConcentrationCast's early
+            // bails are exactly the zero-latch case it must still catch there.
+            // At levels 1-3 there is nothing latch-independent to do, so the
+            // zero-latch/no-ff fast-out is taken as before. With ff defaulted
+            // ON this condition was already almost never taken anyway.
+            if (g_wantCount.load(std::memory_order_relaxed) == 0 && !ff &&
+                Config::g_castControl.load(std::memory_order_relaxed) < 4) return aiOK;
             // NORMAL SPELLS ONLY -- not staves/scrolls (non-Spell forms) nor
             // shouts/powers/abilities (SpellItems, but not GetSpellType()==kSpell).
             if (!a_spell || !a_spell->Is(RE::FormType::Spell) ||
@@ -596,6 +707,18 @@ namespace MFO::CasterConsent {
             auto* actor = a_this->GetCasterAsActor();
             if (!actor) return aiOK;
             const auto fid = actor->GetFormID();
+
+            // CONCENTRATION, latch-independent -- the HARD half of the bound.
+            // The CheckStartCast suppression is advisory and advisory denies
+            // LEAK (deck-proven, the reason this hook exists); this is the
+            // pre-charge gate that actually stops a leaked stream. BEFORE
+            // ShouldDeny's wanted-allow, so a latched follower's own attempt
+            // at the gambit concentration spell is caught too. MFO's package
+            // stream reads StreamLive and passes untouched.
+            if (ConcUnboundedDeny(fid, a_spell)) {
+                AbortLog(fid, actor, a_spell->GetFormID(), "concentration unbounded");
+                return false;
+            }
 
             // HARD EXCLUSIVE CONTROL: refuse a latched follower's non-gambit spell
             // at the gate -> no charge, no animation, the engine fizzles cleanly.
@@ -721,6 +844,7 @@ namespace MFO::CasterConsent {
             std::lock_guard<std::mutex> dl(g_denyLogMx);
             g_lastDenied.erase(a_follower);
             g_lastPacedWindow.erase(a_follower);
+            g_lastConcDeny.erase(a_follower);
         }
         { std::lock_guard<std::mutex> al(g_abortLogMx); g_lastAbort.erase(a_follower); }
         FFReset(a_follower);   // v1.0.35: drop the friendly-fire decay counter
@@ -738,6 +862,7 @@ namespace MFO::CasterConsent {
             std::lock_guard<std::mutex> dl(g_denyLogMx);
             g_lastDenied.clear();
             g_lastPacedWindow.clear();
+            g_lastConcDeny.clear();
         }
         { std::lock_guard<std::mutex> al(g_abortLogMx); g_lastAbort.clear(); }
         { std::lock_guard<std::mutex> fl(g_ffMx); g_ffHold.clear(); }

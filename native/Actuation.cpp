@@ -176,6 +176,120 @@ namespace MFO::Actuation {
             return std::nullopt;
         }
 
+        // ── CONCENTRATION: the BOUNDED STREAM (v1.0.53 deck freeze) ──────────
+        // A concentration spell has no "one cast" for the fire-and-forget
+        // machinery to observe: force-YESing it to the AI made a PERMANENT
+        // held stream (Lucien's Flames through Xelzaz -- the freeze), and
+        // skipping it was rejected -- exact bounding must cover EVERY spell
+        // class, no AI escape hatch (marth). So MFO streams it ITSELF through
+        // the proven package route (§0.21/0.22: concentration casts animated
+        // on every probed axis), with the bound stated UP FRONT and enforced
+        // by Packages::Pump each tick:
+        //   hostile  -- 1-4 s by temperament (each mage's breath is
+        //               consistently their own), cut EARLY the moment a
+        //               teammate crosses the line of fire;
+        //   heal     -- until the target tops off, capped;
+        //   utility  -- a capped hold; "still relevant" is the rule still
+        //               WINNING, which re-fires another bounded stream after
+        //               the cooldown rather than holding one open forever.
+        // Release is eviction + InterruptCast (Packages::ClearAlias), so the
+        // beam dies with the package. The AI-first grace is deliberately NOT
+        // offered here: the CheckStartCast hook denies the AI's own attempt
+        // at a wanted concentration spell (an AI channel cannot be bounded),
+        // so the package stream is the ONLY open channel. Every exit below
+        // is bounded: a dispatched hold, a transparent wait, or a legible
+        // failure (§5.3) -- never "leave it to their AI".
+        constexpr float kConcHealCap     = 6.0f;   // heal stream hard cap
+        constexpr float kConcUtilityHold = 4.0f;   // utility hold cap
+
+        Outcome ConcentrationCast(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                  RE::Actor* a_target) {
+            const auto id   = a_follower->GetFormID();
+            const bool self = !a_target || a_target == a_follower;
+
+            // No package, no stream. The silent fallback is meaningless for a
+            // channel (an instant apply of a per-second effect), so this
+            // fails LEGIBLY instead -- transparent, the rules below run.
+            if (!Config::g_forceCastOnMiss.load() || !Packages::Available()) {
+                return { Result::FailedOther,
+                         "concentration needs the cast package (bForceCastOnMiss+bUsePackages)",
+                         true };
+            }
+            // The package self route is BARRED (QNAM+t6, the unprobed rev-4
+            // CTD cell -- Packages::Begin). No bounded self-stream exists
+            // yet, and an unbounded one is not an acceptable substitute.
+            if (self) {
+                return { Result::FailedOther,
+                         "concentration self-cast unreachable (package self route barred)",
+                         true };
+            }
+            // PACING -- the same fCastCooldown every other gambit cast obeys,
+            // consulted directly (no equip machinery on this path to consult
+            // it for us). This is what spaces one bounded stream from the
+            // next. Same reason string as Prepare's, for the transition log.
+            if (Loadout::CoolingDown(id)) {
+                return { Result::NoOp, "cast cooling down", true };
+            }
+            // LoS: never stream into a wall (the forced shot's gate).
+            if (Sightline::Check(id, a_target->GetFormID()) ==
+                Sightline::Verdict::Occluded) {
+                return { Result::NoOp, "forced cast held (no line of sight)", true };
+            }
+
+            const auto kind = CasterConsent::ClassifySpell(a_spell);
+
+            // THE LINE-OF-FIRE GATE, hostile streams, NOT optional: friendly
+            // fire from a stream is what triggered the freeze; the #63 quash
+            // is a backstop, never a license. The same check re-runs every
+            // Pump tick mid-stream (ffWatch) and cuts the beam if someone
+            // walks into it.
+            if (kind == CasterConsent::SpellKind::Offense &&
+                Sightline::TeammateInFireLine(id, a_target->GetFormID())) {
+                return { Result::NoOp,
+                         "concentration held (teammate in the line of fire)", true };
+            }
+
+            Packages::CastHold hold;
+            const char*        kindName = "utility";
+            if (kind == CasterConsent::SpellKind::Offense) {
+                hold.holdSeconds = 1.0f + 3.0f * Temperament(id);   // 1-4 s, flair #1
+                hold.ffWatch     = true;
+                kindName         = "hostile";
+            } else if (kind == CasterConsent::SpellKind::Heal) {
+                hold.holdSeconds = kConcHealCap;
+                hold.healWatch   = a_target->GetFormID();
+                kindName         = "heal";
+            } else {
+                hold.holdSeconds = kConcUtilityHold;
+            }
+
+            const auto d = Packages::CastAt(a_follower, a_spell, a_target, hold);
+            if (d == Packages::Decline::None) {
+                // Exclusive control while the rule governs: the latch's DENY
+                // of other spells is the exact-mode bounding, and the
+                // concentration deny in CheckStartCast keeps the PERMIT half
+                // off, so the latch can never re-arm an AI stream. The
+                // cooldown paces the next stream.
+                CasterConsent::Want(id, a_spell->GetFormID());
+                Loadout::StartCooldown(id);
+                spdlog::info("[cast] {:08X} {} CONCENTRATION {} ({:08X}) at {:08X} -- "
+                             "{} stream, hold {:.1f}s{}",
+                             id, a_follower->GetName() ? a_follower->GetName() : "?",
+                             a_spell->GetName() ? a_spell->GetName() : "?",
+                             a_spell->GetFormID(), a_target->GetFormID(), kindName,
+                             hold.holdSeconds,
+                             hold.healWatch ? " (or until healed)" : "");
+                return { Result::Fired, "concentration stream (bounded)" };
+            }
+            if (d == Packages::Decline::Busy) {
+                // Our own live stream lands here every tick while it runs --
+                // the wait IS the action; transparent like the FF form.
+                return { Result::NoOp, "cast package busy", true };
+            }
+            // Structural decline -- Packages already logged the reason.
+            return { Result::FailedOther, "concentration cast declined (see [pkg])", true };
+        }
+
         // a_rangeGate (#68): true only for an OBVIOUS target (ladder rungs
         // 1-3 -- a selector, an explicit subject, a condition-implied actor).
         // The PLAYER FALLBACK (rung 4) always passes false: a rule that
@@ -289,6 +403,16 @@ namespace MFO::Actuation {
                                  true };   // transparent -- fall to steel (§3.5)
                     }
                 }
+            }
+
+            // CONCENTRATION forks off HERE -- after the range and competence
+            // gates (a stream obeys §5.3 and #68 like any cast), BEFORE the
+            // equip/grace/force machinery, all of which assumes a
+            // fire-and-forget release to observe. The bounded stream is its
+            // own actuation (see ConcentrationCast above).
+            if (spell->GetCastingType() ==
+                RE::MagicSystem::CastingType::kConcentration) {
+                return ConcentrationCast(a_follower, spell, a_target);
             }
 
             // THE FOLLOWER CASTS IT -- MFO does not cast on their behalf.

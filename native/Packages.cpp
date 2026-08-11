@@ -3,6 +3,7 @@
 #include "Followers.h"
 #include "Config.h"
 #include "Forms.h"
+#include "Sightline.h"   // concentration hold: the mid-stream line-of-fire watch
 
 namespace MFO::Packages {
 
@@ -151,8 +152,25 @@ namespace MFO::Packages {
             // after -- the "cast happened, hand him back" edge §0.23 lacked.
             bool              castSeen   = false;
             Clock::time_point castSeenAt{};
+            // CONCENTRATION HOLD (see Packages.h). holdSeconds == 0 is the
+            // fire-and-forget lifecycle above; > 0 replaces the linger with
+            // the caller's bound and arms the early-release watches. targetID
+            // is the aim ref, kept for the ffWatch line check. Same
+            // single-writer discipline as every other g_holder field.
+            CastHold          hold{};
+            RE::FormID        targetID   = 0;
         };
         Holder g_holder;
+
+        // THE LIVE-STREAM MIRROR, for the CONSENT HOOKS. g_holder is single-
+        // writer (the serialized task queue) and lock-free, so the caster-
+        // thread hooks may not read it. This atomic mirrors exactly one fact
+        // -- "MFO's bounded concentration stream for (actor, spell) is live"
+        // -- packed (actor << 32 | spell), 0 = none. Set in the same Begin
+        // call that dispatches the fill -- package selection runs at AI
+        // cadence, so the package's own cast always finds it live -- and
+        // cleared in ResetHolder (every release path, ReleaseAll included).
+        std::atomic<std::uint64_t> g_liveStream{ 0 };
 
         std::atomic<std::uint32_t> g_requests{ 0 };
         std::atomic<std::uint32_t> g_completions{ 0 };
@@ -595,6 +613,7 @@ namespace MFO::Packages {
 
         void ResetHolder() {
             g_holder = Holder{};
+            g_liveStream.store(0, std::memory_order_relaxed);
         }
 
         // Defined below with the eviction-marker machinery (#48); declared here
@@ -640,13 +659,30 @@ namespace MFO::Packages {
             // detached. Re-evaluate so the framework reclaims him THIS tick.
             if (auto* actor = HolderActor()) {
                 actor->EvaluatePackage(true, false);   // never resetAI -- combat group
+                // CONCENTRATION: CUT THE STREAM. Eviction re-evaluates the
+                // package away, but a channel the graph already opened can
+                // outlive the package by a beat -- and a beam that lingers
+                // even one beat past "teammate crossed the line" is the
+                // friendly fire this hold exists to prevent. InterruptCast on
+                // all three plausible sources (the package's casting source
+                // is not observable); no refund -- package casts spend
+                // nothing (§0.22). Same worker-side call Actuation's
+                // bDriveCaster probe ships.
+                if (g_holder.hold.holdSeconds > 0.0f) {
+                    using CS = RE::MagicSystem::CastingSource;
+                    for (const auto src : { CS::kLeftHand, CS::kRightHand, CS::kInstant }) {
+                        if (auto* mc = actor->GetMagicCaster(src)) mc->InterruptCast(false);
+                    }
+                    spdlog::info("[pkg] {:08X}: concentration stream interrupted ({})",
+                                 id, a_why);
+                }
                 VerifyDetachedFrom(quest, actor, "pkg", "MFO_CommandQuest", a_why);
             }
             ResetHolder();
         }
 
         Decline Begin(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                      RE::TESObjectREFR* a_target) {
+                      RE::TESObjectREFR* a_target, const CastHold& a_hold) {
             if (!Config::g_usePackages.load()) return Decline::Disabled;
             if (!a_follower || !a_spell)       return Decline::NoRecord;
 
@@ -746,16 +782,26 @@ namespace MFO::Packages {
             }
 
             ResetHolder();
-            g_holder.actorID = id;
-            g_holder.spellID = a_spell->GetFormID();
-            g_holder.startAt = Clock::now();
-            g_holder.phaseAt = Clock::now();
-            g_holder.phase   = Phase::Requested;
+            g_holder.actorID  = id;
+            g_holder.spellID  = a_spell->GetFormID();
+            g_holder.targetID = a_target ? a_target->GetFormID() : 0;
+            g_holder.hold     = a_hold;
+            g_holder.startAt  = Clock::now();
+            g_holder.phaseAt  = Clock::now();
+            g_holder.phase    = Phase::Requested;
+            if (a_hold.holdSeconds > 0.0f) {
+                g_liveStream.store((static_cast<std::uint64_t>(id) << 32) |
+                                       a_spell->GetFormID(),
+                                   std::memory_order_relaxed);
+            }
             ++g_requests;
 
-            spdlog::info("[pkg] {:08X}: requested cast of {:08X} ({}) -- fill DISPATCHED, "
+            spdlog::info("[pkg] {:08X}: requested cast of {:08X} ({}){} -- fill DISPATCHED, "
                          "not yet observed", id, g_holder.spellID,
-                         a_target ? "at reference" : "self/alias-0");
+                         a_target ? "at reference" : "self/alias-0",
+                         a_hold.holdSeconds > 0.0f
+                             ? std::format(" [concentration hold {:.1f}s]", a_hold.holdSeconds)
+                             : std::string());
             return Decline::None;
         }
 
@@ -875,7 +921,7 @@ namespace MFO::Packages {
     }
 
     Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell) {
-        const auto r = Begin(a_follower, a_spell, nullptr);
+        const auto r = Begin(a_follower, a_spell, nullptr, {});
         if (r != Decline::None) {
             ++g_declines;
             spdlog::debug("[pkg] {:08X}: declined -- {}",
@@ -884,16 +930,68 @@ namespace MFO::Packages {
         return r;
     }
 
+    bool StreamLive(RE::FormID a_actor, RE::FormID a_spell) {
+        if (!a_actor || !a_spell) return false;   // never match the empty mirror
+        return g_liveStream.load(std::memory_order_relaxed) ==
+               ((static_cast<std::uint64_t>(a_actor) << 32) | a_spell);
+    }
+
     Decline CastAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                   RE::TESObjectREFR* a_target) {
+                   RE::TESObjectREFR* a_target, const CastHold& a_hold) {
         if (!a_target) return CastSelf(a_follower, a_spell);
-        const auto r = Begin(a_follower, a_spell, a_target);
+        const auto r = Begin(a_follower, a_spell, a_target, a_hold);
         if (r != Decline::None) {
             ++g_declines;
             spdlog::debug("[pkg] {:08X}: declined -- {}",
                           a_follower ? a_follower->GetFormID() : 0u, DeclineName(r));
         }
         return r;
+    }
+
+    namespace {
+
+        // The heal stream's release condition: the watched actor's health is
+        // (near-)full. Runs on the same serialized queue as Pump; the reads
+        // are the Actuation reserve-gate idiom (GetPermanentActorValue + the
+        // temporary modifier = the live maximum). An unresolvable/dead watch
+        // reads as TOPPED -- there is nothing left to heal, stop streaming.
+        constexpr float kConcHealedFrac = 0.95f;
+        bool HealWatchTopped(RE::FormID a_id) {
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id);
+            if (!a || a->IsDead() || !a->Is3DLoaded()) return true;
+            auto* avo = a->AsActorValueOwner();
+            if (!avo) return true;
+            const float cur = avo->GetActorValue(RE::ActorValue::kHealth);
+            const float mx  = avo->GetPermanentActorValue(RE::ActorValue::kHealth) +
+                              a->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
+                                                       RE::ActorValue::kHealth);
+            return mx <= 0.0f || cur >= kConcHealedFrac * mx;
+        }
+
+        // The pop's completion condition, HOLD-AWARE. Fire-and-forget
+        // (holdSeconds == 0): one linger after the observed cast --
+        // unchanged. Concentration (holdSeconds > 0): the stream is BOUNDED
+        // -- release when the hold elapses, earlier when the watched heal
+        // target tops off, earlier still when a teammate crosses the line of
+        // fire. nullptr = keep holding. Always anchored on castSeen: the
+        // clock starts when the STREAM is observed, not when it was asked
+        // for, so a slow package start cannot eat the hold.
+        const char* CastPopDue() {
+            if (!g_holder.castSeen) return nullptr;
+            if (g_holder.hold.holdSeconds <= 0.0f) {
+                return Since(g_holder.castSeenAt) > kPostCastLinger
+                           ? "cast observed -- releasing" : nullptr;
+            }
+            if (Since(g_holder.castSeenAt) > g_holder.hold.holdSeconds)
+                return "concentration hold elapsed";
+            if (g_holder.hold.healWatch != 0 && HealWatchTopped(g_holder.hold.healWatch))
+                return "heal target topped off";
+            if (g_holder.hold.ffWatch &&
+                Sightline::TeammateInFireLine(g_holder.actorID, g_holder.targetID))
+                return "teammate crossed the line of fire";
+            return nullptr;
+        }
+
     }
 
     void Pump() {
@@ -943,8 +1041,10 @@ namespace MFO::Packages {
             // The pop's completion condition can beat the Running observation:
             // the [cast] sink fires the instant the spell releases, while
             // GetCurrentPackage is only sampled here at tick cadence.
-            if (g_holder.castSeen && Since(g_holder.castSeenAt) > kPostCastLinger) {
-                SetPhase(Phase::Done, "cast observed -- releasing");
+            // CastPopDue is the hold-aware form: linger for fire-and-forget,
+            // the caller's bound + early-release watches for concentration.
+            if (const char* pop = CastPopDue()) {
+                SetPhase(Phase::Done, pop);
                 ++g_completions;
             } else if (running) {
                 SetPhase(Phase::Running, "package is the actor's current package");
@@ -968,8 +1068,9 @@ namespace MFO::Packages {
             // follower back rather than letting the package's own Cooldown/
             // NumToCast keep him rooted for another cycle. The natural
             // "package no longer current" edge stays as the other half.
-            if (g_holder.castSeen && Since(g_holder.castSeenAt) > kPostCastLinger) {
-                SetPhase(Phase::Done, "cast observed -- releasing");
+            // CastPopDue is hold-aware (concentration bounds, see above).
+            if (const char* pop = CastPopDue()) {
+                SetPhase(Phase::Done, pop);
                 ++g_completions;
             } else if (!running) {
                 SetPhase(Phase::Done, "package no longer current");
@@ -1011,8 +1112,14 @@ namespace MFO::Packages {
         if (g_holder.castSeen) return;
         g_holder.castSeen   = true;
         g_holder.castSeenAt = Clock::now();
-        spdlog::info("[pkg] {:08X}: commanded cast OBSERVED ({:08X}) -- releasing in {:.1f}s",
-                     a_actorID, a_spellID, kPostCastLinger);
+        // For a concentration hold this line announces the BOUND, not the
+        // linger -- the field log must show the promised release up front.
+        spdlog::info("[pkg] {:08X}: commanded cast OBSERVED ({:08X}) -- releasing in {:.1f}s{}",
+                     a_actorID, a_spellID,
+                     g_holder.hold.holdSeconds > 0.0f ? g_holder.hold.holdSeconds
+                                                      : kPostCastLinger,
+                     g_holder.hold.holdSeconds > 0.0f ? " (concentration hold, or earlier)"
+                                                      : "");
     }
 
     void EnsureEvictMarker() {
@@ -1113,7 +1220,11 @@ namespace MFO::Packages {
         // cast): the command alias fill is engine-serialized like loot's and
         // retreat's, so a save written MID-CAST loads with the follower still
         // claimed at static 60 by a UseMagic alias package -- rooted, aimed at
-        // a stale alias-1 target, on every subsequent load. This sweep runs
+        // a stale alias-1 target, on every subsequent load. The concentration
+        // hold widens the filled window (up to kRunTimeout), so mid-stream
+        // saves hit this sweep MORE OFTEN -- same handling, higher hit rate;
+        // the in-session half (holder + StreamLive mirror) is cleared by the
+        // phase!=Idle ClearAlias below via ResetHolder. This sweep runs
         // whether or not this session's holder mirror knows anything (a
         // PREVIOUS session's latch is exactly the case the mirror cannot see).
         // Evict any ACTOR occupant, the player included (#48b); the VM Clear

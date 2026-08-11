@@ -1,3 +1,21 @@
+## v1.0.58 -- concentration spells: bounded, and no more freeze
+
+- Fixed a hard freeze (the game hangs, no crash log) that could strike when a
+  follower ran a cast gambit for a concentration spell like Flames. The spell
+  became a permanent held stream that sprayed a nearby teammate; that friendly
+  fire made the two followers fight, and the "followers stop fighting each other"
+  safety then deadlocked the game trying to break up the endless re-aggro. The
+  whole chain is closed -- the ally-combat quash can no longer lock up, and the
+  stream that started it is bounded (below).
+- Concentration spells now cast PROPERLY BOUNDED instead of streaming forever:
+  hostile streams (Flames, Frostbite, Sparks) hold ~1-4 seconds, healing streams
+  hold until the target is topped off, utility holds while it's relevant -- each
+  with a clean cut-off. A follower never rakes an ally: the stream won't start,
+  and cuts out mid-cast, if a teammate (or you) crosses its line of fire.
+- At the "Exact spell" cast-control setting, concentration spells are now held to
+  the same rule as every other spell -- no spell class can slip the exact bound.
+  Lower cast-control settings leave a follower's own concentration casting alone.
+
 ## v1.0.53 -- combat pathing fix: melee/ranged followers stop moving like casters
 
 - Fix: a follower forced to melee or ranged now MOVES like one. MFO's combat-style
