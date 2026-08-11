@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest public:** v1.0.48 · **v1.0.52 DEPLOYED to Tuxborn (DLL e28842f5, run 31451550335) = loose-loot native-ActivateRef pickup atop v1.0.49-51; FIELD-TEST PENDING; public release HELD** · inruo debug branch building (#71) · **#62/#66/#67 shipped**
+> **Last updated:** 2026-08-11 · **Latest public:** v1.0.52 (GitHub release CUT — bundles v1.0.49-52) · field-confirmed: #63 peace, #65 class dropdown, #68 cond.dark, loose-loot pickup. Nexus kit prep in progress. inruo/#71 tester build out. Next: TOWN UPDATE (#31).
 
 > **v1.0.50:** #65 = per-follower Combat Class dropdown on the board (Auto/Melee/
 > Ranged/Mage), Auto=no-override (custom-follower-safe #64), forces the CSTY stance
