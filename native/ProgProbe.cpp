@@ -240,7 +240,7 @@ namespace MFO::ProgProbe {
         constexpr struct { RE::ActorValue av; const char* name; } kSkills[] = {
             { RE::ActorValue::kOneHanded,   "OneHanded" },
             { RE::ActorValue::kTwoHanded,   "TwoHanded" },
-            { RE::ActorValue::kMarksman,    "Marksman" },
+            { RE::ActorValue::kArchery,     "Archery" },
             { RE::ActorValue::kBlock,       "Block" },
             { RE::ActorValue::kHeavyArmor,  "HeavyArmor" },
             { RE::ActorValue::kLightArmor,  "LightArmor" },
