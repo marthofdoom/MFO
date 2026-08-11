@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest:** v1.0.61 (creature weapons DELETED not handed to player — follow-up to #73; building) · **Latest public:** v1.0.60 (#73 creature-weapon loot fix) · prior public: v1.0.59 (controller fix, field-confirmed), v1.0.58 (concentration freeze). Next: FOLLOWER-PROGRESSION ESL ADDON (#74), then town update (#31).
+> **Last updated:** 2026-08-11 · **Latest public:** v1.0.61 (creature weapons DELETED not handed to player — follow-up to #73) · **Latest public:** v1.0.60 (#73 creature-weapon loot fix) · prior public: v1.0.59 (controller fix, field-confirmed), v1.0.58 (concentration freeze). Next: FOLLOWER-PROGRESSION ESL ADDON (#74), then town update (#31).
 
 > **v1.0.61 — creature weapons DELETED, not handed to player** (marth: a creature
 > weapon is non-playable, useless clutter on the player too). `HealExcludedWeapon`
