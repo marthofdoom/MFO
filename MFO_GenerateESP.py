@@ -867,20 +867,24 @@ def make_pack():
 
 
 # ── CSTY: MFO's combat styles (stance ownership) ───────────────────────────
-def _csty_record(edid, fid, csgd_floats):
-    """One CSTY record. Byte shape MIRRORED from vanilla csHumanMagic (0003BE1C),
-    dumped from Skyrim.esm per doctrine (never format docs): EDID, CSGD 40 bytes
-    (10 floats, the CommonLibSSE-NG CombatStyleGeneralData layout), CSME 28 bytes
+def _csty_record(edid, fid, csgd_floats, cscr):
+    """One CSTY record. Byte shape MIRRORED from vanilla humanoid styles (dumped
+    from Skyrim.esm per doctrine, never format docs): EDID, CSGD 40 bytes (10
+    floats, the CommonLibSSE-NG CombatStyleGeneralData layout), CSME 28 bytes
     (7 floats -- the on-disk record carries one float FEWER than the runtime
     struct's 8; mirror the disk, the loader zero-fills), CSCR 16, CSLR 4, CSFL 28
     (same 7-of-8 truncation), DATA 4 (flags, 1 = dueling).
 
-    ONLY the CSGD scoring axis varies between MFO's styles -- every behavioural
-    multiplier below it stays byte-verbatim csHumanMagic, so each style has one
-    moving part (the weapon-selection scoring)."""
+    TWO axes vary between MFO's styles: the CSGD weapon-SCORING (which weapon the
+    style prefers) AND the CSCR close-range POSITIONING (`cscr`, 16 raw bytes taken
+    byte-verbatim from the MATCHING vanilla style -- see make_csty). Everything
+    else stays byte-verbatim csHumanMagic. CSCR must be per-style: it was verbatim
+    csHumanMagic for all three, so a follower forced to MELEE kept the mage's low
+    circle / high fallback and drifted backwards instead of closing (marth: battle
+    pathfinding "worse")."""
+    assert len(cscr) == 16, "CSCR is 16 bytes (circleMult, fallbackMult, flankDistance, stalkTime)"
     csgd = struct.pack('<10f', *csgd_floats)
     csme = struct.pack('<7f', 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
-    cscr = struct.pack('<4f', 0.3, 0.5, 0.2, 0.2)
     cslr = struct.pack('<f', 0.2)
     csfl = struct.pack('<7f', 0.33, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5)
     body = (subrec('EDID', zstr(edid))
@@ -908,12 +912,22 @@ def make_csty():
       for act.equip_ranged so a follower (even a mage handed a bow) kites/shoots.
     The stance follows the winning EQUIP gambit, not the follower's class, so
     "make my mage melee" / "make my mage shoot" fall out for free."""
+    # CSCR (close-range positioning) taken BYTE-VERBATIM from the MATCHING vanilla
+    # humanoid style, dumped from Skyrim.esm (doctrine: mirror the disk). Order is
+    # circleMult, fallbackMult, flankDistance, stalkTime. The old code used the
+    # csHumanMagic values (0.3/0.5/0.2/0.2) for ALL THREE, so a forced-melee
+    # follower kept the mage's low circle + high fallback and drifted backwards
+    # instead of closing -- the "battle pathfinding worse" report. Now each style
+    # positions like its vanilla counterpart:
+    CSCR_MAGE   = bytes.fromhex('9a99993e0000003fcdcc4c3ecdcc4c3e')  # csHumanMagic     0003BE1C: circle 0.30 / fallback 0.50
+    CSCR_MELEE  = bytes.fromhex('48e13a3f3d0ad73ecdcc4c3ecdcc4c3e')  # csHumanMeleeLvl1 0003BE1B: circle 0.73 / fallback 0.42
+    CSCR_RANGED = bytes.fromhex('6666e63e6666263fcdcc4c3ecdcc4c3e')  # csHumanMissile   0003BE1D: circle 0.45 / fallback 0.65
     cast   = _csty_record("MFO_CastStyle",   FID_CAST_STYLE,
-                          (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2))
+                          (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2), CSCR_MAGE)
     melee  = _csty_record("MFO_MeleeStyle",  FID_MELEE_STYLE,
-                          (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0))
+                          (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0), CSCR_MELEE)
     ranged = _csty_record("MFO_RangedStyle", FID_RANGED_STYLE,
-                          (1.0, 0.5, 1.0, 0.1, 0.1, 10.0, 1.0, 0.1, 0.1, 0.5))
+                          (1.0, 0.5, 1.0, 0.1, 0.1, 10.0, 1.0, 0.1, 0.1, 0.5), CSCR_RANGED)
     return group('CSTY', cast + melee + ranged)
 
 
