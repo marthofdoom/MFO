@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.48 · **v1.0.49 = #68 cast-targeting + #69 stock-gear (pushed to CI); deploy to Tuxborn on green** · **#62/#66/#67 shipped**
+> **Last updated:** 2026-08-11 · **Latest public:** v1.0.48 · **v1.0.49 = #68 + #69 DEPLOYED to Tuxborn (DLL 6083a197, run 31444592472, deck-verified); FIELD-TEST PENDING; public GitHub release HELD until marth confirms** · **#62/#66/#67 shipped**
 
 > **v1.0.49 (#68 + #69), marth's combined drop.** #69 = stock-loadout snapshot
 > (co-save `MSTK` record, snapshot at first management, never shed/displace stock
