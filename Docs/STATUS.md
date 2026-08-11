@@ -44,6 +44,14 @@
 > alone (vanilla-safe/self-bounded).** Principle recorded: [[exact-bounding-covers-all-spells]].
 > kRunTimeout(12s) backstops every exit; no new co-save fields. VR re-entrancy also
 > closed (M1). Field-test pending marth.
+> **FOLLOW-UP #72 DEFERRED (marth, only-if-needed):** framework followers (Lucien/
+> Xelzaz) are §4.6-declined for the package-driven bound (quest owns them at 80/99 vs
+> MFO 60, #64), so v1.0.58's cap + FF gate don't reach them — they cast concentration
+> via their own AI, unmanaged-but-safe (deadlock fix + AI self-bounds). Fable scoped a
+> monitor-and-interrupt fix via the hook layer (bound the AI's own stream, never touch
+> their package; ~150-250 lines + a Deck interrupt-cleanliness probe; also memoize the
+> §4.6 verdict to kill [pkg] DECLINED log spam). Build ONLY if a framework mage's
+> unmanaged concentration causes an observable field problem.
 
 > **v1.0.53 — DEPLOYED to Tuxborn** (DLL `75bb3c00`, ESP `a05c1b1d`, both deck-verified; tag `v1.0.53` pushed). Field-test PENDING marth: melee/ranged followers should hold ground / keep bowman spacing instead of back-pedalling like casters. CSTY combat-pathfinding fix. MFO's three combat-style records
 > (MFO_MeleeStyle/RangedStyle/CastStyle) were copying their close-range positioning
