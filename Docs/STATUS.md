@@ -8,6 +8,8 @@
 >
 > **Last updated:** 2026-08-11 · **Latest public:** v1.0.61 (creature weapons DELETED not handed to player — completes #73) · prior public: v1.0.60 (#73 creature-weapon loot fix), v1.0.59 (controller fix, field-confirmed), v1.0.58 (concentration freeze). Next: FOLLOWER-PROGRESSION ESL ADDON (#74), then town update (#31).
 
+> **#74 DESIGN PASS DONE (2026-08-11) — feasibility GREEN.** Full doc: `Docs/FOLLOWER-PROGRESSION-ESL-DESIGN.md`. AVIF perk-tree graph + PERK introspection verified in CommonLibSSE-NG → render + gate the real merged trees player-identically, NO Synthesis. Engine surprise: `Actor::AddPerk` is a NPC no-op → `TESNPC::AddPerk`+`ApplyPerksFromBase()` (SPID pattern, already live in LoreRim). ESL = 2 GLOB records, co-save `PRGN`, board 3rd tab, no storage. First build = a PROBE dev build (P1 entry-point-on-NPC / P2 base-AV-vs-autocalc / P3 reapply-idempotency — log-only) before UI. AWAITING marth's calls on: XP rate, veteran catch-up, Shared-Growth default, respec free/paid, MCM-detect mechanism, v1 unique-base-only, + 5 proposed additions.
+
 > **v1.0.61 — creature weapons DELETED, not handed to player** (marth: a creature
 > weapon is non-playable, useless clutter on the player too). `HealExcludedWeapon`
 > (Logistics.cpp ~3304) now splits eviction like the v1.0.46 ARMOR fix: `IsCreatureWeapon`

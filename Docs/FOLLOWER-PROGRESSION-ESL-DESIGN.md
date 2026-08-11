@@ -1,0 +1,198 @@
+# Follower Progression ESL — Design + Feasibility
+
+**Status: DESIGN (no code). Target: the update after v1.0.61. Supersedes the town update as "next" per marth 2026-08-11.**
+
+An optional, separately-shipped ESL addon (`MFO_Progression.esl`), detected at runtime, adding: (1) real follower leveling — skill AVs + player-selectable perks from the load order's *actual* perk trees; (2) vanilla-style roster recall; (3) a gated Field Orders "Progression" tab; (4) MCM detection indicator. All heavy machinery lives in the DLL; the ESL is a switch plus a version stamp.
+
+**Feasibility verdict: GREEN.** Every risky engine unknown verified present in the CommonLibSSE-NG headers; the one surprise (`Actor::AddPerk` is a no-op on NPCs) has a proven alternative — `TESNPC::AddPerk` + `Actor::ApplyPerksFromBase()` (the SPID pattern), already running in marth's LoreRim via "Requiem - SPID Apprentice and Novice Perks for All Followers." The build is DLL-heavy, records-minimal, save-safe by construction, and sits entirely on existing MFO machinery (Board tabs, EditCmd queue, MainThread::Post, co-save records, §4.6, #65 class override).
+
+---
+
+## 1. Architecture and component split
+
+```
+MFO_Progression.esl        (generated, separate file; ~1-3 records; the feature switch)
+        │ detected at kDataLoaded
+        ▼
+native/Progression.cpp/.h  (new module)
+  ├─ Catalog     — one-time runtime read of merged AVIF trees + PERK effectiveness (kDataLoaded)
+  ├─ Allocator   — points economy, gate enforcement, apply/reapply/respec (main thread only)
+  ├─ Roster      — recall validation + MoveTo + standard-path recruit
+  └─ Snapshot    — value-only views for the board (existing Board discipline)
+native/Board.cpp           — third tab "Progression", gated; kTabCount becomes runtime
+native/Serialization.cpp   — new independent co-save record 'PRGN' (MSTK precedent)
+MFO_GenerateESP.py         — second-file emitter for the .esl
+MCM                        — Addons section, Detected line
+```
+
+**Detection:** `TESDataHandler::LookupLoadedLightModByName("MFO_Progression.esl")` at kDataLoaded + resolution of an `MFOP_Version` GLOB via a `Forms::Look`-style helper with a second plugin-name constant. Absent = feature off with one named log line, never an error (Forms failure doctrine). Plugin-file presence (not the MEO DLL↔DLL messaging handshake) is the right signal for a data addon.
+
+**Threading:** every engine mutation (AddPerk, SetBaseActorValue, MoveTo, VM calls) goes through `MainThread::Post` — never `AddTask` (job worker). Catalog build runs at kDataLoaded (already main thread).
+
+---
+
+## 2. Runtime AVIF/PERK reading — VERIFIED FEASIBLE
+
+### 2.1 The tree graph (`ActorValueInfo.h`, `BGSSkillPerkTreeNode.h`)
+`ActorValueInfo::perkTree` → root `BGSSkillPerkTreeNode`; each node exposes `perk` (PNAM, null on root), `children`/`parents` (directed + reverse edges), `perkGridX/Y` (integer grid for nav), `horizontalPosition/verticalPosition` (float dome coords for layout), `associatedSkill`. Skill AVIF via `ActorValueList::GetActorValue(av)` for the 18 skills. Live merged forms → Requiem/Ordinator/Vokrii replacements + any Synthesis output are seen automatically. Zero Synthesis dependency.
+
+Note: the skill-level requirement is NOT on the node — it lives on the PERK as conditions (§2.2). Tree gives prereq edges; perk gives the skill gate. Both are in the runtime read.
+
+### 2.2 PERK introspection (`BGSPerk.h`, entry + entry-point headers, `TESCondition.h`)
+`BGSPerk`: `data` (numRanks/playable/hidden), `perkConditions` (the skill gate, CTDA), `perkEntries`, `nextPerk` (rank chain). Entries polymorphic via `GetType()` → kQuest/kAbility/kEntryPoint; `BGSEntryPointPerkEntry` carries `entryPoint` (one of 92 ENTRY_POINT values) + per-entry conditions; `BGSAbilityPerkEntry` carries an ability spell. Conditions walk `TESCondition::head` → items exposing function id, params, comparison value/global, opcode, object (kSelf/kTarget). `TESCondition::IsTrue(actionRef, targetRef)` evaluates.
+
+### 2.3 The Catalog
+Built once at kDataLoaded, main thread, then **frozen** (immutable → render thread reads lock-free; per-follower *state* still crosses via Snapshot). Per skill: BFS from root; per node with a perk, emit value-only `PerkNodeView { perkFormID, name, desc, gridX/Y, hpos/vpos, parentIndices[], ranks[] }`, ranks[] walking `nextPerk` recording `{ formID, extracted skill req, effectiveness verdict }`. Skill-req extraction for display: condition items `function == kGetBaseActorValue` on kSelf with opcode `>=`. A few hundred nodes total, kilobytes.
+
+---
+
+## 3. NPC-effectiveness classification (the dead-perk filter)
+
+Same catalog pass. A perk rank is **effective** iff ≥1 entry is effective; perks with zero effective ranks never reach the board.
+
+- **kQuest** → dead (script/player-mechanic drivers; Ordinator's script perks land here).
+- **kAbility** → effective by default (constant ability on the owner), unless the ability's effects are player-gated.
+- **kEntryPoint** → allow/deny on the entry point:
+  - **Effective (combat/defense):** weapon-damage, attack/power-attack/bash damage, incoming damage/stagger, target stagger, damage/spell resistance, spell magnitude/duration/cost, ward absorption, block %, armor rating, apply-*-spell (combat hit/bashing/weapon-swing/reanimate/sneaking), recovered health, sneak-attack mult, detection, sweep attack, falling damage.
+  - **Dead (player UI/mechanics):** all lockpicking/pickpocketing, all crafting/harvest (tempering/enchanting/alchemy/soul gems), commerce/social (prices, intimidation, reputation, favors, bribes), player-camera/UI (bow zoom, activate labels, book skill points, shout OK, magic slowdown).
+  - **Marginal (MCM "show marginal", default hidden):** max carry weight, arrow recovery, dual-cast, mount, commanded-actor limit.
+- **Player-gate condition scan** (heuristic backstop): an AND-required item testing `kGetIsID`/`kGetIsReference` against the player marks the entry dead. Primary filter is structural; §5's evaluate-on-the-follower catches most player-gated perks for free.
+
+MCM-gated `[prog]` dump lists every filtered perk + reason, so over-filtering under a new overhaul is diagnosable from a deck log.
+
+---
+
+## 4. Applying perks and skills to a follower
+
+### 4.1 Perks: the SPID pattern
+**Verified:** `Actor::AddPerk/RemovePerk` are base no-ops (only PlayerCharacter implements them). NPC perks live on the base — `TESNPC` inherits a perk-rank array; `Actor::ApplyPerksFromBase()` applies them to the loaded actor. CommonLib provides `TESNPC::AddPerk(perk, rank)`/`RemovePerk`/`GetPerkIndex`.
+
+**Apply (main thread):** `GetActorBase()->AddPerk(perk, rank)` → `ApplyPerksFromBase()`. Same path SPID uses; LoreRim ships Requiem SPID follower perks — live proof entry points fire on followers in marth's environment.
+
+**Persistence:** treat base mutations as runtime-only; the co-save allocation record (§8) is the source of truth, reapplied **idempotently at kPostLoadGame** (guard `GetPerkIndex` before AddPerk; only `ApplyPerksFromBase` on change) — the fix-forward-proof shape (nothing engine-serialized to sweep).
+
+**Respec:** `TESNPC::RemovePerk` on the base, retract applied entries on the actor, re-settle via `ApplyPerksFromBase()`.
+
+**Shared-base guard:** base-array edits hit every actor sharing that TESNPC. v1 restricts enrollment to unique-flagged bases (housecarls, named/custom followers); generic hirelings show "not eligible (shared template)."
+
+### 4.2 Skill AVs: base-delta with reconciliation
+Perk gates condition on GetBaseActorValue, so allocation must raise the **base**. But NPC base skills are autocalc-derived and can be recomputed on level-up. Design: co-save per skill `{ allocPoints, lastWrittenBase }`; reconcile at apply, kPostLoadGame, and on level change:
+```
+cur     = GetBaseActorValue(av)
+natural = (cur == lastWrittenBase) ? lastWrittenBase - allocPoints : cur   // adopt engine recompute
+desired = min(natural + allocPoints, 100)
+SetBaseActorValue(av, desired); lastWrittenBase = desired
+```
+Idempotent, converges, survives static-stat (Requiem) and PC-level-mult growth. Attributes (Health/Magicka/Stamina) allocatable via the same path.
+
+---
+
+## 5. Requirement enforcement — identical to the player (marth, load-bearing)
+
+A follower may take a perk **only** when it meets both gates the player would face. No free-picking.
+
+1. **Prerequisite perk(s):** node `parents` edges — reachable iff a child of root OR ≥1 parent perk owned (rank ≥1); rank N+1 requires rank N in order (never skipping).
+2. **Skill-level (+ anything else the overhaul conditions on):** evaluate the rank's `perkConditions.IsTrue(follower, follower)` — the same record the player's skill menu gates on, evaluated against the follower → player-identical semantics generically, including overhaul-added conditions. (Side benefit: hard player-gated perks evaluate false forever — defense in depth over §3.)
+
+**Enforced in two places:**
+- **Board (UI):** each node renders owned / available / **locked** (greyed, non-activatable, shows the unmet requirement). Locked nodes can't be selected by mouse or pad; A shows the requirement, never a confirm.
+- **Allocator (backend):** UI never mutates — it queues an `AllocPerk` EditCmd; `ApplyEdits()` on the main thread re-validates everything against live state (addon detected, follower enrolled+eligible, perk in catalog+effective, points sufficient, prereq via HasPerk, `perkConditions.IsTrue` at apply time). Any failure → reject + named log line, no mutation. A stale/bypassed UI cannot over-allocate.
+
+---
+
+## 6. Leveling economy (proposal — MCM-tunable)
+
+- **XP source: level-with-player.** Each player level: active followers +1 progression level. **Shared Growth** (toggle, default ON): retained followers +1 per 2 player levels. Deterministic, save-safe, no combat hooks, overhaul-agnostic. (Own-kill XP rejected for v1.)
+- **Per level:** +3 skill points (1 pt = +1 base AV, cap 100), +1 perk point.
+- **Veteran catch-up** (toggle, default ON): first enrollment grants `floor(level/2)` skill + `floor(level/5)` perk points (one-shot, co-saved).
+- **Respec:** board action, hold-to-confirm; refunds points, removes perks, zeroes AV allocs. Free by default; optional MCM "costs gold" (gold via GetInventory).
+- **Class auto-allocation** (ties to #65 combatClassOverride): when a class is set + "auto-spend" on, points spend on level-up. Weights — **Melee:** dominant weapon 40% / dominant armor 30% / Block 20% (+Health/Stamina). **Ranged:** Marksman 45% / LightArmor 25% / Sneak 20% (+Stamina/Health). **Mage:** Destruction 35% / Alteration 20% / Restoration 20% / Conjuration 15% (+Magicka/Health). Auto (class 0) infers from loadout. Perk auto-pick deterministic + name-agnostic: highest-weight eligible effective perk; tiebreak lowest skill req, then lowest BFS depth. No hardcoded perk EDIDs.
+
+---
+
+## 7. Board UI — the Progression tab
+
+Third `BeginTabItem("Progression")`, emitted only when detected; `kTabCount` becomes runtime so the tab cycler stays correct. Layout: follower header (reuse L1/R1 cycling) → skill strip (18 skills, AV + allocated + unspent) → tree canvas (scrollable child, ImDrawList `AddLine` edges bright when both ends owned, `AddCircleFilled`+label per node at scaled float positions, root at bottom) → node detail panel (name/desc/ranks/requirements/cost/Take) → roster section (retained followers + availability + Recall).
+
+**Controller (standing family rule):** all input via the existing InputDispatchHook — no new paths. D-pad = spatial node nav via grid coords; A = select/confirm (listPopup pattern); B = cancel cascade single-path (detail → tree → tab → close); X = respec/auto-spend; Y = next skill; L1/R1 = follower. Vendored imgui backend has gamepad polling disabled (v1.0.59) → B stays single-path.
+
+**Threading:** catalog immutable (lock-free); mutable state crosses as plain values in Snapshot; all mutations via new EditKinds drained in ApplyEdits.
+
+---
+
+## 8. Co-save schema
+
+New **independent** record `'PRGN'` v1 alongside FLWR/MSTK under `'MFO0'` (older DLLs skip unknown record; newer PRGN version → skip that record only). All FormIDs via `ResolveFormID`; unresolvable perk → drop + refund. Per follower: formID, flags (enrolled / wasInPotentialFollowerFaction / autoSpend / veteranGrantConsumed), progressionLevel, sharedGrowthRemainder, unspentSkill, unspentPerk, skillAlloc[]{avId, points, lastWrittenBase}, perkAlloc[]{perkFormID, rank}, enrollBaseline[]{avId, f32} (respec floor). New fields behind `if (version >= N)`. Runtime-only 0xFF FormIDs excluded. Perks/AVs live natively on the actor between saves; the co-save exists for reapply, UI, and respec.
+
+---
+
+## 9. Roster recall — safety design
+
+Roster = retained followers minus active. Dismissal = standard path. No storage, no benches, no player-touching aliases → the furniture-ejection class of bug is structurally impossible.
+
+**Availability (at draw AND re-validated at recall):**
+1. `LookupByID<Actor>` unresolvable → unavailable.
+2. IsDead/IsDisabled/IsDeleted/bleedout → unavailable ("fallen").
+3. **Primary:** `IsInFaction(PotentialFollowerFaction 0x0005C84D)` — not in it and not a teammate → **"away/unavailable," never MoveTo.**
+4. **§4.6 guard:** `ForeignOwnerBlocks()` — foreign quest at ≥ MFO priority → "busy" (covers scenes; never drag out mid-quest).
+5. **Provenance (new):** co-save flag `wasInPotentialFollowerFaction` at enrollment → distinguishes "away on their own business" (recoverable) from "managed by their own mod — use their dialogue" (permanent; correct for Inigo/Lucien — byte-scan found zero PotentialFollowerFaction refs, their systems are fully custom). MFO logs faction state at enroll/dismiss → the framework-behavior question answers itself from deck logs.
+
+**Recall flow (main thread):** re-validate → swap dismisses current via standard path → entrance = nearest loaded door ref within ~2000u, out of view frustum if possible (`MoveTo(door)`), else `MoveTo(player)` behind camera → recruit via **standard path** VM `DialogueFollowerScript.SetFollower(actor)` on quest 0x750BA (NFF hooks the same quest, so it lands in whatever the standard path is). VM failure → log + abort (never a manual half-recruit).
+
+---
+
+## 10. ESL record footprint + generator
+
+Minimal — the ESL is a switch:
+
+| FormID | Type | EDID | Purpose |
+|---|---|---|---|
+| 0x800 | GLOB | `MFOP_Version` | Detection anchor + addon version stamp |
+| 0x801 | GLOB | `MFOP_Reserved` | Spare future gate |
+
+Master: Skyrim.esm only. No recall markers, storage, packages, or quest — everything else is DLL. GLOB *values* are save-persisted, so the DLL reads the record default at kDataLoaded, never trusts a saved value. Generator: add a second output profile (own `make_tes4()` flags 0x200, local IDs 0x800-0xFFF) → `out/MFO_Progression.esl`; `audit_esp.py` gains a `--plugin` profile. No SEQ (no start-enabled quests).
+
+---
+
+## 11. MCM Detected / Not-Detected
+
+Board tab presence = primary indicator. MCM line: add an **Addons** section, text bound to `bProgressionDetected:Addons` (seeded false), and at kDataLoaded a one-shot VM call to MCM Helper's `SetModSettingBool("MFO", "bProgressionDetected:Addons", ...)`. Fallback if brittle: static text "Progression addon: see Field Orders board." Diff against installed LoreRim configs before shipping. Addons section also holds XP sliders, Shared Growth, Veteran catch-up, respec cost, show-marginal, strict/lenient filter, framework-leveling warning.
+
+---
+
+## 12. Framework interop
+
+- **Framework followers (Inigo/Lucien/Kaidan):** perks SAFE (inert base combat-stat adds, no packages/aliases touched); recall OFF (provenance → "use their dialogue"); AV allocation default OFF, per-follower toggle with warning. Enrollment is explicit per follower — nothing happens by default.
+- **Manager frameworks (NFF/AFT/Nether's):** coexist-and-defer; recall goes through the DialogueFollower VM path they hook (lands in their pipeline or fails loudly). Roster header notes management framework if detected.
+- **Leveling mods (FLSR — interop blocked):** detect by name; default AV allocation OFF globally (perks stay on), MCM warning + override. Re-check FLSR API on updates.
+
+---
+
+## 13. Ranked risks + field probes
+
+| # | Risk | Severity | Mitigation / probe |
+|---|---|---|---|
+| 1 | Entry-point variance on NPCs per overhaul (filter wrong for Requiem/Ordinator edge perks) | High (quality) | Structural filter + condition backstop + `[prog]` dump. **P1:** LoreRim — grant Armsman/Augmented perks, measure damage delta in logs. |
+| 2 | SetBaseActorValue vs autocalc/level-up | High | §4.2 reconcile. **P2:** level player ×2 with a PC-mult follower; verify base = natural+alloc. |
+| 3 | Reapply idempotency (double-applied ability entries) | Med-high | GetPerkIndex guard; reapply on delta. **P3:** save/load ×3 with an ability perk; count effects. |
+| 4 | PotentialFollowerFaction fidelity across frameworks | Medium | Provenance flag + never-MoveTo default. **P4:** enroll-time faction logging → deck-log data. |
+| 5 | Respec completeness (entry retraction residue) | Medium | §4.1 removal. **P5:** allocate→respec→verify HasPerk false + effects gone. |
+| 6 | DialogueFollower VM under NFF/vanilla | Medium | Standard-path-only + loud abort. **P6:** recall on Tuxborn + an NFF list. |
+| 7 | Shared-base/templated followers (perk leak) | Med (contained) | v1 unique-base restriction. |
+| 8 | Requiem conditions over-filtering legit combat perks | Low-med | Lenient-filter toggle + P1 dump review. |
+| 9 | Generator second-file + audit profile regressions | Low | Mechanical; audit profile + CI-green rule. |
+| 10 | Board perf/nav on dense trees | Low | Few hundred nodes; existing render discipline. |
+
+**Sinkers:** only #1-3 could sink pillars — all three have cheap log-only probes that should be the **first field build** (a probe-instrumented dev build before UI polish).
+
+---
+
+## 14. Fable additions (proposed, all optional/toggleable, in-ethos)
+
+1. **Loadout-aware perk advisor** — tag perks the follower's current loadout exercises (bow user → Marksman glows). Runtime-only, high value/line.
+2. **Auto-respec offer on class change** — flipping #65 prompts "Respec + auto-spend for <class>?"
+3. **Shared Growth** (woven into §6) — retained followers grow at half rate; makes the roster strategic.
+4. **Milestone rapport moments** — a capstone-depth perk grants a small rapport bump + notification via existing Rapport machinery.
+5. **Trainer fees mode** (off by default) — points cost gold by rank; a sink using existing economy code.
+
+Not proposed: training scenes, any Synthesis-side anything, any storage records.
