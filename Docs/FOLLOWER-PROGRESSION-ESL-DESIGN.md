@@ -196,3 +196,18 @@ Board tab presence = primary indicator. MCM line: add an **Addons** section, tex
 5. **Trainer fees mode** (off by default) — points cost gold by rank; a sink using existing economy code.
 
 Not proposed: training scenes, any Synthesis-side anything, any storage records.
+
+---
+
+## 15. DECISIONS LOCKED (marth, 2026-08-11) — override the §6 proposals above
+
+- **Skill model: AUTO skills, MANUAL perks.** Skills are NOT a manual point pool. MFO auto-scales a follower's skills to their level **by class** (Requiem/LoreRim make NPC stats static → MFO drives it via the §4.2 base-AV path, not engine autocalc). Perks are the only manual allocation.
+- **Class gate / onboarding.** A newly-enrolled follower gets **no skills assigned until the player explicitly picks a CLASS** for them. Selecting an unclassed follower on the Progression tab pops a **class-selection prompt**. On class pick → auto-skills scale to level + perk allocation unlocks. Before that, progression is inactive for that follower (skills stay vanilla). Concrete class (not "Auto"); aligns with the #65 combat-class override.
+- **Perk earn rate = COPIES the player's** (1 perk/level, whatever the game grants the player).
+- **Scarcity-scaled perks (load-bearing).** Perk points awarded to a follower are scaled by **(perks usable by a follower ÷ perks usable by the player)** so the follower can afford the *same percentage of their available tree* the player can of theirs — preserving felt scarcity. Applies to ongoing earning AND the late-recruit catch-up. Compute the ratio from the runtime catalog (follower-effective perk count vs full player pool).
+- **Shared Growth:** default **ON** = retained/benched followers grow at **half** rate; toggle **OFF** = they match player level (full rate).
+- **Mid-game recruit:** progression level = **player level**. **No** bonus/free skill points (auto-skills scale to level). **Not** perk-penalized for arriving late — gets the level-matched, scarcity-scaled perk points.
+- **Respec:** free of gold, but **costs −500 rapport** (the follower resents the reset). Uses the existing Rapport machinery.
+- **v1 scope:** unique-base followers only (confirmed).
+- **Detection:** ESL presence is the signal (confirmed). Do it to the robustness bar of how **Precision detects Nemesis** and how **DynDOLOD surfaces dynamic info** — study those patterns for the detection + MCM "Detected" display (Fable, at build time).
+- **The 5 proposed additions (§14):** not yet individually ruled on; carry as optional/toggleable.
