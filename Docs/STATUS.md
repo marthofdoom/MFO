@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest public:** v1.0.48 · **v1.0.49 (#68+#69) deck-deployed, field-test pending; v1.0.51 = v1.0.50 (#65 + cond.dark + loose-loot) + #62-followup (un-equippable eviction now ALL visible armor slots + weapons, not just head) pushed to CI** · **#62/#66/#67 shipped**
+> **Last updated:** 2026-08-11 · **Latest public:** v1.0.48 · **v1.0.51 DEPLOYED to Tuxborn (DLL 10b69466, run 31449221211, deck-verified) = #65 class-override + cond.dark + loose-loot fix + #62-followup (all-slot armor eviction); FIELD-TEST PENDING; public release HELD** · **#62/#66/#67 shipped**
 
 > **v1.0.50:** #65 = per-follower Combat Class dropdown on the board (Auto/Melee/
 > Ranged/Mage), Auto=no-override (custom-follower-safe #64), forces the CSTY stance
