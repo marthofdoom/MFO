@@ -18,6 +18,7 @@
 #include "MainThread.h"
 #include "Probe.h"
 #include "Board.h"
+#include <unordered_set>   // #69: stock-gear per-follower sets (kRecStock)
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
 //
@@ -30,6 +31,9 @@
 //     v1  v0.1.0-v0.3.0. Had a tutored-spell block between the tables and the
 //         overrides. Still READ below; never written again.
 //     v2  tutoring removed (DESIGN.md 5.4).
+//     v3  #68: subjectActorForm (a specific cast-target follower) added
+//         right after subjectSelector, per gambit. Read gated on
+//         version >= 3; a v1/v2 record simply has none (defaults to 0).
 //
 //   #12 Versioned schema; readers kept FOREVER; SKSE does NOT round-trip
 //       unread records, so a downgraded DLL DESTROYS newer ones -> warn loud.
@@ -43,6 +47,7 @@ namespace MFO {
         constexpr std::uint32_t kMaxOpcodeLen = 64;
         constexpr std::uint16_t kMaxOverrides = 64;
         constexpr std::uint16_t kMaxTutoredV1 = 512;
+        constexpr std::uint32_t kMaxStockGear = 512;   // #69: generous headroom over any real loadout
 
         std::atomic<bool> g_sawNewerSave{ false };   // v1 only, consumed and discarded
 
@@ -126,6 +131,15 @@ namespace MFO {
                     }
                     a_intfc->WriteRecordData(g.conditionParam);
                     a_intfc->WriteRecordData(g.subjectSelector);
+                    // v3 (#68): the specific-follower cast target, if any.
+                    // Runtime (0xFF) actor ids are NEVER persisted
+                    // (INVARIANTS #9) -- a summoned/cloned teammate targeted
+                    // this session just falls back down the resolution
+                    // ladder next load, same shape as an unresolvable
+                    // actionParamForm below.
+                    const RE::FormID subjActorOut =
+                        Followers::IsPersistableID(g.subjectActorForm) ? g.subjectActorForm : 0;
+                    a_intfc->WriteRecordData(subjActorOut);
                     if (!WriteString(a_intfc, g.actionOpcode)) {
                         spdlog::error("[cosave] WRITE FAILED mid-record for {:08X}. This save's MFO "
                                       "data is TRUNCATED -- followers after this one will not load. "
@@ -158,16 +172,132 @@ namespace MFO {
         spdlog::info("[cosave] saved {} follower record(s), schema v{}{}", written, kSchemaVersion,
                      skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) record(s)", skippedRuntime)
                                     : std::string{});
+
+        // #69: stock gear (kRecStock/'MSTK') -- a SECOND, INDEPENDENT record.
+        // Never bumps or touches kSchemaVersion/FLWR above. CopyStockGear()
+        // takes the lock once and hands back a copy; everything below runs
+        // lock-free over that copy (a lock must never be held across an
+        // OpenRecord/WriteRecordData call).
+        if (!a_intfc->OpenRecord(kRecStock, kStockVersion)) {
+            spdlog::error("[cosave] OpenRecord('{}') failed -- stock gear NOT saved", "MSTK");
+            return;
+        }
+        const auto stock = Logistics::CopyStockGear();
+        std::uint32_t stockPersistable = 0;
+        for (const auto& [formID, set] : stock) {
+            if (Followers::IsPersistableID(formID)) ++stockPersistable;
+        }
+        a_intfc->WriteRecordData(stockPersistable);
+
+        std::uint32_t stockWritten = 0, stockSkippedRuntime = 0;
+        for (const auto& [formID, set] : stock) {
+            if (!Followers::IsPersistableID(formID)) { ++stockSkippedRuntime; continue; }
+            a_intfc->WriteRecordData(formID);
+            const size_t n = std::min<size_t>(set.size(), kMaxStockGear);
+            if (set.size() > n) {
+                spdlog::warn("[cosave] {:08X}: {} stock-gear item(s) truncated to {}",
+                             formID, set.size(), n);
+            }
+            a_intfc->WriteRecordData(static_cast<std::uint32_t>(n));
+            size_t emitted = 0;
+            for (const auto base : set) {
+                if (emitted >= n) break;
+                a_intfc->WriteRecordData(base);
+                ++emitted;
+            }
+            ++stockWritten;
+        }
+        spdlog::info("[cosave] saved stock-gear for {} follower(s), schema v{}{}", stockWritten, kStockVersion,
+                     stockSkippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) record(s)", stockSkippedRuntime)
+                                         : std::string{});
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
         g_followers.clear();
+        Logistics::ClearStockGear();   // #69: defence in depth -- RevertCallback already
+                                        // cleared it, same belt-and-braces as g_followers above
 
         std::uint32_t type = 0, version = 0, length = 0;
         std::uint32_t loaded = 0, droppedActor = 0, disabledRules = 0,
                       droppedOverride = 0, collisions = 0;
 
         while (a_intfc->GetNextRecordInfo(type, version, length)) {
+            if (type == kRecStock) {
+                // #69: independent of FLWR -- its own version guard, its own
+                // ResolveFormID/DROP discipline (INVARIANTS #8), never
+                // fabricates. A newer stock record this DLL can't fully parse
+                // is skipped (GetNextRecordInfo seeks past it on the next
+                // loop, same as any unknown record type below) rather than
+                // aborting the whole load -- it's a separate record, not a
+                // mid-stream desync risk like a newer FLWR would be.
+                if (version > kStockVersion) {
+                    spdlog::error("[cosave] STOCK-GEAR SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
+                                  version, kStockVersion);
+                    g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
+                    continue;
+                }
+                std::uint32_t followerCount = 0;
+                if (!a_intfc->ReadRecordData(followerCount)) {
+                    spdlog::error("[cosave] short read on stock-gear follower count -- ABORTING stock load");
+                    return;
+                }
+                if (followerCount > kMaxFollowers) {
+                    spdlog::error("[cosave] implausible stock-gear follower count {} -- ABORTING stock load",
+                                  followerCount);
+                    return;
+                }
+                std::uint32_t stockLoaded = 0, stockDroppedActor = 0, stockDroppedItem = 0;
+                for (std::uint32_t i = 0; i < followerCount; ++i) {
+                    RE::FormID rawID = 0;
+                    if (!a_intfc->ReadRecordData(rawID)) {
+                        spdlog::error("[cosave] short read at stock-gear follower {}/{} -- ABORTING stock load",
+                                      i, followerCount);
+                        return;
+                    }
+                    std::uint32_t itemCount = 0;
+                    if (!a_intfc->ReadRecordData(itemCount)) {
+                        spdlog::error("[cosave] short read on stock-gear item count -- ABORTING stock load");
+                        return;
+                    }
+                    if (itemCount > kMaxStockGear) {
+                        spdlog::error("[cosave] implausible stock-gear item count {} -- ABORTING stock load",
+                                      itemCount);
+                        return;
+                    }
+
+                    RE::FormID resolvedID = 0;
+                    const bool resolved = a_intfc->ResolveFormID(rawID, resolvedID);
+
+                    std::unordered_set<RE::FormID> set;
+                    for (std::uint32_t bi = 0; bi < itemCount; ++bi) {
+                        RE::FormID rawBase = 0;
+                        // NOTE: read unconditionally, even when the follower
+                        // itself won't resolve -- bailing early would desync
+                        // the byte stream for every record after this one.
+                        if (!a_intfc->ReadRecordData(rawBase)) {
+                            spdlog::error("[cosave] short read at stock-gear item {}/{} -- ABORTING stock load",
+                                          bi, itemCount);
+                            return;
+                        }
+                        if (!resolved) continue;   // actor gone -- whole set goes with it, below
+                        RE::FormID resolvedBase = 0;
+                        if (a_intfc->ResolveFormID(rawBase, resolvedBase)) {
+                            set.insert(resolvedBase);
+                        } else {
+                            ++stockDroppedItem;   // INVARIANTS #8: DROP, never fabricate
+                        }
+                    }
+
+                    if (!resolved) { ++stockDroppedActor; continue; }
+                    Logistics::LoadStockRecord(resolvedID, std::move(set));
+                    ++stockLoaded;
+                }
+                spdlog::info("[cosave] loaded stock-gear for {} follower(s); dropped {} unresolvable "
+                             "actor(s), {} unresolvable item(s)",
+                             stockLoaded, stockDroppedActor, stockDroppedItem);
+                continue;
+            }
             if (type != kRecFollowers) {
                 spdlog::warn("[cosave] unknown record type {:08X} -- skipped", type);
                 continue;
@@ -244,6 +374,28 @@ namespace MFO {
                         if (!ReadString(a_intfc, g.conditionOpcode)) return;
                         if (!a_intfc->ReadRecordData(g.conditionParam)) return;
                         if (!a_intfc->ReadRecordData(g.subjectSelector)) return;
+
+                        // v3 (#68): STRICTLY version-gated -- a v1/v2 record
+                        // never wrote this field, so reading it unconditionally
+                        // would consume the next field's bytes and desync the
+                        // whole rest of the stream. g.subjectActorForm already
+                        // defaults to 0 (Gambit{}), which is exactly "use
+                        // subjectSelector instead" -- the pre-#68 behaviour.
+                        if (version >= 3) {
+                            RE::FormID rawSubjActor = 0;
+                            if (!a_intfc->ReadRecordData(rawSubjActor)) return;
+                            if (rawSubjActor != 0) {
+                                RE::FormID resolvedSubjActor = 0;
+                                if (a_intfc->ResolveFormID(rawSubjActor, resolvedSubjActor)) {
+                                    g.subjectActorForm = resolvedSubjActor;
+                                }
+                                // else: that follower is gone. Leave it 0 --
+                                // DESIGN's ladder falls back to subjectSelector,
+                                // never disables the rule (unlike a missing
+                                // actionParamForm, which has no fallback rung).
+                            }
+                        }
+
                         if (!ReadString(a_intfc, g.actionOpcode)) return;
 
                         RE::FormID rawParam = 0;
@@ -388,6 +540,11 @@ namespace MFO {
         Followers::ClearTransientState();   // streak map is save-scoped (F1)
         Scheduler::ClearTransientState();   // suppression + round-robin cursor likewise
         Logistics::ClearTransientState();   // logistics cadence clocks + loot LRUs (#22h)
+        // #69: g_stockGear IS serialized (kRecStock), unlike everything
+        // ClearTransientState owns -- kept as its own call so that contract
+        // stays true. A load right after this repopulates it; a main-menu
+        // revert with no load leaves it empty, same as g_followers above.
+        Logistics::ClearStockGear();
         // The equip ledger describes a LIVE loadout. On revert the world is
         // about to be replaced, so there is nothing to give back -- but the
         // ledger must not survive to re-equip gear into the next save (#16).

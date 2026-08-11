@@ -22,6 +22,7 @@
 #include <functional>     // #62 self-reposting on-load sweep closure
 #include <memory>         // std::shared_ptr for that closure
 #include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
+#include <mutex>          // #69: g_stockMx -- g_stockGear is a real cross-thread map (worker + co-save)
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -845,6 +846,81 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // ── #69: the STABLE weapon-role signal ──────────────────────────────
+        // LootEquipment (what to loot/keep) and ShedOffRoleWeapon (what to hand
+        // back) used to each infer "melee" / "ranged" from whatever weapon was
+        // MOMENTARILY WIELDED -- but loot and shed run at DIFFERENT times, so
+        // each call caught whatever happened to be drawn at THAT instant. A
+        // hybrid 1h/bow follower's role flipped between calls (his 1h got shed
+        // while the bow was drawn), and a custom follower's own signature
+        // weapon -- drawn only sometimes -- read as "off-role" mid-fight and
+        // got handed to the player (Feris's Gauldurbow, marth's field report).
+        // The fix: judge the role from what the follower actually MAINTAINS --
+        // a gambit first, else whatever they physically CARRY -- never what's
+        // in hand right now. WHAT gets force-EQUIPPED over a drawn weapon is a
+        // wholly separate decision (LootEquipment's equipIt gate, untouched);
+        // this only decides what's looted, kept, or shed.
+        struct WeaponRoles {
+            WepClass melee        = WepClass::Other;   // Other = no melee role at all
+            bool     doRanged     = false;
+            bool     wantCrossbow = false;              // meaningful only when doRanged
+        };
+
+        WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state) {
+            using WT = RE::WEAPON_TYPE;
+            const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
+            const bool wantsRanged = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
+
+            // Best MELEE skill decides 1H vs 2H (archery is irrelevant here) --
+            // shared by the gambit-driven case AND the carries-but-no-gambit
+            // fallback below; neither is a wielded-weapon guess.
+            auto*       avo = a_follower->AsActorValueOwner();
+            const float one = avo ? avo->GetActorValue(RE::ActorValue::kOneHanded) : 0.0f;
+            const float two = avo ? avo->GetActorValue(RE::ActorValue::kTwoHanded) : 0.0f;
+            const WepClass bestMeleeSkill = (two > one) ? WepClass::TwoHand : WepClass::OneHand;
+
+            // ONE stable read of the pack: any melee weapon at all, any bow/
+            // crossbow, and (for the bow-vs-crossbow call) the ammo/damage
+            // census -- moved here verbatim from ShedOffRoleWeapon so both
+            // callers derive wantCrossbow from the exact same scan.
+            bool carriesMelee = false, carriesRanged = false;
+            std::uint16_t bowDmg = 0, xbowDmg = 0;
+            int arrows = 0, bolts = 0;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                    switch (WeaponClassOf(w->GetWeaponType())) {
+                    case WepClass::OneHand:
+                    case WepClass::TwoHand:
+                        carriesMelee = true;
+                        break;
+                    case WepClass::Ranged:
+                        carriesRanged = true;
+                        if (w->GetWeaponType() == WT::kBow) bowDmg  = std::max(bowDmg,  w->GetAttackDamage());
+                        else                                xbowDmg = std::max(xbowDmg, w->GetAttackDamage());
+                        break;
+                    default: break;   // staff/hand-to-hand -- not a role signal
+                    }
+                } else if (auto* am = obj->As<RE::TESAmmo>()) {
+                    (AmmoIsBolt(am) ? bolts : arrows) += data.first;
+                }
+            }
+
+            WeaponRoles roles;
+            if (wantsMelee || carriesMelee) roles.melee = bestMeleeSkill;
+            roles.doRanged = wantsRanged || carriesRanged;
+
+            // BOW vs CROSSBOW (verbatim from ShedOffRoleWeapon): carrying both,
+            // the ammo they hold decides (damage breaks a tie); carrying ONE
+            // kind, that kind; carrying neither, their ammo decides.
+            if (roles.doRanged) {
+                if (bowDmg > 0 && xbowDmg > 0)      roles.wantCrossbow = (bolts != arrows) ? (bolts > arrows) : (xbowDmg > bowDmg);
+                else if (bowDmg > 0 || xbowDmg > 0) roles.wantCrossbow = xbowDmg > bowDmg;
+                else                                 roles.wantCrossbow = bolts > arrows;
+            }
+            return roles;
+        }
+
         // A NON-PLAYABLE weapon (record-header flag bit 2 == Mutagen
         // Weapon.MajorFlag.NonPlayable, confirmed set on the Dwarven Sphere Crossbow)
         // is creature/automaton gear with no humanoid mesh -- invisible if a follower
@@ -878,76 +954,55 @@ namespace MFO::Logistics {
             // armor slots are independent of the (left-hand) spell hand.
             auto* equippedWeap = a_follower->GetEquippedObject(false);
             auto* myWeap       = equippedWeap ? equippedWeap->As<RE::TESObjectWEAP>() : nullptr;
-            // ONLY loot weapons for an actual weapon-fighter: someone who already
-            // wields a real melee/ranged weapon (not a staff, not empty-handed).
-            // A staff-wielding healer or a weaponless caster must NOT hoover up
-            // the first sword on a corpse -- that is the "arbitrary-weapon vacuum"
-            // (marth). Their weapon-skill numbers are incidental.
-            const bool wieldsRealWeapon =
-                myWeap && WeaponClassOf(myWeap->GetWeaponType()) != WepClass::Other;
-
-            // THE ROLE WE UPGRADE IS THE ONE THEY ACTUALLY WIELD -- never a skill
-            // guess (marth). Upgrade a bow-user's BOW and a swordsman's SWORD in
-            // place; NEVER shove a melee weapon on an archer just because his
-            // One-Handed happens to be decent -- that forced a role change every
-            // loot and thrashed against his bow (the "switches weapons for no
-            // reason" bug). A follower keeps whatever weapon their gambits/AI put
-            // them on; the ONLY role switches come from an explicit equip-melee/
-            // equip-ranged gambit, or a cast freeing a hand. Skill (BestWeaponClass)
-            // no longer drives loot at all.
-            const WepClass wieldedClass = wieldsRealWeapon
-                ? WeaponClassOf(myWeap->GetWeaponType()) : WepClass::Other;
-            const bool wieldsMelee  = wieldedClass == WepClass::OneHand ||
-                                      wieldedClass == WepClass::TwoHand;
-            const bool wieldsRanged = wieldedClass == WepClass::Ranged;
             using WT = RE::WEAPON_TYPE;
-            // WHAT the follower maintains is GAMBIT-DRIVEN (marth), not skill-guessed:
-            //   equip-melee present  -> keep/upgrade a MELEE weapon; the BEST MELEE
-            //                           SKILL (1H vs 2H) decides the class.
-            //   equip-ranged present -> keep/upgrade a BOW or CROSSBOW (by what they
-            //                           carry / their ammo); ranged is a primary too.
-            // With NEITHER gambit we only upgrade the role they ALREADY WIELD, in
-            // place -- a bow-user is never handed a melee weapon just because his
-            // One-Handed is decent (the "switches weapons for no reason" thrash).
+
+            // THE ROLE WE LOOT/KEEP is a STABLE signal, never the momentarily
+            // WIELDED weapon (#69, ComputeWeaponRoles above): a gambit-driven
+            // role first, else whatever the follower actually CARRIES. Loot and
+            // ShedOffRoleWeapon judge the SAME roles from the SAME helper, so
+            // they can no longer disagree about what's "off-role" -- that
+            // disagreement was the Gauldurbow bug (a custom follower's own
+            // weapon, drawn only sometimes, read as off-role and got handed to
+            // the player) and the hybrid-1h-gets-shed bug. WHAT gets force-
+            // EQUIPPED over a drawn weapon is still decided below by the
+            // equipIt gate, UNCHANGED -- roles only decide what's looted/kept.
             const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
             const bool wantsMelee  = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
-
-            // The MELEE class we loot/upgrade, or Other = "no melee role at all".
-            WepClass meleeTargetClass = WepClass::Other;
-            if (wantsMelee) {
-                // Best MELEE skill decides 1H vs 2H (archery is irrelevant here).
-                auto*       avo = a_follower->AsActorValueOwner();
-                const float one = avo ? avo->GetActorValue(RE::ActorValue::kOneHanded) : 0.0f;
-                const float two = avo ? avo->GetActorValue(RE::ActorValue::kTwoHanded) : 0.0f;
-                meleeTargetClass = (two > one) ? WepClass::TwoHand : WepClass::OneHand;
-            } else if (wieldsMelee) {
-                meleeTargetClass = wieldedClass;   // no gambit -> upgrade what they hold
-            }
-            // Ranged is a primary if a gambit wants it OR they already wield one.
-            const bool doRanged = wantsRanged || wieldsRanged;
+            const WeaponRoles roles = g_svc ? ComputeWeaponRoles(a_follower, *g_svc) : WeaponRoles{};
 
             // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
-            // Gambit-driven magic-user detection (TargetMagicSchool above). A
-            // magic user gets two parallel loot paths:
-            //  (1) SCHOOL-SCORED APPAREL on the mage slots -- bypasses
-            //      ArmorIsBetter's rating>0 gate, which can never judge a robe;
-            //  (2) ONE one-handed melee BACKUP (daggers by default). Vanilla AI
-            //      draws a weapon at zero magicka, and the wieldsRealWeapon
-            //      gate above deliberately keeps a staff/spell-handed caster
-            //      out of the weapon-upgrade role -- so without this path he
-            //      has nothing to draw and swings fists. Only when he
-            //      maintains NO melee role of his own (meleeTargetClass ==
-            //      Other): a battlemage with an equip-melee gambit already
-            //      loots real melee and needs no sidearm.
+            // Gambit-driven magic-user detection. A magic user gets two loot
+            // paths: (1) SCHOOL-SCORED APPAREL on the mage slots (bypasses
+            // ArmorIsBetter's rating>0 gate, which can never judge a robe); and
+            // (2) ONE one-handed melee BACKUP (daggers by default) his AI draws
+            // at zero magicka. Detected BEFORE the role below, because a pure
+            // caster must be kept OUT of the general weapon-upgrade role.
             int castGambits = 0;
             RE::ActorValue school = RE::ActorValue::kNone;
             if (Config::g_magicLoadout.load() && g_svc)
                 school = TargetMagicSchool(*g_svc, castGambits);
             const bool mageMode    = castGambits > 0;   // magic user AND master toggle on
             const bool daggersOnly = Config::g_mageDaggersOnly.load();
+
+            // The MELEE class we loot/upgrade, or Other = "no melee role at all".
+            // #69: ComputeWeaponRoles hands a role to ANY carried melee/ranged
+            // weapon, but a non-battlemage magic user must NOT take the general
+            // weapon-upgrade path -- his melee is the ONE-sidearm backup contract
+            // (#52/#54: daggers-only, never an armory), not a role, and he loots
+            // no bow either. Only an explicit equip-melee/equip-ranged gambit (a
+            // battlemage/spellbow) earns him the real role. Pre-#69 this fell out
+            // for free -- the role was WIELD-based and a caster wields spells/
+            // staff, never his carried sidearm -- so the stable carries-based
+            // signal has to say it explicitly. (Shed still KEEPS his carried gear;
+            // this only bars LOOTING new weapon upgrades for a pure caster.)
+            const WepClass meleeTargetClass =
+                (mageMode && !wantsMelee)  ? WepClass::Other : roles.melee;
+            // Ranged is a primary if a gambit wants it OR they carry one.
+            const bool doRanged =
+                (mageMode && !wantsRanged) ? false           : roles.doRanged;
             const bool wantBackup  = mageMode && meleeTargetClass == WepClass::Other;
 
-            // Baseline the MELEE upgrade must beat: the best in-target-class
+            // Baseline the MELEE/RANGED upgrade must beat: the best in-role
             // weapon anywhere in the follower's OWN INVENTORY (the equipped one
             // is part of it). Equipped-only was the residual thrash hole: a
             // follower HOLDING HIS BOW with an equip-melee gambit baselined
@@ -955,52 +1010,31 @@ namespace MFO::Logistics {
             // already in his pack -- looted a duplicate and force-equipped it
             // over the bow, corpse after corpse (the in-AND-out-of-combat half
             // of "Erik switches weapons for no reason": the combat gambit put
-            // the bow back, the next corpse knocked it out again). The ranged
-            // path already baselined from inventory; melee now matches it. One
-            // pass covers both, plus the ammo census for the bow-vs-crossbow
-            // kind choice. Creature/excluded weapons are unusable gear -- they
-            // never set a baseline or steer the kind.
+            // the bow back, the next corpse knocked it out again). BOW vs
+            // CROSSBOW is decided by ComputeWeaponRoles now (#69, shared with
+            // the shed side); this pass only baselines the follower's best
+            // ALREADY-CARRIED weapon of that kind. Creature/excluded weapons
+            // are unusable gear -- they never set a baseline.
+            const bool wantCrossbow = roles.wantCrossbow;
             std::uint16_t baseDmg      = 0;
-            bool          wantCrossbow = false;
             std::uint16_t myRangedDmg  = 0;
             bool          hasBackup    = false;   // magic user already carries a qualifying sidearm
-            {
-                std::uint16_t bowDmg = 0, xbowDmg = 0;
-                int arrows = 0, bolts = 0;
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
-                    if (auto* w = obj->As<RE::TESObjectWEAP>()) {
-                        if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
-                        if (meleeTargetClass != WepClass::Other &&
-                            WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
-                            baseDmg = std::max(baseDmg, w->GetAttackDamage());
-                        // ONE sidearm is the mage-backup contract: he restocks
-                        // only when he carries NONE, never accumulates an
-                        // armory (creature/excluded weapons already skipped
-                        // above -- an unusable weapon is not a backup).
-                        if (wantBackup && WeaponClassOf(w->GetWeaponType()) == WepClass::OneHand &&
-                            (!daggersOnly || w->GetWeaponType() == WT::kOneHandDagger))
-                            hasBackup = true;
-                        if (w->GetWeaponType() == WT::kBow)           bowDmg  = std::max(bowDmg,  w->GetAttackDamage());
-                        else if (w->GetWeaponType() == WT::kCrossbow) xbowDmg = std::max(xbowDmg, w->GetAttackDamage());
-                    } else if (auto* am = obj->As<RE::TESAmmo>()) {
-                        (AmmoIsBolt(am) ? bolts : arrows) += data.first;
-                    }
-                }
-                // BOW vs CROSSBOW must not be conflated: they feed different
-                // ammo, so the wrong kind is a weapon they can't feed. Carrying
-                // BOTH kinds, the ammo they actually hold decides (damage breaks
-                // an ammo tie); carrying ONE kind, that kind; carrying neither,
-                // their ammo decides; a blank slate defaults to bow. Loot only
-                // THAT kind; baseline is their best carried of it.
-                if (doRanged) {
-                    if (bowDmg > 0 && xbowDmg > 0)
-                        wantCrossbow = (bolts != arrows) ? (bolts > arrows) : (xbowDmg > bowDmg);
-                    else if (bowDmg > 0 || xbowDmg > 0) wantCrossbow = xbowDmg > bowDmg;
-                    else if (arrows > 0 || bolts > 0)   wantCrossbow = bolts > arrows;
-                    else                                wantCrossbow = false;
-                    myRangedDmg = wantCrossbow ? xbowDmg : bowDmg;
-                }
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* w = obj->As<RE::TESObjectWEAP>();
+                if (!w || IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (meleeTargetClass != WepClass::Other &&
+                    WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
+                    baseDmg = std::max(baseDmg, w->GetAttackDamage());
+                // ONE sidearm is the mage-backup contract: he restocks only
+                // when he carries NONE, never accumulates an armory (creature/
+                // excluded weapons already skipped above -- an unusable weapon
+                // is not a backup).
+                if (wantBackup && WeaponClassOf(w->GetWeaponType()) == WepClass::OneHand &&
+                    (!daggersOnly || w->GetWeaponType() == WT::kOneHandDagger))
+                    hasBackup = true;
+                if (doRanged && w->GetWeaponType() == (wantCrossbow ? WT::kCrossbow : WT::kBow))
+                    myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
             }
 
             RE::TESBoundObject* bestArmor     = nullptr;
@@ -1825,6 +1859,61 @@ namespace MFO::Logistics {
         std::unordered_map<RE::FormID, Claim> g_claim;
         constexpr float kTickSecs = 1.0f;   // ~kLogisticsInterval, the fair-chance accrual step
         constexpr float kDepartRelease = 3.0f;   // player near then gone this long -> release Valuables (P3)
+
+        // ── #69: a follower's OWN gear, snapshotted ONCE at first management ──
+        // ShedOffRoleWeapon's exemption list: the Gauldurbow fix. Part C above
+        // makes role inference stable; this is the belt -- whatever a follower
+        // already owned the moment MFO started managing them (recruit, or an
+        // existing save's first post-load service) is off limits to the shed
+        // path FOREVER, role logic notwithstanding.
+        //
+        // THREADING: unlike every other map on this page (g_claim, g_nextTick,
+        // etc. -- worker-tick-only, never touched by serialization, per the
+        // comments above), this one is written by BOTH the logistics WORKER
+        // (EnsureStockSnapshot, called from ServiceFollower) and the co-save's
+        // Save/Load/RevertCallback (Serialization.cpp), which run on the real
+        // main thread (State.h: "serialization callbacks run on main") -- a
+        // DIFFERENT thread from the worker (MainThread.h/§0.37: AddTask drains
+        // on BSJobs::JobThread, never main). A save can happen mid-session
+        // while the worker is live, so this IS a real cross-thread map and the
+        // no-lock discipline above does not apply here. Guarded by g_stockMx,
+        // locked in every accessor -- never held across an engine call.
+        std::mutex g_stockMx;
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_stockGear;
+
+        // Snapshot a_follower's current weapon/armor base FormIDs as "stock",
+        // but ONLY the first time -- an existing entry means this follower was
+        // already snapshotted this session, or loaded from the co-save. Runtime
+        // (0xFF) bases are skipped (INVARIANTS #9): a dynamic form id is
+        // meaningless next session and must never be persisted.
+        void EnsureStockSnapshot(RE::Actor* a_follower) {
+            const auto id = a_follower->GetFormID();
+            { std::scoped_lock lk(g_stockMx); if (g_stockGear.contains(id)) return; }   // fast path
+            // Build the set with the lock RELEASED -- GetInventory() is an engine
+            // call and g_stockMx must never be held across one (a main-thread
+            // SaveCallback could be blocked on it).
+            std::unordered_set<RE::FormID> stock;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (!obj->As<RE::TESObjectWEAP>() && !obj->As<RE::TESObjectARMO>()) continue;
+                const auto baseID = obj->GetFormID();
+                if (!Followers::IsPersistableID(baseID)) continue;   // #9: never a runtime form
+                stock.insert(baseID);
+            }
+            std::scoped_lock lk(g_stockMx);
+            if (g_stockGear.contains(id)) return;   // raced another snapshot -- keep the first
+            spdlog::info("[stock] {:08X}: snapshotted {} gear item(s) at first management -- never shed",
+                         id, stock.size());
+            g_stockGear.emplace(id, std::move(stock));
+        }
+
+        // Is a_baseID part of a_followerID's snapshotted stock? ShedOffRoleWeapon's
+        // one guard against ever giving away a follower's own gear.
+        bool IsStockGear(RE::FormID a_followerID, RE::FormID a_baseID) {
+            std::scoped_lock lk(g_stockMx);
+            const auto it = g_stockGear.find(a_followerID);
+            return it != g_stockGear.end() && it->second.count(a_baseID) != 0;
+        }
 
         // EvictOldest for the Claim map -- oldest by first-seen. The FormID/time
         // overload above cannot serve it (Claim has no operator<), so this is its
@@ -3194,14 +3283,13 @@ namespace MFO::Logistics {
     // worker-safe move LootAmmo already uses.
     bool ShedOffRoleWeapon(RE::Actor* a_follower, const FollowerState& a_state) {
         using WT = RE::WEAPON_TYPE;
-        auto* eqW = a_follower->GetEquippedObject(false);
-        auto* myW = eqW ? eqW->As<RE::TESObjectWEAP>() : nullptr;
-        const WepClass wielded = (myW && WeaponClassOf(myW->GetWeaponType()) != WepClass::Other)
-                                 ? WeaponClassOf(myW->GetWeaponType()) : WepClass::Other;
-        const bool wieldsMelee  = wielded == WepClass::OneHand || wielded == WepClass::TwoHand;
-        const bool wieldsRanged = wielded == WepClass::Ranged;
-        const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
-        const bool wantsRanged = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
+
+        // #69: the SAME stable role signal LootEquipment loots/keeps against
+        // (ComputeWeaponRoles, kept in sync by construction) -- never the
+        // momentarily-wielded weapon. A follower who carries both a melee and
+        // a ranged weapon keeps BOTH roles regardless of which is drawn right
+        // now, so this can no longer shed what loot just decided to keep.
+        const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
 
         // MAGIC LOADOUT (v1.0.29): the mage's one-hand BACKUP is IN-ROLE. A
         // magic user (>= 1 enabled cast gambit -- the SAME gambit-driven test
@@ -3216,34 +3304,10 @@ namespace MFO::Logistics {
         const bool magicUser   = castGambits > 0;
         const bool daggersOnly = Config::g_mageDaggersOnly.load();
 
-        WepClass meleeRole = WepClass::Other;
-        if (wantsMelee) {
-            auto*       avo = a_follower->AsActorValueOwner();
-            const float one = avo ? avo->GetActorValue(RE::ActorValue::kOneHanded) : 0.0f;
-            const float two = avo ? avo->GetActorValue(RE::ActorValue::kTwoHanded) : 0.0f;
-            meleeRole = (two > one) ? WepClass::TwoHand : WepClass::OneHand;
-        } else if (wieldsMelee) {
-            meleeRole = wielded;
-        }
-        const bool doRanged = wantsRanged || wieldsRanged;
+        const WepClass meleeRole    = roles.melee;
+        const bool     doRanged     = roles.doRanged;
+        const bool     wantCrossbow = roles.wantCrossbow;
         if (meleeRole == WepClass::Other && !doRanged) return false;   // no role -> not ours to judge
-
-        bool wantCrossbow = false;
-        if (doRanged) {
-            std::uint16_t bowDmg = 0, xbowDmg = 0; int arrows = 0, bolts = 0;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
-                if (!obj || data.first <= 0) continue;
-                if (auto* w = obj->As<RE::TESObjectWEAP>()) {
-                    if (w->GetWeaponType() == WT::kBow)           bowDmg  = std::max(bowDmg,  w->GetAttackDamage());
-                    else if (w->GetWeaponType() == WT::kCrossbow) xbowDmg = std::max(xbowDmg, w->GetAttackDamage());
-                } else if (auto* am = obj->As<RE::TESAmmo>()) {
-                    (AmmoIsBolt(am) ? bolts : arrows) += data.first;
-                }
-            }
-            if (bowDmg > 0 && xbowDmg > 0)      wantCrossbow = (bolts != arrows) ? (bolts > arrows) : (xbowDmg > bowDmg);
-            else if (bowDmg > 0 || xbowDmg > 0) wantCrossbow = xbowDmg > bowDmg;
-            else                                wantCrossbow = bolts > arrows;
-        }
 
         auto inRole = [&](const RE::TESObjectWEAP* w) {
             const WepClass wc = WeaponClassOf(w->GetWeaponType());
@@ -3273,6 +3337,10 @@ namespace MFO::Logistics {
             if (!w || w->IsStaff()) continue;
             if (inRole(w)) { ++inRoleWeapons; continue; }
             if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
+            // #69: never shed the follower's OWN gear, snapshotted at first
+            // management (the Gauldurbow fix) -- an off-role signature weapon
+            // stays in the pack, not handed to the player.
+            if (IsStockGear(a_follower->GetFormID(), obj->GetFormID())) continue;
             if (socketed(data.second.get())) continue;
             if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
         }
@@ -3298,6 +3366,12 @@ namespace MFO::Logistics {
         if (!a_follower) return;
         g_svc = &a_state;   // loot code reads the gambit table through this (worker-sequential)
 
+        // #69: snapshot the follower's OWN gear the very FIRST time MFO manages
+        // them -- before HealExcludedWeapon/ShedOffRoleWeapon/loot touch a
+        // single item. First management is recruit for a new follower (nothing
+        // looted yet); a no-op for anyone already snapshotted this session or
+        // loaded from the co-save.
+        EnsureStockSnapshot(a_follower);
 
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
@@ -3861,6 +3935,26 @@ namespace MFO::Logistics {
         // Forget the live intent too, if he was the active traveller (his slot).
         if (const int slot = SlotIndexOf(a_id); slot >= 0)
             g_travelSlots[slot] = TravelIntent{};
+    }
+
+    // ── #69: co-save companions for g_stockGear ─────────────────────────────
+    // Locked accessors so Serialization.cpp never reaches into the anonymous
+    // namespace's map directly -- the same hand-off shape every other module's
+    // co-save side uses.
+
+    std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> CopyStockGear() {
+        std::scoped_lock lk(g_stockMx);
+        return g_stockGear;   // copied out UNDER the lock; SaveCallback writes the copy lock-free
+    }
+
+    void LoadStockRecord(RE::FormID a_followerID, std::unordered_set<RE::FormID> a_set) {
+        std::scoped_lock lk(g_stockMx);
+        g_stockGear[a_followerID] = std::move(a_set);
+    }
+
+    void ClearStockGear() {
+        std::scoped_lock lk(g_stockMx);
+        g_stockGear.clear();
     }
 
 }

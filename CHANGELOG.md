@@ -1,3 +1,21 @@
+## v1.0.49 -- followers keep their own gear; cast gambits target smarter
+
+- Fix (#69): MFO no longer gives away a follower's OWN gear. A custom follower's
+  signature weapon (Feris's Gauldurbow) or a 1h/bow hybrid's off-hand sidearm was
+  being handed to the player whenever it read as "off-role." MFO now snapshots a
+  follower's gear the first time it manages them and NEVER sheds or displaces that
+  stock gear -- only gear MFO itself looted is ever managed. And the loot and
+  hand-back-off-role systems now judge a follower's weapon role from ONE stable
+  signal (their gambits + what they actually carry), not whatever weapon is drawn
+  that instant -- so they can't disagree and thrash (loot a 1h, then shed it while
+  the bow is out). Pure casters are unchanged (still just their one sidearm).
+- New (#68): cast gambits target smarter. A cast whose target is "questionable" --
+  e.g. "when dark -> cast Magelight" with no foe around -- now falls through to
+  YOU (the player) and lights up, instead of failing to cast at all. Cast rows get
+  a Target picker: Auto (the foe/ally if any, else you), the player by name,
+  Nearest ally, or a specific follower by name. A cast aimed at an obvious target
+  that's beyond the spell's range is skipped cleanly so the rule below it still runs.
+
 ## v1.0.48 -- LOTD drop-off boxes left alone (towns/inns/museum); SE 1.5.97 cast-control crash gated
 
 - Fix (#66): followers no longer loot from Legacy of the Dragonborn drop-off /

@@ -7,6 +7,12 @@ namespace MFO {
     inline constexpr std::uint32_t kSerID       = 'MFO0';
     inline constexpr std::uint32_t kRecFollowers = 'FLWR';
 
+    // #69: a follower's OWN gear (Logistics::g_stockGear), SEPARATE from FLWR
+    // -- its own record type and its own version, so it can evolve (or fail to
+    // parse on a downgrade) without touching the FLWR schema at all.
+    inline constexpr std::uint32_t kRecStock    = 'MSTK';
+    inline constexpr std::uint32_t kStockVersion = 1;
+
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.
     //
@@ -14,13 +20,17 @@ namespace MFO {
     //        overrides[]}
     //   v2 - tutoring removed (DESIGN.md 5.4): {rapport, rank, tables[],
     //        overrides[]}
+    //   v3 - #68: cast-target resolution ladder. Each gambit gains
+    //        subjectActorForm (a FormID, 0 = use subjectSelector's enum
+    //        instead), written right after subjectSelector. Read ONLY when
+    //        version >= 3; older records simply have none (defaults to 0).
     //
     // The v1 block was briefly deleted WITHOUT a bump, on the reasoning that no
     // save had ever held an MFO record. True at the time; it stopped being true
     // the moment saving with the mod active was planned. Bumped to v2 with a v1
     // reader that consumes and discards the tutored block -- because "no save
     // has it yet" is a fact with an expiry date, and a version number is not.
-    inline constexpr std::uint32_t kSchemaVersion = 2;
+    inline constexpr std::uint32_t kSchemaVersion = 3;
 
     void SaveCallback(SKSE::SerializationInterface* a_intfc);
     void LoadCallback(SKSE::SerializationInterface* a_intfc);

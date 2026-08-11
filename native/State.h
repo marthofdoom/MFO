@@ -32,6 +32,12 @@ namespace MFO {
         float       conditionParam = 0.0f;
         RE::FormID  actionParamForm = 0;   // spell/item; ResolveFormID on load
         std::uint8_t subjectSelector = 0;
+        // #68: a SPECIFIC follower to target (a Cast-on-target row picked a
+        // named ally, not the Self/Player/NearestAlly enum). 0 = use
+        // subjectSelector instead; ResolveFormID on load, same as
+        // actionParamForm -- unresolvable (the follower is gone) just falls
+        // back to 0, never disables the rule (Actuation's ladder keeps going).
+        RE::FormID  subjectActorForm = 0;
         bool        enabled = true;
 
         // Runtime-only, never serialized (ARCHITECTURE.md §7): display state

@@ -13,6 +13,10 @@ namespace MFO::Eval {
         std::string actionOpcode;
         RE::FormID  actionParam = 0;
         std::uint8_t subject = 0;
+        // #68: a SPECIFIC follower target, carried straight from the
+        // Gambit (0 = use `subject`'s enum instead). Actuation's
+        // ResolveCastTarget is the only reader.
+        RE::FormID  subjectActorForm = 0;
 
         // The foe a selector condition chose. Only set by foe selectors; empty
         // for self/player rules. Carried as a HANDLE, never a pointer -- the

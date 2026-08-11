@@ -139,12 +139,22 @@ namespace MFO::Board {
     // table's condition/action vocabulary. Cycle* remain for any legacy caller.
     enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
                                          CycleCond, CycleAct, SetParam, SetSpell,
-                                         SetCond, SetAct, TeachSpell };
+                                         SetCond, SetAct, TeachSpell,
+                                         SetSubject, SetSubjectActor };   // #68
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
         RE::FormID spell = 0;
         RE::FormID book  = 0;   // #4 TeachSpell: the spellbook to consume
+        RE::FormID subjectActor = 0;   // #68 SetSubjectActor: the specific follower
     };
+    // #68: written into a Gambit's subjectSelector when SetSubjectActor picks
+    // a SPECIFIC follower, so a stale subject value from an earlier Self/
+    // Player/NearestAlly pick cannot linger and mislead. Deliberately OUTSIDE
+    // Vocab::Subject's real range (0/1/2) -- ResolveCastTarget's switch falls
+    // into its `default:` case (Self) if the specific actor ever becomes
+    // unavailable, exactly the same graceful demotion an unrecognised value
+    // would get anyway.
+    constexpr std::uint8_t kSubjectSpecificFollower = 0xFF;
     std::mutex          g_editMx;
     std::vector<EditCmd> g_edits;
 
@@ -702,7 +712,7 @@ namespace MFO::Board {
                         std::uint32_t rowFocusUid = 0;
                         const float listH = ImGui::GetTextLineHeightWithSpacing() * 11.0f;
 
-                        if (ImGui::BeginTable("##rules", 7,
+                        if (ImGui::BeginTable("##rules", 8,
                                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                 ImGuiTableFlags_ScrollY, ImVec2(0.0f, listH))) {
                             ImGui::TableSetupColumn("#",    ImGuiTableColumnFlags_WidthFixed, 24);
@@ -713,6 +723,9 @@ namespace MFO::Board {
                             ImGui::TableSetupColumn("Do (action)",
                                                             ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("Spell",ImGuiTableColumnFlags_WidthStretch);
+                            // #68: who a Cast-on-target row hits (Self / player
+                            // by name / Nearest ally / a specific follower).
+                            ImGui::TableSetupColumn("Target",ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 96);
                             ImGui::TableHeadersRow();
 
@@ -923,6 +936,68 @@ namespace MFO::Board {
                                             }
                                             ImGui::EndPopup();
                                         }
+                                    }
+                                }
+
+                                // TARGET -- #68, act.cast_target ONLY. cast_self
+                                // and cast_player ignore the subject entirely
+                                // (Fire() hardcodes their target), so a live
+                                // picker there would edit a field nothing reads.
+                                ImGui::TableNextColumn();
+                                {
+                                    const bool isCastTarget = (rv.actOp == Vocab::kActCastTarget);
+                                    if (!isCastTarget) {
+                                        ImGui::TextDisabled("-");
+                                    } else {
+                                        const char* cur = rv.subjectName.empty()
+                                                          ? "Auto" : rv.subjectName.c_str();
+                                        if (ImGui::Selectable(cur)) ImGui::OpenPopup("##target");
+                                        track();
+
+                                        // Option list, rebuilt fresh each frame the
+                                        // popup is open: Self, the player by name,
+                                        // Nearest ally, then every OTHER active
+                                        // follower by name. form==0 means "use kind
+                                        // (the Subject enum)"; form!=0 means "this
+                                        // SPECIFIC follower" and kind is ignored.
+                                        struct TargetOpt {
+                                            std::uint8_t kind; RE::FormID form; const std::string* label;
+                                        };
+                                        // #68: subject 0 (Vocab::Subject::Self) on a cast-AT-target
+                                        // row means AUTO -- the ladder resolves the selector/
+                                        // condition target if any, else the player. It is NOT
+                                        // "cast on the follower" (that is the separate Cast-on-self
+                                        // action). Labelled Auto so the picker reads true.
+                                        static const std::string kAutoLbl = "Auto (target, else you)";
+                                        static const std::string kAllyLbl = "Nearest ally";
+                                        std::vector<TargetOpt> opts;
+                                        opts.push_back({ (std::uint8_t)Vocab::Subject::Self,        0, &kAutoLbl });
+                                        opts.push_back({ (std::uint8_t)Vocab::Subject::Player,      0, &who->playerName });
+                                        opts.push_back({ (std::uint8_t)Vocab::Subject::NearestAlly, 0, &kAllyLbl });
+                                        for (const auto& al : who->alliesForPicker)
+                                            opts.push_back({ 0, al.first, &al.second });
+
+                                        int curT = 0;
+                                        if (rv.subjectActorForm != 0) {
+                                            for (int k = 0; k < (int)opts.size(); ++k)
+                                                if (opts[k].form == rv.subjectActorForm) { curT = k; break; }
+                                        } else {
+                                            for (int k = 0; k < (int)opts.size(); ++k)
+                                                if (opts[k].form == 0 && opts[k].kind == rv.subject) { curT = k; break; }
+                                        }
+
+                                        listPopup("##target", "Target", (int)opts.size(),
+                                            [&](int k) { return opts[k].label->c_str(); }, curT,
+                                            [&](int k) {
+                                                if (opts[k].form != 0) {
+                                                    EditCmd e{ EditKind::SetSubjectActor, sel, selTable, rv.uid, 0 };
+                                                    e.subjectActor = opts[k].form;
+                                                    QueueEdit(e);
+                                                } else {
+                                                    QueueEdit({ EditKind::SetSubject, sel, selTable,
+                                                                rv.uid, (float)opts[k].kind });
+                                                }
+                                            });
                                     }
                                 }
 
@@ -1526,6 +1601,25 @@ namespace MFO::Board {
                 if (auto* sp = RE::TESForm::LookupByID(v.spell))
                     v.spellName = sp->GetName() ? sp->GetName() : "?";
             }
+            // #68: the cast-target subject, resolved to a display name here
+            // (main thread) so the draw call never touches an engine pointer.
+            v.subject = g.subjectSelector;
+            v.subjectActorForm = g.subjectActorForm;
+            if (v.subjectActorForm) {
+                RE::Actor* act = nullptr;
+                if (auto* f = RE::TESForm::LookupByID(v.subjectActorForm)) act = f->As<RE::Actor>();
+                v.subjectName = act ? (act->GetName() ? act->GetName() : "?") : "(follower gone)";
+            } else {
+                switch (static_cast<Vocab::Subject>(v.subject)) {
+                case Vocab::Subject::Player:
+                    if (auto* pc = RE::PlayerCharacter::GetSingleton())
+                        v.subjectName = pc->GetName() ? pc->GetName() : "Player";
+                    break;
+                case Vocab::Subject::NearestAlly: v.subjectName = "Nearest ally"; break;
+                case Vocab::Subject::Self:
+                default:                          v.subjectName = "Auto"; break;   // #68: subject 0 = Auto ladder, not self
+                }
+            }
             a_out.push_back(std::move(v));
         }
     }
@@ -1644,6 +1738,19 @@ namespace MFO::Board {
                                             : (int)std::size(kActsCombat);
                 const int n = std::clamp((int)(c.param + 0.5f), 0, tn - 1);
                 tab[i].actionOpcode = t[n].op; break; }
+            // #68: absolute picks from the target popup, same shape as
+            // SetCond/SetAct. Self/Player/NearestAlly CLEAR any stale
+            // specific-follower pick; a specific follower gets the sentinel
+            // subjectSelector so a later demotion (the actor goes away)
+            // reads as Self, never a leftover Player/NearestAlly nobody chose.
+            case EditKind::SetSubject:
+                tab[i].subjectSelector   = static_cast<std::uint8_t>(c.param + 0.5f);
+                tab[i].subjectActorForm  = 0;
+                break;
+            case EditKind::SetSubjectActor:
+                tab[i].subjectActorForm = c.subjectActor;
+                tab[i].subjectSelector  = kSubjectSpecificFollower;
+                break;
             default: break;
             }
         }
@@ -1705,7 +1812,19 @@ namespace MFO::Board {
             r.healthPct  = Vocab::HealthPct(a);
             r.magickaPct = Vocab::MagickaPct(a);
             r.staminaPct = Vocab::StaminaPct(a);
-            if (player) r.distance = a->GetPosition().GetDistance(player->GetPosition());
+            if (player) {
+                r.distance   = a->GetPosition().GetDistance(player->GetPosition());
+                r.playerName = player->GetName() ? player->GetName() : "Player";
+            }
+            // #68: the cast-target picker's follower list -- every OTHER
+            // active teammate by name (never this row's own actor). Same
+            // g_active walk Actuation::NearestAlly does at cast time.
+            for (const auto& h2 : Followers::g_active) {
+                auto* ally = h2.get().get();
+                if (!ally || ally == a) continue;
+                r.alliesForPicker.emplace_back(ally->GetFormID(),
+                                               ally->GetName() ? ally->GetName() : "?");
+            }
 
             if (auto it = g_followers.find(r.id); it != g_followers.end()) {
                 r.rapport        = it->second.rapport;

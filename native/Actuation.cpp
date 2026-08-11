@@ -7,6 +7,8 @@
 #include "CasterConsent.h"
 #include "Targeting.h"
 #include "Logistics.h"
+#include "Followers.h"   // #68: g_active -- NearestAlly walks the maintained teammate list
+#include <limits>        // #68: std::numeric_limits for NearestAlly's distance seed
 #include "Packages.h"    // #35: act.flee reuses the retreat package; hybrid forced cast
 #include "Sightline.h"   // LoS gate on the forced cast -- no firebolts into walls
 #include "Temperament.h" // flair #1: per-follower timing seed (grace offset)
@@ -17,12 +19,80 @@ namespace MFO::Actuation {
 
     namespace {
 
-        RE::Actor* ResolveTarget(RE::Actor* a_follower, std::uint8_t a_subject) {
-            switch (static_cast<Vocab::Subject>(a_subject)) {
-            case Vocab::Subject::Player: return RE::PlayerCharacter::GetSingleton();
-            case Vocab::Subject::Self:
-            default:                     return a_follower;
+        // #68: the nearest living player-teammate that is not a_follower
+        // himself. Walks the maintained g_active list (not a world sweep) --
+        // same precedent as Evaluator.cpp's PickAlly, just by DISTANCE
+        // instead of lowest HP, because "nearest ally" as a cast SUBJECT is
+        // a positional pick, not a triage one.
+        RE::Actor* NearestAlly(RE::Actor* a_follower) {
+            if (!a_follower) return nullptr;
+            const auto selfPos = a_follower->GetPosition();
+            RE::Actor* best = nullptr;
+            float bestDist = std::numeric_limits<float>::max();
+            for (const auto& h : Followers::g_active) {
+                auto ptr = h.get();   // HOLD the NiPointer (Targeting rule)
+                auto* ally = ptr.get();
+                if (!ally || ally == a_follower) continue;
+                if (ally->IsDead() || !ally->Is3DLoaded()) continue;
+                const float d = selfPos.GetDistance(ally->GetPosition());
+                if (d < bestDist) { bestDist = d; best = ally; }
             }
+            return best;
+        }
+
+        // THE RESOLUTION LADDER (#68). Given a cast-target choice, decides WHO
+        // gets cast at, first rung to match wins:
+        //   1 (+3) a selector (or Evaluate()'s player-HP-condition special
+        //     case) already named someone THIS TICK -- a_choice.target.
+        //   2   an explicit subject the player picked on the row: a SPECIFIC
+        //       follower (subjectActorForm) takes precedence over the enum
+        //       when both are somehow set; Self/Player always resolve;
+        //       NearestAlly falls on down the ladder if nobody is in range.
+        //   4   otherwise -- THE PLAYER. The catch-all for actor-agnostic
+        //       rules ("when dark -> cast Magelight") that would otherwise
+        //       resolve to nobody. a_outIsFallbackPlayer marks this rung so
+        //       CastOn's out-of-range skip (below) knows to WAIVE it -- a
+        //       fallback must always fire, never quietly vanish because the
+        //       player happens to be far away.
+        RE::Actor* ResolveCastTarget(RE::Actor* a_follower, const Eval::Choice& a_choice,
+                                     bool& a_outIsFallbackPlayer) {
+            a_outIsFallbackPlayer = false;
+            if (auto ptr = a_choice.target.get(); ptr.get()) return ptr.get();
+
+            auto* player = RE::PlayerCharacter::GetSingleton();
+
+            // A SPECIFIC follower, gone/dead/unloaded falls on down the
+            // ladder rather than bailing -- a "questionable" target must
+            // never wall off the whole rule (the #68 problem statement).
+            if (a_choice.subjectActorForm != 0) {
+                if (auto* specific = RE::TESForm::LookupByID<RE::Actor>(a_choice.subjectActorForm)) {
+                    if (!specific->IsDead() && specific->Is3DLoaded()) return specific;
+                }
+            }
+
+            switch (static_cast<Vocab::Subject>(a_choice.subject)) {
+            case Vocab::Subject::Player:
+                return player;
+            case Vocab::Subject::NearestAlly:
+                if (auto* ally = NearestAlly(a_follower)) return ally;
+                break;   // nobody in range -- fall to the player default below
+            case Vocab::Subject::Self:
+            default:
+                // #68 (marth): on a CAST-AT-TARGET row the default subject
+                // (Self=0 -- what every pre-#68 row and every freshly-added row
+                // carries) means AUTO: run the ladder to the PLAYER fallback, so
+                // an actor-agnostic rule ("when dark -> cast Magelight") lights
+                // up around the player instead of resolving to nobody (the #68
+                // bug) or to the caster. Deliberate self-casting is the separate
+                // "Cast on self" action (kActCastSelf), which never routes
+                // through this ladder. A stale specific-follower sentinel (0xFF)
+                // lands here too and correctly falls through rather than
+                // disarming the rule.
+                break;
+            }
+
+            a_outIsFallbackPlayer = true;
+            return player;
         }
 
         // THE HYBRID'S FORCE HALF. The AI-first grace (below, in CastOn) stays
@@ -106,7 +176,15 @@ namespace MFO::Actuation {
             return std::nullopt;
         }
 
-        Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target) {
+        // a_rangeGate (#68): true only for an OBVIOUS target (ladder rungs
+        // 1-3 -- a selector, an explicit subject, a condition-implied actor).
+        // The PLAYER FALLBACK (rung 4) always passes false: a rule that
+        // exists to cover "nobody obvious applies" must fire regardless of
+        // distance, or the fallback itself becomes just another thing that
+        // can silently not happen. kActCastSelf/kActCastPlayer never set
+        // this (unchanged -- they are not part of the #68 ladder at all).
+        Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target,
+                       bool a_rangeGate = false) {
             // #67 SE/VR GUARD (mirrors the CasterConsent hook guards). The mage
             // cast-control path CRASHES on Skyrim SE 1.5.97: a reporter's crash log
             // pinned an EXCEPTION_ACCESS_VIOLATION to Scheduler::Tick -> Actuation::
@@ -131,6 +209,37 @@ namespace MFO::Actuation {
             if (!spell) {
                 return { Result::FailedOther,
                          std::format("spell {:08X} not in load order", a_spellID), true };
+            }
+
+            // #68 OUT-OF-RANGE SKIP, obvious targets only (a_rangeGate).
+            // Self and Touch delivery are CONTACT/self spells -- there is no
+            // "aimed" range to exceed, so they are never out of range no
+            // matter the distance. For Aimed/TargetActor/TargetLocation,
+            // SpellItem::GetRange() is the SPIT record's own Range field
+            // (confirmed in the pinned CommonLibSSE-NG headers: RE::MagicItem
+            // declares the virtual, RE::SpellItem overrides it to return
+            // data.range). A ZERO/unset range FAILS OPEN -- plenty of vanilla
+            // spells ship with no declared cap, and reading that as "cannot
+            // reach anyone" would silently disable rules on data we cannot
+            // read confidently, exactly the failure mode §5.3 exists to avoid.
+            // TRANSPARENT (GAMBIT_FLOWS §2): a target merely being far away
+            // must not wall off the gambits below this one.
+            if (a_rangeGate && a_target && a_target != a_follower) {
+                const auto delivery = spell->GetDelivery();
+                if (delivery != RE::MagicSystem::Delivery::kSelf &&
+                    delivery != RE::MagicSystem::Delivery::kTouch) {
+                    const float range = spell->GetRange();
+                    if (range > 0.0f) {
+                        const float dist = a_follower->GetPosition().GetDistance(a_target->GetPosition());
+                        if (dist > range) {
+                            return { Result::NoOp,
+                                     std::format("target beyond {} range ({:.0f}/{:.0f})",
+                                                 spell->GetName() ? spell->GetName() : "spell",
+                                                 dist, range),
+                                     true };
+                        }
+                    }
+                }
             }
 
             // COMPETENCE IS NOT PERMISSION (DESIGN.md §5.3). MFO does not top up
@@ -591,14 +700,14 @@ namespace MFO::Actuation {
             return CastOn(a_follower, a_choice.actionParam, RE::PlayerCharacter::GetSingleton());
         }
         if (op == Vocab::kActCastTarget) {
-            // A foe selector already named someone; prefer that over the static
-            // self/player subject, or "Foe: lowest HP -> Cast Firebolt" would
-            // cast at the follower.
-            if (auto ptr = a_choice.target.get(); ptr.get()) {
-                return CastOn(a_follower, a_choice.actionParam, ptr.get());
-            }
-            return CastOn(a_follower, a_choice.actionParam,
-                          ResolveTarget(a_follower, a_choice.subject));
+            // #68: the full resolution ladder -- a selector/condition target
+            // first, then the row's explicit subject, then the player as the
+            // last rung. a_rangeGate is OFF only for that last rung (the
+            // fallback must fire regardless of distance); every obvious
+            // target above it is range-checked inside CastOn.
+            bool isFallbackPlayer = false;
+            auto* target = ResolveCastTarget(a_follower, a_choice, isFallbackPlayer);
+            return CastOn(a_follower, a_choice.actionParam, target, !isFallbackPlayer);
         }
 
         if (op == Vocab::kActEquipRanged) return EquipWeapon(a_follower, true);

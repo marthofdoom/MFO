@@ -463,6 +463,7 @@ namespace MFO::Eval {
             out.actionOpcode = g.actionOpcode;
             out.actionParam  = g.actionParamForm;
             out.subject      = g.subjectSelector;
+            out.subjectActorForm = g.subjectActorForm;   // #68
             out.target       = chosen;
             return out;
         }

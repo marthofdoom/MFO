@@ -35,9 +35,14 @@ namespace MFO::Vocab {
 
     // Who a condition reads / an action targets.
     enum class Subject : std::uint8_t {
-        Self   = 0,
-        Player = 1,
-        // Ally/Foe selectors arrive with the world snapshot in a later slice.
+        Self        = 0,
+        Player      = 1,
+        // #68: the nearest living player-teammate that is not the follower
+        // himself -- resolved at cast time (Actuation::NearestAlly), never
+        // cached. A SPECIFIC follower is NOT an enum value: it is carried
+        // separately as Gambit::subjectActorForm (a FormID), because the
+        // roster is open-ended and a frozen enum cannot name a follower.
+        NearestAlly = 2,
     };
 
     // ── conditions (stable opcode strings) ──────────────────────────────────

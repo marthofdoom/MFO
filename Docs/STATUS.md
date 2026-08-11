@@ -6,7 +6,21 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-10 · **Latest public:** v1.0.46 · **v1.0.48 = #66 (real: town/inn drop-off boxes) + #67 SE-cast-CTD; v1.0.47 folded in** · **#62 FIXED & confirmed**
+> **Last updated:** 2026-08-10 · **Latest public:** v1.0.48 · **v1.0.49 = #68 cast-targeting + #69 stock-gear (pushed to CI); deploy to Tuxborn on green** · **#62/#66/#67 shipped**
+
+> **v1.0.49 (#68 + #69), marth's combined drop.** #69 = stock-loadout snapshot
+> (co-save `MSTK` record, snapshot at first management, never shed/displace stock
+> gear; shared stable `ComputeWeaponRoles` for loot+shed; mage kept out of the
+> weapon-upgrade path). Fixes Feris's Gauldurbow give-away + the 1h/bow thrash.
+> #68 = cast-target ladder (selector → specific-follower → subject → PLAYER
+> fallback; Subject::Self(0) = AUTO on cast-at-target rows), player-by-name +
+> nearby-follower Target picker on the board, FLWR schema v2→v3 (subjectActorForm),
+> spell-range transparent skip. Both agent-built + reviewed (mage-loot regression
+> caught & fixed; Fable PASS; `<limits>` + lock-across-GetInventory advisories
+> applied). FIELD TEST on Tuxborn: Feris keeps her bow; a hybrid keeps 1h+bow; a
+> "when dark → Magelight" gambit lights up around the player. **#70(A)** (config/
+> mod-authored gambit tables) SHELVED for a later update. After this: back to the
+> **town update (#31)**.
 
 > **PRIORITY LIST STATUS (#62-67):** #62 ✅ shipped+confirmed (v1.0.46). #63 ✅
 > coded (v1.0.42+, in v1.0.46), field-test pending. #64 ✅ audit-clean — Packages

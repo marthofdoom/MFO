@@ -1,6 +1,7 @@
 #pragma once
 #include "PCH.h"
 #include "State.h"
+#include <unordered_set>   // #69: stock-gear sets (CopyStockGear/LoadStockRecord)
 
 // The logistics table's actuation. DESIGN.md §4.8.
 //
@@ -111,5 +112,28 @@ namespace MFO::Logistics {
     // is save-serialized, so it would re-latch on every future load. Safe to
     // call for any id -- a no-op unless a_id is the active traveller.
     void OnFollowerRemoved(RE::FormID a_id);
+
+    // ── #69: co-save companions for g_stockGear ──────────────────────────────
+    // A follower's OWN weapon/armor gear, snapshotted the first time MFO
+    // manages them (ServiceFollower's EnsureStockSnapshot) and never touched
+    // by ShedOffRoleWeapon again (the Gauldurbow fix). This map is a REAL
+    // cross-thread structure -- written by the logistics worker, read/written
+    // by the co-save callbacks on the main thread -- so every accessor locks
+    // internally; none of these may be called while already holding a lock
+    // this module owns.
+
+    // A lock-taken COPY of the whole map, for SaveCallback to write the
+    // kRecStock record from without holding the lock across file/engine calls.
+    std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> CopyStockGear();
+
+    // Repopulate one follower's stock set on LoadCallback (mirrors how the
+    // FLWR loader hands resolved data to other modules). Overwrites any
+    // existing entry for a_followerID.
+    void LoadStockRecord(RE::FormID a_followerID, std::unordered_set<RE::FormID> a_set);
+
+    // RevertCallback: drop every snapshot. The next LoadCallback (if any)
+    // repopulates from that save's kRecStock record; a main-menu revert with
+    // no load leaves the map empty, same as every other save-scoped map.
+    void ClearStockGear();
 
 }

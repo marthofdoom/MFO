@@ -26,6 +26,13 @@ namespace MFO::Board {
         float       param = 0.0f;
         RE::FormID  spell = 0;
         std::string spellName;
+        // #68: the cast-target resolution subject, mirrored from the Gambit
+        // for display. subjectName is resolved MAIN-THREAD-ONLY in
+        // FillRuleViews (same rule as spellName just above) -- the render
+        // thread only ever reads the plain string, never an engine pointer.
+        std::uint8_t subject = 0;
+        RE::FormID   subjectActorForm = 0;
+        std::string  subjectName;
         bool        enabled = true;
         bool        lastFired = false;
         std::string fail;
@@ -58,6 +65,12 @@ namespace MFO::Board {
         // (consumes the book) on confirm.
         struct Teachable { RE::FormID spell = 0; RE::FormID book = 0; std::string name; };
         std::vector<Teachable> teachableSpells;
+        // #68: the cast-target picker's option list -- the PLAYER's live
+        // name and every OTHER active follower by name (never this row's
+        // own actor). Same "resolved main-thread-only, plain values cross to
+        // the render thread" rule as knownSpells above.
+        std::string playerName;
+        std::vector<std::pair<RE::FormID, std::string>> alliesForPicker;
     };
 
     struct Snapshot {
