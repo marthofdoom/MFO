@@ -1,3 +1,14 @@
+## v1.0.53 -- combat pathing fix: melee/ranged followers stop moving like casters
+
+- Fix: a follower forced to melee or ranged now MOVES like one. MFO's combat-style
+  records were copying their close-range positioning (how tightly to circle a foe,
+  how readily to fall back) byte-for-byte from a vanilla MAGE style, so a
+  sword-and-board or archer follower kited and back-pedalled like a caster even
+  though it was picking the right attacks -- which is why battle movement felt
+  worse than vanilla. Each style now carries its MATCHING vanilla positioning:
+  melee circles in close and holds ground, ranged keeps a bowman's spacing, casters
+  are unchanged. ESP-only fix; no settings to touch.
+
 ## v1.0.52 -- loose loot: followers actually PICK IT UP now
 
 - Fix: a follower who walks to loose gold/ammo now actually collects it. The
