@@ -192,6 +192,17 @@ namespace MFO::Config {
     // exact. Applied in the CheckStartCast consent hook (CasterConsent).
     inline std::atomic<int>   g_castControl{ 2 };
 
+    // ── INRUO 1.5 CAST-DEBUG (branch `inruo` only) ──────────────────────────
+    // The #67 fix gates the whole mage cast-control path to AE-only because it
+    // CTDs on Skyrim SE 1.5.97 -- which also disables cast gambits on 1.5. This
+    // DEBUG toggle (default OFF) RE-ENABLES the cast path on SE/VR so a willing
+    // 1.5.97 tester can reproduce the crash and capture a fresh log. With it on,
+    // CastOn emits warn-level `[bc] CastOn/<step>` breadcrumbs (which flush at
+    // once, per plugin.cpp) before each suspect op -- the LAST `[bc]` line in
+    // MFO.log before the CTD pins the exact fault. NEVER ship this ON. INI:
+    // bDebugCastSE (Data/SKSE/Plugins/MFO.ini).
+    inline std::atomic<bool>  g_debugCastSE{ false };
+
     // FRIENDLY-FIRE HOLD (v1.0.35), DEFAULT ON. In the SpellCast hook, hold a
     // follower's OFFENSIVE cast when one of the player's own teammates is in the
     // AoE blast at the target or on the caster->target projectile line -- the

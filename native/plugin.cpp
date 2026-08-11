@@ -377,6 +377,13 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     spdlog::info("=== MFO {}.{}.{} loading — game {} ===",
                  ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
+    // INRUO 1.5 CAST-DEBUG BRANCH marker -- warn-level so it's unmistakable in
+    // the log and flushes at once. Confirms the tester installed the debug DLL.
+    // When bDebugCastSE is on AND the runtime is not AE, the cast path runs on
+    // SE/VR and will breadcrumb + crash for diagnosis. NEVER ship this branch.
+    spdlog::warn("=== INRUO 1.5 CAST-DEBUG build — bDebugCastSE={} runtime={} ===",
+                 Config::g_debugCastSE.load() ? "ON" : "off",
+                 REL::Module::IsAE() ? "AE" : (REL::Module::IsVR() ? "VR" : "SE"));
 
     // The Field Kit's three trampoline hooks MUST be installed here, before
     // the renderer initializes. This is the only place they can go.

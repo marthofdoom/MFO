@@ -197,9 +197,26 @@ namespace MFO::Actuation {
             // vanilla AI keeps casting (mobile, animated), exactly the graceful
             // degradation the VR guards already give. Gate here (not just the
             // package route) so no cast-control code runs at all off AE.
-            if (!REL::Module::IsAE())
+            // INRUO DEBUG BRANCH: with bDebugCastSE ON, DO NOT take the AE-only
+            // early-out -- run the cast path on SE/VR so the 1.5.97 crash
+            // reproduces and the [bc] breadcrumbs below pin it. Default OFF = the
+            // shipped #67 behavior (transparent decline off AE, no cast-control).
+            if (!REL::Module::IsAE() && !Config::g_debugCastSE.load())
                 return { Result::FailedOther,
                          "cast control is AE-only (SE/VR use the follower's own AI casting)", true };
+            if (!a_follower) return { Result::FailedOther, "no follower", true };
+            // INRUO: breadcrumb each suspect op at WARN level so it FLUSHES AT ONCE
+            // (info is buffered on a 1s timer and lost in a CTD -- plugin.cpp:79).
+            // Only off AE (the runtime we're debugging), so AE builds stay clean.
+            // The LAST `[bc] CastOn/<step>` line in MFO.log before the CTD is the
+            // exact fault site -- no PDB/version match needed.
+            const bool bc = !REL::Module::IsAE();
+            auto crumb = [&](const char* step) {
+                if (bc) spdlog::warn("[bc] CastOn/{} fol={:08X} spell={:08X} tgt={:08X}", step,
+                                     a_follower->GetFormID(), a_spellID,
+                                     a_target ? a_target->GetFormID() : 0u);
+            };
+            crumb("enter");
             // TRANSPARENT (GAMBIT_FLOWS §2): a cast that provably cannot run this
             // tick must not wall off the rules below it -- FFXII skips an
             // unaffordable gambit and runs the next line.
@@ -247,9 +264,11 @@ namespace MFO::Actuation {
             // the follower cannot afford it the rule FAILS and the tick falls
             // through, and the board says why. This is the whole point: a list
             // you wrote that your follower cannot run is legible, not silent.
+            crumb("avo");
             auto* avo = a_follower->AsActorValueOwner();
             float cost = 0.0f;
             if (avo) {
+                crumb("magicka-cost");
                 cost = spell->CalculateMagickaCost(a_follower);
                 const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
                 if (cost > have) {
@@ -320,6 +339,7 @@ namespace MFO::Actuation {
             bool equipped = false;
             if (Config::g_equipToCast.load()) {
                 std::string why;
+                crumb("equip-prepare");   // INRUO: prime crash suspect (spell equip / inventory walk)
                 switch (Loadout::Prepare(a_follower, spell, why)) {
                 case Loadout::Ready::AlreadyReady:
                 case Loadout::Ready::Equipped: {
@@ -332,6 +352,7 @@ namespace MFO::Actuation {
                     // it (§0.16). This is why the grace wait below now usually
                     // succeeds: MFO removed the veto that made it fail. No-op
                     // if bCasterHook is off; observe-only in log mode.
+                    crumb("consent-want");   // INRUO
                     CasterConsent::Want(a_follower->GetFormID(), spell->GetFormID());
 
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
@@ -384,6 +405,7 @@ namespace MFO::Actuation {
                     // its own spell. Force the CONFIGURED spell through the
                     // package route; only a structural decline falls through
                     // to the silent apply below (never a regression).
+                    crumb("force-cast");   // INRUO: package route (native alias-fill is AE-only; VM on SE)
                     if (auto forced = ForceCast(a_follower, spell, a_target, aiCastOther)) {
                         return *forced;
                     }

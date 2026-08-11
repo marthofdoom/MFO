@@ -113,6 +113,7 @@ namespace MFO::Config {
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "iCastControl")       setI(g_castControl, 0, 4);
+            else if (a_key == "bDebugCastSE")       setB(g_debugCastSE);   // inruo: re-enable cast on 1.5
             else if (a_key == "bFriendlyFireHold")  setB(g_friendlyFireHold);
             else if (a_key == "bQuashAllyCombat")    setB(g_quashAllyCombat);   // #63 default ON
             else if (a_key == "iOverlayX")          setI(g_overlayX, 0, 2560);
@@ -223,6 +224,7 @@ namespace MFO::Config {
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
             g_weaponStyleControl = true;    // v1.0.33: standard feature -- ON by default
             g_castControl        = 2;       // mage update: cast-control slider -- center (ignore heals)
+            g_debugCastSE        = false;   // inruo debug branch: OFF by default
             g_friendlyFireHold   = true;    // v1.0.35: hold offensive casts that would hit a teammate
             g_overlayX           = 12;      // #56 combat-overlay margins (px from top-right)
             g_overlayY           = 12;
@@ -283,6 +285,7 @@ namespace MFO::Config {
             { "bAllowSummons", "0" },          { "bEquipToCast", "1" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
             { "bForceCastOnMiss", "1" },       { "iCastControl", "2" },
+            { "bDebugCastSE", "0" },
             { "iOverlayX", "12" },             { "iOverlayY", "12" },
             { "bDollsMode", "0" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },
