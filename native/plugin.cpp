@@ -382,7 +382,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     // When bDebugCastSE is on AND the runtime is not AE, the cast path runs on
     // SE/VR and will breadcrumb + crash for diagnosis. NEVER ship this branch.
     spdlog::warn("=== INRUO 1.5 CAST-DEBUG build — bDebugCastSE={} runtime={} ===",
-                 Config::g_debugCastSE.load() ? "ON" : "off",
+                 MFO::Config::g_debugCastSE.load() ? "ON" : "off",   // SKSEPluginLoad is GLOBAL scope -> fully-qualify
                  REL::Module::IsAE() ? "AE" : (REL::Module::IsVR() ? "VR" : "SE"));
 
     // The Field Kit's three trampoline hooks MUST be installed here, before
