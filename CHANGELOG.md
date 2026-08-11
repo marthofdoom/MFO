@@ -1,3 +1,13 @@
+## v1.0.59 -- controller: Field Orders back/close fixed
+
+- Fixed the Field Orders board breaking on a controller when the game switches
+  between keyboard and gamepad input (frequent on Steam Deck): B would stop working
+  as back/close, navigation got erratic, and only keyboard Esc could close the
+  board. B -- and all controller nav -- now runs entirely off the game's own
+  controller input stream instead of a separate poll that went deaf on a mode
+  flip, so back and close stay reliable through keyboard/gamepad switches, docked
+  or handheld. B also responds on the first press every time you reopen the board.
+
 ## v1.0.58 -- concentration spells: bounded, and no more freeze
 
 - Fixed a hard freeze (the game hangs, no crash log) that could strike when a

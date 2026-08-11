@@ -14,7 +14,10 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // nav state (NavWindow/NavLayer/NavId) for the cascaded B back-out
 #include <imgui_impl_dx11.h>
-#include <imgui_impl_win32.h>
+// VENDORED (native/imgui_impl_win32.h, upstream v1.92.8), not vcpkg: the TU is
+// compiled into this target with IMGUI_IMPL_WIN32_DISABLE_GAMEPAD so the
+// backend's XInput poll cannot race the input hook's gamepad feed (v1.0.59).
+#include "imgui_impl_win32.h"
 
 #include "Board.h"
 #include "Followers.h"
@@ -96,9 +99,9 @@ namespace MFO::Board {
             case K::kBack:          return ImGuiKey_GamepadBack;
             default:                return ImGuiKey_None;
             }
-            // kB is deliberately ABSENT: it is intercepted as close before
-            // translation, so it never reaches ImGui nav as Cancel and fight
-            // the close.
+            // kB is deliberately ABSENT here: the hook forwards it through an
+            // explicit branch (see InputDispatchHook) that documents B's
+            // special role as the nav-cancel / cascaded-back key.
         }
 
         ImGuiKey DIKToImGuiKey(std::uint32_t a_key) {
@@ -429,7 +432,21 @@ namespace MFO::Board {
             // only edges fed while OPEN; the guard is belt-and-suspenders on top of
             // the fact that the opening DOWN was seen while closed and never fed.
             static bool s_r1Guard = false;
-            if (g_justOpened.exchange(false)) { s_r1Guard = true; s_prevNavBusy = true; }
+            if (g_justOpened.exchange(false)) {
+                s_r1Guard = true; s_prevNavBusy = true;
+                // STUCK-KEY SWEEP (v1.0.59). The press that CLOSED the last
+                // session (B / Esc) never gets its release fed: the hook stops
+                // feeding the instant g_open is false and the close grace
+                // swallows the up-edge. With the hook as the only gamepad
+                // source (the backend's absolute-state XInput poll used to
+                // paper over this) that key stays down in io.KeysData, and
+                // AddKeyEvent's duplicate filter would eat the NEXT session's
+                // first press of it -- a dead first B after every B-close.
+                // Clear keyboard+gamepad state once per open (mouse untouched;
+                // same call WM_KILLFOCUS already uses). Render thread, under
+                // g_ioMx via the present hook, so it can't tear the queue.
+                io.ClearInputKeys();
+            }
             if (s_r1Guard && !ImGui::IsKeyDown(ImGuiKey_GamepadR1)) s_r1Guard = false;
             const bool r1Ready = !s_r1Guard;
 
@@ -1154,11 +1171,20 @@ namespace MFO::Board {
             // Render, where IsAnyItemActive/IsPopupOpen are valid.
             // CASCADED BACK, decided here on the render thread off ImGui's OWN
             // nav-cancel key -- the only signal that can't race the picker close.
-            // The Win32 backend polls XInput itself (ImGui_ImplWin32_NewFrame) and
-            // feeds physical B as GamepadFaceRight, ImGui's nav-cancel; our input
-            // hook can't stop that and must not add a second B path. So by the time
-            // this runs, ImGui's nav-cancel has ALREADY closed any open picker this
-            // frame. Rule: a cancel press (B / Esc) when NO picker was up last frame
+            // B's ONE source is the input hook (v1.0.59): it forwards physical B as
+            // GamepadFaceRight off Skyrim's ButtonEvent stream; the Win32 backend's
+            // own XInput poll -- which used to feed B but went deaf on Steam Input
+            // kb<->pad mode flips -- is compiled out of the vendored backend TU
+            // (IMGUI_IMPL_WIN32_DISABLE_GAMEPAD), so no second path races this one.
+            // The hook feeds on the input thread under g_ioMx; the whole render
+            // frame (NewFrame -> Render) holds the same lock, so a fed edge is
+            // either fully visible to this frame's NewFrame or waits for the next
+            // -- exactly how the other hook-fed nav keys (and Esc) already land.
+            // By the time this runs, ImGui's nav-cancel has ALREADY closed any open
+            // picker this frame (NavUpdateCancelRequest, gated on nav_gamepad_active
+            // = NavEnableGamepad + HasGamepad, both pinned on at init now that the
+            // backend can't rewrite HasGamepad per frame).
+            // Rule: a cancel press (B / Esc) when NO picker was up last frame
             // AND none opened this frame is a root back -> close the board. A cancel
             // press with a picker up is the picker-back ImGui just handled -> keep
             // the board. Same key, same thread as the close: they can't disagree.
@@ -1329,6 +1355,13 @@ namespace MFO::Board {
                 auto& io = ImGui::GetIO();
                 io.IniFilename = nullptr;    // never write imgui.ini into the game dir
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+                // LOAD-BEARING: gamepad nav (nav_gamepad_active in imgui.cpp) needs
+                // NavEnableGamepad AND HasGamepad. Stock imgui_impl_win32 rewrites
+                // HasGamepad every frame from its XInput poll -- deaf poll (Steam
+                // Input kb<->pad flip) = flag cleared = ALL hook-fed gamepad nav
+                // dead. Our vendored backend compiles that poll out, so this
+                // init-time set persists and the hook-fed Gamepad* keys always
+                // drive nav (v1.0.59).
                 io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
 
                 // Bake real typefaces at backbuffer scale -- FontGlobalScale on
@@ -1491,7 +1524,7 @@ namespace MFO::Board {
                         // is race-free against the render thread.
                         // The BACK keys never decide the close here -- this thread
                         // can't read ImGui. Keyboard Esc/Tab forward Escape; gamepad
-                        // B is left to the Win32 backend's own XInput nav-cancel. The
+                        // B forwards GamepadFaceRight (ImGui's nav-cancel) below. The
                         // render thread resolves the board close off that keypress
                         // and the on-screen picker state (see DrawFieldKit's end).
                         switch (b->device.get()) {
@@ -1523,16 +1556,24 @@ namespace MFO::Board {
                         case RE::INPUT_DEVICE::kGamepad:
                             if (static_cast<RE::BSWin32GamepadDevice::Key>(code) ==
                                     RE::BSWin32GamepadDevice::Key::kB) {
-                                // CASCADED BACK. Do NOT forward B ourselves: the
-                                // ImGui Win32 backend polls XInput directly and
-                                // already feeds physical B as GamepadFaceRight (its
-                                // nav-cancel), which closes the innermost picker on
-                                // the render thread. A second B path here is exactly
-                                // what raced and closed the whole board. We only
-                                // intercept so the game never sees B (swallowed
-                                // below); the render-thread resolver decides the
-                                // board close off that same nav-cancel keypress.
-                                (void)down;
+                                // CASCADED BACK. THIS HOOK is B's one and only
+                                // source (v1.0.59): forward it as GamepadFaceRight,
+                                // ImGui's nav-cancel, off Skyrim's ButtonEvent
+                                // stream -- the stream that survives Steam Input's
+                                // kb<->pad mode flips, unlike the Win32 backend's
+                                // XInput poll, which went deaf on a flip and took
+                                // B (and, via its HasGamepad rewrite, ALL gamepad
+                                // nav) down with it. That poll is now compiled out
+                                // (IMGUI_IMPL_WIN32_DISABLE_GAMEPAD on the vendored
+                                // backend TU), so there is no second B path to race
+                                // this one -- the race that a hook-side B caused
+                                // back when the backend ALSO fed B is structurally
+                                // gone. ImGui nav-cancel closes the innermost
+                                // picker at NewFrame; the render-thread resolver
+                                // (DrawFieldKit's end) decides the board close off
+                                // this same keypress. The game never sees B
+                                // (swallowed below).
+                                io.AddKeyEvent(ImGuiKey_GamepadFaceRight, down);
                             } else if (auto k = GamepadToImGuiKey(code); k != ImGuiKey_None) {
                                 // NB: the gamepad shout-close branch was removed on
                                 // purpose. R1 is the Field Orders power on the deck;

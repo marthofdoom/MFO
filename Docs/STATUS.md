@@ -6,7 +6,24 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest public:** v1.0.58 (concentration-freeze fix + bounded concentration casting; deployed to Tuxborn + GitHub release) · prior v1.0.53 (CSTY pathing), v1.0.52 (bundled v1.0.49-52) · field-confirmed: #63 peace, #65 class dropdown, #68 cond.dark, loose-loot pickup. Next: TOWN UPDATE (#31).
+> **Last updated:** 2026-08-11 · **Latest:** v1.0.59 (controller board back/close fix; deploying to Tuxborn, public HELD pending marth's Deck field test — controller behavior is unverifiable in CI) · **Latest public:** v1.0.58 (concentration-freeze fix + bounded concentration casting) · field-confirmed: #63 peace, #65 class dropdown, #68 cond.dark, loose-loot pickup. Next: TOWN UPDATE (#31).
+
+> **v1.0.59 — CONTROLLER board back/close fix** (Fable-built). Field bug (Deck):
+> the Field Orders board broke on controller after a keyboard↔gamepad input-mode
+> flip — B stopped backing out/closing, nav went erratic, only Esc closed. ROOT:
+> B's ONLY source was ImGui's Win32 backend XInput poll (`ImGui_ImplWin32_NewFrame`),
+> which goes deaf on a Steam Input mode flip AND rewrites `HasGamepad` every frame
+> (so a deaf poll killed ALL hook-fed gamepad nav, not just B) — confirmed against
+> imgui 1.92.8 source; route (b) "disable the poll from outside" is impossible there.
+> FIX (route a): VENDOR `imgui_impl_win32.cpp/.h` (byte-exact upstream v1.92.8) into
+> native/, drop vcpkg's `win32-binding` feature, compile the vendored TU with
+> `IMGUI_IMPL_WIN32_DISABLE_GAMEPAD` (XInput poll compiled OUT). B now forwarded from
+> the input hook as `GamepadFaceRight` (Skyrim ButtonEvent stream, survives flips) —
+> single gamepad source, original double-B race structurally gone. Plus a stuck-key
+> sweep (`io.ClearInputKeys()` on board open) so a close-press's swallowed release
+> can't eat the next session's first B. **CI proves compile/LINK (watch for
+> duplicate ImGui_ImplWin32_* symbols = stale imgui restored); controller behavior
+> is FIELD-TEST ONLY.** Deck checklist handed to marth. See [[imgui-backend-polls-xinput-itself]].
 
 > **v1.0.58 — CONCENTRATION FREEZE FIX + bounded concentration casting** (jumped
 > 53→58 per marth). ROOT (deck-diagnosed live: all threads parked, log dead, no
@@ -393,8 +410,11 @@ now obeys "ignore buffs & heals". Design detail below.
 Crashes trump features. Start here. MFO's plausible crash surfaces, ranked:
 1. **The ImGui/Field-Kit overlay (Board.cpp) — #1 GRAPHICS suspect.** Three RENDER-
    thread hooks (D3DInit, DXGIPresent, InputDispatch) + an every-frame overlay +
-   baked fonts + the ImGui Win32 backend polling XInput ([[imgui-backend-polls-
-   xinput-itself]]). Graphics/device-lost/present crashes usually live here.
+   baked fonts. (The Win32 backend's XInput poll ([[imgui-backend-polls-xinput-
+   itself]]) is GONE as of the v1.0.59 fix: imgui_impl_win32.cpp is vendored and
+   compiled with IMGUI_IMPL_WIN32_DISABLE_GAMEPAD; the input hook is the single
+   gamepad source, B included.) Graphics/device-lost/present crashes usually
+   live here.
 2. **Off-main engine MUTATIONS added v1.0.35-37 (memory-corruption/UAF suspects).**
    The CheckCast hook (ActorMagicCaster vtable[0] idx 0x0A) fires on a NON-main
    thread (confirmed in the deck log) and calls GetCasterAsActor + ShouldDeny on
