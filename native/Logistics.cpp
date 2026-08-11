@@ -396,14 +396,18 @@ namespace MFO::Logistics {
             auto isNonPlayable = [](const RE::TESObjectARMO* a) {
                 return a && (a->GetFormFlags() & (1u << 2)) != 0;
             };
-            // Occupies a HEAD-region slot (head/hair/circlet). Used to scope the
-            // hand-back branch to the invisible-HEAD symptom (see below).
-            auto isHeadSlot = [](RE::TESObjectARMO* a) {
+            // JEWELRY slots (amulet/ring). The hand-back branch below covers every
+            // VISIBLE armor slot -- head, body, hands, feet, shield, ... (marth: the
+            // invisible-CHEST-piece case, not just the head) -- but SKIPS jewelry:
+            // rings/amulets key their ArmorAddon off DefaultRace and can resolve
+            // null on a custom race even when they render, and an invisible ring is
+            // negligible, so the false-positive risk there isn't worth it. (A
+            // NON-PLAYABLE creature ring is still DELETED in any slot above.)
+            auto isJewelrySlot = [](RE::TESObjectARMO* a) {
                 using S = RE::BGSBipedObjectForm::BipedObjectSlot;
                 const auto m = static_cast<std::uint32_t>(a->GetSlotMask());
-                return (m & (static_cast<std::uint32_t>(S::kHead) |
-                             static_cast<std::uint32_t>(S::kHair) |
-                             static_cast<std::uint32_t>(S::kCirclet))) != 0;
+                return (m & (static_cast<std::uint32_t>(S::kAmulet) |
+                             static_cast<std::uint32_t>(S::kRing))) != 0;
             };
             // Renders on the race IFF some ArmorAddon matches the race OR a race up
             // its armorParentRace (RNAM) chain -- the SAME resolution the engine
@@ -437,14 +441,11 @@ namespace MFO::Logistics {
                 if (pluginKey(armo->GetFormID()) == actorKey) continue;     // his OWN plugin -> intentional (#64)
                 if (isNonPlayable(armo))
                     hits.push_back({ armo, data.first, true,  "NON-PLAYABLE creature armor" });   // DELETE, any slot
-                else if (isHeadSlot(armo))
-                    hits.push_back({ armo, data.first, false, "FOREIGN non-rendering head item" }); // HAND BACK, head only
-                // else: a foreign PLAYABLE non-rendering piece in a NON-head slot is
-                // LEFT ALONE. Scoping hand-back to head slots (the invisible-HEAD
-                // symptom) avoids stripping a genuinely custom-race follower's rings/
-                // amulets/body whose ArmorAddon can resolve null here even though the
-                // engine renders them via a parent race (Fable review). Non-playable
-                // creature junk is still deleted in any slot above.
+                else if (!isJewelrySlot(armo))
+                    hits.push_back({ armo, data.first, false, "FOREIGN non-rendering armor" });    // HAND BACK, any visible slot
+                // else: a foreign PLAYABLE non-rendering JEWELRY piece (amulet/ring)
+                // is LEFT ALONE -- see isJewelrySlot above for why. Non-playable
+                // creature junk is still deleted in ANY slot (jewelry included) above.
             }
             for (auto& h : hits) {
                 const char* nm = h.armo->GetFullName();

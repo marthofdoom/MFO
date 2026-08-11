@@ -1,3 +1,15 @@
+## v1.0.51 -- un-equippable-gear eviction now covers ALL slots + weapons (not just heads)
+
+- Fix (#62 follow-up): the "take off gear that can't be equipped" fix now covers
+  EVERY worn slot, not just the head. Creature/non-playable ARMOR is deleted and
+  creature WEAPONS are swapped out in any slot/hand (both were already the case);
+  and a foreign wrong-race piece that renders NOTHING is now handed back to you
+  from any VISIBLE slot -- chest, body, hands, feet, shield, head -- so an
+  invisible chest piece is corrected the same way an invisible head is. Rings and
+  amulets are deliberately left alone (their render test is unreliable on custom
+  races and an invisible ring is negligible; a non-playable creature ring is still
+  deleted anywhere).
+
 ## v1.0.50 -- combat-class override; "when dark" condition; loose-loot pickup fix
 
 - New (#65): a per-follower COMBAT CLASS override on the board -- set a follower to
