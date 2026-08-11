@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest:** v1.0.60 (#73 creature-weapon loot fix — giant clubs; building) · **Latest public:** v1.0.59 (controller board back/close fix — FIELD-CONFIRMED by marth, released) · prior v1.0.58 (concentration-freeze + bounded casting). Next: TOWN UPDATE (#31).
+> **Last updated:** 2026-08-11 · **Latest public:** v1.0.60 (#73 creature-weapon loot fix — giant clubs; released) · **Latest public:** v1.0.59 (controller board back/close fix — FIELD-CONFIRMED by marth, released) · prior v1.0.58 (concentration-freeze + bounded casting). Next: TOWN UPDATE (#31).
 
 > **v1.0.60 — #73 CREATURE-WEAPON LOOT FIX** (Fable-built, dotnet-selftested). User
 > report: a follower looted a Giant's Club. ROOT: CrGiantClub (skyrim.esm 0x0461DA)
