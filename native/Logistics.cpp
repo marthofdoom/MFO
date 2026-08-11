@@ -1695,6 +1695,23 @@ namespace MFO::Logistics {
                              std::chrono::duration_cast<std::chrono::minutes>(kTravelStickyCooldown).count());
             }
         }
+        // STRAIGHT to sticky, no strike accrual (loose-loot fix, marth field report:
+        // Xelzaz cycled 000D1EFx loose gold forever). Two definitive verdicts skip
+        // the 2-strike patience: (1) a LOOSE ref that stalls -- a gold/ammo pile
+        // never moves, so one no-progress verdict is GEOMETRIC (off-navmesh, on a
+        // table/shelf), not a transient block; and (2) a ref the follower REACHED
+        // but could not acquire (Activate dispatch failed) -- arrival ERASED its
+        // strikes (3551) so it would otherwise re-pick every 25s. Either way the
+        // excursion abandons it for the sticky window instead of looping.
+        void MarkTravelSticky(RE::FormID a_id, Clock::time_point a_now) {
+            if (!a_id) return;
+            g_stallStrikes.erase(a_id);
+            g_travelFailed[a_id]  = a_now;  EvictOldest(g_travelFailed);
+            g_travelUnreach[a_id] = a_now;  EvictOldest(g_travelUnreach);
+            spdlog::info("[loot] {:08X} STICKY-unreachable (loose/unacquirable) -- won't re-pick "
+                         "for {}m", a_id,
+                         std::chrono::duration_cast<std::chrono::minutes>(kTravelStickyCooldown).count());
+        }
 
         // IDLE REASSESS (marth: "to be fair, reassess all nearby bodies if nothing
         // else matches for a few cycles"). The blocklist is a churn-guard, not a
@@ -3543,7 +3560,15 @@ namespace MFO::Logistics {
                 // (he's waiting out YOUR QuickLoot). Letting the no-progress timer
                 // fire during that hold would falsely blacklist a corpse he reached
                 // and is politely waiting on (audit).
-                if (!gone && dist <= kArrivalDist) {
+                // #(loose-loot fix): a LOOSE item Activates from a longer reach
+                // (g_looseAcquireDist, default 300) -- the engine picks it up
+                // regardless of physical distance, so a follower who walked as
+                // close as the navmesh allows still grabs a pile the corpse-tight
+                // 160u arm's reach would strand (marth: reachable gold, pickup
+                // distance too small). A corpse still needs true arm's reach.
+                const float arrivalDist = (tref && LooseRef(tref))
+                                        ? Config::g_looseAcquireDist.load() : kArrivalDist;
+                if (!gone && dist <= arrivalDist) {
                     // REACHED it -> this body is provably reachable: clear any stall
                     // strike so a merely-transient earlier block (boxed in by an actor,
                     // a door) never accumulates toward the sticky verdict. Only bodies
@@ -3577,7 +3602,7 @@ namespace MFO::Logistics {
                         // VM unreachable / no handle -- end the leg, batch continues.
                         spdlog::info("[acquire] {:08X}: ACTIVATE dispatch FAILED for ref {:08X}",
                                      id, tref->GetFormID());
-                        MarkTravelFailed(tref->GetFormID(), now);
+                        MarkTravelSticky(tref->GetFormID(), now);   // reached but unacquirable -> abandon, don't loop
                         tr.phase = TravelPhase::Holding;
                         tr.lingerUntil = now + std::chrono::seconds(
                                                   static_cast<int>(Config::g_batchLinger.load()));
@@ -3604,8 +3629,16 @@ namespace MFO::Logistics {
                     if (tref) {
                         // A stall (zero progress) is a reachability verdict -> strike
                         // toward sticky; a vanished target or a plain deadline is not.
-                        if (stalled) MarkTravelStalled(tref->GetFormID(), now);
-                        else         MarkTravelFailed(tref->GetFormID(), now);
+                        // A LOOSE pile that stalls is beyond even the generous
+                        // g_looseAcquireDist Activate reach AND never moves -> a
+                        // single verdict is geometric, so sticky it straight off
+                        // rather than strike-accrue across a cluster (the churn loop).
+                        if (stalled) {
+                            if (LooseRef(tref)) MarkTravelSticky(tref->GetFormID(), now);
+                            else                MarkTravelStalled(tref->GetFormID(), now);
+                        } else {
+                            MarkTravelFailed(tref->GetFormID(), now);
+                        }
                     }
                     if (stalled && tref)
                         spdlog::info("[loot] {:08X} unreachable {:08X} (no progress, dist={:.0f}) -- skipping",

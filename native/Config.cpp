@@ -143,6 +143,7 @@ namespace MFO::Config {
             else if (a_key == "bRapportToasts")     setB(g_rapportToasts);
             else if (a_key == "iMinPotionMag")      setI(g_minPotionMag, 0, 500);   // 0 = auto floor
             else if (a_key == "fTravelRadius")       setF(g_travelRadius,   64.0f, 8192.0f);   // match the MCM slider max
+            else if (a_key == "fLooseAcquireDist")   setF(g_looseAcquireDist, 64.0f, 2048.0f);   // loose gold/ammo pickup reach
             else if (a_key == "fBatchLinger")        setF(g_batchLinger,     0.0f, 15.0f);
             else if (a_key == "fExcursionMax")       setF(g_excursionMax,    5.0f, 300.0f);
             else if (a_key == "fNavmeshGate")        setF(g_navmeshGate,     0.0f, 2048.0f);
@@ -249,6 +250,7 @@ namespace MFO::Config {
             g_rapportToasts      = true;
             g_minPotionMag       = 0;
             g_travelRadius       = 4096.0f;
+            g_looseAcquireDist   = 300.0f;
             g_batchLinger        = 4.0f;
             g_excursionMax       = 60.0f;
             g_navmeshGate        = 300.0f;
@@ -296,6 +298,7 @@ namespace MFO::Config {
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },
             { "iMinPotionMag", "0" },
             { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "4.000000" },
+            { "fLooseAcquireDist", "300.000000" },
             { "fExcursionMax", "60.000000" },  { "fNavmeshGate", "300.000000" },
             { "fLeashMin", "512.000000" },     { "fLeashMax", "4000.000000" },
             { "iMenuStyle", "0" },             { "bShowHud", "0" },

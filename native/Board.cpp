@@ -140,7 +140,8 @@ namespace MFO::Board {
     enum class EditKind : std::uint8_t { Add, Del, MoveUp, MoveDown, Toggle,
                                          CycleCond, CycleAct, SetParam, SetSpell,
                                          SetCond, SetAct, TeachSpell,
-                                         SetSubject, SetSubjectActor };   // #68
+                                         SetSubject, SetSubjectActor,   // #68
+                                         SetClassOverride };   // #65
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
         RE::FormID spell = 0;
@@ -220,6 +221,7 @@ namespace MFO::Board {
         { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
         { Vocab::kCondIsInterior,    "In an interior",       ParamKind::None    },
         { Vocab::kCondIsNight,       "At night",             ParamKind::None    },
+        { Vocab::kCondDark,          "When dark",            ParamKind::None    },
     };
     inline constexpr VocabEntry kActsCombat[] = {
         { Vocab::kActWait,              "Wait" },
@@ -250,6 +252,7 @@ namespace MFO::Board {
         { Vocab::kCondSelfCarryWeightAbove,"Carry weight % above",  ParamKind::Percent },
         { Vocab::kCondIsInterior,          "In an interior",        ParamKind::None    },
         { Vocab::kCondIsNight,             "At night",              ParamKind::None    },
+        { Vocab::kCondDark,                "When dark",             ParamKind::None    },
     };
     inline constexpr VocabEntry kActsLogi[] = {
         { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
@@ -275,6 +278,12 @@ namespace MFO::Board {
         { Vocab::kActCastPlayer,         "Cast on player" },
         { Vocab::kActWait,               "Wait" },   // gate lower rules, e.g. "carry weight > 90% -> Wait"
     };
+
+    // #65: the combat-class override picker's labels, index-matched to
+    // FollowerState::combatClassOverride / CombatStyle::Stance (0=Auto,
+    // 1=Melee, 2=Ranged, 3=Cast/Mage). Auto is the default -- "no override".
+    inline constexpr const char* kClassNames[4] = { "Auto", "Melee", "Ranged", "Mage" };
+
     int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {
         int cur = 0;
         for (int i = 0; i < n; ++i) if (op == tab[i].op) { cur = i; break; }
@@ -633,6 +642,18 @@ namespace MFO::Board {
                         ImGui::SameLine();
                         ImGui::TextDisabled("rank %u", who->rank);
                         ImGui::SameLine();
+                        // #65: per-follower combat-class OVERRIDE trigger. Auto
+                        // (0) is the default and reads as "no override" -- the
+                        // #64 custom-follower guarantee lives in Scheduler
+                        // (Auto never forces anything); this button just opens
+                        // the picker that sets/clears it. The popup itself is
+                        // drawn below, once listPopup exists.
+                        {
+                            const int curClass = std::clamp<int>(who->combatClassOverride, 0, 3);
+                            std::string cl = std::string("Class: ") + kClassNames[curClass];
+                            if (ImGui::SmallButton(cl.c_str())) ImGui::OpenPopup("##class");
+                        }
+                        ImGui::SameLine();
                         ImGui::BeginDisabled(party.size() < 2);
                         if (ImGui::SmallButton(">##nextf")) switchFollower(+1);
                         ImGui::EndDisabled();
@@ -701,6 +722,25 @@ namespace MFO::Board {
                                 ImGui::EndPopup();
                             }
                         };
+
+                        // #65: the combat-class override popup, triggered by
+                        // the "Class:" button drawn in the party context bar
+                        // above -- placed here (after listPopup exists) rather
+                        // than up there; a BeginPopup's SCREEN position comes
+                        // from SetNextWindowPos inside listPopup, not from
+                        // where in the draw this call sits, so this is purely
+                        // a code-organization choice. Per-FOLLOWER, not
+                        // per-gambit -- SetClassOverride is keyed on `sel`
+                        // alone (uid/table are unused, mirrors Add).
+                        {
+                            const int curClass = std::clamp<int>(who->combatClassOverride, 0, 3);
+                            listPopup("##class", "Combat class", 4,
+                                [&](int k) { return kClassNames[k]; }, curClass,
+                                [&](int k) {
+                                    QueueEdit({ EditKind::SetClassOverride, sel, selTable,
+                                                0u, (float)k });
+                                });
+                        }
 
                         // ── DENSE GAMBIT LIST ───────────────────────────
                         // Tight padding so a full page of gambits reads like
@@ -1663,6 +1703,17 @@ namespace MFO::Board {
                 continue;
             }
 
+            // #65: a per-FOLLOWER edit, not per-gambit -- keyed on c.fid alone
+            // (uid/table are unused, same "no per-rule identity" shape as Add
+            // above). Absolute pick by index, same c.param convention as
+            // SetCond/SetAct; clamp so a stray value never writes an
+            // out-of-range stance ordinal into the co-save.
+            if (c.kind == EditKind::SetClassOverride) {
+                it->second.combatClassOverride =
+                    static_cast<std::uint8_t>(std::clamp((int)(c.param + 0.5f), 0, 3));
+                continue;
+            }
+
             // Resolve by IDENTITY, not index (#31). A command whose rule is
             // gone -- deleted, reseeded -- is dropped, never misapplied.
             int i = -1;
@@ -1829,6 +1880,7 @@ namespace MFO::Board {
             if (auto it = g_followers.find(r.id); it != g_followers.end()) {
                 r.rapport        = it->second.rapport;
                 r.rank           = it->second.rank;
+                r.combatClassOverride = it->second.combatClassOverride;
                 r.combatRules    = static_cast<std::uint8_t>(it->second.combat().size());
                 r.logisticsRules = static_cast<std::uint8_t>(it->second.logistics().size());
                 r.combatSlots    = SlotsForRank(it->second.rank, Table::Combat);
@@ -1886,6 +1938,7 @@ namespace MFO::Board {
             r.active         = false;
             r.rapport        = st.rapport;
             r.rank           = st.rank;
+            r.combatClassOverride = st.combatClassOverride;
             r.combatRules    = static_cast<std::uint8_t>(st.combat().size());
             r.logisticsRules = static_cast<std::uint8_t>(st.logistics().size());
             r.combatSlots    = SlotsForRank(st.rank, Table::Combat);

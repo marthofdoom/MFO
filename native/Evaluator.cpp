@@ -80,6 +80,22 @@ namespace MFO::Eval {
         // cond.foe_count_at_least gambit read the exact same tally.
         int FoeCount(RE::Actor* a_self) { return CombatSense::FoeCount(a_self); }
 
+        // cond.dark (#65 sibling): is it DARK where a_self stands? The engine
+        // exposes no clean per-actor light meter, so this is a HEURISTIC --
+        // interior OR night -- the same two reads kCondIsInterior/kCondIsNight
+        // already use individually, just OR'd so "cast Magelight when it's
+        // dark" covers both the dungeon case and the outdoor-night case in one
+        // rule. Fails toward NOT dark on a missing API (Calendar unavailable),
+        // matching every other condition's "fail closed, never fabricate" rule.
+        bool IsDark(RE::Actor* a_self) {
+            auto* cell = a_self ? a_self->GetParentCell() : nullptr;
+            if (cell && cell->IsInteriorCell()) return true;
+            auto* cal = RE::Calendar::GetSingleton();
+            if (!cal) return false;   // no clock -> can't call it dark
+            const float h = cal->GetHour();   // [0,24)
+            return h >= 20.0f || h < 6.0f;     // dusk to dawn, same window as kCondIsNight
+        }
+
         // Surface the ALL-OCCLUDED fallback (throttled, outside the lock): every
         // qualified foe failed the LoS preference, so the selector fell back to
         // the old distance/HP pick rather than going passive. One line per ~5 s
@@ -365,6 +381,7 @@ namespace MFO::Eval {
                 const float h = cal->GetHour();   // [0,24)
                 return h >= 20.0f || h < 6.0f;     // dusk to dawn
             }
+            if (op == Vocab::kCondDark) return IsDark(a_self);
 
             // Foe-COUNT gate -- reads the group, picks no target.
             if (op == Vocab::kCondFoeCountAtLeast)

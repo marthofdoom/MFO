@@ -70,6 +70,12 @@ namespace MFO::Vocab {
     // World gates -- no param.
     inline constexpr const char* kCondIsInterior  = "cond.is_interior";
     inline constexpr const char* kCondIsNight     = "cond.is_night";
+    // "When dark" -- a no-param SELF/environment condition, same shape as
+    // kCondAlways (no threshold, no foe target). Composite of the two gates
+    // above (interior OR night) so a player who wants "cast Magelight when
+    // it's dark" -- dungeons AND outdoor night both -- doesn't have to author
+    // an OR out of two separate rules the evaluator has no OR for.
+    inline constexpr const char* kCondDark        = "cond.dark";
     // Foe-COUNT gate -- true when at least `param` live foes are in the group.
     // Reads the combat group but chooses NO target (not a selector).
     inline constexpr const char* kCondFoeCountAtLeast = "cond.foe_count_at_least";

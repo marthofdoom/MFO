@@ -1,3 +1,19 @@
+## v1.0.50 -- combat-class override; "when dark" condition; loose-loot pickup fix
+
+- New (#65): a per-follower COMBAT CLASS override on the board -- set a follower to
+  Melee / Ranged / Mage, or leave it Auto. Auto is the default and changes nothing,
+  so a follower you don't reclass is never touched (custom followers stay safe). An
+  override forces the combat stance, superseding whatever the gambits inferred.
+- New: a "When dark" gambit condition (dark = interior/dungeon OR night) -- so you
+  can author "when dark -> cast Magelight". (The existing "In an interior" and "At
+  night" conditions remain; this is just the combined convenience in one rule.)
+- Fix: followers no longer get stuck cycling reachable loose gold/ammo without ever
+  picking it up. Loose piles are now grabbed from a longer, tunable reach
+  (fLooseAcquireDist, default 300) -- the engine's pickup is distance-independent,
+  so a follower who walked as close as the navmesh allows now grabs the pile
+  instead of stalling just short of it. A pile that's genuinely out of reach or
+  won't pick up is abandoned cleanly instead of looping forever.
+
 ## v1.0.49 -- followers keep their own gear; cast gambits target smarter
 
 - Fix (#69): MFO no longer gives away a follower's OWN gear. A custom follower's

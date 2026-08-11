@@ -34,6 +34,9 @@
 //     v3  #68: subjectActorForm (a specific cast-target follower) added
 //         right after subjectSelector, per gambit. Read gated on
 //         version >= 3; a v1/v2 record simply has none (defaults to 0).
+//     v4  #65: combatClassOverride (per-follower forced combat stance)
+//         added right after st.rank. Read gated on version >= 4; an older
+//         record simply has none (defaults to 0 -- Auto, no override).
 //
 //   #12 Versioned schema; readers kept FOREVER; SKSE does NOT round-trip
 //       unread records, so a downgraded DLL DESTROYS newer ones -> warn loud.
@@ -98,6 +101,8 @@ namespace MFO {
             a_intfc->WriteRecordData(formID);
             a_intfc->WriteRecordData(st.rapport);
             a_intfc->WriteRecordData(st.rank);
+            // v4 (#65): the per-follower combat class override, right after rank.
+            a_intfc->WriteRecordData(st.combatClassOverride);
 
             // Two tables, written in Table enum order (DESIGN.md 4.8).
             // The table COUNT is written explicitly so a future third table
@@ -341,6 +346,17 @@ namespace MFO {
                 if (!a_intfc->ReadRecordData(st.rapport)) return;
                 if (!a_intfc->ReadRecordData(st.rank)) return;
                 st.rank = std::clamp<std::uint8_t>(st.rank, 1, kMaxRank);
+
+                // v4 (#65): STRICTLY version-gated, same discipline as the v3
+                // subjectActorForm read below -- a v1/v2/v3 record never wrote
+                // this field, so reading it unconditionally would consume the
+                // next field's bytes and desync the rest of the stream.
+                // st.combatClassOverride already defaults to 0 (FollowerState{}),
+                // exactly "Auto / no override" for every pre-v4 record.
+                if (version >= 4) {
+                    if (!a_intfc->ReadRecordData(st.combatClassOverride)) return;
+                    st.combatClassOverride = std::clamp<std::uint8_t>(st.combatClassOverride, 0, 3);
+                }
 
                 std::uint8_t tableCount = 0;
                 if (!a_intfc->ReadRecordData(tableCount)) return;

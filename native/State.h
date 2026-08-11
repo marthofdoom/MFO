@@ -72,6 +72,14 @@ namespace MFO {
     struct FollowerState {
         std::uint32_t rapport = 0;
         std::uint8_t  rank = 1;                 // clamped [1,5] on load
+        // #65: a user-set per-follower combat class OVERRIDE that forces the
+        // follower's CombatStyle::Stance, superseding the gambit-inferred one.
+        // Deliberately EQUAL to CombatStyle::Stance's ordinals (0=Auto/None,
+        // 1=Melee, 2=Ranged, 3=Cast) so Scheduler can cast it directly. 0 =
+        // Auto = NO override -- custom-follower safety (#64): an un-
+        // overridden follower is never touched by this feature. Clamped to
+        // [0,3] on load (Serialization.cpp).
+        std::uint8_t  combatClassOverride = 0;
         std::vector<Gambit> tables[static_cast<size_t>(Table::kCount)];
         std::vector<PackageOverride> overrides;
 

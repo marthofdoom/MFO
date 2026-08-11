@@ -355,6 +355,17 @@ namespace MFO::Config {
     // the 2 inside 768 ever attempted). fTravelRadius.
     inline std::atomic<float> g_travelRadius{ 4096.0f };
 
+    // LOOSE-ITEM PICKUP DISTANCE (fLooseAcquireDist). A loose world item (gold/
+    // ammo pile) is acquired by dispatching ObjectReference.Activate, which the
+    // ENGINE runs regardless of physical reach -- so a follower who walked as
+    // close as the navmesh allows and STALLED short of a corpse's arm's-reach
+    // (kArrivalDist 160) still grabs it. Bigger than kArrivalDist because the
+    // navmesh often ends well off a pile sitting on a table/shelf (marth field
+    // report: Xelzaz stalled ~221 from reachable gold and never triggered the
+    // grab). Corpses still need real arm's reach (a transfer, not an Activate),
+    // so this is LOOSE-only. Tune up if piles beyond this still get skipped.
+    inline std::atomic<float> g_looseAcquireDist{ 300.0f };
+
     // BATCH EXCURSION (walk-to-loot batching). A follower stays CLAIMED (loot
     // quest at priority 60) across multiple corpses instead of returning to the
     // player between each, retargeting closest-first. Two bounds:

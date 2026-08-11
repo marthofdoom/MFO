@@ -6,7 +6,18 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest public:** v1.0.48 · **v1.0.49 = #68 + #69 DEPLOYED to Tuxborn (DLL 6083a197, run 31444592472, deck-verified); FIELD-TEST PENDING; public GitHub release HELD until marth confirms** · **#62/#66/#67 shipped**
+> **Last updated:** 2026-08-11 · **Latest public:** v1.0.48 · **v1.0.49 (#68+#69) deck-deployed, field-test pending; v1.0.50 (#65 class-override + cond.dark + loose-loot pickup fix) pushed to CI** · **#62/#66/#67 shipped**
+
+> **v1.0.50:** #65 = per-follower Combat Class dropdown on the board (Auto/Melee/
+> Ranged/Mage), Auto=no-override (custom-follower-safe #64), forces the CSTY stance
+> in Scheduler, co-save FLWR v3→v4. `cond.dark` = interior-OR-night condition (for
+> "when dark → Magelight"). LOOSE-LOOT FIX: field log showed a follower cycling
+> REACHABLE loose gold forever, stalling ~221u short of the 160u corpse arm's-reach
+> and never triggering the Activate. Now loose items acquire from `fLooseAcquireDist`
+> (default 300, INI-tunable) since Activate is distance-independent; unreachable/
+> unacquirable piles go STICKY instead of looping. All three Fable-PASS. v1.0.49
+> Tuxborn field-test (Feris bow / hybrid / Magelight) + v1.0.50 all pending marth.
+> Public GitHub release of v1.0.49/50 HELD until field-confirmed. Next: TOWN UPDATE (#31).
 
 > **v1.0.49 (#68 + #69), marth's combined drop.** #69 = stock-loadout snapshot
 > (co-save `MSTK` record, snapshot at first management, never shed/displace stock

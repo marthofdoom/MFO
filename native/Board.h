@@ -46,6 +46,10 @@ namespace MFO::Board {
         std::string   name;
         std::uint32_t rapport = 0;
         std::uint8_t  rank = 1;
+        // #65: the follower's current combat-class override, mirrored from
+        // FollowerState::combatClassOverride for the header dropdown to show
+        // the live pick. 0=Auto, 1=Melee, 2=Ranged, 3=Cast (mage).
+        std::uint8_t  combatClassOverride = 0;
         std::uint8_t  combatSlots = 0;
         std::uint8_t  logisticsSlots = 0;
         std::uint8_t  combatRules = 0;

@@ -327,7 +327,22 @@ namespace MFO::Scheduler {
             }
         }
 
-        if (it->second.combat().empty()) return;      // no rules -> nothing to run
+        if (it->second.combat().empty()) {
+            // #65: no combat gambits, but a class override is still a valid STYLE
+            // pick -- apply it (same master-toggle gating as the main stance path
+            // below) before this early-out, so "just make this follower Ranged/
+            // Mage" works even with an empty rule table. Auto (0) does nothing --
+            // the #64 custom-follower guarantee holds on the empty path too.
+            if (const std::uint8_t ov = it->second.combatClassOverride; ov != 0) {
+                const auto forced = static_cast<CombatStyle::Stance>(ov);
+                if (forced == CombatStyle::Stance::Cast) {
+                    if (Config::g_castControl.load() > 0) CombatStyle::Want(id, forced);
+                } else if (Config::g_weaponStyleControl.load()) {
+                    CombatStyle::Want(id, forced);
+                }
+            }
+            return;      // no rules -> nothing else to run
+        }
 
         // ── FLAIR #3: COMBAT-ENTRY READY BEAT ────────────────────────────────
         // The first serviced tick of a fight stamps the entry; the table holds
@@ -499,8 +514,31 @@ namespace MFO::Scheduler {
         //      to caster when it regenerates (marth: cast-till-dry-then-melee).
         // Only UPDATE on a real signal; a one-tick heal above must not drop the
         // stance (the "hold until it changes" contract), so no Want otherwise.
+        // #65: the per-follower COMBAT-CLASS OVERRIDE, if the user set one,
+        // SUPERSEDES the gambit-inferred stance below entirely -- an explicit
+        // "make him Melee" wins over whatever the equip/cast gambits decided
+        // this tick. Re-find the record (same INVARIANTS #2 discipline as
+        // `rec` above: g_followers could have shifted under the scan). Auto
+        // (0) changes NOTHING -- falls straight through to the unchanged
+        // gambit-driven logic, the #64 custom-follower guarantee.
+        std::uint8_t classOverride = 0;
+        if (const auto fit = g_followers.find(id); fit != g_followers.end())
+            classOverride = fit->second.combatClassOverride;
+
         CombatStyle::Stance stance = CombatStyle::Stance::None;
-        if (wantStance) {
+        if (classOverride != 0) {
+            const auto forced = static_cast<CombatStyle::Stance>(classOverride);
+            // Same master-toggle gating the inferred paths use below: the
+            // override is a forced PICK, not a bypass of the kill-switches --
+            // bWeaponStyleControl off still means MFO never touches weapon
+            // stances, iCastControl==0 still means it never touches the
+            // caster stance, override or not.
+            if (forced == CombatStyle::Stance::Cast) {
+                if (Config::g_castControl.load() > 0) stance = forced;
+            } else if (Config::g_weaponStyleControl.load()) {
+                stance = forced;
+            }
+        } else if (wantStance) {
             if (Config::g_weaponStyleControl.load())
                 stance = (wantStance == 2) ? CombatStyle::Stance::Ranged
                                            : CombatStyle::Stance::Melee;
