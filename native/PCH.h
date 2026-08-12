@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cstdint>
 #include <format>
+#include <memory>   // shared_ptr — the board's immutable prog-view handoff (#74)
 #include <mutex>
 #include <shared_mutex>   // Targeting's latch is the one cross-thread map (#4)
 #include <string>

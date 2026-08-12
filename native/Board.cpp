@@ -20,6 +20,7 @@
 #include "imgui_impl_win32.h"
 
 #include "Board.h"
+#include "Progression.h"   // #74: the frozen catalog — lock-free render reads by contract
 #include "Followers.h"
 #include "Rapport.h"
 #include "Config.h"
@@ -147,12 +148,14 @@ namespace MFO::Board {
                                          CycleCond, CycleAct, SetParam, SetSpell,
                                          SetCond, SetAct, TeachSpell,
                                          SetSubject, SetSubjectActor,   // #68
-                                         SetClassOverride };   // #65
+                                         SetClassOverride,   // #65
+                                         ProgSetClass, ProgAllocPerk, ProgRespec };   // #74 comp 3
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
         RE::FormID spell = 0;
         RE::FormID book  = 0;   // #4 TeachSpell: the spellbook to consume
         RE::FormID subjectActor = 0;   // #68 SetSubjectActor: the specific follower
+        RE::FormID perk  = 0;   // #74 ProgAllocPerk: the catalog node (rank-1 form)
     };
     // #68: written into a Gambit's subjectSelector when SetSubjectActor picks
     // a SPECIFIC follower, so a stale subject value from an earlier Self/
@@ -501,7 +504,14 @@ namespace MFO::Board {
             // tab still resyncs s_tab inside the opened body.
             static int s_tab = 0;
             static bool s_tabForce = false;   // apply SetSelected for ONE frame after an edge
-            constexpr int kTabCount = 2;   // Followers, Gambits (diagnostics tabs removed, marth)
+            // #74: the tab count is RUNTIME now — the Progression tab exists
+            // only when the addon ESL is detected (§1: absent = the tab is
+            // absent entirely, the same optional-addon pattern as the MCM
+            // Detected line), and the View-cycle must not step onto a tab
+            // that was never emitted.
+            const bool progActive = snap.prog && snap.prog->active;
+            const int kTabCount = progActive ? 3 : 2;   // Followers, Gambits[, Progression]
+            if (s_tab >= kTabCount) s_tab = 0;   // the addon vanished under a stale pick
             // Gated like everything else: never while an item is being tweaked or
             // a picker popup is open.
             if (!ImGui::IsAnyItemActive() &&
@@ -1161,6 +1171,499 @@ namespace MFO::Board {
                     }
                 }
 
+                // ── THE PROGRESSION TAB (#74 component 3) ───────────────
+                // Emitted ONLY when the addon ESL is detected (§1) — absent
+                // means absent, the same optional-addon pattern as the MCM
+                // Detected line. The draw reads two immutable sources: the
+                // FROZEN catalog (lock-free on this thread by its contract)
+                // and the allocator's published value-only views (snap.prog).
+                // It mutates NOTHING — every action queues an EditCmd that
+                // ApplyEdits re-posts to the MAIN thread, where the §5
+                // backend gate re-validates before any engine write.
+                if (progActive && ImGui::BeginTabItem("Progression", nullptr, tabSel(2))) {
+                    s_tab = 2;
+                    const auto& prog = *snap.prog;
+
+                    static RE::FormID s_psel = 0;          // selected follower
+                    static RE::FormID s_promptedFor = 0;   // class prompt auto-opened for
+                    static int   s_skillCur = 0;           // index into the non-empty-tree list
+                    static float s_zoom = 1.0f;
+                    static bool  s_scrollHome = true;      // recentre on the root
+                    static int   s_nodeTree = -1, s_nodeIdx = -1;   // node popup target
+
+                    const ProgAllocator::BoardFollowerView* who = nullptr;
+                    for (const auto& r : prog.rows) if (r.id == s_psel) { who = &r; break; }
+                    if (!who && !prog.rows.empty()) {
+                        who = &prog.rows.front();
+                        s_psel = who->id;
+                        s_promptedFor = 0;
+                        s_scrollHome = true;
+                    }
+
+                    // Tell the main thread whose tree to publish next (atomic
+                    // — a plain value, safe from the render thread).
+                    ProgAllocator::SetBoardFocus(s_psel);
+
+                    if (!who) {
+                        ImGui::TextDisabled("No active follower. Recruit one to manage progression.");
+                        ImGui::EndTabItem();
+                    } else {
+                        const bool popupOpen = ImGui::IsPopupOpen(nullptr,
+                            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+
+                        auto switchFollower = [&](int d) {
+                            if (prog.rows.size() < 2) return;
+                            int idx = 0;
+                            for (int k = 0; k < (int)prog.rows.size(); ++k)
+                                if (prog.rows[k].id == s_psel) { idx = k; break; }
+                            idx = ((idx + d) % (int)prog.rows.size() + (int)prog.rows.size())
+                                  % (int)prog.rows.size();
+                            s_psel = prog.rows[idx].id;
+                            s_promptedFor = 0;
+                            s_scrollHome = true;
+                        };
+
+                        // L1/R1 = party switch — the Gambits gating verbatim
+                        // (r1Ready keeps the opening R1 press from skipping).
+                        if (!ImGui::IsAnyItemActive() && !popupOpen) {
+                            if (r1Ready && ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false))
+                                switchFollower(+1);
+                            if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false))
+                                switchFollower(-1);
+                        }
+
+                        // ── FOLLOWER CONTEXT BAR ────────────────────────
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::BeginDisabled(prog.rows.size() < 2);
+                        if (ImGui::SmallButton("<##prevpf")) switchFollower(-1);
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::PushFont(g_fontHead);
+                        ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                        ImGui::TextUnformatted(who->name.c_str());
+                        ImGui::PopStyleColor();
+                        ImGui::PopFont();
+                        ImGui::SameLine();
+                        ImGui::BeginDisabled(prog.rows.size() < 2);
+                        if (ImGui::SmallButton(">##nextpf")) switchFollower(+1);
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        if (who->enrolled && who->cls != 0) {
+                            ImGui::TextDisabled("level %u", (unsigned)who->level);
+                            ImGui::SameLine();
+                            std::string cl = std::string("Class: ") +
+                                ProgAllocator::ClassName(static_cast<ProgAllocator::Class>(who->cls));
+                            if (ImGui::SmallButton(cl.c_str())) ImGui::OpenPopup("##pclass");
+                        } else {
+                            ImGui::TextDisabled("not enrolled");
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("  [LB]/[RB] change follower");
+                        ImGui::Separator();
+
+                        // ── CLASS PROMPT (§15 — REQUIRED behavior) ──────
+                        // Selecting an UNENROLLED (or class-less) follower on
+                        // this tab pops the picker ONCE per selection: nothing
+                        // is assigned until the player explicitly picks; B
+                        // backs out (popup cascade) and the button below
+                        // reopens. The class ordinals are the allocator's own
+                        // (#65-aligned); their skill weights come from the
+                        // ESL FormLists read at Init — nothing hardcoded here.
+                        const bool needsClass = who->eligible && (!who->enrolled || who->cls == 0);
+                        if (needsClass && s_promptedFor != s_psel && !popupOpen) {
+                            ImGui::OpenPopup("##pclass");
+                            s_promptedFor = s_psel;
+                        }
+                        ImGui::SetNextWindowPos(
+                            ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                        if (ImGui::BeginPopup("##pclass")) {
+                            pickerDrawnThisFrame = true;
+                            ImGui::PushFont(g_fontHead);
+                            ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                            ImGui::TextUnformatted("Choose a class");
+                            ImGui::PopStyleColor();
+                            ImGui::PopFont();
+                            ImGui::TextDisabled("Skills auto-scale to level by class; perks stay yours to pick.");
+                            ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
+                            ImGui::Separator();
+                            for (int k = 1; k <= 3; ++k) {
+                                const bool cur = (who->cls == k);
+                                ImGui::PushID(k);
+                                if (ImGui::Selectable(
+                                        ProgAllocator::ClassName(static_cast<ProgAllocator::Class>(k)),
+                                        cur)) {
+                                    QueueEdit({ EditKind::ProgSetClass, s_psel, 0, 0u, (float)k });
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                if (cur) ImGui::SetItemDefaultFocus();
+                                ImGui::PopID();
+                            }
+                            ImGui::EndPopup();
+                        }
+
+                        if (!who->eligible) {
+                            ImGui::Spacing();
+                            ImGui::TextWrapped("%s cannot progress: %s.",
+                                               who->name.c_str(), who->blocker.c_str());
+                        } else if (needsClass) {
+                            ImGui::Spacing();
+                            ImGui::TextWrapped("%s is not enrolled. Pick a class to begin — "
+                                               "no skills are touched until you do.",
+                                               who->name.c_str());
+                            ImGui::Spacing();
+                            if (ImGui::Button("Choose class...")) ImGui::OpenPopup("##pclass");
+                        } else {
+                            // ── SKILL STRIP (the 18, post-scaling) ──────
+                            if (ImGui::BeginTable("##pskills", 6,
+                                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                                for (const auto& sl : who->skills) {
+                                    ImGui::TableNextColumn();
+                                    ImGui::TextDisabled("%s", sl.name.c_str());
+                                    ImGui::Text("%.0f", sl.base);
+                                    if (sl.alloc > 0.5f) {
+                                        ImGui::SameLine();
+                                        ImGui::TextColored(skin.accent, "(+%.0f)", sl.alloc);
+                                    }
+                                }
+                                ImGui::EndTable();
+                            }
+
+                            // ── TREE PICKER + POINTS ────────────────────
+                            const auto& cat = Progression::Get();   // frozen — lock-free
+                            std::vector<int> trees;
+                            std::size_t totalNodes = 0;
+                            for (int t = 0; t < (int)cat.skills.size(); ++t) {
+                                totalNodes += cat.skills[t].nodes.size();
+                                if (!cat.skills[t].nodes.empty()) trees.push_back(t);
+                            }
+                            // State rows align with the catalog ONLY when the
+                            // published tree is this follower's and complete —
+                            // otherwise draw the shape and say "syncing".
+                            const bool stateOk = (prog.treeFor == s_psel) &&
+                                                 (prog.nodes.size() == totalNodes);
+                            auto stateAt = [&](std::size_t flat)
+                                -> const ProgAllocator::BoardNodeView* {
+                                return (stateOk && flat < prog.nodes.size())
+                                           ? &prog.nodes[flat] : nullptr;
+                            };
+
+                            if (trees.empty()) {
+                                ImGui::TextDisabled("The catalog holds no perk trees — "
+                                                    "see the [prog] census in the log.");
+                            } else {
+                                if (s_skillCur >= (int)trees.size()) s_skillCur = 0;
+                                auto switchSkill = [&](int d) {
+                                    s_skillCur = ((s_skillCur + d) % (int)trees.size()
+                                                  + (int)trees.size()) % (int)trees.size();
+                                    s_scrollHome = true;
+                                };
+                                // Y / FaceUp = next tree (design §7). Inert to
+                                // ImGui itself here — no text widgets — the
+                                // same reasoning as the Gambits Y binding.
+                                if (!ImGui::IsAnyItemActive() && !popupOpen &&
+                                    ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false))
+                                    switchSkill(+1);
+
+                                const auto& tree = cat.skills[trees[s_skillCur]];
+                                std::size_t flatBase = 0;
+                                for (int t = 0; t < trees[s_skillCur]; ++t)
+                                    flatBase += cat.skills[t].nodes.size();
+
+                                ImGui::AlignTextToFramePadding();
+                                if (ImGui::SmallButton("<##prevsk")) switchSkill(-1);
+                                ImGui::SameLine();
+                                ImGui::TextColored(skin.accent, "%s", tree.skillName.c_str());
+                                ImGui::SameLine();
+                                ImGui::TextDisabled("%d perk(s)", (int)tree.nodes.size());
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton(">##nextsk")) switchSkill(+1);
+                                ImGui::SameLine();
+                                ImGui::TextDisabled(" [Y] next tree ");
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton("-##zo")) s_zoom = std::max(0.5f, s_zoom - 0.15f);
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton("+##zi")) s_zoom = std::min(2.0f, s_zoom + 0.15f);
+                                ImGui::SameLine();
+                                ImGui::TextColored(skin.accent, "  %.2f perk point(s)",
+                                                   who->unspentPerk);
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip("Earned at the player's rate x scarcity %.2f\n"
+                                                      "(%d of %d tree ranks are useful to a follower)",
+                                                      prog.scarcity, prog.effectiveRanks,
+                                                      prog.totalRanks);
+                                if (!stateOk) { ImGui::SameLine(); ImGui::TextDisabled("syncing..."); }
+
+                                // ── THE TREE CANVAS ─────────────────────
+                                // ImGui items over a Dummy extent: each
+                                // VISIBLE node is an InvisibleButton, so
+                                // ImGui's own spatial gamepad nav walks the
+                                // tree (d-pad), A activates, auto-scroll
+                                // keeps the focused node in view, and the
+                                // B-cascade sees a child window to back out
+                                // of — no new input paths. VIRTUALIZED:
+                                // nodes outside the child rect + ~1.5 cells
+                                // of nav headroom submit no item and draw
+                                // nothing, so a Vokriinator-scale tree costs
+                                // what is on screen, not what exists.
+                                const float footerH = ImGui::GetFrameHeightWithSpacing() + 6.0f;
+                                ImGui::BeginChild("##ptree", ImVec2(0.0f, -footerH),
+                                                  ImGuiChildFlags_Borders,
+                                                  ImGuiWindowFlags_HorizontalScrollbar);
+                                {
+                                    float minH = 1e9f, maxH = -1e9f, minV = 1e9f, maxV = -1e9f;
+                                    for (const auto& n : tree.nodes) {
+                                        minH = std::min(minH, n.hpos); maxH = std::max(maxH, n.hpos);
+                                        minV = std::min(minV, n.vpos); maxV = std::max(maxV, n.vpos);
+                                    }
+                                    const float ppH = 170.0f * s_zoom;   // px per dome unit
+                                    const float ppV = 150.0f * s_zoom;
+                                    const float pad = 70.0f * s_zoom;
+                                    const ImVec2 childSz = ImGui::GetWindowSize();
+                                    const float canvasW =
+                                        std::max((maxH - minH) * ppH + pad * 2.0f, childSz.x - 4.0f);
+                                    const float canvasH =
+                                        std::max((maxV - minV) * ppV + pad * 2.0f, childSz.y - 4.0f);
+                                    const ImVec2 origin = ImGui::GetCursorScreenPos();
+                                    ImGui::Dummy(ImVec2(canvasW, canvasH));   // the scrollable extent
+
+                                    if (s_scrollHome) {
+                                        // Land on the ROOT (bottom), centred —
+                                        // the skill menu's own framing.
+                                        s_scrollHome = false;
+                                        ImGui::SetScrollY(canvasH);
+                                        ImGui::SetScrollX(std::max(0.0f, (canvasW - childSz.x) * 0.5f));
+                                    }
+
+                                    auto nodePos = [&](const Progression::PerkNodeView& n) {
+                                        return ImVec2(origin.x + pad + (n.hpos - minH) * ppH,
+                                                      origin.y + pad + (maxV - n.vpos) * ppV);
+                                    };
+                                    const ImVec2 winPos = ImGui::GetWindowPos();
+                                    const float navPad = 1.5f * std::max(ppH, ppV);
+                                    const float visX0 = winPos.x - navPad;
+                                    const float visX1 = winPos.x + childSz.x + navPad;
+                                    const float visY0 = winPos.y - navPad;
+                                    const float visY1 = winPos.y + childSz.y + navPad;
+
+                                    auto* dl = ImGui::GetWindowDrawList();
+                                    const ImU32 cDim    = ImGui::GetColorU32(ImGuiCol_Border);
+                                    const ImU32 cText   = ImGui::GetColorU32(ImGuiCol_Text);
+                                    const ImU32 cFaint  = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+                                    const ImU32 cBtn    = ImGui::GetColorU32(ImGuiCol_Button);
+                                    const ImU32 cSel    = ImGui::GetColorU32(ImGuiCol_Header);
+                                    const ImU32 cAccent = ImGui::GetColorU32(skin.accent);
+
+                                    // EDGES first (under the discs); an edge
+                                    // submits only when its box touches the view.
+                                    for (int i = 0; i < (int)tree.nodes.size(); ++i) {
+                                        const auto& n = tree.nodes[i];
+                                        if (n.parentIndices.empty()) continue;
+                                        const ImVec2 p1 = nodePos(n);
+                                        const auto* sc = stateAt(flatBase + i);
+                                        const bool childOwned = sc && (sc->ownedRank > 0 || sc->native);
+                                        for (const auto pi : n.parentIndices) {
+                                            const ImVec2 p0 = nodePos(tree.nodes[pi]);
+                                            if (std::max(p0.x, p1.x) < visX0 ||
+                                                std::min(p0.x, p1.x) > visX1 ||
+                                                std::max(p0.y, p1.y) < visY0 ||
+                                                std::min(p0.y, p1.y) > visY1)
+                                                continue;
+                                            const auto* sp = stateAt(flatBase + pi);
+                                            const bool bothOwned = childOwned && sp &&
+                                                (sp->ownedRank > 0 || sp->native);
+                                            dl->AddLine(p0, p1, bothOwned ? cAccent : cDim,
+                                                        bothOwned ? 2.5f : 1.5f);
+                                        }
+                                    }
+
+                                    // NODES: owned = accent disc; available =
+                                    // bright-ringed (A opens the take popup);
+                                    // locked = dim; native = accent ring on a
+                                    // dim disc (the load order granted it —
+                                    // MFO leaves it alone, §4.1 boundary).
+                                    const float R = std::max(6.0f, 10.0f * s_zoom);
+                                    bool wantNodePopup = false;
+                                    for (int i = 0; i < (int)tree.nodes.size(); ++i) {
+                                        const auto& n = tree.nodes[i];
+                                        const ImVec2 p = nodePos(n);
+                                        if (p.x < visX0 || p.x > visX1 ||
+                                            p.y < visY0 || p.y > visY1)
+                                            continue;   // virtualized out
+                                        const auto* st = stateAt(flatBase + i);
+                                        const bool owned  = st && st->ownedRank > 0;
+                                        const bool native = st && st->native;
+                                        const bool avail  = st && st->available;
+
+                                        ImGui::PushID(i);
+                                        ImGui::SetCursorScreenPos(
+                                            ImVec2(p.x - R - 4.0f, p.y - R - 4.0f));
+                                        const bool clicked = ImGui::InvisibleButton(
+                                            "##nd", ImVec2((R + 4.0f) * 2.0f, (R + 4.0f) * 2.0f));
+                                        const bool focused = ImGui::IsItemFocused();
+                                        const bool hovered = ImGui::IsItemHovered();
+                                        ImGui::PopID();
+
+                                        dl->AddCircleFilled(p, R,
+                                            owned ? cAccent : avail ? cSel : cBtn);
+                                        dl->AddCircle(p, R,
+                                            (owned || native) ? cAccent : avail ? cText : cDim,
+                                            0, (avail || native) ? 2.5f : 1.5f);
+                                        if (focused) dl->AddCircle(p, R + 4.0f, cAccent, 0, 3.0f);
+
+                                        if (s_zoom >= 0.7f) {
+                                            const ImVec2 ts = ImGui::CalcTextSize(n.name.c_str());
+                                            dl->AddText(ImVec2(p.x - ts.x * 0.5f, p.y + R + 3.0f),
+                                                        owned ? cAccent : avail ? cText : cFaint,
+                                                        n.name.c_str());
+                                            if (n.ranks.size() > 1 || owned) {
+                                                const std::string rk = std::format("{}/{}",
+                                                    st ? (int)st->ownedRank : 0, (int)n.ranks.size());
+                                                const ImVec2 rs = ImGui::CalcTextSize(rk.c_str());
+                                                dl->AddText(ImVec2(p.x - rs.x * 0.5f,
+                                                                   p.y - R - rs.y - 2.0f),
+                                                            owned ? cAccent : cFaint, rk.c_str());
+                                            }
+                                        }
+
+                                        if (hovered) {
+                                            if (owned)
+                                                ImGui::SetTooltip("%s — rank %d/%d (allocated by MFO)",
+                                                    n.name.c_str(), (int)st->ownedRank,
+                                                    (int)n.ranks.size());
+                                            else if (native)
+                                                ImGui::SetTooltip("%s — granted by your load order",
+                                                    n.name.c_str());
+                                            else if (avail)
+                                                ImGui::SetTooltip("%s — [A] take rank %d (1 point)",
+                                                    n.name.c_str(), (int)st->ownedRank + 1);
+                                            else if (st && !st->whyNot.empty())
+                                                ImGui::SetTooltip("%s — locked: %s",
+                                                    n.name.c_str(), st->whyNot.c_str());
+                                            else
+                                                ImGui::SetTooltip("%s", n.name.c_str());
+                                        }
+                                        if (clicked) {
+                                            s_nodeTree = trees[s_skillCur];
+                                            s_nodeIdx  = i;
+                                            wantNodePopup = true;   // OpenPopup outside PushID
+                                        }
+                                    }
+
+                                    // ── NODE POPUP (A on a node) ────────
+                                    // Available → confirm-take; locked → the
+                                    // unmet requirement, never a confirm
+                                    // (§5's UI leg). B closes via the popup
+                                    // cascade like every other picker.
+                                    if (wantNodePopup) ImGui::OpenPopup("##pnode");
+                                    ImGui::SetNextWindowPos(
+                                        ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                        ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                                    if (ImGui::BeginPopup("##pnode")) {
+                                        pickerDrawnThisFrame = true;
+                                        if (s_nodeTree >= 0 && s_nodeTree < (int)cat.skills.size() &&
+                                            s_nodeIdx >= 0 &&
+                                            s_nodeIdx < (int)cat.skills[s_nodeTree].nodes.size()) {
+                                            const auto& nd = cat.skills[s_nodeTree].nodes[s_nodeIdx];
+                                            std::size_t fb = 0;
+                                            for (int t = 0; t < s_nodeTree; ++t)
+                                                fb += cat.skills[t].nodes.size();
+                                            const auto* stv = stateAt(fb + s_nodeIdx);
+                                            const int ownedR = stv ? (int)stv->ownedRank : 0;
+
+                                            ImGui::PushFont(g_fontHead);
+                                            ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                                            ImGui::TextUnformatted(nd.name.c_str());
+                                            ImGui::PopStyleColor();
+                                            ImGui::PopFont();
+                                            if (nd.verdict == Progression::Verdict::kMarginal)
+                                                ImGui::TextDisabled("marginal for followers");
+                                            if (!nd.description.empty()) {
+                                                ImGui::PushTextWrapPos(
+                                                    ImGui::GetCursorPosX() + 380.0f);
+                                                ImGui::TextUnformatted(nd.description.c_str());
+                                                ImGui::PopTextWrapPos();
+                                            }
+                                            for (int rr = 0; rr < (int)nd.ranks.size(); ++rr)
+                                                ImGui::TextDisabled("rank %d: %s%s", rr + 1,
+                                                    nd.ranks[rr].skillReq.empty()
+                                                        ? "no skill requirement"
+                                                        : nd.ranks[rr].skillReq.c_str(),
+                                                    rr < ownedR ? "  [owned]" : "");
+                                            ImGui::Separator();
+                                            if (stv && stv->native) {
+                                                ImGui::TextDisabled("Granted by your load order — "
+                                                                    "MFO leaves it untouched.");
+                                            } else if (ownedR > 0 &&
+                                                       ownedR >= (int)nd.ranks.size()) {
+                                                ImGui::TextColored(skin.accent,
+                                                    "Fully allocated (%d/%d).",
+                                                    ownedR, (int)nd.ranks.size());
+                                            } else if (stv && stv->available) {
+                                                const std::string take = std::format(
+                                                    "Take rank {}  (1 perk point)", ownedR + 1);
+                                                if (ImGui::Selectable(take.c_str())) {
+                                                    EditCmd e{ EditKind::ProgAllocPerk, s_psel,
+                                                               0, 0u, 0.0f };
+                                                    e.perk = nd.perkFormID;
+                                                    QueueEdit(e);
+                                                    ImGui::CloseCurrentPopup();
+                                                }
+                                                ImGui::SetItemDefaultFocus();
+                                            } else if (stv && !stv->whyNot.empty()) {
+                                                ImGui::TextWrapped("Locked: %s",
+                                                                   stv->whyNot.c_str());
+                                            } else {
+                                                ImGui::TextDisabled(
+                                                    stateOk ? "Locked." : "syncing...");
+                                            }
+                                            ImGui::TextDisabled("[B]/Esc close");
+                                        }
+                                        ImGui::EndPopup();
+                                    }
+                                }
+                                ImGui::EndChild();
+                            }
+
+                            // ── FOOTER: RESPEC + HINTS ──────────────────
+                            if (ImGui::Button("Respec")) ImGui::OpenPopup("##prespec");
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("refund all perks, -%.0f rapport  |  d-pad move   "
+                                                "[A] node   [B] back   [Y] next tree",
+                                                prog.respecRapportCost);
+                            ImGui::SetNextWindowPos(
+                                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                            if (ImGui::BeginPopup("##prespec")) {
+                                pickerDrawnThisFrame = true;
+                                ImGui::PushFont(g_fontHead);
+                                ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                                ImGui::TextUnformatted("Respec?");
+                                ImGui::PopStyleColor();
+                                ImGui::PopFont();
+                                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
+                                ImGui::TextWrapped("Every perk MFO allocated to %s is removed and "
+                                                   "its points refunded. They will resent the "
+                                                   "reset: -%.0f rapport.",
+                                                   who->name.c_str(), prog.respecRapportCost);
+                                ImGui::PopTextWrapPos();
+                                ImGui::Separator();
+                                ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
+                                if (ImGui::Selectable("Confirm respec")) {
+                                    QueueEdit({ EditKind::ProgRespec, s_psel, 0, 0u, 0.0f });
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::PopStyleColor();
+                                if (ImGui::Selectable("Cancel")) ImGui::CloseCurrentPopup();
+                                ImGui::SetItemDefaultFocus();   // land on Cancel, not the danger row
+                                ImGui::EndPopup();
+                            }
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+                }
+
                 ImGui::EndTabBar();
             }
             s_tabForce = false;   // consumed this frame; mouse clicks own s_tab again
@@ -1763,6 +2266,51 @@ namespace MFO::Board {
         { std::scoped_lock lk(g_editMx); todo.swap(g_edits); }
         if (todo.empty()) return;
         for (const auto& c : todo) {
+            // #74 component 3: progression verbs. These mutate the ENGINE
+            // (AddPerk / SetBaseActorValue / rapport) and g_prog is main-
+            // thread-only (the poll's thread) — so they ride MainThread::Post
+            // exactly like the harness hotkey, never this drain. The
+            // allocator re-validates everything at apply time (§5's backend
+            // gate): a stale board can only be REFUSED, never over-allocate.
+            // Republish the views right after so the tab echoes on the next
+            // snapshot instead of waiting out the poll cadence.
+            if (c.kind == EditKind::ProgSetClass || c.kind == EditKind::ProgAllocPerk ||
+                c.kind == EditKind::ProgRespec) {
+                const auto kind = c.kind;
+                const auto fid  = c.fid;
+                const auto perk = c.perk;
+                const auto cls  = static_cast<ProgAllocator::Class>(
+                    std::clamp(static_cast<int>(c.param + 0.5f), 0, 3));
+                MainThread::Post([kind, fid, perk, cls]() {
+                    auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
+                    if (!actor) {
+                        spdlog::info("[prog] board edit dropped: actor {:08X} unresolvable", fid);
+                        return;
+                    }
+                    switch (kind) {
+                    case EditKind::ProgSetClass:
+                        // The §15 onboarding as ONE player action: enroll on
+                        // first contact (refuses with a named line when
+                        // already enrolled), then the class pick auto-scales.
+                        if (auto it2 = ProgAllocator::g_prog.find(fid);
+                            it2 == ProgAllocator::g_prog.end() || !it2->second.enrolled)
+                            ProgAllocator::Enroll(actor);
+                        ProgAllocator::SetClass(actor, cls);
+                        break;
+                    case EditKind::ProgAllocPerk:
+                        ProgAllocator::AllocatePerk(actor, perk);
+                        break;
+                    case EditKind::ProgRespec:
+                        ProgAllocator::Respec(actor);
+                        break;
+                    default:
+                        break;
+                    }
+                    ProgAllocator::PublishBoardViews();
+                });
+                continue;
+            }
+
             auto it = g_followers.find(c.fid);
             if (it == g_followers.end()) continue;
             const int table = std::clamp(c.table, 0, 1);
@@ -1924,6 +2472,10 @@ namespace MFO::Board {
         s.bossLevelDelta = Config::g_bossLevelDelta.load();
         s.quirksActive   = Followers::QuirksActive();
         s.quirksInactive = Followers::QuirksInactive();
+        // #74 component 3: refcount copy of the allocator's published views
+        // (built on the MAIN thread; this drain runs on the task worker, so
+        // it must never read g_prog itself — only the immutable snap).
+        s.prog = ProgAllocator::CopyBoardViews();
 
         auto* player = RE::PlayerCharacter::GetSingleton();
 

@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include "ProgAllocator.h"   // #74 component 3: the Progression tab's view types
 
 // The Field Kit — the in-game overlay.
 //
@@ -99,6 +100,12 @@ namespace MFO::Board {
         int   lastCredited = 0;
         bool  lastValid = false;
         int   bossLevelDelta = 5;
+        // #74 component 3: the Progression tab's value-only view — built and
+        // published by the allocator on the MAIN thread, immutable once
+        // published, so copying this snapshot (and the render thread's
+        // per-frame copy) only bumps a refcount. Null or !active = the addon
+        // is absent and the tab does not exist.
+        std::shared_ptr<const ProgAllocator::BoardProgSnap> prog;
     };
 
     // Install the three trampoline hooks. MUST be called from SKSEPluginLoad,

@@ -147,6 +147,56 @@ namespace MFO::ProgAllocator {
     bool AllocateNextEligible(RE::Actor* a_actor);
     bool Respec(RE::Actor* a_actor);                      // refunds points, −500 rapport
 
+    // ── board views (component 3 — the Progression tab's read seam) ─────────
+    // The tab draws on the RENDER thread; g_prog and every engine read here
+    // are main-thread-only (the poll's thread). So the board reads VALUE-ONLY
+    // views published on the MAIN thread behind a small mutex as an immutable
+    // shared_ptr — Board::PublishSnapshot (task worker) and the render
+    // thread's per-frame snapshot copy only bump a refcount, never deep-copy
+    // or touch live state. `nodes` is in CATALOG order (skill-major, node
+    // order), so the render thread indexes it with prefix sums off the frozen
+    // catalog it already reads lock-free.
+    struct BoardNodeView {
+        std::uint8_t ownedRank{ 0 };     // ranks MFO allocated (0 = none)
+        bool         native{ false };    // owned by the load order, not MFO (§4.1 boundary)
+        bool         available{ false }; // §5 gate passes NOW (points + prereq + conditions)
+        std::string  whyNot;             // locked reason (empty when owned/available/no class)
+    };
+    struct BoardSkillLine {
+        std::string name;
+        float       base{ 0.0f };        // current base AV (post-scaling)
+        float       alloc{ 0.0f };       // MFO's applied share of that base
+    };
+    struct BoardFollowerView {
+        RE::FormID    id{ 0 };
+        std::string   name;
+        bool          eligible{ false };
+        std::string   blocker;           // why enrollment is refused (empty when eligible)
+        bool          enrolled{ false };
+        std::uint8_t  cls{ 0 };          // Class ordinal (0 = class not chosen yet, §15 gate)
+        std::uint16_t level{ 0 };
+        float         unspentPerk{ 0.0f };
+        std::vector<BoardSkillLine> skills;   // the 18, kSkillNames order
+    };
+    struct BoardProgSnap {
+        bool  active{ false };           // addon detected + catalog built → tab exists
+        float scarcity{ 1.0f };          // §15 (follower ranks ÷ player ranks)
+        int   effectiveRanks{ 0 };
+        int   totalRanks{ 0 };
+        float respecRapportCost{ 500.0f };
+        std::vector<BoardFollowerView> rows;  // the active party, g_active order
+        RE::FormID treeFor{ 0 };              // whose nodes[] below describe
+        std::vector<BoardNodeView> nodes;     // catalog order; empty until a focus published
+    };
+    // Render thread: which follower's tree the tab wants published (atomic).
+    void SetBoardFocus(RE::FormID a_id);
+    // MAIN THREAD only: rebuild + publish the views. PollTick calls this on a
+    // cadence while the board is open; the board's queued verbs call it after
+    // applying for an immediate echo.
+    void PublishBoardViews();
+    // Any thread: the latest published views (null before the first publish).
+    std::shared_ptr<const BoardProgSnap> CopyBoardViews();
+
     // ── co-save ('PRGN' — independent record beside FLWR/MSTK) ──────────────
     void CoSaveSave(SKSE::SerializationInterface* a_intfc);
     void CoSaveLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version);

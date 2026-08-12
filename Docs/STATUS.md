@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest:** v1.0.62 (#75 weapon-equip thrash fix + progression PROBE — deploying to BOTH decks, public HELD pending field test) · **Latest public:** v1.0.61 (creature weapons deleted) · prior public: v1.0.60 (#73), v1.0.59 (controller). Next: FOLLOWER-PROGRESSION ESL ADDON (#74 — probe validation is the on-ramp), then town update (#31).
+> **Last updated:** 2026-08-11 · **Latest:** v1.0.62 (#75 weapon-equip thrash fix + progression PROBE — deploying to BOTH decks, public HELD pending field test) · **Latest public:** v1.0.61 (creature weapons deleted) · prior public: v1.0.60 (#73), v1.0.59 (controller). Next: FOLLOWER-PROGRESSION ESL ADDON (#74 — probe validation is the on-ramp; components 1–3 BUILT: catalog + allocator + board tab), then town update (#31).
 
 > **#74 COMPONENT 2 BUILT (2026-08-11) — the ALLOCATOR backend + MFO_Progression.esl +
 > dev harness — awaiting marth review + CI.** New `native/ProgAllocator.cpp/.h` (design
@@ -59,6 +59,43 @@
 > set on load (droppedAv counter), not just counts. L3: PerkPointsPerLevel /
 > SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
 > (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
+
+> **#74 COMPONENT 3 BUILT (2026-08-11) — the Field Orders "Progression" TAB — awaiting
+> marth review + field test.** Third board tab, emitted ONLY when MFO_Progression.esl is
+> detected (`kTabCount` is runtime now; the View-cycle follows). Flow per §15: selecting
+> an eligible UNENROLLED follower auto-pops the class prompt once per selection (Melee/
+> Ranged/Mage via `ProgAllocator::ClassName`, nothing hardcoded, nothing assigned until
+> the pick) → one `ProgSetClass` edit enrolls + sets class + auto-scales skills. Then:
+> 18-skill strip (base + accent `(+alloc)`), per-skill tree canvas, node detail popup
+> (desc/ranks/skill-reqs; available → "Take rank N (1 point)", locked → the unmet
+> requirement, never a confirm — §5's UI leg), respec button + danger confirm popup
+> (−500 rapport, default focus on Cancel). **Threading (the load-bearing bit):** the tab
+> reads TWO immutable sources on the render thread — the frozen catalog (its designed
+> lock-free contract) and a NEW value-only `BoardProgSnap` published by the allocator on
+> the MAIN thread (g_prog's thread) behind a small mutex as `shared_ptr<const>`; the
+> snapshot/render copies only bump a refcount. Publish cadence: PollTick per-frame check
+> — open-edge, focus-change (L1/R1), or ~500ms; seeded at OnPostLoad so the tab exists on
+> first open; cleared in ClearAll (stale-save views can't cross a load). Mutations queue
+> new EditKinds (`ProgSetClass`/`ProgAllocPerk`/`ProgRespec`) that ApplyEdits re-posts to
+> `MainThread::Post` (the harness-hotkey shape — NEVER the AddTask drain), where the
+> allocator's §5 backend gate re-validates; each verb republishes for an immediate echo.
+> **Tree render (Vokriinator-scale):** dome-coord layout (hpos/vpos normalized, root at
+> bottom, land-on-root scroll), zoom 0.5–2.0, VIRTUALIZED — nodes outside the child rect
+> +1.5 cells submit nothing (edges AABB-culled), so cost tracks the viewport, not tree
+> size. Each visible node is an InvisibleButton → ImGui's OWN spatial gamepad nav walks
+> the tree (d-pad), A activates, auto-scroll follows focus, and the B-cascade sees a
+> child window — zero new input paths; L1/R1 party-switch + r1Ready guard copied from
+> Gambits; Y = next tree. DELIBERATE deviations: §7's "X = respec/auto-spend" NOT bound
+> (FaceLeft is ImGui's nav-windowing key — a real collision; respec is a nav-reachable
+> button instead) and auto-spend has no UI yet (the allocator's `autoSpend` flag stays
+> reserved; its poll doesn't consume it either — a comp-3.5 follow-up with the MCM work).
+> Allocator API added (the comp-2/3 seam): `BoardNodeView/BoardSkillLine/
+> BoardFollowerView/BoardProgSnap`, `SetBoardFocus` (render-side atomic),
+> `PublishBoardViews` (main thread; full §5 gate walk only for the FOCUSED follower —
+> one tree per publish), `CopyBoardViews`, + read-only `EnrollBlocker` mirror of
+> Enroll's refusals for the "why not eligible" line. `<memory>` added to the PCH
+> (shared_ptr — the v1.0.8 missing-header class). No ESP/ESL changes (classes/economy
+> already in the ESL). NO version bump; pushed for CI.
 
 > **#74 COMPONENT 1 BUILT (2026-08-11) — the PRODUCTION catalog reader — awaiting marth
 > review + CI.** New `native/Progression.cpp/.h` (design §1/§2/§3; component 1 of 4:

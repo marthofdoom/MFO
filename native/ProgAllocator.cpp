@@ -2,6 +2,7 @@
 #include <cmath>   // std::floor / std::isfinite — not guaranteed via the PCH
 #include "ProgAllocator.h"
 #include "Progression.h"
+#include "Board.h"
 #include "Config.h"
 #include "Followers.h"
 #include "Rapport.h"
@@ -558,6 +559,69 @@ namespace MFO::ProgAllocator {
             a_st.applied = true;
         }
 
+        // ── board views (component 3 — see ProgAllocator.h) ─────────────────
+        // Written on the MAIN thread only; the mutex guards the shared_ptr
+        // swap so any thread may take a refcounted copy. The snap itself is
+        // immutable once published — the Snapshot discipline, by pointer.
+        std::mutex g_viewMx;
+        std::shared_ptr<const BoardProgSnap> g_boardSnap;
+        std::atomic<RE::FormID> g_boardFocus{ 0 };   // written by the render thread
+        RE::FormID g_lastPublishedFocus = 0;         // main-thread-only
+        bool g_boardWasOpen = false;                 // main-thread-only
+        int  g_viewFrames   = 0;
+        constexpr int kViewFrames = 30;   // ~500ms at 60fps while the board is open
+
+        // Read-only mirror of Enroll()'s refusals, for the board to explain
+        // an ineligible follower BEFORE the player tries (same checks, same
+        // order — keep in sync with Enroll).
+        const char* EnrollBlocker(RE::Actor* a_actor, RE::TESNPC* a_base) {
+            if (!a_base) return "no actor base";
+            if (!Followers::IsPersistableID(a_actor->GetFormID()))
+                return "temporary (runtime) actor — cannot persist across saves";
+            if (!a_base->IsUnique())
+                return "shared template — not eligible (v1 is unique-base only)";
+            if (!Followers::IsEligibleFollower(a_actor))
+                return "not an eligible follower";
+            return nullptr;
+        }
+
+        // One BoardNodeView per catalog node, catalog order (skill-major) —
+        // the render thread indexes by prefix sums off the same frozen
+        // catalog. Cost is bounded by the publish cadence (kViewFrames), not
+        // per frame: GateNextRank's condition evaluation only runs for nodes
+        // that survive the cheaper gates (its points check sits before the
+        // prereq walk and perkConditions.IsTrue).
+        void BuildNodeViews(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState* a_st,
+                            std::vector<BoardNodeView>& a_out) {
+            static const ProgState kNoState{};
+            const auto& cat = Progression::Get();
+            std::size_t total = 0;
+            for (const auto& t : cat.skills) total += t.nodes.size();
+            a_out.clear();
+            a_out.reserve(total);
+            const bool gateable = a_st && a_st->enrolled && a_st->cls != Class::kNone;
+            for (const auto& tree : cat.skills) {
+                for (const auto& node : tree.nodes) {
+                    BoardNodeView v;
+                    if (a_st)
+                        if (auto* al = FindAlloc(*a_st, node.perkFormID))
+                            v.ownedRank = al->rank;
+                    if (v.ownedRank == 0 &&
+                        OwnsAnyRank(a_actor, a_base, a_st ? *a_st : kNoState, node.perkFormID))
+                        v.native = true;   // load-order-granted — MFO never builds on it (§4.1)
+                    if (gateable && !v.native &&
+                        v.ownedRank < static_cast<std::uint8_t>(node.ranks.size())) {
+                        std::string why;
+                        if (GateNextRank(a_actor, a_base, *a_st, node, why) > 0)
+                            v.available = true;
+                        else
+                            v.whyNot = std::move(why);
+                    }
+                    a_out.push_back(std::move(v));
+                }
+            }
+        }
+
         // ── activity + economy (the poll body) ──────────────────────────────
 
         bool IsActiveFollower(RE::FormID a_id) {
@@ -640,6 +704,21 @@ namespace MFO::ProgAllocator {
             if (--g_pollFrames <= 0) {
                 g_pollFrames = kPollFrames;
                 PollWork();
+            }
+            // Board-view refresh (component 3): while the board is open,
+            // republish on the open edge, on a follower-focus change (the tab
+            // switched who it is looking at — don't make the tree lag half a
+            // second behind an L1/R1), and on the ~500ms cadence. Closed =
+            // free (one atomic read + a bool).
+            if (Board::IsOpen()) {
+                const bool focusChanged = g_boardFocus.load() != g_lastPublishedFocus;
+                if (!g_boardWasOpen || focusChanged || --g_viewFrames <= 0) {
+                    g_viewFrames = kViewFrames;
+                    PublishBoardViews();
+                }
+                g_boardWasOpen = true;
+            } else {
+                g_boardWasOpen = false;
             }
             MainThread::Post([a_gen]() { PollTick(a_gen); });
         }
@@ -867,8 +946,77 @@ namespace MFO::ProgAllocator {
         g_pollFrames = kPollFrames;
         const int gen = g_pollGen;
         MainThread::Post([gen]() { PollTick(gen); });
+        // Seed the board views once so the Progression TAB exists on the very
+        // first board open (the power's own PublishSnapshot copies the prog
+        // pointer before the open-gated poll refresh would have run).
+        PublishBoardViews();
         spdlog::info("[prog] post-load: {} progression record(s); level poll started (gen {})",
                      g_prog.size(), gen);
+    }
+
+    // ── board views (component 3) ───────────────────────────────────────────
+
+    void SetBoardFocus(RE::FormID a_id) { g_boardFocus.store(a_id); }
+
+    std::shared_ptr<const BoardProgSnap> CopyBoardViews() {
+        std::scoped_lock lk(g_viewMx);
+        return g_boardSnap;
+    }
+
+    void PublishBoardViews() {
+        auto snap = std::make_shared<BoardProgSnap>();
+        snap->active = g_ready && Progression::Get().built;
+        if (snap->active) {
+            const auto& cat      = Progression::Get();
+            snap->totalRanks     = cat.totalRanks;
+            snap->effectiveRanks = cat.effectiveRanks;
+            snap->scarcity       = static_cast<float>(ScarcityRatio());
+            snap->respecRapportCost = g_econ.respecRapportCost;
+
+            const RE::FormID focus = g_boardFocus.load();
+            for (const auto& h : Followers::g_active) {
+                auto* a = h.get().get();
+                if (!a) continue;
+                BoardFollowerView v;
+                v.id   = a->GetFormID();
+                v.name = a->GetName() ? a->GetName() : "?";
+                auto* base = a->GetActorBase();
+                const char* blk = EnrollBlocker(a, base);
+                v.eligible = (blk == nullptr);
+                if (blk) v.blocker = blk;
+                ProgState* st = nullptr;
+                if (auto it = g_prog.find(v.id); it != g_prog.end() && it->second.enrolled)
+                    st = &it->second;
+                if (st) {
+                    v.enrolled    = true;
+                    v.cls         = static_cast<std::uint8_t>(st->cls);
+                    v.level       = st->progressionLevel;
+                    v.unspentPerk = st->unspentPerk;
+                }
+                if (auto* avo = a->AsActorValueOwner()) {
+                    v.skills.reserve(std::size(kSkillNames));
+                    for (const auto& s : kSkillNames) {
+                        BoardSkillLine line;
+                        line.name = s.name;
+                        line.base = avo->GetBaseActorValue(s.av);
+                        if (st)
+                            for (const auto& e : st->skills)
+                                if (e.av == s.av) { line.alloc = e.points; break; }
+                        v.skills.push_back(std::move(line));
+                    }
+                }
+                // The full per-node gate walk only for the follower the tab
+                // is actually LOOKING at — one tree per publish, not four.
+                if (base && v.id == focus) {
+                    snap->treeFor = focus;
+                    BuildNodeViews(a, base, st, snap->nodes);
+                }
+                snap->rows.push_back(std::move(v));
+            }
+            g_lastPublishedFocus = focus;
+        }
+        std::scoped_lock lk(g_viewMx);
+        g_boardSnap = std::move(snap);
     }
 
     // ── verbs ───────────────────────────────────────────────────────────────
@@ -1314,6 +1462,11 @@ namespace MFO::ProgAllocator {
         g_lastPlayerLevel = 0;
         ++g_pollGen;   // orphan any in-flight poll chain (MainThread::Clear
                        // drops the queued closure too — belt and braces)
+        // Drop the published board views: a view built from the old save must
+        // never be drawn over a freshly loaded one (the ClearPendingEdits rule
+        // applied to reads). OnPostLoad reseeds it.
+        std::scoped_lock lk(g_viewMx);
+        g_boardSnap.reset();
     }
 
     // ── dev harness ─────────────────────────────────────────────────────────
