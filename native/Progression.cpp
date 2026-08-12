@@ -250,6 +250,36 @@ namespace MFO::Progression {
             return {};
         }
 
+        // Condition-authored prereqs (deck round 4): the NARROW shape
+        // "HasPerk X, ==1 (or >=1), AND-connected, literal" — the way some
+        // overhauls encode a prerequisite as a condition instead of (or on
+        // top of) a tree edge. Display/LAYOUT only: §5's IsTrue-on-the-
+        // follower already ENFORCES these in full; extracting them lets the
+        // tiered layout put such a node above its true prerequisite. The
+        // exclusion shape "HasPerk X == 0" (mutually-exclusive perks) is
+        // deliberately NOT matched — it is not a prerequisite.
+        std::vector<RE::FormID> ExtractCondPrereqs(RE::BGSPerk* a_rank) {
+            using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            std::vector<RE::FormID> out;
+            for (auto* it = a_rank->perkConditions.head; it; it = it->next) {
+                const auto& d = it->data;
+                if (d.functionData.function.get() != RE::FUNCTION_DATA::FunctionID::kHasPerk)
+                    continue;
+                if (d.flags.isOR)  continue;   // OR'd — not a hard requirement
+                if (d.flags.global) continue;  // global-compared — ambiguous, skip
+                const float v = d.comparisonValue.f;
+                const bool isReq =
+                    (d.flags.opCode == Op::kEqualTo && v == 1.0f) ||
+                    (d.flags.opCode == Op::kGreaterThanOrEqualTo && v > 0.0f && v <= 1.0f) ||
+                    (d.flags.opCode == Op::kGreaterThan && v >= 0.0f && v < 1.0f);
+                if (!isReq) continue;
+                auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                if (form && std::find(out.begin(), out.end(), form->GetFormID()) == out.end())
+                    out.push_back(form->GetFormID());
+            }
+            return out;
+        }
+
         // ── the §3 rank classifier ──────────────────────────────────────────
 
         // kAbility is effective by default; "clearly player-gated" means
@@ -313,7 +343,8 @@ namespace MFO::Progression {
             if (n == 0) {
                 // Entry-less perks are flavor/prereq markers (Ordinator and
                 // Requiem both ship them). Nothing to gain from a point spent
-                // here -> filtered; parentPerkIDs keeps their prereq role.
+                // here -> filtered; pass 2 BRIDGES prereq lines through them
+                // (round 4) so their subtrees stay reachable.
                 a_outWhy = "no entries (flavor/marker perk)";
                 return Verdict::kDead;
             }
@@ -378,6 +409,9 @@ namespace MFO::Progression {
                     node->perk->TESDescription::GetDescription(buf, node->perk);
                     view.description = buf.c_str() ? buf.c_str() : "";
                 }
+                // Rank 1 gates the first take — its condition-authored
+                // prereqs are what the layout tiers by (round 4).
+                view.condPrereqPerkIDs = ExtractCondPrereqs(node->perk);
 
                 // Ranks: the nextPerk chain. Bounded + cycle-guarded against
                 // a malformed overhaul record.
@@ -412,17 +446,48 @@ namespace MFO::Progression {
                 a_out.nodes.push_back(std::move(view));
             }
 
-            // Pass 2: parent edges. parentPerkIDs is the full prereq truth
-            // (filtered parents included); parentIndices only the drawable,
-            // in-catalog ones.
+            // Pass 2: parent edges, BRIDGED THROUGH FILTERED NODES (deck
+            // round 4 — the prereq-order fix). The old wiring recorded a
+            // FILTERED direct parent (dead entry-less marker, player-only
+            // perk) as the prereq truth: unallocatable through MFO, so its
+            // whole subtree was permanently locked, and with no drawable
+            // edge its children rendered as root-row orphans — the field
+            // read "available order ignores prereqs". Now each parent LINE
+            // is resolved through filtered nodes to the nearest KEPT
+            // ancestors: those become both the drawable edges and the §5
+            // reachability truth. A line that reaches the ROOT through only
+            // filtered nodes makes the node root-reachable (parentPerkIDs
+            // cleared — the vanilla any-line rule; the perk's own
+            // conditions still apply in full at gate time).
             for (std::size_t i = 0; i < keptRaw.size(); ++i) {
                 auto& view = a_out.nodes[i];
-                for (auto* parent : keptRaw[i]->parents) {
-                    if (!parent || !parent->perk) continue;   // root parent = root child
-                    view.parentPerkIDs.push_back(parent->perk->GetFormID());
-                    if (auto it = keptIndex.find(parent); it != keptIndex.end())
-                        view.parentIndices.push_back(it->second);
+                bool rootLine = false;
+                std::vector<const RE::BGSSkillPerkTreeNode*> stack;
+                std::vector<const RE::BGSSkillPerkTreeNode*> seen;
+                for (auto* parent : keptRaw[i]->parents) stack.push_back(parent);
+                while (!stack.empty()) {
+                    const auto* p = stack.back();
+                    stack.pop_back();
+                    if (!p) continue;
+                    if (std::find(seen.begin(), seen.end(), p) != seen.end()) continue;
+                    seen.push_back(p);
+                    if (!p->perk) { rootLine = true; continue; }   // reached the root
+                    if (auto it = keptIndex.find(p); it != keptIndex.end()) {
+                        // Kept ancestor — a real, allocatable prereq and a
+                        // drawable edge (deduped: several lines can bridge
+                        // to the same ancestor).
+                        const auto idx = it->second;
+                        if (std::find(view.parentIndices.begin(), view.parentIndices.end(),
+                                      idx) == view.parentIndices.end()) {
+                            view.parentIndices.push_back(idx);
+                            view.parentPerkIDs.push_back(a_out.nodes[idx].perkFormID);
+                        }
+                        continue;
+                    }
+                    // Filtered — bridge onward through ITS parents.
+                    for (auto* gp : p->parents) stack.push_back(gp);
                 }
+                if (rootLine) view.parentPerkIDs.clear();   // reachable like tier 1
             }
         }
 
@@ -483,13 +548,17 @@ namespace MFO::Progression {
                                                   : n.ranks[r].verdict == Verdict::kMarginal ? "marg" : "dead",
                                                   n.ranks[r].skillReq));
                     }
+                    // Round 4: parentPerkIDs mirrors the bridged
+                    // parentIndices; empty = root-reachable (possibly via a
+                    // bridged line). The old "off-board" delta is gone.
                     spdlog::info("[prog]   node[{}] {} ({:08X}){} grid=({},{}) dome=({:.2f},{:.2f}) "
-                                 "parents={}(+{} off-board) ranks: {}",
+                                 "parents={}{} condPrereqs={} ranks: {}",
                                  i, n.name, n.perkFormID,
                                  n.verdict == Verdict::kMarginal ? " [MARGINAL]" : "",
                                  n.gridX, n.gridY, n.hpos, n.vpos,
                                  n.parentIndices.size(),
-                                 n.parentPerkIDs.size() - n.parentIndices.size(),
+                                 n.parentPerkIDs.empty() ? " (root-reachable)" : "",
+                                 n.condPrereqPerkIDs.size(),
                                  ranks);
                 }
             }

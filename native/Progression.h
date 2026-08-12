@@ -61,15 +61,29 @@ namespace MFO::Progression {
         std::uint32_t gridY{ 0 };
         float         hpos{ 0.0f };       // float dome coords — layout
         float         vpos{ 0.0f };
-        // Prereq graph, two views of the same `parents` edges:
-        //  - parentIndices: indices into this skill's `nodes` — only parents
-        //    that themselves survived the filter (the edges the board draws).
-        //  - parentPerkIDs: EVERY perk-carrying parent by FormID, including
-        //    filtered ones — the prereq TRUTH the allocator's §5 gate needs
-        //    (a dead prereq must still lock its children, not vanish).
-        // Empty parentPerkIDs = child of the tree root (§5 reachability).
+        // Prereq graph, BRIDGED THROUGH FILTERED NODES (deck round 4): a
+        // filtered direct parent (dead entry-less marker, player-only perk)
+        // is not allocatable, so wiring it as the prereq left its whole
+        // subtree permanently locked AND drew its children as root-row
+        // orphans. Both views now resolve THROUGH filtered parents to the
+        // nearest KEPT ancestors:
+        //  - parentIndices: kept-ancestor indices into this skill's `nodes`
+        //    (the edges the board draws AND tiers by).
+        //  - parentPerkIDs: the same ancestors by rank-1 FormID — the §5
+        //    gate's reachability truth (ANY owned unlocks, the vanilla
+        //    any-line rule). A line that reaches the ROOT through only
+        //    filtered nodes makes the node root-reachable: parentPerkIDs is
+        //    cleared (empty = reachable), exactly like a first-tier perk.
+        // The perk's own CONDITIONS remain the final authority either way —
+        // §5 evaluates the full perkConditions on the follower at gate time.
         std::vector<std::uint32_t> parentIndices;
         std::vector<RE::FormID>    parentPerkIDs;
+        // Same-authority prereqs the OVERHAUL wrote as conditions instead of
+        // tree edges: rank-1 perkConditions items of the narrow shape
+        // "HasPerk X == 1 (AND)". Enforcement already happens via IsTrue;
+        // this list exists so the LAYOUT can tier by them too (visual order
+        // must match dependency order).
+        std::vector<RE::FormID>    condPrereqPerkIDs;
         std::vector<RankView>      ranks;
         Verdict       verdict{ Verdict::kEffective };   // best rank's verdict
     };

@@ -485,9 +485,12 @@ namespace MFO::ProgAllocator {
                                        a_st.nativeTreePerksAtEnroll, AllocatedRanks(a_st));
                 return 0;
             }
-            // §5.1 prereq: reachable iff a child of the tree root (no perk-
-            // carrying parents) OR at least one parent perk owned at rank ≥1.
-            // parentPerkIDs is the FULL truth — filtered parents included.
+            // §5.1 prereq: reachable iff root-reachable (empty parentPerkIDs
+            // — includes lines that BRIDGE to the root through filtered
+            // nodes, round 4) OR at least one parent perk owned at rank ≥1.
+            // parentPerkIDs holds the bridged KEPT ancestors — allocatable
+            // prereqs, the vanilla any-line rule. The perk's own conditions
+            // (§5.2 below) stay the final authority on top.
             if (have == 0 && !a_node.parentPerkIDs.empty()) {
                 bool anyParent = false;
                 for (const auto pid : a_node.parentPerkIDs)

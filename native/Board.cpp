@@ -1195,6 +1195,11 @@ namespace MFO::Board {
                     static bool  s_scrollHome = true;      // recentre on the root
                     static int   s_nodeTree = -1, s_nodeIdx = -1;   // node popup target
                     static RE::ActorValue s_actAv = RE::ActorValue::kNone;   // §16 action-popup skill
+                    // Round 4: the A press that OPENS the tree window must be
+                    // RELEASED before A can act inside it — without this, the
+                    // same edge instantly opened the seeded root's take popup
+                    // (the r1Ready guard's class of bug, same cure).
+                    static bool s_aGuard = false;
 
                     const ProgAllocator::BoardFollowerView* who = nullptr;
                     for (const auto& r : prog.rows) if (r.id == s_psel) { who = &r; break; }
@@ -1579,7 +1584,10 @@ namespace MFO::Board {
                                 ImGui::EndPopup();
                             }
 
-                            if (wantOpenTree) ImGui::OpenPopup("##ptreewin");
+                            if (wantOpenTree) {
+                                s_aGuard = true;   // swallow the opening press (round 4)
+                                ImGui::OpenPopup("##ptreewin");
+                            }
 
                             // ── THE DEDICATED TREE WINDOW (deck field fix
                             // #2: the in-tab child was far too small on the
@@ -1663,18 +1671,63 @@ namespace MFO::Board {
                                 static std::vector<ImVec2> s_visPos;   // centered cols / rows
                                 static float s_layW = 1.0f, s_layH = 1.0f;
                                 static int   s_selNode = -1;           // P1 explicit selection
+                                static bool  s_reclamp = false;        // pull selection into view once
+                                static double s_lastMoveT = 0.0;       // pad-move throttle
                                 if (s_layoutSkill != s_skillCur || s_layoutMarg != s_showMarginal) {
+                                    // Same tree, different filter (marginal
+                                    // toggle)? Keep the player's place.
+                                    const bool sameSkill = (s_layoutSkill == s_skillCur);
+                                    const int  prevNode  =
+                                        (sameSkill && s_selNode >= 0 && s_selNode < (int)s_vis.size())
+                                            ? s_vis[s_selNode] : -1;
+
                                     const int n = (int)tree.nodes.size();
-                                    std::vector<int> tier(n, 0);
-                                    for (int guard = 0; guard < 64; ++guard) {
-                                        bool changed = false;
+                                    // STRICT topological tiers (round 4):
+                                    // longest path from the roots via Kahn —
+                                    // the bounded relaxation is gone. Edges =
+                                    // the catalog's bridged prereq edges PLUS
+                                    // same-tree condition-authored prereqs
+                                    // (HasPerk), so the visual order matches
+                                    // the CONDITIONS authority, not just the
+                                    // drawn tree lines.
+                                    std::vector<std::vector<int>> kids(n);
+                                    std::vector<int> indeg(n, 0), tier(n, 0);
+                                    auto addEdge = [&](int p, int c) {
+                                        if (p < 0 || p == c) return;
+                                        for (const int k : kids[p])
+                                            if (k == c) return;   // dedupe
+                                        kids[p].push_back(c);
+                                        ++indeg[c];
+                                    };
+                                    for (int i = 0; i < n; ++i)
+                                        for (const auto pi : tree.nodes[i].parentIndices)
+                                            addEdge((int)pi, i);
+                                    for (int i = 0; i < n; ++i)
+                                        for (const auto pid : tree.nodes[i].condPrereqPerkIDs)
+                                            for (int j = 0; j < n; ++j) {
+                                                if (j == i) continue;
+                                                bool match = tree.nodes[j].perkFormID == pid;
+                                                if (!match)
+                                                    for (const auto& rr : tree.nodes[j].ranks)
+                                                        if (rr.perkFormID == pid) { match = true; break; }
+                                                if (match) { addEdge(j, i); break; }
+                                            }
+                                    {
+                                        std::vector<int> q;
+                                        q.reserve(n);
                                         for (int i = 0; i < n; ++i)
-                                            for (const auto pi : tree.nodes[i].parentIndices)
-                                                if (tier[i] < tier[(int)pi] + 1) {
-                                                    tier[i] = tier[(int)pi] + 1;
-                                                    changed = true;
-                                                }
-                                        if (!changed) break;
+                                            if (indeg[i] == 0) q.push_back(i);
+                                        for (std::size_t head = 0; head < q.size(); ++head) {
+                                            const int p = q[head];
+                                            for (const int c : kids[p]) {
+                                                tier[c] = std::max(tier[c], tier[p] + 1);
+                                                if (--indeg[c] == 0) q.push_back(c);
+                                            }
+                                        }
+                                        // A cycle in authored data would leave
+                                        // nodes unprocessed with their max-so-
+                                        // far tiers — nothing hangs, nothing
+                                        // draws below a resolved parent.
                                     }
                                     std::vector<char> keep(n, 1), pass(n, 0);
                                     if (!s_showMarginal) {
@@ -1728,21 +1781,28 @@ namespace MFO::Board {
                                     }
                                     s_layW = (float)widest;
                                     s_layH = (float)(maxTier + 1);
-                                    // Seed the selection on the ROOT row's
+                                    // Restore the player's place on a filter
+                                    // toggle; otherwise seed the ROOT row's
                                     // middle node — something is ALWAYS
                                     // selected before any input arrives (P1).
-                                    s_selNode = -1;
-                                    float bestAbs = 1e9f;
-                                    for (int k = 0; k < (int)s_vis.size(); ++k)
-                                        if (s_visPos[k].y == (float)maxTier &&
-                                            std::fabs(s_visPos[k].x) < bestAbs) {
-                                            bestAbs = std::fabs(s_visPos[k].x);
-                                            s_selNode = k;
-                                        }
-                                    if (s_selNode < 0 && !s_vis.empty()) s_selNode = 0;
+                                    if (prevNode >= 0 && prevNode < (int)s_visOf.size() &&
+                                        s_visOf[prevNode] >= 0) {
+                                        s_selNode = s_visOf[prevNode];
+                                        s_reclamp = true;   // rows shifted — pull it into view
+                                    } else {
+                                        s_selNode = -1;
+                                        float bestAbs = 1e9f;
+                                        for (int k = 0; k < (int)s_vis.size(); ++k)
+                                            if (s_visPos[k].y == (float)maxTier &&
+                                                std::fabs(s_visPos[k].x) < bestAbs) {
+                                                bestAbs = std::fabs(s_visPos[k].x);
+                                                s_selNode = k;
+                                            }
+                                        if (s_selNode < 0 && !s_vis.empty()) s_selNode = 0;
+                                        s_scrollHome = true;   // new tree → land on the root
+                                    }
                                     s_layoutSkill = s_skillCur;
                                     s_layoutMarg  = s_showMarginal;
-                                    s_scrollHome  = true;
                                 }
 
                                 ImGui::BeginChild("##ptcanvas", ImVec2(0.0f, 0.0f),
@@ -1753,6 +1813,19 @@ namespace MFO::Board {
                                     const float rowH = 130.0f * s_zoom;
                                     const float pad  = 70.0f * s_zoom;
                                     const ImVec2 childSz = ImGui::GetWindowSize();
+                                    // Round 4 feel state: zoom edges recenter
+                                    // the selection; the mouse only steers
+                                    // selection while it actually MOVES (a
+                                    // parked deck cursor must not fight the
+                                    // pad); follow-scroll runs only on
+                                    // intent, so the wheel can roam freely.
+                                    static float s_prevZoom = -1.0f;
+                                    const bool zoomChanged = (s_prevZoom >= 0.0f && s_prevZoom != s_zoom);
+                                    s_prevZoom = s_zoom;
+                                    const bool mouseActive = io.MouseDelta.x != 0.0f ||
+                                                             io.MouseDelta.y != 0.0f;
+                                    bool selMoved = false;
+                                    bool didHome  = false;
                                     const float canvasW =
                                         std::max(s_layW * colW + pad * 2.0f, childSz.x - 4.0f);
                                     const float canvasH =
@@ -1775,9 +1848,13 @@ namespace MFO::Board {
 
                                     if (s_scrollHome) {
                                         // Land on the ROOT row (bottom),
-                                        // centred; the follow-scroll below
-                                        // then keeps the selection in view.
+                                        // centred. didHome mutes this frame's
+                                        // follow-scroll — SetScroll lands
+                                        // NEXT frame, so a same-frame clamp
+                                        // reading stale scroll would fight it
+                                        // (the round-3 open-jitter).
                                         s_scrollHome = false;
+                                        didHome = true;
                                         ImGui::SetScrollY(canvasH);
                                         ImGui::SetScrollX(std::max(0.0f, (canvasW - childSz.x) * 0.5f));
                                     }
@@ -1791,7 +1868,8 @@ namespace MFO::Board {
                                     // arrows, and the LStick keys for good
                                     // measure. Never touches ImGui nav.
                                     const bool nodePopupOpen = ImGui::IsPopupOpen("##pnode");
-                                    if (!nodePopupOpen && !s_vis.empty()) {
+                                    if (!nodePopupOpen) {
+                                    if (!s_vis.empty()) {
                                         if (s_selNode < 0 || s_selNode >= (int)s_vis.size())
                                             s_selNode = 0;
                                         auto down3 = [](ImGuiKey a, ImGuiKey b, ImGuiKey c) {
@@ -1808,7 +1886,11 @@ namespace MFO::Board {
                                                        ImGuiKey_GamepadLStickLeft))  dx = -1;
                                         else if (down3(ImGuiKey_GamepadDpadRight, ImGuiKey_RightArrow,
                                                        ImGuiKey_GamepadLStickRight)) dx = +1;
-                                        if (dx != 0 || dy != 0) {
+                                        // Throttled to ~8 hops/s — ImGui's raw
+                                        // key-repeat (20/s) overshot the
+                                        // intended node constantly.
+                                        if ((dx != 0 || dy != 0) &&
+                                            ImGui::GetTime() - s_lastMoveT >= 0.12) {
                                             const ImVec2 cur = s_visPos[s_selNode];
                                             int best = -1;
                                             float bestScore = 1e9f;
@@ -1823,20 +1905,38 @@ namespace MFO::Board {
                                                 const float score = proj + 2.5f * lat;
                                                 if (score < bestScore) { bestScore = score; best = k; }
                                             }
-                                            if (best >= 0) s_selNode = best;
+                                            if (best >= 0) {
+                                                s_selNode   = best;
+                                                s_lastMoveT = ImGui::GetTime();
+                                                selMoved    = true;
+                                            }
                                         }
                                         // A / Enter / E → the detail popup for
                                         // the selection. Single-path: no nav
                                         // items exist here, so ImGui cannot
-                                        // also act on the same press.
-                                        if (s_selNode >= 0 &&
+                                        // also act on the same press. The
+                                        // aGuard swallows the press that
+                                        // OPENED this window until released.
+                                        if (s_aGuard) {
+                                            if (!ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown) &&
+                                                !ImGui::IsKeyDown(ImGuiKey_Enter))
+                                                s_aGuard = false;
+                                        } else if (s_selNode >= 0 &&
                                             (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) ||
                                              ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
                                             s_nodeTree = s_skillCur;
                                             s_nodeIdx  = s_vis[s_selNode];
                                             wantNodePopup = true;
                                         }
-                                        // Pad-reachable window controls.
+                                    } else if (s_aGuard &&
+                                               !ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown) &&
+                                               !ImGui::IsKeyDown(ImGuiKey_Enter)) {
+                                        s_aGuard = false;   // release clears even over an empty tree
+                                    }
+                                        // Pad-reachable window controls — OUTSIDE
+                                        // the empty-tree gate on purpose: an
+                                        // all-filtered tree must still answer
+                                        // [Y]/[View]/zoom or the player is stuck.
                                         if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, true))
                                             s_zoom = std::max(0.5f, s_zoom - 0.15f);
                                         if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, true))
@@ -1852,22 +1952,39 @@ namespace MFO::Board {
                                             if (t2 != s_skillCur) s_skillCur = t2;
                                         }
                                     }
-                                    // FOLLOW-SCROLL: keep the selection in
-                                    // view every frame — geometry-driven, so
-                                    // it scrolls TO nodes that were culled.
-                                    if (s_selNode >= 0 && s_selNode < (int)s_vis.size()) {
+                                    // FOLLOW-SCROLL — on INTENT only (pad
+                                    // move / zoom / filter reflow), never
+                                    // continuously: a permanent clamp made
+                                    // the mouse wheel unusable (it yanked
+                                    // the view back every frame). Geometry-
+                                    // driven, so it scrolls TO culled nodes.
+                                    if (!didHome && (selMoved || zoomChanged || s_reclamp) &&
+                                        s_selNode >= 0 && s_selNode < (int)s_vis.size()) {
+                                        s_reclamp = false;
                                         const ImVec2 l = lpos(s_selNode);
-                                        const float m = 90.0f * s_zoom;
-                                        const float sx = ImGui::GetScrollX();
-                                        const float sy = ImGui::GetScrollY();
-                                        if (l.x < sx + m)
-                                            ImGui::SetScrollX(std::max(0.0f, l.x - m));
-                                        else if (l.x > sx + childSz.x - m)
-                                            ImGui::SetScrollX(l.x - childSz.x + m);
-                                        if (l.y < sy + m)
-                                            ImGui::SetScrollY(std::max(0.0f, l.y - m));
-                                        else if (l.y > sy + childSz.y - m)
-                                            ImGui::SetScrollY(l.y - childSz.y + m);
+                                        if (zoomChanged) {
+                                            // Zoom re-centres ON the selection
+                                            // — the layout scales under it,
+                                            // and losing the node you were
+                                            // looking at felt broken.
+                                            ImGui::SetScrollX(std::max(0.0f, l.x - childSz.x * 0.5f));
+                                            ImGui::SetScrollY(std::max(0.0f, l.y - childSz.y * 0.5f));
+                                        } else {
+                                            const float m = 90.0f * s_zoom;
+                                            const float sx = ImGui::GetScrollX();
+                                            const float sy = ImGui::GetScrollY();
+                                            if (l.x < sx + m)
+                                                ImGui::SetScrollX(std::max(0.0f, l.x - m));
+                                            else if (l.x > sx + childSz.x - m)
+                                                ImGui::SetScrollX(l.x - childSz.x + m);
+                                            if (l.y < sy + m)
+                                                ImGui::SetScrollY(std::max(0.0f, l.y - m));
+                                            else if (l.y > sy + childSz.y - m)
+                                                ImGui::SetScrollY(l.y - childSz.y + m);
+                                        }
+                                    } else if (didHome || s_reclamp) {
+                                        // Home consumed any pending reclamp.
+                                        s_reclamp = false;
                                     }
 
                                     const ImVec2 winPos = ImGui::GetWindowPos();
@@ -1884,6 +2001,19 @@ namespace MFO::Board {
                                     const ImU32 cBtn    = ImGui::GetColorU32(ImGuiCol_Button);
                                     const ImU32 cSel    = ImGui::GetColorU32(ImGuiCol_Header);
                                     const ImU32 cAccent = ImGui::GetColorU32(skin.accent);
+
+                                    // Everything filtered (a tree of nothing
+                                    // but marginal perks): SAY so instead of
+                                    // drawing an empty canvas (round 4).
+                                    if (s_vis.empty()) {
+                                        const char* msg =
+                                            "Nothing in this tree is useful to a follower -- "
+                                            "[View] shows marginal perks.";
+                                        const ImVec2 ts = ImGui::CalcTextSize(msg);
+                                        dl->AddText(ImVec2(winPos.x + (childSz.x - ts.x) * 0.5f,
+                                                           winPos.y + (childSz.y - ts.y) * 0.5f),
+                                                    cFaint, msg);
+                                    }
 
                                     // EDGES (under the discs), vis→vis. The
                                     // filter keeps every parent of a kept
@@ -1975,7 +2105,11 @@ namespace MFO::Board {
                                         }
 
                                         if (hovered) {
-                                            s_selNode = k;   // mouse steers the SAME selection
+                                            // Mouse steers the SAME selection —
+                                            // but only while it MOVES; a parked
+                                            // deck cursor must not snap the pad's
+                                            // selection back every frame.
+                                            if (mouseActive) s_selNode = k;
                                             if (owned)
                                                 ImGui::SetTooltip("%s -- rank %d/%d (allocated by MFO)",
                                                     n.name.c_str(), (int)st->ownedRank,

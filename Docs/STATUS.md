@@ -60,6 +60,38 @@
 > SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
 > (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
 
+> **#74 ROUND 4 POLISH (2026-08-12) — marth: round 3 "much better"; this pass fixes
+> prereq ordering + menu feel.** **Prereq root cause (the real one): catalog pass 2
+> recorded FILTERED direct parents (Requiem/Ordinator entry-less marker perks,
+> classified dead) as the prereq truth — unallocatable through MFO, so whole
+> subtrees were permanently locked AND their children drew as root-row orphans
+> (tier 0, no edge): "order of unlocked perks doesn't respect prereqs" exactly.
+> FIX: pass 2 now BRIDGES each prereq line through filtered nodes to the nearest
+> KEPT ancestors (drawable edge + §5 truth, vanilla ANY-line rule; a line reaching
+> the root through only-filtered nodes = root-reachable). perkConditions.IsTrue on
+> the follower stays the final authority on top (an overhaul's HasPerk conditions
+> still bind).** Also: rank-1 `HasPerk X==1` conditions extracted into the catalog
+> (`condPrereqPerkIDs`) and added as TIER edges so visual order matches the
+> conditions authority; tiering itself is now Kahn longest-path (strict topological,
+> cycle-defensive) replacing the bounded relaxation. **Feel sweep (each a real
+> state-machine bug, reasoned frame-by-frame):** (1) the A press that OPENED the
+> tree window instantly opened the seeded root's take popup (same-frame edge) —
+> release-guard added (r1Ready pattern); (2) scroll-home and follow-scroll fought
+> in the same frame (SetScroll lands next frame; the clamp read stale scroll) —
+> home mutes the clamp that frame; (3) continuous follow-scroll made the mouse
+> wheel unusable (yanked back every frame) — follow now runs on INTENT only (pad
+> move/zoom/filter reflow); (4) a parked deck cursor over the canvas stole the
+> pad's selection every frame — hover steers only while the mouse MOVES; (5) ImGui
+> key-repeat (20/s) overshot nodes — moves throttled to ~8 hops/s; (6) zoom
+> shifted the layout under the selection — LB/RB now recentre ON the selection;
+> (7) the marginal toggle reseeded to root, losing your place — selection restored
+> by node id + pulled into view; (8) an all-filtered tree drew a blank canvas AND
+> its gated input block ate [Y]/[View]/zoom (stuck) — message drawn, window
+> controls moved outside the empty gate. Census dump updated (bridged parents +
+> condPrereq counts; the old off-board delta underflowed). Design doc §17 round-4
+> addendum. Economies untouched (perk floor(level/3)−native−spent; manual flat
+> 5/level; ReconcileSkill single-site + floors intact). NOT field-tested (round 4).
+
 > **#74 DECK ROUND 3 (2026-08-12) — field test 2 rebuild: explicit nav, tiered tree,
 > filtered perks, derived perk economy.** Commit on top of 6080d1c (which IS CI-green,
 > run 31614543597). **P1 root cause of two dead rounds: ImGui spatial auto-nav can

@@ -304,3 +304,33 @@ unspent = max(0, floor(followerLevel / 3)
   1); MARGINAL perks are hidden by default, kept only as dimmed passthroughs when
   an effective descendant needs them for connectivity ("Show marginal" toggle —
   [View] on the pad — reveals everything).
+
+**Round 4 (polish pass, same day) — prereq correctness + feel:**
+
+- **Bridged prereqs (the "order ignores prereqs" root cause).** Pass 2 of the
+  catalog used to record a FILTERED direct parent (dead entry-less marker perk,
+  player-only perk) as the prereq truth: unallocatable through MFO, so its whole
+  subtree was permanently locked, and with no drawable edge its children rendered
+  as root-row orphans. Prereq lines now resolve THROUGH filtered nodes to the
+  nearest KEPT ancestors — those are both the drawable/tiered edges and the §5
+  reachability truth (vanilla ANY-line rule); a line reaching the ROOT through
+  only filtered nodes makes the node root-reachable. The perk's own CONDITIONS
+  stay the final authority regardless: §5 evaluates full perkConditions on the
+  follower at gate time, so an overhaul's HasPerk conditions still bind even when
+  the bridge would be more lenient.
+- **Condition-authored prereqs tier the layout** — rank-1 `HasPerk X == 1` (AND,
+  literal) conditions are extracted into the catalog and added as tier edges, so
+  visual order matches the conditions authority; exclusivity conditions
+  (`HasPerk == 0`) are deliberately not matched.
+- **Strict topological tiers** — Kahn longest-path from the roots replaced the
+  bounded relaxation: every node sits strictly above all of its true, drawable
+  prerequisites; cycle-defensive (authored cycles keep max-so-far tiers, nothing
+  hangs).
+- **Feel fixes**: the A press that opens the tree can no longer instantly open the
+  root's take popup (release-guard, the r1Ready pattern); scroll-home no longer
+  fights same-frame follow-scroll; follow-scroll runs on intent only (pad move /
+  zoom / filter reflow) so the mouse wheel roams freely; a parked cursor no longer
+  steals the pad's selection (hover steers only while the mouse moves); pad moves
+  throttled to ~8 hops/s; zoom recentres on the selection; the marginal toggle
+  keeps your place (selection restored by node, pulled back into view); an
+  all-filtered tree says so and still answers [Y]/[View]/zoom.
