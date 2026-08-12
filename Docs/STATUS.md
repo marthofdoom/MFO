@@ -6,7 +6,23 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest public:** v1.0.61 (creature weapons DELETED not handed to player — completes #73) · prior public: v1.0.60 (#73 creature-weapon loot fix), v1.0.59 (controller fix, field-confirmed), v1.0.58 (concentration freeze). Next: FOLLOWER-PROGRESSION ESL ADDON (#74), then town update (#31).
+> **Last updated:** 2026-08-11 · **Latest:** v1.0.62 (#75 weapon-equip thrash fix + progression PROBE — deploying to BOTH decks, public HELD pending field test) · **Latest public:** v1.0.61 (creature weapons deleted) · prior public: v1.0.60 (#73), v1.0.59 (controller). Next: FOLLOWER-PROGRESSION ESL ADDON (#74 — probe validation is the on-ramp), then town update (#31).
+
+> **v1.0.62 — #75 WEAPON-EQUIP THRASH FIX + progression probe.** #75 (Fable-built,
+> adversarially reviewed CLEAN + CI green): (1) both-hand idempotency in EquipWeapon
+> (right-hand-only guard was the thrash trigger — a caster's off-hand weapon was
+> invisible); (2) equip-order ownership — `CombatStyle::Want` gains an equip-order
+> flag set ONLY by the Scheduler wantStance branch (explicit equip gambit), and a
+> `write_vfunc` gate on `CombatInventoryItem::CheckShouldEquip` (0x0F) across the 30
+> concrete spell/staff item vtables denies the AI re-arming a spell/staff while an
+> equip order owns the stance (latched gambit spell exempt; fast-out atomic; leaf
+> locks; VR-guarded; off-switch bWeaponStyleControl). **marth's SCOPING CALL: gate
+> covers the equip GAMBIT ONLY — NOT the magicka-dry fallback or #65 class override.
+> A mage backing off to spells when low on magicka is correct base behavior; don't
+> override it. The bug was thrash, not commitment.** Bundled: the dev-only progression
+> PROBE (bProgProbe=0 default, CI green) — the P1/P2/P3 sinker validation for #74; run
+> it on Tuxborn (throwaway save) as the on-ramp to the real progression build. Field-
+> test both: Serana keeps her ordered blade (`[wstyle] ... DENIED`); no thrash.
 
 > **#74 PROBE BUILD WRITTEN (2026-08-11) — awaiting marth review + CI + field run.** New
 > `native/ProgProbe.cpp/.h` (LOG-ONLY, throwaway): the three §13 sinker probes behind

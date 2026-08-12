@@ -1,3 +1,15 @@
+## v1.0.62 -- followers commit to an ordered weapon (no more re-draw thrash)
+
+- Fixed weapon thrash under an equip order: a follower you've told to "equip melee"
+  or "equip ranged" -- most visibly a caster ordered to melee -- could re-draw the
+  same weapon every second as their own combat AI kept trying to put a spell back
+  in hand. Two fixes: the "already holding it" check now looks at BOTH hands (a
+  caster keeps a spell in one and the weapon in the other), and an explicit equip
+  order now truly OWNS the weapon hand for the fight -- the AI can't re-arm a spell
+  over it, so the ordered weapon sticks instead of flickering. Scoped strictly to
+  explicit equip gambits: a mage naturally backing off to spells when low on
+  magicka, or a class set to Mage, is unchanged. Off-switch: bWeaponStyleControl.
+
 ## v1.0.61 -- creature weapons are deleted, not handed to you
 
 - Follow-up to v1.0.60: when MFO relieves a follower of a creature weapon (a
