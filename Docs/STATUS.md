@@ -60,6 +60,23 @@
 > SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
 > (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
 
+> **#74 ROUND 5 (2026-08-12) — AUTHORED DOME LAYOUT replaces the tiers.** marth:
+> combat trees tiered fine, MAGIC trees were terrible under round-4 Kahn tiering —
+> and layout must be universal (Vokriinator-scale merges he can't test). The tree
+> now renders from the catalog's authored hpos/vpos (the game's own constellation
+> coordinates, shipped by every perk mod by construction). LAYOUT only — §5 gating
+> untouched. Normalization: kept-set bbox → origin, vpos flipped (root at bottom),
+> scaled by the tree's MEDIAN nearest-neighbour distance (one unit ≈ one typical
+> node gap at any authored scale; a lone close pair can't inflate it; coincident
+> nodes get a tiny deterministic nudge, never amplified). Per-frame fit-to-canvas
+> clamped to a 110–300px typical gap ×zoom: dense trees scroll at readable density,
+> tiny trees don't stretch. Presentation: vertically-eased cubic edges (soft wide
+> underlay + thin core = tapered constellation look; lateral edges ease straight),
+> soft glow on available nodes. Explicit nav (geometry-agnostic — scoring runs on
+> the normalized units), culling, zoom, filter, 90%-window, economies, save-safety
+> all unchanged. Kahn/condPrereq layout edges removed from the board (IsTrue still
+> gates; catalog field stays for the census). NOT field-tested (round 5).
+
 > **#74 ROUND 4b (2026-08-12) — Pyromancer acceptance TRACE + manual-skills =
 > REPLACE.** (1) **The falsifiable trace (design doc §17 has the full data):**
 > offline parse of marth's INSTALLED winning records (custom-modlist/Requiem

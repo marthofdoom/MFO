@@ -381,6 +381,28 @@ gate pipeline ported over the real data:
   dim disc). Correct gating that read as a violation; unverifiable offline, noted
   for the next field pass.
 
+**Round 5 (2026-08-12) — AUTHORED DOME LAYOUT replaces the tiers (marth: combat
+trees tiered fine, magic trees were a crammed mess; must be universal).** The tree
+renders from the catalog's authored `hpos`/`vpos` — the exact coordinates the
+game's own constellation menu draws, which every perk mod ships by construction —
+so any tree, Vokriinator-scale merges included, arrives WITH good positions.
+LAYOUT only: prereq gating (allocator, §5) untouched. **Normalization (the
+universal part):** the kept set's bounding box is translated to origin, vpos
+flipped (root at the canvas bottom), and coordinates scaled by the tree's own
+**median nearest-neighbour distance** — one unit ≈ one typical node gap for ANY
+authored scale; a single pathological close pair can't inflate the layout (median,
+never min); exact-coincident nodes get a tiny deterministic nudge (rendered as
+close as authored, never stacked dead-on). Per frame, units map to pixels by
+fit-to-canvas CLAMPED to a 110–300px typical gap (×zoom): dense merged trees
+scroll at readable density instead of clumping, tiny trees don't stretch across
+the screen. **Presentation:** vertically-eased cubic edges with a wide soft
+underlay beneath a thin core (tapered constellation look; lateral edges ease to
+straight), a soft outer glow on available nodes; owned/available/locked/native
+styling, explicit nav, culling, zoom, filter, and the 90%-display window all
+unchanged. Kahn tiering and the condition-prereq layout edges are gone from the
+board (the conditions authority still gates via IsTrue; the catalog field
+remains for the census).
+
 ## 18. Addon API — making the add-on third-party-reproducible (2026-08-12)
 
 **Why this section exists (marth):** the Progression Add-On (and the sibling

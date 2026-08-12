@@ -1652,27 +1652,29 @@ namespace MFO::Board {
                                                     "[Y] next tree  [View] marginal  [B]/Esc back");
                                 ImGui::Separator();
 
-                                // ── P5 TIERED LAYOUT + P3 FILTER ────────
-                                // Cached: the catalog is frozen, recompute
-                                // only when the skill or the marginal toggle
-                                // changes. Tier = prerequisite depth over the
-                                // catalog's kept-parent edges; ROOTS on the
-                                // BOTTOM row, each tier one row up, siblings
-                                // spread across the row ordered by the
-                                // authored hpos (stable left-right only —
-                                // the dome coords' scatter is gone). Dead
-                                // (NPC-inert) perks never reached the
-                                // catalog; MARGINAL ones are hidden by
-                                // default — except passthroughs an effective
-                                // descendant needs, kept dimmed so no kept
-                                // node ever dangles.
+                                // ── DOME LAYOUT + P3 FILTER (round 5) ───
+                                // The tiered layout is GONE (marth: combat
+                                // trees tiered fine, magic trees were a
+                                // crammed mess — and it must be universal).
+                                // Nodes render from the AUTHORED dome
+                                // coordinates — the exact hpos/vpos the
+                                // game's own perk menu draws. Every perk mod
+                                // ships these (the constellation menu needs
+                                // them), so ANY tree — Vokriinator-scale
+                                // merges included — arrives WITH good
+                                // positions. Layout only: prereq GATING is
+                                // the allocator's and unchanged. Cached:
+                                // recompute on skill / marginal-toggle
+                                // change. Filter unchanged: dead perks never
+                                // reached the catalog; marginal hidden by
+                                // default except needed passthroughs.
                                 static int  s_layoutSkill = -1;
                                 static bool s_layoutMarg  = false;
                                 static std::vector<int>    s_vis;      // node idx per entry
                                 static std::vector<int>    s_visOf;    // node idx -> vis idx / -1
                                 static std::vector<char>   s_visPass;  // dimmed passthrough
-                                static std::vector<ImVec2> s_visPos;   // centered cols / rows
-                                static float s_layW = 1.0f, s_layH = 1.0f;
+                                static std::vector<ImVec2> s_visPos;   // dome units, ~1 per node gap
+                                static float s_spanX = 1.0f, s_spanY = 1.0f;   // extents in units
                                 static int   s_selNode = -1;           // P1 explicit selection
                                 static bool  s_reclamp = false;        // pull selection into view once
                                 static double s_lastMoveT = 0.0;       // pad-move throttle
@@ -1685,53 +1687,6 @@ namespace MFO::Board {
                                             ? s_vis[s_selNode] : -1;
 
                                     const int n = (int)tree.nodes.size();
-                                    // STRICT topological tiers (round 4):
-                                    // longest path from the roots via Kahn —
-                                    // the bounded relaxation is gone. Edges =
-                                    // the catalog's bridged prereq edges PLUS
-                                    // same-tree condition-authored prereqs
-                                    // (HasPerk), so the visual order matches
-                                    // the CONDITIONS authority, not just the
-                                    // drawn tree lines.
-                                    std::vector<std::vector<int>> kids(n);
-                                    std::vector<int> indeg(n, 0), tier(n, 0);
-                                    auto addEdge = [&](int p, int c) {
-                                        if (p < 0 || p == c) return;
-                                        for (const int k : kids[p])
-                                            if (k == c) return;   // dedupe
-                                        kids[p].push_back(c);
-                                        ++indeg[c];
-                                    };
-                                    for (int i = 0; i < n; ++i)
-                                        for (const auto pi : tree.nodes[i].parentIndices)
-                                            addEdge((int)pi, i);
-                                    for (int i = 0; i < n; ++i)
-                                        for (const auto pid : tree.nodes[i].condPrereqPerkIDs)
-                                            for (int j = 0; j < n; ++j) {
-                                                if (j == i) continue;
-                                                bool match = tree.nodes[j].perkFormID == pid;
-                                                if (!match)
-                                                    for (const auto& rr : tree.nodes[j].ranks)
-                                                        if (rr.perkFormID == pid) { match = true; break; }
-                                                if (match) { addEdge(j, i); break; }
-                                            }
-                                    {
-                                        std::vector<int> q;
-                                        q.reserve(n);
-                                        for (int i = 0; i < n; ++i)
-                                            if (indeg[i] == 0) q.push_back(i);
-                                        for (std::size_t head = 0; head < q.size(); ++head) {
-                                            const int p = q[head];
-                                            for (const int c : kids[p]) {
-                                                tier[c] = std::max(tier[c], tier[p] + 1);
-                                                if (--indeg[c] == 0) q.push_back(c);
-                                            }
-                                        }
-                                        // A cycle in authored data would leave
-                                        // nodes unprocessed with their max-so-
-                                        // far tiers — nothing hangs, nothing
-                                        // draws below a resolved parent.
-                                    }
                                     std::vector<char> keep(n, 1), pass(n, 0);
                                     if (!s_showMarginal) {
                                         std::vector<char> needed(n, 0);
@@ -1757,51 +1712,89 @@ namespace MFO::Board {
                                                           Progression::Verdict::kEffective;
                                         }
                                     }
-                                    int maxTier = 0;
-                                    for (int i = 0; i < n; ++i)
-                                        if (keep[i]) maxTier = std::max(maxTier, tier[i]);
+                                    // AUTHORED positions, normalized (the
+                                    // universal part). Translate the kept
+                                    // set's bounding box to the origin, flip
+                                    // vpos (the dome grows upward; the root,
+                                    // vpos 0, lands at the canvas BOTTOM),
+                                    // then scale by the MEDIAN nearest-
+                                    // neighbour distance so ONE UNIT ≈ ONE
+                                    // TYPICAL NODE GAP for any authored
+                                    // scale: a tree in 0.1-unit or 1000-unit
+                                    // coordinates lands identically, and one
+                                    // pathological close pair cannot inflate
+                                    // the layout (median, never min).
                                     s_vis.clear(); s_visPos.clear(); s_visPass.clear();
                                     s_visOf.assign(n, -1);
-                                    std::size_t widest = 1;
-                                    for (int tr = 0; tr <= maxTier; ++tr) {
-                                        std::vector<int> row;
-                                        for (int i = 0; i < n; ++i)
-                                            if (keep[i] && tier[i] == tr) row.push_back(i);
-                                        std::stable_sort(row.begin(), row.end(),
-                                            [&](int a, int b) {
-                                                return tree.nodes[a].hpos < tree.nodes[b].hpos;
-                                            });
-                                        widest = std::max(widest, row.size());
-                                        for (int s2 = 0; s2 < (int)row.size(); ++s2) {
-                                            const int i = row[s2];
-                                            s_visOf[i] = (int)s_vis.size();
-                                            s_vis.push_back(i);
-                                            s_visPos.push_back(ImVec2(
-                                                (float)s2 - (float)(row.size() - 1) * 0.5f,
-                                                (float)(maxTier - tr)));
-                                            s_visPass.push_back(pass[i] ? 1 : 0);
+                                    float minH = 1e9f, maxH = -1e9f, minV = 1e9f, maxV = -1e9f;
+                                    for (int i = 0; i < n; ++i) {
+                                        if (!keep[i]) continue;
+                                        minH = std::min(minH, tree.nodes[i].hpos);
+                                        maxH = std::max(maxH, tree.nodes[i].hpos);
+                                        minV = std::min(minV, tree.nodes[i].vpos);
+                                        maxV = std::max(maxV, tree.nodes[i].vpos);
+                                    }
+                                    for (int i = 0; i < n; ++i) {
+                                        if (!keep[i]) continue;
+                                        s_visOf[i] = (int)s_vis.size();
+                                        s_vis.push_back(i);
+                                        s_visPos.push_back(ImVec2(tree.nodes[i].hpos - minH,
+                                                                  maxV - tree.nodes[i].vpos));
+                                        s_visPass.push_back(pass[i] ? 1 : 0);
+                                    }
+                                    float dtyp = 1.0f;
+                                    if (s_vis.size() >= 2) {
+                                        std::vector<float> nn(s_vis.size(), 1e9f);
+                                        for (std::size_t a = 0; a < s_vis.size(); ++a)
+                                            for (std::size_t b = a + 1; b < s_vis.size(); ++b) {
+                                                const float ddx = s_visPos[a].x - s_visPos[b].x;
+                                                const float ddy = s_visPos[a].y - s_visPos[b].y;
+                                                const float d = std::sqrt(ddx * ddx + ddy * ddy);
+                                                nn[a] = std::min(nn[a], d);
+                                                nn[b] = std::min(nn[b], d);
+                                            }
+                                        std::vector<float> nz;
+                                        for (const float d : nn)
+                                            if (d > 1e-4f && d < 1e8f) nz.push_back(d);
+                                        if (!nz.empty()) {
+                                            std::nth_element(nz.begin(),
+                                                             nz.begin() + nz.size() / 2, nz.end());
+                                            dtyp = std::max(1e-3f, nz[nz.size() / 2]);
                                         }
                                     }
-                                    s_layW = (float)widest;
-                                    s_layH = (float)(maxTier + 1);
+                                    s_spanX = 0.0f; s_spanY = 0.0f;
+                                    for (auto& p2 : s_visPos) {
+                                        p2.x /= dtyp; p2.y /= dtyp;
+                                        s_spanX = std::max(s_spanX, p2.x);
+                                        s_spanY = std::max(s_spanY, p2.y);
+                                    }
+                                    // Coincident authored coords: rendered as
+                                    // close as authored (never amplified) but
+                                    // nudged off dead-center so both stay
+                                    // visible and selectable.
+                                    for (std::size_t a = 0; a < s_visPos.size(); ++a)
+                                        for (std::size_t b = a + 1; b < s_visPos.size(); ++b)
+                                            if (std::fabs(s_visPos[a].x - s_visPos[b].x) < 0.02f &&
+                                                std::fabs(s_visPos[a].y - s_visPos[b].y) < 0.02f)
+                                                s_visPos[b].x += 0.22f * (float)((b - a) % 3 + 1);
                                     // Restore the player's place on a filter
-                                    // toggle; otherwise seed the ROOT row's
-                                    // middle node — something is ALWAYS
-                                    // selected before any input arrives (P1).
+                                    // toggle; otherwise seed the ROOT region
+                                    // — lowest on the canvas, centre-most —
+                                    // so something is ALWAYS selected before
+                                    // any input arrives (P1).
                                     if (prevNode >= 0 && prevNode < (int)s_visOf.size() &&
                                         s_visOf[prevNode] >= 0) {
                                         s_selNode = s_visOf[prevNode];
-                                        s_reclamp = true;   // rows shifted — pull it into view
+                                        s_reclamp = true;   // layout shifted — pull it into view
                                     } else {
                                         s_selNode = -1;
-                                        float bestAbs = 1e9f;
-                                        for (int k = 0; k < (int)s_vis.size(); ++k)
-                                            if (s_visPos[k].y == (float)maxTier &&
-                                                std::fabs(s_visPos[k].x) < bestAbs) {
-                                                bestAbs = std::fabs(s_visPos[k].x);
-                                                s_selNode = k;
-                                            }
-                                        if (s_selNode < 0 && !s_vis.empty()) s_selNode = 0;
+                                        float bestScore = 1e9f;
+                                        for (int k = 0; k < (int)s_vis.size(); ++k) {
+                                            const float score =
+                                                (s_spanY - s_visPos[k].y) * 2.0f +
+                                                std::fabs(s_visPos[k].x - s_spanX * 0.5f);
+                                            if (score < bestScore) { bestScore = score; s_selNode = k; }
+                                        }
                                         s_scrollHome = true;   // new tree → land on the root
                                     }
                                     s_layoutSkill = s_skillCur;
@@ -1812,10 +1805,22 @@ namespace MFO::Board {
                                                   ImGuiChildFlags_Borders,
                                                   ImGuiWindowFlags_HorizontalScrollbar);
                                 {
-                                    const float colW = 190.0f * s_zoom;
-                                    const float rowH = 130.0f * s_zoom;
-                                    const float pad  = 70.0f * s_zoom;
                                     const ImVec2 childSz = ImGui::GetWindowSize();
+                                    const float pad = 90.0f * s_zoom;
+                                    // Per-frame FIT, units → pixels: fill the
+                                    // canvas when that keeps nodes readable,
+                                    // else clamp the typical node gap between
+                                    // 110px and 300px (zoom multiplies after)
+                                    // — a Vokriinator-scale tree scrolls at a
+                                    // readable density instead of clumping,
+                                    // a five-node tree doesn't stretch across
+                                    // the screen. No per-tree special cases:
+                                    // span and gap both come from the tree's
+                                    // own normalized geometry.
+                                    const float fitU = std::min(
+                                        (childSz.x - 2.0f * pad) / std::max(s_spanX, 0.5f),
+                                        (childSz.y - 2.0f * pad) / std::max(s_spanY, 0.5f));
+                                    const float unit = std::clamp(fitU, 110.0f, 300.0f) * s_zoom;
                                     // Round 4 feel state: zoom edges recenter
                                     // the selection; the mouse only steers
                                     // selection while it actually MOVES (a
@@ -1830,19 +1835,23 @@ namespace MFO::Board {
                                     bool selMoved = false;
                                     bool didHome  = false;
                                     const float canvasW =
-                                        std::max(s_layW * colW + pad * 2.0f, childSz.x - 4.0f);
+                                        std::max(s_spanX * unit + pad * 2.0f, childSz.x - 4.0f);
                                     const float canvasH =
-                                        std::max(s_layH * rowH + pad * 2.0f, childSz.y - 4.0f);
+                                        std::max(s_spanY * unit + pad * 2.0f, childSz.y - 4.0f);
                                     const ImVec2 origin = ImGui::GetCursorScreenPos();
                                     ImGui::Dummy(ImVec2(canvasW, canvasH));   // the scrollable extent
                                     bool wantNodePopup = false;
 
                                     // Canvas-local / screen position of a vis
                                     // entry — PURE GEOMETRY, valid for culled
-                                    // nodes too (the P1 requirement).
+                                    // nodes too (the P1 requirement). The
+                                    // tree is centred in whichever canvas
+                                    // dimension exceeds its span.
+                                    const float xOff = (canvasW - s_spanX * unit) * 0.5f;
+                                    const float yOff = (canvasH - s_spanY * unit) * 0.5f;
                                     auto lpos = [&](int k) {
-                                        return ImVec2(canvasW * 0.5f + s_visPos[k].x * colW,
-                                                      pad + (s_visPos[k].y + 0.5f) * rowH);
+                                        return ImVec2(xOff + s_visPos[k].x * unit,
+                                                      yOff + s_visPos[k].y * unit);
                                     };
                                     auto spos = [&](int k) {
                                         const ImVec2 l = lpos(k);
@@ -1991,7 +2000,7 @@ namespace MFO::Board {
                                     }
 
                                     const ImVec2 winPos = ImGui::GetWindowPos();
-                                    const float cullPad = std::max(colW, rowH);
+                                    const float cullPad = unit;   // one node gap of headroom
                                     const float visX0 = winPos.x - cullPad;
                                     const float visX1 = winPos.x + childSz.x + cullPad;
                                     const float visY0 = winPos.y - cullPad;
@@ -2004,6 +2013,15 @@ namespace MFO::Board {
                                     const ImU32 cBtn    = ImGui::GetColorU32(ImGuiCol_Button);
                                     const ImU32 cSel    = ImGui::GetColorU32(ImGuiCol_Header);
                                     const ImU32 cAccent = ImGui::GetColorU32(skin.accent);
+                                    // Soft variants for the tapered edge
+                                    // underlay and the available-node glow
+                                    // (round 5 presentation: constellation,
+                                    // not flat scatter).
+                                    const ImU32 cAccentSoft = ImGui::GetColorU32(ImVec4(
+                                        skin.accent.x, skin.accent.y, skin.accent.z, 0.30f));
+                                    const ImVec4 borV = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+                                    const ImU32 cDimSoft = ImGui::GetColorU32(ImVec4(
+                                        borV.x, borV.y, borV.z, 0.22f));
 
                                     // Everything filtered (a tree of nothing
                                     // but marginal perks): SAY so instead of
@@ -2022,6 +2040,13 @@ namespace MFO::Board {
                                     // filter keeps every parent of a kept
                                     // node (the needed-fixpoint), so edges
                                     // never dangle; still AABB-culled.
+                                    // Round-5 presentation: vertically-eased
+                                    // cubic curves with a wide soft underlay
+                                    // beneath a thin core — the tapered
+                                    // constellation look instead of raw
+                                    // straight lines (lateral edges ease to
+                                    // straight on their own: the bend scales
+                                    // with the vertical run).
                                     for (int k = 0; k < (int)s_vis.size(); ++k) {
                                         const int i = s_vis[k];
                                         const auto& n = tree.nodes[i];
@@ -2041,8 +2066,15 @@ namespace MFO::Board {
                                             const auto* sp = stateAt(flatBase + (int)pi);
                                             const bool bothOwned = childOwned && sp &&
                                                 (sp->ownedRank > 0 || sp->native);
-                                            dl->AddLine(p0, p1, bothOwned ? cAccent : cDim,
-                                                        bothOwned ? 2.5f : 1.5f);
+                                            const float bend = 0.38f * (p1.y - p0.y);
+                                            const ImVec2 c0(p0.x, p0.y + bend);
+                                            const ImVec2 c1(p1.x, p1.y - bend);
+                                            const float core = bothOwned ? 2.5f : 1.4f;
+                                            dl->AddBezierCubic(p0, c0, c1, p1,
+                                                bothOwned ? cAccentSoft : cDimSoft,
+                                                core * 2.6f);
+                                            dl->AddBezierCubic(p0, c0, c1, p1,
+                                                bothOwned ? cAccent : cDim, core);
                                         }
                                     }
 
@@ -2079,6 +2111,11 @@ namespace MFO::Board {
                                         const bool hovered = ImGui::IsItemHovered();
                                         ImGui::PopID();
 
+                                        // Available nodes get a soft outer
+                                        // glow — the "you can take this"
+                                        // read at a glance (round 5).
+                                        if (avail)
+                                            dl->AddCircle(p, r + 3.5f, cAccentSoft, 0, 5.0f);
                                         dl->AddCircleFilled(p, r,
                                             owned ? cAccent : avail ? cSel : cBtn);
                                         dl->AddCircle(p, r,
