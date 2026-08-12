@@ -536,6 +536,15 @@ namespace MFO::Scheduler {
             classOverride = fit->second.combatClassOverride;
 
         CombatStyle::Stance stance = CombatStyle::Stance::None;
+        // #75: is this stance an EQUIP ORDER? Only the wantStance branch sets
+        // it -- an act.equip gambit won (or stands satisfied as) the hand claim
+        // -- and it rides into CombatStyle::Want so the equip gate can deny the
+        // follower's AI re-arming spells/staves over the forced weapon. The
+        // class override and the magicka-dry melee fallback are style PICKS,
+        // not weapon orders: they leave the flag false (and a Want with false
+        // RELEASES a standing hold -- a cast latch flipping the stance to Cast
+        // reopens the follower's own magic the same tick).
+        bool stanceIsEquipOrder = false;
         if (classOverride != 0) {
             const auto forced = static_cast<CombatStyle::Stance>(classOverride);
             // Same master-toggle gating the inferred paths use below: the
@@ -549,9 +558,11 @@ namespace MFO::Scheduler {
                 stance = forced;
             }
         } else if (wantStance) {
-            if (Config::g_weaponStyleControl.load())
+            if (Config::g_weaponStyleControl.load()) {
                 stance = (wantStance == 2) ? CombatStyle::Stance::Ranged
                                            : CombatStyle::Stance::Melee;
+                stanceIsEquipOrder = true;
+            }
         } else if (Config::g_castControl.load() > 0) {
             if (const RE::FormID cs = CasterConsent::WantedSpell(id)) {
                 float cost = 0.0f;
@@ -569,7 +580,7 @@ namespace MFO::Scheduler {
             }
         }
         if (stance != CombatStyle::Stance::None)
-            CombatStyle::Want(id, stance);
+            CombatStyle::Want(id, stance, stanceIsEquipOrder);
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
         // aware). A gambit spell stays in the follower's hand only while some

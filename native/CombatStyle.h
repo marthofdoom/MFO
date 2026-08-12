@@ -40,7 +40,18 @@ namespace MFO::CombatStyle {
     // scheduler tick. No-op when the feature is off or the stance is None.
     // Persists until Clear (battle end) or the next Want (melee<->ranged
     // handoff) -- exactly "hold until battle end or another equip triggers".
-    void Want(RE::FormID a_follower, Stance a_stance);
+    //
+    // a_equipOrder (#75): true iff this stance is an EQUIP ORDER -- an
+    // act.equip_melee / act.equip_ranged gambit won (or stands satisfied as)
+    // the hand claim this tick. While an equip order owns the stance, the
+    // equip gate below DENIES the follower's combat AI re-arming spells or
+    // staves over the forced weapon, so the weapon STICKS instead of MFO and
+    // the AI trading it every service tick. Deliberately NOT set by the #65
+    // class override or the caster magicka-dry melee fallback: those are style
+    // PICKS, not weapon orders, and must not mute the AI's own magic. A later
+    // Want with a_equipOrder=false (a cast latch flipping the stance) releases
+    // the hold; Clear releases it with the stance.
+    void Want(RE::FormID a_follower, Stance a_stance, bool a_equipOrder = false);
 
     // Drop this follower's stance ownership -- combat end / dismissal / revert.
     // The live CSTY already reverted when the per-combat controller was
@@ -60,5 +71,28 @@ namespace MFO::CombatStyle {
     // owns a stance. Keeps the common no-op combat tick off the mutex.
     bool AnyActive();
     std::size_t OwnedCount();   // diagnostics
+
+    // ── THE EQUIP GATE (#75) ─────────────────────────────────────────────────
+    // The CSTY swap above is a score BIAS, not a prohibition: MFO_MeleeStyle
+    // starves magic at 0.1x, but a spell-heavy caster's magic score can still
+    // beat her weapon's, and the engine RE-DERIVES the style mid-combat (the
+    // [wstyle] breadcrumb measured it) -- windows in which her own combat AI
+    // re-arms a spell, strips the forced weapon, and MFO's equip rule fires
+    // again next tick: the deck's Ebony-Tanto thrash. Suppression windows are
+    // a band-aid; the real fix is the same influence-not-insertion move as
+    // CheckStartCast one layer down: CombatInventoryItem::CheckShouldEquip
+    // (vtable 0x0F) is the combat AI's "should I put this in my hands?"
+    // permission bit. While an equip order owns a follower's stance, the gate
+    // answers NO for spell/staff inventory items (the hand-competing magic),
+    // so there is nothing to revert to -- the follower commits to the weapon.
+    // The one exemption is the LATCHED gambit spell (CasterConsent::
+    // WantedSpell): a spellsword list's cast rule below a satisfied equip is a
+    // legal off-hand loan (GAMBIT_FLOWS §7.2) and stays castable. Scoped
+    // exactly to the equip-order flag: a cast-gambit stance, the #65 class
+    // override, and the magicka-dry melee fallback never engage it, and it
+    // releases with the stance (combat end / dismissal / a cast latch flipping
+    // the stance / revert). Install once at kDataLoaded; VR-guarded like every
+    // other vtable hook (indices unverified there).
+    void InstallEquipGate();
 
 }

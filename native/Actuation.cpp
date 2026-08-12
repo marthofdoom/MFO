@@ -716,19 +716,27 @@ namespace MFO::Actuation {
         // ledger -- acceptable because equip and cast are alternative gambits
         // (first-match-wins fires only one per tick).
         Outcome EquipWeapon(RE::Actor* a_follower, bool a_ranged) {
-            if (auto* cur = a_follower->GetEquippedObject(false)) {
-                if (auto* w = cur->As<RE::TESObjectWEAP>(); w && !w->IsStaff()) {
-                    const bool curRanged = w->IsBow() || w->IsCrossbow();
-                    // TRANSPARENT (satisfied): the rule's goal already holds, so
-                    // the scan falls past it -- AND the scheduler reads this
-                    // exact shape (transparent NoOp on an equip action) as the
-                    // H2 hand-claim: a lower CONTRADICTORY equip is skipped
-                    // without firing, so fall-through cannot manufacture the
-                    // melee<->ranged thrash of GAMBIT_FLOWS D4.
-                    if (curRanged == a_ranged)
-                        return { Result::NoOp, "already holding that category", true };
-                }
-            }
+            // BOTH HANDS decide "already holding" (#75). The old guard read only
+            // the RIGHT hand -- but a caster keeps a SPELL there, so the melee
+            // weapon her off-hand still held was invisible to it and a
+            // persistently-winning equip rule re-equipped the SAME weapon every
+            // service tick (deck, Serana: 'Ebony Tanto' at gambit cadence,
+            // visible weapon thrash while her own AI fought back for the
+            // spell). The rule's goal is a weapon CATEGORY in hand -- EITHER
+            // hand satisfies it.
+            const auto holdsCategory = [a_ranged](RE::TESForm* a_held) {
+                auto* w = a_held ? a_held->As<RE::TESObjectWEAP>() : nullptr;
+                return w && !w->IsStaff() && ((w->IsBow() || w->IsCrossbow()) == a_ranged);
+            };
+            // TRANSPARENT (satisfied): the rule's goal already holds, so
+            // the scan falls past it -- AND the scheduler reads this
+            // exact shape (transparent NoOp on an equip action) as the
+            // H2 hand-claim: a lower CONTRADICTORY equip is skipped
+            // without firing, so fall-through cannot manufacture the
+            // melee<->ranged thrash of GAMBIT_FLOWS D4.
+            if (holdsCategory(a_follower->GetEquippedObject(false)) ||
+                holdsCategory(a_follower->GetEquippedObject(true)))
+                return { Result::NoOp, "already holding that category", true };
             RE::TESObjectWEAP* best = nullptr; std::uint16_t bestDmg = 0;
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
