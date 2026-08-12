@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-11 · **Latest:** v1.0.62 (#75 weapon-equip thrash fix + progression PROBE — deploying to BOTH decks, public HELD pending field test) · **Latest public:** v1.0.61 (creature weapons deleted) · prior public: v1.0.60 (#73), v1.0.59 (controller). Next: FOLLOWER-PROGRESSION ESL ADDON (#74 — probe validation is the on-ramp; components 1–3 BUILT: catalog + allocator + board tab), then town update (#31).
+> **Last updated:** 2026-08-12 (#59 continuous cast-control filter BUILT — see blurb) · **Latest:** v1.0.62 (#75 weapon-equip thrash fix + progression PROBE — deploying to BOTH decks, public HELD pending field test) · **Latest public:** v1.0.61 (creature weapons deleted) · prior public: v1.0.60 (#73), v1.0.59 (controller). Next: FOLLOWER-PROGRESSION ESL ADDON (#74 — probe validation is the on-ramp; components 1–3 BUILT: catalog + allocator + board tab), then town update (#31).
 
 > **#74 COMPONENT 2 BUILT (2026-08-11) — the ALLOCATOR backend + MFO_Progression.esl +
 > dev harness — awaiting marth review + CI.** New `native/ProgAllocator.cpp/.h` (design
@@ -267,6 +267,32 @@
 > per tree, global scarcity ratio) for on-deck verification. Mutates nothing. Wired:
 > plugin.cpp kDataLoaded (after Catalog::Load), Config, CMakeLists. NO version bump,
 > NOT pushed. ProgProbe untouched (stays gated off; removed later).
+
+> **#59 CONTINUOUS CAST-CONTROL FILTER (2026-08-12) — BUILT, awaiting marth redeploy +
+> field test.** Deck evidence (Serana, EXACT): forced Sunfire fires and concentration is
+> bounded, but BETWEEN forced casts her AI slips Ice Spike (000C969C) / conjuration —
+> `[cast] … (their own spell, not ours)`. ROOT CAUSE: the whole slider filter (deny +
+> CastExempt kind-filter) lived on the transient `g_want` latch — armed only while a
+> cast rule wins the scan, dropped by `Clear` on any IsInCombat flap — and BOTH deny
+> hooks fast-out un-latched (`ShouldDeny` line ~582 "not latched → never our deny").
+> FIX (CasterConsent.cpp/.h + Scheduler.cpp): persistent per-follower `g_ctrl` map
+> (follower → configured combat cast-gambit spells; own `g_ctrlCount` fast-out mirror,
+> same `g_mx` leaf lock), repopulated EVERY combat service tick by the Scheduler (before
+> the ready-beat/suppression early-outs; empty = control off / log mode / no cast
+> gambits → erase), swept by Clear/ClearAll (combat end, dismissal, revert/load). New
+> `CtrlUnlatchedDeny` runs the SAME slider policy latch-free in both hooks
+> (CheckStartCast advisory + CheckCast pre-charge hard gate, the latter behind an
+> explicit `actor->IsInCombat()`): gambit spells always pass (forced/animated path
+> untouched); **exact (≥4) denies every other spell — fire-and-forget, summons, all
+> schools**; **partial (1–3) applies the CastExempt kind-filter continuously (marth:
+> "the partial filter will also need to be active constant")** — self-heal/heal/buff
+> exemptions per level preserved. Normal kSpell only (potions/scrolls/shouts/powers
+> untouched); concentration exact-bound, pacing, FFHold decay, miss detector all
+> unchanged. Out of combat: completely hands-off (population is combat-branch-only,
+> hard gate checks IsInCombat, world casters never enter the map). FIELD SIGNATURE:
+> an exact-mode follower in combat logs NO `(their own spell, not ours)` — leaks now
+> log `[consent] … DENIED own spell … continuous cast control (unlatched; gambit …)`
+> or `HARD-ABORTED … (continuous cast control)`. No version bump, NOT deployed.
 
 > **v1.0.62 — #75 WEAPON-EQUIP THRASH FIX + progression probe.** #75 (Fable-built,
 > adversarially reviewed CLEAN + CI green): (1) both-hand idempotency in EquipWeapon

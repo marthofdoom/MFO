@@ -64,6 +64,32 @@ namespace MFO::CasterConsent {
         std::unordered_map<RE::FormID, Want> g_want;         // follower -> latch
         std::atomic<std::size_t> g_wantCount{ 0 };           // fast-path: skip the lock when empty
 
+        // ── #59: CONTINUOUS CAST CONTROL -- the persistent gambit reference ──
+        // The latch above is TRANSIENT: Want() arms it when a cast rule wins,
+        // Clear() drops it on any IsInCombat() flap (the Scheduler's non-combat
+        // branch), and it only re-arms when a cast rule wins the scan AGAIN.
+        // Deck-proven leak: Serana on EXACT force-casts Sunfire, but between
+        // forced casts -- while act.equip_melee wins, or across a combat-state
+        // flicker -- she is un-latched, both deny hooks fast-out, and her AI
+        // fires its own Ice Spike / conjuration ("their own spell, not ours").
+        // The filter must not share the latch's lifetime: this map is the
+        // PERSISTENT per-follower record "under continuous cast control", the
+        // follower's configured combat cast-gambit spells. The Scheduler
+        // repopulates it every combat service tick (cast control on, follower
+        // tracked + in combat + at least one cast gambit configured -- an
+        // empty set ERASES, so unconfigured followers never appear); it dies
+        // in Clear (combat end, dismissal) and ClearAll (revert/load). The
+        // deny half (CtrlUnlatchedDeny) reads the SLIDER LIVE at deny time:
+        // exact (>=4) allows only the gambit spells, partial (1-3) applies
+        // the same CastExempt kind-filter the latched deny uses -- both now
+        // continuous in combat, latched or not (marth: "the partial filter
+        // will also need to be active constant"). Same g_mx leaf lock as
+        // g_want (written from the scheduler's task-queue tick, read from
+        // the combat thread); the count mirror keeps both hooks' fast-outs
+        // lock-free while no follower is under control.
+        std::unordered_map<RE::FormID, std::vector<RE::FormID>> g_ctrl;
+        std::atomic<std::size_t> g_ctrlCount{ 0 };
+
         // Followers whose AI cast a DIFFERENT spell while latched -- the miss
         // signal the hybrid forced-cast consumes (see NoteCast in the header).
         // Same lock as g_want: the two are read and erased together.
@@ -156,6 +182,44 @@ namespace MFO::CasterConsent {
                          a_fid, a_actor->GetName() ? a_actor->GetName() : "?", a_spell,
                          Config::g_usePackages.load()
                              ? "" : " (packages OFF: unboundable at this slider level)");
+        }
+
+        // ── #59: the latch-independent CAST-CONTROL deny ────────────────────
+        // The un-latched half of the slider's filter (see g_ctrl above). NORMAL
+        // SPELLS ONLY, mirroring CheckCastThunk's own gate: potions (the
+        // Restore caster drinks through CheckStartCast too, §0.29), scrolls,
+        // staves, shouts, powers and abilities are never ours to veto -- the
+        // latched deny exempts them the same way. A gambit spell passes (the
+        // takeover's own cast must still fire, forced or AI-driven); past
+        // that, exact (>=4) denies everything and partial (1-3) denies the
+        // non-exempt kinds -- exactly the latched filter, read off the LIVE
+        // slider so an MCM change applies mid-combat. Ordered cheap-first:
+        // one relaxed atomic, two config atomics, the form reads, and only
+        // then the shared-locked map probe. a_gambitOut carries a configured
+        // gambit spell for the deny log (0 = allow / not under control).
+        bool CtrlUnlatchedDeny(RE::FormID a_fid, RE::MagicItem* a_mi, RE::FormID& a_gambitOut) {
+            a_gambitOut = 0;
+            if (g_ctrlCount.load(std::memory_order_relaxed) == 0) return false;
+            const int lvl = Config::g_castControl.load();
+            if (lvl <= 0 || Config::g_casterMode.load() == 0) return false;
+            if (!a_mi || !a_mi->Is(RE::FormType::Spell)) return false;
+            auto* sp = a_mi->As<RE::SpellItem>();
+            if (!sp || sp->GetSpellType() != RE::MagicSystem::SpellType::kSpell) return false;
+            const auto spellID = a_mi->GetFormID();
+            {
+                std::shared_lock lk(g_mx);
+                const auto it = g_ctrl.find(a_fid);
+                if (it == g_ctrl.end() || it->second.empty()) return false;
+                for (const auto s : it->second) {
+                    if (s == spellID) { a_gambitOut = 0; return false; }   // a gambit spell -> the takeover's own
+                    if (a_gambitOut == 0) a_gambitOut = s;
+                }
+            }
+            if (lvl >= 4) return true;                    // exact: only the gambit spells cast
+            const SpellKind k = ClassifySpell(a_mi);
+            const bool selfHeal = k == SpellKind::Heal &&
+                a_mi->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+            return !CastExempt(k, selfHeal, lvl);         // partial: the kind-filter, continuous
         }
 
         // Same throttle idea for the PACING deny (v1.0.32): one info line per
@@ -325,15 +389,23 @@ namespace MFO::CasterConsent {
         // Log a suppressed own-spell cast, deduped per (follower, denied spell)
         // so the combat-thread thunk cannot spam it. Leaf mutex, deny-path only.
         void DenyLog(RE::FormID a_fid, RE::Actor* a_actor,
-                     RE::FormID a_denied, RE::FormID a_wanted) {
+                     RE::FormID a_denied, RE::FormID a_wanted, bool a_latched) {
             {
                 std::lock_guard<std::mutex> lk(g_denyLogMx);
                 auto it = g_lastDenied.find(a_fid);
                 if (it != g_lastDenied.end() && it->second == a_denied) return;
                 g_lastDenied[a_fid] = a_denied;
             }
-            spdlog::info("[consent] {:08X} {} DENIED own spell {:08X} while latched for {:08X}",
-                         a_fid, a_actor->GetName() ? a_actor->GetName() : "?", a_denied, a_wanted);
+            if (a_latched) {
+                spdlog::info("[consent] {:08X} {} DENIED own spell {:08X} while latched for {:08X}",
+                             a_fid, a_actor->GetName() ? a_actor->GetName() : "?", a_denied, a_wanted);
+            } else {
+                // #59: the continuous filter caught a between-casts leak -- the
+                // exact line whose ABSENCE the field test reads.
+                spdlog::info("[consent] {:08X} {} DENIED own spell {:08X} -- continuous cast "
+                             "control (unlatched; gambit {:08X})",
+                             a_fid, a_actor->GetName() ? a_actor->GetName() : "?", a_denied, a_wanted);
+            }
         }
 
         using CheckStartCast_t = bool (*)(RE::CombatMagicCaster*, RE::CombatController*);
@@ -355,9 +427,13 @@ namespace MFO::CasterConsent {
             // atomic, permanently 0 unless bProbeCastStyle was armed, so the
             // fast-out stays lock-free (a swap must still be restorable after
             // its follower's latch drops, which is exactly a wantCount==0
-            // moment).
+            // moment). The third is #59's continuous-control mirror: while ANY
+            // follower is under the slider's filter the thunk must reach the
+            // un-latched deny below -- un-latched is exactly the leak it closes
+            // -- so the fast-out may only take all three at zero.
             if (g_wantCount.load(std::memory_order_relaxed) == 0 &&
-                g_styleSwapCount.load(std::memory_order_relaxed) == 0) return aiSaysYes;
+                g_styleSwapCount.load(std::memory_order_relaxed) == 0 &&
+                g_ctrlCount.load(std::memory_order_relaxed) == 0) return aiSaysYes;
             if (!a_cc) return aiSaysYes;
 
             // RESOLVE THE ACTOR VIA attackerHandle (0x28), NEVER cachedAttacker.
@@ -384,8 +460,8 @@ namespace MFO::CasterConsent {
 
             // Is this follower latched? Decide BEFORE touching the caster's
             // spell -- for a non-latched actor, magicItem is only ever read
-            // behind ConcUnboundedDeny's two atomic gates (the latch-
-            // independent concentration bound), never on the plain fast-out.
+            // behind ConcUnboundedDeny's / CtrlUnlatchedDeny's atomic gates
+            // (the latch-independent bounds), never on the plain fast-out.
             // The permit deadline rides the same latch entry and the same
             // shared lock (v1.0.32, the "existing locks" rule): the thunk must
             // not call Loadout's non-atomic maps from the combat thread.
@@ -422,6 +498,21 @@ namespace MFO::CasterConsent {
                 // worldwide unlatched fast-out stays effectively free.
                 if (ConcUnboundedDeny(fid, a_this->magicItem)) {
                     ConcSuppressLog(fid, actor, a_this->magicItem->GetFormID());
+                    return false;
+                }
+                // #59: CONTINUOUS CAST CONTROL. The un-latched gap -- between
+                // forced casts, while an equip rule wins the scan, across a
+                // combat-state flicker's Clear -- used to hand the AI channel
+                // back wholesale (Serana's own Ice Spike between forced
+                // Sunfires). The persistent filter runs the SAME slider policy
+                // the latched deny below runs, minus the latch: gambit spells
+                // pass, exact denies the rest, partial denies the non-exempt
+                // kinds. In-combat by construction here -- CheckStartCast only
+                // ticks under a live CombatController -- and g_ctrl only ever
+                // names tracked, cast-gambit-configured followers.
+                if (RE::FormID gambit = 0;
+                    CtrlUnlatchedDeny(fid, a_this->magicItem, gambit)) {
+                    DenyLog(fid, actor, a_this->magicItem->GetFormID(), gambit, false);
                     return false;
                 }
                 return aiSaysYes;
@@ -471,7 +562,7 @@ namespace MFO::CasterConsent {
                     if (CastExempt(kind, selfHeal, castLvl))
                         return aiSaysYes;   // this category is the AI's to keep
                 }
-                DenyLog(fid, actor, mi->GetFormID(), wantSpell);
+                DenyLog(fid, actor, mi->GetFormID(), wantSpell, true);
                 return false;
             }
 
@@ -691,14 +782,15 @@ namespace MFO::CasterConsent {
                              std::this_thread::get_id() == g_mainThread ? "the MAIN" : "a NON-main");
 
             const bool ff = Config::g_friendlyFireHold.load(std::memory_order_relaxed);
-            // The fast-out stays open unless cast control is at EXACT (4): the
-            // latch-independent concentration bound (below) runs only at Exact
-            // now (marth's exact-only scope), and ConcentrationCast's early
-            // bails are exactly the zero-latch case it must still catch there.
-            // At levels 1-3 there is nothing latch-independent to do, so the
-            // zero-latch/no-ff fast-out is taken as before. With ff defaulted
-            // ON this condition was already almost never taken anyway.
+            // The fast-out stays open when cast control is at EXACT (4) -- the
+            // latch-independent concentration bound (below) must still catch
+            // ConcentrationCast's zero-latch early bails there -- and (#59)
+            // whenever ANY follower is under the continuous cast-control
+            // filter (g_ctrl non-empty): the un-latched deny below is exactly
+            // the between-casts leak it closes, at partial levels too. With
+            // ff defaulted ON this condition was already almost never taken.
             if (g_wantCount.load(std::memory_order_relaxed) == 0 && !ff &&
+                g_ctrlCount.load(std::memory_order_relaxed) == 0 &&
                 Config::g_castControl.load(std::memory_order_relaxed) < 4) return aiOK;
             // NORMAL SPELLS ONLY -- not staves/scrolls (non-Spell forms) nor
             // shouts/powers/abilities (SpellItems, but not GetSpellType()==kSpell).
@@ -726,6 +818,24 @@ namespace MFO::CasterConsent {
             if (ShouldDeny(fid, a_spell, want)) {
                 AbortLog(fid, actor, a_spell->GetFormID(), "exclusive");
                 return false;
+            }
+
+            // #59: CONTINUOUS CAST CONTROL, the HARD half -- the advisory
+            // CheckStartCast deny above leaks (deck-proven; the reason this
+            // hook exists), so the un-latched filter must stand HERE too or
+            // Ice Spike still fires between forced Sunfires. want != 0 means
+            // the latched logic above already governed this spell (allowed
+            // gambit / exempt kind) -- never second-guess it. The explicit
+            // IsInCombat gate is what CheckStartCast gets by construction:
+            // CheckCast also fires OUT of combat (a follower topping up a buff
+            // in town), where MFO must stay completely hands-off -- g_ctrl
+            // entries can outlive the fight by up to a service round before
+            // the Scheduler's non-combat Clear sweeps them.
+            if (want == 0 && actor->IsInCombat()) {
+                if (RE::FormID gambit = 0; CtrlUnlatchedDeny(fid, a_spell, gambit)) {
+                    AbortLog(fid, actor, a_spell->GetFormID(), "continuous cast control");
+                    return false;
+                }
             }
 
             // FRIENDLY FIRE: refuse an OFFENSIVE, non-gambit, non-self cast that
@@ -840,6 +950,11 @@ namespace MFO::CasterConsent {
                                              // a fresh fight's first cast is prompt
         g_otherCast.erase(a_follower);       // the miss flag dies with the latch
         g_wantCount.store(g_want.size(), std::memory_order_relaxed);
+        // #59: the continuous-control reference dies here too -- Clear's call
+        // sites (combat end, dismissal) are exactly its release points; the
+        // Scheduler re-populates on the next combat service tick.
+        g_ctrl.erase(a_follower);
+        g_ctrlCount.store(g_ctrl.size(), std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> dl(g_denyLogMx);
             g_lastDenied.erase(a_follower);
@@ -858,6 +973,8 @@ namespace MFO::CasterConsent {
         g_want.clear();
         g_otherCast.clear();
         g_wantCount.store(0, std::memory_order_relaxed);
+        g_ctrl.clear();                      // #59: no filter survives revert/load
+        g_ctrlCount.store(0, std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> dl(g_denyLogMx);
             g_lastDenied.clear();
@@ -878,6 +995,18 @@ namespace MFO::CasterConsent {
             g_styleSwaps.clear();
             g_styleSwapCount.store(0, std::memory_order_relaxed);
         }
+    }
+
+    void NoteGambits(RE::FormID a_follower, std::vector<RE::FormID> a_spells) {
+        std::unique_lock lk(g_mx);
+        if (a_spells.empty()) {
+            // Cast control off / log mode / no cast gambits configured -> this
+            // follower is NOT under the continuous filter. Idempotent erase.
+            g_ctrl.erase(a_follower);
+        } else {
+            g_ctrl.insert_or_assign(a_follower, std::move(a_spells));
+        }
+        g_ctrlCount.store(g_ctrl.size(), std::memory_order_relaxed);
     }
 
     void NoteCooldown(RE::FormID a_follower, float a_seconds) {

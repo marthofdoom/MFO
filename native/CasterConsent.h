@@ -60,6 +60,22 @@ namespace MFO::CasterConsent {
     void Clear(RE::FormID a_follower);
     void ClearAll();
 
+    // #59: CONTINUOUS CAST CONTROL. The Want latch is transient -- armed only
+    // while a cast rule wins the scan, dropped by Clear on any combat-state
+    // flap -- so between forced casts the slider's filter used to vanish and
+    // the follower's AI slipped its own spells in (Serana's Ice Spike between
+    // forced Sunfires, exact mode). This is the PERSISTENT half: the
+    // follower's configured combat cast-gambit spells, repopulated by the
+    // Scheduler every combat service tick while cast control is on (an empty
+    // vector erases -- control off, log mode, or no cast gambits). While an
+    // entry stands, both deny hooks run the slider's filter WITHOUT the
+    // latch, in combat only: exact (>=4) allows only the gambit spells;
+    // partial (1-3) applies the CastExempt kind-filter continuously. Gambit
+    // spells always pass -- the takeover's own cast (forced or AI-fired) is
+    // never denied here. Dies with Clear/ClearAll (combat end, dismissal,
+    // revert/load). MAIN THREAD (task-queue tick), like Want.
+    void NoteGambits(RE::FormID a_follower, std::vector<RE::FormID> a_spells);
+
     // The gambit spell this follower is latched to cast, or 0 if unlatched. The
     // scheduler reads it to drive the CASTER combat stance (CombatStyle) and its
     // magicka-dry -> melee fallback. Locked shared read; safe off the job-worker

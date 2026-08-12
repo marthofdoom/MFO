@@ -235,6 +235,35 @@ namespace MFO::Scheduler {
         // it yields even for a follower with no combat gambits.
         Logistics::ReleaseTravelOnCombat(f);
 
+        // ── #59: CONTINUOUS CAST CONTROL -- refresh the persistent filter ────
+        // The consent LATCH only stands while a cast rule wins the scan, and
+        // Clear drops it on any combat-state flap -- so between forced casts
+        // the slider's filter used to vanish and the follower's AI slipped its
+        // own spells in (Serana's Ice Spike between forced Sunfires). This
+        // hands CasterConsent the follower's configured cast-gambit spells
+        // every combat service tick, BEFORE the ready-beat and suppression
+        // early-outs below (a suppressed scan must not starve the filter), so
+        // the deny hooks can run the slider's policy continuously -- exact
+        // allows only these spells, partial applies the kind-filter -- latched
+        // or not. An empty vector ERASES: control off, log mode, or no cast
+        // gambit configured means this follower is never under the filter (a
+        // pure-melee follower's own casting stays untouched). Combat end /
+        // dismissal / revert-load sweep the entry (CasterConsent::Clear/
+        // ClearAll); out of combat nothing reads it and the hard gate checks
+        // IsInCombat besides.
+        {
+            std::vector<RE::FormID> gambits;
+            if (Config::g_castControl.load() > 0 && Config::g_casterMode.load() != 0) {
+                for (const auto& g : it->second.combat()) {
+                    const auto& op = g.actionOpcode;
+                    if ((op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
+                         op == Vocab::kActCastPlayer) && g.actionParamForm != 0)
+                        gambits.push_back(g.actionParamForm);
+                }
+            }
+            CasterConsent::NoteGambits(id, std::move(gambits));
+        }
+
         // COMBAT SENSE sample (#23): confidence now folds foe count in, so a
         // field test can watch a growing pack tighten the leash and, past a few
         // foes, arm auto-retreat. Purely observational; throttled ~3 s / follower.
