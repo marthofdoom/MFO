@@ -60,6 +60,41 @@
 > SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
 > (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
 
+> **#74 DECK ROUND 3 (2026-08-12) — field test 2 rebuild: explicit nav, tiered tree,
+> filtered perks, derived perk economy.** Commit on top of 6080d1c (which IS CI-green,
+> run 31614543597). **P1 root cause of two dead rounds: ImGui spatial auto-nav can
+> only move to SUBMITTED items — virtualization culls them and nothing seeded focus;
+> deck has no mouse. ABANDONED.** The tree window now runs EXPLICIT selection nav:
+> everything in it is NoNav (PushItemFlag); a selected-node index seeds to the root
+> row's middle node on open, d-pad/arrows (+LStick keys; the hook folds the stick
+> into d-pad anyway) move it by deterministic nearest-in-direction over the LAYOUT
+> (forward projection + 2.5x lateral penalty) — pure geometry, so culled nodes are
+> reachable and the canvas follow-scrolls to the selection every frame; A/Enter/E
+> opens the detail popup (its Take Selectable keeps ImGui nav — listPopup pattern);
+> mouse hover/click steer the SAME selection. Pad controls: LB/RB zoom, [Y] next
+> tree, [View] show-marginal, [B] close (popup-native). **P2 (skills invisible):
+> branch order bug — `!eligible` was checked BEFORE `enrolled`, and eligibility
+> (teammate/dismissal quirks) can flap at runtime, blanking an enrolled follower's
+> whole UI. Now enrolled-first; eligibility only gates enrollment. Belt+braces: the
+> skill list renders from the allocator's 18-line snapshot (compile-time names,
+> engine-read levels — can never be blank), catalog joined per-row by AV, failed
+> join degrades to a visible "no tree".** **P3:** NPC-dead perks never reach the
+> catalog (comp 1); MARGINAL now hidden by default, kept as dimmed passthroughs when
+> an effective descendant needs the prereq (needed-fixpoint keeps every parent of a
+> kept node → edges never dangle); "Show marginal" checkbox + [View]. **P4 (marth
+> SIMPLIFIED mid-round, supersedes rate×scarcity): perk points are DERIVED, never
+> stored — max(0, floor(level/3) − nativeTreePerksAtEnroll − ranksAllocated).**
+> Native tree ranks counted ONCE at enroll (serialized, PRGN v2); refunds automatic
+> (respec/dropped allocs remove the debit); curve L10→3, L25→8, L50→16 minus
+> pre-trained. 0x802/0x806 GLOBs now unread (kept in the ESL for id stability); v1
+> co-save's stored pool read-and-discarded. **Manual skill points (also
+> simplified): flat 5/level, hardcoded** — pool = (level − baseline)×5 − applied;
+> 0x803 stays auto-scale-only. **P5:** dome coords replaced by a TIERED layout —
+> tier = prereq depth, roots bottom row, siblings hpos-ordered (stable L-R only),
+> centered rows; cached per (skill, marginal-toggle); culling + zoom kept; explicit
+> nav works on any layout. Design doc §17 written (+§16 rate corrected). NOT yet
+> field-tested (round 3).
+
 > **#74 §16 MANUAL SKILL POINTS (2026-08-12) — per-follower toggle, built on the new
 > design lens.** New design-doc §16 engrains the lens (marth): every auto-behavior is
 > a DEFAULT, never a cage — manual override always exists (mage + multiclass builds

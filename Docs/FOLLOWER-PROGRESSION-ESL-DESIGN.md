@@ -236,16 +236,17 @@ from the skill picker, **+1 base per point**, capped at the economy `skillCap`.
 stack on top of the class share and **survive class changes** (the override outranks
 the default).
 
-**Economy:** accrual rate = the existing `MFOP_SkillPointsPerLevel` GLOB (0x803,
-float) — the same knob that feeds the auto-scale total; no new record. One point =
-one base level.
+**Economy (marth, round 3):** **flat 5 skill points per level while the toggle is
+ON** — no detection, no GLOB, a plain constant ("5 skill points per level when
+manual mode is on"). One point = one base level. `MFOP_SkillPointsPerLevel` (0x803)
+remains the AUTO-scale total only; the two are independent, and both are separate
+from the §17 perk-point economy.
 
 **Save-safety (the round-2 SEV-1 lesson, applied):** the pool is **never an
 incremental accumulator** — it is a pure function of two serialized baselines:
 
 ```
-available = floor((progressionLevel − manualBaselineLevel) × skillPointsPerLevel)
-            − manualPointsApplied
+available = (progressionLevel − manualBaselineLevel) × 5 − manualPointsApplied
 ```
 
 `manualBaselineLevel` latches ONCE at first enable (0 = never enabled); after that
@@ -258,3 +259,48 @@ Spending refuses at the cap rather than silently absorbing into the clamp. Co-sa
 PRGN **v2** — flags bit 0x10 (manual ON), `manualBaselineLevel`/`manualPointsApplied`
 u16s, per-skill `manualPoints` f32 — version-guarded reads, value-validated on
 ingestion, coherence-guarded (ON without a latched baseline loads as OFF).
+
+---
+
+## 17. Perk-point economy v2 + the legible tree (deck round 3, 2026-08-12)
+
+**PERK POINTS — SUPERSEDES §15's "copies the player" rate (marth: it was far too
+generous; scarcity is the point).** There is no stored pool, no per-level grant, no
+scarcity ratio. The pool is **derived**, every time it is asked for:
+
+```
+unspent = max(0, floor(followerLevel / 3)
+              − nativeTreePerksAtEnroll
+              − ranks MFO has allocated)
+```
+
+- **1 point per 3 levels, past or present** — a level-30 follower has earned 10;
+  the curve is level 10 → 3, level 25 → 8, level 50 → 16, minus the debits below.
+- **Pre-trained perks count against the budget**: at ENROLLMENT, MFO counts the
+  catalog-tree perk ranks the follower already owns (`nativeTreePerksAtEnroll`,
+  captured once, serialized in PRGN v2). A level-30 recruit who came with 4 tree
+  perks has 10 − 4 = 6 to spend — a heavily-perked custom follower doesn't get a
+  double pile; racial/quest/passive perks outside the trees never count.
+- **Clamped at 0** — an already-"ahead" follower simply has nothing to spend.
+- **Refunds are automatic**: respec and any dropped/unresolvable alloc remove the
+  debit, so the derived pool rises by exactly the ranks returned. No accumulator
+  anywhere — idempotent across reloads by construction. `MFOP_PerkPointsPerLevel`
+  (0x802) and the veteran multiplier (0x806) are unread; the records stay in the
+  ESL for id stability.
+
+**THE TREE (deck rounds 1–2 both failed on ImGui auto-nav; round 3 rebuilds):**
+
+- **Explicit selection nav** — the canvas owns a selected-node index; d-pad/stick/
+  arrows move it by deterministic nearest-in-direction over the LAYOUT (forward
+  projection + lateral penalty), so culled off-screen nodes are reachable and the
+  canvas follow-scrolls to the selection. Every ImGui item in the tree window is
+  NoNav (auto-nav is out of the loop entirely); A/Enter opens the detail popup,
+  whose Selectables keep normal nav (the deck-proven listPopup pattern). Mouse
+  hover/click drive the same selection state.
+- **Tiered layout** — tier = prerequisite depth over the catalog's kept edges;
+  roots on the bottom row, one row per tier, siblings ordered by the authored
+  hpos (used for stable left-right ordering ONLY — the dome scatter is gone).
+- **Low-value perks hidden** — NPC-dead perks never reach the catalog (component
+  1); MARGINAL perks are hidden by default, kept only as dimmed passthroughs when
+  an effective descendant needs them for connectivity ("Show marginal" toggle —
+  [View] on the pad — reveals everything).

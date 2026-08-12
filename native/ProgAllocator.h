@@ -18,9 +18,9 @@
 //     weights. Perks are the only manual allocation.
 //   - CLASS GATE: a follower gets NOTHING until the player picks a concrete
 //     class (Melee/Ranged/Mage — the #65 combatClassOverride ordinals).
-//   - Perk earn rate COPIES the player's (1 point per player level),
-//     SCARCITY-SCALED by (follower-effective ranks ÷ player ranks) from the
-//     catalog, so the follower affords the same % of their tree.
+//   - Perk points (§17, round 3 — SUPERSEDES the old scarcity model): DERIVED,
+//     never stored: floor(level/3) − native tree perks at enroll − ranks
+//     MFO allocated, clamped ≥ 0.
 //   - Shared Growth default ON: benched enrollees level at half rate.
 //   - Mid-game recruit: progression level = player level, no bonus skill
 //     points, NOT perk-penalized (level-matched scarcity-scaled points).
@@ -46,11 +46,16 @@ namespace MFO::ProgAllocator {
     // GLOB *values* are save-persisted, a post-load read could be stale).
     // Author-tunable in xEdit; a missing record degrades to the DLL default
     // beside it with a named log line, never an error.
-    inline constexpr RE::FormID kGlobPerkPointsPerLevel = 0x802;  // default 1
+    // UNUSED since the round-3 perk economy (marth, 2026-08-12): perk points
+    // are now DERIVED — floor(level/3) − native tree perks at enroll − ranks
+    // MFO allocated (design doc §17) — so the per-level rate and the veteran
+    // multiplier have no consumer. The records stay in the ESL (frozen ids,
+    // author-visible); the DLL simply no longer reads them.
+    inline constexpr RE::FormID kGlobPerkPointsPerLevel = 0x802;  // UNUSED (§17)
     inline constexpr RE::FormID kGlobSkillPointsPerLevel = 0x803; // default 3
     inline constexpr RE::FormID kGlobSharedGrowthDivisor = 0x804; // default 2
     inline constexpr RE::FormID kGlobRespecRapportCost   = 0x805; // default 500
-    inline constexpr RE::FormID kGlobVeteranCatchupMult  = 0x806; // default 1
+    inline constexpr RE::FormID kGlobVeteranCatchupMult  = 0x806; // UNUSED (§17)
     inline constexpr RE::FormID kGlobSkillCap            = 0x807; // default 100
     // Dev-harness command selector — the ONE glob read LIVE on purpose (the
     // console writes the live value: `set MFOP_DevCmd to N`). Dev-only.
@@ -111,15 +116,27 @@ namespace MFO::ProgAllocator {
         Class         cls{ Class::kNone };
         std::uint16_t progressionLevel{ 0 };
         std::uint16_t sharedGrowthRemainder{ 0 };    // banked player-levels while benched
-        float         unspentPerk{ 0.0f };           // scarcity-scaled points (fractional)
+
+        // §17 perk economy (marth, round 3): there is NO stored point pool.
+        // unspent = max(0, floor(progressionLevel / 3)
+        //                  − nativeTreePerksAtEnroll − Σ allocated ranks)
+        // — derived every time it is asked for, so it is idempotent across
+        // reloads/level-ups by construction. The one serialized input is the
+        // enrollment baseline below: how many CATALOG-TREE perk ranks the
+        // follower already owned when MFO first met them (pre-trained perks
+        // count against the budget — a loaded custom follower doesn't get a
+        // double pile; racial/quest perks outside the trees never count).
+        std::uint16_t nativeTreePerksAtEnroll{ 0 };
 
         // §16 manual skill-point pool — NO incremental accumulator (the round-2
         // SEV-1 lesson): the pool is a PURE FUNCTION of serialized baselines,
-        //   available = floor((progressionLevel − manualBaselineLevel) × rate)
+        //   available = (progressionLevel − manualBaselineLevel) × 5
         //               − manualPointsApplied
-        // so any replay/reload/level recompute lands on the same number.
-        // manualBaselineLevel latches ONCE at first enable (0 = never enabled);
-        // the toggle afterwards only gates spending, never mutates the math.
+        // (flat 5/level by decree — marth, round 3; a separate economy from
+        // the §17 perk points) so any replay/reload/level recompute lands on
+        // the same number. manualBaselineLevel latches ONCE at first enable
+        // (0 = never enabled); the toggle afterwards only gates spending,
+        // never mutates the math.
         std::uint16_t manualBaselineLevel{ 0 };
         std::uint16_t manualPointsApplied{ 0 };
 
@@ -174,6 +191,10 @@ namespace MFO::ProgAllocator {
     // recovery), clamped at the economy skillCap. Refuses with a named line.
     bool ApplyManualSkillPoint(RE::Actor* a_actor, RE::ActorValue a_av);
 
+    // §17: the derived perk-point pool (see ProgState) — the ONE authority
+    // every gate, log line and board view asks.
+    int PerkPointsAvailable(const ProgState& a_st);
+
     // ── board views (component 3 — the Progression tab's read seam) ─────────
     // The tab draws on the RENDER thread; g_prog and every engine read here
     // are main-thread-only (the poll's thread). So the board reads VALUE-ONLY
@@ -204,19 +225,16 @@ namespace MFO::ProgAllocator {
         bool          enrolled{ false };
         std::uint8_t  cls{ 0 };          // Class ordinal (0 = class not chosen yet, §15 gate)
         std::uint16_t level{ 0 };
-        float         unspentPerk{ 0.0f };
+        float         unspentPerk{ 0.0f };    // §17 DERIVED pool (PerkPointsAvailable)
+        std::uint16_t nativeAtEnroll{ 0 };    // §17: pre-trained tree ranks (the budget debit)
+        std::uint16_t allocatedRanks{ 0 };    // §17: ranks MFO has spent
         bool          manualSkills{ false };  // §16 toggle state
         int           manualAvail{ 0 };       // §16 pool (deterministic, see ProgState)
         std::vector<BoardSkillLine> skills;   // the 18, kSkillNames order
     };
     struct BoardProgSnap {
         bool  active{ false };           // addon detected + catalog built → tab exists
-        float scarcity{ 1.0f };          // §15 (follower ranks ÷ player ranks)
-        int   effectiveRanks{ 0 };
-        int   totalRanks{ 0 };
         float respecRapportCost{ 500.0f };
-        float perkPtsPerLevel{ 1.0f };   // economy rate — the board explains a zero with it
-        float skillPtsPerLevel{ 3.0f };  // §16 manual accrual rate (same GLOB as auto-scale)
         float skillCap{ 100.0f };        // §16 apply gate — the board disables at cap
         std::vector<BoardFollowerView> rows;  // the active party, g_active order
         RE::FormID treeFor{ 0 };              // whose nodes[] below describe

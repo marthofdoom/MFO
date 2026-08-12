@@ -1194,6 +1194,7 @@ namespace MFO::Board {
                     static float s_zoom = 1.0f;
                     static bool  s_scrollHome = true;      // recentre on the root
                     static int   s_nodeTree = -1, s_nodeIdx = -1;   // node popup target
+                    static RE::ActorValue s_actAv = RE::ActorValue::kNone;   // §16 action-popup skill
 
                     const ProgAllocator::BoardFollowerView* who = nullptr;
                     for (const auto& r : prog.rows) if (r.id == s_psel) { who = &r; break; }
@@ -1273,7 +1274,13 @@ namespace MFO::Board {
                         // reopens. The class ordinals are the allocator's own
                         // (#65-aligned); their skill weights come from the
                         // ESL FormLists read at Init — nothing hardcoded here.
-                        const bool needsClass = who->eligible && (!who->enrolled || who->cls == 0);
+                        // P2 (deck round 3): ENROLLED-FIRST branching. The
+                        // eligibility check (teammate/dismissal quirks) can
+                        // flap at runtime — it must gate ENROLLMENT only,
+                        // never blank the UI of an already-enrolled follower
+                        // (that read as "skills not visible at all").
+                        const bool progReady  = who->enrolled && who->cls != 0;
+                        const bool needsClass = !progReady && who->eligible;
                         if (needsClass && s_promptedFor != s_psel && !popupOpen) {
                             ImGui::OpenPopup("##pclass");
                             s_promptedFor = s_psel;
@@ -1306,7 +1313,7 @@ namespace MFO::Board {
                             ImGui::EndPopup();
                         }
 
-                        if (!who->eligible) {
+                        if (!progReady && !who->eligible) {
                             ImGui::Spacing();
                             ImGui::TextWrapped("%s cannot progress: %s.",
                                                who->name.c_str(), who->blocker.c_str());
@@ -1337,22 +1344,22 @@ namespace MFO::Board {
                             // and "broken input" look identical; this line is
                             // always on screen and self-explains a zero).
                             ImGui::PushFont(g_fontHead);
-                            ImGui::TextColored(skin.accent, "Perk points: %.2f", who->unspentPerk);
+                            ImGui::TextColored(skin.accent, "Perk points: %.0f", who->unspentPerk);
                             ImGui::PopFont();
+                            // §17: the derived budget, spelled out so a zero
+                            // is self-explaining, never "is it broken?".
                             if (who->unspentPerk < 1.0f)
-                                ImGui::TextDisabled("None to spend yet: %s earns %.2f per player "
-                                                    "level (rate %g x scarcity %.2f; %d of %d tree "
-                                                    "ranks are useful to a follower). Enrolling at "
-                                                    "player level 1 starts from zero.",
-                                                    who->name.c_str(),
-                                                    prog.perkPtsPerLevel * prog.scarcity,
-                                                    prog.perkPtsPerLevel, prog.scarcity,
-                                                    prog.effectiveRanks, prog.totalRanks);
+                                ImGui::TextDisabled("None to spend: 1 point per 3 levels -- level "
+                                                    "%u has earned %u, %u came pre-trained and %u "
+                                                    "are already spent.",
+                                                    (unsigned)who->level, (unsigned)(who->level / 3),
+                                                    (unsigned)who->nativeAtEnroll,
+                                                    (unsigned)who->allocatedRanks);
                             else
-                                ImGui::TextDisabled("Pick a skill to open its perk tree. Earning "
-                                                    "%.2f per player level (rate %g x scarcity %.2f).",
-                                                    prog.perkPtsPerLevel * prog.scarcity,
-                                                    prog.perkPtsPerLevel, prog.scarcity);
+                                ImGui::TextDisabled("1 perk point per 3 levels; perks %s already "
+                                                    "had at enrollment (%u) counted against the "
+                                                    "budget. Pick a skill to open its tree.",
+                                                    who->name.c_str(), (unsigned)who->nativeAtEnroll);
                             if (!stateOk) ImGui::TextDisabled("syncing follower state...");
 
                             // ── §16 MANUAL SKILL POINTS (design doc §16:
@@ -1371,9 +1378,8 @@ namespace MFO::Board {
                                 if (ImGui::IsItemHovered())
                                     ImGui::SetTooltip(
                                         "Class auto-scaling stays on; this ADDS a bankable pool\n"
-                                        "(%g per level) you spend by hand -- for mage or\n"
-                                        "multiclass builds the class weights won't serve.",
-                                        prog.skillPtsPerLevel);
+                                        "(5 per level) you spend by hand -- for mage or\n"
+                                        "multiclass builds the class weights won't serve.");
                                 if (who->manualSkills) {
                                     ImGui::SameLine();
                                     ImGui::PushFont(g_fontHead);
@@ -1409,34 +1415,72 @@ namespace MFO::Board {
                                 ImGui::TableSetupColumn("",      ImGuiTableColumnFlags_WidthFixed, 120.0f);
                                 ImGui::TableHeadersRow();
 
-                                std::size_t rowFlat = 0;
-                                for (int t = 0; t < (int)cat.skills.size(); ++t) {
-                                    const auto& skl = cat.skills[t];
-                                    const std::size_t base = rowFlat;
-                                    rowFlat += skl.nodes.size();
-                                    const bool hasTree = !skl.nodes.empty();
-
+                                // P2 (deck round 3): rows come PRIMARILY from
+                                // the allocator's 18-line snapshot — its
+                                // names are compile-time constants and its
+                                // levels are engine reads, so the list can
+                                // never be blank for an enrolled follower.
+                                // The catalog joins per row by AV for tree
+                                // data; a failed join degrades to a visible
+                                // "no tree", never an empty row. Catalog-only
+                                // fallback if the snapshot hasn't published.
+                                const bool haveLines = !who->skills.empty();
+                                if (!haveLines) {
+                                    ImGui::TableNextRow();
+                                    ImGui::TableNextColumn();
+                                    ImGui::TextDisabled("skill levels syncing...");
+                                }
+                                auto flatBaseOf = [&](int idx) {
+                                    std::size_t f = 0;
+                                    for (int t2 = 0; t2 < idx; ++t2)
+                                        f += cat.skills[t2].nodes.size();
+                                    return f;
+                                };
+                                const int rowCount = haveLines ? (int)who->skills.size()
+                                                               : (int)cat.skills.size();
+                                for (int r = 0; r < rowCount; ++r) {
+                                    RE::ActorValue av = RE::ActorValue::kNone;
+                                    const char* label = nullptr;
                                     float lvl = 0.0f, alloc = 0.0f;
-                                    for (const auto& sl : who->skills)
-                                        if (sl.av == skl.av) { lvl = sl.base; alloc = sl.alloc; break; }
+                                    int catIdx = -1;
+                                    if (haveLines) {
+                                        const auto& sl = who->skills[r];
+                                        av = sl.av; lvl = sl.base; alloc = sl.alloc;
+                                        for (int t = 0; t < (int)cat.skills.size(); ++t)
+                                            if (cat.skills[t].av == av) { catIdx = t; break; }
+                                        label = (catIdx >= 0 && !cat.skills[catIdx].skillName.empty())
+                                                    ? cat.skills[catIdx].skillName.c_str()
+                                                    : sl.name.c_str();
+                                    } else {
+                                        catIdx = r; av = cat.skills[r].av;
+                                        label = cat.skills[r].skillName.empty()
+                                                    ? "(skill)" : cat.skills[r].skillName.c_str();
+                                    }
+                                    const bool hasTree = catIdx >= 0 &&
+                                                         !cat.skills[catIdx].nodes.empty();
                                     int ownedN = 0, availN = 0;
-                                    for (std::size_t k = 0; k < skl.nodes.size(); ++k)
-                                        if (const auto* stn = stateAt(base + k)) {
-                                            if (stn->ownedRank > 0 || stn->native) ++ownedN;
-                                            if (stn->available) ++availN;
-                                        }
+                                    if (hasTree) {
+                                        const std::size_t base = flatBaseOf(catIdx);
+                                        const auto& skl = cat.skills[catIdx];
+                                        for (std::size_t k = 0; k < skl.nodes.size(); ++k)
+                                            if (const auto* stn = stateAt(base + k)) {
+                                                if (stn->ownedRank > 0 || stn->native) ++ownedN;
+                                                if (stn->available) ++availN;
+                                            }
+                                    }
 
                                     ImGui::TableNextRow();
                                     ImGui::TableNextColumn();
-                                    ImGui::PushID(t);
+                                    ImGui::PushID(r);
                                     // §16: with manual ON, even a tree-less
                                     // skill row is selectable (points can go
                                     // anywhere); the action popup disables
                                     // its tree entry instead.
                                     ImGui::BeginDisabled(!hasTree && !who->manualSkills);
-                                    if (ImGui::Selectable(skl.skillName.c_str(), false,
+                                    if (ImGui::Selectable(label, false,
                                                           ImGuiSelectableFlags_SpanAllColumns)) {
-                                        s_skillCur = t;       // catalog index
+                                        s_skillCur = catIdx;   // catalog index (may be -1)
+                                        s_actAv    = av;
                                         if (who->manualSkills) {
                                             wantSkillAct = true;   // tree OR +1 — ask
                                         } else {
@@ -1453,8 +1497,11 @@ namespace MFO::Board {
                                         ImGui::TextColored(skin.accent, "(+%.0f)", alloc);
                                     }
                                     ImGui::TableNextColumn();
-                                    if (hasTree) ImGui::Text("%d/%d", ownedN, (int)skl.nodes.size());
-                                    else         ImGui::TextDisabled("--");
+                                    if (hasTree)
+                                        ImGui::Text("%d/%d", ownedN,
+                                                    (int)cat.skills[catIdx].nodes.size());
+                                    else
+                                        ImGui::TextDisabled("--");
                                     ImGui::TableNextColumn();
                                     if (availN > 0)
                                         ImGui::TextColored(skin.accent, "%d to spend", availN);
@@ -1478,17 +1525,26 @@ namespace MFO::Board {
                                 ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
                             if (ImGui::BeginPopup("##pskillact")) {
                                 pickerDrawnThisFrame = true;
-                                if (s_skillCur < 0 || s_skillCur >= (int)cat.skills.size()) {
+                                // Keyed on the AV (always valid from the row),
+                                // not the catalog index (may be -1 when the
+                                // join failed — points still apply).
+                                const ProgAllocator::BoardSkillLine* line = nullptr;
+                                for (const auto& sl : who->skills)
+                                    if (sl.av == s_actAv) { line = &sl; break; }
+                                if (s_actAv == RE::ActorValue::kNone || !line) {
                                     ImGui::CloseCurrentPopup();
                                 } else {
-                                    const auto& skl = cat.skills[s_skillCur];
-                                    float base = 0.0f, manual = 0.0f;
-                                    for (const auto& sl : who->skills)
-                                        if (sl.av == skl.av) { base = sl.base; manual = sl.manual; break; }
+                                    const bool haveCatRow = s_skillCur >= 0 &&
+                                                            s_skillCur < (int)cat.skills.size();
+                                    const char* actLabel =
+                                        (haveCatRow && !cat.skills[s_skillCur].skillName.empty())
+                                            ? cat.skills[s_skillCur].skillName.c_str()
+                                            : line->name.c_str();
+                                    const float base = line->base, manual = line->manual;
 
                                     ImGui::PushFont(g_fontHead);
                                     ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
-                                    ImGui::TextUnformatted(skl.skillName.c_str());
+                                    ImGui::TextUnformatted(actLabel);
                                     ImGui::PopStyleColor();
                                     ImGui::PopFont();
                                     ImGui::TextDisabled("base %.0f (manual +%.0f)  |  %d point(s) "
@@ -1504,14 +1560,15 @@ namespace MFO::Board {
                                     if (ImGui::Selectable(apply.c_str(), false,
                                                           ImGuiSelectableFlags_DontClosePopups)) {
                                         QueueEdit({ EditKind::ProgApplySkillPoint, s_psel, 0, 0u,
-                                                    (float)(int)skl.av });
+                                                    (float)(int)s_actAv });
                                     }
                                     ImGui::EndDisabled();
                                     if (!canApply)
                                         ImGui::TextDisabled(who->manualAvail < 1
                                                                 ? "no pooled points"
                                                                 : "at the skill cap");
-                                    ImGui::BeginDisabled(skl.nodes.empty());
+                                    ImGui::BeginDisabled(!haveCatRow ||
+                                                         cat.skills[s_skillCur].nodes.empty());
                                     if (ImGui::Selectable("Open perk tree")) {
                                         s_scrollHome = true;
                                         wantOpenTree = true;   // opened at this scope, below
@@ -1551,13 +1608,25 @@ namespace MFO::Board {
                                 for (int t = 0; t < s_skillCur; ++t)
                                     flatBase += cat.skills[t].nodes.size();
 
-                                // Header: tree name + the POINTS, prominent
-                                // in the window too (field fix #1), + zoom.
+                                // ── P1: NO ImGui NAV IN THIS WINDOW ─────
+                                // Two deck rounds died on ImGui's spatial
+                                // auto-nav (it can only move to SUBMITTED
+                                // items; virtualization culls them, and
+                                // nothing seeded focus). Everything here is
+                                // NoNav; selection is OURS (s_selNode), fed
+                                // by explicit key reads below. Header
+                                // widgets stay mouse-clickable extras — the
+                                // pad reaches the same functions via
+                                // LB/RB (zoom), [Y] (tree), [View]
+                                // (marginal). Popped before the ##pnode
+                                // popup, whose Selectables keep ImGui nav
+                                // (the field-proven listPopup pattern).
+                                ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
                                 ImGui::AlignTextToFramePadding();
                                 ImGui::PushFont(g_fontHead);
                                 ImGui::TextColored(skin.accent, "%s", tree.skillName.c_str());
                                 ImGui::SameLine();
-                                ImGui::TextColored(skin.accent, "  --  %.2f point(s)",
+                                ImGui::TextColored(skin.accent, "  --  %.0f point(s)",
                                                    who->unspentPerk);
                                 ImGui::PopFont();
                                 ImGui::SameLine();
@@ -1565,64 +1634,248 @@ namespace MFO::Board {
                                 ImGui::SameLine();
                                 if (ImGui::SmallButton("+##zi")) s_zoom = std::min(2.0f, s_zoom + 0.15f);
                                 ImGui::SameLine();
-                                ImGui::TextDisabled("  d-pad move   [A] node   [Y] next tree   "
-                                                    "[B]/Esc back to skills");
+                                static bool s_showMarginal = false;
+                                ImGui::Checkbox("Show marginal", &s_showMarginal);
+                                ImGui::SameLine();
+                                ImGui::TextDisabled(" d-pad move  [A] node  [LB]/[RB] zoom  "
+                                                    "[Y] next tree  [View] marginal  [B]/Esc back");
                                 ImGui::Separator();
 
-                                // ── THE TREE CANVAS ─────────────────────
-                                // ImGui items over a Dummy extent: each
-                                // VISIBLE node is an InvisibleButton, so
-                                // ImGui's own spatial gamepad nav walks the
-                                // tree (d-pad), A activates, and auto-scroll
-                                // follows focus. NAV-FLATTENED — the deck
-                                // field root cause: directional nav does NOT
-                                // cross into a plain child window, so the
-                                // pad could never reach a node; flattening
-                                // shares the popup's focus scope with the
-                                // canvas. VIRTUALIZED: nodes outside the
-                                // child rect + ~1.5 cells of nav headroom
-                                // submit no item and draw nothing, so a
-                                // Vokriinator-scale tree costs what is on
-                                // screen, not what exists.
+                                // ── P5 TIERED LAYOUT + P3 FILTER ────────
+                                // Cached: the catalog is frozen, recompute
+                                // only when the skill or the marginal toggle
+                                // changes. Tier = prerequisite depth over the
+                                // catalog's kept-parent edges; ROOTS on the
+                                // BOTTOM row, each tier one row up, siblings
+                                // spread across the row ordered by the
+                                // authored hpos (stable left-right only —
+                                // the dome coords' scatter is gone). Dead
+                                // (NPC-inert) perks never reached the
+                                // catalog; MARGINAL ones are hidden by
+                                // default — except passthroughs an effective
+                                // descendant needs, kept dimmed so no kept
+                                // node ever dangles.
+                                static int  s_layoutSkill = -1;
+                                static bool s_layoutMarg  = false;
+                                static std::vector<int>    s_vis;      // node idx per entry
+                                static std::vector<int>    s_visOf;    // node idx -> vis idx / -1
+                                static std::vector<char>   s_visPass;  // dimmed passthrough
+                                static std::vector<ImVec2> s_visPos;   // centered cols / rows
+                                static float s_layW = 1.0f, s_layH = 1.0f;
+                                static int   s_selNode = -1;           // P1 explicit selection
+                                if (s_layoutSkill != s_skillCur || s_layoutMarg != s_showMarginal) {
+                                    const int n = (int)tree.nodes.size();
+                                    std::vector<int> tier(n, 0);
+                                    for (int guard = 0; guard < 64; ++guard) {
+                                        bool changed = false;
+                                        for (int i = 0; i < n; ++i)
+                                            for (const auto pi : tree.nodes[i].parentIndices)
+                                                if (tier[i] < tier[(int)pi] + 1) {
+                                                    tier[i] = tier[(int)pi] + 1;
+                                                    changed = true;
+                                                }
+                                        if (!changed) break;
+                                    }
+                                    std::vector<char> keep(n, 1), pass(n, 0);
+                                    if (!s_showMarginal) {
+                                        std::vector<char> needed(n, 0);
+                                        for (int i = 0; i < n; ++i)
+                                            needed[i] = tree.nodes[i].verdict ==
+                                                        Progression::Verdict::kEffective;
+                                        for (int guard = 0; guard < 64; ++guard) {
+                                            bool changed = false;
+                                            for (int i = 0; i < n; ++i) {
+                                                if (!needed[i]) continue;
+                                                for (const auto pi : tree.nodes[i].parentIndices)
+                                                    if (!needed[(int)pi]) {
+                                                        needed[(int)pi] = 1;
+                                                        changed = true;
+                                                    }
+                                            }
+                                            if (!changed) break;
+                                        }
+                                        for (int i = 0; i < n; ++i) {
+                                            keep[i] = needed[i];
+                                            pass[i] = needed[i] &&
+                                                      tree.nodes[i].verdict !=
+                                                          Progression::Verdict::kEffective;
+                                        }
+                                    }
+                                    int maxTier = 0;
+                                    for (int i = 0; i < n; ++i)
+                                        if (keep[i]) maxTier = std::max(maxTier, tier[i]);
+                                    s_vis.clear(); s_visPos.clear(); s_visPass.clear();
+                                    s_visOf.assign(n, -1);
+                                    std::size_t widest = 1;
+                                    for (int tr = 0; tr <= maxTier; ++tr) {
+                                        std::vector<int> row;
+                                        for (int i = 0; i < n; ++i)
+                                            if (keep[i] && tier[i] == tr) row.push_back(i);
+                                        std::stable_sort(row.begin(), row.end(),
+                                            [&](int a, int b) {
+                                                return tree.nodes[a].hpos < tree.nodes[b].hpos;
+                                            });
+                                        widest = std::max(widest, row.size());
+                                        for (int s2 = 0; s2 < (int)row.size(); ++s2) {
+                                            const int i = row[s2];
+                                            s_visOf[i] = (int)s_vis.size();
+                                            s_vis.push_back(i);
+                                            s_visPos.push_back(ImVec2(
+                                                (float)s2 - (float)(row.size() - 1) * 0.5f,
+                                                (float)(maxTier - tr)));
+                                            s_visPass.push_back(pass[i] ? 1 : 0);
+                                        }
+                                    }
+                                    s_layW = (float)widest;
+                                    s_layH = (float)(maxTier + 1);
+                                    // Seed the selection on the ROOT row's
+                                    // middle node — something is ALWAYS
+                                    // selected before any input arrives (P1).
+                                    s_selNode = -1;
+                                    float bestAbs = 1e9f;
+                                    for (int k = 0; k < (int)s_vis.size(); ++k)
+                                        if (s_visPos[k].y == (float)maxTier &&
+                                            std::fabs(s_visPos[k].x) < bestAbs) {
+                                            bestAbs = std::fabs(s_visPos[k].x);
+                                            s_selNode = k;
+                                        }
+                                    if (s_selNode < 0 && !s_vis.empty()) s_selNode = 0;
+                                    s_layoutSkill = s_skillCur;
+                                    s_layoutMarg  = s_showMarginal;
+                                    s_scrollHome  = true;
+                                }
+
                                 ImGui::BeginChild("##ptcanvas", ImVec2(0.0f, 0.0f),
-                                                  ImGuiChildFlags_Borders |
-                                                  ImGuiChildFlags_NavFlattened,
+                                                  ImGuiChildFlags_Borders,
                                                   ImGuiWindowFlags_HorizontalScrollbar);
                                 {
-                                    float minH = 1e9f, maxH = -1e9f, minV = 1e9f, maxV = -1e9f;
-                                    for (const auto& n : tree.nodes) {
-                                        minH = std::min(minH, n.hpos); maxH = std::max(maxH, n.hpos);
-                                        minV = std::min(minV, n.vpos); maxV = std::max(maxV, n.vpos);
-                                    }
-                                    const float ppH = 170.0f * s_zoom;   // px per dome unit
-                                    const float ppV = 150.0f * s_zoom;
-                                    const float pad = 70.0f * s_zoom;
+                                    const float colW = 190.0f * s_zoom;
+                                    const float rowH = 130.0f * s_zoom;
+                                    const float pad  = 70.0f * s_zoom;
                                     const ImVec2 childSz = ImGui::GetWindowSize();
                                     const float canvasW =
-                                        std::max((maxH - minH) * ppH + pad * 2.0f, childSz.x - 4.0f);
+                                        std::max(s_layW * colW + pad * 2.0f, childSz.x - 4.0f);
                                     const float canvasH =
-                                        std::max((maxV - minV) * ppV + pad * 2.0f, childSz.y - 4.0f);
+                                        std::max(s_layH * rowH + pad * 2.0f, childSz.y - 4.0f);
                                     const ImVec2 origin = ImGui::GetCursorScreenPos();
                                     ImGui::Dummy(ImVec2(canvasW, canvasH));   // the scrollable extent
+                                    bool wantNodePopup = false;
+
+                                    // Canvas-local / screen position of a vis
+                                    // entry — PURE GEOMETRY, valid for culled
+                                    // nodes too (the P1 requirement).
+                                    auto lpos = [&](int k) {
+                                        return ImVec2(canvasW * 0.5f + s_visPos[k].x * colW,
+                                                      pad + (s_visPos[k].y + 0.5f) * rowH);
+                                    };
+                                    auto spos = [&](int k) {
+                                        const ImVec2 l = lpos(k);
+                                        return ImVec2(origin.x + l.x, origin.y + l.y);
+                                    };
 
                                     if (s_scrollHome) {
-                                        // Land on the ROOT (bottom), centred —
-                                        // the skill menu's own framing.
+                                        // Land on the ROOT row (bottom),
+                                        // centred; the follow-scroll below
+                                        // then keeps the selection in view.
                                         s_scrollHome = false;
                                         ImGui::SetScrollY(canvasH);
                                         ImGui::SetScrollX(std::max(0.0f, (canvasW - childSz.x) * 0.5f));
                                     }
 
-                                    auto nodePos = [&](const Progression::PerkNodeView& n) {
-                                        return ImVec2(origin.x + pad + (n.hpos - minH) * ppH,
-                                                      origin.y + pad + (maxV - n.vpos) * ppV);
-                                    };
+                                    // ── P1 EXPLICIT NAV ─────────────────
+                                    // Deterministic nearest-in-direction over
+                                    // the laid-out tree: forward projection
+                                    // plus a lateral penalty, minimum score
+                                    // wins. Reads d-pad (the input hook also
+                                    // folds the left stick into these),
+                                    // arrows, and the LStick keys for good
+                                    // measure. Never touches ImGui nav.
+                                    const bool nodePopupOpen = ImGui::IsPopupOpen("##pnode");
+                                    if (!nodePopupOpen && !s_vis.empty()) {
+                                        if (s_selNode < 0 || s_selNode >= (int)s_vis.size())
+                                            s_selNode = 0;
+                                        auto down3 = [](ImGuiKey a, ImGuiKey b, ImGuiKey c) {
+                                            return ImGui::IsKeyPressed(a, true) ||
+                                                   ImGui::IsKeyPressed(b, true) ||
+                                                   ImGui::IsKeyPressed(c, true);
+                                        };
+                                        int dx = 0, dy = 0;
+                                        if (down3(ImGuiKey_GamepadDpadUp, ImGuiKey_UpArrow,
+                                                  ImGuiKey_GamepadLStickUp))         dy = -1;
+                                        else if (down3(ImGuiKey_GamepadDpadDown, ImGuiKey_DownArrow,
+                                                       ImGuiKey_GamepadLStickDown))  dy = +1;
+                                        else if (down3(ImGuiKey_GamepadDpadLeft, ImGuiKey_LeftArrow,
+                                                       ImGuiKey_GamepadLStickLeft))  dx = -1;
+                                        else if (down3(ImGuiKey_GamepadDpadRight, ImGuiKey_RightArrow,
+                                                       ImGuiKey_GamepadLStickRight)) dx = +1;
+                                        if (dx != 0 || dy != 0) {
+                                            const ImVec2 cur = s_visPos[s_selNode];
+                                            int best = -1;
+                                            float bestScore = 1e9f;
+                                            for (int k = 0; k < (int)s_vis.size(); ++k) {
+                                                if (k == s_selNode) continue;
+                                                const float vx = s_visPos[k].x - cur.x;
+                                                const float vy = s_visPos[k].y - cur.y;
+                                                const float proj = vx * (float)dx + vy * (float)dy;
+                                                if (proj < 0.05f) continue;   // behind / abreast
+                                                const float lat = std::fabs(vx * (float)dy) +
+                                                                  std::fabs(vy * (float)dx);
+                                                const float score = proj + 2.5f * lat;
+                                                if (score < bestScore) { bestScore = score; best = k; }
+                                            }
+                                            if (best >= 0) s_selNode = best;
+                                        }
+                                        // A / Enter / E → the detail popup for
+                                        // the selection. Single-path: no nav
+                                        // items exist here, so ImGui cannot
+                                        // also act on the same press.
+                                        if (s_selNode >= 0 &&
+                                            (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) ||
+                                             ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
+                                            s_nodeTree = s_skillCur;
+                                            s_nodeIdx  = s_vis[s_selNode];
+                                            wantNodePopup = true;
+                                        }
+                                        // Pad-reachable window controls.
+                                        if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, true))
+                                            s_zoom = std::max(0.5f, s_zoom - 0.15f);
+                                        if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, true))
+                                            s_zoom = std::min(2.0f, s_zoom + 0.15f);
+                                        if (ImGui::IsKeyPressed(ImGuiKey_GamepadBack, false))
+                                            s_showMarginal = !s_showMarginal;
+                                        if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)) {
+                                            int t2 = s_skillCur;
+                                            for (int n2 = 0; n2 < (int)cat.skills.size(); ++n2) {
+                                                t2 = (t2 + 1) % (int)cat.skills.size();
+                                                if (!cat.skills[t2].nodes.empty()) break;
+                                            }
+                                            if (t2 != s_skillCur) s_skillCur = t2;
+                                        }
+                                    }
+                                    // FOLLOW-SCROLL: keep the selection in
+                                    // view every frame — geometry-driven, so
+                                    // it scrolls TO nodes that were culled.
+                                    if (s_selNode >= 0 && s_selNode < (int)s_vis.size()) {
+                                        const ImVec2 l = lpos(s_selNode);
+                                        const float m = 90.0f * s_zoom;
+                                        const float sx = ImGui::GetScrollX();
+                                        const float sy = ImGui::GetScrollY();
+                                        if (l.x < sx + m)
+                                            ImGui::SetScrollX(std::max(0.0f, l.x - m));
+                                        else if (l.x > sx + childSz.x - m)
+                                            ImGui::SetScrollX(l.x - childSz.x + m);
+                                        if (l.y < sy + m)
+                                            ImGui::SetScrollY(std::max(0.0f, l.y - m));
+                                        else if (l.y > sy + childSz.y - m)
+                                            ImGui::SetScrollY(l.y - childSz.y + m);
+                                    }
+
                                     const ImVec2 winPos = ImGui::GetWindowPos();
-                                    const float navPad = 1.5f * std::max(ppH, ppV);
-                                    const float visX0 = winPos.x - navPad;
-                                    const float visX1 = winPos.x + childSz.x + navPad;
-                                    const float visY0 = winPos.y - navPad;
-                                    const float visY1 = winPos.y + childSz.y + navPad;
+                                    const float cullPad = std::max(colW, rowH);
+                                    const float visX0 = winPos.x - cullPad;
+                                    const float visX1 = winPos.x + childSz.x + cullPad;
+                                    const float visY0 = winPos.y - cullPad;
+                                    const float visY1 = winPos.y + childSz.y + cullPad;
 
                                     auto* dl = ImGui::GetWindowDrawList();
                                     const ImU32 cDim    = ImGui::GetColorU32(ImGuiCol_Border);
@@ -1632,22 +1885,27 @@ namespace MFO::Board {
                                     const ImU32 cSel    = ImGui::GetColorU32(ImGuiCol_Header);
                                     const ImU32 cAccent = ImGui::GetColorU32(skin.accent);
 
-                                    // EDGES first (under the discs); an edge
-                                    // submits only when its box touches the view.
-                                    for (int i = 0; i < (int)tree.nodes.size(); ++i) {
+                                    // EDGES (under the discs), vis→vis. The
+                                    // filter keeps every parent of a kept
+                                    // node (the needed-fixpoint), so edges
+                                    // never dangle; still AABB-culled.
+                                    for (int k = 0; k < (int)s_vis.size(); ++k) {
+                                        const int i = s_vis[k];
                                         const auto& n = tree.nodes[i];
                                         if (n.parentIndices.empty()) continue;
-                                        const ImVec2 p1 = nodePos(n);
+                                        const ImVec2 p1 = spos(k);
                                         const auto* sc = stateAt(flatBase + i);
                                         const bool childOwned = sc && (sc->ownedRank > 0 || sc->native);
                                         for (const auto pi : n.parentIndices) {
-                                            const ImVec2 p0 = nodePos(tree.nodes[pi]);
+                                            const int vk = s_visOf[(int)pi];
+                                            if (vk < 0) continue;
+                                            const ImVec2 p0 = spos(vk);
                                             if (std::max(p0.x, p1.x) < visX0 ||
                                                 std::min(p0.x, p1.x) > visX1 ||
                                                 std::max(p0.y, p1.y) < visY0 ||
                                                 std::min(p0.y, p1.y) > visY1)
                                                 continue;
-                                            const auto* sp = stateAt(flatBase + pi);
+                                            const auto* sp = stateAt(flatBase + (int)pi);
                                             const bool bothOwned = childOwned && sp &&
                                                 (sp->ownedRank > 0 || sp->native);
                                             dl->AddLine(p0, p1, bothOwned ? cAccent : cDim,
@@ -1656,55 +1914,68 @@ namespace MFO::Board {
                                     }
 
                                     // NODES: owned = accent disc; available =
-                                    // bright-ringed (A opens the take popup);
-                                    // locked = dim; native = accent ring on a
-                                    // dim disc (the load order granted it —
-                                    // MFO leaves it alone, §4.1 boundary).
+                                    // bright-ringed; locked = dim; native =
+                                    // accent ring on a dim disc (§4.1
+                                    // boundary); PASSTHROUGH (marginal kept
+                                    // for connectivity) = smaller + dim. The
+                                    // InvisibleButtons are MOUSE-ONLY (NoNav
+                                    // is pushed): hover steers s_selNode,
+                                    // click opens the popup — the same state
+                                    // the pad drives, no second path.
                                     const float R = std::max(6.0f, 10.0f * s_zoom);
-                                    bool wantNodePopup = false;
-                                    for (int i = 0; i < (int)tree.nodes.size(); ++i) {
+                                    for (int k = 0; k < (int)s_vis.size(); ++k) {
+                                        const int i = s_vis[k];
                                         const auto& n = tree.nodes[i];
-                                        const ImVec2 p = nodePos(n);
+                                        const ImVec2 p = spos(k);
                                         if (p.x < visX0 || p.x > visX1 ||
                                             p.y < visY0 || p.y > visY1)
-                                            continue;   // virtualized out
+                                            continue;   // culled — geometry above still saw it
                                         const auto* st = stateAt(flatBase + i);
-                                        const bool owned  = st && st->ownedRank > 0;
-                                        const bool native = st && st->native;
-                                        const bool avail  = st && st->available;
+                                        const bool owned    = st && st->ownedRank > 0;
+                                        const bool native   = st && st->native;
+                                        const bool avail    = st && st->available;
+                                        const bool passthru = s_visPass[k] != 0;
+                                        const bool selected = (k == s_selNode);
+                                        const float r = passthru ? R * 0.72f : R;
 
-                                        ImGui::PushID(i);
+                                        ImGui::PushID(k);
                                         ImGui::SetCursorScreenPos(
                                             ImVec2(p.x - R - 4.0f, p.y - R - 4.0f));
                                         const bool clicked = ImGui::InvisibleButton(
                                             "##nd", ImVec2((R + 4.0f) * 2.0f, (R + 4.0f) * 2.0f));
-                                        const bool focused = ImGui::IsItemFocused();
                                         const bool hovered = ImGui::IsItemHovered();
                                         ImGui::PopID();
 
-                                        dl->AddCircleFilled(p, R,
+                                        dl->AddCircleFilled(p, r,
                                             owned ? cAccent : avail ? cSel : cBtn);
-                                        dl->AddCircle(p, R,
-                                            (owned || native) ? cAccent : avail ? cText : cDim,
+                                        dl->AddCircle(p, r,
+                                            passthru ? cDim
+                                                     : (owned || native) ? cAccent
+                                                       : avail ? cText : cDim,
                                             0, (avail || native) ? 2.5f : 1.5f);
-                                        if (focused) dl->AddCircle(p, R + 4.0f, cAccent, 0, 3.0f);
+                                        // THE selection ring — ours, drawn
+                                        // every frame the node is on screen.
+                                        if (selected)
+                                            dl->AddCircle(p, r + 5.0f, cAccent, 0, 3.5f);
 
-                                        if (s_zoom >= 0.7f) {
+                                        if (s_zoom >= 0.7f || selected) {
                                             const ImVec2 ts = ImGui::CalcTextSize(n.name.c_str());
-                                            dl->AddText(ImVec2(p.x - ts.x * 0.5f, p.y + R + 3.0f),
-                                                        owned ? cAccent : avail ? cText : cFaint,
+                                            dl->AddText(ImVec2(p.x - ts.x * 0.5f, p.y + r + 4.0f),
+                                                        owned ? cAccent
+                                                              : (avail || selected) ? cText : cFaint,
                                                         n.name.c_str());
                                             if (n.ranks.size() > 1 || owned) {
                                                 const std::string rk = std::format("{}/{}",
                                                     st ? (int)st->ownedRank : 0, (int)n.ranks.size());
                                                 const ImVec2 rs = ImGui::CalcTextSize(rk.c_str());
                                                 dl->AddText(ImVec2(p.x - rs.x * 0.5f,
-                                                                   p.y - R - rs.y - 2.0f),
+                                                                   p.y - r - rs.y - 2.0f),
                                                             owned ? cAccent : cFaint, rk.c_str());
                                             }
                                         }
 
                                         if (hovered) {
+                                            s_selNode = k;   // mouse steers the SAME selection
                                             if (owned)
                                                 ImGui::SetTooltip("%s -- rank %d/%d (allocated by MFO)",
                                                     n.name.c_str(), (int)st->ownedRank,
@@ -1722,11 +1993,17 @@ namespace MFO::Board {
                                                 ImGui::SetTooltip("%s", n.name.c_str());
                                         }
                                         if (clicked) {
+                                            s_selNode  = k;
                                             s_nodeTree = s_skillCur;   // catalog index
                                             s_nodeIdx  = i;
                                             wantNodePopup = true;   // OpenPopup outside PushID
                                         }
                                     }
+
+                                    // NoNav ends here — the detail popup's
+                                    // Selectables use ImGui nav (listPopup
+                                    // pattern, deck-proven).
+                                    ImGui::PopItemFlag();
 
                                     // ── NODE POPUP (A on a node) ────────
                                     // Available → confirm-take; locked → the
@@ -1757,7 +2034,7 @@ namespace MFO::Board {
                                             // Field fix #1: the point budget is
                                             // visible IN the take dialog too.
                                             ImGui::TextColored(skin.accent,
-                                                "%.2f perk point(s) available",
+                                                "%.0f perk point(s) available",
                                                 who->unspentPerk);
                                             if (nd.verdict == Progression::Verdict::kMarginal)
                                                 ImGui::TextDisabled("marginal for followers");
@@ -1803,20 +2080,6 @@ namespace MFO::Board {
                                             ImGui::TextDisabled("[B]/Esc close");
                                         }
                                         ImGui::EndPopup();
-                                    }
-
-                                    // Y / FaceUp = next tree WITH nodes —
-                                    // read here (child scope) so the
-                                    // IsPopupOpen gate matches the node
-                                    // popup opened in this same scope.
-                                    if (!ImGui::IsPopupOpen("##pnode") &&
-                                        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)) {
-                                        int t = s_skillCur;
-                                        for (int n = 0; n < (int)cat.skills.size(); ++n) {
-                                            t = (t + 1) % (int)cat.skills.size();
-                                            if (!cat.skills[t].nodes.empty()) break;
-                                        }
-                                        if (t != s_skillCur) { s_skillCur = t; s_scrollHome = true; }
                                     }
                                 }
                                 ImGui::EndChild();

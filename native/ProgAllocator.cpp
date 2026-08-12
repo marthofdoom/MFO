@@ -31,14 +31,25 @@ namespace MFO::ProgAllocator {
         // the record default is trustworthy. The DLL defaults below are what
         // a missing record degrades to, each with its own named log line.)
         struct Economy {
-            float perkPointsPerLevel  = 1.0f;    // §15: copies the player
             float skillPointsPerLevel = 3.0f;    // §6 proposal, ESL-tunable
             int   sharedGrowthDivisor = 2;       // §15: benched = half rate
             float respecRapportCost   = 500.0f;  // §15: respec costs rapport
-            float veteranCatchupMult  = 1.0f;    // scales the one-shot grant
             float skillCap            = 100.0f;
         };
         Economy g_econ;
+
+        // §17 (marth, round 3): the perk cadence. One point per three
+        // follower levels — scarce enough that each point matters. The old
+        // rate/scarcity GLOBs (0x802/0x806) are deliberately unread now; the
+        // formula in PerkPointsAvailable is the single authority.
+        constexpr int kLevelsPerPerkPoint = 3;
+
+        // §16 (marth, same round): manual SKILL points accrue at a FLAT 5
+        // per follower level while the toggle is on — no detection, no GLOB,
+        // by decree ("5 skill points per level when manual mode is on").
+        // A separate economy from the perk points above. g_econ's
+        // skillPointsPerLevel (0x803) remains the AUTO-scale total only.
+        constexpr int kManualSkillPtsPerLevel = 5;
 
         bool           g_ready  = false;    // Detected + economy latched
         RE::TESGlobal* g_devCmd = nullptr;  // harness selector — read LIVE on
@@ -141,14 +152,11 @@ namespace MFO::ProgAllocator {
             return nullptr;
         }
 
-        // §15 scarcity: (ranks a follower can use ÷ ranks the player can use).
-        // Both numbers come from the frozen catalog; the floor keeps a
-        // degenerate load order (0 effective ranks read) from zeroing all
-        // earning forever — it would still be visibly broken in the census.
-        double ScarcityRatio() {
-            const auto& c = Progression::Get();
-            if (!c.built || c.totalRanks <= 0) return 1.0;
-            return std::clamp(static_cast<double>(c.effectiveRanks) / c.totalRanks, 0.01, 1.0);
+        // §17: ranks MFO has allocated — each one cost a point.
+        int AllocatedRanks(const ProgState& a_st) {
+            int total = 0;
+            for (const auto& p : a_st.perks) total += p.rank;
+            return total;
         }
 
         // ── ownership questions ─────────────────────────────────────────────
@@ -192,15 +200,13 @@ namespace MFO::ProgAllocator {
 
         // §16 manual pool — a PURE FUNCTION of serialized baselines, never an
         // incremental accumulator (the round-2 SEV-1 lesson: accumulators
-        // drift under replay; a formula cannot). Self-clamping: an economy
-        // GLOB lowered between sessions can make applied exceed accrued —
-        // that reads as 0 available, never a negative or a corrupt state.
+        // drift under replay; a formula cannot). Rate: flat 5/level (marth).
+        // Self-clamping: applied can never read as a negative pool.
         int ManualAvail(const ProgState& a_st) {
             if (!a_st.manualSkills || a_st.manualBaselineLevel == 0) return 0;
             const int lvls = std::max(0, static_cast<int>(a_st.progressionLevel) -
                                           static_cast<int>(a_st.manualBaselineLevel));
-            const int accrued = static_cast<int>(std::floor(
-                static_cast<float>(lvls) * g_econ.skillPointsPerLevel + 1e-4f));
+            const int accrued = lvls * kManualSkillPtsPerLevel;
             return std::max(0, accrued - static_cast<int>(a_st.manualPointsApplied));
         }
 
@@ -411,6 +417,27 @@ namespace MFO::ProgAllocator {
             return a_id ? RE::TESForm::LookupByID<RE::BGSPerk>(a_id) : nullptr;
         }
 
+        // §17: how many CATALOG-TREE perk ranks the follower already owns —
+        // captured ONCE at enrollment as the budget debit. Per node, the
+        // highest rank form present counts that many ranks (rank K implies
+        // 1..K, each of which would have cost a point). Perks outside the
+        // trees (racial, quest, passives) are invisible here on purpose.
+        int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base) {
+            int total = 0;
+            for (const auto& tree : Progression::Get().skills) {
+                for (const auto& node : tree.nodes) {
+                    for (int r = static_cast<int>(node.ranks.size()); r >= 1; --r) {
+                        auto* perk = PerkByID(node.ranks[static_cast<std::size_t>(r - 1)].perkFormID);
+                        if (perk && (a_base->GetPerkIndex(perk).has_value() || a_actor->HasPerk(perk))) {
+                            total += r;
+                            break;
+                        }
+                    }
+                }
+            }
+            return total;
+        }
+
         // The §5 double gate. Returns the 1-based rank this follower may take
         // NEXT on this node, or 0 with a_whyNot filled. Pure read — callers
         // decide whether the refusal is worth a log line (AllocatePerk always
@@ -452,8 +479,10 @@ namespace MFO::ProgAllocator {
                 a_whyNot = std::format("rank {} is not NPC-effective", have + 1);
                 return 0;
             }
-            if (a_st.unspentPerk + 1e-4f < 1.0f) {
-                a_whyNot = std::format("insufficient perk points ({:.2f} < 1)", a_st.unspentPerk);
+            if (PerkPointsAvailable(a_st) < 1) {
+                a_whyNot = std::format("no perk points (earned {}, {} pre-trained, {} spent)",
+                                       static_cast<int>(a_st.progressionLevel) / kLevelsPerPerkPoint,
+                                       a_st.nativeTreePerksAtEnroll, AllocatedRanks(a_st));
                 return 0;
             }
             // §5.1 prereq: reachable iff a child of the tree root (no perk-
@@ -512,12 +541,12 @@ namespace MFO::ProgAllocator {
                 alloc = &a_st.perks.back();
             }
             alloc->rank = static_cast<std::uint8_t>(a_targetRank);
-            a_st.unspentPerk -= 1.0f;
-            if (a_st.unspentPerk < 0.0f) a_st.unspentPerk = 0.0f;
+            // §17: no decrement — the pool is derived, and the rank we just
+            // recorded is the debit.
 
-            spdlog::info("[prog] {:08X} GRANTED {} rank {}/{} ({:08X}) — {:.2f} point(s) left",
+            spdlog::info("[prog] {:08X} GRANTED {} rank {}/{} ({:08X}) — {} point(s) left",
                          a_actor->GetFormID(), a_node.name, a_targetRank,
-                         a_node.ranks.size(), rank.perkFormID, a_st.unspentPerk);
+                         a_node.ranks.size(), rank.perkFormID, PerkPointsAvailable(a_st));
             return true;
         }
 
@@ -668,7 +697,6 @@ namespace MFO::ProgAllocator {
                 g_lastPlayerLevel = pl;
             }
 
-            const double ratio = ScarcityRatio();
             for (auto& [id, st] : g_prog) {
                 if (!st.enrolled) continue;
 
@@ -701,13 +729,12 @@ namespace MFO::ProgAllocator {
                     }
                     if (gain > 0) {
                         st.progressionLevel = static_cast<std::uint16_t>(st.progressionLevel + gain);
-                        const float pts = static_cast<float>(gain) * g_econ.perkPointsPerLevel *
-                                          static_cast<float>(ratio);
-                        st.unspentPerk += pts;
-                        spdlog::info("[prog] {:08X} level {} (+{}) — +{:.2f} perk point(s) "
-                                     "(rate {:.0f}/lvl x scarcity {:.2f}) -> {:.2f} unspent",
-                                     id, st.progressionLevel, gain, pts,
-                                     g_econ.perkPointsPerLevel, ratio, st.unspentPerk);
+                        // §17: no grant — the derived pool follows the level.
+                        spdlog::info("[prog] {:08X} level {} (+{}) — {} perk point(s) available "
+                                     "(§17: floor(level/{}) − {} pre-trained − {} spent)",
+                                     id, st.progressionLevel, gain, PerkPointsAvailable(st),
+                                     kLevelsPerPerkPoint, st.nativeTreePerksAtEnroll,
+                                     AllocatedRanks(st));
                         if (actor) RecomputeSkills(actor, st, /*log*/ true);
                     }
                 }
@@ -853,13 +880,15 @@ namespace MFO::ProgAllocator {
             }
             auto& st = it->second;
             spdlog::info("[prog] status {} ({:08X}): class {} | progression level {} | "
-                         "{:.2f} perk point(s) unspent | {} perk(s) allocated | {} | "
-                         "sharedRemainder {} | veteran {} | provenance PFF={}",
+                         "{} perk point(s) available (§17: floor(lvl/{}) − {} pre-trained − "
+                         "{} spent) | {} perk(s) allocated | {} | "
+                         "sharedRemainder {} | level-matched {} | provenance PFF={}",
                          NameOf(a_actor), id, ClassName(st.cls), st.progressionLevel,
-                         st.unspentPerk, st.perks.size(),
+                         PerkPointsAvailable(st), kLevelsPerPerkPoint,
+                         st.nativeTreePerksAtEnroll, AllocatedRanks(st), st.perks.size(),
                          IsActiveFollower(id) ? "ACTIVE" : "benched",
                          st.sharedGrowthRemainder,
-                         st.veteranConsumed ? "consumed" : "pending",
+                         st.veteranConsumed ? "yes" : "pending",
                          st.wasInPotentialFollowerFaction ? "yes" : "no");
             for (const auto& p : st.perks) {
                 auto ref = FindNode(p.nodePerkID);
@@ -891,16 +920,25 @@ namespace MFO::ProgAllocator {
 
         void HarnessEconomyDump() {
             const auto& c = Progression::Get();
-            spdlog::info("[prog] economy: perk/lvl {:g} | skill/lvl {:g} | sharedDiv {} | "
-                         "respec rapport {:g} | veteranMult {:g} | cap {:g} | "
-                         "scarcity {}/{} = {:.3f} | lastPlayerLevel {}",
-                         g_econ.perkPointsPerLevel, g_econ.skillPointsPerLevel,
+            spdlog::info("[prog] economy: perk = 1 per {} level(s) (§17 derived, minus "
+                         "pre-trained + spent) | skill/lvl {:g} | sharedDiv {} | "
+                         "respec rapport {:g} | cap {:g} | catalog ranks {}/{} | "
+                         "lastPlayerLevel {}",
+                         kLevelsPerPerkPoint, g_econ.skillPointsPerLevel,
                          g_econ.sharedGrowthDivisor, g_econ.respecRapportCost,
-                         g_econ.veteranCatchupMult, g_econ.skillCap,
-                         c.effectiveRanks, c.totalRanks, ScarcityRatio(), g_lastPlayerLevel);
+                         g_econ.skillCap, c.effectiveRanks, c.totalRanks, g_lastPlayerLevel);
         }
 
     }   // anonymous namespace
+
+    // §17: THE perk-point authority — derived, never stored. Idempotent
+    // across reloads and level-ups by construction; clamped at 0 so a
+    // heavily pre-trained follower is simply "ahead", never negative.
+    int PerkPointsAvailable(const ProgState& a_st) {
+        const int earned = static_cast<int>(a_st.progressionLevel) / kLevelsPerPerkPoint;
+        return std::max(0, earned - static_cast<int>(a_st.nativeTreePerksAtEnroll)
+                                  - AllocatedRanks(a_st));
+    }
 
     const char* ClassName(Class a_cls) {
         switch (a_cls) {
@@ -926,12 +964,12 @@ namespace MFO::ProgAllocator {
         }
 
         // Economy GLOBs — the RECORD DEFAULTS (kDataLoaded is pre-save, §10).
-        g_econ.perkPointsPerLevel  = ReadGlob(dh, kGlobPerkPointsPerLevel,  "MFOP_PerkPointsPerLevel",  1.0f);
+        // 0x802/0x806 (perk rate / veteran mult) are NO LONGER READ — the §17
+        // derived formula replaced the whole perk-grant economy.
         g_econ.skillPointsPerLevel = ReadGlob(dh, kGlobSkillPointsPerLevel, "MFOP_SkillPointsPerLevel", 3.0f);
         g_econ.sharedGrowthDivisor = std::max(1, static_cast<int>(
             ReadGlob(dh, kGlobSharedGrowthDivisor, "MFOP_SharedGrowthDivisor", 2.0f)));
         g_econ.respecRapportCost   = ReadGlob(dh, kGlobRespecRapportCost,   "MFOP_RespecRapportCost",   500.0f);
-        g_econ.veteranCatchupMult  = ReadGlob(dh, kGlobVeteranCatchupMult,  "MFOP_VeteranCatchupMult",  1.0f);
         g_econ.skillCap            = ReadGlob(dh, kGlobSkillCap,            "MFOP_SkillCap",            100.0f);
 
         // The harness selector is the ONE live-read glob (console-set).
@@ -947,10 +985,11 @@ namespace MFO::ProgAllocator {
         FallbackClassSkills();
 
         g_ready = true;
-        spdlog::info("[prog] allocator ready: perk/lvl {:g}, skill/lvl {:g}, sharedDiv {}, "
+        spdlog::info("[prog] allocator ready: perk = 1 per {} levels (§17 derived), "
+                     "skill/lvl {:g}, sharedDiv {}, "
                      "respec {:g} rapport, cap {:g}, class lists {}/{}/{} skill(s), "
                      "perk priorities {}/{}/{}, devCmd {}",
-                     g_econ.perkPointsPerLevel, g_econ.skillPointsPerLevel,
+                     kLevelsPerPerkPoint, g_econ.skillPointsPerLevel,
                      g_econ.sharedGrowthDivisor, g_econ.respecRapportCost, g_econ.skillCap,
                      g_class[1].skills.size(), g_class[2].skills.size(), g_class[3].skills.size(),
                      g_class[1].perkPriority.size(), g_class[2].perkPriority.size(),
@@ -994,13 +1033,7 @@ namespace MFO::ProgAllocator {
         auto snap = std::make_shared<BoardProgSnap>();
         snap->active = g_ready && Progression::Get().built;
         if (snap->active) {
-            const auto& cat      = Progression::Get();
-            snap->totalRanks     = cat.totalRanks;
-            snap->effectiveRanks = cat.effectiveRanks;
-            snap->scarcity       = static_cast<float>(ScarcityRatio());
             snap->respecRapportCost = g_econ.respecRapportCost;
-            snap->perkPtsPerLevel   = g_econ.perkPointsPerLevel;
-            snap->skillPtsPerLevel  = g_econ.skillPointsPerLevel;
             snap->skillCap          = g_econ.skillCap;
 
             const RE::FormID focus = g_boardFocus.load();
@@ -1018,12 +1051,15 @@ namespace MFO::ProgAllocator {
                 if (auto it = g_prog.find(v.id); it != g_prog.end() && it->second.enrolled)
                     st = &it->second;
                 if (st) {
-                    v.enrolled     = true;
-                    v.cls          = static_cast<std::uint8_t>(st->cls);
-                    v.level        = st->progressionLevel;
-                    v.unspentPerk  = st->unspentPerk;
-                    v.manualSkills = st->manualSkills;             // §16
-                    v.manualAvail  = ManualAvail(*st);
+                    v.enrolled       = true;
+                    v.cls            = static_cast<std::uint8_t>(st->cls);
+                    v.level          = st->progressionLevel;
+                    v.unspentPerk    = static_cast<float>(PerkPointsAvailable(*st));   // §17 derived
+                    v.nativeAtEnroll = st->nativeTreePerksAtEnroll;
+                    v.allocatedRanks = static_cast<std::uint16_t>(
+                        std::min(AllocatedRanks(*st), 0xFFFF));
+                    v.manualSkills   = st->manualSkills;           // §16
+                    v.manualAvail    = ManualAvail(*st);
                 }
                 if (auto* avo = a->AsActorValueOwner()) {
                     v.skills.reserve(std::size(kSkillNames));
@@ -1101,11 +1137,18 @@ namespace MFO::ProgAllocator {
                 st.baseline.push_back({ s.av, avo->GetBaseActorValue(s.av) });
         }
 
+        // §17: the perk-budget debit — tree ranks the follower brought along.
+        // Captured ONCE, before MFO ever grants anything, so the derived pool
+        // can never double-pay a pre-trained follower.
+        st.nativeTreePerksAtEnroll =
+            static_cast<std::uint16_t>(std::min(CountNativeTreeRanks(a_actor, base), 0xFFFF));
+
         spdlog::info("[prog] ENROLLED {} ({:08X}) — unique base {:08X}, PotentialFollowerFaction={}, "
-                     "baseline {} skill(s) captured. Progression INACTIVE until a class is set (§15).",
+                     "baseline {} skill(s) captured, {} native tree rank(s) counted against the "
+                     "perk budget (§17). Progression INACTIVE until a class is set (§15).",
                      NameOf(a_actor), id, base->GetFormID(),
                      st.wasInPotentialFollowerFaction ? "yes" : "NO",
-                     st.baseline.size());
+                     st.baseline.size(), st.nativeTreePerksAtEnroll);
         return true;
     }
 
@@ -1126,22 +1169,17 @@ namespace MFO::ProgAllocator {
         auto* player = RE::PlayerCharacter::GetSingleton();
         const auto pl = player ? player->GetLevel() : std::uint16_t{ 1 };
 
-        // First class pick = the on-ramp (§15): level-match to the player and
-        // grant the veteran catch-up ONCE — level-matched, scarcity-scaled,
-        // NOT perk-penalized for arriving late. No bonus skill points: the
-        // auto-scale below already reflects the level.
+        // First class pick = the on-ramp (§15): level-match to the player,
+        // once. No point grant lives here any more — §17 derives the pool
+        // from the level directly (floor(level/3) − pre-trained − spent), so
+        // matching the level IS the catch-up.
         if (!st.veteranConsumed) {
             st.progressionLevel = pl;
-            const double ratio = ScarcityRatio();
-            const float grant = static_cast<float>(std::max(0, pl - 1)) *
-                                g_econ.perkPointsPerLevel * static_cast<float>(ratio) *
-                                g_econ.veteranCatchupMult;
-            st.unspentPerk += grant;
             st.veteranConsumed = true;
-            spdlog::info("[prog] {} veteran catch-up: level {} x rate {:g} x scarcity {:.2f} x mult {:g} "
-                         "= {:.2f} perk point(s)",
-                         NameOf(a_actor), pl, g_econ.perkPointsPerLevel, ratio,
-                         g_econ.veteranCatchupMult, grant);
+            spdlog::info("[prog] {} level-matched to player level {} — {} perk point(s) "
+                         "available (§17: floor(level/3) − {} pre-trained)",
+                         NameOf(a_actor), pl, PerkPointsAvailable(st),
+                         st.nativeTreePerksAtEnroll);
         }
 
         const auto before = st.cls;
@@ -1247,9 +1285,9 @@ namespace MFO::ProgAllocator {
                 }
             }
         }
-        spdlog::info("[prog] auto-pick {}: no eligible perk right now ({:.2f} point(s) unspent) — "
+        spdlog::info("[prog] auto-pick {}: no eligible perk right now ({} point(s) available) — "
                      "gates (skill reqs / prereqs) block everything reachable",
-                     NameOf(a_actor), st.unspentPerk);
+                     NameOf(a_actor), PerkPointsAvailable(st));
         return false;
     }
 
@@ -1274,7 +1312,6 @@ namespace MFO::ProgAllocator {
         }
 
         int removed = 0;
-        float refund = 0.0f;
         for (const auto& p : st.perks) {
             auto ref = FindNode(p.nodePerkID);
             RE::BGSPerk* held = nullptr;
@@ -1285,19 +1322,20 @@ namespace MFO::ProgAllocator {
                 base->RemovePerk(held);
                 ++removed;
             }
-            refund += static_cast<float>(p.rank);   // 1 point per rank taken
         }
         a_actor->ApplyPerksFromBase();   // §4.1: re-settle the actor once
         st.perks.clear();
-        st.unspentPerk += refund;
+        // §17: the refund is AUTOMATIC — clearing the allocs removes the
+        // debit and the derived pool rises by exactly the ranks returned.
 
         // §15: free of gold, −500 rapport (record default; the follower
         // resents the reset). Reuses the Rapport rank machinery wholesale.
         Rapport::Spend(id, g_econ.respecRapportCost, "progression respec");
 
-        spdlog::info("[prog] RESPEC {} ({:08X}): {} perk(s) removed, {:.0f} point(s) refunded "
-                     "-> {:.2f} unspent, rapport -{:.0f}",
-                     NameOf(a_actor), id, removed, refund, st.unspentPerk, g_econ.respecRapportCost);
+        spdlog::info("[prog] RESPEC {} ({:08X}): {} perk(s) removed -> {} point(s) available, "
+                     "rapport -{:.0f}",
+                     NameOf(a_actor), id, removed, PerkPointsAvailable(st),
+                     g_econ.respecRapportCost);
         return true;
     }
 
@@ -1321,9 +1359,9 @@ namespace MFO::ProgAllocator {
         if (a_on && st.manualBaselineLevel == 0)
             st.manualBaselineLevel = std::max<std::uint16_t>(1, st.progressionLevel);
         spdlog::info("[prog] {} manual skill points {} (baseline level {}, {} available, "
-                     "rate {:g}/level)",
+                     "flat {}/level)",
                      NameOf(a_actor), a_on ? "ON" : "OFF", st.manualBaselineLevel,
-                     ManualAvail(st), g_econ.skillPointsPerLevel);
+                     ManualAvail(st), kManualSkillPtsPerLevel);
         return true;
     }
 
@@ -1347,9 +1385,9 @@ namespace MFO::ProgAllocator {
         }
         if (ManualAvail(st) < 1) {
             spdlog::info("[prog] apply-skill refused {}: no pooled points "
-                         "(level {} - baseline {} at {:g}/level, {} applied)",
+                         "(level {} - baseline {} at flat {}/level, {} applied)",
                          NameOf(a_actor), st.progressionLevel, st.manualBaselineLevel,
-                         g_econ.skillPointsPerLevel, st.manualPointsApplied);
+                         kManualSkillPtsPerLevel, st.manualPointsApplied);
             return false;
         }
         auto* avo = a_actor->AsActorValueOwner();
@@ -1378,17 +1416,23 @@ namespace MFO::ProgAllocator {
         return true;
     }
 
-    // ── co-save ('PRGN' v2, §8 + §16) ───────────────────────────────────────
+    // ── co-save ('PRGN' v2, §8 + §16 + §17) ─────────────────────────────────
     //
     //   u16 lastPlayerLevel
     //   u32 followerCount, then per follower:
     //     u32 formID | u8 flags | u8 class | u16 progressionLevel
-    //     u16 sharedGrowthRemainder | f32 unspentPerk
+    //     u16 sharedGrowthRemainder
+    //     v1 ONLY: f32 unspentPerk        (legacy stored pool — read + DISCARDED;
+    //                                      §17 derives the pool instead)
     //     v2: u16 manualBaselineLevel | u16 manualPointsApplied
+    //         u16 nativeTreePerksAtEnroll (§17 budget debit)
     //     u16 perkCount   { u32 nodePerkID, u8 rank }*
     //     u16 skillCount  { u32 av, f32 points, f32 lastWrittenBase,
     //                       v2: f32 manualPoints }*
     //     u16 baseCount   { u32 av, f32 value }*
+    //
+    // v2 never shipped in any deployed build, so its layout is defined here
+    // once, cleanly — no in-between shape to migrate.
     //
     // FormIDs go through ResolveFormID on load (INVARIANTS #8): a gone
     // follower drops with its whole block consumed; a gone perk drops and
@@ -1421,12 +1465,12 @@ namespace MFO::ProgAllocator {
             a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.cls));
             a_intfc->WriteRecordData(st.progressionLevel);
             a_intfc->WriteRecordData(st.sharedGrowthRemainder);
-            a_intfc->WriteRecordData(st.unspentPerk);
-            // v2 (§16): the manual-pool BASELINES — never a pool value; the
-            // pool is recomputed from these, so a save replays to the same
-            // number by construction.
+            // v2: BASELINES only, never a pool value — both the §16 manual
+            // pool and the §17 perk pool are recomputed from these, so a
+            // save replays to the same numbers by construction.
             a_intfc->WriteRecordData(st.manualBaselineLevel);
             a_intfc->WriteRecordData(st.manualPointsApplied);
+            a_intfc->WriteRecordData(st.nativeTreePerksAtEnroll);
 
             const auto perkCount = static_cast<std::uint16_t>(
                 std::min<std::size_t>(st.perks.size(), kMaxPerkAllocs));
@@ -1493,17 +1537,24 @@ namespace MFO::ProgAllocator {
             if (!a_intfc->ReadRecordData(clsRaw)) return;
             if (!a_intfc->ReadRecordData(st.progressionLevel)) return;
             if (!a_intfc->ReadRecordData(st.sharedGrowthRemainder)) return;
-            if (!a_intfc->ReadRecordData(st.unspentPerk)) return;
+            if (a_version < 2) {
+                // v1 stored the (pre-§17) point pool — consume the bytes,
+                // discard the value: the pool is derived now. A v1 follower
+                // migrates with nativeTreePerksAtEnroll = 0 (the debit was
+                // never captured; the derived pool is simply what §17 says).
+                float legacyUnspent = 0.0f;
+                if (!a_intfc->ReadRecordData(legacyUnspent)) return;
+            }
             st.enrolled                       = (flags & 1u) != 0;
             st.autoSpend                      = (flags & 2u) != 0;
             st.veteranConsumed                = (flags & 4u) != 0;
             st.wasInPotentialFollowerFaction  = (flags & 8u) != 0;
             st.manualSkills                   = (flags & 16u) != 0;   // v2 (§16)
             st.cls = static_cast<Class>(std::min<std::uint8_t>(clsRaw, 3));
-            if (st.unspentPerk < 0.0f || !std::isfinite(st.unspentPerk)) st.unspentPerk = 0.0f;
             if (a_version >= 2) {
                 if (!a_intfc->ReadRecordData(st.manualBaselineLevel)) return;
                 if (!a_intfc->ReadRecordData(st.manualPointsApplied)) return;
+                if (!a_intfc->ReadRecordData(st.nativeTreePerksAtEnroll)) return;
             }
             // Coherence guard: manual ON without a latched baseline cannot
             // happen through the verbs — a hand-edited/corrupt record reads
@@ -1526,19 +1577,18 @@ namespace MFO::ProgAllocator {
                 if (!resolved) continue;
                 RE::FormID resolvedPerk = 0;
                 if (!a_intfc->ResolveFormID(rawPerk, resolvedPerk)) {
-                    // INVARIANTS #8 + §8: DROP the alloc, REFUND its points —
-                    // the load order lost this perk; the investment returns.
-                    st.unspentPerk += static_cast<float>(rank);
+                    // INVARIANTS #8 + §8: DROP the alloc — the load order lost
+                    // this perk. The "refund" is automatic under §17: a dropped
+                    // alloc no longer debits the derived pool.
                     ++droppedPerk;
                     continue;
                 }
                 if (haveCatalog) {
                     // The catalog is this session's truth: a node the current
                     // trees no longer carry (overhaul swap mid-playthrough)
-                    // also drops + refunds, with the same counter.
+                    // also drops, with the same counter (same automatic refund).
                     auto ref = FindNode(resolvedPerk);
                     if (!ref.node || rank > ref.node->ranks.size()) {
-                        st.unspentPerk += static_cast<float>(rank);
                         ++droppedPerk;
                         continue;
                     }
@@ -1587,7 +1637,7 @@ namespace MFO::ProgAllocator {
         }
         // Split counters by reason (INVARIANTS #47).
         spdlog::info("[cosave] loaded {} progression record(s); dropped {} unresolvable actor(s), "
-                     "{} unresolvable/off-catalog perk alloc(s) (points refunded), "
+                     "{} unresolvable/off-catalog perk alloc(s) (§17 auto-refund), "
                      "{} unknown-skill AV entr(ies); lastPlayerLevel {}",
                      loaded, droppedActor, droppedPerk, droppedAv, g_lastPlayerLevel);
     }
