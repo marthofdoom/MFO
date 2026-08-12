@@ -1015,16 +1015,22 @@ PROG_CLASS_SKILLS = [
      [AVIF_DESTRUCTION, AVIF_ALTERATION, AVIF_RESTORATION, AVIF_CONJURATION, AVIF_ILLUSION]),
 ]
 
+# (fid, edid, default, FNAM type). Type 'f' (float) on the fractional
+# MULTIPLIER knobs — perk/lvl, skill/lvl, the shared-growth divisor and the
+# veteran mult — so an author can set 0.5/2.5-style values in the CK/xEdit
+# (a short-typed GLOB floors them in the editor UI). The DLL reads g->value
+# (a float) either way, so no DLL change rides this. Whole-number knobs and
+# the version/dev stamps stay 's' (short), the vanilla quest-control shape.
 PROG_GLOBS = [
-    (PGID_VERSION,        "MFOP_Version",            PROG_VERSION_STAMP),
-    (PGID_RESERVED,       "MFOP_Reserved",           0.0),
-    (PGID_PERK_PER_LEVEL, "MFOP_PerkPointsPerLevel", 1.0),
-    (PGID_SKILL_PER_LEVEL,"MFOP_SkillPointsPerLevel",3.0),
-    (PGID_SHARED_DIVISOR, "MFOP_SharedGrowthDivisor",2.0),
-    (PGID_RESPEC_RAPPORT, "MFOP_RespecRapportCost",  500.0),
-    (PGID_VETERAN_MULT,   "MFOP_VeteranCatchupMult", 1.0),
-    (PGID_SKILL_CAP,      "MFOP_SkillCap",           100.0),
-    (PGID_DEV_CMD,        "MFOP_DevCmd",             0.0),
+    (PGID_VERSION,        "MFOP_Version",            PROG_VERSION_STAMP, 's'),
+    (PGID_RESERVED,       "MFOP_Reserved",           0.0,                's'),
+    (PGID_PERK_PER_LEVEL, "MFOP_PerkPointsPerLevel", 1.0,                'f'),
+    (PGID_SKILL_PER_LEVEL,"MFOP_SkillPointsPerLevel",3.0,                'f'),
+    (PGID_SHARED_DIVISOR, "MFOP_SharedGrowthDivisor",2.0,                'f'),
+    (PGID_RESPEC_RAPPORT, "MFOP_RespecRapportCost",  500.0,              's'),
+    (PGID_VETERAN_MULT,   "MFOP_VeteranCatchupMult", 1.0,                'f'),
+    (PGID_SKILL_CAP,      "MFOP_SkillCap",           100.0,              's'),
+    (PGID_DEV_CMD,        "MFOP_DevCmd",             0.0,                's'),
 ]
 
 PROG_PERK_LISTS = [
@@ -1043,10 +1049,12 @@ def make_prog_tes4():
     return record('TES4', 0, 0x00000200, body)
 
 
-def prog_glob(fid, edid, value):
+def prog_glob(fid, edid, value, fnam):
     # The make_glob shape (mirrored from vanilla quest-control globals):
-    # EDID + FNAM 's' (short) + FLTV float.
-    body = subrec('EDID', zstr(edid)) + subrec('FNAM', b's')
+    # EDID + FNAM type char ('s' short / 'f' float — FLTV stores a float32
+    # either way; FNAM only tells the editor how to present it) + FLTV.
+    assert fnam in ('s', 'f'), f"{edid}: FNAM must be 's' or 'f'"
+    body = subrec('EDID', zstr(edid)) + subrec('FNAM', fnam.encode('ascii'))
     body += subrec('FLTV', struct.pack('<f', float(value)))
     return record('GLOB', fid, 0, body)
 
@@ -1067,8 +1075,8 @@ def make_progression_esl():
     kywd_body = subrec('EDID', zstr("MFOP_Enrolled")) + subrec('CNAM', struct.pack('<I', 0))
     data += group('KYWD', record('KYWD', PGID_ENROLLED_KYWD, 0, kywd_body))
     glob_body = b''
-    for fid, edid, value in PROG_GLOBS:
-        glob_body += prog_glob(fid, edid, value)
+    for fid, edid, value, fnam in PROG_GLOBS:
+        glob_body += prog_glob(fid, edid, value, fnam)
     data += group('GLOB', glob_body)
     flst_body = b''
     for fid, edid, forms in PROG_CLASS_SKILLS:
@@ -1155,8 +1163,8 @@ def main():
     print("MFO_Progression.esl records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{PROG_NEXT_OBJECT_ID:03X}")
     print(f"  KYWD  0x{PGID_ENROLLED_KYWD & 0xFFF:03X}        MFOP_Enrolled (reserved tag; DLL does not stamp it in v1)")
-    for fid, edid, value in PROG_GLOBS:
-        print(f"  GLOB  0x{fid & 0xFFF:03X}        {edid} = {value:g}")
+    for fid, edid, value, fnam in PROG_GLOBS:
+        print(f"  GLOB  0x{fid & 0xFFF:03X}        {edid} = {value:g} ({'float' if fnam == 'f' else 'short'})")
     for fid, edid, forms in PROG_CLASS_SKILLS:
         print(f"  FLST  0x{fid & 0xFFF:03X}        {edid} ({len(forms)} AVIF entries, order = weight)")
     for fid, edid in PROG_PERK_LISTS:

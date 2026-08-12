@@ -45,6 +45,20 @@
 > 6=economy dump; all `[prog]`-logged. New RE:: symbol for CI: `RE::BGSListForm`
 > (everything else already in-tree). Shared-growth player toggle = `bSharedGrowth`
 > (Config, MCM wiring later). NO version bump, NOT pushed.
+> **Adversarial review round 1 FIXED (same day):** SEV-1 — ReconcileSkill stored the
+> REQUESTED points, so a cap-saturated write under-recovered natural and a later shrink
+> (class change / drift-watch dominance re-pick) wrote the base BELOW true natural into
+> the save. Fixed both ways: `points` now stores the APPLIED delta (desired−natural,
+> exact recovery), AND the serialized enrollment baseline is a hard floor on natural
+> and on every write — SetBaseActorValue has exactly ONE call site (ReconcileSkill), so
+> no path (class change, drift-watch, respec, reload) can leave a base below the
+> captured natural; a pre-fix-corrupted save self-heals on first post-load reconcile.
+> L1: reapply sibling-clear could RemovePerk a natively-appeared rank — now DEFERS
+> (touches nothing, named line) and GateNextRank freezes upgrades whose own rank form
+> is no longer on the base. L2: co-save `av` ordinals validated against the 18-skill
+> set on load (droppedAv counter), not just counts. L3: PerkPointsPerLevel /
+> SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
+> (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
 
 > **#74 COMPONENT 1 BUILT (2026-08-11) — the PRODUCTION catalog reader — awaiting marth
 > review + CI.** New `native/Progression.cpp/.h` (design §1/§2/§3; component 1 of 4:

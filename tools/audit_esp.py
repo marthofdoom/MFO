@@ -250,6 +250,18 @@ def audit_one(esp):
                 val = struct.unpack('<f', fltv[:4])[0]
                 if val <= 0.0:
                     errors.append(f"GLOB 0x800 MFOP_Version FLTV is {val:g} -- must be a positive stamp")
+        # The fractional multiplier knobs must be FLOAT-typed ('f') so authors
+        # can set 0.5/2.5-style values in the CK/xEdit (a short-typed GLOB
+        # floors them in the editor UI). Keep in lockstep with PROG_GLOBS.
+        for local, edid in ((0x802, "MFOP_PerkPointsPerLevel"),
+                            (0x803, "MFOP_SkillPointsPerLevel"),
+                            (0x804, "MFOP_SharedGrowthDivisor"),
+                            (0x806, "MFOP_VeteranCatchupMult")):
+            if local in by_local:
+                fnam = by_local[local][1].get('FNAM')
+                if fnam != b'f':
+                    errors.append(f"GLOB 0x{local:03X} {edid}: FNAM {fnam!r}, expected b'f' "
+                                  f"(float-typed so fractional values are authorable)")
         # Class-skill lists: every LNAM entry must point into Skyrim.esm
         # (master index 0x00) -- the ESL cannot legally reference anything else.
         for local in (0x810, 0x811, 0x812):

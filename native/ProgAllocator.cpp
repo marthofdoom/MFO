@@ -98,6 +98,16 @@ namespace MFO::ProgAllocator {
             return "?";
         }
 
+        // Is this raw co-save ordinal one of the 18 skill AVs this module
+        // ever writes? Ingestion defense (INVARIANTS #11): a garbage av fed
+        // to Get/SetBaseActorValue would index the engine's AV array out of
+        // bounds — validate the VALUE, not just the count.
+        bool IsKnownSkillAv(std::uint32_t a_raw) {
+            for (const auto& s : kSkillNames)
+                if (static_cast<std::uint32_t>(s.av) == a_raw) return true;
+            return false;
+        }
+
         const char* NameOf(RE::TESForm* a_form) {
             if (!a_form) return "<none>";
             const char* n = a_form->GetName();
@@ -171,35 +181,64 @@ namespace MFO::ProgAllocator {
             return perk && (a_base->GetPerkIndex(perk).has_value() || a_actor->HasPerk(perk));
         }
 
+        // The follower's TRUE natural for this skill, captured at enrollment
+        // (§8 enrollBaseline). <0 = not captured (no floor available).
+        float BaselineFloor(const ProgState& a_st, RE::ActorValue a_av) {
+            for (const auto& b : a_st.baseline)
+                if (b.av == a_av) return b.value;
+            return -1.0f;
+        }
+
         // ── the §4.2 skill reconcile (P2-proven) ────────────────────────────
         //
         //   cur     = GetBaseActorValue(av)
         //   natural = (cur == lastWrittenBase) ? lastWrittenBase - points : cur
+        //   natural = max(natural, baselineFloor)            // hard floor
         //   desired = clamp(natural + newPoints, natural, cap)
+        //   desired = max(desired, baselineFloor)            // belt-and-braces
+        //   points  = desired - natural                      // APPLIED delta
         //
         // Idempotent and convergent: an engine recompute (autocalc, Requiem,
-        // level-up) is ADOPTED as the new natural rather than fought. The
-        // lower clamp at natural means MFO never writes a skill BELOW what
-        // the follower would have had without MFO — shrinking an allocation
-        // (class change) settles back to natural, never under it.
+        // level-up) is ADOPTED as the new natural rather than fought.
+        //
+        // TWO GUARANTEES (adversarial review of 9f45f3b, SEV-1):
+        //  1. `points` records the delta actually WRITTEN (desired − natural),
+        //     never the requested amount. Under cap saturation the requested
+        //     and applied deltas differ; storing the request made the next
+        //     recovery (`lastWrittenBase − points`) under-shoot natural, and a
+        //     later SHRINK (class change, drift-watch dominance re-pick) then
+        //     wrote the base BELOW the follower's true natural — permanently,
+        //     into the save. Applied-delta storage makes recovery exact.
+        //  2. The enrollment BASELINE is a hard floor on both the natural
+        //     estimate and the written value: this is the ONLY call site of
+        //     SetBaseActorValue in the module, so no path can ever leave a
+        //     base skill below the captured natural — and a save corrupted by
+        //     the pre-fix build self-heals here on its first post-load
+        //     reconcile (fix-forward: stop writing it AND sweep it).
         void ReconcileSkill(RE::ActorValueOwner* a_avo, SkillAlloc& a_e,
-                            float a_newPoints, RE::FormID a_who, bool a_log) {
+                            float a_newPoints, float a_floor,
+                            RE::FormID a_who, bool a_log) {
             const float cur = a_avo->GetBaseActorValue(a_e.av);
-            const float natural = (a_e.lastWrittenBase < 0.0f)
-                                      ? cur
-                                      : (cur == a_e.lastWrittenBase ? a_e.lastWrittenBase - a_e.points
-                                                                    : cur);
-            const float desired = std::max(natural,
-                                           std::min(natural + a_newPoints, g_econ.skillCap));
+            float natural = (a_e.lastWrittenBase < 0.0f)
+                                ? cur
+                                : (cur == a_e.lastWrittenBase ? a_e.lastWrittenBase - a_e.points
+                                                              : cur);
+            if (a_floor >= 0.0f && natural < a_floor) natural = a_floor;
+            float desired = std::max(natural,
+                                     std::min(natural + a_newPoints, g_econ.skillCap));
+            if (a_floor >= 0.0f && desired < a_floor) desired = a_floor;   // provably redundant
+                                                                           // after the natural
+                                                                           // clamp; kept as the
+                                                                           // stated invariant
             if (desired != cur) {
                 a_avo->SetBaseActorValue(a_e.av, desired);
                 if (a_log)
                     spdlog::info("[prog] {:08X} skill {}: base {:.1f} -> {:.1f} "
-                                 "(natural {:.1f} + alloc {:.0f}, cap {:.0f})",
+                                 "(natural {:.1f} + alloc {:.0f}, floor {:.1f}, cap {:.0f})",
                                  a_who, AvName(a_e.av), cur, desired, natural,
-                                 a_newPoints, g_econ.skillCap);
+                                 desired - natural, a_floor, g_econ.skillCap);
             }
-            a_e.points = a_newPoints;
+            a_e.points = desired - natural;   // APPLIED delta — exact recovery
             a_e.lastWrittenBase = desired;
         }
 
@@ -315,13 +354,15 @@ namespace MFO::ProgAllocator {
 
             const auto id = a_actor->GetFormID();
 
-            // 1) skills leaving the allocation settle back to natural.
+            // 1) skills leaving the allocation settle back to natural. The
+            // baseline floor rides along: a shrink can never land below the
+            // captured natural (SEV-1 guarantee, single choke point).
             for (auto it = a_st.skills.begin(); it != a_st.skills.end();) {
                 const bool keep = std::find_if(desired.begin(), desired.end(),
                                                [&](const auto& d) { return d.first == it->av; })
                                   != desired.end();
                 if (!keep) {
-                    ReconcileSkill(avo, *it, 0.0f, id, a_log);
+                    ReconcileSkill(avo, *it, 0.0f, BaselineFloor(a_st, it->av), id, a_log);
                     it = a_st.skills.erase(it);
                 } else {
                     ++it;
@@ -335,7 +376,7 @@ namespace MFO::ProgAllocator {
                     a_st.skills.push_back({ av, 0.0f, -1.0f });
                     return &a_st.skills.back();
                 }();
-                ReconcileSkill(avo, *e, pts, id, a_log);
+                ReconcileSkill(avo, *e, pts, BaselineFloor(a_st, av), id, a_log);
             }
         }
 
@@ -366,6 +407,19 @@ namespace MFO::ProgAllocator {
             if (have >= static_cast<int>(a_node.ranks.size())) {
                 a_whyNot = std::format("already at max rank {}", have);
                 return 0;
+            }
+            // The L1 companion: an upgrade (have > 0) requires MFO's OWN rank
+            // form to actually be on the base. When reapply deferred to a
+            // natively-appeared rank, granting rank N+1 would RemovePerk a
+            // form MFO never placed and stack entries on the native one —
+            // the node is frozen until the native grant goes away or respec
+            // clears the alloc.
+            if (have > 0) {
+                auto* ours = PerkByID(a_node.ranks[static_cast<std::size_t>(have - 1)].perkFormID);
+                if (!ours || !a_base->GetPerkIndex(ours).has_value()) {
+                    a_whyNot = "MFO's rank is not on the base (native rank owns this node) — frozen";
+                    return 0;
+                }
             }
             const auto& rank = a_node.ranks[static_cast<std::size_t>(have)];
             if (rank.verdict == Progression::Verdict::kDead) {
@@ -450,7 +504,7 @@ namespace MFO::ProgAllocator {
             auto* base = a_actor->GetActorBase();
             if (!base) return;
 
-            int reAdded = 0, present = 0, dropped = 0;
+            int reAdded = 0, present = 0, dropped = 0, nativeDeferred = 0;
             bool changed = false;
             for (const auto& alloc : a_st.perks) {
                 auto ref = FindNode(alloc.nodePerkID);
@@ -462,13 +516,32 @@ namespace MFO::ProgAllocator {
                 auto* target = PerkByID(ref.node->ranks[alloc.rank - 1].perkFormID);
                 if (!target) { ++dropped; continue; }
                 if (base->GetPerkIndex(target).has_value()) { ++present; continue; }
-                // A stale OTHER rank of this node on the base (e.g. the save
-                // predates an upgrade) would double entries once the target
-                // lands — clear siblings first.
+                // ANOTHER rank of this node on the base at reapply time is
+                // NATIVE ownership: base perk mutations do not survive a load
+                // (P3), so at session start the array holds only what the
+                // load order authored — and mid-session MFO's own grants keep
+                // exactly the target rank present (GrantRank swaps at
+                // upgrade). Removing it here would strip a perk MFO never
+                // granted (SPID/Requiem gave it between sessions) — the L1
+                // violation. Stacking ours on top would double entries. So:
+                // touch NOTHING, defer with a named line. The alloc is kept —
+                // respec later refunds it without removing the native form
+                // (RemovePerk is GetPerkIndex-guarded on OUR rank form only).
+                bool nativeRank = false;
                 for (const auto& r : ref.node->ranks) {
                     if (r.perkFormID == target->GetFormID()) continue;
-                    if (auto* sib = PerkByID(r.perkFormID); sib && base->GetPerkIndex(sib).has_value())
-                        base->RemovePerk(sib);
+                    if (auto* sib = PerkByID(r.perkFormID); sib && base->GetPerkIndex(sib).has_value()) {
+                        nativeRank = true;
+                        break;
+                    }
+                }
+                if (nativeRank) {
+                    ++nativeDeferred;
+                    spdlog::info("[prog] {:08X} reapply: {} rank {} NOT re-added — the load order "
+                                 "now grants another rank of this node natively; MFO never removes "
+                                 "or stacks on a rank it did not grant",
+                                 a_actor->GetFormID(), ref.node->name, alloc.rank);
+                    continue;
                 }
                 base->AddPerk(target, 1);
                 ++reAdded;
@@ -479,9 +552,9 @@ namespace MFO::ProgAllocator {
             RecomputeSkills(a_actor, a_st, /*log*/ false);
 
             spdlog::info("[prog] {:08X} {} reapply: {} perk(s) re-added, {} already on base, "
-                         "{} unresolvable — ApplyPerksFromBase {}",
+                         "{} unresolvable, {} deferred to native ownership — ApplyPerksFromBase {}",
                          a_actor->GetFormID(), NameOf(a_actor), reAdded, present, dropped,
-                         changed ? "called" : "SKIPPED (no change)");
+                         nativeDeferred, changed ? "called" : "SKIPPED (no change)");
             a_st.applied = true;
         }
 
@@ -1133,7 +1206,7 @@ namespace MFO::ProgAllocator {
         }
 
         const bool haveCatalog = Progression::Get().built;
-        std::uint32_t loaded = 0, droppedActor = 0, droppedPerk = 0;
+        std::uint32_t loaded = 0, droppedActor = 0, droppedPerk = 0, droppedAv = 0;
 
         for (std::uint32_t i = 0; i < count; ++i) {
             RE::FormID rawID = 0;
@@ -1205,6 +1278,7 @@ namespace MFO::ProgAllocator {
                 if (!a_intfc->ReadRecordData(points)) return;
                 if (!a_intfc->ReadRecordData(lastBase)) return;
                 if (!resolved) continue;
+                if (!IsKnownSkillAv(av)) { ++droppedAv; continue; }   // L2: value, not just count
                 st.skills.push_back({ static_cast<RE::ActorValue>(av), points, lastBase });
             }
 
@@ -1220,6 +1294,7 @@ namespace MFO::ProgAllocator {
                 if (!a_intfc->ReadRecordData(av)) return;
                 if (!a_intfc->ReadRecordData(value)) return;
                 if (!resolved) continue;
+                if (!IsKnownSkillAv(av)) { ++droppedAv; continue; }   // L2: value, not just count
                 st.baseline.push_back({ static_cast<RE::ActorValue>(av), value });
             }
 
@@ -1229,8 +1304,9 @@ namespace MFO::ProgAllocator {
         }
         // Split counters by reason (INVARIANTS #47).
         spdlog::info("[cosave] loaded {} progression record(s); dropped {} unresolvable actor(s), "
-                     "{} unresolvable/off-catalog perk alloc(s) (points refunded); lastPlayerLevel {}",
-                     loaded, droppedActor, droppedPerk, g_lastPlayerLevel);
+                     "{} unresolvable/off-catalog perk alloc(s) (points refunded), "
+                     "{} unknown-skill AV entr(ies); lastPlayerLevel {}",
+                     loaded, droppedActor, droppedPerk, droppedAv, g_lastPlayerLevel);
     }
 
     void ClearAll() {
