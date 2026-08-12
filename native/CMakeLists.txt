@@ -36,6 +36,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Probe.cpp
     ProgProbe.cpp
     Progression.cpp
+    ProgAllocator.cpp
     Evaluator.cpp
     Actuation.cpp
     Scheduler.cpp

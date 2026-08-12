@@ -478,6 +478,30 @@ namespace MFO::Rapport {
         }
     }
 
+    void Spend(RE::FormID a_actorID, float a_amount, const char* a_reason) {
+        // The DEBIT twin of Award, added for the progression respec (§15:
+        // respec is free of gold but costs rapport — the follower resents the
+        // reset). Deliberately NOT rate-scaled: a cost is a price tag, not an
+        // accrual, and fRapportRate must not discount it.
+        if (a_amount <= 0.0f) return;
+        auto* rec = Followers::TryEnsureRecord(a_actorID);
+        if (!rec) return;
+        auto& st = *rec;
+        const auto before = st.rank;
+        const auto cut = static_cast<std::uint32_t>(a_amount + 0.5f);
+        st.rapport = (st.rapport > cut) ? st.rapport - cut : 0u;
+        st.rank = RankFor(st.rapport);
+        spdlog::info("[rapport] {:08X} -{} ({}) -> {}", a_actorID, cut, a_reason, st.rapport);
+        if (st.rank != before) {
+            // A DOWN transition can shrink the slot ladder below rules already
+            // authored; nothing is deleted here — the load-time clamp is the
+            // enforcement point — but say it plainly.
+            spdlog::info("[rapport] {:08X} RANK {} -> {} at {} rapport (spend: '{}'; slots may now "
+                         "exceed the ladder until the next load clamps them)",
+                         a_actorID, before, st.rank, st.rapport, a_reason);
+        }
+    }
+
     void RegisterSinks() {
         auto* holder = RE::ScriptEventSourceHolder::GetSingleton();
         if (!holder) {

@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""MFO.esp audit — structural + FormID validation. PASS is a merge gate.
+"""MFO plugin audit — structural + FormID validation. PASS is a merge gate.
 
 A FAIL here is guaranteed runtime breakage. The engine drops malformed
 records SILENTLY, so this parses the emitted plugin back and checks it
 against what the DLL will look for.
+
+PROFILES (selected by the file's basename):
+  MFO.esp             — the main plugin (default)
+  MFO_Progression.esl — the optional progression addon (component 2):
+                        economy GLOBs + class FormLists; no quests, no SEQ
 
 Checks:
   1. TES4 parses; ESL flag set; exactly one master (Skyrim.esm)
@@ -13,9 +18,10 @@ Checks:
   5. No duplicate FormIDs
   6. Every FormID the DLL hardcodes is actually present
   7. Records the DLL needs carry their required subrecords
-  8. SEQ lists the start-game-enabled non-run-once quest
+  8. SEQ lists the start-game-enabled non-run-once quests (MFO.esp only)
 
-Usage:  python3 tools/audit_esp.py [out/MFO.esp]
+Usage:  python3 tools/audit_esp.py [out/MFO.esp] [out/MFO_Progression.esl ...]
+        (no args = audit both emitted plugins)
 """
 
 import os
@@ -62,6 +68,36 @@ REQUIRED = {
 # they never start on an existing save.
 SEQ_EXPECTED = {0x808, 0x80A, 0x80C, 0x830, 0x80E}
 
+# MFO_Progression.esl — what native/Progression.h (0x800/0x801) and
+# native/ProgAllocator.h (the rest) hardcode. Keep in lockstep with the
+# generator's PROG_* tables AND the DLL's lookups.
+PROG_REQUIRED = {
+    0x800: ('GLOB', "MFOP_Version",             ['EDID', 'FNAM', 'FLTV']),
+    0x801: ('GLOB', "MFOP_Reserved",            ['EDID', 'FNAM', 'FLTV']),
+    0x802: ('GLOB', "MFOP_PerkPointsPerLevel",  ['EDID', 'FNAM', 'FLTV']),
+    0x803: ('GLOB', "MFOP_SkillPointsPerLevel", ['EDID', 'FNAM', 'FLTV']),
+    0x804: ('GLOB', "MFOP_SharedGrowthDivisor", ['EDID', 'FNAM', 'FLTV']),
+    0x805: ('GLOB', "MFOP_RespecRapportCost",   ['EDID', 'FNAM', 'FLTV']),
+    0x806: ('GLOB', "MFOP_VeteranCatchupMult",  ['EDID', 'FNAM', 'FLTV']),
+    0x807: ('GLOB', "MFOP_SkillCap",            ['EDID', 'FNAM', 'FLTV']),
+    0x808: ('GLOB', "MFOP_DevCmd",              ['EDID', 'FNAM', 'FLTV']),
+    # Class skill lists carry entries (LNAM); the perk lists ship EMPTY on
+    # purpose (xEdit extension point) so LNAM is not required there.
+    0x810: ('FLST', "MFOP_ClassSkills_Melee",   ['EDID', 'LNAM']),
+    0x811: ('FLST', "MFOP_ClassSkills_Ranged",  ['EDID', 'LNAM']),
+    0x812: ('FLST', "MFOP_ClassSkills_Mage",    ['EDID', 'LNAM']),
+    0x818: ('FLST', "MFOP_ClassPerks_Melee",    ['EDID']),
+    0x819: ('FLST', "MFOP_ClassPerks_Ranged",   ['EDID']),
+    0x81A: ('FLST', "MFOP_ClassPerks_Mage",     ['EDID']),
+    0x820: ('KYWD', "MFOP_Enrolled",            ['EDID']),
+}
+
+# basename -> (required table, seq expectations or None [no SEQ file at all])
+PROFILES = {
+    "MFO.esp":             (REQUIRED, SEQ_EXPECTED),
+    "MFO_Progression.esl": (PROG_REQUIRED, None),
+}
+
 GRUP_HDR = 24
 REC_HDR = 24
 
@@ -104,8 +140,14 @@ def walk(data):
     return recs
 
 
-def main():
-    esp = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "out", "MFO.esp")
+def audit_one(esp):
+    base = os.path.basename(esp)
+    if base not in PROFILES:
+        print(f"FAIL: no audit profile for '{base}' (know: {', '.join(PROFILES)})")
+        return 1
+    required, seq_expected = PROFILES[base]
+    is_main = (base == "MFO.esp")
+
     if not os.path.exists(esp):
         print(f"FAIL: {esp} not found -- run MFO_GenerateESP.py first")
         return 1
@@ -160,7 +202,7 @@ def main():
 
     # 6 + 7. required records and their subrecords
     by_local = {(fid & 0xFFFFFF): (t, subs) for t, fid, _, subs in own}
-    for local, (want_type, want_edid, want_subs) in REQUIRED.items():
+    for local, (want_type, want_edid, want_subs) in required.items():
         if local not in by_local:
             errors.append(f"REQUIRED record 0x{local:03X} ({want_edid}) MISSING -- "
                           f"the DLL looks this up by local id and will log 'form not found'")
@@ -175,42 +217,66 @@ def main():
             if s not in subs:
                 errors.append(f"0x{local:03X} ({want_edid}): missing required subrecord {s}")
 
-    # SPEL sanity: a lesser power must be SPIT type 3. Type 4 is an Ability,
-    # which is passive and never fires a cast event -- the board would never open.
-    if 0x801 in by_local:
-        spit = by_local[0x801][1].get('SPIT')
-        if spit and len(spit) >= 12:
-            stype = struct.unpack('<I', spit[8:12])[0]
-            if stype != 3:
-                errors.append(f"SPEL 0x801: SPIT type {stype}, expected 3 (Lesser Power). "
-                              f"Type 4 is an Ability and never fires TESSpellCastEvent")
+    if is_main:
+        # SPEL sanity: a lesser power must be SPIT type 3. Type 4 is an Ability,
+        # which is passive and never fires a cast event -- the board would never open.
+        if 0x801 in by_local:
+            spit = by_local[0x801][1].get('SPIT')
+            if spit and len(spit) >= 12:
+                stype = struct.unpack('<I', spit[8:12])[0]
+                if stype != 3:
+                    errors.append(f"SPEL 0x801: SPIT type {stype}, expected 3 (Lesser Power). "
+                                  f"Type 4 is an Ability and never fires TESSpellCastEvent")
 
-    # RETREAT PROBE sanity: the probe's entire question is whether kIgnoreCombat
-    # (0x00100000) on a Travel package survives a live combat controller. A
-    # record missing the bit measures nothing while looking like a clean run.
-    if 0x831 in by_local:
-        pkdt = by_local[0x831][1].get('PKDT')
-        if pkdt and len(pkdt) >= 7:
-            pflags = struct.unpack('<I', pkdt[:4])[0]
-            if pflags != 0x00102000:
-                errors.append(f"PACK 0x831: PKDT flags {pflags:08X}, expected 00102000 "
-                              f"(kIgnoreCombat 0x00100000 | preferred-speed 0x2000)")
-            if pkdt[6] != 2:
-                errors.append(f"PACK 0x831: PKDT byte6 (preferredSpeed) {pkdt[6]}, expected 2 (Run)")
-
-    # 8. SEQ
-    seq_path = os.path.join(os.path.dirname(esp), "SEQ", "MFO.seq")
-    if not os.path.exists(seq_path):
-        errors.append("SEQ/MFO.seq missing -- start-game-enabled non-run-once quests never start "
-                      "on an existing save without it")
+        # RETREAT PROBE sanity: the probe's entire question is whether kIgnoreCombat
+        # (0x00100000) on a Travel package survives a live combat controller. A
+        # record missing the bit measures nothing while looking like a clean run.
+        if 0x831 in by_local:
+            pkdt = by_local[0x831][1].get('PKDT')
+            if pkdt and len(pkdt) >= 7:
+                pflags = struct.unpack('<I', pkdt[:4])[0]
+                if pflags != 0x00102000:
+                    errors.append(f"PACK 0x831: PKDT flags {pflags:08X}, expected 00102000 "
+                                  f"(kIgnoreCombat 0x00100000 | preferred-speed 0x2000)")
+                if pkdt[6] != 2:
+                    errors.append(f"PACK 0x831: PKDT byte6 (preferredSpeed) {pkdt[6]}, expected 2 (Run)")
     else:
-        raw = open(seq_path, 'rb').read()
-        if len(raw) % 4:
-            errors.append(f"SEQ/MFO.seq length {len(raw)} is not a multiple of 4")
-        listed = {struct.unpack('<I', raw[i:i + 4])[0] & 0xFFFFFF for i in range(0, len(raw) - 3, 4)}
-        for want in SEQ_EXPECTED:
-            if want not in listed:
-                errors.append(f"SEQ does not list 0x{want:03X} -- that quest will never start")
+        # Progression addon: the DLL keys DETECTION on MFOP_Version resolving
+        # with a non-zero record default (§10). A zero stamp would read as
+        # "version 0" and muddy the MCM Detected line.
+        if 0x800 in by_local:
+            fltv = by_local[0x800][1].get('FLTV')
+            if fltv and len(fltv) >= 4:
+                val = struct.unpack('<f', fltv[:4])[0]
+                if val <= 0.0:
+                    errors.append(f"GLOB 0x800 MFOP_Version FLTV is {val:g} -- must be a positive stamp")
+        # Class-skill lists: every LNAM entry must point into Skyrim.esm
+        # (master index 0x00) -- the ESL cannot legally reference anything else.
+        for local in (0x810, 0x811, 0x812):
+            if local not in by_local:
+                continue
+            body_subs = by_local[local][1]
+            lnam = body_subs.get('LNAM')
+            if lnam and len(lnam) >= 4:
+                fid = struct.unpack('<I', lnam[:4])[0]
+                if (fid >> 24) != 0x00:
+                    errors.append(f"FLST 0x{local:03X}: LNAM {fid:08X} not a Skyrim.esm form")
+
+    # 8. SEQ (main plugin only -- the addon carries no quests, so a SEQ would
+    # itself be a bug)
+    if seq_expected is not None:
+        seq_path = os.path.join(os.path.dirname(esp), "SEQ", "MFO.seq")
+        if not os.path.exists(seq_path):
+            errors.append("SEQ/MFO.seq missing -- start-game-enabled non-run-once quests never start "
+                          "on an existing save without it")
+        else:
+            raw = open(seq_path, 'rb').read()
+            if len(raw) % 4:
+                errors.append(f"SEQ/MFO.seq length {len(raw)} is not a multiple of 4")
+            listed = {struct.unpack('<I', raw[i:i + 4])[0] & 0xFFFFFF for i in range(0, len(raw) - 3, 4)}
+            for want in seq_expected:
+                if want not in listed:
+                    errors.append(f"SEQ does not list 0x{want:03X} -- that quest will never start")
 
     print(f"MFO ESP audit -- {esp}")
     print(f"  {len(own)} own record(s), {len(recs)} total")
@@ -224,6 +290,18 @@ def main():
         return 1
     print("\nPASS")
     return 0
+
+
+def main():
+    targets = sys.argv[1:] if len(sys.argv) > 1 else [
+        os.path.join(ROOT, "out", "MFO.esp"),
+        os.path.join(ROOT, "out", "MFO_Progression.esl"),
+    ]
+    rc = 0
+    for esp in targets:
+        rc |= audit_one(esp)
+        print()
+    return rc
 
 
 if __name__ == "__main__":

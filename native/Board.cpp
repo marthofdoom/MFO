@@ -27,6 +27,7 @@
 #include "State.h"
 #include "Probe.h"
 #include "ProgProbe.h"
+#include "ProgAllocator.h"
 #include "MainThread.h"
 #include "Vocabulary.h"
 #include "Scheduler.h"
@@ -1496,6 +1497,26 @@ namespace MFO::Board {
                                 if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
                                 if (static_cast<int>(b->GetIDCode()) != pk) continue;
                                 MainThread::Post([]() { ProgProbe::OnHotkey(); });
+                            }
+                        }
+                    }
+
+                    // PROGRESSION ALLOCATOR HARNESS HOTKEY (dev-only,
+                    // bProgHarness=0 for everyone else). Same shape as the
+                    // probe key above; the harness mutates engine state
+                    // (AddPerk/SetBaseActorValue) so it rides MainThread::Post,
+                    // never AddTask (§0.37). The verb comes from the addon's
+                    // MFOP_DevCmd GLOB (console-set) — see ProgAllocator.h.
+                    if (Config::g_progHarness.load()) {
+                        const int hk = Config::g_progHarnessKey.load();
+                        if (hk != 0) {
+                            for (auto* e = *a_events; e; e = e->next) {
+                                if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) continue;
+                                auto* b = static_cast<RE::ButtonEvent*>(e);
+                                if (!b->IsDown()) continue;                 // edge only
+                                if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
+                                if (static_cast<int>(b->GetIDCode()) != hk) continue;
+                                MainThread::Post([]() { ProgAllocator::OnHarnessHotkey(); });
                             }
                         }
                     }

@@ -13,6 +13,19 @@ namespace MFO {
     inline constexpr std::uint32_t kRecStock    = 'MSTK';
     inline constexpr std::uint32_t kStockVersion = 1;
 
+    // Follower progression (component 2 of the ESL addon): per-follower
+    // enrollment/class/level/perk+skill allocations (ProgAllocator::g_prog).
+    // A THIRD independent record -- own type, own version, never touches
+    // FLWR/MSTK. Layout + ingestion rules live in ProgAllocator.cpp
+    // (CoSaveSave/CoSaveLoad); design doc §8.
+    //
+    //   v1 - header {lastPlayerLevel u16}, then per follower {formID, flags,
+    //        class, progressionLevel, sharedGrowthRemainder, unspentPerk f32,
+    //        perkAlloc[]{formID,rank}, skillAlloc[]{av,points,lastWrittenBase},
+    //        enrollBaseline[]{av,f32}}
+    inline constexpr std::uint32_t kRecProgression = 'PRGN';
+    inline constexpr std::uint32_t kProgVersion    = 1;
+
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.
     //

@@ -18,6 +18,7 @@
 #include "MainThread.h"
 #include "Probe.h"
 #include "Board.h"
+#include "ProgAllocator.h"
 #include <unordered_set>   // #69: stock-gear per-follower sets (kRecStock)
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
@@ -215,6 +216,14 @@ namespace MFO {
         spdlog::info("[cosave] saved stock-gear for {} follower(s), schema v{}{}", stockWritten, kStockVersion,
                      stockSkippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) record(s)", stockSkippedRuntime)
                                          : std::string{});
+
+        // Progression (kRecProgression/'PRGN') -- a THIRD independent record,
+        // same isolation contract as MSTK above. Written even when the addon
+        // ESL is absent this session: the data must survive a session where
+        // the user temporarily disabled MFO_Progression.esl, not be silently
+        // destroyed by the next save. Layout + bounds live with the state
+        // owner (ProgAllocator.cpp).
+        ProgAllocator::CoSaveSave(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -301,6 +310,21 @@ namespace MFO {
                 spdlog::info("[cosave] loaded stock-gear for {} follower(s); dropped {} unresolvable "
                              "actor(s), {} unresolvable item(s)",
                              stockLoaded, stockDroppedActor, stockDroppedItem);
+                continue;
+            }
+            if (type == kRecProgression) {
+                // Same independence contract as MSTK: own version guard, own
+                // ResolveFormID/DROP discipline; a newer PRGN skips THIS
+                // record only (GetNextRecordInfo seeks past it), never aborts
+                // the whole load.
+                if (version > kProgVersion) {
+                    spdlog::error("[cosave] PROGRESSION SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
+                                  version, kProgVersion);
+                    g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
+                    continue;
+                }
+                ProgAllocator::CoSaveLoad(a_intfc, version);
                 continue;
             }
             if (type != kRecFollowers) {
@@ -561,6 +585,10 @@ namespace MFO {
         // stays true. A load right after this repopulates it; a main-menu
         // revert with no load leaves it empty, same as g_followers above.
         Logistics::ClearStockGear();
+        // Progression state IS serialized too (kRecProgression) -- same
+        // contract as stock gear. ClearAll also orphans the level-poll chain
+        // (generation bump) so a stale tick never runs against the next save.
+        ProgAllocator::ClearAll();
         // The equip ledger describes a LIVE loadout. On revert the world is
         // about to be replaced, so there is nothing to give back -- but the
         // ledger must not survive to re-equip gear into the next save (#16).

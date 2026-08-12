@@ -937,6 +937,148 @@ def make_qust():
                  + make_trade_quest())
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# MFO_Progression.esl — the follower-progression addon (component 2).
+# A SEPARATE plugin, generated beside MFO.esp: detection anchor + the
+# CONFIG/DATA AUTHORITY the allocator reads (economy GLOBs, per-class
+# auto-pick FormLists). The DLL reads every GLOB's RECORD DEFAULT at
+# kDataLoaded (design doc §10 — GLOB values are save-persisted, so a
+# post-load read could see a stale saved number). All numbers here are
+# author-tunable in xEdit without touching the DLL.
+#
+# FormID band: FROZEN generator<->DLL contract with native/Progression.h
+# (0x800/0x801) and native/ProgAllocator.h (everything else). One master
+# (Skyrim.esm) => same OWN prefix 0x01; ESL-legal locals 0x800-0xFFF.
+# ═══════════════════════════════════════════════════════════════════════════
+
+PROG_VERSION_STAMP = 1.0               # MFOP_Version FLTV — the addon version
+
+PGID_VERSION            = OWN | 0x800  # GLOB detection anchor + version stamp
+PGID_RESERVED           = OWN | 0x801  # GLOB spare future gate (design §10)
+PGID_PERK_PER_LEVEL     = OWN | 0x802  # GLOB perk points per player level (§15: copies the player)
+PGID_SKILL_PER_LEVEL    = OWN | 0x803  # GLOB auto-scale skill points per level
+PGID_SHARED_DIVISOR     = OWN | 0x804  # GLOB benched growth divisor (2 = half rate, §15)
+PGID_RESPEC_RAPPORT     = OWN | 0x805  # GLOB respec cost in rapport (§15: 500)
+PGID_VETERAN_MULT       = OWN | 0x806  # GLOB veteran catch-up multiplier
+PGID_SKILL_CAP          = OWN | 0x807  # GLOB auto-scale base-AV ceiling
+PGID_DEV_CMD            = OWN | 0x808  # GLOB dev-harness verb selector (console: set MFOP_DevCmd to N)
+# 0x809-0x80F reserved: more economy knobs
+PGID_SKILLS_MELEE       = OWN | 0x810  # FLST ordered AVIF skill priority per class
+PGID_SKILLS_RANGED      = OWN | 0x811
+PGID_SKILLS_MAGE        = OWN | 0x812
+# 0x813-0x817 reserved: more classes / attribute lists
+PGID_PERKS_MELEE        = OWN | 0x818  # FLST ordered PERK priority per class — SHIPPED
+PGID_PERKS_RANGED       = OWN | 0x819  #      EMPTY (this plugin can only master
+PGID_PERKS_MAGE         = OWN | 0x81A  #      Skyrim.esm, and overhauls replace the
+                                       #      perks); an overhaul patch fills them in
+                                       #      xEdit, the DLL falls back name-agnostic
+# 0x81B-0x81F reserved: more perk lists
+PGID_ENROLLED_KYWD      = OWN | 0x820  # KYWD enrollment tag — RESERVED for
+                                       #      conditions/SPID use; v1 DLL does not
+                                       #      stamp it (no probe data for base
+                                       #      keyword-array writes)
+PROG_NEXT_OBJECT_ID     = 0x821
+
+# Vanilla AVIF forms (Skyrim.esm) for the class-skill lists — DUMPED from the
+# shipped master (doctrine: mirror the disk, never a wiki). AVOneHanded ..
+# AVEnchanting sit in one contiguous run at 0x44C-0x45D.
+AVIF_ONEHANDED   = 0x0000044C
+AVIF_TWOHANDED   = 0x0000044D
+AVIF_MARKSMAN    = 0x0000044E
+AVIF_BLOCK       = 0x0000044F
+AVIF_HEAVYARMOR  = 0x00000451
+AVIF_LIGHTARMOR  = 0x00000452
+AVIF_SNEAK       = 0x00000455
+AVIF_ALTERATION  = 0x00000458
+AVIF_CONJURATION = 0x00000459
+AVIF_DESTRUCTION = 0x0000045A
+AVIF_RESTORATION = 0x0000045C
+# The dump shows NO "AVIllusion" record: vanilla reuses the Morrowind-era
+# Mysticism slot — AVIF 0x45B keeps EDID AVMysticism but IS the Illusion
+# skill (FULL renamed in game; it sits at the kIllusion position in the
+# 0x458-0x45D school run). The DLL maps list entries through the LIVE
+# ActorValueList (GetActorValue(kIllusion)->GetFormID()), so a load order
+# that moves the skill still maps — and an entry that maps to nothing is
+# skipped with a named warn, never guessed.
+AVIF_ILLUSION    = 0x0000045B
+
+# Class skill priority, ORDER = weight (triangular over the DLL's post-prune
+# list; with both weapon and both armor siblings listed, the DLL keeps the
+# follower's DOMINANT one — see ProgAllocator.cpp WeightsFor). Melee prunes to
+# the design's exact 40/30/20/10.
+PROG_CLASS_SKILLS = [
+    (PGID_SKILLS_MELEE,  "MFOP_ClassSkills_Melee",
+     [AVIF_ONEHANDED, AVIF_TWOHANDED, AVIF_HEAVYARMOR, AVIF_LIGHTARMOR, AVIF_BLOCK, AVIF_MARKSMAN]),
+    (PGID_SKILLS_RANGED, "MFOP_ClassSkills_Ranged",
+     [AVIF_MARKSMAN, AVIF_LIGHTARMOR, AVIF_HEAVYARMOR, AVIF_SNEAK, AVIF_ONEHANDED]),
+    (PGID_SKILLS_MAGE,   "MFOP_ClassSkills_Mage",
+     [AVIF_DESTRUCTION, AVIF_ALTERATION, AVIF_RESTORATION, AVIF_CONJURATION, AVIF_ILLUSION]),
+]
+
+PROG_GLOBS = [
+    (PGID_VERSION,        "MFOP_Version",            PROG_VERSION_STAMP),
+    (PGID_RESERVED,       "MFOP_Reserved",           0.0),
+    (PGID_PERK_PER_LEVEL, "MFOP_PerkPointsPerLevel", 1.0),
+    (PGID_SKILL_PER_LEVEL,"MFOP_SkillPointsPerLevel",3.0),
+    (PGID_SHARED_DIVISOR, "MFOP_SharedGrowthDivisor",2.0),
+    (PGID_RESPEC_RAPPORT, "MFOP_RespecRapportCost",  500.0),
+    (PGID_VETERAN_MULT,   "MFOP_VeteranCatchupMult", 1.0),
+    (PGID_SKILL_CAP,      "MFOP_SkillCap",           100.0),
+    (PGID_DEV_CMD,        "MFOP_DevCmd",             0.0),
+]
+
+PROG_PERK_LISTS = [
+    (PGID_PERKS_MELEE,  "MFOP_ClassPerks_Melee"),
+    (PGID_PERKS_RANGED, "MFOP_ClassPerks_Ranged"),
+    (PGID_PERKS_MAGE,   "MFOP_ClassPerks_Mage"),
+]
+
+
+def make_prog_tes4():
+    # Same shape as make_tes4 (ESL flag 0x200, one master), own identity.
+    hedr = struct.pack('<f', 1.70) + struct.pack('<I', 100) + struct.pack('<I', PROG_NEXT_OBJECT_ID)
+    body = subrec('HEDR', hedr) + subrec('CNAM', zstr("marth"))
+    body += subrec('SNAM', zstr("MFO follower-progression addon (optional; detected at runtime)"))
+    body += subrec('MAST', zstr("Skyrim.esm")) + subrec('DATA', struct.pack('<Q', 0))
+    return record('TES4', 0, 0x00000200, body)
+
+
+def prog_glob(fid, edid, value):
+    # The make_glob shape (mirrored from vanilla quest-control globals):
+    # EDID + FNAM 's' (short) + FLTV float.
+    body = subrec('EDID', zstr(edid)) + subrec('FNAM', b's')
+    body += subrec('FLTV', struct.pack('<f', float(value)))
+    return record('GLOB', fid, 0, body)
+
+
+def prog_flst(fid, edid, forms):
+    # FLST shape dumped from Skyrim.esm (CWMission07StewardVoiceTypes
+    # 00017334): EDID then one LNAM (u32 form) per entry. An EMPTY list is
+    # legal — the shipped perk-priority lists are exactly that.
+    body = subrec('EDID', zstr(edid))
+    for f in forms:
+        body += subrec('LNAM', struct.pack('<I', f))
+    return record('FLST', fid, 0, body)
+
+
+def make_progression_esl():
+    data = make_prog_tes4()
+    # Top-group order mirrors Skyrim.esm's relative order: KYWD < GLOB < FLST.
+    kywd_body = subrec('EDID', zstr("MFOP_Enrolled")) + subrec('CNAM', struct.pack('<I', 0))
+    data += group('KYWD', record('KYWD', PGID_ENROLLED_KYWD, 0, kywd_body))
+    glob_body = b''
+    for fid, edid, value in PROG_GLOBS:
+        glob_body += prog_glob(fid, edid, value)
+    data += group('GLOB', glob_body)
+    flst_body = b''
+    for fid, edid, forms in PROG_CLASS_SKILLS:
+        flst_body += prog_flst(fid, edid, forms)
+    for fid, edid in PROG_PERK_LISTS:
+        flst_body += prog_flst(fid, edid, [])
+    data += group('FLST', flst_body)
+    return data
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "out"
     os.makedirs(out_dir, exist_ok=True)
@@ -959,6 +1101,14 @@ def main():
     with open(out_path, 'wb') as f:
         f.write(data)
 
+    # The progression addon — a SEPARATE, OPTIONAL plugin (detected at
+    # runtime by the DLL; absent = feature off, never an error). No SEQ:
+    # it carries no quests.
+    prog_path = os.path.join(out_dir, "MFO_Progression.esl")
+    prog_data = make_progression_esl()
+    with open(prog_path, 'wb') as f:
+        f.write(prog_data)
+
     # SEQ: a start-game-enabled quest WITHOUT the Run Once flag never starts on
     # an existing save unless it is listed in Data/SEQ/<plugin>.seq (a flat
     # array of uint32 FormIDs as stored in the plugin). Without this the MCM
@@ -977,6 +1127,7 @@ def main():
     print(f"MFO {VERSION}")
     print(f"Written: {out_path} ({len(data):,} bytes)")
     print(f"Written: {seq_path} (5 start-game-enabled quests: MCM, Command, Loot, Retreat, Trade)")
+    print(f"Written: {prog_path} ({len(prog_data):,} bytes) — optional progression addon, no SEQ")
     print()
     print("Records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{NEXT_OBJECT_ID:03X}")
@@ -1000,6 +1151,16 @@ def main():
         print(f"  GLOB  0x{FID_PROBE_GLOB & 0xFFF:03X}        MFO_ProbeSelect (console: set MFO_ProbeSelect to N; 0 = all probes off)")
         for idx, sp, label, (tkind, tval) in POC_PROBES:
             print(f"  PACK  0x{(FID_POC_PACK_BASE + idx - 1) & 0xFFF:03X}        MFO_PoC{idx}_{label} (gate =={idx}, target {tkind})")
+    print()
+    print("MFO_Progression.esl records:")
+    print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{PROG_NEXT_OBJECT_ID:03X}")
+    print(f"  KYWD  0x{PGID_ENROLLED_KYWD & 0xFFF:03X}        MFOP_Enrolled (reserved tag; DLL does not stamp it in v1)")
+    for fid, edid, value in PROG_GLOBS:
+        print(f"  GLOB  0x{fid & 0xFFF:03X}        {edid} = {value:g}")
+    for fid, edid, forms in PROG_CLASS_SKILLS:
+        print(f"  FLST  0x{fid & 0xFFF:03X}        {edid} ({len(forms)} AVIF entries, order = weight)")
+    for fid, edid in PROG_PERK_LISTS:
+        print(f"  FLST  0x{fid & 0xFFF:03X}        {edid} (shipped EMPTY — xEdit extension point)")
 
 
 if __name__ == "__main__":

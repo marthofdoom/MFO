@@ -110,6 +110,9 @@ namespace MFO::Config {
             else if (a_key == "bProgProbe")         setB(g_progProbe);        // progression sinker probe, dev-only
             else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
             else if (a_key == "bProgCatalogDump")   setB(g_progCatalogDump);  // catalog census dump, dev-only
+            else if (a_key == "bProgHarness")       setB(g_progHarness);      // allocator dev harness, dev-only
+            else if (a_key == "iProgHarnessKey")    setI(g_progHarnessKey, 0, 255);
+            else if (a_key == "bSharedGrowth")      setB(g_sharedGrowth);     // progression: benched at half rate
             else if (a_key == "bWeaponStyleControl") setB(g_weaponStyleControl); // default ON, debug kill-switch
             else if (a_key == "bUsePackages")       setB(g_usePackages);
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
@@ -227,6 +230,9 @@ namespace MFO::Config {
             g_progProbe          = false;   // progression sinker probe -- OFF everywhere by default
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
             g_progCatalogDump    = false;   // progression catalog dump -- OFF everywhere by default
+            g_progHarness        = false;   // allocator dev harness -- OFF everywhere by default
+            g_progHarnessKey     = 0x28;    // DIK apostrophe, unbound in vanilla
+            g_sharedGrowth       = true;    // progression: benched enrollees at half rate (§15)
             g_weaponStyleControl = true;    // v1.0.33: standard feature -- ON by default
             g_castControl        = 2;       // mage update: cast-control slider -- center (ignore heals)
             g_friendlyFireHold   = true;    // v1.0.35: hold offensive casts that would hit a teammate

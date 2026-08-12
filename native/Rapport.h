@@ -16,6 +16,11 @@ namespace MFO::Rapport {
     // Award to one follower and log any rank change. Main thread only.
     void Award(RE::FormID a_actorID, float a_amount, const char* a_reason);
 
+    // Deduct rapport (clamped at 0) and log any rank change. The progression
+    // respec's price tag (§15: −500 rapport). NOT fRapportRate-scaled — a
+    // cost is a price, not an accrual. Main thread only.
+    void Spend(RE::FormID a_actorID, float a_amount, const char* a_reason);
+
     // Counters for the diagnostic dump (TEST_GUIDE 2C/2D). Without these the
     // combat-dispatch volume question cannot be answered at all.
     std::uint32_t CombatEventCount();

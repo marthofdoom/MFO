@@ -35,6 +35,11 @@ $GH run download "$RUN_ID" -n MFO-dll -D "$STAGE/dll"
 # 3. Stage in Data/ layout.
 mkdir -p "$STAGE/pkg/SKSE/Plugins" "$STAGE/pkg/SEQ"
 cp out/MFO.esp        "$STAGE/pkg/"
+# The OPTIONAL progression addon rides the TEST zip so the allocator is
+# exercisable on the deck (enable its plugin too, or it stays undetected —
+# that un-detected state is itself a valid test). Release packaging ships it
+# separately; this is the iteration path only.
+cp out/MFO_Progression.esl "$STAGE/pkg/"
 cp out/SEQ/MFO.seq    "$STAGE/pkg/SEQ/"
 cp "$STAGE/dll/MFO.dll" "$STAGE/pkg/SKSE/Plugins/"
 [ -f out/SKSE/Plugins/MFO.ini ] && cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"

@@ -8,6 +8,44 @@
 >
 > **Last updated:** 2026-08-11 · **Latest:** v1.0.62 (#75 weapon-equip thrash fix + progression PROBE — deploying to BOTH decks, public HELD pending field test) · **Latest public:** v1.0.61 (creature weapons deleted) · prior public: v1.0.60 (#73), v1.0.59 (controller). Next: FOLLOWER-PROGRESSION ESL ADDON (#74 — probe validation is the on-ramp), then town update (#31).
 
+> **#74 COMPONENT 2 BUILT (2026-08-11) — the ALLOCATOR backend + MFO_Progression.esl +
+> dev harness — awaiting marth review + CI.** New `native/ProgAllocator.cpp/.h` (design
+> §4/§5/§6/§8/§15; consumes component 1's frozen catalog, ProgProbe untouched). The
+> LOCKED model: AUTO skills / MANUAL perks; class gate (no skills until a concrete
+> Melee/Ranged/Mage pick — mirrors into #65 combatClassOverride, same ordinals); perk
+> earn = 1/player-level × scarcity (catalog effectiveRanks÷totalRanks); Shared Growth
+> ON = benched at ESL-divisor half rate (active earns at the player's RATE, never an
+> instant catch-up — bench-lag is the price); first class-set = level-match + one-shot
+> veteran grant (level-matched, scarcity-scaled, no skill bonus); respec = perks
+> refunded + −500 rapport via new `Rapport::Spend` (not rate-scaled); v1 unique-base
+> only + never builds on natively-owned perks. §5 gate enforced in the backend
+> (prereq via parentPerkIDs any-parent-owned + rank order + `perkConditions.IsTrue
+> (follower,follower)` at apply; named `[prog] allocate REJECTED` lines). Engine writes
+> are the three probe-proven paths only (P1 TESNPC::AddPerk+ApplyPerksFromBase with
+> rank-K-replaces-K−1; P2 §4.2 reconcile with adopt-natural + never-below-natural
+> clamp; P3 GetPerkIndex-guarded reapply, lazy via the poll until the actor resolves).
+> Level poll = MainThread::Post self-chain (~2s), generation-guarded, started at
+> kPostLoadGame. Co-save: NEW independent record `'PRGN'` v1 (header lastPlayerLevel;
+> per follower flags/class/level/remainder/unspentPerk f32/perkAlloc/skillAlloc/
+> baseline; ResolveFormID-or-drop, off-catalog perk allocs drop+REFUND; saved even
+> when the ESL is absent so disabling the addon never eats the data). The ESL is now
+> EMITTED by MFO_GenerateESP.py (out/MFO_Progression.esl, ESL-flagged, Skyrim.esm
+> master, no SEQ): GLOBs 0x800 MFOP_Version=1 / 0x802-0x807 economy knobs (perk/lvl,
+> skill/lvl, shared divisor, respec rapport 500, veteran mult, skill cap) / 0x808
+> MFOP_DevCmd; FLSTs 0x810-0x812 MFOP_ClassSkills_* (ordered AVIF priority, dumped
+> vanilla ids incl. Illusion=AVMysticism 0x45B; DLL maps via live ActorValueList,
+> triangular weights + dominant-sibling pruning → Melee lands 40/30/20/10) and
+> 0x818-0x81A MFOP_ClassPerks_* shipped EMPTY (xEdit extension point; DLL falls back
+> name-agnostic); KYWD 0x820 MFOP_Enrolled reserved (not stamped in v1). DLL reads
+> GLOB record DEFAULTS at kDataLoaded (§10). audit_esp.py now has per-plugin profiles
+> and audits BOTH files (no args); package_test.sh ships the ESL in the test zip.
+> DEV HARNESS (`bProgHarness=0` default, INI-only + `iProgHarnessKey=40` apostrophe):
+> one hotkey on the first unique teammate, verb from console `set MFOP_DevCmd to N` —
+> 0=status 1=enroll 2=cycle-class 3=skills 4=alloc-next-eligible-perk 5=respec
+> 6=economy dump; all `[prog]`-logged. New RE:: symbol for CI: `RE::BGSListForm`
+> (everything else already in-tree). Shared-growth player toggle = `bSharedGrowth`
+> (Config, MCM wiring later). NO version bump, NOT pushed.
+
 > **#74 COMPONENT 1 BUILT (2026-08-11) — the PRODUCTION catalog reader — awaiting marth
 > review + CI.** New `native/Progression.cpp/.h` (design §1/§2/§3; component 1 of 4:
 > catalog → allocator → board tab → ESL). One read-only pass at kDataLoaded (main thread)

@@ -192,6 +192,26 @@ namespace MFO::Config {
     // in Data/SKSE/Plugins/MFO.ini, then a restart (read at kDataLoaded).
     inline std::atomic<bool>  g_progCatalogDump{ false };
 
+    // PROGRESSION DEV HARNESS (component 2 of the ESL addon), DEFAULT OFF —
+    // dev opt-in ONLY, INI-only (the bProgProbe precedent). One hotkey that
+    // exercises the ALLOCATOR on the current follower before the board (comp
+    // 3) exists; the verb comes from the addon's MFOP_DevCmd GLOB, set from
+    // the console (`set MFOP_DevCmd to N`): 0=status 1=enroll 2=cycle-class
+    // 3=skills 4=alloc-next-perk 5=respec 6=economy. Inert without
+    // MFO_Progression.esl (the allocator is). bProgHarness = 1 in
+    // Data/SKSE/Plugins/MFO.ini, trigger with iProgHarnessKey below.
+    inline std::atomic<bool>  g_progHarness{ false };
+    // DIK code for the harness trigger. 0x28 is apostrophe — unbound in
+    // vanilla (focus holds 0x2B backslash, the probe 0x27 semicolon).
+    // 0 disables the trigger.
+    inline std::atomic<int>   g_progHarnessKey{ 0x28 };
+
+    // SHARED GROWTH (progression addon, §15 — a PLAYER setting, so it lives
+    // here and later in the MCM Addons section, never in the ESL). Default ON:
+    // benched/retained enrollees level at the ESL's divisor rate (half by
+    // default). OFF: they match the player's level at full rate.
+    inline std::atomic<bool>  g_sharedGrowth{ true };
+
     // #56 COMBAT-OVERLAY POSITION (mage update). The compact combat HUD
     // (Board::DrawHud) is pinned to the top-right with a top-right pivot; these
     // are its margins in PIXELS from the right edge (X) and the top (Y), so a

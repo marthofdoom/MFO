@@ -11,6 +11,7 @@
 #include "Probe.h"
 #include "ProgProbe.h"
 #include "Progression.h"
+#include "ProgAllocator.h"
 #include "Vocabulary.h"
 #include "Loadout.h"
 #include "Targeting.h"
@@ -283,6 +284,7 @@ namespace {
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
             MFO::Progression::Init();       // addon detection + frozen perk catalog (§1/§2/§3); read-only pass
+            MFO::ProgAllocator::Init();     // allocator economy + class lists from the addon ESL; inert if absent
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::Followers::ResolveQuirks();
@@ -358,6 +360,8 @@ namespace {
             MFO::Logistics::SweepBeastHeadsOnLoad();   // #62: reattach beast heads on load (self-retries)
             MFO::Loadout::Reconcile();  // undo a save taken mid-cast
             MFO::ProgProbe::OnPostLoad();   // P3 guarded reapply — no-op unless bProgProbe armed + probe ran
+            MFO::ProgAllocator::OnPostLoad();   // progression: start level poll + queue guarded reapply
+                                                // (after the co-save load — ARCHITECTURE §9)
             MFO::Board::SetHud(MFO::Config::g_showHud.load());
             MFO::Diagnostics::StartPump();
             MFO::Diagnostics::DumpReport("load");
