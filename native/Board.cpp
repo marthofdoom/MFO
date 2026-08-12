@@ -1713,33 +1713,67 @@ namespace MFO::Board {
                                         }
                                     }
                                     // AUTHORED positions, normalized (the
-                                    // universal part). Translate the kept
-                                    // set's bounding box to the origin, flip
-                                    // vpos (the dome grows upward; the root,
-                                    // vpos 0, lands at the canvas BOTTOM),
-                                    // then scale by the MEDIAN nearest-
+                                    // universal part). Round-5b DATA-TRACED
+                                    // convention fix (installed One-Handed
+                                    // AVIF, Requiem.esp): the constellation
+                                    // position is the COMPOSITE of the
+                                    // integer grid slot and the float fine
+                                    // offset — x = gridX + hpos, y_up =
+                                    // gridY + vpos, with y growing UP the
+                                    // dome. Neither float alone reproduces
+                                    // the game (vpos-up put Penetrating
+                                    // Strikes BELOW Weapon Mastery — the
+                                    // field bug; vpos-down put capstones at
+                                    // the bottom). Composite: Weapon Mastery
+                                    // y=0.0 bottom, Penetrating Strikes 0.9
+                                    // straight above it (same x column),
+                                    // Stunning Charge 6.2 top — the real
+                                    // constellation. Screen y flips once
+                                    // (root lands at the canvas bottom).
+                                    // Then scale by the MEDIAN nearest-
                                     // neighbour distance so ONE UNIT ≈ ONE
                                     // TYPICAL NODE GAP for any authored
-                                    // scale: a tree in 0.1-unit or 1000-unit
-                                    // coordinates lands identically, and one
-                                    // pathological close pair cannot inflate
-                                    // the layout (median, never min).
+                                    // scale: any coordinate units land
+                                    // identically, and one pathological
+                                    // close pair cannot inflate the layout
+                                    // (median, never min).
                                     s_vis.clear(); s_visPos.clear(); s_visPass.clear();
                                     s_visOf.assign(n, -1);
-                                    float minH = 1e9f, maxH = -1e9f, minV = 1e9f, maxV = -1e9f;
+                                    auto compX = [&](int i) {
+                                        return static_cast<float>(tree.nodes[i].gridX) +
+                                               tree.nodes[i].hpos;
+                                    };
+                                    auto compY = [&](int i) {   // grows UP the dome
+                                        return static_cast<float>(tree.nodes[i].gridY) +
+                                               tree.nodes[i].vpos;
+                                    };
+                                    // Outlier guard: real files carry
+                                    // UNINITIALIZED grid fields on some
+                                    // sections (the traced Requiem root sat
+                                    // at ~4.5e8) — a malformed overhaul
+                                    // could ship that on a perk node and
+                                    // detonate the bounding box. Insane
+                                    // coords are excluded from the bbox and
+                                    // clamped to its edge: still rendered,
+                                    // still selectable, never layout-fatal.
+                                    auto sane = [](float a_c) { return std::fabs(a_c) < 1.0e5f; };
+                                    float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
                                     for (int i = 0; i < n; ++i) {
                                         if (!keep[i]) continue;
-                                        minH = std::min(minH, tree.nodes[i].hpos);
-                                        maxH = std::max(maxH, tree.nodes[i].hpos);
-                                        minV = std::min(minV, tree.nodes[i].vpos);
-                                        maxV = std::max(maxV, tree.nodes[i].vpos);
+                                        if (!sane(compX(i)) || !sane(compY(i))) continue;
+                                        minX = std::min(minX, compX(i));
+                                        maxX = std::max(maxX, compX(i));
+                                        minY = std::min(minY, compY(i));
+                                        maxY = std::max(maxY, compY(i));
                                     }
+                                    if (minX > maxX) { minX = maxX = 0.0f; minY = maxY = 0.0f; }
                                     for (int i = 0; i < n; ++i) {
                                         if (!keep[i]) continue;
+                                        const float cx = std::clamp(compX(i), minX, maxX);
+                                        const float cy = std::clamp(compY(i), minY, maxY);
                                         s_visOf[i] = (int)s_vis.size();
                                         s_vis.push_back(i);
-                                        s_visPos.push_back(ImVec2(tree.nodes[i].hpos - minH,
-                                                                  maxV - tree.nodes[i].vpos));
+                                        s_visPos.push_back(ImVec2(cx - minX, maxY - cy));
                                         s_visPass.push_back(pass[i] ? 1 : 0);
                                     }
                                     float dtyp = 1.0f;

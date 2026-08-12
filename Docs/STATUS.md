@@ -60,6 +60,24 @@
 > SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
 > (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
 
+> **#74 ROUND 5b (2026-08-12) — vertical-axis DATA-TRACE fix: constellation position
+> = GRID + FLOAT OFFSET.** marth (One-Handed field test): Penetrating Strikes drew
+> BELOW Weapon Mastery — inverted vs the game. Offline trace of the installed
+> winning One-Handed AVIF (Requiem.esp) settled the convention with data: NEITHER
+> float sign works alone (vpos-up: PS −0.10 < WM 0.00 → PS below, the exact bug;
+> vpos-down: capstone Stunning Charge +2.2 lands at the bottom). The engine's real
+> position is the COMPOSITE of the integer grid slot and the float fine-offset —
+> x = gridX + hpos, y_up = gridY + vpos — which reproduces the game exactly: WM
+> (2,0)+0.187/0.0 → y 0.0 bottom; PS (2,1)+0.187/−0.1 → y 0.9 STRAIGHT ABOVE WM
+> (same x column); Stunning Charge (3,4)+2.2 → y 6.2 top. Cross-checked on
+> Destruction: Novice 0.0 → Apprentice 0.9 → Adept 2.1 → Expert 3.0 → Master 4.6,
+> every chain monotone upward. Board.cpp maps compX/compY with one screen-y flip
+> (root at canvas bottom); median-NN normalization, fit clamp, Béziers, nav,
+> culling, zoom, filter all unchanged. BONUS guard the trace exposed: real records
+> carry UNINITIALIZED grid fields on the root section (~4.5e8) — perk-node
+> outliers are now excluded from the bbox and clamped to its edge (rendered,
+> selectable, never layout-fatal). NOT field-tested (round 5b).
+
 > **#74 ROUND 5 (2026-08-12) — AUTHORED DOME LAYOUT replaces the tiers.** marth:
 > combat trees tiered fine, MAGIC trees were terrible under round-4 Kahn tiering —
 > and layout must be universal (Vokriinator-scale merges he can't test). The tree
