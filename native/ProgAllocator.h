@@ -87,8 +87,13 @@ namespace MFO::ProgAllocator {
     };
     struct SkillAlloc {
         RE::ActorValue av{ RE::ActorValue::kNone };
-        float points{ 0.0f };            // auto-granted points currently applied
+        float points{ 0.0f };            // TOTAL applied delta (auto + manual) — the
+                                         // §4.2 recovery term, exact by construction
         float lastWrittenBase{ -1.0f };  // §4.2 reconcile anchor; <0 = never wrote
+        // §16 manual points the PLAYER spent on this skill (requested, whole).
+        // Additive on top of the class auto-share; an entry with manual > 0
+        // survives a class change instead of settling out.
+        float manualPoints{ 0.0f };
     };
     struct BaselineAV {
         RE::ActorValue av{ RE::ActorValue::kNone };
@@ -101,11 +106,22 @@ namespace MFO::ProgAllocator {
         bool autoSpend{ false };                     // reserved for the board (comp 3)
         bool veteranConsumed{ false };               // one-shot catch-up granted
         bool wasInPotentialFollowerFaction{ false }; // provenance at enroll (§9.5)
+        bool manualSkills{ false };                  // §16 manual skill points ON
 
         Class         cls{ Class::kNone };
         std::uint16_t progressionLevel{ 0 };
         std::uint16_t sharedGrowthRemainder{ 0 };    // banked player-levels while benched
         float         unspentPerk{ 0.0f };           // scarcity-scaled points (fractional)
+
+        // §16 manual skill-point pool — NO incremental accumulator (the round-2
+        // SEV-1 lesson): the pool is a PURE FUNCTION of serialized baselines,
+        //   available = floor((progressionLevel − manualBaselineLevel) × rate)
+        //               − manualPointsApplied
+        // so any replay/reload/level recompute lands on the same number.
+        // manualBaselineLevel latches ONCE at first enable (0 = never enabled);
+        // the toggle afterwards only gates spending, never mutates the math.
+        std::uint16_t manualBaselineLevel{ 0 };
+        std::uint16_t manualPointsApplied{ 0 };
 
         std::vector<PerkAlloc>  perks;
         std::vector<SkillAlloc> skills;
@@ -147,6 +163,17 @@ namespace MFO::ProgAllocator {
     bool AllocateNextEligible(RE::Actor* a_actor);
     bool Respec(RE::Actor* a_actor);                      // refunds points, −500 rapport
 
+    // ── §16 manual skill points (design doc §16 — auto is a default, not a
+    // cage; this is the escape hatch for mage/multiclass builds) ────────────
+    // Toggle per follower. First enable latches manualBaselineLevel at the
+    // current progression level; accrual rate is the SAME ESL GLOB the auto-
+    // scale uses (MFOP_SkillPointsPerLevel 0x803) — additive on top of it.
+    bool SetManualSkills(RE::Actor* a_actor, bool a_on);
+    // Spend one pooled point: chosen skill's base +1 through the ONE
+    // SetBaseActorValue call site (ReconcileSkill — baseline floor + exact
+    // recovery), clamped at the economy skillCap. Refuses with a named line.
+    bool ApplyManualSkillPoint(RE::Actor* a_actor, RE::ActorValue a_av);
+
     // ── board views (component 3 — the Progression tab's read seam) ─────────
     // The tab draws on the RENDER thread; g_prog and every engine read here
     // are main-thread-only (the poll's thread). So the board reads VALUE-ONLY
@@ -166,7 +193,8 @@ namespace MFO::ProgAllocator {
         std::string    name;
         RE::ActorValue av{ RE::ActorValue::kNone };   // join key to the catalog's SkillTree.av
         float          base{ 0.0f };     // current base AV (post-scaling)
-        float          alloc{ 0.0f };    // MFO's applied share of that base
+        float          alloc{ 0.0f };    // MFO's applied share of that base (auto + manual)
+        float          manual{ 0.0f };   // §16: the manual share of alloc (requested)
     };
     struct BoardFollowerView {
         RE::FormID    id{ 0 };
@@ -177,6 +205,8 @@ namespace MFO::ProgAllocator {
         std::uint8_t  cls{ 0 };          // Class ordinal (0 = class not chosen yet, §15 gate)
         std::uint16_t level{ 0 };
         float         unspentPerk{ 0.0f };
+        bool          manualSkills{ false };  // §16 toggle state
+        int           manualAvail{ 0 };       // §16 pool (deterministic, see ProgState)
         std::vector<BoardSkillLine> skills;   // the 18, kSkillNames order
     };
     struct BoardProgSnap {
@@ -186,6 +216,8 @@ namespace MFO::ProgAllocator {
         int   totalRanks{ 0 };
         float respecRapportCost{ 500.0f };
         float perkPtsPerLevel{ 1.0f };   // economy rate — the board explains a zero with it
+        float skillPtsPerLevel{ 3.0f };  // §16 manual accrual rate (same GLOB as auto-scale)
+        float skillCap{ 100.0f };        // §16 apply gate — the board disables at cap
         std::vector<BoardFollowerView> rows;  // the active party, g_active order
         RE::FormID treeFor{ 0 };              // whose nodes[] below describe
         std::vector<BoardNodeView> nodes;     // catalog order; empty until a focus published

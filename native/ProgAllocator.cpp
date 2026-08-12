@@ -190,6 +190,20 @@ namespace MFO::ProgAllocator {
             return -1.0f;
         }
 
+        // §16 manual pool — a PURE FUNCTION of serialized baselines, never an
+        // incremental accumulator (the round-2 SEV-1 lesson: accumulators
+        // drift under replay; a formula cannot). Self-clamping: an economy
+        // GLOB lowered between sessions can make applied exceed accrued —
+        // that reads as 0 available, never a negative or a corrupt state.
+        int ManualAvail(const ProgState& a_st) {
+            if (!a_st.manualSkills || a_st.manualBaselineLevel == 0) return 0;
+            const int lvls = std::max(0, static_cast<int>(a_st.progressionLevel) -
+                                          static_cast<int>(a_st.manualBaselineLevel));
+            const int accrued = static_cast<int>(std::floor(
+                static_cast<float>(lvls) * g_econ.skillPointsPerLevel + 1e-4f));
+            return std::max(0, accrued - static_cast<int>(a_st.manualPointsApplied));
+        }
+
         // ── the §4.2 skill reconcile (P2-proven) ────────────────────────────
         //
         //   cur     = GetBaseActorValue(av)
@@ -334,7 +348,9 @@ namespace MFO::ProgAllocator {
         // total = skillPointsPerLevel × (progressionLevel − 1), split by the
         // class weights, applied through the reconcile. Recomputed whole on
         // every level gain / class change; entries leaving the set settle
-        // back to natural and are dropped.
+        // back to natural and are dropped — UNLESS they carry §16 manual
+        // points, which are ADDITIVE on top of the class share and survive
+        // any class change (the manual override outranks the auto default).
         void RecomputeSkills(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
             if (a_st.cls == Class::kNone) return;
             auto* avo = a_actor->AsActorValueOwner();
@@ -348,20 +364,25 @@ namespace MFO::ProgAllocator {
                                 static_cast<float>(std::max(0, a_st.progressionLevel - 1));
             const auto weights = WeightsFor(a_actor, a_st.cls);
 
-            // Desired points per skill (deterministic: round-half-up).
+            // Desired AUTO points per skill (deterministic: round-half-up).
             std::vector<std::pair<RE::ActorValue, float>> desired;
             for (const auto& [av, w] : weights)
                 desired.emplace_back(av, std::floor(total * w + 0.5f));
+            auto autoFor = [&](RE::ActorValue av) -> float {
+                for (const auto& d : desired)
+                    if (d.first == av) return d.second;
+                return 0.0f;
+            };
 
             const auto id = a_actor->GetFormID();
 
-            // 1) skills leaving the allocation settle back to natural. The
-            // baseline floor rides along: a shrink can never land below the
-            // captured natural (SEV-1 guarantee, single choke point).
+            // 1) skills leaving the allocation entirely (no auto share, no
+            // manual points) settle back to natural and drop. The baseline
+            // floor rides along: a shrink can never land below the captured
+            // natural (SEV-1 guarantee, single choke point).
             for (auto it = a_st.skills.begin(); it != a_st.skills.end();) {
-                const bool keep = std::find_if(desired.begin(), desired.end(),
-                                               [&](const auto& d) { return d.first == it->av; })
-                                  != desired.end();
+                const bool keep = it->manualPoints > 0.0f ||
+                                  autoFor(it->av) > 0.0f;
                 if (!keep) {
                     ReconcileSkill(avo, *it, 0.0f, BaselineFloor(a_st, it->av), id, a_log);
                     it = a_st.skills.erase(it);
@@ -369,16 +390,19 @@ namespace MFO::ProgAllocator {
                     ++it;
                 }
             }
-            // 2) current set reconciles to its new targets.
+            // 2) ensure an entry exists for every auto-desired skill, then
+            // reconcile EVERY kept entry to auto + manual in one pass — one
+            // target, one call site, exact recovery.
             for (const auto& [av, pts] : desired) {
-                auto* e = [&]() -> SkillAlloc* {
-                    for (auto& s : a_st.skills)
-                        if (s.av == av) return &s;
-                    a_st.skills.push_back({ av, 0.0f, -1.0f });
-                    return &a_st.skills.back();
-                }();
-                ReconcileSkill(avo, *e, pts, BaselineFloor(a_st, av), id, a_log);
+                (void)pts;
+                const bool have = std::find_if(a_st.skills.begin(), a_st.skills.end(),
+                                               [&](const SkillAlloc& s) { return s.av == av; })
+                                  != a_st.skills.end();
+                if (!have) a_st.skills.push_back({ av, 0.0f, -1.0f });
             }
+            for (auto& e : a_st.skills)
+                ReconcileSkill(avo, e, autoFor(e.av) + e.manualPoints,
+                               BaselineFloor(a_st, e.av), id, a_log);
         }
 
         // ── perk grant plumbing (P1/P3-proven paths only) ───────────────────
@@ -976,6 +1000,8 @@ namespace MFO::ProgAllocator {
             snap->scarcity       = static_cast<float>(ScarcityRatio());
             snap->respecRapportCost = g_econ.respecRapportCost;
             snap->perkPtsPerLevel   = g_econ.perkPointsPerLevel;
+            snap->skillPtsPerLevel  = g_econ.skillPointsPerLevel;
+            snap->skillCap          = g_econ.skillCap;
 
             const RE::FormID focus = g_boardFocus.load();
             for (const auto& h : Followers::g_active) {
@@ -992,10 +1018,12 @@ namespace MFO::ProgAllocator {
                 if (auto it = g_prog.find(v.id); it != g_prog.end() && it->second.enrolled)
                     st = &it->second;
                 if (st) {
-                    v.enrolled    = true;
-                    v.cls         = static_cast<std::uint8_t>(st->cls);
-                    v.level       = st->progressionLevel;
-                    v.unspentPerk = st->unspentPerk;
+                    v.enrolled     = true;
+                    v.cls          = static_cast<std::uint8_t>(st->cls);
+                    v.level        = st->progressionLevel;
+                    v.unspentPerk  = st->unspentPerk;
+                    v.manualSkills = st->manualSkills;             // §16
+                    v.manualAvail  = ManualAvail(*st);
                 }
                 if (auto* avo = a->AsActorValueOwner()) {
                     v.skills.reserve(std::size(kSkillNames));
@@ -1006,7 +1034,11 @@ namespace MFO::ProgAllocator {
                         line.base = avo->GetBaseActorValue(s.av);
                         if (st)
                             for (const auto& e : st->skills)
-                                if (e.av == s.av) { line.alloc = e.points; break; }
+                                if (e.av == s.av) {
+                                    line.alloc  = e.points;
+                                    line.manual = e.manualPoints;   // §16
+                                    break;
+                                }
                         v.skills.push_back(std::move(line));
                     }
                 }
@@ -1269,14 +1301,93 @@ namespace MFO::ProgAllocator {
         return true;
     }
 
-    // ── co-save ('PRGN' v1, §8) ─────────────────────────────────────────────
+    // ── §16 manual skill points ─────────────────────────────────────────────
+
+    bool SetManualSkills(RE::Actor* a_actor, bool a_on) {
+        if (!g_ready) { spdlog::info("[prog] manual-skills refused: addon absent"); return false; }
+        if (!a_actor) return false;
+        auto it = g_prog.find(a_actor->GetFormID());
+        if (it == g_prog.end() || !it->second.enrolled || it->second.cls == Class::kNone) {
+            spdlog::info("[prog] manual-skills refused {}: not enrolled or no class (§15 gate)",
+                         NameOf(a_actor));
+            return false;
+        }
+        auto& st = it->second;
+        if (st.manualSkills == a_on) return true;   // idempotent no-op
+        st.manualSkills = a_on;
+        // First enable LATCHES the accrual baseline; afterwards the toggle
+        // only gates spending — the pool stays a pure function of level, so
+        // off/on cycling can neither farm points nor forfeit them.
+        if (a_on && st.manualBaselineLevel == 0)
+            st.manualBaselineLevel = std::max<std::uint16_t>(1, st.progressionLevel);
+        spdlog::info("[prog] {} manual skill points {} (baseline level {}, {} available, "
+                     "rate {:g}/level)",
+                     NameOf(a_actor), a_on ? "ON" : "OFF", st.manualBaselineLevel,
+                     ManualAvail(st), g_econ.skillPointsPerLevel);
+        return true;
+    }
+
+    bool ApplyManualSkillPoint(RE::Actor* a_actor, RE::ActorValue a_av) {
+        if (!g_ready) { spdlog::info("[prog] apply-skill refused: addon absent"); return false; }
+        if (!a_actor) return false;
+        auto it = g_prog.find(a_actor->GetFormID());
+        if (it == g_prog.end() || !it->second.enrolled || it->second.cls == Class::kNone) {
+            spdlog::info("[prog] apply-skill refused {}: not enrolled or no class", NameOf(a_actor));
+            return false;
+        }
+        auto& st = it->second;
+        if (!st.manualSkills) {
+            spdlog::info("[prog] apply-skill refused {}: manual skill points are OFF", NameOf(a_actor));
+            return false;
+        }
+        if (!IsKnownSkillAv(static_cast<std::uint32_t>(a_av))) {
+            spdlog::info("[prog] apply-skill refused {}: AV {} is not one of the 18 skills",
+                         NameOf(a_actor), static_cast<std::uint32_t>(a_av));
+            return false;
+        }
+        if (ManualAvail(st) < 1) {
+            spdlog::info("[prog] apply-skill refused {}: no pooled points "
+                         "(level {} - baseline {} at {:g}/level, {} applied)",
+                         NameOf(a_actor), st.progressionLevel, st.manualBaselineLevel,
+                         g_econ.skillPointsPerLevel, st.manualPointsApplied);
+            return false;
+        }
+        auto* avo = a_actor->AsActorValueOwner();
+        if (!avo) return false;
+        if (avo->GetBaseActorValue(a_av) + 0.5f >= g_econ.skillCap) {
+            spdlog::info("[prog] apply-skill refused {}: {} already at the cap ({:g})",
+                         NameOf(a_actor), AvName(a_av), g_econ.skillCap);
+            return false;   // refuse instead of silently absorbing at the clamp
+        }
+        auto* e = [&]() -> SkillAlloc* {
+            for (auto& s : st.skills)
+                if (s.av == a_av) return &s;
+            st.skills.push_back({ a_av, 0.0f, -1.0f });
+            return &st.skills.back();
+        }();
+        e->manualPoints += 1.0f;
+        st.manualPointsApplied = static_cast<std::uint16_t>(st.manualPointsApplied + 1);
+        // The write goes through the SAME reconcile every other skill write
+        // uses (RecomputeSkills → ReconcileSkill, the one SetBaseActorValue
+        // call site) — floor discipline and exact recovery hold by
+        // construction; manual is just one more term in the target.
+        RecomputeSkills(a_actor, st, /*log*/ true);
+        spdlog::info("[prog] {} manual +1 {} -> base {:.0f} ({} point(s) left)",
+                     NameOf(a_actor), AvName(a_av), avo->GetBaseActorValue(a_av),
+                     ManualAvail(st));
+        return true;
+    }
+
+    // ── co-save ('PRGN' v2, §8 + §16) ───────────────────────────────────────
     //
     //   u16 lastPlayerLevel
     //   u32 followerCount, then per follower:
     //     u32 formID | u8 flags | u8 class | u16 progressionLevel
     //     u16 sharedGrowthRemainder | f32 unspentPerk
+    //     v2: u16 manualBaselineLevel | u16 manualPointsApplied
     //     u16 perkCount   { u32 nodePerkID, u8 rank }*
-    //     u16 skillCount  { u32 av, f32 points, f32 lastWrittenBase }*
+    //     u16 skillCount  { u32 av, f32 points, f32 lastWrittenBase,
+    //                       v2: f32 manualPoints }*
     //     u16 baseCount   { u32 av, f32 value }*
     //
     // FormIDs go through ResolveFormID on load (INVARIANTS #8): a gone
@@ -1304,12 +1415,18 @@ namespace MFO::ProgAllocator {
             a_intfc->WriteRecordData(id);
             const std::uint8_t flags =
                 (st.enrolled ? 1u : 0u) | (st.autoSpend ? 2u : 0u) |
-                (st.veteranConsumed ? 4u : 0u) | (st.wasInPotentialFollowerFaction ? 8u : 0u);
+                (st.veteranConsumed ? 4u : 0u) | (st.wasInPotentialFollowerFaction ? 8u : 0u) |
+                (st.manualSkills ? 16u : 0u);   // v2 (§16) — spare bit in the same byte
             a_intfc->WriteRecordData(flags);
             a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.cls));
             a_intfc->WriteRecordData(st.progressionLevel);
             a_intfc->WriteRecordData(st.sharedGrowthRemainder);
             a_intfc->WriteRecordData(st.unspentPerk);
+            // v2 (§16): the manual-pool BASELINES — never a pool value; the
+            // pool is recomputed from these, so a save replays to the same
+            // number by construction.
+            a_intfc->WriteRecordData(st.manualBaselineLevel);
+            a_intfc->WriteRecordData(st.manualPointsApplied);
 
             const auto perkCount = static_cast<std::uint16_t>(
                 std::min<std::size_t>(st.perks.size(), kMaxPerkAllocs));
@@ -1325,6 +1442,7 @@ namespace MFO::ProgAllocator {
                 a_intfc->WriteRecordData(static_cast<std::uint32_t>(st.skills[i].av));
                 a_intfc->WriteRecordData(st.skills[i].points);
                 a_intfc->WriteRecordData(st.skills[i].lastWrittenBase);
+                a_intfc->WriteRecordData(st.skills[i].manualPoints);   // v2 (§16)
             }
             const auto baseCount = static_cast<std::uint16_t>(
                 std::min<std::size_t>(st.baseline.size(), kMaxSkillAllocs));
@@ -1341,7 +1459,8 @@ namespace MFO::ProgAllocator {
     }
 
     void CoSaveLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version) {
-        (void)a_version;   // v1 is the only shape; new fields gate on >= 2 here
+        // v1 saves lack the §16 manual fields — every v2 read below gates on
+        // a_version >= 2 and defaults to "manual off, nothing applied".
         g_prog.clear();    // defence in depth — ClearAll ran at revert already
 
         std::uint16_t lastPl = 0;
@@ -1379,8 +1498,17 @@ namespace MFO::ProgAllocator {
             st.autoSpend                      = (flags & 2u) != 0;
             st.veteranConsumed                = (flags & 4u) != 0;
             st.wasInPotentialFollowerFaction  = (flags & 8u) != 0;
+            st.manualSkills                   = (flags & 16u) != 0;   // v2 (§16)
             st.cls = static_cast<Class>(std::min<std::uint8_t>(clsRaw, 3));
             if (st.unspentPerk < 0.0f || !std::isfinite(st.unspentPerk)) st.unspentPerk = 0.0f;
+            if (a_version >= 2) {
+                if (!a_intfc->ReadRecordData(st.manualBaselineLevel)) return;
+                if (!a_intfc->ReadRecordData(st.manualPointsApplied)) return;
+            }
+            // Coherence guard: manual ON without a latched baseline cannot
+            // happen through the verbs — a hand-edited/corrupt record reads
+            // as OFF rather than as an infinite level-1 pool.
+            if (st.manualSkills && st.manualBaselineLevel == 0) st.manualSkills = false;
 
             std::uint16_t perkCount = 0;
             if (!a_intfc->ReadRecordData(perkCount)) return;
@@ -1426,13 +1554,15 @@ namespace MFO::ProgAllocator {
             }
             for (std::uint16_t s = 0; s < skillCount; ++s) {
                 std::uint32_t av = 0;
-                float points = 0.0f, lastBase = -1.0f;
+                float points = 0.0f, lastBase = -1.0f, manual = 0.0f;
                 if (!a_intfc->ReadRecordData(av)) return;
                 if (!a_intfc->ReadRecordData(points)) return;
                 if (!a_intfc->ReadRecordData(lastBase)) return;
+                if (a_version >= 2 && !a_intfc->ReadRecordData(manual)) return;   // §16
                 if (!resolved) continue;
                 if (!IsKnownSkillAv(av)) { ++droppedAv; continue; }   // L2: value, not just count
-                st.skills.push_back({ static_cast<RE::ActorValue>(av), points, lastBase });
+                if (!std::isfinite(manual) || manual < 0.0f) manual = 0.0f;   // L2 for v2
+                st.skills.push_back({ static_cast<RE::ActorValue>(av), points, lastBase, manual });
             }
 
             std::uint16_t baseCount = 0;

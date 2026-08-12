@@ -60,6 +60,32 @@
 > SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
 > (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
 
+> **#74 §16 MANUAL SKILL POINTS (2026-08-12) — per-follower toggle, built on the new
+> design lens.** New design-doc §16 engrains the lens (marth): every auto-behavior is
+> a DEFAULT, never a cage — manual override always exists (mage + multiclass builds
+> are the motivating cases). The toggle ("Manual skill points", OFF by default, a
+> nav-focusable Checkbox under the perk-point headline) banks a VISIBLE pool per
+> progression level at the existing `MFOP_SkillPointsPerLevel` GLOB rate (0x803
+> reused — no new record, no generator change), ADDITIVE on top of class
+> auto-scaling. Spend: selecting a skill row with manual ON opens an action popup —
+> "Apply 1 skill point (N -> N+1)" (DontClosePopups, pump-able; backend re-validates
+> the pool per press so a stale double-A refuses, never over-applies) or "Open perk
+> tree"; manual OFF keeps the old row-opens-tree behavior; tree-less rows become
+> selectable under manual so points can go anywhere. **Save-safety (SEV-1 lesson
+> baked in): NO incremental accumulator** — pool = floor((level − manualBaselineLevel)
+> × rate) − manualPointsApplied, a pure function of two serialized baselines;
+> baseline latches ONCE at first enable (off/on cycling can't farm or forfeit);
+> apply routes through the ONE SetBaseActorValue site (RecomputeSkills →
+> ReconcileSkill, target = auto share + per-skill manualPoints, baseline floor,
+> applied-delta recovery); refuses at skillCap instead of absorbing into the clamp;
+> manual-carrying skill entries survive class changes (override outranks default).
+> Co-save PRGN **v2**: flags bit 0x10, manualBaselineLevel/manualPointsApplied u16,
+> per-skill manualPoints f32 — version-guarded, value-validated, ON-without-baseline
+> loads as OFF. Board seam: BoardFollowerView.manualSkills/manualAvail,
+> BoardSkillLine.manual, snap skillPtsPerLevel/skillCap; EditKinds ProgSetManual /
+> ProgApplySkillPoint (param carries the AV ordinal, the SetClassOverride shape).
+> Respec still perk-only (does not touch manual skill points). NOT yet field-tested.
+
 > **#74 COMPONENT 3 DECK FIELD FIXES (2026-08-12) — three field-test failures fixed,
 > tab flow redesigned.** (1) *Perks un-selectable on deck* — ROOT CAUSE: the tree lived
 > in a plain BeginChild and ImGui directional nav does NOT cross into a non-flattened

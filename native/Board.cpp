@@ -149,7 +149,11 @@ namespace MFO::Board {
                                          SetCond, SetAct, TeachSpell,
                                          SetSubject, SetSubjectActor,   // #68
                                          SetClassOverride,   // #65
-                                         ProgSetClass, ProgAllocPerk, ProgRespec };   // #74 comp 3
+                                         ProgSetClass, ProgAllocPerk, ProgRespec,   // #74 comp 3
+                                         ProgSetManual, ProgApplySkillPoint };   // #74 §16 (param:
+                                                            // 0/1 toggle | AV ordinal, same
+                                                            // param-carries-ordinal shape as
+                                                            // SetClassOverride)
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
         RE::FormID spell = 0;
@@ -1350,6 +1354,37 @@ namespace MFO::Board {
                                                     prog.perkPtsPerLevel * prog.scarcity,
                                                     prog.perkPtsPerLevel, prog.scarcity);
                             if (!stateOk) ImGui::TextDisabled("syncing follower state...");
+
+                            // ── §16 MANUAL SKILL POINTS (design doc §16:
+                            // auto-scaling is a default, never a cage — the
+                            // escape hatch for mage/multiclass builds). Off
+                            // by default; ON banks a visible pool per level
+                            // (the SAME MFOP_SkillPointsPerLevel rate, added
+                            // on TOP of the auto-scale) spent from the skill
+                            // list below. The checkbox is a nav item — A
+                            // toggles it on the pad.
+                            {
+                                bool man = who->manualSkills;
+                                if (ImGui::Checkbox("Manual skill points", &man))
+                                    QueueEdit({ EditKind::ProgSetManual, s_psel, 0, 0u,
+                                                man ? 1.0f : 0.0f });
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip(
+                                        "Class auto-scaling stays on; this ADDS a bankable pool\n"
+                                        "(%g per level) you spend by hand -- for mage or\n"
+                                        "multiclass builds the class weights won't serve.",
+                                        prog.skillPtsPerLevel);
+                                if (who->manualSkills) {
+                                    ImGui::SameLine();
+                                    ImGui::PushFont(g_fontHead);
+                                    ImGui::TextColored(skin.accent, "  Skill points: %d",
+                                                       who->manualAvail);
+                                    ImGui::PopFont();
+                                    ImGui::SameLine();
+                                    ImGui::TextDisabled("  select a skill to apply (+1 base, "
+                                                        "cap %g)", prog.skillCap);
+                                }
+                            }
                             ImGui::Spacing();
 
                             // ── SKILL PICKER (deck field fix #3) ────────
@@ -1363,6 +1398,7 @@ namespace MFO::Board {
                             // nav-flattened by ImGui, so the d-pad walks the
                             // rows on the deck (field-proven).
                             bool wantOpenTree = false;
+                            bool wantSkillAct = false;   // §16: the row action popup
                             const float footer = ImGui::GetFrameHeightWithSpacing() + 6.0f;
                             if (ImGui::BeginTable("##pskillpick", 4,
                                     ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -1393,12 +1429,20 @@ namespace MFO::Board {
                                     ImGui::TableNextRow();
                                     ImGui::TableNextColumn();
                                     ImGui::PushID(t);
-                                    ImGui::BeginDisabled(!hasTree);
+                                    // §16: with manual ON, even a tree-less
+                                    // skill row is selectable (points can go
+                                    // anywhere); the action popup disables
+                                    // its tree entry instead.
+                                    ImGui::BeginDisabled(!hasTree && !who->manualSkills);
                                     if (ImGui::Selectable(skl.skillName.c_str(), false,
                                                           ImGuiSelectableFlags_SpanAllColumns)) {
                                         s_skillCur = t;       // catalog index
-                                        s_scrollHome = true;
-                                        wantOpenTree = true;  // OpenPopup outside the table/PushID
+                                        if (who->manualSkills) {
+                                            wantSkillAct = true;   // tree OR +1 — ask
+                                        } else {
+                                            s_scrollHome = true;
+                                            wantOpenTree = true;   // OpenPopup outside the table/PushID
+                                        }
                                     }
                                     ImGui::EndDisabled();
                                     ImGui::PopID();
@@ -1419,6 +1463,65 @@ namespace MFO::Board {
                                 }
                                 ImGui::EndTable();
                             }
+
+                            // ── §16 SKILL ACTION POPUP (manual ON only) ──
+                            // One row press → two possible actions, so the
+                            // row asks: apply a pooled point (+1 base, stays
+                            // open to pump repeat points — the backend
+                            // re-validates the pool per press, a stale double
+                            // A is refused, never over-applied) or open the
+                            // perk tree. The listPopup idiom: pad A picks,
+                            // B/Esc backs out.
+                            if (wantSkillAct) ImGui::OpenPopup("##pskillact");
+                            ImGui::SetNextWindowPos(
+                                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                            if (ImGui::BeginPopup("##pskillact")) {
+                                pickerDrawnThisFrame = true;
+                                if (s_skillCur < 0 || s_skillCur >= (int)cat.skills.size()) {
+                                    ImGui::CloseCurrentPopup();
+                                } else {
+                                    const auto& skl = cat.skills[s_skillCur];
+                                    float base = 0.0f, manual = 0.0f;
+                                    for (const auto& sl : who->skills)
+                                        if (sl.av == skl.av) { base = sl.base; manual = sl.manual; break; }
+
+                                    ImGui::PushFont(g_fontHead);
+                                    ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                                    ImGui::TextUnformatted(skl.skillName.c_str());
+                                    ImGui::PopStyleColor();
+                                    ImGui::PopFont();
+                                    ImGui::TextDisabled("base %.0f (manual +%.0f)  |  %d point(s) "
+                                                        "pooled", base, manual, who->manualAvail);
+                                    ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
+                                    ImGui::Separator();
+
+                                    const bool canApply = who->manualAvail >= 1 &&
+                                                          base + 0.5f < prog.skillCap;
+                                    ImGui::BeginDisabled(!canApply);
+                                    const std::string apply = std::format(
+                                        "Apply 1 skill point  ({:.0f} -> {:.0f})", base, base + 1.0f);
+                                    if (ImGui::Selectable(apply.c_str(), false,
+                                                          ImGuiSelectableFlags_DontClosePopups)) {
+                                        QueueEdit({ EditKind::ProgApplySkillPoint, s_psel, 0, 0u,
+                                                    (float)(int)skl.av });
+                                    }
+                                    ImGui::EndDisabled();
+                                    if (!canApply)
+                                        ImGui::TextDisabled(who->manualAvail < 1
+                                                                ? "no pooled points"
+                                                                : "at the skill cap");
+                                    ImGui::BeginDisabled(skl.nodes.empty());
+                                    if (ImGui::Selectable("Open perk tree")) {
+                                        s_scrollHome = true;
+                                        wantOpenTree = true;   // opened at this scope, below
+                                        ImGui::CloseCurrentPopup();
+                                    }
+                                    ImGui::EndDisabled();
+                                }
+                                ImGui::EndPopup();
+                            }
+
                             if (wantOpenTree) ImGui::OpenPopup("##ptreewin");
 
                             // ── THE DEDICATED TREE WINDOW (deck field fix
@@ -2371,13 +2474,15 @@ namespace MFO::Board {
             // Republish the views right after so the tab echoes on the next
             // snapshot instead of waiting out the poll cadence.
             if (c.kind == EditKind::ProgSetClass || c.kind == EditKind::ProgAllocPerk ||
-                c.kind == EditKind::ProgRespec) {
-                const auto kind = c.kind;
-                const auto fid  = c.fid;
-                const auto perk = c.perk;
-                const auto cls  = static_cast<ProgAllocator::Class>(
+                c.kind == EditKind::ProgRespec || c.kind == EditKind::ProgSetManual ||
+                c.kind == EditKind::ProgApplySkillPoint) {
+                const auto  kind  = c.kind;
+                const auto  fid   = c.fid;
+                const auto  perk  = c.perk;
+                const float param = c.param;
+                const auto  cls   = static_cast<ProgAllocator::Class>(
                     std::clamp(static_cast<int>(c.param + 0.5f), 0, 3));
-                MainThread::Post([kind, fid, perk, cls]() {
+                MainThread::Post([kind, fid, perk, cls, param]() {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
                     if (!actor) {
                         spdlog::info("[prog] board edit dropped: actor {:08X} unresolvable", fid);
@@ -2398,6 +2503,13 @@ namespace MFO::Board {
                         break;
                     case EditKind::ProgRespec:
                         ProgAllocator::Respec(actor);
+                        break;
+                    case EditKind::ProgSetManual:   // #74 §16
+                        ProgAllocator::SetManualSkills(actor, param > 0.5f);
+                        break;
+                    case EditKind::ProgApplySkillPoint:   // #74 §16 — param = AV ordinal
+                        ProgAllocator::ApplyManualSkillPoint(actor,
+                            static_cast<RE::ActorValue>(static_cast<int>(param + 0.5f)));
                         break;
                     default:
                         break;

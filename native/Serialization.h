@@ -24,7 +24,7 @@ namespace MFO {
     //        perkAlloc[]{formID,rank}, skillAlloc[]{av,points,lastWrittenBase},
     //        enrollBaseline[]{av,f32}}
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
-    inline constexpr std::uint32_t kProgVersion    = 1;
+    inline constexpr std::uint32_t kProgVersion    = 2;   // v2: §16 manual skill points
 
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.

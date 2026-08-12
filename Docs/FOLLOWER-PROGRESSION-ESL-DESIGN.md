@@ -211,3 +211,50 @@ Not proposed: training scenes, any Synthesis-side anything, any storage records.
 - **v1 scope:** unique-base followers only (confirmed).
 - **Detection:** ESL presence is the signal (confirmed). Do it to the robustness bar of how **Precision detects Nemesis** and how **DynDOLOD surfaces dynamic info** — study those patterns for the detection + MCM "Detected" display (Fable, at build time).
 - **The 5 proposed additions (§14):** not yet individually ruled on; carry as optional/toggleable.
+
+---
+
+## 16. Manual skill points (2026-08-12) — and the manual-override lens
+
+**THE STANDING DESIGN LENS (marth — engrain this): every auto-behavior in the
+progression system is a helpful DEFAULT, never a cage, and therefore needs a manual
+override.** Class auto-scaling picks sensible skills for the archetype, but real
+builds outgrow archetypes — **mage followers especially** (the Mage weights split
+across five schools and can't know you're building a pure conjurer), and
+**unexpected/desired multiclass builds** (a spellsword, a sneak-archer housecarl)
+that no fixed weight table serves. When an auto-system and the player disagree, the
+player wins. Apply this lens to every future auto-feature in this system: auto-spend
+perks will need a manual picker (it has one — the tree), auto-skills need this
+toggle, any future auto-class inference needs the explicit class prompt it already
+has.
+
+**The feature:** a per-follower **"Manual skill points" toggle** on the Progression
+tab, **OFF by default** (auto-scaling stays the norm). ON = the follower **banks
+skill points every progression level** into a visible pool; the player applies them
+from the skill picker, **+1 base per point**, capped at the economy `skillCap`.
+**Additive**: auto-scaling and per-level growth continue untouched — manual points
+stack on top of the class share and **survive class changes** (the override outranks
+the default).
+
+**Economy:** accrual rate = the existing `MFOP_SkillPointsPerLevel` GLOB (0x803,
+float) — the same knob that feeds the auto-scale total; no new record. One point =
+one base level.
+
+**Save-safety (the round-2 SEV-1 lesson, applied):** the pool is **never an
+incremental accumulator** — it is a pure function of two serialized baselines:
+
+```
+available = floor((progressionLevel − manualBaselineLevel) × skillPointsPerLevel)
+            − manualPointsApplied
+```
+
+`manualBaselineLevel` latches ONCE at first enable (0 = never enabled); after that
+the toggle only gates spending — off/on cycling can neither farm nor forfeit points,
+and any reload/replay recomputes the identical number. Applied points ride the SAME
+single `SetBaseActorValue` call site as everything else (`ReconcileSkill`: target =
+auto share + manual points, baseline floor, applied-delta recovery), so a manual
+point can never push a skill below its enrollment natural and recovers exactly.
+Spending refuses at the cap rather than silently absorbing into the clamp. Co-save:
+PRGN **v2** — flags bit 0x10 (manual ON), `manualBaselineLevel`/`manualPointsApplied`
+u16s, per-skill `manualPoints` f32 — version-guarded reads, value-validated on
+ingestion, coherence-guarded (ON without a latched baseline loads as OFF).
