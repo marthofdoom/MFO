@@ -163,9 +163,10 @@ namespace MFO::ProgAllocator {
         std::string  whyNot;             // locked reason (empty when owned/available/no class)
     };
     struct BoardSkillLine {
-        std::string name;
-        float       base{ 0.0f };        // current base AV (post-scaling)
-        float       alloc{ 0.0f };       // MFO's applied share of that base
+        std::string    name;
+        RE::ActorValue av{ RE::ActorValue::kNone };   // join key to the catalog's SkillTree.av
+        float          base{ 0.0f };     // current base AV (post-scaling)
+        float          alloc{ 0.0f };    // MFO's applied share of that base
     };
     struct BoardFollowerView {
         RE::FormID    id{ 0 };
@@ -184,6 +185,7 @@ namespace MFO::ProgAllocator {
         int   effectiveRanks{ 0 };
         int   totalRanks{ 0 };
         float respecRapportCost{ 500.0f };
+        float perkPtsPerLevel{ 1.0f };   // economy rate — the board explains a zero with it
         std::vector<BoardFollowerView> rows;  // the active party, g_active order
         RE::FormID treeFor{ 0 };              // whose nodes[] below describe
         std::vector<BoardNodeView> nodes;     // catalog order; empty until a focus published

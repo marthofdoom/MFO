@@ -1308,35 +1308,15 @@ namespace MFO::Board {
                                                who->name.c_str(), who->blocker.c_str());
                         } else if (needsClass) {
                             ImGui::Spacing();
-                            ImGui::TextWrapped("%s is not enrolled. Pick a class to begin — "
+                            ImGui::TextWrapped("%s is not enrolled. Pick a class to begin -- "
                                                "no skills are touched until you do.",
                                                who->name.c_str());
                             ImGui::Spacing();
                             if (ImGui::Button("Choose class...")) ImGui::OpenPopup("##pclass");
                         } else {
-                            // ── SKILL STRIP (the 18, post-scaling) ──────
-                            if (ImGui::BeginTable("##pskills", 6,
-                                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                                for (const auto& sl : who->skills) {
-                                    ImGui::TableNextColumn();
-                                    ImGui::TextDisabled("%s", sl.name.c_str());
-                                    ImGui::Text("%.0f", sl.base);
-                                    if (sl.alloc > 0.5f) {
-                                        ImGui::SameLine();
-                                        ImGui::TextColored(skin.accent, "(+%.0f)", sl.alloc);
-                                    }
-                                }
-                                ImGui::EndTable();
-                            }
-
-                            // ── TREE PICKER + POINTS ────────────────────
                             const auto& cat = Progression::Get();   // frozen — lock-free
-                            std::vector<int> trees;
                             std::size_t totalNodes = 0;
-                            for (int t = 0; t < (int)cat.skills.size(); ++t) {
-                                totalNodes += cat.skills[t].nodes.size();
-                                if (!cat.skills[t].nodes.empty()) trees.push_back(t);
-                            }
+                            for (const auto& t : cat.skills) totalNodes += t.nodes.size();
                             // State rows align with the catalog ONLY when the
                             // published tree is this follower's and complete —
                             // otherwise draw the shape and say "syncing".
@@ -1348,67 +1328,162 @@ namespace MFO::Board {
                                            ? &prog.nodes[flat] : nullptr;
                             };
 
-                            if (trees.empty()) {
-                                ImGui::TextDisabled("The catalog holds no perk trees — "
-                                                    "see the [prog] census in the log.");
-                            } else {
-                                if (s_skillCur >= (int)trees.size()) s_skillCur = 0;
-                                auto switchSkill = [&](int d) {
-                                    s_skillCur = ((s_skillCur + d) % (int)trees.size()
-                                                  + (int)trees.size()) % (int)trees.size();
-                                    s_scrollHome = true;
-                                };
-                                // Y / FaceUp = next tree (design §7). Inert to
-                                // ImGui itself here — no text widgets — the
-                                // same reasoning as the Gambits Y binding.
-                                if (!ImGui::IsAnyItemActive() && !popupOpen &&
-                                    ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false))
-                                    switchSkill(+1);
+                            // ── PERK POINTS — the headline number (deck
+                            // field fix #1: a hover tooltip made "no points"
+                            // and "broken input" look identical; this line is
+                            // always on screen and self-explains a zero).
+                            ImGui::PushFont(g_fontHead);
+                            ImGui::TextColored(skin.accent, "Perk points: %.2f", who->unspentPerk);
+                            ImGui::PopFont();
+                            if (who->unspentPerk < 1.0f)
+                                ImGui::TextDisabled("None to spend yet: %s earns %.2f per player "
+                                                    "level (rate %g x scarcity %.2f; %d of %d tree "
+                                                    "ranks are useful to a follower). Enrolling at "
+                                                    "player level 1 starts from zero.",
+                                                    who->name.c_str(),
+                                                    prog.perkPtsPerLevel * prog.scarcity,
+                                                    prog.perkPtsPerLevel, prog.scarcity,
+                                                    prog.effectiveRanks, prog.totalRanks);
+                            else
+                                ImGui::TextDisabled("Pick a skill to open its perk tree. Earning "
+                                                    "%.2f per player level (rate %g x scarcity %.2f).",
+                                                    prog.perkPtsPerLevel * prog.scarcity,
+                                                    prog.perkPtsPerLevel, prog.scarcity);
+                            if (!stateOk) ImGui::TextDisabled("syncing follower state...");
+                            ImGui::Spacing();
 
-                                const auto& tree = cat.skills[trees[s_skillCur]];
+                            // ── SKILL PICKER (deck field fix #3) ────────
+                            // An explicit list instead of the Y-only cycler:
+                            // one row per skill — level (auto-scaled by
+                            // class; never manually assigned), perks owned in
+                            // that tree, and whether anything is spendable
+                            // there NOW. A / click on a row opens the tree in
+                            // the dedicated window below. The ScrollY table
+                            // is the Gambits pattern — its inner window is
+                            // nav-flattened by ImGui, so the d-pad walks the
+                            // rows on the deck (field-proven).
+                            bool wantOpenTree = false;
+                            const float footer = ImGui::GetFrameHeightWithSpacing() + 6.0f;
+                            if (ImGui::BeginTable("##pskillpick", 4,
+                                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                    ImGuiTableFlags_ScrollY, ImVec2(0.0f, -footer))) {
+                                ImGui::TableSetupColumn("Skill", ImGuiTableColumnFlags_WidthStretch);
+                                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+                                ImGui::TableSetupColumn("Perks", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                                ImGui::TableSetupColumn("",      ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                                ImGui::TableHeadersRow();
+
+                                std::size_t rowFlat = 0;
+                                for (int t = 0; t < (int)cat.skills.size(); ++t) {
+                                    const auto& skl = cat.skills[t];
+                                    const std::size_t base = rowFlat;
+                                    rowFlat += skl.nodes.size();
+                                    const bool hasTree = !skl.nodes.empty();
+
+                                    float lvl = 0.0f, alloc = 0.0f;
+                                    for (const auto& sl : who->skills)
+                                        if (sl.av == skl.av) { lvl = sl.base; alloc = sl.alloc; break; }
+                                    int ownedN = 0, availN = 0;
+                                    for (std::size_t k = 0; k < skl.nodes.size(); ++k)
+                                        if (const auto* stn = stateAt(base + k)) {
+                                            if (stn->ownedRank > 0 || stn->native) ++ownedN;
+                                            if (stn->available) ++availN;
+                                        }
+
+                                    ImGui::TableNextRow();
+                                    ImGui::TableNextColumn();
+                                    ImGui::PushID(t);
+                                    ImGui::BeginDisabled(!hasTree);
+                                    if (ImGui::Selectable(skl.skillName.c_str(), false,
+                                                          ImGuiSelectableFlags_SpanAllColumns)) {
+                                        s_skillCur = t;       // catalog index
+                                        s_scrollHome = true;
+                                        wantOpenTree = true;  // OpenPopup outside the table/PushID
+                                    }
+                                    ImGui::EndDisabled();
+                                    ImGui::PopID();
+                                    ImGui::TableNextColumn();
+                                    ImGui::Text("%.0f", lvl);
+                                    if (alloc > 0.5f) {
+                                        ImGui::SameLine();
+                                        ImGui::TextColored(skin.accent, "(+%.0f)", alloc);
+                                    }
+                                    ImGui::TableNextColumn();
+                                    if (hasTree) ImGui::Text("%d/%d", ownedN, (int)skl.nodes.size());
+                                    else         ImGui::TextDisabled("--");
+                                    ImGui::TableNextColumn();
+                                    if (availN > 0)
+                                        ImGui::TextColored(skin.accent, "%d to spend", availN);
+                                    else if (!hasTree)
+                                        ImGui::TextDisabled("no tree");
+                                }
+                                ImGui::EndTable();
+                            }
+                            if (wantOpenTree) ImGui::OpenPopup("##ptreewin");
+
+                            // ── THE DEDICATED TREE WINDOW (deck field fix
+                            // #2: the in-tab child was far too small on the
+                            // deck). A full-screen POPUP — the listPopup
+                            // pattern scaled up, so B/Esc-close, input focus
+                            // and the board's cascade all come from ImGui's
+                            // own popup machinery, nothing new. Sized every
+                            // frame off the LIVE io.DisplaySize (rewritten
+                            // per frame from the real backbuffer — deck
+                            // handheld 1280x800 and docked 1080p+ both land
+                            // right; nothing hardcoded).
+                            ImGui::SetNextWindowPos(
+                                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                            ImGui::SetNextWindowSize(
+                                ImVec2(io.DisplaySize.x * 0.90f, io.DisplaySize.y * 0.90f),
+                                ImGuiCond_Always);
+                            if (ImGui::BeginPopup("##ptreewin")) {
+                                pickerDrawnThisFrame = true;
+                                if (s_skillCur < 0 || s_skillCur >= (int)cat.skills.size() ||
+                                    cat.skills[s_skillCur].nodes.empty())
+                                    ImGui::CloseCurrentPopup();   // stale pick — bail this frame
+                                else {
+                                const auto& tree = cat.skills[s_skillCur];
                                 std::size_t flatBase = 0;
-                                for (int t = 0; t < trees[s_skillCur]; ++t)
+                                for (int t = 0; t < s_skillCur; ++t)
                                     flatBase += cat.skills[t].nodes.size();
 
+                                // Header: tree name + the POINTS, prominent
+                                // in the window too (field fix #1), + zoom.
                                 ImGui::AlignTextToFramePadding();
-                                if (ImGui::SmallButton("<##prevsk")) switchSkill(-1);
-                                ImGui::SameLine();
+                                ImGui::PushFont(g_fontHead);
                                 ImGui::TextColored(skin.accent, "%s", tree.skillName.c_str());
                                 ImGui::SameLine();
-                                ImGui::TextDisabled("%d perk(s)", (int)tree.nodes.size());
-                                ImGui::SameLine();
-                                if (ImGui::SmallButton(">##nextsk")) switchSkill(+1);
-                                ImGui::SameLine();
-                                ImGui::TextDisabled(" [Y] next tree ");
+                                ImGui::TextColored(skin.accent, "  --  %.2f point(s)",
+                                                   who->unspentPerk);
+                                ImGui::PopFont();
                                 ImGui::SameLine();
                                 if (ImGui::SmallButton("-##zo")) s_zoom = std::max(0.5f, s_zoom - 0.15f);
                                 ImGui::SameLine();
                                 if (ImGui::SmallButton("+##zi")) s_zoom = std::min(2.0f, s_zoom + 0.15f);
                                 ImGui::SameLine();
-                                ImGui::TextColored(skin.accent, "  %.2f perk point(s)",
-                                                   who->unspentPerk);
-                                if (ImGui::IsItemHovered())
-                                    ImGui::SetTooltip("Earned at the player's rate x scarcity %.2f\n"
-                                                      "(%d of %d tree ranks are useful to a follower)",
-                                                      prog.scarcity, prog.effectiveRanks,
-                                                      prog.totalRanks);
-                                if (!stateOk) { ImGui::SameLine(); ImGui::TextDisabled("syncing..."); }
+                                ImGui::TextDisabled("  d-pad move   [A] node   [Y] next tree   "
+                                                    "[B]/Esc back to skills");
+                                ImGui::Separator();
 
                                 // ── THE TREE CANVAS ─────────────────────
                                 // ImGui items over a Dummy extent: each
                                 // VISIBLE node is an InvisibleButton, so
                                 // ImGui's own spatial gamepad nav walks the
-                                // tree (d-pad), A activates, auto-scroll
-                                // keeps the focused node in view, and the
-                                // B-cascade sees a child window to back out
-                                // of — no new input paths. VIRTUALIZED:
-                                // nodes outside the child rect + ~1.5 cells
-                                // of nav headroom submit no item and draw
-                                // nothing, so a Vokriinator-scale tree costs
-                                // what is on screen, not what exists.
-                                const float footerH = ImGui::GetFrameHeightWithSpacing() + 6.0f;
-                                ImGui::BeginChild("##ptree", ImVec2(0.0f, -footerH),
-                                                  ImGuiChildFlags_Borders,
+                                // tree (d-pad), A activates, and auto-scroll
+                                // follows focus. NAV-FLATTENED — the deck
+                                // field root cause: directional nav does NOT
+                                // cross into a plain child window, so the
+                                // pad could never reach a node; flattening
+                                // shares the popup's focus scope with the
+                                // canvas. VIRTUALIZED: nodes outside the
+                                // child rect + ~1.5 cells of nav headroom
+                                // submit no item and draw nothing, so a
+                                // Vokriinator-scale tree costs what is on
+                                // screen, not what exists.
+                                ImGui::BeginChild("##ptcanvas", ImVec2(0.0f, 0.0f),
+                                                  ImGuiChildFlags_Borders |
+                                                  ImGuiChildFlags_NavFlattened,
                                                   ImGuiWindowFlags_HorizontalScrollbar);
                                 {
                                     float minH = 1e9f, maxH = -1e9f, minV = 1e9f, maxV = -1e9f;
@@ -1528,23 +1603,23 @@ namespace MFO::Board {
 
                                         if (hovered) {
                                             if (owned)
-                                                ImGui::SetTooltip("%s — rank %d/%d (allocated by MFO)",
+                                                ImGui::SetTooltip("%s -- rank %d/%d (allocated by MFO)",
                                                     n.name.c_str(), (int)st->ownedRank,
                                                     (int)n.ranks.size());
                                             else if (native)
-                                                ImGui::SetTooltip("%s — granted by your load order",
+                                                ImGui::SetTooltip("%s -- granted by your load order",
                                                     n.name.c_str());
                                             else if (avail)
-                                                ImGui::SetTooltip("%s — [A] take rank %d (1 point)",
+                                                ImGui::SetTooltip("%s -- [A] take rank %d (1 point)",
                                                     n.name.c_str(), (int)st->ownedRank + 1);
                                             else if (st && !st->whyNot.empty())
-                                                ImGui::SetTooltip("%s — locked: %s",
+                                                ImGui::SetTooltip("%s -- locked: %s",
                                                     n.name.c_str(), st->whyNot.c_str());
                                             else
                                                 ImGui::SetTooltip("%s", n.name.c_str());
                                         }
                                         if (clicked) {
-                                            s_nodeTree = trees[s_skillCur];
+                                            s_nodeTree = s_skillCur;   // catalog index
                                             s_nodeIdx  = i;
                                             wantNodePopup = true;   // OpenPopup outside PushID
                                         }
@@ -1576,6 +1651,11 @@ namespace MFO::Board {
                                             ImGui::TextUnformatted(nd.name.c_str());
                                             ImGui::PopStyleColor();
                                             ImGui::PopFont();
+                                            // Field fix #1: the point budget is
+                                            // visible IN the take dialog too.
+                                            ImGui::TextColored(skin.accent,
+                                                "%.2f perk point(s) available",
+                                                who->unspentPerk);
                                             if (nd.verdict == Progression::Verdict::kMarginal)
                                                 ImGui::TextDisabled("marginal for followers");
                                             if (!nd.description.empty()) {
@@ -1592,7 +1672,7 @@ namespace MFO::Board {
                                                     rr < ownedR ? "  [owned]" : "");
                                             ImGui::Separator();
                                             if (stv && stv->native) {
-                                                ImGui::TextDisabled("Granted by your load order — "
+                                                ImGui::TextDisabled("Granted by your load order -- "
                                                                     "MFO leaves it untouched.");
                                             } else if (ownedR > 0 &&
                                                        ownedR >= (int)nd.ranks.size()) {
@@ -1621,15 +1701,31 @@ namespace MFO::Board {
                                         }
                                         ImGui::EndPopup();
                                     }
+
+                                    // Y / FaceUp = next tree WITH nodes —
+                                    // read here (child scope) so the
+                                    // IsPopupOpen gate matches the node
+                                    // popup opened in this same scope.
+                                    if (!ImGui::IsPopupOpen("##pnode") &&
+                                        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)) {
+                                        int t = s_skillCur;
+                                        for (int n = 0; n < (int)cat.skills.size(); ++n) {
+                                            t = (t + 1) % (int)cat.skills.size();
+                                            if (!cat.skills[t].nodes.empty()) break;
+                                        }
+                                        if (t != s_skillCur) { s_skillCur = t; s_scrollHome = true; }
+                                    }
                                 }
                                 ImGui::EndChild();
+                                }   // valid-pick else
+                                ImGui::EndPopup();
                             }
 
                             // ── FOOTER: RESPEC + HINTS ──────────────────
                             if (ImGui::Button("Respec")) ImGui::OpenPopup("##prespec");
                             ImGui::SameLine();
                             ImGui::TextDisabled("refund all perks, -%.0f rapport  |  d-pad move   "
-                                                "[A] node   [B] back   [Y] next tree",
+                                                "[A] open skill tree   [B] back",
                                                 prog.respecRapportCost);
                             ImGui::SetNextWindowPos(
                                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),

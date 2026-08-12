@@ -60,8 +60,35 @@
 > SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
 > (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
 
-> **#74 COMPONENT 3 BUILT (2026-08-11) — the Field Orders "Progression" TAB — awaiting
-> marth review + field test.** Third board tab, emitted ONLY when MFO_Progression.esl is
+> **#74 COMPONENT 3 DECK FIELD FIXES (2026-08-12) — three field-test failures fixed,
+> tab flow redesigned.** (1) *Perks un-selectable on deck* — ROOT CAUSE: the tree lived
+> in a plain BeginChild and ImGui directional nav does NOT cross into a non-flattened
+> child window (ScrollY tables work because their inner window IS nav-flattened — why
+> Gambits never hit this); on the deck there is no mouse fallback, so the pad could
+> never focus a node and A had nothing to press. Not the edit wiring, not the §5 gate.
+> The canvas child now carries `ImGuiChildFlags_NavFlattened`, and the perk-point count
+> is a HEADLINE (head font, always visible on the tab, in the tree window header, and
+> inside the take dialog) with a self-explaining zero line (earn rate x scarcity, live
+> numbers; enrolling at player level 1 legitimately starts at 0 — SetClass's veteran
+> catch-up is (playerLevel−1)×rate×scarcity). Every locked node states WHY (tooltip +
+> detail popup — whyNot from the §5 gate); no silent no-ops. Bonus deck-visible bug:
+> several UI strings used a Unicode em-dash the baked fonts' default (Basic Latin)
+> glyph ranges can't draw — all UI literals are ASCII `--` now (allocator whyNot/
+> blocker strings included). (2) *Tree far too small* — the tree now opens in a
+> DEDICATED full-screen popup (the listPopup pattern scaled up: B/Esc-close, focus and
+> the board cascade all native), sized every frame to 90% of the LIVE
+> `io.DisplaySize` (rewritten per frame from the real backbuffer — deck 1280x800 and
+> docked 1080p+ both land; nothing hardcoded), canvas + culling + zoom inside.
+> (3) *Skill selection unclear* — the Y-only cycler is replaced by an explicit SKILL
+> PICKER table (Gambits' proven ScrollY pattern): one row per catalog skill — name,
+> level (+alloc accent; auto-scaled by class, never manually assigned), perks owned/
+> total, and an accent "N to spend" indicator; A/click on a row opens that tree's
+> window; Y still cycles trees from INSIDE the window. Flow now: tab → L1/R1 follower
+> → [class prompt] → skill list w/ visible points → skill → full-screen tree → A to
+> allocate → B back. NOT yet re-field-tested on the deck.
+
+> **#74 COMPONENT 3 BUILT (2026-08-11) — the Field Orders "Progression" TAB.**
+> Third board tab, emitted ONLY when MFO_Progression.esl is
 > detected (`kTabCount` is runtime now; the View-cycle follows). Flow per §15: selecting
 > an eligible UNENROLLED follower auto-pops the class prompt once per selection (Melee/
 > Ranged/Mage via `ProgAllocator::ClassName`, nothing hardcoded, nothing assigned until

@@ -418,7 +418,8 @@ namespace MFO::ProgAllocator {
             if (have > 0) {
                 auto* ours = PerkByID(a_node.ranks[static_cast<std::size_t>(have - 1)].perkFormID);
                 if (!ours || !a_base->GetPerkIndex(ours).has_value()) {
-                    a_whyNot = "MFO's rank is not on the base (native rank owns this node) — frozen";
+                    // ASCII only -- renders in the board's locked tooltip.
+                    a_whyNot = "MFO's rank is not on the base (native rank owns this node) -- frozen";
                     return 0;
                 }
             }
@@ -576,10 +577,12 @@ namespace MFO::ProgAllocator {
         // order — keep in sync with Enroll).
         const char* EnrollBlocker(RE::Actor* a_actor, RE::TESNPC* a_base) {
             if (!a_base) return "no actor base";
+            // ASCII only: these strings render in the board UI and the baked
+            // fonts carry the default (Basic Latin) glyph ranges.
             if (!Followers::IsPersistableID(a_actor->GetFormID()))
-                return "temporary (runtime) actor — cannot persist across saves";
+                return "temporary (runtime) actor -- cannot persist across saves";
             if (!a_base->IsUnique())
-                return "shared template — not eligible (v1 is unique-base only)";
+                return "shared template -- not eligible (v1 is unique-base only)";
             if (!Followers::IsEligibleFollower(a_actor))
                 return "not an eligible follower";
             return nullptr;
@@ -972,6 +975,7 @@ namespace MFO::ProgAllocator {
             snap->effectiveRanks = cat.effectiveRanks;
             snap->scarcity       = static_cast<float>(ScarcityRatio());
             snap->respecRapportCost = g_econ.respecRapportCost;
+            snap->perkPtsPerLevel   = g_econ.perkPointsPerLevel;
 
             const RE::FormID focus = g_boardFocus.load();
             for (const auto& h : Followers::g_active) {
@@ -998,6 +1002,7 @@ namespace MFO::ProgAllocator {
                     for (const auto& s : kSkillNames) {
                         BoardSkillLine line;
                         line.name = s.name;
+                        line.av   = s.av;
                         line.base = avo->GetBaseActorValue(s.av);
                         if (st)
                             for (const auto& e : st->skills)
