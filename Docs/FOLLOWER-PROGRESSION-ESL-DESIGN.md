@@ -380,3 +380,69 @@ gate pipeline ported over the real data:
   available while its parent renders in the subtle native style (accent ring on a
   dim disc). Correct gating that read as a violation; unverifiable offline, noted
   for the next field pass.
+
+## 18. Addon API — making the add-on third-party-reproducible (2026-08-12)
+
+**Why this section exists (marth):** the Progression Add-On (and the sibling
+Roster Add-On, now a separate product) are meant to be the *worked examples* of a
+public MFO addon API — after they ship, marth wants third parties to build their
+own MFO add-ons. An "example" only qualifies if a third party could reproduce it
+**with an ESL (+ Papyrus/config) and ZERO access to MFO's C++ source.** The add-on
+therefore **cannot go to Nexus until this API layer exists** — it is the release
+gate. See [[progression-addon-is-api-reference-example]].
+
+### 18.1 What is already generic (the expensive part — done)
+The entire runtime *engine* operates on load-order data, not on anything specific
+to our ESL, so it is already reusable by any add-on:
+- runtime read of the merged perk trees (§2), NPC-effectiveness classification (§3),
+- player-identical requirement gating (§5), the tiered/bridged legible layout (§17),
+- allocation + reconciliation (§4.2), the SPID perk-grant (§4.1), the ImGui board (§7).
+None of this is coupled to `MFO_Progression.esl`. This is the shared runtime a
+third-party add-on would consume unchanged.
+
+### 18.2 What is hardcoded to OUR ESL today (the coupling to break)
+1. **Plugin discovery by NAME** — `Progression.h:30` `kAddonPlugin =
+   "MFO_Progression.esl"`, detected via `LookupLoadedLightModByName`. A third-party
+   ESL has a different name and is never seen.
+2. **A frozen FormID contract** — `ProgAllocator.h:41` ("a FROZEN contract with the
+   generator"): the DLL reads records at fixed local ids via
+   `LookupForm(id, "MFO_Progression.esl")`, and in particular a **fixed set of 3
+   classes** (Melee/Ranged/Mage FormLists at frozen ids `0x81x`, with DLL
+   fallbacks). A third party cannot add a class or supply their own set.
+3. **Economy hardcoded in the DLL** — the §17 simplification put
+   `floor(level/3)` perk points and flat 5/level skill points in C++ constants. For
+   an add-on to set its own rates this must move back out to ESL-declared config —
+   note this pulls opposite to §17's simplification (accept the reversal for the API).
+
+### 18.3 The gap = a bounded front-door refactor (NOT a rewrite)
+- **Generic registration/discovery.** Replace the by-name lookup with a MFO.esp
+  anchor that any add-on ESL joins to announce itself — a keyword or a FormList in
+  MFO.esp (`MFO_AddonRegistry`-style) that the add-on adds its config-holder record
+  to; the DLL scans members at load instead of hardcoding a plugin name. This is the
+  actual "API surface."
+- **Declared N-class model.** Read an arbitrary set of classes the add-on defines
+  (name + skill FormList + perk-priority FormList per class), instead of the fixed 3.
+  Biggest single piece: the allocator's class model and the board's class prompt go
+  from fixed-3 to N-declared; the generator/contract describes how an add-on lays
+  out a class.
+- **Re-expose per-add-on config** (economy, display name, MCM label) as
+  ESL-declared records the DLL reads per registered add-on.
+- **Document the API contract** — the records/keywords/layout a third-party ESL must
+  define, plus a minimal example ESL. This *writing* deliverable is the thing that
+  actually makes it reproducible "without the main code"; it is not optional.
+
+### 18.4 Effort + sequencing
+Moderate and contained — the engine (§18.1) carries over untouched; this generalizes
+the declaration layer + ships a spec. Rough size: ~one focused build round for the
+DLL generalization (registration + N-class + re-exposed config) + one for the API
+doc/example ESL — comparable to a single board round, not the whole saga. Do it as
+its OWN effort **after** the feature is field-verified (don't destabilize working
+code). It is the **Nexus-release gate** for the add-on: the Serana cast-takeover and
+other core fixes can ship as normal MFO updates meanwhile; the Progression Add-On
+releases as the first API example once §18.3 lands. The Roster Add-On, not yet built,
+should be authored API-first against the same registration mechanism.
+
+### 18.5 Design test going forward
+For every remaining #74 decision, ask: *"could a third party replicate this with only
+their ESL and the documented API?"* If a behavior can only be reached by editing
+MFO's C++, it belongs behind the API, not baked to our plugin.
