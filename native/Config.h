@@ -180,6 +180,18 @@ namespace MFO::Config {
     // (the focus key holds 0x2B backslash). 0 disables the trigger.
     inline std::atomic<int>   g_progProbeKey{ 0x27 };
 
+    // PROGRESSION CATALOG DUMP (component 1 of the ESL addon), DEFAULT OFF —
+    // dev opt-in ONLY, INI-only (a verification aid, not a setting; the
+    // bProgProbe precedent). The production catalog reader (Progression.cpp)
+    // only builds when MFO_Progression.esl is detected — which does not exist
+    // yet — so this FORCES the build at kDataLoaded and emits the [prog]
+    // census (per-skill node/filter counts, every filtered perk + reason,
+    // spot-check nodes) for on-deck verification of the reader against the
+    // real merged trees. Read-only over the load order: builds an in-memory
+    // catalog and logs — mutates no actor, form, or save. bProgCatalogDump = 1
+    // in Data/SKSE/Plugins/MFO.ini, then a restart (read at kDataLoaded).
+    inline std::atomic<bool>  g_progCatalogDump{ false };
+
     // #56 COMBAT-OVERLAY POSITION (mage update). The compact combat HUD
     // (Board::DrawHud) is pinned to the top-right with a top-right pivot; these
     // are its margins in PIXELS from the right edge (X) and the top (Y), so a

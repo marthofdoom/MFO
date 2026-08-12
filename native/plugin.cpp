@@ -10,6 +10,7 @@
 #include "ItemCatalog.h"
 #include "Probe.h"
 #include "ProgProbe.h"
+#include "Progression.h"
 #include "Vocabulary.h"
 #include "Loadout.h"
 #include "Targeting.h"
@@ -281,6 +282,7 @@ namespace {
             MFO::Forms::Resolve();          // then forms
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
+            MFO::Progression::Init();       // addon detection + frozen perk catalog (§1/§2/§3); read-only pass
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::Followers::ResolveQuirks();

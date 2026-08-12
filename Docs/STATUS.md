@@ -8,6 +8,27 @@
 >
 > **Last updated:** 2026-08-11 · **Latest:** v1.0.62 (#75 weapon-equip thrash fix + progression PROBE — deploying to BOTH decks, public HELD pending field test) · **Latest public:** v1.0.61 (creature weapons deleted) · prior public: v1.0.60 (#73), v1.0.59 (controller). Next: FOLLOWER-PROGRESSION ESL ADDON (#74 — probe validation is the on-ramp), then town update (#31).
 
+> **#74 COMPONENT 1 BUILT (2026-08-11) — the PRODUCTION catalog reader — awaiting marth
+> review + CI.** New `native/Progression.cpp/.h` (design §1/§2/§3; component 1 of 4:
+> catalog → allocator → board tab → ESL). One read-only pass at kDataLoaded (main thread)
+> over the fully-merged AVIF trees of ALL 18 skills (18, not 12: the §15 scarcity ratio
+> needs the full player pool as denominator) → an IMMUTABLE frozen catalog of value-only
+> `PerkNodeView`s (FormID/name/desc/grid/dome coords/parent edges/rank chain with display
+> skill-req strings extracted from perkConditions kGetBaseActorValue-on-kSelf->=). The §3
+> dead-perk filter is in: kQuest dead; kAbility effective unless every effect is behind a
+> narrow player-pin (GetIsID/GetIsReference == player, AND, ==1); kEntryPoint via a
+> 92-row static_assert-complete verdict table (combat/defense effective; lockpick/craft/
+> commerce/UI dead; marginal set flagged, unknowns FLAG-never-kill). Zero-effective-rank
+> perks are excluded but recorded with a per-perk reason; `parentPerkIDs` keeps filtered
+> prereqs in the graph truth. Detection helper per §1 (`LookupLoadedLightModByName
+> ("MFO_Progression.esl")` + MFOP_Version GLOB 0x800 record-default read) — absent = one
+> named line, off. Since the ESL doesn't exist yet: `bProgCatalogDump = 1` (INI-only,
+> default OFF, bProgProbe precedent) forces the build + a `[prog]` census dump (per-skill
+> kept/marginal/filtered + rank pools, every filtered perk + reason, 3 spot-check nodes
+> per tree, global scarcity ratio) for on-deck verification. Mutates nothing. Wired:
+> plugin.cpp kDataLoaded (after Catalog::Load), Config, CMakeLists. NO version bump,
+> NOT pushed. ProgProbe untouched (stays gated off; removed later).
+
 > **v1.0.62 — #75 WEAPON-EQUIP THRASH FIX + progression probe.** #75 (Fable-built,
 > adversarially reviewed CLEAN + CI green): (1) both-hand idempotency in EquipWeapon
 > (right-hand-only guard was the thrash trigger — a caster's off-hand weapon was
