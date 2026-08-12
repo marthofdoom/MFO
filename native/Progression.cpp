@@ -341,12 +341,18 @@ namespace MFO::Progression {
                 }
             }
             if (n == 0) {
-                // Entry-less perks are flavor/prereq markers (Ordinator and
-                // Requiem both ship them). Nothing to gain from a point spent
-                // here -> filtered; pass 2 BRIDGES prereq lines through them
-                // (round 4) so their subtrees stay reachable.
-                a_outWhy = "no entries (flavor/marker perk)";
-                return Verdict::kDead;
+                // Entry-less perks: MARGINAL, not dead (round-4 acceptance
+                // trace). Requiem implements real perk effects in scripts/DLL
+                // keyed on HasPerk — its Cremation/Deep Freeze/Electrostatic
+                // Discharge are entry-less yet gate the Mastery tier through
+                // BOTH tree edges and HasPerk perkConditions. Filtering them
+                // made that tier permanently unattainable (the conditions are
+                // the authority and the marker was unallocatable). Marginal =
+                // takeable, drawn as a dimmed passthrough when an effective
+                // descendant needs it — the player-identical path, one point
+                // each, exactly like the player pays.
+                a_outWhy = "no entries (script-driven or marker)";
+                return Verdict::kMarginal;
             }
             a_outWhy = why;
             return anyMarginal ? Verdict::kMarginal : Verdict::kDead;

@@ -366,8 +366,18 @@ namespace MFO::ProgAllocator {
                 return;
             }
 
+            // §16 (round-4 correction): manual REPLACES auto. While the
+            // toggle is ON the auto total is FROZEN at the stint baseline;
+            // levels progressed manually (manualExcludedLevels) are excluded
+            // from the auto total forever — a manual-mode follower does NOT
+            // auto-gain skills on level-up, and toggling back never
+            // back-fills the manual stint.
+            const int effAutoLvl = std::max(0,
+                (a_st.manualSkills ? static_cast<int>(a_st.manualBaselineLevel)
+                                   : static_cast<int>(a_st.progressionLevel)) -
+                static_cast<int>(a_st.manualExcludedLevels));
             const float total = g_econ.skillPointsPerLevel *
-                                static_cast<float>(std::max(0, a_st.progressionLevel - 1));
+                                static_cast<float>(std::max(0, effAutoLvl - 1));
             const auto weights = WeightsFor(a_actor, a_st.cls);
 
             // Desired AUTO points per skill (deterministic: round-half-up).
@@ -1355,16 +1365,31 @@ namespace MFO::ProgAllocator {
         }
         auto& st = it->second;
         if (st.manualSkills == a_on) return true;   // idempotent no-op
-        st.manualSkills = a_on;
-        // First enable LATCHES the accrual baseline; afterwards the toggle
-        // only gates spending — the pool stays a pure function of level, so
-        // off/on cycling can neither farm points nor forfeit them.
-        if (a_on && st.manualBaselineLevel == 0)
+        // §16 (round-4 correction): manual is an OVERRIDE, never additive.
+        // OFF→ON starts a fresh stint: latch the baseline at the current
+        // level (auto growth FREEZES here) and zero the applied counter (the
+        // pool accrues from zero). ON→OFF banks the stint's levels into
+        // manualExcludedLevels so resumed auto growth can never back-fill
+        // levels that were progressed manually — no double-dip in either
+        // toggle direction.
+        if (a_on) {
             st.manualBaselineLevel = std::max<std::uint16_t>(1, st.progressionLevel);
-        spdlog::info("[prog] {} manual skill points {} (baseline level {}, {} available, "
-                     "flat {}/level)",
+            st.manualPointsApplied = 0;
+        } else {
+            const int stint = std::max(0, static_cast<int>(st.progressionLevel) -
+                                           static_cast<int>(st.manualBaselineLevel));
+            st.manualExcludedLevels = static_cast<std::uint16_t>(
+                std::min(st.manualExcludedLevels + stint, 0xFFFF));
+        }
+        st.manualSkills = a_on;
+        // Re-reconcile NOW so the auto share freezes/unfreezes immediately
+        // (same single SetBaseActorValue path; the baseline floor rides).
+        RecomputeSkills(a_actor, st, /*log*/ true);
+        spdlog::info("[prog] {} manual skill points {} (stint baseline {}, {} available, "
+                     "flat {}/level, {} level(s) excluded from auto — manual REPLACES "
+                     "auto growth while ON)",
                      NameOf(a_actor), a_on ? "ON" : "OFF", st.manualBaselineLevel,
-                     ManualAvail(st), kManualSkillPtsPerLevel);
+                     ManualAvail(st), kManualSkillPtsPerLevel, st.manualExcludedLevels);
         return true;
     }
 
@@ -1428,6 +1453,7 @@ namespace MFO::ProgAllocator {
     //     v1 ONLY: f32 unspentPerk        (legacy stored pool — read + DISCARDED;
     //                                      §17 derives the pool instead)
     //     v2: u16 manualBaselineLevel | u16 manualPointsApplied
+    //         u16 manualExcludedLevels    (§16 override accounting)
     //         u16 nativeTreePerksAtEnroll (§17 budget debit)
     //     u16 perkCount   { u32 nodePerkID, u8 rank }*
     //     u16 skillCount  { u32 av, f32 points, f32 lastWrittenBase,
@@ -1473,6 +1499,7 @@ namespace MFO::ProgAllocator {
             // save replays to the same numbers by construction.
             a_intfc->WriteRecordData(st.manualBaselineLevel);
             a_intfc->WriteRecordData(st.manualPointsApplied);
+            a_intfc->WriteRecordData(st.manualExcludedLevels);   // §16 override accounting
             a_intfc->WriteRecordData(st.nativeTreePerksAtEnroll);
 
             const auto perkCount = static_cast<std::uint16_t>(
@@ -1557,6 +1584,7 @@ namespace MFO::ProgAllocator {
             if (a_version >= 2) {
                 if (!a_intfc->ReadRecordData(st.manualBaselineLevel)) return;
                 if (!a_intfc->ReadRecordData(st.manualPointsApplied)) return;
+                if (!a_intfc->ReadRecordData(st.manualExcludedLevels)) return;   // §16
                 if (!a_intfc->ReadRecordData(st.nativeTreePerksAtEnroll)) return;
             }
             // Coherence guard: manual ON without a latched baseline cannot

@@ -60,6 +60,36 @@
 > SkillPointsPerLevel / SharedGrowthDivisor / VeteranCatchupMult GLOBs now FNAM 'f'
 > (float-typed, fractional-authorable in xEdit; DLL unchanged) + audit lockstep check.
 
+> **#74 ROUND 4b (2026-08-12) — Pyromancer acceptance TRACE + manual-skills =
+> REPLACE.** (1) **The falsifiable trace (design doc §17 has the full data):**
+> offline parse of marth's INSTALLED winning records (custom-modlist/Requiem
+> profile; winning Destruction AVIF = Requiem.esp, 18 nodes) with the round-4
+> classify/bridge/gate pipeline ported over the real data. Verified: Novice
+> Destruction (root child) classifies EFFECTIVE/kept — the entry gate is intact;
+> Pyromancy's bridged prereq set = exactly {Novice Destruction} (nothing bridged
+> past, rootLine false); its perkConditions independently carry HasPerk(Novice)==1
+> + Destruction>=25; three-state gate: nothing owned → unavailable, everything-but-
+> Novice → unavailable, Novice owned → available. Gate keys on OWNERSHIP of the
+> nearest kept parent, never structural reachability. **ONE real gap exposed +
+> fixed:** Requiem's entry-less script-driven perks (Cremation/Deep Freeze/
+> Electrostatic Discharge/Impact) were classified DEAD → their children's
+> HasPerk conditions (Fire/Frost/Lightning Mastery) could never pass — the whole
+> Mastery tier was permanently locked. Entry-less perks are now kMARGINAL:
+> takeable for a point (as the player pays), dimmed-passthrough-visible when an
+> effective descendant needs them — the player-identical chain restored. Field
+> sighting likely explained by "Requiem - SPID Apprentice and Novice Perks for
+> All Followers" granting Novice natively (legitimate availability, subtle native
+> rendering); re-check on the deck. Trace tool: session scratchpad pyro_trace.py.
+> (2) **Manual skill points now REPLACE auto growth (marth reverses "additive" —
+> stacking was overpowered):** while ON, auto per-level growth is FROZEN at the
+> stint baseline (RecomputeSkills effAutoLvl); OFF→ON re-latches the baseline
+> (fresh stint, pool from 0); ON→OFF banks the stint's levels into NEW PRGN-v2
+> field `manualExcludedLevels` so resumed auto never back-fills manual levels —
+> no double-dip in either toggle direction, all fields change only on toggle
+> transitions (replay-safe). Class enrollment baseline stays. Tooltip/hints now
+> say REPLACES unambiguously. v2 layout extended (still never shipped — no
+> migration).
+
 > **#74 ROUND 4 POLISH (2026-08-12) — marth: round 3 "much better"; this pass fixes
 > prereq ordering + menu feel.** **Prereq root cause (the real one): catalog pass 2
 > recorded FILTERED direct parents (Requiem/Ordinator entry-less marker perks,

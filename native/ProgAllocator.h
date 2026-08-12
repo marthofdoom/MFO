@@ -128,17 +128,24 @@ namespace MFO::ProgAllocator {
         // double pile; racial/quest perks outside the trees never count).
         std::uint16_t nativeTreePerksAtEnroll{ 0 };
 
-        // §16 manual skill-point pool — NO incremental accumulator (the round-2
-        // SEV-1 lesson): the pool is a PURE FUNCTION of serialized baselines,
-        //   available = (progressionLevel − manualBaselineLevel) × 5
-        //               − manualPointsApplied
-        // (flat 5/level by decree — marth, round 3; a separate economy from
-        // the §17 perk points) so any replay/reload/level recompute lands on
-        // the same number. manualBaselineLevel latches ONCE at first enable
-        // (0 = never enabled); the toggle afterwards only gates spending,
-        // never mutates the math.
+        // §16 manual skill points — an OVERRIDE of automatic skill growth,
+        // NEVER additive (marth, round-4 correction: stacking both was wrong
+        // and overpowered). While the toggle is ON, this follower's ongoing
+        // skill progression IS the flat 5 points/level the player places —
+        // automatic per-level growth is SUPPRESSED, frozen at the enable
+        // level. Still no per-tick accumulator (the SEV-1 lesson):
+        //   pool        = (progressionLevel − manualBaselineLevel) × 5
+        //                 − manualPointsApplied
+        //   autoLevel   = (manual ? manualBaselineLevel : progressionLevel)
+        //                 − manualExcludedLevels
+        // Each OFF→ON re-latches the baseline (a fresh stint; the pool
+        // accrues from zero); each ON→OFF adds the stint's levels to
+        // manualExcludedLevels so auto growth never back-fills levels that
+        // progressed manually — never both, in any order of toggling. All
+        // three fields change ONLY on the toggle transitions — replay-safe.
         std::uint16_t manualBaselineLevel{ 0 };
         std::uint16_t manualPointsApplied{ 0 };
+        std::uint16_t manualExcludedLevels{ 0 };
 
         std::vector<PerkAlloc>  perks;
         std::vector<SkillAlloc> skills;

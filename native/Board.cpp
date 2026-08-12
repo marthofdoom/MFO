@@ -1370,11 +1370,12 @@ namespace MFO::Board {
                             // ── §16 MANUAL SKILL POINTS (design doc §16:
                             // auto-scaling is a default, never a cage — the
                             // escape hatch for mage/multiclass builds). Off
-                            // by default; ON banks a visible pool per level
-                            // (the SAME MFOP_SkillPointsPerLevel rate, added
-                            // on TOP of the auto-scale) spent from the skill
-                            // list below. The checkbox is a nav item — A
-                            // toggles it on the pad.
+                            // by default; ON = manual REPLACES auto growth
+                            // (round-4 correction, never additive): a flat 5
+                            // points/level banks into a visible pool spent
+                            // from the skill list below while auto per-level
+                            // growth is frozen. The checkbox is a nav item —
+                            // A toggles it on the pad.
                             {
                                 bool man = who->manualSkills;
                                 if (ImGui::Checkbox("Manual skill points", &man))
@@ -1382,9 +1383,11 @@ namespace MFO::Board {
                                                 man ? 1.0f : 0.0f });
                                 if (ImGui::IsItemHovered())
                                     ImGui::SetTooltip(
-                                        "Class auto-scaling stays on; this ADDS a bankable pool\n"
-                                        "(5 per level) you spend by hand -- for mage or\n"
-                                        "multiclass builds the class weights won't serve.");
+                                        "Manual OVERRIDE: while ON, this follower earns 5 skill\n"
+                                        "points per level for YOU to place -- INSTEAD OF automatic\n"
+                                        "class-based skill growth, never on top of it. Toggle OFF\n"
+                                        "to resume auto growth. For mage or multiclass builds the\n"
+                                        "class weights won't serve.");
                                 if (who->manualSkills) {
                                     ImGui::SameLine();
                                     ImGui::PushFont(g_fontHead);
@@ -1392,8 +1395,8 @@ namespace MFO::Board {
                                                        who->manualAvail);
                                     ImGui::PopFont();
                                     ImGui::SameLine();
-                                    ImGui::TextDisabled("  select a skill to apply (+1 base, "
-                                                        "cap %g)", prog.skillCap);
+                                    ImGui::TextDisabled("  replaces auto growth -- select a skill "
+                                                        "to apply (+1 base, cap %g)", prog.skillCap);
                                 }
                             }
                             ImGui::Spacing();

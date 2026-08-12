@@ -232,9 +232,15 @@ has.
 tab, **OFF by default** (auto-scaling stays the norm). ON = the follower **banks
 skill points every progression level** into a visible pool; the player applies them
 from the skill picker, **+1 base per point**, capped at the economy `skillCap`.
-**Additive**: auto-scaling and per-level growth continue untouched — manual points
-stack on top of the class share and **survive class changes** (the override outranks
-the default).
+**REPLACES auto growth — never additive (marth, round-4 correction: stacking both
+was incorrect and overpowered).** While the toggle is ON, the 5 points/level IS the
+follower's ongoing skill progression: automatic per-level growth is SUPPRESSED,
+frozen at the enable level. The one-time class enrollment baseline (auto-scale to
+level at class pick) stays as the starting stats; only ongoing progression switches
+auto↔manual. Toggling OFF resumes auto growth — but levels progressed manually are
+excluded from the auto total forever (`manualExcludedLevels`), so toggle-cycling can
+never double-dip in either direction. Manual points placed **survive class changes**
+(the override outranks the default).
 
 **Economy (marth, round 3):** **flat 5 skill points per level while the toggle is
 ON** — no detection, no GLOB, a plain constant ("5 skill points per level when
@@ -247,7 +253,12 @@ incremental accumulator** — it is a pure function of two serialized baselines:
 
 ```
 available = (progressionLevel − manualBaselineLevel) × 5 − manualPointsApplied
+autoLevel = (manual ? manualBaselineLevel : progressionLevel) − manualExcludedLevels
 ```
+
+Each OFF→ON re-latches the baseline (a fresh stint, pool from zero); each ON→OFF
+banks the stint's levels into `manualExcludedLevels`. All three fields change only
+on toggle transitions — replay-safe, no per-tick accumulator anywhere.
 
 `manualBaselineLevel` latches ONCE at first enable (0 = never enabled); after that
 the toggle only gates spending — off/on cycling can neither farm nor forfeit points,
@@ -334,3 +345,38 @@ unspent = max(0, floor(followerLevel / 3)
   throttled to ~8 hops/s; zoom recentres on the selection; the marginal toggle
   keeps your place (selection restored by node, pulled back into view); an
   all-filtered tree says so and still answers [Y]/[View]/zoom.
+
+**Round-4 ACCEPTANCE TRACE (the Pyromancer case, marth) — verified against the
+installed load order.** Offline parse of the WINNING records in marth's
+custom-modlist (profile Requiem; winning Destruction AVIF = Requiem.esp, 18 nodes,
+root INAM 0 → single child Novice Destruction), with the round-4 classify/bridge/
+gate pipeline ported over the real data:
+
+- **Root intact:** Novice Destruction classifies EFFECTIVE (ModSpellCost entries) —
+  kept, allocatable, the entry gate for the whole tree (single root child, so every
+  node transitively requires it — vanilla-identical).
+- **Pyromancy** (`Skyrim.esm:0581E7`): raw direct parent = Novice Destruction
+  (kept) → the bridged prereq set is exactly {Novice Destruction}; nothing was
+  bridged past, rootLine = false. Its own perkConditions carry
+  `HasPerk(Novice Destruction) == 1` AND `GetBaseActorValue(Destruction) >= 25` —
+  the conditions authority agrees with the tree edge, and §5 evaluates them in
+  full on the follower. Three-state gate: owns nothing → unavailable; owns
+  everything except Novice Destruction → unavailable; owns Novice Destruction
+  (+ conditions) → available. The gate keys on OWNERSHIP of the nearest kept
+  parent, never structural reachability.
+- **The one real gap the trace exposed (fixed):** Requiem's Cremation / Deep
+  Freeze / Electrostatic Discharge / Impact are ENTRY-LESS perks (script-driven —
+  Requiem implements their effects outside the perk-entry engine) that the §3
+  classifier filtered as dead markers. Their children (Fire/Frost/Lightning
+  Mastery) carry `HasPerk(<that perk>) == 1` conditions — with the parent
+  unallocatable, the conditions authority locked the whole Mastery tier forever.
+  Entry-less perks are now **kMarginal**: takeable (one point, like the player
+  pays), drawn as dimmed passthroughs when an effective descendant needs them —
+  the player-identical chain (Novice → Pyromancy → Cremation → Fire Mastery)
+  restored, no bridging involved.
+- **Likely explanation for the original field sighting:** the load order ships
+  "Requiem - SPID Apprentice and Novice Perks for All Followers" — Novice
+  Destruction is granted NATIVELY to followers, making Pyromancy legitimately
+  available while its parent renders in the subtle native style (accent ring on a
+  dim disc). Correct gating that read as a violation; unverifiable offline, noted
+  for the next field pass.
