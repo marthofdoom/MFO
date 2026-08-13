@@ -8,6 +8,22 @@
 >
 > **Last updated:** 2026-08-13 (SHIPPED v1.0.63 — tag pushed, releases/v1.0.63/, Nexus bbcode ready) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
+> **▶ RESUME SUNDAY 2026-08-16+ — §18 ADDON-API REFACTOR (PAUSED).** Fable hit its
+> WEEKLY limit (resets Sun night); token-light hold also lifts Sun afternoon — so the
+> ESL/API work is parked until then. State is stable and organized:
+> - **main is clean** at `1ce99b6` (contract locked); **v1.0.63 shipped** unaffected.
+> - **Known-good fallback:** tag `esl-fieldverified-2026-08-13` = board + allocator +
+>   manual skills + constellation trees, all field-verified (the code dormant in v1.0.63).
+> - **Incomplete WIP** of the refactor is on branch **`esl-api-wip`** (pushed): DLL-side
+>   registration + partial N-class only — does NOT compile.
+> - **The contract to implement:** design doc §18.6 (LOCKED). **Remaining:** finish the
+>   N-class allocator, wire full economy config incl. **perk points `floor(level/2)`**,
+>   rewrite `MFO_GenerateESP.py` for the new manifest/N-class/econ records, **bump+migrate
+>   PRGN** (map old fixed-3 class indices), write the third-party API doc, then CI/audit/
+>   redeploy + a field-test-and-iterate cycle. Resume on Fable or restart the round fresh
+>   from `1ce99b6` using `esl-api-wip` as reference.
+> - After the addon: **Roster addon** (separate ESL, Mon), then town update (#31).
+
 > **#74 COMPONENT 2 BUILT (2026-08-11) — the ALLOCATOR backend + MFO_Progression.esl +
 > dev harness — awaiting marth review + CI.** New `native/ProgAllocator.cpp/.h` (design
 > §4/§5/§6/§8/§15; consumes component 1's frozen catalog, ProgProbe untouched). The
