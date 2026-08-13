@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-12 (#59 continuous cast-control filter BUILT — see blurb) · **Latest:** v1.0.62 (#75 weapon-equip thrash fix + progression PROBE — deploying to BOTH decks, public HELD pending field test) · **Latest public:** v1.0.61 (creature weapons deleted) · prior public: v1.0.60 (#73), v1.0.59 (controller). Next: FOLLOWER-PROGRESSION ESL ADDON (#74 — probe validation is the on-ramp; components 1–3 BUILT: catalog + allocator + board tab), then town update (#31).
+> **Last updated:** 2026-08-12 (CUTTING v1.0.63 — #59 continuous cast-takeover, exact+partial) · **Latest public:** v1.0.63 (casters cast only the spell you chose) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
 > **#74 COMPONENT 2 BUILT (2026-08-11) — the ALLOCATOR backend + MFO_Progression.esl +
 > dev harness — awaiting marth review + CI.** New `native/ProgAllocator.cpp/.h` (design

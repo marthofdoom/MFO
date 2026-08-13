@@ -1,3 +1,15 @@
+## v1.0.63 -- casters cast the spell you chose, and only that one
+
+- Fixed a follower on exact cast control still slipping their own spells in between
+  the ones you told them to cast -- most visibly a caster like Serana firing an Ice
+  Spike or throwing down a summon in the gaps. Cast control is now a CONTINUOUS
+  takeover: while the follower is in combat under exact control, only your chosen
+  spell is cast, and every other spell they know -- any school, fire-and-forget or
+  summon -- is held, not just concentration spells and not only during the forced
+  cast itself. The lighter (partial) cast-control settings now filter continuously
+  the same way. Out of combat is untouched, and it all switches off when cast
+  control is off.
+
 ## v1.0.62 -- followers commit to an ordered weapon (no more re-draw thrash)
 
 - Fixed weapon thrash under an equip order: a follower you've told to "equip melee"
