@@ -1,0 +1,9 @@
+[size=4][b]v1.0.63 — casters cast the spell you chose, and only that one[/b][/size]
+[list]
+[*]Fixed a follower on exact cast control still slipping their own spells in between the ones you told them to cast — most visibly a caster like Serana firing an Ice Spike or throwing down a summon in the gaps. Cast control is now a [b]continuous takeover[/b]: while the follower is in combat under exact control, only your chosen spell is cast, and every other spell they know — any school, fire-and-forget or summon — is held, not just concentration spells and not only during the forced cast itself. The lighter (partial) cast-control settings now filter continuously the same way. Out of combat is untouched, and it all switches off when cast control is off.
+[/list]
+
+[size=4][b]v1.0.62 — followers commit to an ordered weapon (no more re-draw thrash)[/b][/size]
+[list]
+[*]Fixed weapon thrash under an equip order: a follower you've told to "equip melee" or "equip ranged" — most visibly a caster ordered to melee — could re-draw the same weapon every second as their own combat AI kept trying to put a spell back in hand. The "already holding it" check now looks at [b]both[/b] hands, and an explicit equip order now truly owns the weapon hand for the fight, so the ordered weapon sticks instead of flickering. Scoped strictly to explicit equip gambits — a mage naturally backing off to spells when low on magicka, or a class set to Mage, is unchanged. Off-switch: bWeaponStyleControl.
+[/list]
