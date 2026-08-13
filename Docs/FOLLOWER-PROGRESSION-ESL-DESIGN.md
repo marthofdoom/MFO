@@ -468,3 +468,10 @@ should be authored API-first against the same registration mechanism.
 For every remaining #74 decision, ask: *"could a third party replicate this with only
 their ESL and the documented API?"* If a behavior can only be reached by editing
 MFO's C++, it belongs behind the API, not baked to our plugin.
+
+### 18.6 CONTRACT LOCKED (marth, 2026-08-13)
+- **Registration = conflict-free per-addon, enumerable.** MFO.esp ships a sentinel (keyword or marker form). Each addon owns ONE manifest record that carries/points to that sentinel; MFO enumerates every addon manifest across the merged load order at kDataLoaded (supports N addons, though we ship one). Replaces the by-name `LookupLoadedLightModByName("MFO_Progression.esl")`. NO shared FormList that addons inject into (that collides) — each addon has its own record. The implementing round picks the exact enumerable record type/layout CommonLib supports cleanly and DOCUMENTS it as the frozen contract.
+- **Classes: N-declared, not fixed 3.** Manifest → a FormList of class definitions; each class = `{ display name, skills FormList (AVIF forms, order = weight), perk-priority FormList }`. Allocator `g_class[]` and the board class prompt become dynamic-N.
+- **Economy: FULLY addon-configurable — option (a), marth.** EVERY economy value is addon-declared via GLOBs the manifest references: perk divisor (`levelsPerPerkPoint`), skill points/level, shared-growth divisor, respec rapport cost, skill cap, manual skill points/level. MFO applies documented defaults when a GLOB is absent. Re-exposes what §17 hardcoded. **Perk divisor default is now 2** (`floor(level/2)`, was /3 — too few points, marth 2026-08-13).
+- **`MFO_Progression.esl` = the first addon built to this contract** — the worked reference example (its 3 classes + its economy GLOBs, declared through the public records, no special-casing in the DLL).
+- **PRGN discipline:** if the record layout changes (e.g. class stored as an index into a now-dynamic list), BUMP the PRGN version and gate/migrate — per the cross-update lesson (§/serialization).
