@@ -37,52 +37,41 @@
 
 namespace MFO::ProgAllocator {
 
-    // ── the ESL contract (records this module READS) ────────────────────────
-    // Local ids in MFO_Progression.esl — a FROZEN contract with the generator
-    // profile in MFO_GenerateESP.py, exactly like Forms.h ids are with the
-    // MFO.esp emitter. 0x800/0x801 are owned by Progression.h (detection).
-    //
-    // ECONOMY GLOBs: the DLL reads the RECORD DEFAULT at kDataLoaded (§10 —
-    // GLOB *values* are save-persisted, a post-load read could be stale).
-    // Author-tunable in xEdit; a missing record degrades to the DLL default
-    // beside it with a named log line, never an error.
-    // UNUSED since the round-3 perk economy (marth, 2026-08-12): perk points
-    // are now DERIVED — floor(level/3) − native tree perks at enroll − ranks
-    // MFO allocated (design doc §17) — so the per-level rate and the veteran
-    // multiplier have no consumer. The records stay in the ESL (frozen ids,
-    // author-visible); the DLL simply no longer reads them.
-    inline constexpr RE::FormID kGlobPerkPointsPerLevel = 0x802;  // UNUSED (§17)
-    inline constexpr RE::FormID kGlobSkillPointsPerLevel = 0x803; // default 3
-    inline constexpr RE::FormID kGlobSharedGrowthDivisor = 0x804; // default 2
-    inline constexpr RE::FormID kGlobRespecRapportCost   = 0x805; // default 500
-    inline constexpr RE::FormID kGlobVeteranCatchupMult  = 0x806; // UNUSED (§17)
-    inline constexpr RE::FormID kGlobSkillCap            = 0x807; // default 100
-    // Dev-harness command selector — the ONE glob read LIVE on purpose (the
-    // console writes the live value: `set MFOP_DevCmd to N`). Dev-only.
-    inline constexpr RE::FormID kGlobDevCmd              = 0x808;
-    // Per-class AUTO-PICK FormLists. ClassSkills: ordered AVIF forms = the
-    // skill priority (position → triangular weight, see the .cpp); authored
-    // in the plugin so class behaviour is data, not code. ClassPerks: ordered
-    // PERK forms tried FIRST by the auto-picker; ship EMPTY (the ESL can only
-    // master Skyrim.esm, and overhauls replace perks) — an overhaul patch can
-    // fill them in xEdit; empty/exhausted falls back to the name-agnostic
-    // weight-driven pick, which works under any overhaul.
-    inline constexpr RE::FormID kListClassSkillsMelee  = 0x810;
-    inline constexpr RE::FormID kListClassSkillsRanged = 0x811;
-    inline constexpr RE::FormID kListClassSkillsMage   = 0x812;
-    inline constexpr RE::FormID kListClassPerksMelee   = 0x818;
-    inline constexpr RE::FormID kListClassPerksRanged  = 0x819;
-    inline constexpr RE::FormID kListClassPerksMage    = 0x81A;
-    // Enrollment tag keyword — RESERVED in the ESL for conditions/SPID use;
-    // v1 does not stamp it onto actors (base keyword-array edits are the one
-    // write this module has no probe data for).
-    inline constexpr RE::FormID kKywdEnrolled          = 0x820;
+    // ── the ADDON API declaration layer (§18.6 — FROZEN public contract) ────
+    // NOTHING here reads fixed FormIDs from a named plugin any more. Each
+    // manifest Progression enumerated (its FIRST entry is MFO.esp's sentinel
+    // keyword) declares, in any order after the sentinel:
+    //   - ONE FLST  = the addon's CLASSES list (entries = class-def FLSTs);
+    //   - GLOBs     = economy knobs, matched by EDITOR-ID SUFFIX (globals
+    //                 keep their editor ids at runtime — console-addressable):
+    //                 _LevelsPerPerkPoint (2) | _SkillPointsPerLevel (3) |
+    //                 _SharedGrowthDivisor (2) | _RespecRapportCost (500) |
+    //                 _SkillCap (100) | _ManualSkillPointsPerLevel (5) |
+    //                 _DevCmd (dev harness selector, read live on purpose).
+    // A CLASS-DEF FLST declares, in any order:
+    //   - ONE MESG  = the class display name (its FULL);
+    //   - AVIF forms = the skills, ORDER = weight (triangular, sibling-pruned);
+    //   - PERK forms = auto-pick priority (optional);
+    //   - ONE GLOB suffixed _Stance = the #65 combat-stance mirror (0-3).
+    // Economy: first manifest (load order) declaring a knob wins; absent =
+    // the documented default. GLOB values read at kDataLoaded = the RECORD
+    // DEFAULT (§10 — post-load values are save-persisted). Third-party doc:
+    // Docs/ADDON-API.md.
 
-    // ── classes (§15) — SAME ordinals as FollowerState::combatClassOverride
-    // (0=none, 1=Melee, 2=Ranged, 3=Cast/Mage) so SetClass can mirror into
-    // the #65 override without a mapping table.
-    enum class Class : std::uint8_t { kNone = 0, kMelee = 1, kRanged = 2, kMage = 3 };
-    const char* ClassName(Class a_cls);
+    // ── classes: N-DECLARED, not fixed (§18.6) ──────────────────────────────
+    // Identity = the class-def FLST's FormID — STABLE across sessions and
+    // load-order changes (ResolveFormID on the co-save side), unlike an
+    // index into the enumerated list.
+    struct ClassDef {
+        RE::FormID   id{ 0 };            // the class-def FLST (serialized identity)
+        std::string  name;               // the MESG's FULL
+        std::uint8_t stance{ 0 };        // #65 combatClassOverride mirror (0 = none)
+        std::vector<RE::ActorValue> skills;        // order = weight
+        std::vector<RE::FormID>     perkPriority;  // optional, tried first
+    };
+    // Frozen after Init (the catalog discipline) — lock-free reads.
+    const std::vector<ClassDef>& Classes();
+    const ClassDef* FindClassDef(RE::FormID a_id);
 
     // ── per-follower progression state (co-save record 'PRGN', §8) ──────────
     struct PerkAlloc {
@@ -113,7 +102,10 @@ namespace MFO::ProgAllocator {
         bool wasInPotentialFollowerFaction{ false }; // provenance at enroll (§9.5)
         bool manualSkills{ false };                  // §16 manual skill points ON
 
-        Class         cls{ Class::kNone };
+        // §18.6: the CLASS-DEF FLST FormID (0 = no class picked yet — the
+        // §15 gate). Serialized as a FormID (PRGN v3) so it survives load-
+        // order changes via ResolveFormID; v2's fixed ordinal is migrated.
+        RE::FormID    clsId{ 0 };
         std::uint16_t progressionLevel{ 0 };
         std::uint16_t sharedGrowthRemainder{ 0 };    // banked player-levels while benched
 
@@ -176,7 +168,8 @@ namespace MFO::ProgAllocator {
 
     // ── the backend verbs (main thread; named [prog] reject lines) ──────────
     bool Enroll(RE::Actor* a_actor);
-    bool SetClass(RE::Actor* a_actor, Class a_cls);       // auto-scales skills
+    // a_classId = a declared ClassDef's id (§18.6). Auto-scales skills.
+    bool SetClass(RE::Actor* a_actor, RE::FormID a_classId);
     // §5 double gate (prereq perk(s)/rank order + perkConditions.IsTrue on
     // the follower at apply time). a_nodePerkID = the catalog node's rank-1
     // form; takes the NEXT untaken rank.
@@ -230,7 +223,8 @@ namespace MFO::ProgAllocator {
         bool          eligible{ false };
         std::string   blocker;           // why enrollment is refused (empty when eligible)
         bool          enrolled{ false };
-        std::uint8_t  cls{ 0 };          // Class ordinal (0 = class not chosen yet, §15 gate)
+        RE::FormID    clsId{ 0 };        // class-def id (0 = not chosen yet, §15 gate)
+        std::string   clsName;           // resolved display name ("" when none)
         std::uint16_t level{ 0 };
         float         unspentPerk{ 0.0f };    // §17 DERIVED pool (PerkPointsAvailable)
         std::uint16_t nativeAtEnroll{ 0 };    // §17: pre-trained tree ranks (the budget debit)
@@ -243,6 +237,8 @@ namespace MFO::ProgAllocator {
         bool  active{ false };           // addon detected + catalog built → tab exists
         float respecRapportCost{ 500.0f };
         float skillCap{ 100.0f };        // §16 apply gate — the board disables at cap
+        // §18.6: the declared classes for the board's dynamic-N prompt.
+        std::vector<std::pair<RE::FormID, std::string>> classes;
         std::vector<BoardFollowerView> rows;  // the active party, g_active order
         RE::FormID treeFor{ 0 };              // whose nodes[] below describe
         std::vector<BoardNodeView> nodes;     // catalog order; empty until a focus published
