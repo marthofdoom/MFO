@@ -42,7 +42,7 @@ namespace MFO::ProgAllocator {
         // follower levels — scarce enough that each point matters. The old
         // rate/scarcity GLOBs (0x802/0x806) are deliberately unread now; the
         // formula in PerkPointsAvailable is the single authority.
-        constexpr int kLevelsPerPerkPoint = 3;
+        constexpr int kLevelsPerPerkPoint = 2;   // 1 perk point / 2 levels (was /3 — too few, marth 2026-08-13)
 
         // §16 (marth, same round): manual SKILL points accrue at a FLAT 5
         // per follower level while the toggle is on — no detection, no GLOB,
