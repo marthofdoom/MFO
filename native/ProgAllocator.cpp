@@ -464,7 +464,8 @@ namespace MFO::ProgAllocator {
         // kFallback and the caller runs the engine evaluator UNCHANGED, so no
         // exotic perk's gating is ever relaxed by guesswork.
         enum class CondEval { kPass, kFail, kFallback };
-        CondEval EvalPerkConditions(RE::Actor* a_actor, RE::BGSPerk* a_rank) {
+        CondEval EvalPerkConditions(RE::Actor* a_actor, RE::BGSPerk* a_rank,
+                                    std::uint16_t a_progLevel) {
             using Op = RE::CONDITION_ITEM_DATA::OpCode;
             using Fn = RE::FUNCTION_DATA::FunctionID;
             auto* avo = a_actor->AsActorValueOwner();
@@ -503,11 +504,64 @@ namespace MFO::ProgAllocator {
                     if (!PerkAllocatableInCatalog(pid)) continue;  // filtered prereq → §5.1 owns it
                     auto* perk = PerkByID(pid);
                     result = result && (perk && a_actor->HasPerk(perk));
+                } else if (fn == Fn::kGetLevel) {
+                    // A character-LEVEL gate must count MFO's added progression
+                    // levels — the engine's GetLevel lags them, which is why a
+                    // level-gated perk read "locked" with the skill long met
+                    // (the original bug 1). Never read below the real level.
+                    if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf) return CondEval::kFallback;
+                    const float lhs = static_cast<float>(std::max<int>(
+                        static_cast<int>(a_actor->GetLevel()), static_cast<int>(a_progLevel)));
+                    const float rhs = d.flags.global
+                                          ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
+                                          : d.comparisonValue.f;
+                    bool ok;
+                    switch (d.flags.opCode) {
+                    case Op::kGreaterThan:          ok = lhs >  rhs; break;
+                    case Op::kGreaterThanOrEqualTo: ok = lhs >= rhs; break;
+                    default: return CondEval::kFallback;
+                    }
+                    result = result && ok;
                 } else {
-                    return CondEval::kFallback;   // GetLevel / quest / faction / … — don't guess
+                    return CondEval::kFallback;   // quest / faction / … — don't guess
                 }
             }
             return result ? CondEval::kPass : CondEval::kFail;
+        }
+
+        // Compact human dump of a perk's conditions — appended to the refusal
+        // ONLY when we fell back to the engine and it still blocked, so a
+        // genuinely-locked perk names its exact gating (function/op/value)
+        // instead of an opaque "perkConditions false". Diagnostic; cheap and
+        // bounded.
+        std::string DumpConditions(RE::BGSPerk* a_rank) {
+            using Fn = RE::FUNCTION_DATA::FunctionID;
+            using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            std::string out;
+            int n = 0;
+            for (auto* it = a_rank->perkConditions.head; it && n < 8; it = it->next, ++n) {
+                const auto& d = it->data;
+                const auto fn = d.functionData.function.get();
+                const char* name =
+                    fn == Fn::kGetBaseActorValue ? "GetBaseAV" :
+                    fn == Fn::kGetActorValue     ? "GetAV"     :
+                    fn == Fn::kHasPerk           ? "HasPerk"   :
+                    fn == Fn::kGetLevel          ? "GetLevel"  : nullptr;
+                const char* op =
+                    d.flags.opCode == Op::kEqualTo             ? "==" :
+                    d.flags.opCode == Op::kGreaterThan         ? ">"  :
+                    d.flags.opCode == Op::kGreaterThanOrEqualTo ? ">=" : "op?";
+                const float v = d.flags.global
+                                    ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
+                                    : d.comparisonValue.f;
+                if (!out.empty()) out += (d.flags.isOR ? " OR " : " AND ");
+                if (name)
+                    out += std::format("{} {} {:g}", name, op, v);
+                else
+                    out += std::format("fn#{} obj{} {} {:g}", static_cast<int>(fn),
+                                       static_cast<int>(d.object.get()), op, v);
+            }
+            return out;
         }
 
         // §17: how many CATALOG-TREE perk ranks the follower already owns —
@@ -602,7 +656,7 @@ namespace MFO::ProgAllocator {
                 a_whyNot = std::format("rank form {:08X} did not resolve", rank.perkFormID);
                 return 0;
             }
-            const CondEval ce = EvalPerkConditions(a_actor, rankForm);
+            const CondEval ce = EvalPerkConditions(a_actor, rankForm, a_st.progressionLevel);
             const bool condPass = (ce == CondEval::kFallback)
                                       ? rankForm->perkConditions.IsTrue(a_actor, a_actor)
                                       : (ce == CondEval::kPass);
@@ -630,6 +684,8 @@ namespace MFO::ProgAllocator {
                         detail = std::format(" (needs {})", rank.skillReq);
                     }
                 }
+                if (ce == CondEval::kFallback)
+                    detail += std::format(" [cond: {}]", DumpConditions(rankForm));
                 a_whyNot = std::format("perkConditions false on follower{}", detail);
                 return 0;
             }
