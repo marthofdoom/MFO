@@ -529,24 +529,21 @@ namespace MFO::ProgAllocator {
             return result ? CondEval::kPass : CondEval::kFail;
         }
 
-        // Compact human dump of a perk's conditions — appended to the refusal
-        // ONLY when we fell back to the engine and it still blocked, so a
-        // genuinely-locked perk names its exact gating (function/op/value)
-        // instead of an opaque "perkConditions false". Diagnostic; cheap and
-        // bounded.
-        std::string DumpConditions(RE::BGSPerk* a_rank) {
+        // EVALUATIVE dump of a perk's conditions — appended to the refusal on
+        // ANY block, annotating each item with the follower's live value and
+        // a [T]/[F] verdict, so a genuinely-locked perk names its exact
+        // blocker (which skill/level/perk, and what the follower actually has)
+        // instead of an opaque "perkConditions false". Diagnostic; bounded.
+        std::string DumpConditions(RE::BGSPerk* a_rank, RE::Actor* a_actor,
+                                   std::uint16_t a_progLevel) {
             using Fn = RE::FUNCTION_DATA::FunctionID;
             using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            auto* avo = a_actor->AsActorValueOwner();
             std::string out;
             int n = 0;
             for (auto* it = a_rank->perkConditions.head; it && n < 8; it = it->next, ++n) {
                 const auto& d = it->data;
                 const auto fn = d.functionData.function.get();
-                const char* name =
-                    fn == Fn::kGetBaseActorValue ? "GetBaseAV" :
-                    fn == Fn::kGetActorValue     ? "GetAV"     :
-                    fn == Fn::kHasPerk           ? "HasPerk"   :
-                    fn == Fn::kGetLevel          ? "GetLevel"  : nullptr;
                 const char* op =
                     d.flags.opCode == Op::kEqualTo             ? "==" :
                     d.flags.opCode == Op::kGreaterThan         ? ">"  :
@@ -555,11 +552,31 @@ namespace MFO::ProgAllocator {
                                     ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
                                     : d.comparisonValue.f;
                 if (!out.empty()) out += (d.flags.isOR ? " OR " : " AND ");
-                if (name)
-                    out += std::format("{} {} {:g}", name, op, v);
-                else
+                if (fn == Fn::kGetBaseActorValue || fn == Fn::kGetActorValue) {
+                    const auto av = static_cast<RE::ActorValue>(
+                        reinterpret_cast<std::uintptr_t>(d.functionData.params[0]));
+                    const float have = avo ? (fn == Fn::kGetBaseActorValue
+                                                  ? avo->GetBaseActorValue(av)
+                                                  : avo->GetActorValue(av))
+                                           : 0.0f;
+                    out += std::format("{} {} {:g} (have {:.0f})", AvName(av), op, v, have);
+                } else if (fn == Fn::kGetLevel) {
+                    const int have = std::max<int>(static_cast<int>(a_actor->GetLevel()),
+                                                   static_cast<int>(a_progLevel));
+                    out += std::format("GetLevel {} {:g} (have {})", op, v, have);
+                } else if (fn == Fn::kHasPerk) {
+                    auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                    const RE::FormID pid = form ? form->GetFormID() : 0;
+                    auto* pp = PerkByID(pid);
+                    const char* nm = pp ? pp->GetName() : nullptr;
+                    out += std::format("HasPerk({}) {} {:g} [{}, {}]",
+                                       nm && *nm ? nm : "?", op, v,
+                                       (pp && a_actor->HasPerk(pp)) ? "owned" : "MISSING",
+                                       PerkAllocatableInCatalog(pid) ? "in-tree" : "filtered");
+                } else {
                     out += std::format("fn#{} obj{} {} {:g}", static_cast<int>(fn),
                                        static_cast<int>(d.object.get()), op, v);
+                }
             }
             return out;
         }
@@ -684,8 +701,8 @@ namespace MFO::ProgAllocator {
                         detail = std::format(" (needs {})", rank.skillReq);
                     }
                 }
-                if (ce == CondEval::kFallback)
-                    detail += std::format(" [cond: {}]", DumpConditions(rankForm));
+                detail += std::format(" [cond: {}]",
+                                      DumpConditions(rankForm, a_actor, a_st.progressionLevel));
                 a_whyNot = std::format("perkConditions false on follower{}", detail);
                 return 0;
             }
