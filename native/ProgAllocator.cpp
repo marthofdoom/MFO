@@ -427,6 +427,89 @@ namespace MFO::ProgAllocator {
             return a_id ? RE::TESForm::LookupByID<RE::BGSPerk>(a_id) : nullptr;
         }
 
+        // Is this perk something a follower could actually allocate on the
+        // board — i.e. it lives in a catalog node that survived the §3 filter
+        // (at least one non-dead rank)? A HasPerk PREREQ pointing at a perk
+        // that is NOT board-allocatable (filtered player-only rank, or a perk
+        // in no MFO tree at all) can never be satisfied on a follower, so §5.1
+        // already bridges around it — §5.2 must NOT hard-block on it.
+        bool PerkAllocatableInCatalog(RE::FormID a_perk) {
+            if (!a_perk) return false;
+            for (const auto& tree : Progression::Get().skills)
+                for (const auto& node : tree.nodes) {
+                    bool hasThis = false, anyKept = false;
+                    for (const auto& r : node.ranks) {
+                        if (r.perkFormID == a_perk) hasThis = true;
+                        if (r.verdict != Progression::Verdict::kDead) anyKept = true;
+                    }
+                    if (hasThis && anyKept) return true;
+                }
+            return false;
+        }
+
+        // §5.2b (deck 2026-08-15): a skill perk's own conditions normally
+        // reduce to a pure AND-chain of the skill-level gate
+        // (GetBaseActorValue-on-self >= N) plus, in some overhauls, HasPerk
+        // <prereq> items that encode a prerequisite as a condition. When such a
+        // prereq perk has been FILTERED out of the tree, the engine's
+        // whole-chain IsTrue locks the node forever even though the skill is
+        // met and §5.1's bridging already routed the prerequisite around the
+        // filtered perk. We evaluate that common shape ourselves:
+        //   - GetBaseActorValue-on-self, op >= / >  : real skill gate, enforced.
+        //   - HasPerk <P>, "req" shape (==1 / >=1 / >0): if P is board-
+        //     allocatable it is a real in-tree prereq → enforce ownership; if
+        //     P is filtered/absent → treat as satisfied (§5.1 owns it).
+        // Anything else — an OR group, an exclusion HasPerk (==0), GetLevel, a
+        // quest/faction/global condition, an unhandled opcode — returns
+        // kFallback and the caller runs the engine evaluator UNCHANGED, so no
+        // exotic perk's gating is ever relaxed by guesswork.
+        enum class CondEval { kPass, kFail, kFallback };
+        CondEval EvalPerkConditions(RE::Actor* a_actor, RE::BGSPerk* a_rank) {
+            using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            using Fn = RE::FUNCTION_DATA::FunctionID;
+            auto* avo = a_actor->AsActorValueOwner();
+            bool result = true;
+            for (auto* it = a_rank->perkConditions.head; it; it = it->next) {
+                const auto& d = it->data;
+                if (d.flags.isOR) return CondEval::kFallback;   // disjunction — don't partial-eval
+                const auto fn = d.functionData.function.get();
+                if (fn == Fn::kGetBaseActorValue) {
+                    if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf) return CondEval::kFallback;
+                    if (!avo) return CondEval::kFallback;
+                    const auto av = static_cast<RE::ActorValue>(
+                        reinterpret_cast<std::uintptr_t>(d.functionData.params[0]));
+                    const float lhs = avo->GetBaseActorValue(av);
+                    const float rhs = d.flags.global
+                                          ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
+                                          : d.comparisonValue.f;
+                    bool ok;
+                    switch (d.flags.opCode) {
+                    case Op::kGreaterThan:          ok = lhs >  rhs; break;
+                    case Op::kGreaterThanOrEqualTo: ok = lhs >= rhs; break;
+                    default: return CondEval::kFallback;   // <, ==, != on a skill — unusual, defer
+                    }
+                    result = result && ok;
+                } else if (fn == Fn::kHasPerk) {
+                    const float rhs = d.flags.global
+                                          ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
+                                          : d.comparisonValue.f;
+                    const bool isReqShape =
+                        (d.flags.opCode == Op::kEqualTo && rhs == 1.0f) ||
+                        (d.flags.opCode == Op::kGreaterThanOrEqualTo && rhs > 0.0f && rhs <= 1.0f) ||
+                        (d.flags.opCode == Op::kGreaterThan && rhs >= 0.0f && rhs < 1.0f);
+                    if (!isReqShape) return CondEval::kFallback;   // exclusion / odd shape — defer
+                    auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                    const RE::FormID pid = form ? form->GetFormID() : 0;
+                    if (!PerkAllocatableInCatalog(pid)) continue;  // filtered prereq → §5.1 owns it
+                    auto* perk = PerkByID(pid);
+                    result = result && (perk && a_actor->HasPerk(perk));
+                } else {
+                    return CondEval::kFallback;   // GetLevel / quest / faction / … — don't guess
+                }
+            }
+            return result ? CondEval::kPass : CondEval::kFail;
+        }
+
         // §17: how many CATALOG-TREE perk ranks the follower already owns —
         // captured ONCE at enrollment as the budget debit. Per node, the
         // highest rank form present counts that many ranks (rank K implies
@@ -519,9 +602,24 @@ namespace MFO::ProgAllocator {
                 a_whyNot = std::format("rank form {:08X} did not resolve", rank.perkFormID);
                 return 0;
             }
-            if (!rankForm->perkConditions.IsTrue(a_actor, a_actor)) {
+            const CondEval ce = EvalPerkConditions(a_actor, rankForm);
+            const bool condPass = (ce == CondEval::kFallback)
+                                      ? rankForm->perkConditions.IsTrue(a_actor, a_actor)
+                                      : (ce == CondEval::kPass);
+            if (!condPass) {
+                // Name the real blocker. In the §5.2 fail path it is usually a
+                // still-allocatable, unowned condition-prereq — say so — before
+                // falling back to the skill string with the follower's value.
                 std::string detail;
-                if (!rank.skillReq.empty()) {
+                for (const auto pid : a_node.condPrereqPerkIDs) {
+                    if (!PerkAllocatableInCatalog(pid)) continue;   // filtered — not the blocker
+                    if (OwnsAnyRank(a_actor, a_base, a_st, pid))    continue;   // owned — not it
+                    auto* pp = PerkByID(pid);
+                    const char* nm = pp ? pp->GetName() : nullptr;
+                    detail = std::format(" (needs perk: {})", nm && *nm ? nm : "prerequisite");
+                    break;
+                }
+                if (detail.empty() && !rank.skillReq.empty()) {
                     if (rank.skillReqAV != RE::ActorValue::kNone) {
                         if (auto* avo = a_actor->AsActorValueOwner())
                             detail = std::format(" (needs {}, have {:.0f})", rank.skillReq,
