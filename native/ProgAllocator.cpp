@@ -744,10 +744,9 @@ namespace MFO::ProgAllocator {
                         st.progressionLevel = static_cast<std::uint16_t>(st.progressionLevel + gain);
                         // §17: no grant — the derived pool follows the level.
                         spdlog::info("[prog] {:08X} level {} (+{}) — {} perk point(s) available "
-                                     "(§17: floor(level/{}) − {} pre-trained − {} spent)",
+                                     "(floor(level/{}) − {} spent)",
                                      id, st.progressionLevel, gain, PerkPointsAvailable(st),
-                                     kLevelsPerPerkPoint, st.nativeTreePerksAtEnroll,
-                                     AllocatedRanks(st));
+                                     kLevelsPerPerkPoint, AllocatedRanks(st));
                         if (actor) RecomputeSkills(actor, st, /*log*/ true);
                     }
                 }
@@ -949,8 +948,9 @@ namespace MFO::ProgAllocator {
     // heavily pre-trained follower is simply "ahead", never negative.
     int PerkPointsAvailable(const ProgState& a_st) {
         const int earned = static_cast<int>(a_st.progressionLevel) / kLevelsPerPerkPoint;
-        return std::max(0, earned - static_cast<int>(a_st.nativeTreePerksAtEnroll)
-                                  - AllocatedRanks(a_st));
+        // native tree perks NO LONGER subtracted (marth 2026-08-13): a follower's
+        // starting perks are their build, not a debt to earn back. available = earned - spent.
+        return std::max(0, earned - AllocatedRanks(a_st));
     }
 
     const char* ClassName(Class a_cls) {

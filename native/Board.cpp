@@ -1354,17 +1354,13 @@ namespace MFO::Board {
                             // §17: the derived budget, spelled out so a zero
                             // is self-explaining, never "is it broken?".
                             if (who->unspentPerk < 1.0f)
-                                ImGui::TextDisabled("None to spend: 1 point per 3 levels -- level "
-                                                    "%u has earned %u, %u came pre-trained and %u "
-                                                    "are already spent.",
-                                                    (unsigned)who->level, (unsigned)(who->level / 3),
-                                                    (unsigned)who->nativeAtEnroll,
+                                ImGui::TextDisabled("None to spend: 1 point per 2 levels -- level "
+                                                    "%u has earned %u, and %u are already spent.",
+                                                    (unsigned)who->level, (unsigned)(who->level / 2),
                                                     (unsigned)who->allocatedRanks);
                             else
-                                ImGui::TextDisabled("1 perk point per 3 levels; perks %s already "
-                                                    "had at enrollment (%u) counted against the "
-                                                    "budget. Pick a skill to open its tree.",
-                                                    who->name.c_str(), (unsigned)who->nativeAtEnroll);
+                                ImGui::TextDisabled("1 perk point per 2 levels. "
+                                                    "Pick a skill to open its tree.");
                             if (!stateOk) ImGui::TextDisabled("syncing follower state...");
 
                             // ── §16 MANUAL SKILL POINTS (design doc §16:
