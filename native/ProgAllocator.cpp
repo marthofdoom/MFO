@@ -463,68 +463,79 @@ namespace MFO::ProgAllocator {
         // quest/faction/global condition, an unhandled opcode — returns
         // kFallback and the caller runs the engine evaluator UNCHANGED, so no
         // exotic perk's gating is ever relaxed by guesswork.
+        // One condition item's truth for THIS follower, tri-stated:
+        //   kTrue/kFalse — we evaluated it; kUnknown — a shape we won't guess
+        //   (the caller then defers the whole perk to the engine).
+        // Handled: GetBaseActorValue/GetActorValue-on-self (>= / >), GetLevel-
+        // on-self counting MFO's progression levels, and HasPerk "req" shape.
+        // A HasPerk on a FILTERED/absent perk is kTrue — the follower can never
+        // hold it, §5.1's bridging already owns that prerequisite, so it must
+        // not lock the node (the Force-of-Nature / Destruction-Mastery case).
+        enum class Tri { kTrue, kFalse, kUnknown };
+        Tri EvalCondItem(const RE::CONDITION_ITEM_DATA& d, RE::Actor* a_actor,
+                         RE::ActorValueOwner* a_avo, std::uint16_t a_progLevel) {
+            using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            using Fn = RE::FUNCTION_DATA::FunctionID;
+            const auto fn  = d.functionData.function.get();
+            const float rhs = d.flags.global
+                                  ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
+                                  : d.comparisonValue.f;
+            auto cmp = [&](float lhs) -> Tri {
+                switch (d.flags.opCode) {
+                case Op::kGreaterThan:          return lhs >  rhs ? Tri::kTrue : Tri::kFalse;
+                case Op::kGreaterThanOrEqualTo: return lhs >= rhs ? Tri::kTrue : Tri::kFalse;
+                default: return Tri::kUnknown;   // <, ==, != — unusual on a gate, defer
+                }
+            };
+            if (fn == Fn::kGetBaseActorValue || fn == Fn::kGetActorValue) {
+                if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf || !a_avo) return Tri::kUnknown;
+                const auto av = static_cast<RE::ActorValue>(
+                    reinterpret_cast<std::uintptr_t>(d.functionData.params[0]));
+                return cmp(fn == Fn::kGetBaseActorValue ? a_avo->GetBaseActorValue(av)
+                                                        : a_avo->GetActorValue(av));
+            }
+            if (fn == Fn::kGetLevel) {
+                if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf) return Tri::kUnknown;
+                return cmp(static_cast<float>(std::max<int>(
+                    static_cast<int>(a_actor->GetLevel()), static_cast<int>(a_progLevel))));
+            }
+            if (fn == Fn::kHasPerk) {
+                const bool isReqShape =
+                    (d.flags.opCode == Op::kEqualTo && rhs == 1.0f) ||
+                    (d.flags.opCode == Op::kGreaterThanOrEqualTo && rhs > 0.0f && rhs <= 1.0f) ||
+                    (d.flags.opCode == Op::kGreaterThan && rhs >= 0.0f && rhs < 1.0f);
+                if (!isReqShape) return Tri::kUnknown;   // exclusion (==0) / odd shape — defer
+                auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                const RE::FormID pid = form ? form->GetFormID() : 0;
+                if (!PerkAllocatableInCatalog(pid)) return Tri::kTrue;   // filtered → satisfied
+                auto* perk = PerkByID(pid);
+                return (perk && a_actor->HasPerk(perk)) ? Tri::kTrue : Tri::kFalse;
+            }
+            return Tri::kUnknown;   // GetLevel-on-target / quest / faction / … — don't guess
+        }
+
+        // §5.2 gate over a perk's own conditions, with correct AND/OR grouping:
+        // items joined by the isOR flag form a disjunction (the group passes if
+        // ANY member is true); groups are ANDed. Any kUnknown item makes the
+        // whole perk defer (kFallback) so the engine — never guesswork — decides
+        // exotic gating. This is what lets a FILTERED HasPerk (kTrue) unlock a
+        // node whether it stands alone or sits inside an OR group.
         enum class CondEval { kPass, kFail, kFallback };
         CondEval EvalPerkConditions(RE::Actor* a_actor, RE::BGSPerk* a_rank,
                                     std::uint16_t a_progLevel) {
-            using Op = RE::CONDITION_ITEM_DATA::OpCode;
-            using Fn = RE::FUNCTION_DATA::FunctionID;
             auto* avo = a_actor->AsActorValueOwner();
             bool result = true;
-            for (auto* it = a_rank->perkConditions.head; it; it = it->next) {
-                const auto& d = it->data;
-                if (d.flags.isOR) return CondEval::kFallback;   // disjunction — don't partial-eval
-                const auto fn = d.functionData.function.get();
-                if (fn == Fn::kGetBaseActorValue) {
-                    if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf) return CondEval::kFallback;
-                    if (!avo) return CondEval::kFallback;
-                    const auto av = static_cast<RE::ActorValue>(
-                        reinterpret_cast<std::uintptr_t>(d.functionData.params[0]));
-                    const float lhs = avo->GetBaseActorValue(av);
-                    const float rhs = d.flags.global
-                                          ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
-                                          : d.comparisonValue.f;
-                    bool ok;
-                    switch (d.flags.opCode) {
-                    case Op::kGreaterThan:          ok = lhs >  rhs; break;
-                    case Op::kGreaterThanOrEqualTo: ok = lhs >= rhs; break;
-                    default: return CondEval::kFallback;   // <, ==, != on a skill — unusual, defer
-                    }
-                    result = result && ok;
-                } else if (fn == Fn::kHasPerk) {
-                    const float rhs = d.flags.global
-                                          ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
-                                          : d.comparisonValue.f;
-                    const bool isReqShape =
-                        (d.flags.opCode == Op::kEqualTo && rhs == 1.0f) ||
-                        (d.flags.opCode == Op::kGreaterThanOrEqualTo && rhs > 0.0f && rhs <= 1.0f) ||
-                        (d.flags.opCode == Op::kGreaterThan && rhs >= 0.0f && rhs < 1.0f);
-                    if (!isReqShape) return CondEval::kFallback;   // exclusion / odd shape — defer
-                    auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
-                    const RE::FormID pid = form ? form->GetFormID() : 0;
-                    if (!PerkAllocatableInCatalog(pid)) continue;  // filtered prereq → §5.1 owns it
-                    auto* perk = PerkByID(pid);
-                    result = result && (perk && a_actor->HasPerk(perk));
-                } else if (fn == Fn::kGetLevel) {
-                    // A character-LEVEL gate must count MFO's added progression
-                    // levels — the engine's GetLevel lags them, which is why a
-                    // level-gated perk read "locked" with the skill long met
-                    // (the original bug 1). Never read below the real level.
-                    if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf) return CondEval::kFallback;
-                    const float lhs = static_cast<float>(std::max<int>(
-                        static_cast<int>(a_actor->GetLevel()), static_cast<int>(a_progLevel)));
-                    const float rhs = d.flags.global
-                                          ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
-                                          : d.comparisonValue.f;
-                    bool ok;
-                    switch (d.flags.opCode) {
-                    case Op::kGreaterThan:          ok = lhs >  rhs; break;
-                    case Op::kGreaterThanOrEqualTo: ok = lhs >= rhs; break;
-                    default: return CondEval::kFallback;
-                    }
-                    result = result && ok;
-                } else {
-                    return CondEval::kFallback;   // quest / faction / … — don't guess
+            for (auto* it = a_rank->perkConditions.head; it;) {
+                bool groupVal = false;                 // OR accumulator for this group
+                for (;;) {
+                    const Tri t = EvalCondItem(it->data, a_actor, avo, a_progLevel);
+                    if (t == Tri::kUnknown) return CondEval::kFallback;
+                    groupVal = groupVal || (t == Tri::kTrue);
+                    const bool orNext = it->data.flags.isOR;   // OR'd with the next item
+                    it = it->next;
+                    if (!orNext || !it) break;                 // group ends (or list ends)
                 }
+                result = result && groupVal;
             }
             return result ? CondEval::kPass : CondEval::kFail;
         }
