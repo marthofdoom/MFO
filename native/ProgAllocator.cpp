@@ -427,6 +427,17 @@ namespace MFO::ProgAllocator {
             return a_id ? RE::TESForm::LookupByID<RE::BGSPerk>(a_id) : nullptr;
         }
 
+        // A follower's perks live on the BASE (TESNPC), not the actor —
+        // Actor::HasPerk alone reports FALSE for a base/native perk the
+        // follower genuinely owns (e.g. a root Mastery perk). Ownership must
+        // test the base index too, exactly like OwnsAnyRank (§ deck
+        // 2026-08-15: Force of Nature read its owned Destruction-Mastery
+        // prereq as MISSING because HasPerk-only missed the base perk).
+        bool OwnsPerkForm(RE::Actor* a_actor, RE::TESNPC* a_base, RE::BGSPerk* a_perk) {
+            return a_perk && ((a_base && a_base->GetPerkIndex(a_perk).has_value()) ||
+                              a_actor->HasPerk(a_perk));
+        }
+
         // Is this perk something a follower could actually allocate on the
         // board — i.e. it lives in a catalog node that survived the §3 filter
         // (at least one non-dead rank)? A HasPerk PREREQ pointing at a perk
@@ -473,7 +484,8 @@ namespace MFO::ProgAllocator {
         // not lock the node (the Force-of-Nature / Destruction-Mastery case).
         enum class Tri { kTrue, kFalse, kUnknown };
         Tri EvalCondItem(const RE::CONDITION_ITEM_DATA& d, RE::Actor* a_actor,
-                         RE::ActorValueOwner* a_avo, std::uint16_t a_progLevel) {
+                         RE::TESNPC* a_base, RE::ActorValueOwner* a_avo,
+                         std::uint16_t a_progLevel) {
             using Op = RE::CONDITION_ITEM_DATA::OpCode;
             using Fn = RE::FUNCTION_DATA::FunctionID;
             const auto fn  = d.functionData.function.get();
@@ -508,8 +520,7 @@ namespace MFO::ProgAllocator {
                 auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
                 const RE::FormID pid = form ? form->GetFormID() : 0;
                 if (!PerkAllocatableInCatalog(pid)) return Tri::kTrue;   // filtered → satisfied
-                auto* perk = PerkByID(pid);
-                return (perk && a_actor->HasPerk(perk)) ? Tri::kTrue : Tri::kFalse;
+                return OwnsPerkForm(a_actor, a_base, PerkByID(pid)) ? Tri::kTrue : Tri::kFalse;
             }
             return Tri::kUnknown;   // GetLevel-on-target / quest / faction / … — don't guess
         }
@@ -521,14 +532,14 @@ namespace MFO::ProgAllocator {
         // exotic gating. This is what lets a FILTERED HasPerk (kTrue) unlock a
         // node whether it stands alone or sits inside an OR group.
         enum class CondEval { kPass, kFail, kFallback };
-        CondEval EvalPerkConditions(RE::Actor* a_actor, RE::BGSPerk* a_rank,
-                                    std::uint16_t a_progLevel) {
+        CondEval EvalPerkConditions(RE::Actor* a_actor, RE::TESNPC* a_base,
+                                    RE::BGSPerk* a_rank, std::uint16_t a_progLevel) {
             auto* avo = a_actor->AsActorValueOwner();
             bool result = true;
             for (auto* it = a_rank->perkConditions.head; it;) {
                 bool groupVal = false;                 // OR accumulator for this group
                 for (;;) {
-                    const Tri t = EvalCondItem(it->data, a_actor, avo, a_progLevel);
+                    const Tri t = EvalCondItem(it->data, a_actor, a_base, avo, a_progLevel);
                     if (t == Tri::kUnknown) return CondEval::kFallback;
                     groupVal = groupVal || (t == Tri::kTrue);
                     const bool orNext = it->data.flags.isOR;   // OR'd with the next item
@@ -546,7 +557,7 @@ namespace MFO::ProgAllocator {
         // blocker (which skill/level/perk, and what the follower actually has)
         // instead of an opaque "perkConditions false". Diagnostic; bounded.
         std::string DumpConditions(RE::BGSPerk* a_rank, RE::Actor* a_actor,
-                                   std::uint16_t a_progLevel) {
+                                   RE::TESNPC* a_base, std::uint16_t a_progLevel) {
             using Fn = RE::FUNCTION_DATA::FunctionID;
             using Op = RE::CONDITION_ITEM_DATA::OpCode;
             auto* avo = a_actor->AsActorValueOwner();
@@ -582,7 +593,7 @@ namespace MFO::ProgAllocator {
                     const char* nm = pp ? pp->GetName() : nullptr;
                     out += std::format("HasPerk({}) {} {:g} [{}, {}]",
                                        nm && *nm ? nm : "?", op, v,
-                                       (pp && a_actor->HasPerk(pp)) ? "owned" : "MISSING",
+                                       OwnsPerkForm(a_actor, a_base, pp) ? "owned" : "MISSING",
                                        PerkAllocatableInCatalog(pid) ? "in-tree" : "filtered");
                 } else {
                     out += std::format("fn#{} obj{} {} {:g}", static_cast<int>(fn),
@@ -684,7 +695,7 @@ namespace MFO::ProgAllocator {
                 a_whyNot = std::format("rank form {:08X} did not resolve", rank.perkFormID);
                 return 0;
             }
-            const CondEval ce = EvalPerkConditions(a_actor, rankForm, a_st.progressionLevel);
+            const CondEval ce = EvalPerkConditions(a_actor, a_base, rankForm, a_st.progressionLevel);
             const bool condPass = (ce == CondEval::kFallback)
                                       ? rankForm->perkConditions.IsTrue(a_actor, a_actor)
                                       : (ce == CondEval::kPass);
@@ -713,7 +724,7 @@ namespace MFO::ProgAllocator {
                     }
                 }
                 detail += std::format(" [cond: {}]",
-                                      DumpConditions(rankForm, a_actor, a_st.progressionLevel));
+                                      DumpConditions(rankForm, a_actor, a_base, a_st.progressionLevel));
                 a_whyNot = std::format("perkConditions false on follower{}", detail);
                 return 0;
             }
