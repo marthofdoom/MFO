@@ -520,10 +520,19 @@ namespace MFO::ProgAllocator {
                 return 0;
             }
             if (!rankForm->perkConditions.IsTrue(a_actor, a_actor)) {
-                a_whyNot = std::format("perkConditions false on follower{}",
-                                       a_node.ranks[static_cast<std::size_t>(have)].skillReq.empty()
-                                           ? std::string{}
-                                           : std::format(" (needs {})", rank.skillReq));
+                std::string detail;
+                if (!rank.skillReq.empty()) {
+                    if (rank.skillReqAV != RE::ActorValue::kNone) {
+                        if (auto* avo = a_actor->AsActorValueOwner())
+                            detail = std::format(" (needs {}, have {:.0f})", rank.skillReq,
+                                                 avo->GetBaseActorValue(rank.skillReqAV));
+                        else
+                            detail = std::format(" (needs {})", rank.skillReq);
+                    } else {
+                        detail = std::format(" (needs {})", rank.skillReq);
+                    }
+                }
+                a_whyNot = std::format("perkConditions false on follower{}", detail);
                 return 0;
             }
             return have + 1;

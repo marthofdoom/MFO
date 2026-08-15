@@ -48,6 +48,12 @@ namespace MFO::Progression {
         // = none found). ENFORCEMENT never parses this — §5 re-evaluates the
         // full perkConditions on the follower via the kept FormID.
         std::string skillReq;
+        // Numeric form of the SAME first GetBaseActorValue-on-self gate, kept
+        // beside the display string so §5's refusal can name the follower's
+        // ACTUAL value ("needs Destruction 50, have 47") — diagnosis + UX.
+        // kNone = no skill-level condition was found.
+        RE::ActorValue skillReqAV{ RE::ActorValue::kNone };
+        float          skillReqVal{ 0.0f };
         Verdict     verdict{ Verdict::kDead };
     };
 

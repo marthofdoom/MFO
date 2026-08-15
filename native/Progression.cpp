@@ -229,7 +229,9 @@ namespace MFO::Progression {
         // item testing GetBaseActorValue on kSelf with >= (or >) gives the
         // human string. The FormID kept beside it is what §5 enforcement
         // re-evaluates in full — nothing downstream parses this string.
-        std::string ExtractSkillReq(RE::BGSPerk* a_rank) {
+        std::string ExtractSkillReq(RE::BGSPerk* a_rank,
+                                    RE::ActorValue* a_outAV = nullptr,
+                                    float* a_outVal = nullptr) {
             using Op = RE::CONDITION_ITEM_DATA::OpCode;
             for (auto* it = a_rank->perkConditions.head; it; it = it->next) {
                 const auto& d = it->data;
@@ -245,6 +247,8 @@ namespace MFO::Progression {
                 const float v = d.flags.global
                                     ? (d.comparisonValue.g ? d.comparisonValue.g->value : 0.0f)
                                     : d.comparisonValue.f;
+                if (a_outAV)  *a_outAV  = av;
+                if (a_outVal) *a_outVal = v;
                 return std::format("{} {:g}", AvName(av), v);
             }
             return {};
@@ -428,7 +432,7 @@ namespace MFO::Progression {
                     if (rankNo > 0 && r == node->perk) break;   // looped chain
                     RankView rank;
                     rank.perkFormID = r->GetFormID();
-                    rank.skillReq   = ExtractSkillReq(r);
+                    rank.skillReq   = ExtractSkillReq(r, &rank.skillReqAV, &rank.skillReqVal);
                     std::string why;
                     rank.verdict = ClassifyRank(r, why);
                     if (rankNo == 0) firstWhy = why;
