@@ -499,6 +499,36 @@ namespace MFO::Progression {
                 }
                 if (rootLine) view.parentPerkIDs.clear();   // reachable like tier 1
             }
+
+            // Pass 2b: CONDITION-ENCODED prereqs become real graph edges too
+            // (marth deck 2026-08-15: "if it's gated on a perk it needs to be
+            // AFTER the perk in the tree"). A perk whose perkConditions carry
+            // HasPerk <P> (the §2.3 condPrereqPerkIDs) had that dependency
+            // enforced by §5.2 but invisible to the graph — so it drew with no
+            // edge to P, P (often an entry-less Requiem "Mastery" perk kept as
+            // MARGINAL) was never surfaced as the needed passthrough, and the
+            // gated perk was not tiered below it. We now wire an edge to the
+            // KEPT node that carries P at any rank; a FILTERED/absent P is left
+            // to §5.2's bypass (it can never gate a follower). Re-populating
+            // parentPerkIDs makes §5.1 require the prereq too — consistent with
+            // §5.2, which is the final authority regardless.
+            for (std::size_t i = 0; i < a_out.nodes.size(); ++i) {
+                auto& view = a_out.nodes[i];
+                for (const auto cpid : view.condPrereqPerkIDs) {
+                    std::uint32_t owner = UINT32_MAX;
+                    for (std::size_t j = 0; j < a_out.nodes.size() && owner == UINT32_MAX; ++j) {
+                        if (j == i) continue;
+                        for (const auto& r : a_out.nodes[j].ranks)
+                            if (r.perkFormID == cpid) { owner = static_cast<std::uint32_t>(j); break; }
+                    }
+                    if (owner == UINT32_MAX) continue;   // filtered/absent — §5.2 bypass owns it
+                    if (std::find(view.parentIndices.begin(), view.parentIndices.end(), owner)
+                            == view.parentIndices.end()) {
+                        view.parentIndices.push_back(owner);
+                        view.parentPerkIDs.push_back(a_out.nodes[owner].perkFormID);
+                    }
+                }
+            }
         }
 
         void BuildCatalog() {
