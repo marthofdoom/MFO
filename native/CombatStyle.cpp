@@ -123,6 +123,12 @@ namespace MFO::CombatStyle {
         RecountEquipOrders();
     }
 
+    bool HoldsEquipOrder(RE::FormID a_follower) {
+        std::lock_guard<std::mutex> lk(g_mx);
+        const auto it = g_owned.find(a_follower);
+        return it != g_owned.end() && it->second.equipOrder;
+    }
+
     void ApplyTick(RE::Actor* a_actor, RE::CombatController* a_cc) {
         if (!a_actor || !a_cc) return;
 

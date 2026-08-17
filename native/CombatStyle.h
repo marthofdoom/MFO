@@ -71,6 +71,16 @@ namespace MFO::CombatStyle {
     // or a non-equip-order owner -> no-op). MAIN / worker thread.
     void ReleaseEquipOrder(RE::FormID a_follower);
 
+    // #76: does this follower CURRENTLY hold an equip-order stance? The scheduler
+    // uses it to PRESERVE the melee/ranged clamp across a tick where a HIGHER-
+    // priority rule stopped the gambit scan before the equip rule (an ordered
+    // cast/heal fires): the equip gambit's truth is unknown that tick, so the
+    // hold must persist rather than be overwritten by the class override / cast
+    // latch -- a mage left-hand-casts the ordered spell (gate-exempted) while the
+    // dagger stays force-held, and reverts only when the equip gambit is KNOWN
+    // false. MAIN / worker thread (takes the same g_mx as ReleaseEquipOrder).
+    bool HoldsEquipOrder(RE::FormID a_follower);
+
     // Apply / re-assert the owned stance on the follower's live controller.
     // COMBAT THREAD ONLY -- called from the UpdateCombat hook with the very
     // controller the engine just handed this actor. Saves the engine-derived

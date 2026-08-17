@@ -586,44 +586,71 @@ namespace MFO::Scheduler {
         //      to caster when it regenerates (marth: cast-till-dry-then-melee).
         // Only UPDATE on a real signal; a one-tick heal above must not drop the
         // stance (the "hold until it changes" contract), so no Want otherwise.
-        // #65: the per-follower COMBAT-CLASS OVERRIDE, if the user set one,
-        // SUPERSEDES the gambit-inferred stance below entirely -- an explicit
-        // "make him Melee" wins over whatever the equip/cast gambits decided
-        // this tick. Re-find the record (same INVARIANTS #2 discipline as
-        // `rec` above: g_followers could have shifted under the scan). Auto
-        // (0) changes NOTHING -- falls straight through to the unchanged
-        // gambit-driven logic, the #64 custom-follower guarantee.
+        // #65: the per-follower COMBAT-CLASS OVERRIDE is the follower's RESTING
+        // stance -- it applies whenever NO equip gambit is active this tick, and
+        // Auto (0) changes NOTHING (the #64 custom-follower guarantee: falls
+        // straight through to the gambit-driven logic). It does NOT supersede an
+        // ACTIVE equip gambit. FFXII TRUE OVERRIDE (marth): while an
+        // act.equip_melee/ranged condition holds TRUE, the ordered weapon stance
+        // is ENFORCED over the class override AND the cast latch for the true
+        // duration, reverting to the resting override the tick it goes false.
+        // Without this, a CASTER-class override (or a Cast/Melee override vs an
+        // equip_ranged order) defeated the #76 clamp for exactly the mages it
+        // was built for -- Lucien: cast override held, dagger<->spell thrash,
+        // the equip gate never armed (equipOrder stayed false).
+        // Re-find the record (same INVARIANTS #2 discipline as `rec` above:
+        // g_followers could have shifted under the scan).
         std::uint8_t classOverride = 0;
         if (const auto fit = g_followers.find(id); fit != g_followers.end())
             classOverride = fit->second.combatClassOverride;
 
+        // #76 (Fable SEV-2): the equip gambit's condition is KNOWN false only when
+        // the scan ran to COMPLETION (Evaluate returns only MATCHING rules); a
+        // scan STOPPED by a higher rule never reached the equip rule, so its truth
+        // is UNKNOWN this tick. Hoisted here because the stance arbitration below
+        // needs it (preserve a held clamp on an unknown tick); the release path
+        // reuses it.
+        const bool condKnownFalse = !stopped && !suppressed;
+
         CombatStyle::Stance stance = CombatStyle::Stance::None;
-        // #75: is this stance an EQUIP ORDER? Only the wantStance branch sets
-        // it -- an act.equip gambit won (or stands satisfied as) the hand claim
-        // -- and it rides into CombatStyle::Want so the equip gate can deny the
-        // follower's AI re-arming spells/staves over the forced weapon. The
-        // class override and the magicka-dry melee fallback are style PICKS,
-        // not weapon orders: they leave the flag false (and a Want with false
-        // RELEASES a standing hold -- a cast latch flipping the stance to Cast
-        // reopens the follower's own magic the same tick).
+        // STANCE PRIORITY (FFXII true-override): an ACTIVE equip gambit is enforced
+        // over the #65 class override and the cast latch for its true duration;
+        // the override is the RESTING stance under it. Only the equip branch sets
+        // stanceIsEquipOrder -- it rides into CombatStyle::Want so the equip gate
+        // denies the follower's AI re-arming spells/staves over the forced weapon
+        // (a cast latch / override Want with false RELEASES a standing hold).
         bool stanceIsEquipOrder = false;
-        if (classOverride != 0) {
+        if (wantStance && Config::g_weaponStyleControl.load()) {
+            // 1. ACTIVE equip gambit (top priority). Enforced over any class
+            //    override / cast latch. equipOrder=true arms the CheckShouldEquip
+            //    gate, which still EXEMPTS a higher cast gambit's latched spell
+            //    (§7.2) -- the mage left-hand-casts an ordered spell while the
+            //    dagger stays force-held. Gated by bWeaponStyleControl -> off
+            //    falls through to the resting override below (MFO never touches
+            //    weapon stances with the kill-switch off).
+            stance = (wantStance == 2) ? CombatStyle::Stance::Ranged
+                                       : CombatStyle::Stance::Melee;
+            stanceIsEquipOrder = true;
+        } else if (!condKnownFalse && CombatStyle::HoldsEquipOrder(id)) {
+            // 2. PRESERVE the held clamp. A HIGHER rule stopped the scan before
+            //    the equip rule this tick, so the equip gambit's truth is UNKNOWN
+            //    and an equip order is HELD -- leave stance None so NO Want fires
+            //    and the standing clamp (weapon + gate) survives while the higher
+            //    rule's transient action (an ordered cast/heal) runs. Without
+            //    this the override / cast latch below would overwrite the clamp to
+            //    Cast mid-fight and disarm the gate -- the thrash reopens. Release
+            //    happens only when the gambit is KNOWN false (ReleaseEquipOrder).
+        } else if (classOverride != 0) {
             const auto forced = static_cast<CombatStyle::Stance>(classOverride);
-            // Same master-toggle gating the inferred paths use below: the
-            // override is a forced PICK, not a bypass of the kill-switches --
-            // bWeaponStyleControl off still means MFO never touches weapon
-            // stances, iCastControl==0 still means it never touches the
-            // caster stance, override or not.
+            // 3. RESTING stance: the #65 class override (no equip gambit active/
+            //    held). A forced PICK, not a bypass of the kill-switches --
+            //    bWeaponStyleControl off still means MFO never touches weapon
+            //    stances, iCastControl==0 still means it never touches the
+            //    caster stance, override or not.
             if (forced == CombatStyle::Stance::Cast) {
                 if (Config::g_castControl.load() > 0) stance = forced;
             } else if (Config::g_weaponStyleControl.load()) {
                 stance = forced;
-            }
-        } else if (wantStance) {
-            if (Config::g_weaponStyleControl.load()) {
-                stance = (wantStance == 2) ? CombatStyle::Stance::Ranged
-                                           : CombatStyle::Stance::Melee;
-                stanceIsEquipOrder = true;
             }
         } else if (Config::g_castControl.load() > 0) {
             if (const RE::FormID cs = CasterConsent::WantedSpell(id)) {
@@ -669,7 +696,8 @@ namespace MFO::Scheduler {
         // releasing then yanks the weapon out mid-fight the tick a higher rule
         // fires (the re-oscillation #76 exists to close). Keep the hold on an
         // unknown tick; combat-end / kill-switch still release unconditionally.
-        const bool condKnownFalse = !stopped && !suppressed;
+        // (condKnownFalse is hoisted above the stance arbitration, which also
+        // needs it to preserve a held clamp on an unknown tick.)
         Actuation::ReconcileForcedWeapon(f, equipHeld, condKnownFalse);
         // AnyActive() is a lock-free atomic mirror -- keep the common no-stance
         // tick off g_mx (the module's own discipline).
