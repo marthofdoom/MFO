@@ -30,12 +30,24 @@
 >   Today's gate fixes (base-aware ownership, OR-group eval, condPrereq edges) preserved.
 >   **FIELD-VERIFY:** existing followers keep their class across load (migration), class pick +
 >   auto-scale still work, board opens, log `[prog] … class … declared`.
-> - **STAGE 3 (next):** economy fully addon-declared via GLOBs matched by editor-id SUFFIX
->   (`_LevelsPerPerkPoint` default 2, `_SkillPointsPerLevel` **2** [marth 08-17], `_SharedGrowthDivisor` 2,
->   `_RespecRapportCost` 500, `_SkillCap` 100, `_ManualSkillPointsPerLevel` **2** [marth 08-17], `_DevCmd` live);
->   remove the transitional by-name reads + `kAddonPlugin`. PLUS: ESL-detected **injects its own MCM
->   tab** with these as sliders ([[field-notes-queue-2026-08-17]] #6). Also here: skill-menu position
->   memory (#5).
+> - **STAGE 3 DONE (economy addon-declared, deployed) — DLL `ce8ac5a1` (CI 31992158112).** Every
+>   economy value now read from the manifest's GLOB entries matched by editor-id SUFFIX
+>   (`AssignEconomyGlob`/`EdidEndsWith`): `_LevelsPerPerkPoint` default 2, `_SkillPointsPerLevel` **2**,
+>   `_ManualSkillPointsPerLevel` **2**, `_SharedGrowthDivisor` 2, `_RespecRapportCost` 500, `_SkillCap` 100,
+>   `_DevCmd` live. DLL supplies defaults when absent. Manifest FLST now 9 entries (sentinel + classes-list
+>   + 7 econ GLOBs). **ALL transitional coupling removed** — `kAddonPlugin`/`kAddonVersionGlob`/`AddonVersion`
+>   /fixed `kGlob*` gone (grep-clean). Class model + gate fixes + PRGN v3 untouched. Econ record shape frozen
+>   in DESIGN §18.6 for the API doc. **FIELD-VERIFY:** log `[prog] economy: _SkillPointsPerLevel = 2 (from …)`,
+>   perks 1/2 levels, followers get ~2 skill pts/level.
+> - **STAGE 3 REMAINDER (still to do):** (a) ESL-detected **injects its own MCM tab** with these economy
+>   values as sliders ([[field-notes-queue-2026-08-17]] #6 — MCM-Helper work, distinct effort); (b) skill-menu
+>   position memory, Board.cpp (#5, small).
+> - **STAGE 4 (next):** `Docs/ADDON-API.md` — the frozen third-party contract (sentinel KYWD, manifest FLST
+>   layout: entry[0]=sentinel, one classes-list FLST of class-def FLSTs {MESG name + AVIF skills + PERK
+>   priority + `_Stance` GLOB}, economy GLOBs by suffix + defaults, PRGN discipline) + MFO_Progression.esl as
+>   the worked example. **This is the Nexus-release gate for the Progression Add-On.**
+> - Also pending (independent files, [[field-notes-queue-2026-08-17]]): slot-empty looting (#1), mage sidearm
+>   loot (#2), coin-purse gold (#3), ally-gambit-includes-player (#4).
 > - **STAGE 4:** `Docs/ADDON-API.md` (frozen third-party contract) + MFO_Progression.esl as
 >   the worked example. This is the Nexus-release gate for the addon.
 > - **Known-good fallback:** tag `esl-fieldverified-2026-08-13`. After the addon: **Roster
