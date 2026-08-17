@@ -232,7 +232,6 @@ namespace MFO::Scheduler {
             }
             g_retreatNotes.erase(id);
             g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
-            g_meleeClampTrueAt.erase(id);  // #76 hysteresis dwell -- moot out of combat
             g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
 
             // v1.0.30: the cast-control latch dies with the fight. The [cast]
@@ -257,7 +256,14 @@ namespace MFO::Scheduler {
             // combat services (SEV-2): IsInCombat flaps mid-fight, and releasing
             // on a single-tick flap would force-unequip then re-force next tick.
             // Idempotent (no record -> no-op).
-            if (++g_outOfCombatTicks[id] >= 2) Actuation::ReleaseForcedWeapon(f);
+            if (++g_outOfCombatTicks[id] >= 2) {
+                Actuation::ReleaseForcedWeapon(f);
+                // #76 hysteresis dwell erased on the SAME 2-tick debounce (Fable
+                // SEV-3): an un-debounced erase on a 1-tick IsInCombat flap would
+                // drop the dwell, and the flap-back tick at the gambit's false edge
+                // would then release instantly, skipping the commit window.
+                g_meleeClampTrueAt.erase(id);
+            }
 
             Logistics::ServiceFollower(f, it->second);
             g_lastTickMs = std::chrono::duration<double, std::milli>(
@@ -666,7 +672,18 @@ namespace MFO::Scheduler {
         // weapon, the CSTY clamp, and the equip gate all hold together through the
         // commit window. Entry stays prompt (branch 1 below is not gated by this).
         const auto nowTp = std::chrono::steady_clock::now();
-        if (equipHeld != 0) g_meleeClampTrueAt[id] = nowTp;
+        // Refresh the dwell clock while the gambit is TRUE (equipHeld) OR its truth
+        // is UNKNOWN-but-held (a higher rule stopped the scan above the equip rule).
+        // The clock therefore advances ONLY on genuinely KNOWN-false ticks, so the
+        // dwell measures SUSTAINED known-false -- not time-since-last-true. Without
+        // the unknown-tick refresh (Fable SEV-3), a higher-rule burst (e.g. a heal)
+        // longer than the dwell pre-expires it, and the first known-false tick after
+        // it releases instantly -- the very first-tick twitch #76 exists to remove.
+        // heldOrder is reused by preserve branch 2 below (stable across the block:
+        // only worker Want/Release mutate the equipOrder flag, none run between).
+        const bool heldOrder = CombatStyle::HoldsEquipOrder(id);
+        if (equipHeld != 0 || (!equipCondKnownFalse && heldOrder))
+            g_meleeClampTrueAt[id] = nowTp;
         bool dwellExpired = true;
         if (const auto dit = g_meleeClampTrueAt.find(id); dit != g_meleeClampTrueAt.end())
             dwellExpired = std::chrono::duration<float>(nowTp - dit->second).count() >= MeleeClampDwell(id);
@@ -691,7 +708,7 @@ namespace MFO::Scheduler {
             stance = (wantStance == 2) ? CombatStyle::Stance::Ranged
                                        : CombatStyle::Stance::Melee;
             stanceIsEquipOrder = true;
-        } else if (!equipReleaseOK && CombatStyle::HoldsEquipOrder(id)) {
+        } else if (!equipReleaseOK && heldOrder) {
             // 2. PRESERVE the held clamp. A HIGHER rule stopped the scan before
             //    the equip rule this tick AND the equip rule sits BELOW the stop
             //    (so its truth is genuinely UNKNOWN) and an equip order is HELD --

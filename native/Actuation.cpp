@@ -798,10 +798,12 @@ namespace MFO::Actuation {
                     // satisfied with no re-equip until the gambit's condition goes
                     // false, when the scheduler releases it (ReconcileForcedWeapon).
                     const auto id = a_follower->GetFormID();
-                    // A category flip (melee<->ranged) reaches here with a
-                    // DIFFERENT weapon still locked from before -- force-unequip
-                    // the old lock first, then lock the new. (The SAME-category
-                    // case never reaches here: the satisfied NoOp caught it.)
+                    // A DIFFERENT weapon may still be locked from before -- a
+                    // category flip (melee<->ranged), OR a base-mage daggers-only
+                    // SAME-category swap (a looted sword was force-locked, then
+                    // holdsCategory rejected it and the loop picked a dagger; the
+                    // satisfied NoOp no longer catches this melee->melee case since
+                    // c97035f). Force-unequip the old lock first, then lock the new.
                     // Read/write the map UNDER the lock; do the engine calls
                     // OUTSIDE it (SEV-1 discipline).
                     RE::TESBoundObject* oldForced = nullptr;
