@@ -1066,13 +1066,16 @@ namespace MFO::ProgAllocator {
             return -1;
         }
 
-        // §18.6 Stage 3: (re-)read EVERY economy knob from the enumerated addon
-        // manifests into g_econ. **Main-thread only** — it writes g_econ (the
-        // §5 discipline). Re-runnable by design: called at Init, on post-load
-        // (a save persists GLOB *values*, so the player's last tuning applies),
-        // and on MCM/Journal close (an MCM GlobalValue slider writes the GLOB's
-        // RUNTIME value). Reads glob->value — the live value — so a slider edit
-        // or a console `set` takes effect without a reload. Classes are static
+        // §18.6 Stage 3: read EVERY economy knob's RECORD DEFAULT from the
+        // enumerated addon manifests into g_econ. **Main-thread only** — writes
+        // g_econ (the §5 discipline). ***CALLED ONCE, AT INIT (kDataLoaded)
+        // ONLY.*** Do NOT re-call it post-load or on menu close: a GLOB's
+        // runtime value is SAVE-PERSISTED, so a re-read after a load feeds a
+        // stale saved number back into the economy (the 2026-08-17 doubled-perk-
+        // pool bug — a repurposed GLOB's old value read floor(level/1)). The
+        // live MCM override rides a NON-save-persisted INI instead
+        // (ApplyEconomyOverride), which is what post-load / menu-close call.
+        // Classes are static
         // and are NOT re-parsed here. This is FULLY GENERIC: it walks
         // Progression::Addons() and matches by editor-id SUFFIX; it never names
         // any addon plugin, so the DLL stays ignorant of the addon it reads —
@@ -1145,7 +1148,8 @@ namespace MFO::ProgAllocator {
                     if (eq == std::string::npos) continue;
                     const std::string key = trim(line.substr(0, eq));
                     const std::string valS = trim(line.substr(eq + 1));
-                    if (key.empty() || valS.empty() || key.front() == '[' || key.front() == ';') continue;
+                    if (key.empty() || valS.empty() ||
+                        key.front() == '[' || key.front() == ';' || key.front() == '#') continue;
                     float v;
                     try { v = std::stof(valS); } catch (...) { continue; }
                     if (KeyEndsWith(key, "LevelsPerPerkPoint"))
@@ -1349,10 +1353,11 @@ namespace MFO::ProgAllocator {
         // RECORD DEFAULTS (kDataLoaded is pre-save, §10); _DevCmd stores the
         // pointer (read LIVE). unused (unread) legacy GLOBs — perk rate 0x802 /
         // veteran mult 0x806 — are simply never in the manifest.
-        // §18.6 Stage 3: the ECONOMY read is factored into ReloadEconomy() so
-        // it can re-run on post-load and MCM close (live GLOB values). Run it
-        // once here for the initial (record-default) latch; the loop below then
-        // parses only the CLASSES (static — parsed once at Init).
+        // §18.6 Stage 3: the ECONOMY record-default read is factored into
+        // ReloadEconomy(), called ONCE here (kDataLoaded is genuinely pre-save).
+        // It is NEVER re-run post-load/menu-close — see ReloadEconomy's header:
+        // GLOB runtime values are save-persisted (the doubled-perk-pool bug). The
+        // loop below parses only the CLASSES (static — parsed once at Init).
         ReloadEconomy();
         g_econDefaults = g_econ;    // cache the RECORD DEFAULTS (§10) before any
         ApplyEconomyOverride();     // save loads; overlay the MCM INI (if present)

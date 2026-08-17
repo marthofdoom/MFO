@@ -29,6 +29,12 @@ namespace MFO::Actuation {
     // cleared on revert (ClearForcedWeapons). The pointer is a weapon form, which
     // is stable for the session.
     std::unordered_map<RE::FormID, RE::TESBoundObject*> g_forcedWeapon;
+    // SEV-1 (Fable 2026-08-17): the worker tick mutates this map, but the SKSE
+    // SAVE callback reads it (CoSaveForcedWeapons) off that thread with no pump
+    // barrier -- a concurrent insert would invalidate its iterator mid-save
+    // (CTD / truncated save). Guard every access; NEVER hold it across an
+    // Equip/UnequipObject engine call (the MSTK "copy then act" discipline).
+    std::mutex g_forcedMx;
 
     namespace {
 
@@ -781,11 +787,22 @@ namespace MFO::Actuation {
                     // DIFFERENT weapon still locked from before -- force-unequip
                     // the old lock first, then lock the new. (The SAME-category
                     // case never reaches here: the satisfied NoOp caught it.)
-                    if (auto old = g_forcedWeapon.find(id);
-                        old != g_forcedWeapon.end() && old->second && old->second != best)
-                        mgr->UnequipObject(a_follower, old->second, nullptr, 1, nullptr, true, true);
+                    // Read/write the map UNDER the lock; do the engine calls
+                    // OUTSIDE it (SEV-1 discipline).
+                    RE::TESBoundObject* oldForced = nullptr;
+                    {
+                        std::scoped_lock lk(g_forcedMx);
+                        if (auto old = g_forcedWeapon.find(id);
+                            old != g_forcedWeapon.end() && old->second && old->second != best)
+                            oldForced = old->second;
+                    }
+                    if (oldForced)
+                        mgr->UnequipObject(a_follower, oldForced, nullptr, 1, nullptr, true, true);
                     mgr->EquipObject(a_follower, best, nullptr, 1, nullptr, true, true);
-                    g_forcedWeapon[id] = best;
+                    {
+                        std::scoped_lock lk(g_forcedMx);
+                        g_forcedWeapon[id] = best;
+                    }
                 } else {
                     mgr->EquipObject(a_follower, best);   // kill-switch off: today's behaviour exactly
                 }
@@ -957,41 +974,57 @@ namespace MFO::Actuation {
     void ReleaseForcedWeapon(RE::Actor* a_follower) {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();
-        auto it = g_forcedWeapon.find(id);
-        if (it == g_forcedWeapon.end()) return;
+        RE::TESBoundObject* obj = nullptr;
+        {
+            std::scoped_lock lk(g_forcedMx);
+            auto it = g_forcedWeapon.find(id);
+            if (it == g_forcedWeapon.end()) return;
+            obj = it->second;
+            g_forcedWeapon.erase(it);
+        }
         // forceEquip=true on the UNequip clears the prevent-removal lock the
         // force-equip set; a plain unequip would be REFUSED against a forced
         // item and the follower would stay stuck holding the weapon, unable to
         // cast -- the worse-than-oscillation failure this whole feature must not
-        // create.
-        if (auto* mgr = RE::ActorEquipManager::GetSingleton(); mgr && it->second)
-            mgr->UnequipObject(a_follower, it->second, nullptr, 1, nullptr, true, true);
-        g_forcedWeapon.erase(it);
+        // create. Engine call OUTSIDE the lock.
+        if (auto* mgr = RE::ActorEquipManager::GetSingleton(); mgr && obj)
+            mgr->UnequipObject(a_follower, obj, nullptr, 1, nullptr, true, true);
         spdlog::info("[equip] {:08X}: force-hold released", id);
     }
 
-    void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance) {
+    void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance, bool a_condKnownFalse) {
         if (!a_follower) return;
-        auto it = g_forcedWeapon.find(a_follower->GetFormID());
-        if (it == g_forcedWeapon.end()) return;   // nothing forced -> nothing to do
-        // KEEP the hold only while the feature is ON and an equip gambit of the
-        // forced weapon's OWN category held THIS tick (a_wantStance was set by a
-        // fired-or-satisfied equip in the scan). a_wantStance == 0 means the
-        // gambit's condition went false -> release. A different category means a
-        // melee<->ranged flip already re-forced the new weapon in EquipWeapon and
-        // updated the record, so this stays consistent; the check also releases
-        // defensively if that record ever lagged. Switch off -> always release
-        // (a mid-combat toggle-off restores normal behaviour next tick).
-        bool keep = Config::g_weaponStyleControl.load() && a_wantStance != 0;
-        if (keep) {
-            auto* w  = it->second ? it->second->As<RE::TESObjectWEAP>() : nullptr;
-            const int cat = (w && (w->IsBow() || w->IsCrossbow())) ? 2 : 1;
-            keep = (a_wantStance == cat);
+        // KEEP the hold while the feature is ON and an equip gambit of the forced
+        // weapon's OWN category held THIS tick (a_wantStance, set by a fired-or-
+        // satisfied equip). RELEASE only when we actually KNOW the condition is
+        // false: a_condKnownFalse (the scan ran to completion — Evaluate returns
+        // only MATCHING rules, so a scan STOPPED by a higher rule leaves the
+        // equip's truth UNKNOWN; releasing then force-unequips the weapon mid-
+        // fight the tick a heal/attack preempts — the SEV-2 churn). A category
+        // mismatch under condKnownFalse also releases (a stale/flipped record).
+        // Feature OFF -> release immediately, regardless of the scan. Decide
+        // UNDER the lock, Release OUTSIDE it (Release re-locks -> no self-deadlock).
+        bool release = false;
+        {
+            std::scoped_lock lk(g_forcedMx);
+            auto it = g_forcedWeapon.find(a_follower->GetFormID());
+            if (it == g_forcedWeapon.end()) return;   // nothing forced -> nothing to do
+            if (!Config::g_weaponStyleControl.load()) {
+                release = true;                        // kill-switch: always release
+            } else if (a_condKnownFalse) {
+                auto* w  = it->second ? it->second->As<RE::TESObjectWEAP>() : nullptr;
+                const int cat = (w && (w->IsBow() || w->IsCrossbow())) ? 2 : 1;
+                release = (a_wantStance != cat);       // condition confirmed false / flipped
+            }
+            // else: scan stopped early -> UNKNOWN -> keep the hold this tick.
         }
-        if (!keep) ReleaseForcedWeapon(a_follower);
+        if (release) ReleaseForcedWeapon(a_follower);
     }
 
-    void ClearForcedWeapons() { g_forcedWeapon.clear(); }
+    void ClearForcedWeapons() {
+        std::scoped_lock lk(g_forcedMx);
+        g_forcedWeapon.clear();
+    }
 
     // #76 force-hold co-save. Persist the force-equip locks so a load clears the
     // stale ones the .ess carried (the engine's forceEquip serializes; the map
@@ -999,28 +1032,31 @@ namespace MFO::Actuation {
     constexpr std::uint32_t kMaxForcedWeapons = 64;   // party is tiny; a generous cap
 
     void CoSaveForcedWeapons(SKSE::SerializationInterface* a_intfc) {
-        if (!a_intfc->OpenRecord(kRecForcedWeapon,
-                                 kForcedWeaponVersion)) {
+        if (!a_intfc->OpenRecord(kRecForcedWeapon, kForcedWeaponVersion)) {
             spdlog::error("[cosave] OpenRecord('FWPN') failed -- force-holds NOT saved");
             return;
         }
-        std::uint32_t persistable = 0;
-        for (const auto& [id, w] : g_forcedWeapon)
-            if (w && Followers::IsPersistableID(id)) ++persistable;
-        a_intfc->WriteRecordData(persistable);
-
-        std::uint32_t written = 0, skipped = 0;
-        for (const auto& [id, w] : g_forcedWeapon) {
-            if (!w) continue;
-            if (!Followers::IsPersistableID(id)) { ++skipped; continue; }   // #9: never write 0xFF ids
-            a_intfc->WriteRecordData(id);
-            const RE::FormID wid = w->GetFormID();
-            a_intfc->WriteRecordData(wid);
-            ++written;
+        // SEV-1: SNAPSHOT under the lock, then write from the copy — a lock must
+        // never be held across a WriteRecordData (the MSTK/CopyStockGear rule).
+        std::vector<std::pair<RE::FormID, RE::FormID>> snap;   // {followerID, weaponID | 0}
+        {
+            std::scoped_lock lk(g_forcedMx);
+            for (const auto& [id, w] : g_forcedWeapon) {
+                if (!w || !Followers::IsPersistableID(id)) continue;   // #9: never write a 0xFF follower
+                const RE::FormID wid = w->GetFormID();
+                // #9 for the WEAPON too: a player-enchanted/created weapon has a
+                // 0xFF id that ResolveFormID passes through unresolved -> the load
+                // would unequip the WRONG object and the real lock would survive.
+                // Persist weapon=0; CoLoad then sweeps BOTH hands to clear it.
+                snap.emplace_back(id, Followers::IsPersistableID(wid) ? wid : 0u);
+            }
         }
-        spdlog::info("[cosave] saved {} force-hold(s), schema v{}{}", written,
-                     kForcedWeaponVersion,
-                     skipped ? std::format(" -- SKIPPED {} runtime (0xFF)", skipped) : std::string{});
+        a_intfc->WriteRecordData(static_cast<std::uint32_t>(snap.size()));
+        for (const auto& [id, wid] : snap) {
+            a_intfc->WriteRecordData(id);
+            a_intfc->WriteRecordData(wid);
+        }
+        spdlog::info("[cosave] saved {} force-hold(s), schema v{}", snap.size(), kForcedWeaponVersion);
     }
 
     void CoLoadForcedWeapons(SKSE::SerializationInterface* a_intfc, std::uint32_t /*a_version*/) {
@@ -1036,20 +1072,35 @@ namespace MFO::Actuation {
             if (!a_intfc->ReadRecordData(rawFollower)) return;
             if (!a_intfc->ReadRecordData(rawWeapon))   return;
             RE::FormID follower = 0, weapon = 0;
-            if (!a_intfc->ResolveFormID(rawFollower, follower) ||
-                !a_intfc->ResolveFormID(rawWeapon, weapon)) { ++dropped; continue; }
+            if (!a_intfc->ResolveFormID(rawFollower, follower)) { ++dropped; continue; }   // #8 DROP
+            // weapon==0 means "was a created/enchanted (0xFF) weapon at save" —
+            // resolve only a real id; anything unresolvable falls to the both-
+            // hands sweep so a stale lock still clears.
+            if (rawWeapon != 0 && !a_intfc->ResolveFormID(rawWeapon, weapon)) weapon = 0;
             // The lock lives in the actor's inventory extra-data, not the map, so
             // clear it on the follower. Defer to the main thread (the load callback
             // is off it and the actor may not be 3D-loaded yet; the force-unequip
-            // is an inventory op). NO repopulation: a session starts hold-free; the
-            // equip gambit re-forces next combat if its condition still holds.
+            // is an inventory op). NO map repopulation / erase — the map is empty
+            // post-revert, so touching it here would be the only cross-thread
+            // access (SEV-1). A session starts hold-free; the equip gambit
+            // re-forces next combat if its condition still holds.
             MainThread::Post([follower, weapon]() {
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(follower);
-                auto* obj   = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon);
-                if (!actor || !obj) return;
-                if (auto* mgr = RE::ActorEquipManager::GetSingleton())
-                    mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);   // force clears the lock
-                g_forcedWeapon.erase(follower);   // fresh map has none; belt-and-braces
+                if (!actor) return;
+                auto* mgr = RE::ActorEquipManager::GetSingleton();
+                if (!mgr) return;
+                if (weapon != 0) {
+                    if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon))
+                        mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                } else {
+                    // Unknown weapon (created/enchanted): force-unequip whatever
+                    // bound object is in EITHER hand to clear the lock regardless.
+                    for (bool leftHand : { false, true }) {
+                        if (auto* held = actor->GetEquippedObject(leftHand))
+                            if (auto* obj = held->As<RE::TESBoundObject>())
+                                mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                    }
+                }
                 spdlog::info("[equip] {:08X}: stale force-hold cleared on load", follower);
             });
             ++released;

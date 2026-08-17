@@ -66,7 +66,7 @@ namespace MFO::Actuation {
     // this tick (a_wantStance: 0=none/condition-false, 1=melee, 2=ranged);
     // otherwise RELEASE it. This is the gambit true->false lifecycle: a==0
     // (condition went false) or a category flip both release.
-    void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance);
+    void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance, bool a_condKnownFalse);
 
     // Revert/load: drop the session-scoped force-hold records. No engine call --
     // the world is being replaced (mirrors CombatStyle::ClearAll).

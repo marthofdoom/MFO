@@ -56,6 +56,9 @@ namespace MFO::Scheduler {
         // end), so it re-arms per fight. Wall-clock, not ticks: large parties
         // (already serviced every N x 133 ms) never stack extra delay.
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_combatEnteredAt;
+        // #76: consecutive out-of-combat services, to debounce the force-hold
+        // release against an IsInCombat flap (SEV-2, Fable 2026-08-17).
+        std::unordered_map<RE::FormID, int> g_outOfCombatTicks;
 
         // FLAIR #5 -- RETARGET HESITATION. A target SWITCH of an existing latch
         // must win twice before it commits: the first winning service stores
@@ -95,6 +98,7 @@ namespace MFO::Scheduler {
 
     void ClearTransientState() {
         g_retreatNotes.clear();
+        g_outOfCombatTicks.clear();
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
@@ -230,15 +234,19 @@ namespace MFO::Scheduler {
             // #76: the equip force-hold dies with the fight too -- combat end is
             // one of its release points. The prevent-removal LOCK is on the
             // ActorEquipManager (it did NOT die with the controller), so this
-            // force-unequips to clear it: the follower leaves the fight free to
-            // cast/re-arm normally. Idempotent (no record -> no-op).
-            Actuation::ReleaseForcedWeapon(f);
+            // force-unequips to clear it. DEBOUNCED over 2 consecutive out-of-
+            // combat services (SEV-2): IsInCombat flaps mid-fight, and releasing
+            // on a single-tick flap would force-unequip then re-force next tick.
+            // Idempotent (no record -> no-op).
+            if (++g_outOfCombatTicks[id] >= 2) Actuation::ReleaseForcedWeapon(f);
 
             Logistics::ServiceFollower(f, it->second);
             g_lastTickMs = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t0).count();
             return;
         }
+
+        g_outOfCombatTicks.erase(id);   // #76: back in combat -> re-arm the debounce
 
         // IN COMBAT: end any loot excursion for this follower FIRST, so he fights
         // instead of staying claimed by the loot quest at priority 60 (batches
@@ -653,10 +661,20 @@ namespace MFO::Scheduler {
         //  - ReleaseEquipOrder drops the stance ONLY if it is still an equip
         //    order: if a cast latch or the #65 override set a stance this tick,
         //    the Want above already flipped equipOrder off, so their hold stands.
-        Actuation::ReconcileForcedWeapon(f, equipHeld);
+        // SEV-2 (Fable 2026-08-17): release only when the equip condition is
+        // KNOWN false. Evaluate returns only MATCHING rules, so the condition is
+        // confirmed false only when the scan ran to COMPLETION (nothing more
+        // matched); a scan STOPPED by a higher rule (heal/attack/suppression
+        // window) never reached the equip rule -> its truth is UNKNOWN, and
+        // releasing then yanks the weapon out mid-fight the tick a higher rule
+        // fires (the re-oscillation #76 exists to close). Keep the hold on an
+        // unknown tick; combat-end / kill-switch still release unconditionally.
+        const bool condKnownFalse = !stopped && !suppressed;
+        Actuation::ReconcileForcedWeapon(f, equipHeld, condKnownFalse);
         // AnyActive() is a lock-free atomic mirror -- keep the common no-stance
         // tick off g_mx (the module's own discipline).
-        if (equipHeld == 0 && CombatStyle::AnyActive()) CombatStyle::ReleaseEquipOrder(id);
+        if (equipHeld == 0 && condKnownFalse && CombatStyle::AnyActive())
+            CombatStyle::ReleaseEquipOrder(id);
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
         // aware). A gambit spell stays in the follower's hand only while some
