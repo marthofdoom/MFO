@@ -200,6 +200,14 @@ releases **by eviction** with a non-actor XMarker.
   foe fill). Self is AE-only (VM fallback fills alias 0). One `MFO_CastPackage`/
   `MFO_CastPackageSelf` each on their own alias → single holder forced by shared
   `TESPackage::refCount` (`:734`); multi-holder needs per-verb records at 0x821+.
+  **Two callers route self through here when armed:** the combat path
+  (`Actuation::ConcentrationCast` self branch) AND the **out-of-combat logistics
+  cast handler** (`Logistics.cpp` `act.cast_self` branch) — the latter used to
+  ALWAYS `CastSpellImmediate` self (`immediate = op != kActCastTarget`), which
+  instant-applied a concentration ward with no channel so it **stuck forever**
+  (deck 2026-08-17). Now: `bCastSelf` self → `CastSelf` with a bounded hold;
+  concentration on the immediate path (self-gate-off or player) is SKIPPED
+  legibly rather than stuck-applied.
 - `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1265-1494`)
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and
