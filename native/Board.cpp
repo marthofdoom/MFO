@@ -1449,6 +1449,17 @@ namespace MFO::Board {
                                 };
                                 const int rowCount = haveLines ? (int)who->skills.size()
                                                                : (int)cat.skills.size();
+                                // §16 position memory (marth 2026-08-17): the
+                                // apply popup pumps repeats open, but when it
+                                // closes nav focus drops to the top of the
+                                // list. Detect the close and restore focus to
+                                // the skill we were on (keyed by AV, the stable
+                                // handle the popup uses) so the menu keeps its
+                                // place across an apply.
+                                static bool s_skillActWasOpen = false;
+                                const bool skillActOpen = ImGui::IsPopupOpen("##pskillact");
+                                const bool skillActJustClosed = s_skillActWasOpen && !skillActOpen;
+                                s_skillActWasOpen = skillActOpen;
                                 for (int r = 0; r < rowCount; ++r) {
                                     RE::ActorValue av = RE::ActorValue::kNone;
                                     const char* label = nullptr;
@@ -1488,7 +1499,14 @@ namespace MFO::Board {
                                     // anywhere); the action popup disables
                                     // its tree entry instead.
                                     ImGui::BeginDisabled(!hasTree && !who->manualSkills);
-                                    if (ImGui::Selectable(label, false,
+                                    // Keep the just-edited skill highlighted, and
+                                    // when the apply popup closes put nav focus
+                                    // back on it (not the list top).
+                                    const bool isActiveSkill =
+                                        (s_actAv != RE::ActorValue::kNone && av == s_actAv);
+                                    if (skillActJustClosed && isActiveSkill)
+                                        ImGui::SetKeyboardFocusHere();
+                                    if (ImGui::Selectable(label, isActiveSkill,
                                                           ImGuiSelectableFlags_SpanAllColumns)) {
                                         s_skillCur = catIdx;   // catalog index (may be -1)
                                         s_actAv    = av;
