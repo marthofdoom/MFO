@@ -28,9 +28,20 @@
 >   - **hysteresis** (`fa90004`+`7a5956f`): melee-clamp release gated on a per-follower Temperament
 >     dwell (3.0s±1.0s) of SUSTAINED known-false — reads human; Fable SEV-3 fixes (dwell refreshes on
 >     unknown-held ticks too; erase debounced 2-tick; stale comment).
-> - **NEXT:** (1) **CRASH QUEUE** ([[crash-reports-cast-target-1.5.x]]): 3 pastebins — MFO AV in
->   `act.cast_target` (poisoned ptr +0x13) on SE 1.5.97 + a tbbmalloc/EngineFixes heap crash. Diagnose
->   via [bc] + CI PDB. (2) Nexus bbcode 1.0.62→64. (3) Progression Add-On release + kit (still owed).
+> - **NEXT (two tracks, ALONGSIDE):** (A) **CRASH QUEUE** ([[crash-reports-cast-target-1.5.x]]): 3
+>   pastebins — MFO AV in `act.cast_target` (poisoned ptr +0x13) on SE 1.5.97 + a tbbmalloc/EngineFixes
+>   heap crash. Diagnose via [bc] + CI PDB. (B) **FORCED SELF-CAST** — spec at
+>   `Docs/SPEC-self-cast-forced.md`. Self-concentration gambits (ward, self-heal, any chosen self-spell)
+>   are barred every tick (log-proven: Lucien rule 0 `concentration self-cast unreachable`); the
+>   self-heal marth sees is the AUTONOMOUS AI, not MFO. AI-first is INSUFFICIENT (can't force the chosen
+>   spell; can't guarantee reactive timing vs a power-attack windup). Fix = dedicated **no-QNAM t6 self
+>   package** (avoids the QNAM+t6 rev-4 CTD cell), bounded via CastHold; PROBE the no-QNAM t6 shape in
+>   isolation FIRST (P0 risk), then wire Begin/ConcentrationCast. Acceptance incl. a deck LATENCY
+>   measurement (force-dispatch→ward-up ms by weapon class). **Delegate to a worktree-isolated agent**
+>   (big files: Packages.cpp 3278 + ESP gen + probe) to keep main context lean — see
+>   [[be-token-efficient-right-size-effort]] / [[never-two-agents-same-build]]. Robust authoring pattern:
+>   proactive "ward WHILE threatened" held as a stream, not reactive race.
+> - Also owed: Nexus bbcode 1.0.62→64; Progression Add-On release + kit; MAP.md full refresh.
 > - **CONCENTRATION (answered marth):** works v1.0.53+ (ConcentrationCast, Actuation.cpp:224) IFF
 >   TARGETED (not self) AND bForceCastOnMiss+bUsePackages ON — bounded package stream (hostile 1-4s LoF-
 >   gated / heal-until-healed / utility). Self-cast concentration BARRED (package self route = unprobed
