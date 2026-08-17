@@ -23,10 +23,23 @@
 
 namespace MFO::Progression {
 
-    // ── the addon contract (§1) ─────────────────────────────────────────────
-    // Second plugin-name constant beside Forms::kPlugin. Local ids in the ESL
-    // are a frozen contract with the (future) generator profile, exactly like
-    // Forms.h's ids are with MFO_GenerateESP.py.
+    // ── the ADDON API front door (§18.6 — the FROZEN public contract) ───────
+    // MFO.esp ships a sentinel keyword (Forms::g_addonSentinel,
+    // "MFO_AddonManifest"). An addon announces itself with ONE BGSListForm
+    // MANIFEST whose FIRST entry is that sentinel; Init enumerates every such
+    // manifest across the merged load order at kDataLoaded (N addons, each
+    // its own record — no shared injection point, no by-name plugin lookup,
+    // no fixed FormIDs). The manifest's remaining entries declare the addon's
+    // classes list + economy GLOBs (parsed in ProgAllocator). Full contract:
+    // Docs/ADDON-API.md.
+    struct AddonRef {
+        RE::FormID  manifestID{ 0 };   // the manifest FLST (runtime FormID)
+        std::string plugin;            // source file — logs/migration only
+    };
+
+    // TRANSITIONAL (removed once ProgAllocator reads config off the manifest,
+    // Stages 2-3): the reference addon's plugin name + version glob, still
+    // used by the fixed-FormID economy/class reads.
     inline constexpr const char* kAddonPlugin      = "MFO_Progression.esl";
     inline constexpr RE::FormID  kAddonVersionGlob = 0x800;   // GLOB MFOP_Version
 
@@ -127,8 +140,13 @@ namespace MFO::Progression {
 
     // ── API ─────────────────────────────────────────────────────────────────
 
-    // ESL present in the load order this session (latched at Init).
+    // ≥1 addon manifest found in the load order this session (latched at
+    // Init). The tab, the allocator and the catalog all gate on this.
     bool Detected();
+
+    // Every enumerated addon manifest, load-order stable (latched at Init,
+    // immutable after — lock-free reads, the catalog discipline).
+    const std::vector<AddonRef>& Addons();
 
     // MFOP_Version GLOB's RECORD DEFAULT (0 = absent/unresolved). Read at
     // kDataLoaded on purpose: GLOB *values* are save-persisted, so a value

@@ -34,6 +34,15 @@ ROOT = os.path.dirname(HERE)
 OWN_PREFIX = 0x01
 ESL_LO, ESL_HI = 0x800, 0xFFF
 
+# Expected master list per plugin (ORDER = the master index each own/cross ref
+# assumes). §18.6: MFO_Progression.esl masters MFO.esp so its manifest FLST can
+# point at MFO.esp's addon sentinel keyword — so its own records move to master
+# index 0x02. The own-file prefix each plugin must use = len(its masters).
+EXPECTED_MASTERS = {
+    "MFO.esp":              ["Skyrim.esm"],
+    "MFO_Progression.esl":  ["Skyrim.esm", "MFO.esp"],
+}
+
 # What native/ hardcodes. Keep in lockstep with MFO_GenerateESP.py AND with the
 # DLL's lookups -- a mismatch here is the "form not found" class of bug whose
 # only symptom is a feature silently missing.
@@ -147,6 +156,8 @@ def audit_one(esp):
         return 1
     required, seq_expected = PROFILES[base]
     is_main = (base == "MFO.esp")
+    exp_masters = EXPECTED_MASTERS.get(base, ["Skyrim.esm"])
+    own_prefix  = len(exp_masters)   # own records sit at master index == #masters
 
     if not os.path.exists(esp):
         print(f"FAIL: {esp} not found -- run MFO_GenerateESP.py first")
@@ -164,13 +175,14 @@ def audit_one(esp):
         _, _, flags, subs = tes4[0]
         if not (flags & 0x200):
             errors.append("TES4 missing ESL flag 0x200 -- plugin will consume a full load slot")
-        masters = [v for k, v in subs.items() if k == 'MAST']
         raw = data
         mast_count = raw.count(b'MAST')
-        if mast_count != 1:
-            errors.append(f"expected exactly 1 master, found {mast_count} MAST subrecords")
-        if b'Skyrim.esm\x00' not in raw:
-            errors.append("master is not Skyrim.esm")
+        if mast_count != len(exp_masters):
+            errors.append(f"expected exactly {len(exp_masters)} master(s) {exp_masters}, "
+                          f"found {mast_count} MAST subrecords")
+        for m in exp_masters:
+            if (m.encode('latin1') + b'\x00') not in raw:
+                errors.append(f"expected master '{m}' not present")
         hedr = subs.get('HEDR')
         next_id = struct.unpack('<I', hedr[8:12])[0] if hedr and len(hedr) >= 12 else None
 
@@ -184,9 +196,9 @@ def audit_one(esp):
         local = fid & 0xFFFFFF
 
         # 2. prefix
-        if prefix != OWN_PREFIX:
-            errors.append(f"{t} {fid:08X}: master-index prefix 0x{prefix:02X}, expected 0x{OWN_PREFIX:02X} "
-                          f"(1 master) -- WRONG PREFIX COLLIDES WITH A MASTER'S RECORDS")
+        if prefix != own_prefix:
+            errors.append(f"{t} {fid:08X}: master-index prefix 0x{prefix:02X}, expected 0x{own_prefix:02X} "
+                          f"({len(exp_masters)} master(s)) -- WRONG PREFIX COLLIDES WITH A MASTER'S RECORDS")
         # 3. ESL range
         if not (ESL_LO <= local <= ESL_HI):
             errors.append(f"{t} {fid:08X}: local id 0x{local:X} outside ESL range "

@@ -27,6 +27,7 @@ namespace MFO::Forms {
     bool Resolve() {
         g_fieldOrders = Look<RE::SpellItem>(kFieldOrdersSpell, "MFO_FieldOrdersPower");
         g_grantedKywd = Look<RE::BGSKeyword>(kGrantedKeyword, "MFO_GrantedSpell");
+        g_addonSentinel = Look<RE::BGSKeyword>(kAddonSentinel, "MFO_AddonManifest");
 
         // ── M9 records ──────────────────────────────────────────────────
         g_commandQuest = Look<RE::TESQuest>(kCommandQuest, "MFO_CommandQuest");

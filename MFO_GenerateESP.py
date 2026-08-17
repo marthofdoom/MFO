@@ -33,6 +33,8 @@ OWN = 0x01000000
 FID_ORDERS_MGEF    = OWN | 0x800   # Field Orders magic effect
 FID_ORDERS_SPELL   = OWN | 0x801   # Field Orders lesser power (the board opener)
 FID_GRANTED_KYWD   = OWN | 0x802   # tags spells MFO tutored, for the revoke backstop
+FID_ADDON_SENTINEL = OWN | 0x803   # §18.6 ADDON API registration sentinel (KYWD);
+                                   # an addon's manifest FLST leads with this form
 FID_STARTUP_QUEST  = OWN | 0x804   # reserved; the DLL does the granting
 FID_MCM_QUEST      = OWN | 0x808   # carries the MCM Helper config script
 FID_COMMAND_QUEST  = OWN | 0x80A   # M9: carries the alias MFO fills with a target
@@ -314,7 +316,14 @@ def make_kywd():
     # can revoke everything this mod ever taught, independent of the ledger
     # (DESIGN.md 5.4 -- the backstop, not the primary path).
     body = subrec('EDID', zstr("MFO_GrantedSpell")) + subrec('CNAM', struct.pack('<I', 0))
-    return group('KYWD', record('KYWD', FID_GRANTED_KYWD, 0, body))
+    granted = record('KYWD', FID_GRANTED_KYWD, 0, body)
+    # §18.6 ADDON API sentinel. Any MFO addon ships ONE FLST manifest whose
+    # FIRST entry is this keyword; the DLL enumerates such manifests across the
+    # merged load order (Progression::Init). The frozen public contract lives
+    # in Docs/ADDON-API.md.
+    sbody = subrec('EDID', zstr("MFO_AddonManifest")) + subrec('CNAM', struct.pack('<I', 0))
+    sentinel = record('KYWD', FID_ADDON_SENTINEL, 0, sbody)
+    return group('KYWD', granted + sentinel)
 
 
 # ── QUST ────────────────────────────────────────────────────────────────────
@@ -947,37 +956,48 @@ def make_qust():
 # author-tunable in xEdit without touching the DLL.
 #
 # FormID band: FROZEN generator<->DLL contract with native/Progression.h
-# (0x800/0x801) and native/ProgAllocator.h (everything else). One master
-# (Skyrim.esm) => same OWN prefix 0x01; ESL-legal locals 0x800-0xFFF.
+# (0x800/0x801) and native/ProgAllocator.h (everything else). §18.6: the ESL
+# now masters TWO plugins — Skyrim.esm (index 0x00) and MFO.esp (index 0x01),
+# the latter so the manifest FLST can point at MFO.esp's addon sentinel — so
+# the ESL's OWN forms move to master index 0x02 (OWN_PROG). ESL-legal locals
+# stay 0x800-0xFFF. The DLL resolves everything by (localID, plugin name), so
+# the prefix shift is invisible to it; the co-save stores runtime FormIDs.
 # ═══════════════════════════════════════════════════════════════════════════
+
+OWN_PROG = 0x02000000                  # ESL own-form prefix: 2 masters => index 0x02
+# Cross-master ref: MFO.esp (ESL master index 0x01) addon sentinel keyword.
+ESLREF_ADDON_SENTINEL = 0x01000000 | 0x803
 
 PROG_VERSION_STAMP = 1.0               # MFOP_Version FLTV — the addon version
 
-PGID_VERSION            = OWN | 0x800  # GLOB detection anchor + version stamp
-PGID_RESERVED           = OWN | 0x801  # GLOB spare future gate (design §10)
-PGID_PERK_PER_LEVEL     = OWN | 0x802  # GLOB perk points per player level (§15: copies the player)
-PGID_SKILL_PER_LEVEL    = OWN | 0x803  # GLOB auto-scale skill points per level
-PGID_SHARED_DIVISOR     = OWN | 0x804  # GLOB benched growth divisor (2 = half rate, §15)
-PGID_RESPEC_RAPPORT     = OWN | 0x805  # GLOB respec cost in rapport (§15: 500)
-PGID_VETERAN_MULT       = OWN | 0x806  # GLOB veteran catch-up multiplier
-PGID_SKILL_CAP          = OWN | 0x807  # GLOB auto-scale base-AV ceiling
-PGID_DEV_CMD            = OWN | 0x808  # GLOB dev-harness verb selector (console: set MFOP_DevCmd to N)
+PGID_VERSION            = OWN_PROG | 0x800  # GLOB detection anchor + version stamp
+PGID_RESERVED           = OWN_PROG | 0x801  # GLOB spare future gate (design §10)
+PGID_PERK_PER_LEVEL     = OWN_PROG | 0x802  # GLOB perk points per player level (§15: copies the player)
+PGID_SKILL_PER_LEVEL    = OWN_PROG | 0x803  # GLOB auto-scale skill points per level
+PGID_SHARED_DIVISOR     = OWN_PROG | 0x804  # GLOB benched growth divisor (2 = half rate, §15)
+PGID_RESPEC_RAPPORT     = OWN_PROG | 0x805  # GLOB respec cost in rapport (§15: 500)
+PGID_VETERAN_MULT       = OWN_PROG | 0x806  # GLOB veteran catch-up multiplier
+PGID_SKILL_CAP          = OWN_PROG | 0x807  # GLOB auto-scale base-AV ceiling
+PGID_DEV_CMD            = OWN_PROG | 0x808  # GLOB dev-harness verb selector (console: set MFOP_DevCmd to N)
 # 0x809-0x80F reserved: more economy knobs
-PGID_SKILLS_MELEE       = OWN | 0x810  # FLST ordered AVIF skill priority per class
-PGID_SKILLS_RANGED      = OWN | 0x811
-PGID_SKILLS_MAGE        = OWN | 0x812
+PGID_SKILLS_MELEE       = OWN_PROG | 0x810  # FLST ordered AVIF skill priority per class
+PGID_SKILLS_RANGED      = OWN_PROG | 0x811
+PGID_SKILLS_MAGE        = OWN_PROG | 0x812
 # 0x813-0x817 reserved: more classes / attribute lists
-PGID_PERKS_MELEE        = OWN | 0x818  # FLST ordered PERK priority per class — SHIPPED
-PGID_PERKS_RANGED       = OWN | 0x819  #      EMPTY (this plugin can only master
-PGID_PERKS_MAGE         = OWN | 0x81A  #      Skyrim.esm, and overhauls replace the
-                                       #      perks); an overhaul patch fills them in
-                                       #      xEdit, the DLL falls back name-agnostic
+PGID_PERKS_MELEE        = OWN_PROG | 0x818  # FLST ordered PERK priority per class — SHIPPED
+PGID_PERKS_RANGED       = OWN_PROG | 0x819  #      EMPTY (this plugin can only master
+PGID_PERKS_MAGE         = OWN_PROG | 0x81A  #      Skyrim.esm, and overhauls replace the
+                                            #      perks); an overhaul patch fills them in
+                                            #      xEdit, the DLL falls back name-agnostic
 # 0x81B-0x81F reserved: more perk lists
-PGID_ENROLLED_KYWD      = OWN | 0x820  # KYWD enrollment tag — RESERVED for
-                                       #      conditions/SPID use; v1 DLL does not
-                                       #      stamp it (no probe data for base
-                                       #      keyword-array writes)
-PROG_NEXT_OBJECT_ID     = 0x821
+PGID_ENROLLED_KYWD      = OWN_PROG | 0x820  # KYWD enrollment tag — RESERVED for
+                                            #      conditions/SPID use; v1 DLL does not
+                                            #      stamp it (no probe data for base
+                                            #      keyword-array writes)
+# §18.6 the ADDON MANIFEST — ONE FLST the DLL enumerates; entry[0] = the MFO.esp
+# sentinel keyword. Stages 2-3 append the classes-list FLST + economy GLOBs.
+PGID_MANIFEST           = OWN_PROG | 0x821
+PROG_NEXT_OBJECT_ID     = 0x822
 
 # Vanilla AVIF forms (Skyrim.esm) for the class-skill lists — DUMPED from the
 # shipped master (doctrine: mirror the disk, never a wiki). AVOneHanded ..
@@ -1041,11 +1061,15 @@ PROG_PERK_LISTS = [
 
 
 def make_prog_tes4():
-    # Same shape as make_tes4 (ESL flag 0x200, one master), own identity.
+    # ESL flag 0x200. TWO masters (§18.6): Skyrim.esm (index 0x00) for the AVIF
+    # skill forms, MFO.esp (index 0x01) for the addon sentinel keyword the
+    # manifest points at. Master ORDER fixes the index the OWN_PROG / ESLREF_*
+    # prefixes assume — do not reorder. Each MAST is followed by its DATA.
     hedr = struct.pack('<f', 1.70) + struct.pack('<I', 100) + struct.pack('<I', PROG_NEXT_OBJECT_ID)
     body = subrec('HEDR', hedr) + subrec('CNAM', zstr("marth"))
     body += subrec('SNAM', zstr("MFO follower-progression addon (optional; detected at runtime)"))
     body += subrec('MAST', zstr("Skyrim.esm")) + subrec('DATA', struct.pack('<Q', 0))
+    body += subrec('MAST', zstr("MFO.esp"))    + subrec('DATA', struct.pack('<Q', 0))
     return record('TES4', 0, 0x00000200, body)
 
 
@@ -1079,6 +1103,10 @@ def make_progression_esl():
         glob_body += prog_glob(fid, edid, value, fnam)
     data += group('GLOB', glob_body)
     flst_body = b''
+    # §18.6 the addon MANIFEST — enumerated by the DLL; entry[0] MUST be the
+    # MFO.esp sentinel keyword. (Stages 2-3 append the classes-list FLST +
+    # economy GLOBs as further entries.)
+    flst_body += prog_flst(PGID_MANIFEST, "MFOP_AddonManifest", [ESLREF_ADDON_SENTINEL])
     for fid, edid, forms in PROG_CLASS_SKILLS:
         flst_body += prog_flst(fid, edid, forms)
     for fid, edid in PROG_PERK_LISTS:

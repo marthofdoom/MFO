@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Progression.h"
 #include "Config.h"
+#include "Forms.h"   // §18.6: the addon-manifest sentinel keyword
 
 // The production catalog reader. See Progression.h for the contract;
 // Docs/FOLLOWER-PROGRESSION-ESL-DESIGN.md §1/§2/§3 for the design.
@@ -20,9 +21,10 @@ namespace MFO::Progression {
 
         // ── session state — written ONCE by Init() (kDataLoaded, main
         // thread), read-only forever after. No locks: freeze-then-publish.
-        bool          g_detected     = false;
-        std::uint32_t g_addonVersion = 0;
-        Catalog       g_catalog;
+        bool                  g_detected     = false;
+        std::vector<AddonRef> g_addons;              // §18.6 enumerated manifests
+        std::uint32_t         g_addonVersion = 0;    // transitional (reference addon)
+        Catalog               g_catalog;
 
         // ── the 18 skill AVIFs (§2.1) ───────────────────────────────────────
         // The probe walked the 12 combat trees; the catalog walks ALL 18 on
@@ -615,33 +617,48 @@ namespace MFO::Progression {
 
     bool Detected() { return g_detected; }
 
+    const std::vector<AddonRef>& Addons() { return g_addons; }
+
     std::uint32_t AddonVersion() { return g_addonVersion; }
 
     const Catalog& Get() { return g_catalog; }
 
     void Init() {
-        // ── detection (§1): plugin-file presence is the signal ──────────────
+        // ── §18.6 REGISTRATION: enumerate addon manifests ───────────────────
+        // An addon = ONE BGSListForm whose FIRST entry is MFO.esp's sentinel
+        // keyword (Forms::g_addonSentinel). Walking the data handler's FLST
+        // array sees the merged load order, so N addons register without a
+        // shared injection point (a common FormList would collide between
+        // addons — each owns its manifest outright). Runs AFTER Forms::Resolve
+        // (plugin.cpp order); sentinel unresolved = MFO.esp itself is broken.
         auto* dh = RE::TESDataHandler::GetSingleton();
         if (!dh) {
-            spdlog::error("[prog] TESDataHandler unavailable — progression addon detection skipped");
-        } else if (dh->LookupLoadedLightModByName(kAddonPlugin)) {
-            g_detected = true;
-            // Version stamp. Read HERE (kDataLoaded) on purpose: no save is
-            // loaded yet, so glob->value is the RECORD DEFAULT — a post-load
-            // read could see a stale save-persisted value instead (§10).
-            // Forms::Look-style: named miss, feature degrades, never throws.
-            if (auto* glob = dh->LookupForm<RE::TESGlobal>(kAddonVersionGlob, kAddonPlugin)) {
-                g_addonVersion = static_cast<std::uint32_t>(glob->value);
-                spdlog::info("[prog] addon DETECTED: {} (MFOP_Version {})", kAddonPlugin, g_addonVersion);
-            } else {
-                spdlog::error("[prog] {} present but MFOP_Version (0x{:03X}) did not resolve — "
-                              "treating addon as version 0", kAddonPlugin, kAddonVersionGlob);
-                spdlog::info("[prog] addon DETECTED: {} (MFOP_Version 0)", kAddonPlugin);
-            }
+            spdlog::error("[prog] TESDataHandler unavailable — addon enumeration skipped");
+        } else if (!Forms::g_addonSentinel) {
+            spdlog::error("[prog] MFO_AddonManifest sentinel unresolved — addon enumeration skipped");
         } else {
-            // Absent = feature off with ONE named line, never an error (§1,
-            // the Forms failure doctrine — the addon is optional by design).
-            spdlog::info("[prog] addon not detected ({} absent) — progression off", kAddonPlugin);
+            for (auto* list : dh->GetFormArray<RE::BGSListForm>()) {
+                if (!list || list->forms.empty()) continue;
+                if (list->forms.front() != Forms::g_addonSentinel) continue;
+                AddonRef ref;
+                ref.manifestID = list->GetFormID();
+                if (auto* file = list->GetFile(0))
+                    ref.plugin = std::string(file->GetFilename());
+                spdlog::info("[prog] addon manifest {:08X} registered (from \"{}\", {} entr(ies))",
+                             ref.manifestID, ref.plugin, list->forms.size());
+                g_addons.push_back(std::move(ref));
+            }
+            g_detected = !g_addons.empty();
+            if (!g_detected) {
+                // Absent = feature off with ONE named line, never an error
+                // (§1, the Forms failure doctrine — addons are optional).
+                spdlog::info("[prog] no addon manifests found — progression off");
+            } else if (auto* glob = dh->LookupForm<RE::TESGlobal>(kAddonVersionGlob, kAddonPlugin)) {
+                // Transitional version stamp for the reference addon (Stages
+                // 2-3 move version onto the manifest). RECORD DEFAULT at
+                // kDataLoaded (§10 — post-load GLOB values are save-stale).
+                g_addonVersion = static_cast<std::uint32_t>(glob->value);
+            }
         }
 
         // ── catalog build ───────────────────────────────────────────────────
