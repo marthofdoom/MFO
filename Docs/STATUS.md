@@ -42,10 +42,13 @@
 > - **STAGE 3 REMAINDER (still to do):** (a) ESL-detected **injects its own MCM tab** with these economy
 >   values as sliders ([[field-notes-queue-2026-08-17]] #6 — MCM-Helper work, distinct effort); (b) skill-menu
 >   position memory, Board.cpp (#5, small).
-> - **STAGE 4 (next):** `Docs/ADDON-API.md` — the frozen third-party contract (sentinel KYWD, manifest FLST
->   layout: entry[0]=sentinel, one classes-list FLST of class-def FLSTs {MESG name + AVIF skills + PERK
->   priority + `_Stance` GLOB}, economy GLOBs by suffix + defaults, PRGN discipline) + MFO_Progression.esl as
->   the worked example. **This is the Nexus-release gate for the Progression Add-On.**
+> - **STAGE 4 DONE — `Docs/ADDON-API.md` written (the frozen third-party contract).** Sentinel KYWD +
+>   manifest FLST layout (entry[0]=sentinel, one classes-list FLST of class-def FLSTs {MESG name + AVIF
+>   skills + PERK priority + `_Stance` GLOB}, economy GLOBs by suffix + defaults, master reqs, PRGN
+>   discipline) + MFO_Progression.esl as the worked example; linked in Docs/INDEX.md. **The §18 addon-API
+>   detachment is COMPLETE — the runtime "reproducible by a third party with only an ESL" bar is met.**
+>   Remaining before the addon's Nexus release: the MCM-tab injection + skill-menu memory (Stage 3
+>   remainder) and packaging/kit.
 > - Also pending (independent files, [[field-notes-queue-2026-08-17]]): slot-empty looting (#1), mage sidearm
 >   loot (#2), coin-purse gold (#3), ally-gambit-includes-player (#4).
 > - **STAGE 4:** `Docs/ADDON-API.md` (frozen third-party contract) + MFO_Progression.esl as

@@ -129,6 +129,12 @@ family's one principle warns about.
    them). Its M4 is the de-risking step that is deliberately *not* in
    `DESIGN.md`'s phase table: poke each engine primitive with a stick and log
    what happens, before building on assumptions about it.
+11. **ADDON-API.md** (when touching #74 progression / the ESL seam) — the
+   FROZEN public contract for third-party progression addons: the
+   `MFO_AddonManifest` sentinel, the manifest FLST layout, N-declared classes,
+   and suffix-matched economy GLOBs. `FOLLOWER-PROGRESSION-ESL-DESIGN.md` §18 is
+   the design rationale; ADDON-API.md is the authored contract a third party
+   builds against. `MFO_Progression.esl` is its worked example.
 
 ## Sibling projects — reuse, don't re-derive
 
