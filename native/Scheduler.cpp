@@ -604,13 +604,39 @@ namespace MFO::Scheduler {
         if (const auto fit = g_followers.find(id); fit != g_followers.end())
             classOverride = fit->second.combatClassOverride;
 
-        // #76 (Fable SEV-2): the equip gambit's condition is KNOWN false only when
-        // the scan ran to COMPLETION (Evaluate returns only MATCHING rules); a
-        // scan STOPPED by a higher rule never reached the equip rule, so its truth
-        // is UNKNOWN this tick. Hoisted here because the stance arbitration below
-        // needs it (preserve a held clamp on an unknown tick); the release path
-        // reuses it.
+        // #76: is the equip gambit's condition KNOWN false this tick? Two ways:
+        //  (a) the scan ran to COMPLETION without firing (nothing matched) --
+        //      classic condKnownFalse; OR
+        //  (b) POSITIONAL (Fable SEV-2 2026-08-17): Eval returns the FIRST match
+        //      from index 0, so EVERY rule above the stop was evaluated this tick.
+        //      An act.equip_* rule that sits above the stop yet left equipHeld==0
+        //      (it neither fired, satisfied, nor held in its suppression window)
+        //      had a FALSE condition -- its truth IS known even though a lower
+        //      rule stopped the scan. Without (b) the canonical layout (equip
+        //      rule ABOVE the attack/cast fallback that stops the scan every acting
+        //      tick) never releases the clamp until combat end -- the "for the
+        //      duration of true" revert would never fire mid-fight. Hoisted here:
+        //      the stance arbitration preserves a held clamp only on a TRULY
+        //      unknown tick; the weapon/stance release paths reuse it.
         const bool condKnownFalse = !stopped && !suppressed;
+        bool equipCondKnownFalse = condKnownFalse;
+        if (!equipCondKnownFalse && equipHeld == 0) {
+            // Stop index: where the scan halted, or past-end if nothing matched
+            // (choice.ruleIndex < 0 -> the whole list was evaluated).
+            if (const auto r2 = g_followers.find(id); r2 != g_followers.end()) {
+                const auto& rules = r2->second.combat();
+                const int stopIdx = (choice.ruleIndex < 0)
+                                        ? static_cast<int>(rules.size())
+                                        : choice.ruleIndex;
+                for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i) {
+                    const auto& aop = rules[i].actionOpcode;
+                    if (aop == Vocab::kActEquipMelee || aop == Vocab::kActEquipRanged) {
+                        equipCondKnownFalse = true;   // evaluated above the stop, did not hold
+                        break;
+                    }
+                }
+            }
+        }
 
         CombatStyle::Stance stance = CombatStyle::Stance::None;
         // STANCE PRIORITY (FFXII true-override): an ACTIVE equip gambit is enforced
@@ -631,10 +657,11 @@ namespace MFO::Scheduler {
             stance = (wantStance == 2) ? CombatStyle::Stance::Ranged
                                        : CombatStyle::Stance::Melee;
             stanceIsEquipOrder = true;
-        } else if (!condKnownFalse && CombatStyle::HoldsEquipOrder(id)) {
+        } else if (!equipCondKnownFalse && CombatStyle::HoldsEquipOrder(id)) {
             // 2. PRESERVE the held clamp. A HIGHER rule stopped the scan before
-            //    the equip rule this tick, so the equip gambit's truth is UNKNOWN
-            //    and an equip order is HELD -- leave stance None so NO Want fires
+            //    the equip rule this tick AND the equip rule sits BELOW the stop
+            //    (so its truth is genuinely UNKNOWN) and an equip order is HELD --
+            //    leave stance None so NO Want fires
             //    and the standing clamp (weapon + gate) survives while the higher
             //    rule's transient action (an ordered cast/heal) runs. Without
             //    this the override / cast latch below would overwrite the clamp to
@@ -689,19 +716,22 @@ namespace MFO::Scheduler {
         //    order: if a cast latch or the #65 override set a stance this tick,
         //    the Want above already flipped equipOrder off, so their hold stands.
         // SEV-2 (Fable 2026-08-17): release only when the equip condition is
-        // KNOWN false. Evaluate returns only MATCHING rules, so the condition is
-        // confirmed false only when the scan ran to COMPLETION (nothing more
-        // matched); a scan STOPPED by a higher rule (heal/attack/suppression
-        // window) never reached the equip rule -> its truth is UNKNOWN, and
-        // releasing then yanks the weapon out mid-fight the tick a higher rule
-        // fires (the re-oscillation #76 exists to close). Keep the hold on an
-        // unknown tick; combat-end / kill-switch still release unconditionally.
-        // (condKnownFalse is hoisted above the stance arbitration, which also
-        // needs it to preserve a held clamp on an unknown tick.)
-        Actuation::ReconcileForcedWeapon(f, equipHeld, condKnownFalse);
+        // KNOWN false -- `equipCondKnownFalse`, computed above the stance block.
+        // It is true when the scan ran to completion (nothing matched) OR the
+        // equip rule sat ABOVE the stop and did not hold (positional known-false);
+        // a scan stopped by a higher rule with the equip rule BELOW it leaves the
+        // truth UNKNOWN, and releasing then yanks the weapon out mid-fight the
+        // tick a higher rule fires (the re-oscillation #76 exists to close). Keep
+        // the hold on an unknown tick; combat-end / death / dismissal / revert
+        // still release unconditionally elsewhere.
+        Actuation::ReconcileForcedWeapon(f, equipHeld, equipCondKnownFalse);
         // AnyActive() is a lock-free atomic mirror -- keep the common no-stance
-        // tick off g_mx (the module's own discipline).
-        if (equipHeld == 0 && condKnownFalse && CombatStyle::AnyActive())
+        // tick off g_mx (the module's own discipline). The kill-switch also drops
+        // the stance clamp: with bWeaponStyleControl off, branch 1 never set an
+        // equip Want and ApplyTick/gate have no config check, so a hold from
+        // before the flip would strand the CSTY/gate until combat end otherwise.
+        if ((equipHeld == 0 && equipCondKnownFalse && CombatStyle::AnyActive()) ||
+            (!Config::g_weaponStyleControl.load() && CombatStyle::HoldsEquipOrder(id)))
             CombatStyle::ReleaseEquipOrder(id);
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through

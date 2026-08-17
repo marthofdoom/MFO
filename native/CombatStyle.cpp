@@ -124,6 +124,10 @@ namespace MFO::CombatStyle {
     }
 
     bool HoldsEquipOrder(RE::FormID a_follower) {
+        // Fast-out on the module's own discipline (mirrors the gate at :255 and
+        // AnyActive): no equip order anywhere -> keep this per-acting-tick call
+        // off the combat-thread-contended g_mx entirely.
+        if (g_equipOrders.load(std::memory_order_relaxed) == 0) return false;
         std::lock_guard<std::mutex> lk(g_mx);
         const auto it = g_owned.find(a_follower);
         return it != g_owned.end() && it->second.equipOrder;
