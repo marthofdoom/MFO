@@ -8,32 +8,36 @@
 >
 > **Last updated:** 2026-08-13 (SHIPPED v1.0.63 — tag pushed, releases/v1.0.63/, Nexus bbcode ready) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶▶ RESUME HERE (2026-08-17 PM) — two releases staged + a crash queue.**
-> - **Current main build `66716da` — DLL `112349ca`, deployed custom-modlist (Tuxborn PENDING deck
->   wake). CI green.** On top of the earlier #76 (weapon force-hold + stance clamp + FWPN co-save +
->   loot/gambit batch, all Fable-fixed) this build folds in: **addon Fable fixes** (was worktree
->   `930c34d`, cherry-picked → `6a1405e`): PRGN v4 plugin-qualified class identity (fixes addon-absent
->   class wipe; v3+v<3 readers KEPT), OR-tail prereq fix, PerkKnownToCatalog, board economy strings
->   from snapshot. **PLUS the equip-override fix** (`1560bea`+`66716da`, Fable SHIP): a per-follower
->   CAST class override (#65) was superseding the equip-melee gambit's stance clamp → Lucien
->   dagger↔spell thrash. Now an ACTIVE equip gambit is a FFXII TRUE-OVERRIDE of the class stance for
->   its true duration (arms the CheckShouldEquip gate); a higher cast gambit still left-hand casts
->   (gate exempts WantedSpell) while the dagger holds; reverts when the equip gambit is KNOWN false
->   (Fable SEV-2 POSITIONAL known-false — an equip rule above the scan stop with equipHeld==0 is
->   false; also fixes the weapon-hold's same latent conflation). +HoldsEquipOrder(fid) w/ g_equipOrders
->   fast-out; kill-switch now releases the stance clamp too.
-> - **NEXT:** (1) marth loads `112349ca` → I check log: (a) equip-override — `[wstyle] stance HANDOFF
->   -> melee` appears when Lucien's melee gambit fires (ABSENT before = the bug), `AI re-arm ... DENIED`
->   gate lines, reverts to cast on foe-retreat; (b) save undamaged (economy `perk 1/2, skill/lvl 2`,
->   perks correct); (c) flip bProgCatalogDump for finding #3 (dead-rank-locks-node, deferred pending
->   census). (2) cut **v1.0.64** (`release.sh 1.0.64`; main files only — release.sh already excludes
->   the addon) + the **Progression Add-On** release with kits. Last PUBLIC Nexus = v1.0.61; bbcode
->   spans 1.0.62→64. CHANGELOG v1.0.64 written (uncommitted stamp; ADD the equip-override line).
-> - **CRASH QUEUE** ([[crash-reports-cast-target-1.5.x]]): 3 pastebins — MFO AV in `act.cast_target`
->   (poisoned ptr +0x13) on SE 1.5.97 + a tbbmalloc/EngineFixes heap crash. Diagnose via [bc] + CI PDB.
+> **▶▶ RESUME HERE (2026-08-17 PM) — v1.0.64 SHIPPED; crash queue next.**
+> - **v1.0.64 RELEASED & TAGGED — DLL `3832128e`, deployed custom-modlist (Tuxborn PENDING deck wake).**
+>   Field-verified good by marth (Lucien: dagger-only, clean cast↔melee handoffs). Tag `v1.0.64` pushed;
+>   `releases/v1.0.64/` archived. Main files only (release.sh excludes the addon). Last PUBLIC Nexus =
+>   v1.0.61; **Nexus bbcode still owed, spans 1.0.62→1.0.64** (exact-cast, equip-override, this batch).
+>   This release folds in, all Fable-reviewed (two passes, SHIP):
+>   - **addon Fable fixes** (`6a1405e`): PRGN v4 plugin-qualified class identity, OR-tail prereq,
+>     PerkKnownToCatalog, board economy strings from snapshot.
+>   - **equip-override = FFXII TRUE-OVERRIDE** (`1560bea`/`66716da`): a #65 CAST class override no
+>     longer defeats an active equip gambit's stance clamp (Lucien dagger↔spell thrash). Arms the
+>     CheckShouldEquip gate; higher cast gambit still left-hand casts (gate exempts WantedSpell);
+>     reverts on POSITIONAL known-false (equip rule above the scan stop w/ equipHeld==0).
+>   - **base-class mage sidearm** (`c97035f`): melee-loot contract keys on combatClassOverride, not the
+>     gambit — base Mage (Cast==3) = daggers-only for BOTH loot AND the combat gambit; spellsword
+>     (Melee/Ranged class) = full role. Gated bMageDaggersOnly.
+>   - **loose health potions** (`cb214a8`): join the route-2b acquire whitelist (walk + ActivateRef);
+>     ownership gate still skips owned inn/shop/home stock.
+>   - **hysteresis** (`fa90004`+`7a5956f`): melee-clamp release gated on a per-follower Temperament
+>     dwell (3.0s±1.0s) of SUSTAINED known-false — reads human; Fable SEV-3 fixes (dwell refreshes on
+>     unknown-held ticks too; erase debounced 2-tick; stale comment).
+> - **NEXT:** (1) **CRASH QUEUE** ([[crash-reports-cast-target-1.5.x]]): 3 pastebins — MFO AV in
+>   `act.cast_target` (poisoned ptr +0x13) on SE 1.5.97 + a tbbmalloc/EngineFixes heap crash. Diagnose
+>   via [bc] + CI PDB. (2) Nexus bbcode 1.0.62→64. (3) Progression Add-On release + kit (still owed).
+> - **CONCENTRATION (answered marth):** works v1.0.53+ (ConcentrationCast, Actuation.cpp:224) IFF
+>   TARGETED (not self) AND bForceCastOnMiss+bUsePackages ON — bounded package stream (hostile 1-4s LoF-
+>   gated / heal-until-healed / utility). Self-cast concentration BARRED (package self route = unprobed
+>   CTD cell) — a real gap if someone wants self-channel-heal. Old "not working" report predates 1.0.53.
 > - **THEN roadmap:** town update (#31), then the Roster addon (2nd ESL).
-> - Deferred/known: MAP.md untracked+stale (says PRGN v2); PRGN v3-save wipe only fully closed for
->   v4+ saves (deck v3 save self-heals to v4 on next save).
+> - Deferred/known: MAP.md now TRACKED but STALE (PRGN v2 era) — full refresh owed (PRGN v4, #76
+>   equip-override/hysteresis, base-class sidearm); PRGN v3-save wipe fully closed only for v4+ saves.
 >
 > **▶ §18 ADDON-API REFACTOR — DONE (Stages 1-4 shipped; addon fixes pending FF above).**
 > Rebuilt fresh on current main (NOT the stale `esl-api-wip` branch, which predates the
