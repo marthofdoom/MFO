@@ -19,14 +19,23 @@
 >   count. NO save-format change. Deployed local custom-modlist; **deck field-verify PENDING
 >   deck wake** (asleep during deploy) — confirm log `[prog] addon manifest … registered` +
 >   board still opens before building Stage 2 on it.
-> - **STAGE 2 NEXT (save-critical):** N-class model — `ClassDef{id,name,stance,skills,perkPriority}`,
->   `SetClass(FormID)`, manifest→classes-list FLST→class-def FLSTs (MESG name + AVIF skills +
->   PERK priority + `_Stance` GLOB). **BUMP PRGN v2→v3** (class stored as ordinal → FormID
->   `clsId`) + migrate old Melee/Ranged/Mage(1/2/3) indices. INVARIANT #12.
-> - **STAGE 3:** economy fully addon-declared via GLOBs matched by editor-id SUFFIX
->   (`_LevelsPerPerkPoint` default 2, `_SkillPointsPerLevel` 3, `_SharedGrowthDivisor` 2,
->   `_RespecRapportCost` 500, `_SkillCap` 100, `_ManualSkillPointsPerLevel` 5, `_DevCmd` live);
->   remove the transitional by-name reads + `kAddonPlugin`.
+> - **STAGE 2 DONE (save-critical, deployed) — DLL `38357016` (CI 31989899988), ESL `b1b3ef3f`.**
+>   N-class model: `ClassDef{id,name,stance,skills,perkPriority}`, `Classes()`/`FindClassDef()`,
+>   `SetClass(FormID)`; `ProgState.cls`→`clsId`. Built at Init by parsing each manifest's
+>   classes-list FLST (entry[1]) → class-def FLSTs (MESG name + AVIF skills + PERK + `_Stance`
+>   GLOB). Board prompt dynamic-N. **PRGN v2→v3**: class = 4-byte FormID (ResolveFormID) at the
+>   old ordinal's field slot; v<3 load reads the 1-byte ordinal and maps 1/2/3→`g_classes[ord-1].id`
+>   (reviewed vs INVARIANT #12 — field order preserved, v1/v2 readers intact). Generator emits
+>   MESG 0x830-2 / `_Stance` GLOB 0x840-2 / class-def FLST 0x850-2 / classes-list FLST 0x85F.
+>   Today's gate fixes (base-aware ownership, OR-group eval, condPrereq edges) preserved.
+>   **FIELD-VERIFY:** existing followers keep their class across load (migration), class pick +
+>   auto-scale still work, board opens, log `[prog] … class … declared`.
+> - **STAGE 3 (next):** economy fully addon-declared via GLOBs matched by editor-id SUFFIX
+>   (`_LevelsPerPerkPoint` default 2, `_SkillPointsPerLevel` **2** [marth 08-17], `_SharedGrowthDivisor` 2,
+>   `_RespecRapportCost` 500, `_SkillCap` 100, `_ManualSkillPointsPerLevel` **2** [marth 08-17], `_DevCmd` live);
+>   remove the transitional by-name reads + `kAddonPlugin`. PLUS: ESL-detected **injects its own MCM
+>   tab** with these as sliders ([[field-notes-queue-2026-08-17]] #6). Also here: skill-menu position
+>   memory (#5).
 > - **STAGE 4:** `Docs/ADDON-API.md` (frozen third-party contract) + MFO_Progression.esl as
 >   the worked example. This is the Nexus-release gate for the addon.
 > - **Known-good fallback:** tag `esl-fieldverified-2026-08-13`. After the addon: **Roster
