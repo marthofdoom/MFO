@@ -8,21 +8,29 @@
 >
 > **Last updated:** 2026-08-13 (SHIPPED v1.0.63 — tag pushed, releases/v1.0.63/, Nexus bbcode ready) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶ RESUME SUNDAY 2026-08-16+ — §18 ADDON-API REFACTOR (PAUSED).** Fable hit its
-> WEEKLY limit (resets Sun night); token-light hold also lifts Sun afternoon — so the
-> ESL/API work is parked until then. State is stable and organized:
-> - **main is clean** at `1ce99b6` (contract locked); **v1.0.63 shipped** unaffected.
-> - **Known-good fallback:** tag `esl-fieldverified-2026-08-13` = board + allocator +
->   manual skills + constellation trees, all field-verified (the code dormant in v1.0.63).
-> - **Incomplete WIP** of the refactor is on branch **`esl-api-wip`** (pushed): DLL-side
->   registration + partial N-class only — does NOT compile.
-> - **The contract to implement:** design doc §18.6 (LOCKED). **Remaining:** finish the
->   N-class allocator, wire full economy config incl. **perk points `floor(level/2)`**,
->   rewrite `MFO_GenerateESP.py` for the new manifest/N-class/econ records, **bump+migrate
->   PRGN** (map old fixed-3 class indices), write the third-party API doc, then CI/audit/
->   redeploy + a field-test-and-iterate cycle. Resume on Fable or restart the round fresh
->   from `1ce99b6` using `esl-api-wip` as reference.
-> - After the addon: **Roster addon** (separate ESL, Mon), then town update (#31).
+> **▶ §18 ADDON-API REFACTOR — IN PROGRESS (on `main`, staged, CI-green each stage).**
+> Rebuilt fresh on current main (NOT the stale `esl-api-wip` branch, which predates the
+> 2026-08-15/16 perk-gate fixes) using that branch only as reference. Contract = §18.6.
+> - **STAGE 1 DONE (registration seam)** — DLL `1e3b…`→ **`804bd21`** (CI 31987673446): MFO.esp
+>   ships `MFO_AddonManifest` sentinel KYWD (0x803); an addon = ONE FLST manifest whose
+>   entry[0] is that sentinel; `Progression::Init` enumerates manifests (N addons) instead
+>   of `LookupLoadedLightModByName`. MFO_Progression.esl now masters MFO.esp (own prefix
+>   0x02 = OWN_PROG) + carries the manifest FLST. audit_esp.py derives own-prefix from master
+>   count. NO save-format change. Deployed local custom-modlist; **deck field-verify PENDING
+>   deck wake** (asleep during deploy) — confirm log `[prog] addon manifest … registered` +
+>   board still opens before building Stage 2 on it.
+> - **STAGE 2 NEXT (save-critical):** N-class model — `ClassDef{id,name,stance,skills,perkPriority}`,
+>   `SetClass(FormID)`, manifest→classes-list FLST→class-def FLSTs (MESG name + AVIF skills +
+>   PERK priority + `_Stance` GLOB). **BUMP PRGN v2→v3** (class stored as ordinal → FormID
+>   `clsId`) + migrate old Melee/Ranged/Mage(1/2/3) indices. INVARIANT #12.
+> - **STAGE 3:** economy fully addon-declared via GLOBs matched by editor-id SUFFIX
+>   (`_LevelsPerPerkPoint` default 2, `_SkillPointsPerLevel` 3, `_SharedGrowthDivisor` 2,
+>   `_RespecRapportCost` 500, `_SkillCap` 100, `_ManualSkillPointsPerLevel` 5, `_DevCmd` live);
+>   remove the transitional by-name reads + `kAddonPlugin`.
+> - **STAGE 4:** `Docs/ADDON-API.md` (frozen third-party contract) + MFO_Progression.esl as
+>   the worked example. This is the Nexus-release gate for the addon.
+> - **Known-good fallback:** tag `esl-fieldverified-2026-08-13`. After the addon: **Roster
+>   addon** (separate ESL), then town update (#31).
 
 > **#74 COMPONENT 2 BUILT (2026-08-11) — the ALLOCATOR backend + MFO_Progression.esl +
 > dev harness — awaiting marth review + CI.** New `native/ProgAllocator.cpp/.h` (design
