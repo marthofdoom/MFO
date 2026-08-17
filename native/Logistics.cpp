@@ -12,7 +12,6 @@
 #include <utility>        // std::pair: the school-name keyword table (v1.0.31)
 #include "Confidence.h"   // the confidence leash (core tenet)
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
-#include "CasterConsent.h" // ClassifySpell -- self-cast hold classification (SPEC-self-cast-forced)
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
 #include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
@@ -3885,11 +3884,14 @@ namespace MFO::Logistics {
                 // out-of-combat heals. Out of combat the follower's AI never casts
                 // on its own, so the combat AI-grace path never fired (deck
                 // 2026-08-06). ROUTING:
-                //   * SELF + bCastSelf ON  -> the ANIMATED no-QNAM self package
-                //     (alias 2), BOUNDED via CastHold (SPEC-self-cast-forced). This
-                //     is the ONLY self route while the gate is on -- a concentration
-                //     ward instant-applied here has no channel to release and STUCK
-                //     forever, even after the rule was disabled (deck 2026-08-17).
+                //   * SELF + bCastSelf ON  -> Actuation::CastSelfDirect, the
+                //     UNIVERSAL direct trigger (SPEC-self-cast-forced): equip +
+                //     drive the caster + apply the effect + spend magicka, no
+                //     package/alias so it drives package-locked custom followers
+                //     too. This is the ONLY self route while the gate is on -- a
+                //     concentration ward instant-applied here had no channel and
+                //     STUCK forever, even after the rule was disabled (deck
+                //     2026-08-17); the direct trigger is a bounded one-shot.
                 //   * SELF (gate off) + PLAYER, FIRE-AND-FORGET -> CastSpellImmediate
                 //     (applies the effect to any target; no animation, but it lands).
                 //   * SELF (gate off) + PLAYER, CONCENTRATION -> SKIPPED legibly:
@@ -3945,51 +3947,26 @@ namespace MFO::Logistics {
                     start = choice.ruleIndex + 1; continue;   // within this spell's window
                 }
                 if (selfPkg) {
-                    // The animated bounded self channel. Instant-applying a
-                    // CONCENTRATION ward gave it NO channel to release, so it stuck
-                    // FOREVER -- even after the rule was disabled (deck 2026-08-17).
-                    // The package opens a real channel Pump releases at the hold cap
-                    // + InterruptCast; the rule going false OR being disabled simply
-                    // stops re-arming it, so it can never persist. No silent
-                    // concentration apply runs on the self path while the gate is on.
-                    if (!Packages::Available()) {
-                        spdlog::info("[cast] {:08X} self-cast HELD -- bCastSelf on but the self "
-                                     "package is unavailable (no silent apply while armed)", id);
-                        start = choice.ruleIndex + 1; continue;
-                    }
-                    // Same bounds as the combat ConcentrationCast self branch: heal
-                    // watches the caster; anything else a capped utility hold. NO
-                    // ffWatch -- a self stream has no line of fire. FF self keeps
-                    // holdSeconds 0 (animated one-shot, linger release).
-                    Packages::CastHold hold;
-                    const char* kindName = "self (fire-and-forget)";
-                    if (conc) {
-                        if (CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal) {
-                            hold.holdSeconds = 6.0f; hold.healWatch = id; kindName = "self-heal";
-                        } else {
-                            hold.holdSeconds = 4.0f; kindName = "self-utility";
-                        }
-                    }
-                    const auto d = Packages::CastSelf(a_follower, sp, hold);
-                    if (d == Packages::Decline::None) {
+                    // The UNIVERSAL DIRECT TRIGGER (SPEC-self-cast-forced). The
+                    // MFO_CastPackageSelf alias route only EQUIPS the spell -- it
+                    // never fires the cast (deck 2026-08-17: equip, no anim, no
+                    // magicka) and is DECLINED outright on package-locked custom
+                    // followers (Lucien, prio-80). So self bypasses packages:
+                    // Actuation::CastSelfDirect equips + drives the caster for the
+                    // animation + applies the effect + spends magicka. ONE-SHOT,
+                    // so a concentration ward can never stick (each dispatch is a
+                    // bounded action); it re-casts each cooldown while still hurt,
+                    // and stops the moment the rule goes false.
+                    if (Actuation::CastSelfDirect(a_follower, sp)) {
                         acted = true;
-                        spdlog::info("[cast] {:08X} {} {} {} ({:08X}) on self -- {} stream, "
-                                     "hold {:.1f}s (logistics)",
-                                     id, a_follower->GetName() ? a_follower->GetName() : "?",
-                                     conc ? "CONCENTRATION" : "cast",
-                                     sp->GetName() ? sp->GetName() : "?", sp->GetFormID(),
-                                     kindName, hold.holdSeconds);
-                        // Re-arm only AFTER the stream's own bound (plus the cast
-                        // cooldown) elapses, so the ~1s tick can't hammer Begin while
-                        // it channels. The RELEASE itself is package-driven (hold cap
-                        // + InterruptCast), independent of this pacing.
-                        const float pace = hold.holdSeconds + std::max(1.0f, Config::g_castCooldown.load());
+                        const float pace = std::max(1.0f, Config::g_castCooldown.load());
                         s_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(
                                                             std::chrono::duration<float>(pace));
-                    } else if (d == Packages::Decline::Busy) {
-                        acted = true;   // our own stream is still channeling -- the wait IS the action
                     } else {
-                        start = choice.ruleIndex + 1; continue;   // structural decline -> next rule, NEVER silent-apply
+                        // Unaffordable / off-AE / equip failed. Do NOT silent-apply
+                        // a concentration spell (the stuck-ward footgun) -- skip
+                        // legibly to the next rule.
+                        start = choice.ruleIndex + 1; continue;
                     }
                 } else if (immediate) {
                     // A CONCENTRATION spell has no instant apply: CastSpellImmediate

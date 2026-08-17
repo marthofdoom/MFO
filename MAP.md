@@ -183,31 +183,33 @@ releases **by eviction** with a non-actor XMarker.
   false)` at `:1028` — **`resetAI` must stay false** everywhere (`:1028,1296,1319,
   1384,1462,1483,661`); `true` clears the combat group → zero-damage next hit.
   Timeouts `kFillTimeout=3.0`/`kRunTimeout=12.0` (`:126-127`).
-- `CastAt`/`CastSelf`/`Available`/`StreamLive` — callers `Actuation.cpp:135-136,
-  266,113,213`, `Logistics.cpp:3841-3842`, `CasterConsent.cpp:163` (reads the
-  atomic mirror). **`CastSelf` is GATED behind `Config::g_castSelf` (bCastSelf,
-  default OFF)** — off → declines `Decline::SelfRoute` (caller falls back to the
-  silent apply, the pre-feature behaviour); on → runs the DEDICATED self package
-  (SPEC-self-cast-forced). Self is delivered by command-quest **alias 2**
-  (`kAliasCommandSelfActor`) carrying `MFO_CastPackageSelf` (Forms `0x835`,
-  `g_castPackageSelf`): authored **t6 self, NO QNAM** — §0.22's proven-clean
-  probe-6 shape, which REVOKED #67 (the rev-4 crash was the QNAM, not the t6).
-  `SetSelfSpell` writes ONLY the Spell input at runtime; the t6 target is
-  authored statically and never rewritten (writing t6 into a QNAM-carrying
-  record was the crash). `g_holder.self` selects alias/package for every
-  observe/release helper (`HolderActorAlias`/`HolderPackage`); **ReleaseAll now
-  sweeps BOTH alias 0 and alias 2** (the self fill is engine-serialized like the
-  foe fill). Self is AE-only (VM fallback fills alias 0). One `MFO_CastPackage`/
-  `MFO_CastPackageSelf` each on their own alias → single holder forced by shared
-  `TESPackage::refCount` (`:734`); multi-holder needs per-verb records at 0x821+.
-  **Two callers route self through here when armed:** the combat path
-  (`Actuation::ConcentrationCast` self branch) AND the **out-of-combat logistics
-  cast handler** (`Logistics.cpp` `act.cast_self` branch) — the latter used to
-  ALWAYS `CastSpellImmediate` self (`immediate = op != kActCastTarget`), which
-  instant-applied a concentration ward with no channel so it **stuck forever**
-  (deck 2026-08-17). Now: `bCastSelf` self → `CastSelf` with a bounded hold;
-  concentration on the immediate path (self-gate-off or player) is SKIPPED
-  legibly rather than stuck-applied.
+- **SELF-CAST does NOT use the package (SPEC-self-cast-forced, superseded 2026-08-17).**
+  Deck-proven: a no-QNAM/t6 package can be DELIVERED (equips the spell) but never
+  TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
+  EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
+  followers (Lucien, prio-80 quest). So self routes through
+  **`Actuation::CastSelfDirect`** (`Actuation.cpp`, public): equip via
+  `Loadout::Prepare` → drive the caster's own state machine (`RequestCastImpl`) for
+  the ANIMATION (§0.13: the only animated path) → `CastSpellImmediate` + hand-deduct
+  for the effect + magicka (§5.3). Touches only the ACTOR, no alias → **follower-
+  agnostic** (vanilla AND custom-framework). ONE-SHOT + cooldown-paced → the exact-
+  bounding invariant holds with no held channel to leak; re-casts while the rule
+  wins, stops when it goes false. Gated behind `Config::g_castSelf` (bCastSelf,
+  default OFF). Callers: `CastOn` self-intercept (combat, BEFORE the concentration
+  fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
+  `act.cast_self` branch (out-of-combat). The Logistics immediate path still SKIPS
+  concentration spells legibly (self-gate-off / player) — instant-apply has no
+  channel and stuck forever (deck 2026-08-17).
+- **DEAD/superseded: the package self-route.** `Packages::CastSelf`, `Begin`'s self
+  branch, command-quest **alias 2** (`kAliasCommandSelfActor` → `MFO_CastPackageSelf`,
+  Forms `0x835`), `SetSelfSpell`, `HolderActorAlias`/`HolderPackage`'s self side, and
+  the alias-2 `ReleaseAll` sweep are all still present but NO LONGER on the live path
+  (nothing calls `CastSelf` with the gate on). Left in place (harmless; the ESP record
+  never fills) rather than churn the frozen `0x835` FormID; can be removed later.
+- `CastAt`/`Available`/`StreamLive` (FOE cast) — callers `Actuation.cpp` (ForceCast +
+  ConcentrationCast foe), `CasterConsent.cpp:163` (reads the atomic mirror). One
+  `MFO_CastPackage` on alias 0 → single holder forced by shared `TESPackage::refCount`
+  (`:734`); multi-holder needs per-verb records at 0x821+.
 - `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1265-1494`)
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and

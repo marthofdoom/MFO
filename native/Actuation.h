@@ -43,6 +43,20 @@ namespace MFO::Actuation {
     // (§5.3 -- a rule that could not run says why, it is not silent).
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice);
 
+    // FORCED SELF-CAST — the UNIVERSAL direct trigger (Docs/SPEC-self-cast-forced.md).
+    // Fires an authored `act.cast_self` (concentration OR fire-and-forget) as a
+    // REAL cast on the follower himself, bypassing the alias/package machinery
+    // entirely so it drives BOTH vanilla and package-locked custom-framework
+    // followers (Lucien/Inigo, prio-80 quests that decline MFO's alias). Equips
+    // the spell, drives the caster's own state machine for the animation, and
+    // applies the effect + spends the follower's magicka (§5.3). ONE-SHOT and
+    // bounded by construction (no held channel to leak); the caller re-fires
+    // while the rule wins and stops when it goes false. Returns true if it
+    // fired; false is transparent (unaffordable / off-AE / no caster) so the
+    // caller's rules below still run. Main-thread / worker context, same as the
+    // rest of Actuation. Callers: CastOn (combat) + Logistics (out-of-combat).
+    bool CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell);
+
     // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired
     // weapon is FORCE-equipped (ActorEquipManager forceEquip=true = the engine's

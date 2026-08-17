@@ -226,9 +226,20 @@ namespace MFO::Actuation {
             const auto id   = a_follower->GetFormID();
             const bool self = !a_target || a_target == a_follower;
 
-            // No package, no stream. The silent fallback is meaningless for a
-            // channel (an instant apply of a per-second effect), so this
-            // fails LEGIBLY instead -- transparent, the rules below run.
+            // SELF concentration: routed to the UNIVERSAL direct trigger, not the
+            // package (SPEC-self-cast-forced). In practice CastOn intercepts self
+            // BEFORE this fork, so this is defence-in-depth -- but it must never
+            // fall to the inert alias package, which equips but never fires and
+            // is declined outright on package-locked custom followers.
+            if (self) {
+                if (Config::g_castSelf.load() && CastSelfDirect(a_follower, a_spell))
+                    return { Result::Fired, "self-cast (direct trigger)" };
+                return { Result::FailedOther, "self-cast could not fire", true };
+            }
+
+            // No package, no stream (FOE concentration only). The silent fallback
+            // is meaningless for a channel (an instant apply of a per-second
+            // effect), so this fails LEGIBLY -- transparent, the rules below run.
             if (!Config::g_forceCastOnMiss.load() || !Packages::Available()) {
                 return { Result::FailedOther,
                          "concentration needs the cast package (bForceCastOnMiss+bUsePackages)",
@@ -427,11 +438,32 @@ namespace MFO::Actuation {
                 }
             }
 
+            // SELF-CAST forks off FIRST (SPEC-self-cast-forced): a bCastSelf-
+            // armed cast_self -- concentration OR fire-and-forget -- fires
+            // through the UNIVERSAL direct trigger, BEFORE the concentration
+            // fork and before the equip/grace/package machinery. Self needs
+            // neither AI-grace nor an alias package (which package-locked custom
+            // followers decline), so it bypasses both. One-shot + cooldown-
+            // paced: the exact-bounding invariant holds with no held channel to
+            // leak, and re-fires re-cast while the rule keeps winning.
+            if (a_target == a_follower && Config::g_castSelf.load()) {
+                if (Loadout::CoolingDown(a_follower->GetFormID()))
+                    return { Result::NoOp, "cast cooling down", true };
+                if (CastSelfDirect(a_follower, spell)) {
+                    Loadout::StartCooldown(a_follower->GetFormID());
+                    return { Result::Fired, "self-cast (direct trigger)" };
+                }
+                // Unaffordable / off-AE / no caster: transparent, the rules
+                // below run (the follower is not stuck on a cast that can't go).
+                return { Result::FailedOther, "self-cast could not fire", true };
+            }
+
             // CONCENTRATION forks off HERE -- after the range and competence
             // gates (a stream obeys §5.3 and #68 like any cast), BEFORE the
             // equip/grace/force machinery, all of which assumes a
             // fire-and-forget release to observe. The bounded stream is its
-            // own actuation (see ConcentrationCast above).
+            // own actuation (see ConcentrationCast above). (Self concentration
+            // never reaches here -- the self fork above intercepts it.)
             if (spell->GetCastingType() ==
                 RE::MagicSystem::CastingType::kConcentration) {
                 return ConcentrationCast(a_follower, spell, a_target);
@@ -842,6 +874,99 @@ namespace MFO::Actuation {
 
         // (EquipTorch moved to Logistics -- torch is upkeep, not a combat action, #35.)
 
+    }
+
+    // ── FORCED SELF-CAST: the UNIVERSAL direct trigger (SPEC-self-cast-forced) ──
+    // The MFO_CastPackageSelf alias route EQUIPS the spell but never TRIGGERS
+    // the cast (deck 2026-08-17: equip only, no animation, no magicka -- a
+    // no-QNAM/t6 package can deliver a package but the QNAM+target-alias linkage
+    // is what drives the engine to EXECUTE the cast), and it is declined
+    // outright on package-locked custom followers (Lucien, prio-80 framework).
+    // So self-cast bypasses packages: equip, drive the caster's OWN state
+    // machine for the animation (§0.13 -- the only animated path; CastSpellImmediate
+    // is silent), and apply the effect + spend magicka through CastSpellImmediate
+    // (the shipped §5.3 verb). Touches only the ACTOR, never an alias, so it is
+    // follower-agnostic. ONE-SHOT: no held channel to leak (the exact-bounding
+    // invariant is met trivially -- each call is a bounded action); the caller
+    // paces re-fires while the rule wins and stops when it goes false.
+    bool CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        // AE-only, mirroring CastOn: the drive/equip surface is the SE crash
+        // path (#67). Off AE the caller falls back transparently.
+        if (!REL::Module::IsAE())    return false;
+        if (!a_follower || !a_spell) return false;
+        const auto id = a_follower->GetFormID();
+        using CS = RE::MagicSystem::CastingSource;
+
+        // §5.3 COMPETENCE: the follower's real cost gates the cast, and the
+        // reserve floor keeps a self-heal from emptying the pool. Same reads as
+        // CastOn. Unaffordable -> transparent decline, the caller's rules run.
+        auto*       avo  = a_follower->AsActorValueOwner();
+        const float cost = a_spell->CalculateMagickaCost(a_follower);
+        const float have = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+        if (avo) {
+            if (cost > have) return false;
+            const float reserve = Config::g_magickaReserve.load();
+            if (reserve > 0.0f) {
+                const float mx = avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
+                    a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
+                                                      RE::ActorValue::kMagicka);
+                if (mx > 0.0f && (have - cost) < reserve * mx) return false;
+            }
+        }
+
+        // 1. EQUIP the spell to a hand (+ draws magic hands). Universal, no alias
+        //    -- this is the half that already worked on the deck.
+        std::string why;
+        if (Loadout::Prepare(a_follower, a_spell, why) == Loadout::Ready::Failed)
+            return false;
+        const CS src = (a_follower->GetEquippedObject(false) == a_spell &&
+                        a_follower->GetEquippedObject(true)  != a_spell)
+                           ? CS::kRightHand : CS::kLeftHand;
+
+        // 2. DRIVE the caster for the ANIMATION. The visible cast comes ONLY from
+        //    the caster's own state machine advancing (§0.13); CastSpellImmediate
+        //    below is silent. Clear any prior wedge (charge-glow hands from a
+        //    previous tick), then request the cast from rest with the spell
+        //    selected and self as the desired target. CheckCast is logged so the
+        //    field can see whether the engine accepted or refused the drive.
+        RE::MagicSystem::CannotCastReason reason{};
+        std::uint32_t stBefore = 0, stAfter = 0;
+        if (auto* hand = a_follower->GetMagicCaster(src)) {
+            stBefore = static_cast<std::uint32_t>(hand->state.get());
+            if (hand->state.get() != RE::MagicCaster::State::kNone)
+                hand->InterruptCast(true);          // clear wedge, refund its charge
+            if (hand->currentSpell == a_spell) {
+                hand->desiredTarget = a_follower->CreateRefHandle();   // self
+                float strength = 1.0f;
+                hand->CheckCast(a_spell, false, &strength, &reason, false);
+                hand->RequestCastImpl();
+            }
+            stAfter = static_cast<std::uint32_t>(hand->state.get());
+        }
+
+        // 3. GUARANTEE the effect + the magicka spend -- marth's proof-of-cast
+        //    tell (zero magicka == it did not really cast). kInstant so it does
+        //    not fight the hand animation (the DAC pattern, §0.13). A self-
+        //    delivery spell applies to the caster regardless of target.
+        //    CastSpellImmediate spends nothing on its own (§0.22), so MFO deducts
+        //    the follower's real cost -- the identical §5.3 accounting every
+        //    other cast path in the mod uses (Actuation ~695, Logistics ~4018).
+        auto* inst = a_follower->GetMagicCaster(CS::kInstant);
+        if (!inst) inst = a_follower->GetMagicCaster(src);
+        if (inst)
+            inst->CastSpellImmediate(a_spell, false, a_follower, 1.0f, false, 0.0f, a_follower);
+        if (avo && cost > 0.0f)
+            avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                   RE::ActorValue::kMagicka, -cost);
+
+        const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+        spdlog::info("[cast] {:08X} {} SELF-CAST {} ({:08X}) -- equipped {}H, driven caster "
+                     "state {}->{} (CheckCast reason {}), magicka {:.0f}->{:.0f} (cost {:.0f})",
+                     id, a_follower->GetName() ? a_follower->GetName() : "?",
+                     a_spell->GetName() ? a_spell->GetName() : "?", a_spell->GetFormID(),
+                     src == CS::kRightHand ? "R" : "L", stBefore, stAfter,
+                     static_cast<std::uint32_t>(reason), have, after, cost);
+        return true;
     }
 
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice) {
