@@ -2362,6 +2362,26 @@ namespace MFO::Logistics {
                                 constexpr RE::FormID kGold001 = 0x0000000F;   // see TakeGold
                                 if (base->GetFormID() == kGold001)
                                     lootable = loose = true;
+                            } else if (a_cat == Category::Potions) {
+                                // Loose potion on a surface (marth field: Stenvar
+                                // walked past a health potion on a table). Same
+                                // route-2b acquire as loose gold -- walk to it,
+                                // ActivateRef at arrival, never an in-place
+                                // PickUpObject. The ownership gate below
+                                // (ref->GetOwner) still skips inn/shop/home stock.
+                                // Match LootPotions' item test (want + low-power
+                                // floor) so a loose potion qualifies iff the loot
+                                // would take it.
+                                if (auto* alc = base->As<RE::AlchemyItem>()) {
+                                    const bool wantOk =
+                                        a_potionWant == RE::ActorValue::kNone
+                                            ? IsDrinkablePotion(alc)
+                                            : (PotionRestores(alc) == a_potionWant);
+                                    const float fl  = PotionLootFloor();
+                                    const float mag = PotionMagnitude(alc);
+                                    if (wantOk && !(fl > 0.0f && mag > 0.0f && mag < fl))
+                                        lootable = loose = true;
+                                }
                             }
                         }
                     }
