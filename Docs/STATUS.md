@@ -8,7 +8,31 @@
 >
 > **Last updated:** 2026-08-13 (SHIPPED v1.0.63 — tag pushed, releases/v1.0.63/, Nexus bbcode ready) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶ §18 ADDON-API REFACTOR — IN PROGRESS (on `main`, staged, CI-green each stage).**
+> **▶▶ RESUME HERE (2026-08-17 PM) — two releases staged + a crash queue.**
+> - **main-file build `5abb9afb` (deployed both decks):** #76 weapon force-hold + stance clamp
+>   (held while the equip gambit's condition is TRUE, released false/combat-end) + FWPN co-save
+>   (persist force-locks, clear stale on load) + the loot/gambit batch. Fable-reviewed + fixed
+>   (SEV-1 g_forcedWeapon map race → g_forcedMx + snapshot-on-save; SEV-2 preemption → release
+>   only when scan COMPLETED `!stopped&&!suppressed`; SEV-2 combat-flap 2-tick debounce; SEV-2/3
+>   0xFF weapon → both-hands sweep). CHANGELOG v1.0.64 written (uncommitted stamp).
+> - **ADDON fixes committed IN WORKTREE ONLY — branch `worktree-agent-a24c0fa7aa702f54b`, commit
+>   `930c34d` — NOT pushed/CI'd. FF-clean onto main.** §18 Fable pass (no SEV-1) fixes: **PRGN v4**
+>   plugin-qualified class identity (fixes addon-absent class wipe; v3+v<3 readers KEPT, byte
+>   accounting VERIFIED correct by me), OR-group-tail prereq fix (Progression.cpp ExtractCondPrereqs
+>   + ConditionPlayerGated, prev-OR track), PerkKnownToCatalog (unknown prereq → engine), board
+>   economy strings (was hardcoded "5/level"/"1 per 2 levels"; now from snapshot), stale diag strings.
+> - **NEXT:** (1) FF `930c34d` → CI → deploy both decks. (2) marth loads `5abb9afb`/new build → I
+>   check log: save undamaged (economy `perk 1/2, skill/lvl 2`, perks correct), dagger-hold works,
+>   + flip bProgCatalogDump for finding #3 (dead-rank-locks-node, deferred pending census). (3) cut
+>   **v1.0.64** (`release.sh 1.0.64`; main files only — release.sh already excludes the addon) +
+>   the **Progression Add-On** release with kits. Last PUBLIC Nexus = v1.0.61; bbcode spans 1.0.62→64.
+> - **CRASH QUEUE** ([[crash-reports-cast-target-1.5.x]]): 3 pastebins — MFO AV in `act.cast_target`
+>   (poisoned ptr +0x13) on SE 1.5.97 + a tbbmalloc/EngineFixes heap crash. Diagnose via [bc] + CI PDB.
+> - **THEN roadmap:** town update (#31), then the Roster addon (2nd ESL).
+> - Deferred/known: MAP.md untracked+stale (says PRGN v2); PRGN v3-save wipe only fully closed for
+>   v4+ saves (deck v3 save self-heals to v4 on next save).
+>
+> **▶ §18 ADDON-API REFACTOR — DONE (Stages 1-4 shipped; addon fixes pending FF above).**
 > Rebuilt fresh on current main (NOT the stale `esl-api-wip` branch, which predates the
 > 2026-08-15/16 perk-gate fixes) using that branch only as reference. Contract = §18.6.
 > - **STAGE 1 DONE (registration seam)** — DLL `1e3b…`→ **`804bd21`** (CI 31987673446): MFO.esp
