@@ -88,7 +88,87 @@ def val_eq(prefix, a, b):
         return False
 
 
+def walk_all_controls(node, acc):
+    """Every config.json item with a valueOptions block (any sourceType).
+    Unlike ModSetting controls, GlobalValue controls carry no 'id' (they bind
+    via sourceForm), so keying on 'id' would miss them."""
+    if isinstance(node, dict):
+        if isinstance(node.get("valueOptions"), dict):
+            acc.append(node)
+        for v in node.values():
+            walk_all_controls(v, acc)
+    elif isinstance(node, list):
+        for v in node:
+            walk_all_controls(v, acc)
+
+
+def audit_globalvalue_config(path):
+    """Standalone gate for a GlobalValue-bound config (e.g. an addon that ships
+    its economy tab entirely in its own ESL + config, with NO ModSetting store /
+    Config.cpp wiring). Checks the MCM Helper schema is well-formed: modName /
+    displayName / minMcmVersion present, and every GlobalValue slider carries a
+    sane sourceForm + min/max/step + in-range defaultValue."""
+    errs = []
+    p = Path(path)
+    if not p.exists():
+        print(f"FAIL: missing {path}", file=sys.stderr)
+        return 1
+    try:
+        cfg = json.loads(p.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as e:
+        print(f"FAIL: {path} is not valid JSON ({e})", file=sys.stderr)
+        return 1
+
+    for k in ("modName", "displayName"):
+        if not cfg.get(k):
+            errs.append(f"top-level '{k}' missing or empty")
+    mmv = cfg.get("minMcmVersion")
+    if not isinstance(mmv, int) or mmv <= 0:
+        errs.append(f"minMcmVersion must be a positive int (got {mmv!r}) -- "
+                    "MCM Helper silently drops a config without it")
+
+    controls = []
+    walk_all_controls(cfg, controls)
+    gv = [c for c in controls if str(c.get("valueOptions", {}).get("sourceType", "")) == "GlobalValue"]
+    if not gv:
+        errs.append("no GlobalValue controls found -- is this the right config?")
+
+    for c in gv:
+        cid = c.get("id", "?")
+        vo = c["valueOptions"]
+        sf = vo.get("sourceForm")
+        if not (isinstance(sf, str) and "|" in sf):
+            errs.append(f"{cid} | GlobalValue sourceForm must be 'Plugin|FormID' (got {sf!r})")
+        if c.get("type") == "slider":
+            mn, mx, step, dv = vo.get("min"), vo.get("max"), vo.get("step"), vo.get("defaultValue")
+            nums = {"min": mn, "max": mx, "step": step, "defaultValue": dv}
+            for name, val in nums.items():
+                if not isinstance(val, (int, float)):
+                    errs.append(f"{cid} | slider '{name}' must be numeric (got {val!r})")
+            if all(isinstance(v, (int, float)) for v in nums.values()):
+                if mn >= mx:
+                    errs.append(f"{cid} | slider min {mn} >= max {mx}")
+                if step <= 0:
+                    errs.append(f"{cid} | slider step {step} must be > 0")
+                if not (mn <= dv <= mx):
+                    errs.append(f"{cid} | slider defaultValue {dv} out of range [{mn},{mx}]")
+
+    print(f"MFO MCM audit (GlobalValue) -- {path}")
+    print(f"  modName {cfg.get('modName')!r}, {len(gv)} GlobalValue control(s), minMcmVersion {mmv}")
+    if errs:
+        print(f"\nFAIL ({len(errs)}):", file=sys.stderr)
+        for e in sorted(errs):
+            print("  " + e, file=sys.stderr)
+        return 1
+    print("\nPASS")
+    return 0
+
+
 def main():
+    # A config.json path argument runs the GlobalValue-config gate (addon tab);
+    # no argument runs the MFO 5-way ModSetting audit (the default merge gate).
+    if len(sys.argv) > 1:
+        return audit_globalvalue_config(sys.argv[1])
     for p in (CONFIG_JSON, DEFAULTS_INI, USER_INI, CONFIG_CPP):
         if not p.exists():
             print(f"FAIL: missing {p.relative_to(ROOT)}", file=sys.stderr)

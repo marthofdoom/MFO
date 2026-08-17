@@ -19,7 +19,9 @@ echo "MFO ${VER} — test package"
 # 1. ESP + SEQ, always regenerated so the zip can never contain a stale plugin.
 python3 MFO_GenerateESP.py out >/dev/null
 python3 tools/audit_esp.py            # PASS is a merge gate; fail here stops the package
-python3 tools/audit_mcm.py          # #55 gate: every MCM toggle wired in all 5 places
+python3 tools/audit_mcm.py          # #55 gate: every MFO MCM toggle wired in all 5 places
+# The addon's own GlobalValue MCM config (economy tab, ships in the ESL).
+python3 tools/audit_mcm.py out/MCM/Config/MFO_Progression/config.json
 echo
 
 # 2. DLL from the latest successful CI run.
@@ -41,12 +43,14 @@ cp out/MFO.esp        "$STAGE/pkg/"
 # separately; this is the iteration path only.
 cp out/MFO_Progression.esl "$STAGE/pkg/"
 cp out/SEQ/MFO.seq    "$STAGE/pkg/SEQ/"
+# The addon's OWN MCM quest SEQ (its economy tab) -- rides with the ESL.
+cp out/SEQ/MFO_Progression.seq "$STAGE/pkg/SEQ/"
 cp "$STAGE/dll/MFO.dll" "$STAGE/pkg/SKSE/Plugins/"
 [ -f out/SKSE/Plugins/MFO.ini ] && cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
 [ -d out/SKSE/Plugins/MFO ] && cp -r out/SKSE/Plugins/MFO "$STAGE/pkg/SKSE/Plugins/"   # baked board fonts
 cp THIRD-PARTY-NOTICES.md "$STAGE/pkg/"   # ships with every build (INVARIANTS #42a)
-[ -d out/MCM ] && cp -r out/MCM "$STAGE/pkg/"   # MCM Helper config.json
-[ -d out/Scripts ] && cp -r out/Scripts "$STAGE/pkg/"   # MCM Helper compiled script (MFO_MCM.pex)
+[ -d out/MCM ] && cp -r out/MCM "$STAGE/pkg/"   # MCM Helper configs (MFO + MFO_Progression)
+[ -d out/Scripts ] && cp -r out/Scripts "$STAGE/pkg/"   # MCM compiled scripts (MFO_MCM.pex + MFOP_MCM.pex)
 
 OUT="$PWD/MFO-test-v${VER}.zip"
 rm -f "$OUT"

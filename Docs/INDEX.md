@@ -135,6 +135,14 @@ family's one principle warns about.
    and suffix-matched economy GLOBs. `FOLLOWER-PROGRESSION-ESL-DESIGN.md` §18 is
    the design rationale; ADDON-API.md is the authored contract a third party
    builds against. `MFO_Progression.esl` is its worked example.
+12. **TOOLING.md** (before touching the build pipeline) — the consolidated
+   Linux-native toolchain end to end: Papyrus compile (`tools/compile.sh`), the
+   MCM-Helper config pattern (empty `extends MCM_ConfigBase` shim + QUST VMAD +
+   `config.json` + SEQ; GlobalValue vs ModSettingFloat binding; the DLL
+   live-reads on menu close), the ESP/ESL generator (`MFO_GenerateESP.py`,
+   FormID bands / master-index rules, record helpers, the addon-manifest seam),
+   the audits (`audit_esp.py` / `audit_mcm.py`) as merge gates, and the two-deck
+   deploy flow.
 
 ## Sibling projects — reuse, don't re-derive
 

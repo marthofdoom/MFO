@@ -120,12 +120,20 @@ PROG_REQUIRED = {
     0x851: ('FLST', "MFOP_ClassDef_Ranged",     ['EDID', 'LNAM']),
     0x852: ('FLST', "MFOP_ClassDef_Mage",       ['EDID', 'LNAM']),
     0x85F: ('FLST', "MFOP_Classes",             ['EDID', 'LNAM']),
+    # The addon's OWN MCM quest — carries MFOP_MCM (extends MCM_ConfigBase); the
+    # tab ships entirely inside the ESL + its config. Start-game-enabled, NOT
+    # run-once, so it MUST be in SEQ/MFO_Progression.seq (checked below).
+    0x870: ('QUST', "MFOP_MCMQuest",            ['EDID', 'DNAM', 'VMAD']),
 }
+
+# The addon's start-game-enabled non-run-once quests, listed in its own SEQ
+# (SEQ/MFO_Progression.seq) — same rule as the main plugin's SEQ_EXPECTED.
+PROG_SEQ_EXPECTED = {0x870}
 
 # basename -> (required table, seq expectations or None [no SEQ file at all])
 PROFILES = {
     "MFO.esp":             (REQUIRED, SEQ_EXPECTED),
-    "MFO_Progression.esl": (PROG_REQUIRED, None),
+    "MFO_Progression.esl": (PROG_REQUIRED, PROG_SEQ_EXPECTED),
 }
 
 GRUP_HDR = 24
@@ -329,17 +337,19 @@ def audit_one(esp):
                 if (fid >> 24) != 0x00:
                     errors.append(f"FLST 0x{local:03X}: LNAM {fid:08X} not a Skyrim.esm form")
 
-    # 8. SEQ (main plugin only -- the addon carries no quests, so a SEQ would
-    # itself be a bug)
+    # 8. SEQ -- each plugin that has start-game-enabled non-run-once quests
+    # needs its OWN SEQ (Data/SEQ/<plugin-stem>.seq). A profile with
+    # seq_expected is None carries no quests, so a SEQ would itself be a bug.
     if seq_expected is not None:
-        seq_path = os.path.join(os.path.dirname(esp), "SEQ", "MFO.seq")
+        seq_name = os.path.splitext(base)[0] + ".seq"
+        seq_path = os.path.join(os.path.dirname(esp), "SEQ", seq_name)
         if not os.path.exists(seq_path):
-            errors.append("SEQ/MFO.seq missing -- start-game-enabled non-run-once quests never start "
+            errors.append(f"SEQ/{seq_name} missing -- start-game-enabled non-run-once quests never start "
                           "on an existing save without it")
         else:
             raw = open(seq_path, 'rb').read()
             if len(raw) % 4:
-                errors.append(f"SEQ/MFO.seq length {len(raw)} is not a multiple of 4")
+                errors.append(f"SEQ/{seq_name} length {len(raw)} is not a multiple of 4")
             listed = {struct.unpack('<I', raw[i:i + 4])[0] & 0xFFFFFF for i in range(0, len(raw) - 3, 4)}
             for want in seq_expected:
                 if want not in listed:

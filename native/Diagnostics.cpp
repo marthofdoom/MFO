@@ -14,6 +14,7 @@
 #include "Packages.h"
 #include "CasterConsent.h"
 #include "CombatStyle.h"
+#include "ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
 
 // The M3 test instrument.
 //
@@ -95,6 +96,12 @@ namespace MFO::Diagnostics {
                         spdlog::info("[config] re-read after Journal/MCM close (HUD {})",
                                      Config::g_showHud.load() ? "on" : "off");
                     });
+                    // An optional progression addon may bind MCM GlobalValue
+                    // sliders to its economy GLOBs; re-read them so a slider edit
+                    // is live now. Generic — the DLL never names any addon; this
+                    // is a no-op unless an addon manifest is present. OnMenuClose
+                    // marshals to the true main thread itself (g_econ discipline).
+                    ProgAllocator::OnMenuClose();
                 }
                 return RE::BSEventNotifyControl::kContinue;
             }

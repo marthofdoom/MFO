@@ -183,7 +183,16 @@ namespace MFO::ProgAllocator {
 
     // kPostLoadGame/kNewGame, main thread, AFTER the co-save loaded: start
     // the level poll and queue the guarded reapply for every enrolled record.
+    // Also re-reads the economy so a save's persisted GLOB values apply live.
     void OnPostLoad();
+
+    // MCM/Journal close: re-read the economy knobs from the manifests so an
+    // MCM GlobalValue slider (which writes a GLOB's runtime value) takes effect
+    // this session, not at next load. Marshals to the true main thread itself,
+    // so it is safe to call from the MenuSink's task worker. No-op when the
+    // addon is absent. The DLL discovers the economy GLOBs generically off the
+    // addon manifest — it never names any addon plugin.
+    void OnMenuClose();
 
     // ── the backend verbs (main thread; named [prog] reject lines) ──────────
     bool Enroll(RE::Actor* a_actor);

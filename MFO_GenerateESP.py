@@ -19,6 +19,7 @@ FormID band is a FROZEN generator<->DLL contract (DESIGN.md 8.2). One master
 Usage:  python3 MFO_GenerateESP.py [out_dir]     (default: ./out)
 """
 
+import json
 import os
 import struct
 import sys
@@ -1023,7 +1024,15 @@ PGID_CLASSDEF_MAGE      = OWN_PROG | 0x852
 # 0x853-0x85E reserved: more class-def FLSTs
 PGID_CLASSES            = OWN_PROG | 0x85F  # FLST classes list — manifest entry[1]
 
-PROG_NEXT_OBJECT_ID     = 0x860
+# The addon's OWN MCM Helper quest — carries MFOP_MCM (extends MCM_ConfigBase),
+# rendered from Data/MCM/Config/MFO_Progression/config.json. Start-game-enabled,
+# NOT run-once, so it MUST ride the addon's own SEQ (SEQ/MFO_Progression.seq).
+# Everything the tab needs ships in the ESL + its Scripts/config — MFO.esp and
+# MFO.dll carry NO reference to it (the DLL discovers the economy GLOBs
+# generically off the manifest, exactly as it would a third-party addon).
+PGID_MCM_QUEST          = OWN_PROG | 0x870  # QUST MFOP_MCMQuest (MFOP_MCM script)
+
+PROG_NEXT_OBJECT_ID     = 0x871
 
 # Vanilla AVIF forms (Skyrim.esm) for the class-skill lists — DUMPED from the
 # shipped master (doctrine: mirror the disk, never a wiki). AVOneHanded ..
@@ -1170,9 +1179,27 @@ def prog_mesg(fid, edid, full):
     return record('MESG', fid, 0, body)
 
 
+def make_prog_mcm_quest():
+    # The addon's OWN MCM Helper quest — same shape as MFO.esp's MFO_MCMQuest
+    # (make_mcm_quest), mirrored into the ESL. Start-game-enabled, NOT run-once
+    # (SkyUI cannot re-register a run-once quest); zero VMAD properties, MCM
+    # Helper renders from Data/MCM/Config/MFO_Progression/config.json and derives
+    # modName from this plugin's stem. The VMAD script attach is just a name
+    # string, so it needs no new master (the ESL already masters Skyrim.esm +
+    # MFO.esp). MUST be listed in SEQ/MFO_Progression.seq or it never starts on
+    # an existing save.
+    vmad = VMADBuilder()
+    vmad.add_script("MFOP_MCM", [])
+    body = subrec('EDID', zstr("MFOP_MCMQuest")) + subrec('FULL', zstr("MFO Progression"))
+    body += subrec('VMAD', vmad.build())
+    body += subrec('DNAM', qust_dnam(0x0011)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
+    return record('QUST', PGID_MCM_QUEST, 0, body)
+
+
 def make_progression_esl():
     data = make_prog_tes4()
-    # Top-group order mirrors Skyrim.esm's relative order: KYWD < GLOB < FLST.
+    # Top-group order mirrors Skyrim.esm's relative order: KYWD < GLOB < QUST
+    # < FLST < MESG (QUST sorts before FLST in the shipped master).
     kywd_body = subrec('EDID', zstr("MFOP_Enrolled")) + subrec('CNAM', struct.pack('<I', 0))
     data += group('KYWD', record('KYWD', PGID_ENROLLED_KYWD, 0, kywd_body))
     glob_body = b''
@@ -1183,6 +1210,8 @@ def make_progression_esl():
     for _df, _de, _nf, _ne, _disp, stanceFid, stanceEdid, stanceVal, _sk in PROG_CLASSES:
         glob_body += prog_glob(stanceFid, stanceEdid, float(stanceVal), 's')
     data += group('GLOB', glob_body)
+    # The addon's own MCM quest (its economy tab).
+    data += group('QUST', make_prog_mcm_quest())
     flst_body = b''
     # §18.6 the addon MANIFEST — enumerated by the DLL; entry[0] MUST be the
     # MFO.esp sentinel keyword, entry[1] the classes-list FLST (Stage 2), then
@@ -1212,6 +1241,89 @@ def make_progression_esl():
     return data
 
 
+# ── the addon's OWN MCM (MCM Helper) — GlobalValue-bound economy sliders ──────
+# The addon ships its own tab entirely inside the ESL + this config; MFO.esp /
+# MFO.dll carry NO reference to it. Each slider binds sourceType "GlobalValue"
+# to one economy GLOB by "MFO_Progression.esl|0xLOCALID" — moving the slider
+# writes the GLOB's RUNTIME value, and the DLL re-reads it on MCM close
+# (ProgAllocator::OnMenuClose, discovered generically off the manifest). No
+# ModSetting store / Config.cpp wiring is involved (that is MFO.esp's MCM only).
+# defaultValue mirrors each GLOB's record default in PROG_GLOBS.
+#   (localFid, label, help, min, max, step, default)
+PROG_MCM_PLUGIN = "MFO_Progression.esl"
+PROG_MCM_SLIDERS = [
+    (PGID_LEVELS_PER_PERK, "Levels per perk point",
+     "Follower earns one perk point every N levels. Lower = more perks.",
+     1, 10, 1, 2),
+    (PGID_SKILL_PER_LEVEL, "Auto skill points per level",
+     "Skill points auto-scaled onto a class follower each level (class builds). "
+     "0 disables class auto-scaling.",
+     0, 10, 1, 2),
+    (PGID_MANUAL_SKILL, "Manual skill points per level",
+     "Skill points a follower on MANUAL allocation earns each level (you spend "
+     "them by hand for mage / multiclass builds). 0 disables the manual pool.",
+     0, 10, 1, 2),
+    (PGID_SHARED_DIVISOR, "Benched growth divisor",
+     "A benched (not-following) follower grows at 1/N the rate. 1 = full rate, "
+     "2 = half.",
+     1, 10, 1, 2),
+    (PGID_RESPEC_RAPPORT, "Respec rapport cost",
+     "Rapport spent to respec a follower's perks.",
+     0, 2000, 25, 500),
+    (PGID_SKILL_CAP, "Skill cap",
+     "Ceiling the auto-scaler may raise a follower's base skill to.",
+     50, 100, 5, 100),
+]
+
+
+def prog_mcm_config():
+    """The MFO_Progression config.json dict — one Economy page of GlobalValue
+    sliders. minMcmVersion mirrors MFO/MEO (9)."""
+    # NOTE: GlobalValue controls carry NO "id" — binding is via sourceForm, and
+    # the proven installed configs (Requiem Customizable Spells, TrueHUD) omit
+    # it. An "id" is the ModSetting key, which does not apply here.
+    content = [{"text": "Economy", "type": "header"}]
+    for fid, label, help_, mn, mx, step, dflt in PROG_MCM_SLIDERS:
+        content.append({
+            "text": label,
+            "type": "slider",
+            "help": help_,
+            "valueOptions": {
+                "min": mn, "max": mx, "step": step,
+                "sourceType": "GlobalValue",
+                "sourceForm": f"{PROG_MCM_PLUGIN}|0x{fid & 0xFFF:03X}",
+                "defaultValue": dflt,
+            },
+        })
+    return {
+        "modName": "MFO_Progression",
+        "displayName": "MFO — Follower Progression",
+        "minMcmVersion": 9,
+        "cursorFillMode": "topToBottom",
+        "pages": [{
+            "pageDisplayName": "Economy",
+            "cursorFillMode": "topToBottom",
+            "content": content,
+        }],
+    }
+
+
+def write_prog_mcm_files(out_dir):
+    """Emit Data/MCM/Config/MFO_Progression/{config.json,settings.ini}.
+    settings.ini is minimal — GlobalValue sliders need no ModSetting defaults
+    store; the folder is mirrored from MEO/MFO so MCM Helper finds the config."""
+    cdir = os.path.join(out_dir, 'MCM', 'Config', 'MFO_Progression')
+    os.makedirs(cdir, exist_ok=True)
+    with open(os.path.join(cdir, 'config.json'), 'w') as f:
+        json.dump(prog_mcm_config(), f, indent='\t')
+    # No ModSetting-backed controls => no default keys to register. A minimal
+    # (comment-only) settings.ini keeps the folder shape consistent with MFO/MEO.
+    with open(os.path.join(cdir, 'settings.ini'), 'w', encoding='utf-8-sig') as f:
+        f.write("; MFO_Progression MCM: all controls are GlobalValue-bound "
+                "(no ModSetting store).\n")
+    return cdir
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "out"
     os.makedirs(out_dir, exist_ok=True)
@@ -1235,12 +1347,16 @@ def main():
         f.write(data)
 
     # The progression addon — a SEPARATE, OPTIONAL plugin (detected at
-    # runtime by the DLL; absent = feature off, never an error). No SEQ:
-    # it carries no quests.
+    # runtime by the DLL; absent = feature off, never an error). It now carries
+    # its OWN MCM quest, so it ALSO gets its own SEQ + MCM config (below).
     prog_path = os.path.join(out_dir, "MFO_Progression.esl")
     prog_data = make_progression_esl()
     with open(prog_path, 'wb') as f:
         f.write(prog_data)
+
+    # The addon's own MCM config (GlobalValue economy sliders) — everything the
+    # tab needs ships with the ESL; MFO.esp / MFO.dll stay ignorant of it.
+    prog_mcm_dir = write_prog_mcm_files(out_dir)
 
     # SEQ: a start-game-enabled quest WITHOUT the Run Once flag never starts on
     # an existing save unless it is listed in Data/SEQ/<plugin>.seq (a flat
@@ -1257,10 +1373,18 @@ def main():
         f.write(struct.pack('<I', FID_RETREAT_QUEST))
         f.write(struct.pack('<I', FID_TRADE_QUEST))
 
+    # The addon's OWN SEQ (its MCM quest, same reasoning as MFO.seq).
+    prog_seq_path = os.path.join(seq_dir, "MFO_Progression.seq")
+    with open(prog_seq_path, 'wb') as f:
+        f.write(struct.pack('<I', PGID_MCM_QUEST))
+
     print(f"MFO {VERSION}")
     print(f"Written: {out_path} ({len(data):,} bytes)")
     print(f"Written: {seq_path} (5 start-game-enabled quests: MCM, Command, Loot, Retreat, Trade)")
-    print(f"Written: {prog_path} ({len(prog_data):,} bytes) — optional progression addon, no SEQ")
+    print(f"Written: {prog_path} ({len(prog_data):,} bytes) — optional progression addon")
+    print(f"Written: {prog_seq_path} (1 start-game-enabled quest: MFOP MCM)")
+    print(f"Written: {prog_mcm_dir}/config.json + settings.ini "
+          f"({len(PROG_MCM_SLIDERS)} GlobalValue economy sliders)")
     print()
     print("Records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{NEXT_OBJECT_ID:03X}")
@@ -1299,6 +1423,7 @@ def main():
         print(f"  MESG  0x{nameFid & 0xFFF:03X}        {nameEdid} (FULL \"{disp}\" — class display name)")
     for _df, _de, _nf, _ne, disp, stanceFid, stanceEdid, stanceVal, _sk in PROG_CLASSES:
         print(f"  GLOB  0x{stanceFid & 0xFFF:03X}        {stanceEdid} = {stanceVal} (#65 stance mirror)")
+    print(f"  QUST  0x{PGID_MCM_QUEST & 0xFFF:03X}        MFOP_MCMQuest (MFOP_MCM script; addon MCM tab, in SEQ)")
     for defFid, defEdid, _nf, _ne, _disp, _sf, _se, _sv, skills in PROG_CLASSES:
         print(f"  FLST  0x{defFid & 0xFFF:03X}        {defEdid} (class-def: MESG + {len(skills)} AVIF + _Stance)")
     print(f"  FLST  0x{PGID_CLASSES & 0xFFF:03X}        MFOP_Classes ({len(PROG_CLASSES)} class-def(s); manifest entry[1])")

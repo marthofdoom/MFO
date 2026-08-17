@@ -1,0 +1,96 @@
+{
+	"modName": "MFO_Progression",
+	"displayName": "MFO \u2014 Follower Progression",
+	"minMcmVersion": 9,
+	"cursorFillMode": "topToBottom",
+	"pages": [
+		{
+			"pageDisplayName": "Economy",
+			"cursorFillMode": "topToBottom",
+			"content": [
+				{
+					"text": "Economy",
+					"type": "header"
+				},
+				{
+					"text": "Levels per perk point",
+					"type": "slider",
+					"help": "Follower earns one perk point every N levels. Lower = more perks.",
+					"valueOptions": {
+						"min": 1,
+						"max": 10,
+						"step": 1,
+						"sourceType": "GlobalValue",
+						"sourceForm": "MFO_Progression.esl|0x802",
+						"defaultValue": 2
+					}
+				},
+				{
+					"text": "Auto skill points per level",
+					"type": "slider",
+					"help": "Skill points auto-scaled onto a class follower each level (class builds). 0 disables class auto-scaling.",
+					"valueOptions": {
+						"min": 0,
+						"max": 10,
+						"step": 1,
+						"sourceType": "GlobalValue",
+						"sourceForm": "MFO_Progression.esl|0x803",
+						"defaultValue": 2
+					}
+				},
+				{
+					"text": "Manual skill points per level",
+					"type": "slider",
+					"help": "Skill points a follower on MANUAL allocation earns each level (you spend them by hand for mage / multiclass builds). 0 disables the manual pool.",
+					"valueOptions": {
+						"min": 0,
+						"max": 10,
+						"step": 1,
+						"sourceType": "GlobalValue",
+						"sourceForm": "MFO_Progression.esl|0x809",
+						"defaultValue": 2
+					}
+				},
+				{
+					"text": "Benched growth divisor",
+					"type": "slider",
+					"help": "A benched (not-following) follower grows at 1/N the rate. 1 = full rate, 2 = half.",
+					"valueOptions": {
+						"min": 1,
+						"max": 10,
+						"step": 1,
+						"sourceType": "GlobalValue",
+						"sourceForm": "MFO_Progression.esl|0x804",
+						"defaultValue": 2
+					}
+				},
+				{
+					"text": "Respec rapport cost",
+					"type": "slider",
+					"help": "Rapport spent to respec a follower's perks.",
+					"valueOptions": {
+						"min": 0,
+						"max": 2000,
+						"step": 25,
+						"sourceType": "GlobalValue",
+						"sourceForm": "MFO_Progression.esl|0x805",
+						"defaultValue": 500
+					}
+				},
+				{
+					"text": "Skill cap",
+					"type": "slider",
+					"help": "Ceiling the auto-scaler may raise a follower's base skill to.",
+					"valueOptions": {
+						"min": 50,
+						"max": 100,
+						"step": 5,
+						"sourceType": "GlobalValue",
+						"sourceForm": "MFO_Progression.esl|0x807",
+						"defaultValue": 100
+					}
+				}
+			]
+		}
+	]
+}

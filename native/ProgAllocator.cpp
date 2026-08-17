@@ -1058,6 +1058,47 @@ namespace MFO::ProgAllocator {
             return -1;
         }
 
+        // §18.6 Stage 3: (re-)read EVERY economy knob from the enumerated addon
+        // manifests into g_econ. **Main-thread only** — it writes g_econ (the
+        // §5 discipline). Re-runnable by design: called at Init, on post-load
+        // (a save persists GLOB *values*, so the player's last tuning applies),
+        // and on MCM/Journal close (an MCM GlobalValue slider writes the GLOB's
+        // RUNTIME value). Reads glob->value — the live value — so a slider edit
+        // or a console `set` takes effect without a reload. Classes are static
+        // and are NOT re-parsed here. This is FULLY GENERIC: it walks
+        // Progression::Addons() and matches by editor-id SUFFIX; it never names
+        // any addon plugin, so the DLL stays ignorant of the addon it reads —
+        // exactly as it would a third-party addon.
+        void ReloadEconomy() {
+            bool resolvedEcon[kEconKnobCount] = {};   // which knobs a manifest set
+            for (const auto& addon : Progression::Addons()) {
+                auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
+                if (!manifest) continue;
+                for (auto* form : manifest->forms) {
+                    if (!form || form == Forms::g_addonSentinel) continue;
+                    auto* glob = form->As<RE::TESGlobal>();
+                    if (!glob) continue;   // FLSTs (classes) are Init's job, not economy
+                    const int idx = AssignEconomyGlob(glob);
+                    const char* edid = glob->GetFormEditorID();
+                    if (idx < 0) {
+                        spdlog::warn("[prog] manifest {:08X}: GLOB {:08X} \"{}\" matches no "
+                                     "economy knob — ignored", addon.manifestID,
+                                     glob->GetFormID(), edid ? edid : "");
+                    } else {
+                        if (idx < kEconKnobCount) resolvedEcon[idx] = true;
+                        spdlog::info("[prog] economy: {} = {:g} (from {})",
+                                     idx < kEconKnobCount ? kEconKnobSuffixes[idx] : "_DevCmd",
+                                     glob->value, edid ? edid : "?");
+                    }
+                }
+            }
+            // Name every knob that fell back to the DLL default (diagnosable).
+            for (int k = 0; k < kEconKnobCount; ++k)
+                if (!resolvedEcon[k])
+                    spdlog::info("[prog] economy: {} absent from all manifests — DLL default",
+                                 kEconKnobSuffixes[k]);
+        }
+
         // AVIF → ActorValue through the LIVE ActorValueList — no hardcoded
         // AVIF ids, so a load order that replaces the records still maps.
         RE::ActorValue MapSkillAvif(RE::TESForm* a_form) {
@@ -1234,7 +1275,11 @@ namespace MFO::ProgAllocator {
         // RECORD DEFAULTS (kDataLoaded is pre-save, §10); _DevCmd stores the
         // pointer (read LIVE). unused (unread) legacy GLOBs — perk rate 0x802 /
         // veteran mult 0x806 — are simply never in the manifest.
-        bool resolvedEcon[kEconKnobCount] = {};   // which knobs a manifest set
+        // §18.6 Stage 3: the ECONOMY read is factored into ReloadEconomy() so
+        // it can re-run on post-load and MCM close (live GLOB values). Run it
+        // once here for the initial (record-default) latch; the loop below then
+        // parses only the CLASSES (static — parsed once at Init).
+        ReloadEconomy();
         for (const auto& addon : Progression::Addons()) {
             auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
             if (!manifest) continue;   // enumerated moments ago; belt and braces
@@ -1246,19 +1291,8 @@ namespace MFO::ProgAllocator {
                     else spdlog::warn("[prog] manifest {:08X}: extra FLST {:08X} ignored "
                                       "(one classes list per manifest)",
                                       addon.manifestID, flst->GetFormID());
-                } else if (auto* glob = form->As<RE::TESGlobal>()) {
-                    const int idx = AssignEconomyGlob(glob);
-                    const char* edid = glob->GetFormEditorID();
-                    if (idx < 0) {
-                        spdlog::warn("[prog] manifest {:08X}: GLOB {:08X} \"{}\" matches no "
-                                     "economy knob — ignored", addon.manifestID,
-                                     glob->GetFormID(), edid ? edid : "");
-                    } else {
-                        if (idx < kEconKnobCount) resolvedEcon[idx] = true;
-                        spdlog::info("[prog] economy: {} = {:g} (from {})",
-                                     idx < kEconKnobCount ? kEconKnobSuffixes[idx] : "_DevCmd",
-                                     glob->value, edid ? edid : "?");
-                    }
+                } else if (form->As<RE::TESGlobal>()) {
+                    // economy GLOB — read by ReloadEconomy() above; nothing here.
                 } else {
                     spdlog::warn("[prog] manifest {:08X}: entry {:08X} is neither an FLST "
                                  "(classes) nor a GLOB (economy) — ignored",
@@ -1293,14 +1327,6 @@ namespace MFO::ProgAllocator {
                          addon.plugin, addon.manifestID, parsed);
         }
 
-        // Name every knob that fell back to the DLL default (diagnosable — the
-        // old ReadGlob warned per missing GLOB; this preserves that on the
-        // manifest path).
-        for (int k = 0; k < kEconKnobCount; ++k)
-            if (!resolvedEcon[k])
-                spdlog::info("[prog] economy: {} absent from all manifests — DLL default",
-                             kEconKnobSuffixes[k]);
-
         g_ready = true;
         spdlog::info("[prog] allocator ready: perk = 1 per {} level(s), skill/lvl {:g}, "
                      "manual skill/lvl {}, sharedDiv {}, respec {:g} rapport, cap {:g}, "
@@ -1318,6 +1344,10 @@ namespace MFO::ProgAllocator {
                              "inert this session (data preserved, nothing applied)", g_prog.size());
             return;
         }
+        // (a) A save persists GLOB *values*, so a slider the player set last
+        // session is in the loaded globals now — re-read the economy so it is
+        // live, not the record default latched at kDataLoaded (§10).
+        ReloadEconomy();
         // Fresh session: everything reapplies lazily (the poll retries until
         // each enrolled actor resolves — P3's guarded shape, never eager).
         for (auto& [id, st] : g_prog) st.applied = false;
@@ -1332,6 +1362,24 @@ namespace MFO::ProgAllocator {
         PublishBoardViews();
         spdlog::info("[prog] post-load: {} progression record(s); level poll started (gen {})",
                      g_prog.size(), gen);
+    }
+
+    void OnMenuClose() {
+        // (b) The MenuSink calls this on MCM/Journal close from its task worker.
+        // An MCM GlobalValue slider writes the economy GLOB's RUNTIME value; we
+        // re-read it so the change is live this session (mirrors the Config::Read
+        // MenuSink). g_econ / g_ready are touched ONLY on the true main thread,
+        // so all of it rides MainThread::Post (ProgAllocator's g_prog idiom),
+        // never the AddTask worker — do NOT read/write g_econ off-thread.
+        MainThread::Post([]() {
+            if (!g_ready) return;   // addon absent — nothing to reload
+            ReloadEconomy();
+            spdlog::info("[prog] economy reloaded on menu close: skill/lvl={:g}, "
+                         "perk 1/{} lvl, manual/lvl {}, sharedDiv {}, respec {:g}, cap {:g}",
+                         g_econ.skillPointsPerLevel, g_econ.levelsPerPerkPoint,
+                         g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
+                         g_econ.respecRapportCost, g_econ.skillCap);
+        });
     }
 
     // ── board views (component 3) ───────────────────────────────────────────
