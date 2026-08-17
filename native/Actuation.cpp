@@ -999,8 +999,8 @@ namespace MFO::Actuation {
     constexpr std::uint32_t kMaxForcedWeapons = 64;   // party is tiny; a generous cap
 
     void CoSaveForcedWeapons(SKSE::SerializationInterface* a_intfc) {
-        if (!a_intfc->OpenRecord(Serialization::kRecForcedWeapon,
-                                 Serialization::kForcedWeaponVersion)) {
+        if (!a_intfc->OpenRecord(kRecForcedWeapon,
+                                 kForcedWeaponVersion)) {
             spdlog::error("[cosave] OpenRecord('FWPN') failed -- force-holds NOT saved");
             return;
         }
@@ -1019,7 +1019,7 @@ namespace MFO::Actuation {
             ++written;
         }
         spdlog::info("[cosave] saved {} force-hold(s), schema v{}{}", written,
-                     Serialization::kForcedWeaponVersion,
+                     kForcedWeaponVersion,
                      skipped ? std::format(" -- SKIPPED {} runtime (0xFF)", skipped) : std::string{});
     }
 
