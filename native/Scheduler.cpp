@@ -59,6 +59,22 @@ namespace MFO::Scheduler {
         // #76: consecutive out-of-combat services, to debounce the force-hold
         // release against an IsInCombat flap (SEV-2, Fable 2026-08-17).
         std::unordered_map<RE::FormID, int> g_outOfCombatTicks;
+        // #76 HYSTERESIS (marth: "hysteresis makes it seem human"): the last tick
+        // the equip clamp was actively TRUE. The clamp releases only after a
+        // per-follower dwell of SUSTAINED known-false, so a foe bobbing at the
+        // gambit's range threshold does not re-sheathe the follower every tick.
+        // Entry (cast->melee when a foe closes) stays prompt -- this gates only
+        // the RELEASE. Cleared on combat end / death / revert.
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_meleeClampTrueAt;
+        // The dwell is the CENTER of a Temperament band (flair #1), not a fixed
+        // value: a deliberate follower commits to the melee a beat longer, an
+        // eager one shorter -- each consistently themselves, so the party's swaps
+        // never pulse in robotic unison. MeleeClampDwell(id) = 3.0s +/- 1.0s.
+        constexpr float kMeleeClampDwellCenter = 3.0f;   // seconds, MCM-band center
+        constexpr float kMeleeClampDwellSpread = 2.0f;   // full width -> [2.0, 4.0]s
+        [[nodiscard]] float MeleeClampDwell(RE::FormID a_id) {
+            return kMeleeClampDwellCenter + (Temperament(a_id) - 0.5f) * kMeleeClampDwellSpread;
+        }
 
         // FLAIR #5 -- RETARGET HESITATION. A target SWITCH of an existing latch
         // must win twice before it commits: the first winning service stores
@@ -99,6 +115,7 @@ namespace MFO::Scheduler {
     void ClearTransientState() {
         g_retreatNotes.clear();
         g_outOfCombatTicks.clear();
+        g_meleeClampTrueAt.clear();   // #76 hysteresis dwell
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
@@ -189,6 +206,7 @@ namespace MFO::Scheduler {
             // resurrected follower comes back stuck with the weapon, unable to
             // cast. Idempotent (no record -> no-op).
             Actuation::ReleaseForcedWeapon(f);
+            g_meleeClampTrueAt.erase(id);   // #76 hysteresis dwell dies with the follower
             return;
         }
 
@@ -214,6 +232,7 @@ namespace MFO::Scheduler {
             }
             g_retreatNotes.erase(id);
             g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
+            g_meleeClampTrueAt.erase(id);  // #76 hysteresis dwell -- moot out of combat
             g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
 
             // v1.0.30: the cast-control latch dies with the fight. The [cast]
@@ -638,6 +657,21 @@ namespace MFO::Scheduler {
             }
         }
 
+        // #76 HYSTERESIS: gate the RELEASE on MeleeClampDwell(id) of SUSTAINED
+        // known-false so a foe crossing the gambit's range threshold back and
+        // forth doesn't re-sheathe the follower every tick (marth: reads human).
+        // equipHeld != 0 (clamp true this tick) resets the dwell; a genuinely
+        // false gambit still reverts after the dwell. `equipReleaseOK` supersedes
+        // raw `equipCondKnownFalse` at every release/preserve site below -- so the
+        // weapon, the CSTY clamp, and the equip gate all hold together through the
+        // commit window. Entry stays prompt (branch 1 below is not gated by this).
+        const auto nowTp = std::chrono::steady_clock::now();
+        if (equipHeld != 0) g_meleeClampTrueAt[id] = nowTp;
+        bool dwellExpired = true;
+        if (const auto dit = g_meleeClampTrueAt.find(id); dit != g_meleeClampTrueAt.end())
+            dwellExpired = std::chrono::duration<float>(nowTp - dit->second).count() >= MeleeClampDwell(id);
+        const bool equipReleaseOK = equipCondKnownFalse && dwellExpired;
+
         CombatStyle::Stance stance = CombatStyle::Stance::None;
         // STANCE PRIORITY (FFXII true-override): an ACTIVE equip gambit is enforced
         // over the #65 class override and the cast latch for its true duration;
@@ -657,7 +691,7 @@ namespace MFO::Scheduler {
             stance = (wantStance == 2) ? CombatStyle::Stance::Ranged
                                        : CombatStyle::Stance::Melee;
             stanceIsEquipOrder = true;
-        } else if (!equipCondKnownFalse && CombatStyle::HoldsEquipOrder(id)) {
+        } else if (!equipReleaseOK && CombatStyle::HoldsEquipOrder(id)) {
             // 2. PRESERVE the held clamp. A HIGHER rule stopped the scan before
             //    the equip rule this tick AND the equip rule sits BELOW the stop
             //    (so its truth is genuinely UNKNOWN) and an equip order is HELD --
@@ -716,23 +750,27 @@ namespace MFO::Scheduler {
         //    order: if a cast latch or the #65 override set a stance this tick,
         //    the Want above already flipped equipOrder off, so their hold stands.
         // SEV-2 (Fable 2026-08-17): release only when the equip condition is
-        // KNOWN false -- `equipCondKnownFalse`, computed above the stance block.
-        // It is true when the scan ran to completion (nothing matched) OR the
-        // equip rule sat ABOVE the stop and did not hold (positional known-false);
-        // a scan stopped by a higher rule with the equip rule BELOW it leaves the
-        // truth UNKNOWN, and releasing then yanks the weapon out mid-fight the
-        // tick a higher rule fires (the re-oscillation #76 exists to close). Keep
-        // the hold on an unknown tick; combat-end / death / dismissal / revert
-        // still release unconditionally elsewhere.
-        Actuation::ReconcileForcedWeapon(f, equipHeld, equipCondKnownFalse);
+        // KNOWN false -- AND the #76 hysteresis dwell has expired (`equipReleaseOK`
+        // = equipCondKnownFalse && dwellExpired, computed above the stance block).
+        // equipCondKnownFalse is true when the scan ran to completion (nothing
+        // matched) OR the equip rule sat ABOVE the stop and did not hold
+        // (positional known-false); a scan stopped by a higher rule with the equip
+        // rule BELOW it leaves the truth UNKNOWN, and releasing then yanks the
+        // weapon out mid-fight the tick a higher rule fires (the re-oscillation #76
+        // exists to close). Keep the hold on an unknown tick OR within the commit
+        // dwell; combat-end / death / dismissal / revert still release
+        // unconditionally elsewhere.
+        Actuation::ReconcileForcedWeapon(f, equipHeld, equipReleaseOK);
         // AnyActive() is a lock-free atomic mirror -- keep the common no-stance
         // tick off g_mx (the module's own discipline). The kill-switch also drops
         // the stance clamp: with bWeaponStyleControl off, branch 1 never set an
         // equip Want and ApplyTick/gate have no config check, so a hold from
         // before the flip would strand the CSTY/gate until combat end otherwise.
-        if ((equipHeld == 0 && equipCondKnownFalse && CombatStyle::AnyActive()) ||
-            (!Config::g_weaponStyleControl.load() && CombatStyle::HoldsEquipOrder(id)))
+        if ((equipHeld == 0 && equipReleaseOK && CombatStyle::AnyActive()) ||
+            (!Config::g_weaponStyleControl.load() && CombatStyle::HoldsEquipOrder(id))) {
             CombatStyle::ReleaseEquipOrder(id);
+            g_meleeClampTrueAt.erase(id);   // dwell consumed -> reset for the next clamp
+        }
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
         // aware). A gambit spell stays in the follower's hand only while some
