@@ -39,9 +39,22 @@
 >   /fixed `kGlob*` gone (grep-clean). Class model + gate fixes + PRGN v3 untouched. Econ record shape frozen
 >   in DESIGN §18.6 for the API doc. **FIELD-VERIFY:** log `[prog] economy: _SkillPointsPerLevel = 2 (from …)`,
 >   perks 1/2 levels, followers get ~2 skill pts/level.
-> - **STAGE 3 REMAINDER (still to do):** (a) ESL-detected **injects its own MCM tab** with these economy
->   values as sliders ([[field-notes-queue-2026-08-17]] #6 — MCM-Helper work, distinct effort); (b) skill-menu
->   position memory, Board.cpp (#5, small).
+> - **STAGE 3 REMAINDER — BOTH DONE.** (a) **Skill-menu position memory** shipped, DLL `c9742c4d`
+>   (Board.cpp, keyboard-focus restore on apply-popup close). (b) **Addon MCM tab, entirely in the ESL**
+>   — DLL `d30b7a22` (CI 31995641610): the ESL ships `MFOP_MCMQuest` (VMAD→`MFOP_MCM.pex`), its own
+>   `Config/MCM/Config/MFO_Progression/config.json` (6 GlobalValue sliders bound to the economy globals) +
+>   `SEQ/MFO_Progression.seq`; the DLL re-reads the manifest economy on menu close (`ReloadEconomy`/
+>   `OnMenuClose`, MainThread-posted) — GENERICALLY, never naming the addon. **MFO.esp byte-unchanged;
+>   zero `MFO_Progression` code refs.** Deployed local custom-modlist (`d30b7a22` + `MFOP_MCM.pex` + MCM
+>   config + SEQ); **deck field-verify PENDING deck wake + Tuxborn scp retry**. FIELD-TEST (in-game only, no
+>   CI): the "MFO — Follower Progression" MCM tab shows 6 sliders; moving one + closing the menu changes the
+>   economy (log `[prog] economy reloaded on menu close`). Papyrus compile pipeline proven (`tools/compile.sh`).
+> - **BOARD-EXTENSION API — SCOPED (not built):** `Docs/BOARD-EXTENSION-API-DESIGN.md` — two tiers
+>   (Tier 1 declarative ESL/JSON panels via the manifest + GlobalValue/Papyrus; Tier 2 native companion-DLL
+>   tabs via a `MEO_API.h`-style versioned interface + stable C draw shim). Recommends Tier 1 first. Frozen
+>   into ADDON-API.md when built. marth wants it documented + available for third parties.
+> - **Tooling now documented:** `Docs/TOOLING.md` (Papyrus compile, MCM-Helper pattern, ESP/ESL generator,
+>   audits, two-deck deploy) — the pipeline the next session no longer reconstructs from MEO.
 > - **STAGE 4 DONE — `Docs/ADDON-API.md` written (the frozen third-party contract).** Sentinel KYWD +
 >   manifest FLST layout (entry[0]=sentinel, one classes-list FLST of class-def FLSTs {MESG name + AVIF
 >   skills + PERK priority + `_Stance` GLOB}, economy GLOBs by suffix + defaults, master reqs, PRGN

@@ -143,6 +143,11 @@ family's one principle warns about.
    FormID bands / master-index rules, record helpers, the addon-manifest seam),
    the audits (`audit_esp.py` / `audit_mcm.py`) as merge gates, and the two-deck
    deploy flow.
+13. **BOARD-EXTENSION-API-DESIGN.md** (SCOPING, not built) — how a third party
+   could add their own tabs/features to MFO's in-game ImGui board: Tier 1
+   declarative ESL/JSON panels (manifest + GlobalValue/Papyrus binding) and
+   Tier 2 native companion-DLL tabs (`MEO_API.h`-style versioned interface +
+   stable C draw shim). Frozen into ADDON-API.md when a tier is built.
 
 ## Sibling projects — reuse, don't re-derive
 
