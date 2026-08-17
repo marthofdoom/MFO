@@ -1,3 +1,28 @@
+## v1.0.64 -- followers hold the weapon you ordered, and dress the slots they're missing
+
+- Fixed a caster ordered to melee (or ranged) OSCILLATING between the weapon and a
+  spell: MFO would draw the dagger, the follower's own AI would swap straight back to
+  a spell, and the next tick re-drew the dagger -- visible thrash for the whole fight.
+  While a switch-to-melee / switch-to-ranged order is in force, the ordered weapon is
+  now HELD in hand and the follower's combat stance is clamped to it, for exactly as
+  long as that order's condition is true; the moment it goes false (or the fight ends)
+  the hold releases and the follower goes back to normal -- a mage can cast again. Off
+  switch: bWeaponStyleControl.
+- Followers now loot gear for equip slots they have EMPTY, not only slots they're
+  already wearing something in -- a helmetless follower will pick up a helmet instead
+  of ignoring every one until you place one on them first. Still never downgrades real
+  worn armour.
+- A mage keeps acquiring and upgrading their sidearm even while dual-wielding spells
+  (their weapon hand reads "empty," which used to stop them looting a better dagger).
+  Stock-only -- it's kept for when they switch, never force-drawn.
+- Coin purses are now counted as lootable gold, not just loose septims.
+- The "ally" gambit target now includes the PLAYER, so an ally-targeted order (e.g.
+  heal the lowest-health ally) can target you.
+- "Ally health below %" is now available as a Logistics gambit condition (heal/support
+  an ally -- including you -- out of combat).
+- The manual skill-point apply menu keeps its place when you apply a point instead of
+  jumping back to the top of the list.
+
 ## v1.0.63 -- casters cast the spell you chose, and only that one
 
 - Fixed a follower on exact cast control still slipping their own spells in between
