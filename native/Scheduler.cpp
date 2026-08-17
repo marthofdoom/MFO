@@ -179,6 +179,12 @@ namespace MFO::Scheduler {
             // controller without an equip win. The live CSTY already died with
             // the controller. Idempotent erase-miss when unowned.
             CombatStyle::Clear(id);
+            // #76: and the equip force-hold. Unlike the CSTY (which died with the
+            // per-combat controller), the prevent-removal LOCK lives on the
+            // ActorEquipManager, so it must be explicitly force-unequipped or a
+            // resurrected follower comes back stuck with the weapon, unable to
+            // cast. Idempotent (no record -> no-op).
+            Actuation::ReleaseForcedWeapon(f);
             return;
         }
 
@@ -221,6 +227,12 @@ namespace MFO::Scheduler {
             // this drops the stale bookkeeping so the next fight re-baselines.
             // Idempotent out of combat (uncontended erase-miss when unowned).
             CombatStyle::Clear(id);
+            // #76: the equip force-hold dies with the fight too -- combat end is
+            // one of its release points. The prevent-removal LOCK is on the
+            // ActorEquipManager (it did NOT die with the controller), so this
+            // force-unequips to clear it: the follower leaves the fight free to
+            // cast/re-arm normally. Idempotent (no record -> no-op).
+            Actuation::ReleaseForcedWeapon(f);
 
             Logistics::ServiceFollower(f, it->second);
             g_lastTickMs = std::chrono::duration<double, std::milli>(
@@ -416,6 +428,14 @@ namespace MFO::Scheduler {
         bool castSeen   = false;   // H3: some cast rule's condition held this tick
         int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
         int  wantStance = 0;       // combat-style ownership: the equip stance that won
+        // #76: the equip gambit's CONDITION held this tick (0=none,1=melee,
+        // 2=ranged). Drives the force-hold / stance-clamp release lifecycle.
+        // Superset of wantStance: like castSeen (H3) it is ALSO set when the
+        // suppression window stops the scan AT the equip rule -- so the ticks
+        // right after an equip fires (its own window) do NOT read as "condition
+        // false" and yank the weapon. equipHeld == 0 after the scan == the
+        // condition went false / was superseded -> release both holds.
+        int  equipHeld  = 0;
         bool stopped    = false;   // scan ended on a Fired / opaque hold
         bool suppressed = false;   // scan stopped at the suppression window
         std::string chain;         // 1.4: skip-chain, e.g. "0(no potion),2(satisfied)"
@@ -445,6 +465,11 @@ namespace MFO::Scheduler {
             // dying follower's rule-1 heal preempts exactly as before.
             if (inWindow && choice.ruleIndex >= recent.firedRule) {
                 if (isCast) castSeen = true;   // its condition held: keep the loan (H3)
+                // #76: same shape for the equip force-hold -- the equip rule's
+                // condition held this tick (that is why Evaluate returned it),
+                // the scan just stopped at it inside its own suppression window.
+                // Keep the force-hold; do NOT read this as "condition false".
+                if (isEquip) equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
                 suppressed = true;
                 break;
             }
@@ -524,7 +549,7 @@ namespace MFO::Scheduler {
                 // its reason in the chain and the scan moves on.
                 const bool satisfiedEquip =
                     isEquip && outcome.result == Actuation::Result::NoOp;
-                if (satisfiedEquip) handClaim = wantStance = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                if (satisfiedEquip) handClaim = wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
                 chain += std::format("{}{}({})", chain.empty() ? "" : ",",
                                      choice.ruleIndex,
                                      satisfiedEquip ? "satisfied" : outcome.reason.c_str());
@@ -535,7 +560,7 @@ namespace MFO::Scheduler {
             // A FIRED equip is the winning stance too (the satisfied case above
             // handles an already-correct hand; this is the real swap).
             if (isEquip && outcome.result == Actuation::Result::Fired)
-                wantStance = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
 
             stopped = true;                    // Fired or opaque hold -> done
             break;
@@ -610,6 +635,28 @@ namespace MFO::Scheduler {
         }
         if (stance != CombatStyle::Stance::None)
             CombatStyle::Want(id, stance, stanceIsEquipOrder);
+
+        // #76: EQUIP FORCE-HOLD / STANCE-CLAMP LIFECYCLE (gambit TRUE -> FALSE).
+        // While the equip gambit's condition held this tick, `equipHeld` names
+        // its category (superset of wantStance: also set inside the equip's own
+        // suppression window, so the ticks right after a swap are NOT read as
+        // "condition false"): above it clamped the CSTY stance, and this
+        // reconcile keeps the weapon force-equipped. When the condition goes
+        // FALSE / is superseded (equipHeld == 0), release BOTH so the follower's
+        // AI reverts and a mage can cast again -- the critical correctness path
+        // (a weapon force-locked or a stance clamped forever is worse than the
+        // oscillation). The two releases are scoped so a genuinely-active other
+        // owner survives:
+        //  - ReconcileForcedWeapon releases the weapon unless an equip gambit of
+        //    the forced category held this tick (a melee<->ranged flip re-forced
+        //    the new weapon in EquipWeapon, so it stays consistent).
+        //  - ReleaseEquipOrder drops the stance ONLY if it is still an equip
+        //    order: if a cast latch or the #65 override set a stance this tick,
+        //    the Want above already flipped equipOrder off, so their hold stands.
+        Actuation::ReconcileForcedWeapon(f, equipHeld);
+        // AnyActive() is a lock-free atomic mirror -- keep the common no-stance
+        // tick off g_mx (the module's own discipline).
+        if (equipHeld == 0 && CombatStyle::AnyActive()) CombatStyle::ReleaseEquipOrder(id);
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
         // aware). A gambit spell stays in the follower's hand only while some

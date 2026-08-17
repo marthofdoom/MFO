@@ -60,6 +60,17 @@ namespace MFO::CombatStyle {
     void Clear(RE::FormID a_follower);
     void ClearAll();
 
+    // #76: release the stance ownership IFF it is currently an EQUIP ORDER. The
+    // equip-gambit stance clamp's duration is now tied to the gambit's CONDITION
+    // (held while true, released when it goes false) rather than "until battle
+    // end" -- the scheduler calls this on every combat tick where no equip gambit
+    // held, so a mage whose equip gambit went false reverts to its own/auto
+    // stance and can cast again. A cast-latch stance, the #65 class override, and
+    // the magicka-dry melee fallback are NOT equip orders and are left untouched
+    // (they keep their own hold-until-battle-end contract). Idempotent (no owner,
+    // or a non-equip-order owner -> no-op). MAIN / worker thread.
+    void ReleaseEquipOrder(RE::FormID a_follower);
+
     // Apply / re-assert the owned stance on the follower's live controller.
     // COMBAT THREAD ONLY -- called from the UpdateCombat hook with the very
     // controller the engine just handed this actor. Saves the engine-derived

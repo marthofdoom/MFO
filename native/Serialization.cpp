@@ -10,6 +10,7 @@
 #include "Targeting.h"
 #include "CasterConsent.h"
 #include "CombatStyle.h"
+#include "Actuation.h"   // #76: revert drops the equip force-hold records
 #include "Sightline.h"
 #include "Packages.h"
 #include "Papyrus.h"
@@ -598,6 +599,10 @@ namespace MFO {
         CasterConsent::ClearTransientState();
         CombatStyle::ClearAll();            // owned stances are this-session,
                                             // per-combat controller identities
+        Actuation::ClearForcedWeapons();    // #76: equip force-hold records are
+                                            // this-session too, exactly like the
+                                            // owned stances above -- the world is
+                                            // being replaced, no engine call
         Sightline::ClearTransientState();   // LoS cache keys are this-session
                                             // FormID pairs -- same rule as the latch
         Board::ClearPendingEdits();

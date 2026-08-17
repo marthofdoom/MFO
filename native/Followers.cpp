@@ -4,6 +4,7 @@
 #include "Targeting.h"
 #include "CasterConsent.h"   // v1.0.30: dismissal releases the cast latch too
 #include "CombatStyle.h"     // v1.0.33: dismissal drops weapon-stance ownership
+#include "Actuation.h"       // #76: dismissal releases the equip force-hold too
 #include "Packages.h"
 #include "Logistics.h"
 #include "Forms.h"
@@ -283,6 +284,14 @@ namespace MFO::Followers {
                 // paying the ApplyTick lookup and could re-swap a style we no
                 // longer own. Idempotent erase-miss when unowned.
                 CombatStyle::Clear(id);
+                // And the #76 equip force-hold: its prevent-removal LOCK is on
+                // the ActorEquipManager, not the controller, so an ex-follower
+                // left force-held stays stuck with the weapon, unable to cast,
+                // for the rest of the session. Resolve the actor (the handle may
+                // have merely flickered) and force-unequip; if it will not
+                // resolve, the record is session-scoped and revert-cleared.
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
+                    Actuation::ReleaseForcedWeapon(a);
                 // And the cast-consent latch -- the SAME shape as the target
                 // latch, and (v1.0.30) a sharper obligation now that the
                 // [cast] sink no longer clears it on a cast: the H3 release

@@ -17,6 +17,17 @@
 
 namespace MFO::Actuation {
 
+    // #76: the weapon a follower is being force-held on, keyed by FormID. Written
+    // by EquipWeapon (the fire) and cleared by ReleaseForcedWeapon/Reconcile/
+    // ClearForcedWeapons -- ALL on the job-worker serial tick, the same thread
+    // the scheduler already drives Fire on, so no lock (the g_followers
+    // discipline: #4). Persists ACROSS ticks by design -- it is engine-hold
+    // bookkeeping like CombatStyle's owned-stance map, not per-scan evaluator
+    // state (#22), and is never read back by the evaluator. Session-scoped:
+    // cleared on revert (ClearForcedWeapons). The pointer is a weapon form, which
+    // is stable for the session.
+    std::unordered_map<RE::FormID, RE::TESBoundObject*> g_forcedWeapon;
+
     namespace {
 
         // #68: the nearest living player-teammate that is not a_follower
@@ -753,7 +764,30 @@ namespace MFO::Actuation {
             if (!best) return { Result::FailedSkill, a_ranged ? "no ranged weapon carried"
                                                               : "no melee weapon carried",
                                 true };   // transparent -- cannot act, rules below run (§2)
-            if (auto* mgr = RE::ActorEquipManager::GetSingleton()) mgr->EquipObject(a_follower, best);
+            if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
+                if (Config::g_weaponStyleControl.load()) {
+                    // #76 FORCE-HOLD. forceEquip=true (7th arg, after extraData,
+                    // count, slot, queueEquip) sets the engine's prevent-removal
+                    // lock so the follower's OWN combat AI cannot auto-unequip the
+                    // weapon to re-arm a spell -- the both-hands caster thrash
+                    // v1.0.62 narrowed but did not close. The both-hands "already
+                    // holding that category" NoOp above then keeps the rule
+                    // satisfied with no re-equip until the gambit's condition goes
+                    // false, when the scheduler releases it (ReconcileForcedWeapon).
+                    const auto id = a_follower->GetFormID();
+                    // A category flip (melee<->ranged) reaches here with a
+                    // DIFFERENT weapon still locked from before -- force-unequip
+                    // the old lock first, then lock the new. (The SAME-category
+                    // case never reaches here: the satisfied NoOp caught it.)
+                    if (auto old = g_forcedWeapon.find(id);
+                        old != g_forcedWeapon.end() && old->second && old->second != best)
+                        mgr->UnequipObject(a_follower, old->second, nullptr, 1, nullptr, true, true);
+                    mgr->EquipObject(a_follower, best, nullptr, 1, nullptr, true, true);
+                    g_forcedWeapon[id] = best;
+                } else {
+                    mgr->EquipObject(a_follower, best);   // kill-switch off: today's behaviour exactly
+                }
+            }
             // FLAIR #4: visibly COMMIT to the new tool -- steel out, squared up
             // -- rather than leaving the swap in whatever draw state the last
             // weapon had. The exact call Loadout.cpp:240 already ships for the
@@ -916,5 +950,45 @@ namespace MFO::Actuation {
         // (Logistics.cpp fall-through precedent).
         return { Result::FailedOther, std::format("unknown action '{}'", op), true };
     }
+
+    // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
+    void ReleaseForcedWeapon(RE::Actor* a_follower) {
+        if (!a_follower) return;
+        const auto id = a_follower->GetFormID();
+        auto it = g_forcedWeapon.find(id);
+        if (it == g_forcedWeapon.end()) return;
+        // forceEquip=true on the UNequip clears the prevent-removal lock the
+        // force-equip set; a plain unequip would be REFUSED against a forced
+        // item and the follower would stay stuck holding the weapon, unable to
+        // cast -- the worse-than-oscillation failure this whole feature must not
+        // create.
+        if (auto* mgr = RE::ActorEquipManager::GetSingleton(); mgr && it->second)
+            mgr->UnequipObject(a_follower, it->second, nullptr, 1, nullptr, true, true);
+        g_forcedWeapon.erase(it);
+        spdlog::info("[equip] {:08X}: force-hold released", id);
+    }
+
+    void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance) {
+        if (!a_follower) return;
+        auto it = g_forcedWeapon.find(a_follower->GetFormID());
+        if (it == g_forcedWeapon.end()) return;   // nothing forced -> nothing to do
+        // KEEP the hold only while the feature is ON and an equip gambit of the
+        // forced weapon's OWN category held THIS tick (a_wantStance was set by a
+        // fired-or-satisfied equip in the scan). a_wantStance == 0 means the
+        // gambit's condition went false -> release. A different category means a
+        // melee<->ranged flip already re-forced the new weapon in EquipWeapon and
+        // updated the record, so this stays consistent; the check also releases
+        // defensively if that record ever lagged. Switch off -> always release
+        // (a mid-combat toggle-off restores normal behaviour next tick).
+        bool keep = Config::g_weaponStyleControl.load() && a_wantStance != 0;
+        if (keep) {
+            auto* w  = it->second ? it->second->As<RE::TESObjectWEAP>() : nullptr;
+            const int cat = (w && (w->IsBow() || w->IsCrossbow())) ? 2 : 1;
+            keep = (a_wantStance == cat);
+        }
+        if (!keep) ReleaseForcedWeapon(a_follower);
+    }
+
+    void ClearForcedWeapons() { g_forcedWeapon.clear(); }
 
 }

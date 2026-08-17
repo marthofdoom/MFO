@@ -43,4 +43,33 @@ namespace MFO::Actuation {
     // (§5.3 -- a rule that could not run says why, it is not silent).
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice);
 
+    // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
+    // While an equip-melee/ranged gambit's condition holds TRUE, the fired
+    // weapon is FORCE-equipped (ActorEquipManager forceEquip=true = the engine's
+    // prevent-removal lock) so the follower's own combat AI cannot auto-unequip
+    // it to re-arm a spell -- the dagger<->spell thrash a both-hands caster still
+    // showed after v1.0.62's "both hands satisfy the category" NoOp. The hold is
+    // RELEASED when the gambit's condition goes FALSE (Scheduler reconciles every
+    // combat tick), on combat end, on death, on dismissal, and on revert -- a
+    // weapon left force-locked forever is a WORSE bug (the follower can never cast
+    // again), so release is the critical correctness path. Gated by
+    // bWeaponStyleControl; with it off, EquipWeapon does a plain EquipObject and
+    // records nothing. Worker/main-thread only, same discipline as Fire.
+
+    // Release the force-hold NOW: force-unequip the held weapon (forceEquip=true
+    // on the UNequip clears the prevent-removal lock) and drop the record.
+    // Idempotent (no record -> no-op). Combat end / death / dismissal.
+    void ReleaseForcedWeapon(RE::Actor* a_follower);
+
+    // Per-tick reconcile from the combat scan: KEEP the force-hold iff the
+    // feature is on AND an equip gambit of the forced weapon's OWN category held
+    // this tick (a_wantStance: 0=none/condition-false, 1=melee, 2=ranged);
+    // otherwise RELEASE it. This is the gambit true->false lifecycle: a==0
+    // (condition went false) or a category flip both release.
+    void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance);
+
+    // Revert/load: drop the session-scoped force-hold records. No engine call --
+    // the world is being replaced (mirrors CombatStyle::ClearAll).
+    void ClearForcedWeapons();
+
 }

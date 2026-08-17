@@ -109,6 +109,20 @@ namespace MFO::CombatStyle {
         g_equipOrders.store(0, std::memory_order_relaxed);
     }
 
+    void ReleaseEquipOrder(RE::FormID a_follower) {
+        std::lock_guard<std::mutex> lk(g_mx);
+        // #76: ONLY an equip-order stance releases here -- a cast latch (which
+        // Want re-asserts every tick with equipOrder=false), the class override,
+        // and the magicka-dry melee fallback all set equipOrder=false and so are
+        // left standing. This scopes the release exactly to the equip gambit's
+        // true->false lifecycle.
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || !it->second.equipOrder) return;
+        g_owned.erase(it);
+        g_count.store(g_owned.size(), std::memory_order_relaxed);
+        RecountEquipOrders();
+    }
+
     void ApplyTick(RE::Actor* a_actor, RE::CombatController* a_cc) {
         if (!a_actor || !a_cc) return;
 
