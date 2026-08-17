@@ -467,6 +467,25 @@ namespace MFO::ProgAllocator {
             return false;
         }
 
+        // Is this perk KNOWN to the catalog AT ALL — present in some node's
+        // ranks (kept OR dead) or in a tree's `filtered` list? Distinct from
+        // PerkAllocatableInCatalog, which additionally requires a non-dead
+        // (allocatable) rank. A prereq HasPerk on a perk in NO tree at all
+        // (a quest/SPID-granted gate) is NOT known here — §5.2 must then DEFER
+        // it to the engine rather than granting it (a follower may genuinely
+        // lack such a perk). Only a KNOWN-but-filtered perk is safe to bypass.
+        bool PerkKnownToCatalog(RE::FormID a_perk) {
+            if (!a_perk) return false;
+            for (const auto& tree : Progression::Get().skills) {
+                for (const auto& node : tree.nodes)
+                    for (const auto& r : node.ranks)
+                        if (r.perkFormID == a_perk) return true;
+                for (const auto& f : tree.filtered)
+                    if (f.perkFormID == a_perk) return true;
+            }
+            return false;
+        }
+
         // §5.2b (deck 2026-08-15): a skill perk's own conditions normally
         // reduce to a pure AND-chain of the skill-level gate
         // (GetBaseActorValue-on-self >= N) plus, in some overhauls, HasPerk
@@ -528,7 +547,14 @@ namespace MFO::ProgAllocator {
                 if (!isReqShape) return Tri::kUnknown;   // exclusion (==0) / odd shape — defer
                 auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
                 const RE::FormID pid = form ? form->GetFormID() : 0;
-                if (!PerkAllocatableInCatalog(pid)) return Tri::kTrue;   // filtered → satisfied
+                if (!PerkAllocatableInCatalog(pid)) {
+                    // A KNOWN-but-filtered catalog perk can never be held by a
+                    // follower and §5.1 bridges around it → treat as satisfied
+                    // (the Destruction-Mastery case). But a perk in NO tree at
+                    // all (quest/SPID-granted gate) is genuinely unknown — don't
+                    // grant it; defer to the engine's IsTrue.
+                    return PerkKnownToCatalog(pid) ? Tri::kTrue : Tri::kUnknown;
+                }
                 return OwnsPerkForm(a_actor, a_base, PerkByID(pid)) ? Tri::kTrue : Tri::kFalse;
             }
             return Tri::kUnknown;   // GetLevel-on-target / quest / faction / … — don't guess
@@ -675,10 +701,10 @@ namespace MFO::ProgAllocator {
                 return 0;
             }
             if (PerkPointsAvailable(a_st) < 1) {
-                a_whyNot = std::format("no perk points (earned {}, {} pre-trained, {} spent)",
+                a_whyNot = std::format("no perk points (earned {}, {} spent)",
                                        static_cast<int>(a_st.progressionLevel) /
                                            std::max(1, g_econ.levelsPerPerkPoint),
-                                       a_st.nativeTreePerksAtEnroll, AllocatedRanks(a_st));
+                                       AllocatedRanks(a_st));
                 return 0;
             }
             // §5.1 prereq: reachable iff root-reachable (empty parentPerkIDs
@@ -1195,15 +1221,29 @@ namespace MFO::ProgAllocator {
         // a crash. Returns false when the list declares no usable skills.
         bool ParseClassDef(RE::BGSListForm* a_list, ClassDef& a_out) {
             a_out.id = a_list->GetFormID();
+            bool stanceSet = false;   // author diagnostic: warn on a duplicate _Stance
             for (auto* form : a_list->forms) {
                 if (!form) continue;
                 if (auto* msg = form->As<RE::BGSMessage>()) {
                     const char* full = msg->GetFullName();
                     if (full && *full && a_out.name.empty()) a_out.name = full;
                 } else if (auto* glob = form->As<RE::TESGlobal>()) {
-                    if (EdidEndsWith(glob, "_Stance"))
+                    if (EdidEndsWith(glob, "_Stance")) {
+                        if (stanceSet)
+                            spdlog::warn("[prog] class-def {:08X}: duplicate _Stance GLOB "
+                                         "{:08X} — overriding the earlier stance value",
+                                         a_list->GetFormID(), form->GetFormID());
                         a_out.stance = static_cast<std::uint8_t>(
                             std::clamp(static_cast<int>(glob->value), 0, 3));
+                        stanceSet = true;
+                    } else {
+                        // A GLOB whose edid isn't the _Stance declaration was
+                        // consumed silently before — surface it (an author's
+                        // mis-named stance global would just vanish).
+                        spdlog::warn("[prog] class-def {:08X}: GLOB {:08X} edid does not end "
+                                     "\"_Stance\" — ignored (not a stance declaration)",
+                                     a_list->GetFormID(), form->GetFormID());
+                    }
                 } else if (form->Is(RE::FormType::Perk)) {
                     a_out.perkPriority.push_back(form->GetFormID());
                 } else if (const auto av = MapSkillAvif(form); av != RE::ActorValue::kNone) {
@@ -1257,12 +1297,12 @@ namespace MFO::ProgAllocator {
             }
             auto& st = it->second;
             spdlog::info("[prog] status {} ({:08X}): class {} | progression level {} | "
-                         "{} perk point(s) available (§17: floor(lvl/{}) − {} pre-trained − "
-                         "{} spent) | {} perk(s) allocated | {} | "
+                         "{} perk point(s) available (§17: floor(lvl/{}) − {} spent) | "
+                         "{} perk(s) allocated | {} | "
                          "sharedRemainder {} | level-matched {} | provenance PFF={}",
                          NameOf(a_actor), id, ClsName(st.clsId), st.progressionLevel,
                          PerkPointsAvailable(st), g_econ.levelsPerPerkPoint,
-                         st.nativeTreePerksAtEnroll, AllocatedRanks(st), st.perks.size(),
+                         AllocatedRanks(st), st.perks.size(),
                          IsActiveFollower(id) ? "ACTIVE" : "benched",
                          st.sharedGrowthRemainder,
                          st.veteranConsumed ? "yes" : "pending",
@@ -1298,7 +1338,7 @@ namespace MFO::ProgAllocator {
         void HarnessEconomyDump() {
             const auto& c = Progression::Get();
             spdlog::info("[prog] economy: perk = 1 per {} level(s) (§17 derived, minus "
-                         "pre-trained + spent) | skill/lvl {:g} | manual skill/lvl {} | "
+                         "spent) | skill/lvl {:g} | manual skill/lvl {} | "
                          "sharedDiv {} | respec rapport {:g} | cap {:g} | catalog ranks {}/{} | "
                          "lastPlayerLevel {}",
                          g_econ.levelsPerPerkPoint, g_econ.skillPointsPerLevel,
@@ -1475,8 +1515,10 @@ namespace MFO::ProgAllocator {
         auto snap = std::make_shared<BoardProgSnap>();
         snap->active = g_ready && Progression::Get().built;
         if (snap->active) {
-            snap->respecRapportCost = g_econ.respecRapportCost;
-            snap->skillCap          = g_econ.skillCap;
+            snap->respecRapportCost     = g_econ.respecRapportCost;
+            snap->skillCap              = g_econ.skillCap;
+            snap->levelsPerPerkPoint    = std::max(1, g_econ.levelsPerPerkPoint);
+            snap->manualSkillPtsPerLevel = g_econ.manualSkillPtsPerLevel;
             // §18.6: the declared classes, in declaration order — the board's
             // dynamic-N class prompt draws exactly these.
             snap->classes.reserve(g_classes.size());
@@ -1622,15 +1664,15 @@ namespace MFO::ProgAllocator {
 
         // First class pick = the on-ramp (§15): level-match to the player,
         // once. No point grant lives here any more — §17 derives the pool
-        // from the level directly (floor(level/3) − pre-trained − spent), so
+        // from the level directly (floor(level/levelsPerPerkPoint) − spent), so
         // matching the level IS the catch-up.
         if (!st.veteranConsumed) {
             st.progressionLevel = pl;
             st.veteranConsumed = true;
             spdlog::info("[prog] {} level-matched to player level {} — {} perk point(s) "
-                         "available (§17: floor(level/3) − {} pre-trained)",
+                         "available (§17: floor(level/{}) − {} spent)",
                          NameOf(a_actor), pl, PerkPointsAvailable(st),
-                         st.nativeTreePerksAtEnroll);
+                         g_econ.levelsPerPerkPoint, AllocatedRanks(st));
         }
 
         const auto beforeName = std::string(ClsName(st.clsId));
@@ -1910,6 +1952,46 @@ namespace MFO::ProgAllocator {
     // FormIDs — no resolution, bounds-checked only. Runtime (0xFF) ids are
     // never written (#9). New fields go behind `if (version >= N)` (#12).
 
+    namespace {
+        // PRGN v4 class-identity codec. The class is written as a stable
+        // plugin-qualified pair {u16 pluginLen, plugin bytes, u32 localFormID}
+        // so it survives an addon-absent session (see Serialization.h v4 note).
+        constexpr std::uint16_t kMaxPluginLen = 260;   // MAX_PATH; a plugin name can't exceed it
+
+        void WritePluginName(SKSE::SerializationInterface* a_intfc, const std::string& a_s) {
+            const auto len = static_cast<std::uint16_t>(
+                std::min<std::size_t>(a_s.size(), kMaxPluginLen));
+            a_intfc->WriteRecordData(len);
+            if (len) a_intfc->WriteRecordData(a_s.data(), len);
+        }
+        // Returns false on short read / implausible length — caller aborts the
+        // whole load (a desynced byte stream can't be trusted, INVARIANT #12).
+        bool ReadPluginName(SKSE::SerializationInterface* a_intfc, std::string& a_out) {
+            std::uint16_t len = 0;
+            if (!a_intfc->ReadRecordData(len)) return false;
+            if (len > kMaxPluginLen) {
+                spdlog::error("[cosave] class plugin name length {} exceeds max {} -- aborting",
+                              len, kMaxPluginLen);
+                return false;
+            }
+            a_out.resize(len);
+            if (len == 0) return true;
+            return a_intfc->ReadRecordData(a_out.data(), len) == len;
+        }
+        // Derive a class-def form's SOURCE plugin filename + local FormID (the
+        // stable identity). False if the form is gone this session — then the
+        // caller falls back to the already-loaded clsPlugin/clsLocal.
+        bool DeriveClassIdentity(RE::FormID a_clsId, std::string& a_plugin, RE::FormID& a_local) {
+            auto* form = RE::TESForm::LookupByID(a_clsId);
+            if (!form) return false;
+            auto* file = form->GetFile(0);
+            if (!file) return false;
+            a_plugin = std::string(file->GetFilename());
+            a_local  = form->GetLocalFormID();
+            return true;
+        }
+    }
+
     void CoSaveSave(SKSE::SerializationInterface* a_intfc) {
         if (!a_intfc->OpenRecord(kRecProgression, kProgVersion)) {
             spdlog::error("[cosave] OpenRecord('{}') failed -- progression NOT saved", "PRGN");
@@ -1932,11 +2014,26 @@ namespace MFO::ProgAllocator {
                 (st.veteranConsumed ? 4u : 0u) | (st.wasInPotentialFollowerFaction ? 8u : 0u) |
                 (st.manualSkills ? 16u : 0u);   // v2 (§16) — spare bit in the same byte
             a_intfc->WriteRecordData(flags);
-            // v3 (§18.6): the class is a FORMID now — the class-def FLST
-            // (ResolveFormID-stable identity), not an index into a list whose
-            // order the load order can change. Replaces the v1/v2 1-byte
-            // ordinal at the SAME field position.
-            a_intfc->WriteRecordData(st.clsId);
+            // v4 (SEV-2 class-wipe fix): the class is written as its STABLE
+            // plugin-qualified identity {u16 pluginLen, plugin bytes, u32
+            // localFormID}, NOT the runtime clsId (which v3 wrote and a session
+            // without the addon could no longer resolve → cleared → 0 persisted
+            // → class lost forever). Replaces the v3 4-byte FormID at the SAME
+            // field position.
+            //   clsId != 0 → resolved this session: re-derive the authoritative
+            //     identity from the live form (also self-heals a v3→v4 upgrade).
+            //   clsId == 0 but clsPlugin non-empty → failed to resolve THIS
+            //     session (addon absent): echo the loaded identity VERBATIM so a
+            //     save never persists a cleared class over one that merely
+            //     failed to resolve.
+            std::string clsPlugin = st.clsPlugin;
+            RE::FormID  clsLocal  = st.clsLocal;
+            if (st.clsId != 0) {
+                std::string p; RE::FormID l = 0;
+                if (DeriveClassIdentity(st.clsId, p, l)) { clsPlugin = p; clsLocal = l; }
+            }
+            WritePluginName(a_intfc, clsPlugin);
+            a_intfc->WriteRecordData(clsLocal);
             a_intfc->WriteRecordData(st.progressionLevel);
             a_intfc->WriteRecordData(st.sharedGrowthRemainder);
             // v2: BASELINES only, never a pool value — both the §16 manual
@@ -2008,16 +2105,27 @@ namespace MFO::ProgAllocator {
 
             ProgState st{};
             std::uint8_t flags = 0, legacyClsRaw = 0;
-            RE::FormID   rawClsId = 0;
+            RE::FormID   rawClsId = 0;        // v3 only
+            std::string  v4ClsPlugin;        // v4+ only
+            RE::FormID   v4ClsLocal = 0;      // v4+ only
             if (!a_intfc->ReadRecordData(flags)) return;
-            // v3 widened the class field from a 1-byte ordinal to a 4-byte
-            // FormID at the SAME position. Consume exactly the bytes the
-            // save's version wrote (INVARIANT #12 — field order preserved).
+            // The class field has migrated TWICE, always at the SAME position.
+            // Consume EXACTLY the bytes the save's version wrote (INVARIANT #12
+            // — a wrong byte count desyncs every field after this):
+            //   v<3  : 1-byte ordinal        (migrated to the k-th declared class)
+            //   v==3 : 4-byte runtime FormID (ResolveFormID'd — but a session
+            //          without the addon cleared it: the SEV-2 wipe v4 closes)
+            //   v>=4 : {u16 pluginLen, plugin bytes, u32 localFormID} — a stable
+            //          plugin-qualified identity that survives an addon-absent
+            //          session.
             if (a_version < 3) {
                 // v1/v2 stored the fixed-3 ordinal (1=Melee 2=Ranged 3=Mage).
                 if (!a_intfc->ReadRecordData(legacyClsRaw)) return;
-            } else {
+            } else if (a_version < 4) {
                 if (!a_intfc->ReadRecordData(rawClsId)) return;
+            } else {
+                if (!ReadPluginName(a_intfc, v4ClsPlugin)) return;
+                if (!a_intfc->ReadRecordData(v4ClsLocal)) return;
             }
             if (!a_intfc->ReadRecordData(st.progressionLevel)) return;
             if (!a_intfc->ReadRecordData(st.sharedGrowthRemainder)) return;
@@ -2038,25 +2146,61 @@ namespace MFO::ProgAllocator {
                 // MIGRATION (§18.6 PRGN discipline): the legacy ordinal maps
                 // to the k-th DECLARED class. Pre-v3 saves were only ever
                 // written with MFO_Progression.esl as the sole addon, whose
-                // manifest declares Melee/Ranged/Mage in exactly that order,
-                // so ordinal k = the k-th declared class. No class declared at
-                // slot k → class cleared with a named line (the §15 prompt
-                // reappears), never a silent drop of the whole record.
-                const int ord = std::min<int>(legacyClsRaw, 3);
-                if (ord >= 1 && ord <= static_cast<int>(g_classes.size())) {
+                // manifest declares Melee/Ranged/Mage (1/2/3) in exactly that
+                // order, so ordinal k = the k-th declared class. No class
+                // declared at slot k → class cleared with a named line (the
+                // §15 prompt reappears), never a silent drop of the whole record.
+                const int ord = static_cast<int>(legacyClsRaw);
+                if (ord >= 1 && ord <= 3 && ord <= static_cast<int>(g_classes.size())) {
                     st.clsId = g_classes[ord - 1].id;
+                } else if (ord > 3) {
+                    // Parser nit fix: DON'T silently clamp a corrupt ordinal to
+                    // 3 (Mage). Warn and leave class-less.
+                    spdlog::warn("[cosave] corrupt legacy class ordinal {} (>3) — left "
+                                 "class-less (re-pick on the board), NOT mapped to Mage", ord);
                 } else if (ord != 0) {
                     spdlog::warn("[cosave] legacy class ordinal {} has no declared "
                                  "class — cleared (re-pick on the board)", ord);
                 }
-            } else if (rawClsId != 0) {
-                RE::FormID resolvedCls = 0;
-                if (a_intfc->ResolveFormID(rawClsId, resolvedCls) &&
-                    FindClassDef(resolvedCls)) {
-                    st.clsId = resolvedCls;
-                } else {
-                    spdlog::warn("[cosave] class {:08X} unresolvable or no longer "
-                                 "declared — cleared (re-pick on the board)", rawClsId);
+            } else if (a_version < 4) {
+                // v3: bare runtime FormID. ResolveFormID + FindClassDef; on
+                // FAILURE (addon absent) clsId stays 0 for the session — a v3
+                // record carries NO plugin string, so recovering the identity
+                // is impossible (the SEV-2 wipe is only fully closed for v4+
+                // saves). A v3 record that DOES resolve self-heals: its next
+                // save is written in the v4 plugin-qualified form.
+                if (rawClsId != 0) {
+                    RE::FormID resolvedCls = 0;
+                    if (a_intfc->ResolveFormID(rawClsId, resolvedCls) &&
+                        FindClassDef(resolvedCls)) {
+                        st.clsId = resolvedCls;
+                    } else {
+                        spdlog::warn("[cosave] v3 class {:08X} unresolvable this session — "
+                                     "running class-less (a v3 record carries no plugin "
+                                     "string; re-pick on the board, or it self-heals to v4 "
+                                     "once it resolves)", rawClsId);
+                    }
+                }
+            } else {
+                // v4: plugin-qualified identity. ALWAYS keep clsPlugin/clsLocal
+                // (so a save this session — even one taken WITHOUT the addon —
+                // echoes them back verbatim rather than persisting a cleared
+                // class). Resolve to a runtime clsId only when the plugin is
+                // present; absent/removed → clsId 0, all gates already handle
+                // "no class", and the next save re-writes the real identity once
+                // the addon returns.
+                st.clsPlugin = v4ClsPlugin;
+                st.clsLocal  = v4ClsLocal;
+                if (!v4ClsPlugin.empty()) {
+                    auto* dh = RE::TESDataHandler::GetSingleton();
+                    RE::TESForm* form = dh ? dh->LookupForm(v4ClsLocal, v4ClsPlugin) : nullptr;
+                    if (form && FindClassDef(form->GetFormID())) {
+                        st.clsId = form->GetFormID();
+                    } else {
+                        spdlog::info("[cosave] class {}|{:06X} not resolvable this session "
+                                     "(addon absent or class removed) — identity KEPT, "
+                                     "running class-less until it returns", v4ClsPlugin, v4ClsLocal);
+                    }
                 }
             }
             if (a_version >= 2) {

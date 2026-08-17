@@ -30,10 +30,20 @@ namespace MFO {
     //   v3 - §18.6 Stage 2 N-declared classes: the class field WIDENS from a
     //        1-byte ordinal to a 4-byte RE::FormID (the class-def FLST id,
     //        ResolveFormID-stable) at the SAME position. v<3 readers consume
-    //        the 1 byte and MIGRATE ordinal k → k-th declared class; v>=3
+    //        the 1 byte and MIGRATE ordinal k → k-th declared class; v==3
     //        reads the FormID and ResolveFormID's it.
+    //   v4 - SEV-2 class-wipe fix (2026-08-17): the class field WIDENS AGAIN,
+    //        from the bare 4-byte runtime FormID to a stable plugin-qualified
+    //        identity {u16 pluginLen, plugin bytes, u32 localFormID}, at the
+    //        SAME position. A session run WITHOUT the addon ESL could no longer
+    //        ResolveFormID the v3 id → cleared it → the next save persisted 0 →
+    //        class lost forever when the ESL returned. The plugin+local pair
+    //        survives an addon-absent session (echoed back verbatim on save) and
+    //        re-resolves when the ESL comes back. v==3 readers still consume
+    //        exactly the 4 bytes; the v3 reader is KEPT (INVARIANT #12) — a v3
+    //        record that resolves self-heals to v4 on its next save.
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
-    inline constexpr std::uint32_t kProgVersion    = 3;   // v3: §18.6 N-declared class FormID
+    inline constexpr std::uint32_t kProgVersion    = 4;   // v4: plugin-qualified class identity
 
     // #76 force-hold: a FOURTH independent record — the weapons MFO force-equipped
     // (prevent-removal) for an active equip gambit. The engine's forceEquip lock

@@ -208,13 +208,22 @@ namespace MFO::Progression {
         // not OR'd — so it only ever fires on the unambiguous shape; §5's
         // evaluate-on-the-follower catches everything subtler for free.
         bool ConditionPlayerGated(const RE::TESCondition& a_cond) {
+            // isOR marks an item OR'd with the NEXT one, so the LAST member of
+            // an OR group has isOR==false — a member is OR'd iff the previous
+            // item OR itself carries the flag. Track prevOR (updated once per
+            // iteration, up top, so it survives every `continue` below) or a
+            // tail-of-OR-group GetIsID Player is mis-read as a hard prereq.
+            bool prevOR = false;
             for (auto* it = a_cond.head; it; it = it->next) {
                 const auto& d  = it->data;
+                const bool curOR       = d.flags.isOR;
+                const bool memberOfOr  = prevOR || curOR;
+                prevOR = curOR;
                 const auto  fn = d.functionData.function.get();
                 if (fn != RE::FUNCTION_DATA::FunctionID::kGetIsID &&
                     fn != RE::FUNCTION_DATA::FunctionID::kGetIsReference)
                     continue;
-                if (d.flags.isOR) continue;   // OR'd — not a hard requirement
+                if (memberOfOr) continue;   // any member of an OR group — not a hard requirement
                 if (d.flags.opCode != RE::CONDITION_ITEM_DATA::OpCode::kEqualTo) continue;
                 if (d.flags.global || d.comparisonValue.f != 1.0f) continue;
                 // For these functions param 0 is a form pointer resolved at
@@ -266,11 +275,19 @@ namespace MFO::Progression {
         std::vector<RE::FormID> ExtractCondPrereqs(RE::BGSPerk* a_rank) {
             using Op = RE::CONDITION_ITEM_DATA::OpCode;
             std::vector<RE::FormID> out;
+            // isOR marks an item OR'd with the NEXT one — the LAST member of an
+            // OR group has isOR==false. Track prevOR (updated up top so it
+            // survives every `continue`) or a tail-of-OR-group HasPerk is
+            // wrongly extracted as a hard prereq and locks a takeable perk.
+            bool prevOR = false;
             for (auto* it = a_rank->perkConditions.head; it; it = it->next) {
                 const auto& d = it->data;
+                const bool curOR      = d.flags.isOR;
+                const bool memberOfOr = prevOR || curOR;
+                prevOR = curOR;
                 if (d.functionData.function.get() != RE::FUNCTION_DATA::FunctionID::kHasPerk)
                     continue;
-                if (d.flags.isOR)  continue;   // OR'd — not a hard requirement
+                if (memberOfOr) continue;   // any member of an OR group — not a hard requirement
                 if (d.flags.global) continue;  // global-compared — ambiguous, skip
                 const float v = d.comparisonValue.f;
                 const bool isReq =

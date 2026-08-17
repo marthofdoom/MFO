@@ -1365,14 +1365,19 @@ namespace MFO::Board {
                             ImGui::PopFont();
                             // §17: the derived budget, spelled out so a zero
                             // is self-explaining, never "is it broken?".
+                            // Cadence comes from the LIVE economy snapshot, not
+                            // a literal — the shipped default is 2, and an MCM
+                            // override changes it (a hardcoded "2" misinformed).
+                            const int lpp = prog.levelsPerPerkPoint > 0 ? prog.levelsPerPerkPoint : 1;
                             if (who->unspentPerk < 1.0f)
-                                ImGui::TextDisabled("None to spend: 1 point per 2 levels -- level "
+                                ImGui::TextDisabled("None to spend: 1 point per %d levels -- level "
                                                     "%u has earned %u, and %u are already spent.",
-                                                    (unsigned)who->level, (unsigned)(who->level / 2),
+                                                    lpp, (unsigned)who->level,
+                                                    (unsigned)(who->level / lpp),
                                                     (unsigned)who->allocatedRanks);
                             else
-                                ImGui::TextDisabled("1 perk point per 2 levels. "
-                                                    "Pick a skill to open its tree.");
+                                ImGui::TextDisabled("1 perk point per %d levels. "
+                                                    "Pick a skill to open its tree.", lpp);
                             if (!stateOk) ImGui::TextDisabled("syncing follower state...");
 
                             // ── §16 MANUAL SKILL POINTS (design doc §16:
@@ -1391,11 +1396,11 @@ namespace MFO::Board {
                                                 man ? 1.0f : 0.0f });
                                 if (ImGui::IsItemHovered())
                                     ImGui::SetTooltip(
-                                        "Manual OVERRIDE: while ON, this follower earns 5 skill\n"
+                                        "Manual OVERRIDE: while ON, this follower earns %d skill\n"
                                         "points per level for YOU to place -- INSTEAD OF automatic\n"
                                         "class-based skill growth, never on top of it. Toggle OFF\n"
                                         "to resume auto growth. For mage or multiclass builds the\n"
-                                        "class weights won't serve.");
+                                        "class weights won't serve.", prog.manualSkillPtsPerLevel);
                                 if (who->manualSkills) {
                                     ImGui::SameLine();
                                     ImGui::PushFont(g_fontHead);

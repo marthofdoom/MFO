@@ -122,9 +122,17 @@ namespace MFO::ProgAllocator {
         bool manualSkills{ false };                  // §16 manual skill points ON
 
         // §18.6: the CLASS-DEF FLST FormID (0 = no class picked yet — the
-        // §15 gate). Serialized as a FormID (PRGN v3) so it survives load-
-        // order changes via ResolveFormID; v2's fixed ordinal is migrated.
+        // §15 gate). This is the RESOLVED RUNTIME id for THIS session; it is
+        // 0 whenever the addon ESL is absent or the class failed to resolve.
         RE::FormID    clsId{ 0 };
+        // PRGN v4 (SEV-2 class-wipe fix): the class's STABLE plugin-qualified
+        // identity — its SOURCE plugin filename + local FormID. This is what is
+        // serialized (not clsId), so a session run WITHOUT the addon can round-
+        // trip the class rather than persisting a cleared 0 over it. On save,
+        // when clsId != 0 these are re-derived from the live form; when clsId
+        // == 0 (unresolved this session) they are echoed back verbatim.
+        std::string   clsPlugin;
+        RE::FormID    clsLocal{ 0 };
         std::uint16_t progressionLevel{ 0 };
         std::uint16_t sharedGrowthRemainder{ 0 };    // banked player-levels while benched
 
@@ -265,6 +273,10 @@ namespace MFO::ProgAllocator {
         bool  active{ false };           // addon detected + catalog built → tab exists
         float respecRapportCost{ 500.0f };
         float skillCap{ 100.0f };        // §16 apply gate — the board disables at cap
+        // Economy cadence, so the board self-describes from the LIVE values
+        // instead of hardcoded literals (which drifted from the shipped 2/2).
+        int   levelsPerPerkPoint{ 2 };     // §17 perk cadence: floor(level/N)
+        int   manualSkillPtsPerLevel{ 2 }; // §16 manual mode: pts banked per level
         // §18.6: the declared classes for the board's dynamic-N prompt.
         std::vector<std::pair<RE::FormID, std::string>> classes;
         std::vector<BoardFollowerView> rows;  // the active party, g_active order
