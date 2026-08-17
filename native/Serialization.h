@@ -20,11 +20,20 @@ namespace MFO {
     // (CoSaveSave/CoSaveLoad); design doc §8.
     //
     //   v1 - header {lastPlayerLevel u16}, then per follower {formID, flags,
-    //        class, progressionLevel, sharedGrowthRemainder, unspentPerk f32,
-    //        perkAlloc[]{formID,rank}, skillAlloc[]{av,points,lastWrittenBase},
-    //        enrollBaseline[]{av,f32}}
+    //        class(u8 ordinal), progressionLevel, sharedGrowthRemainder,
+    //        unspentPerk f32, perkAlloc[]{formID,rank},
+    //        skillAlloc[]{av,points,lastWrittenBase}, enrollBaseline[]{av,f32}}
+    //   v2 - §16 manual skill points: flags bit 0x10, manualBaselineLevel u16,
+    //        manualPointsApplied u16, manualExcludedLevels u16,
+    //        nativeTreePerksAtEnroll u16 (all gated version>=2); skillAlloc
+    //        gains manualPoints f32.
+    //   v3 - §18.6 Stage 2 N-declared classes: the class field WIDENS from a
+    //        1-byte ordinal to a 4-byte RE::FormID (the class-def FLST id,
+    //        ResolveFormID-stable) at the SAME position. v<3 readers consume
+    //        the 1 byte and MIGRATE ordinal k → k-th declared class; v>=3
+    //        reads the FormID and ResolveFormID's it.
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
-    inline constexpr std::uint32_t kProgVersion    = 2;   // v2: §16 manual skill points
+    inline constexpr std::uint32_t kProgVersion    = 3;   // v3: §18.6 N-declared class FormID
 
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.

@@ -99,6 +99,21 @@ PROG_REQUIRED = {
     0x819: ('FLST', "MFOP_ClassPerks_Ranged",   ['EDID']),
     0x81A: ('FLST', "MFOP_ClassPerks_Mage",     ['EDID']),
     0x820: ('KYWD', "MFOP_Enrolled",            ['EDID']),
+    # §18.6 the addon MANIFEST the DLL enumerates (entry[0]=MFO.esp sentinel,
+    # entry[1]=the classes-list FLST).
+    0x821: ('FLST', "MFOP_AddonManifest",       ['EDID', 'LNAM']),
+    # §18.6 Stage 2 — N-declared classes: MESG display names, _Stance mirrors,
+    # class-def FLSTs, and the classes-list FLST the manifest points at.
+    0x830: ('MESG', "MFOP_ClassName_Melee",     ['EDID', 'FULL']),
+    0x831: ('MESG', "MFOP_ClassName_Ranged",    ['EDID', 'FULL']),
+    0x832: ('MESG', "MFOP_ClassName_Mage",      ['EDID', 'FULL']),
+    0x840: ('GLOB', "MFOP_ClassMelee_Stance",   ['EDID', 'FNAM', 'FLTV']),
+    0x841: ('GLOB', "MFOP_ClassRanged_Stance",  ['EDID', 'FNAM', 'FLTV']),
+    0x842: ('GLOB', "MFOP_ClassMage_Stance",    ['EDID', 'FNAM', 'FLTV']),
+    0x850: ('FLST', "MFOP_ClassDef_Melee",      ['EDID', 'LNAM']),
+    0x851: ('FLST', "MFOP_ClassDef_Ranged",     ['EDID', 'LNAM']),
+    0x852: ('FLST', "MFOP_ClassDef_Mage",       ['EDID', 'LNAM']),
+    0x85F: ('FLST', "MFOP_Classes",             ['EDID', 'LNAM']),
 }
 
 # basename -> (required table, seq expectations or None [no SEQ file at all])

@@ -2,6 +2,7 @@
 #include <cmath>   // std::floor / std::isfinite — not guaranteed via the PCH
 #include "ProgAllocator.h"
 #include "Progression.h"
+#include "Forms.h"   // §18.6: the addon-manifest sentinel keyword
 #include "Board.h"
 #include "Config.h"
 #include "Followers.h"
@@ -57,12 +58,11 @@ namespace MFO::ProgAllocator {
                                             // live value); dev-only, never a
                                             // gameplay input
 
-        // ── class specs (ESL FormLists, DLL fallback) ───────────────────────
-        struct ClassSpec {
-            std::vector<RE::ActorValue> skills;        // priority order
-            std::vector<RE::FormID>     perkPriority;  // may be empty (shipped so)
-        };
-        ClassSpec g_class[4];   // indexed by Class ordinal; [0] unused
+        // ── the declared classes (§18.6 Stage 2 — N, not fixed 3) ───────────
+        // Built once at Init from every registered manifest, in manifest ×
+        // declaration order, then FROZEN (lock-free reads, the catalog
+        // discipline). Identity = the class-def FLST FormID.
+        std::vector<ClassDef> g_classes;
 
         // ── the poll (level-with-player, §6/§15) ────────────────────────────
         // A MainThread::Post self-chain (the ProgProbe DelayedTick shape).
@@ -318,9 +318,10 @@ namespace MFO::ProgAllocator {
             return RE::ActorValue::kLightArmor;
         }
 
-        std::vector<std::pair<RE::ActorValue, float>> WeightsFor(RE::Actor* a_actor, Class a_cls) {
+        std::vector<std::pair<RE::ActorValue, float>> WeightsFor(RE::Actor* a_actor,
+                                                                 const ClassDef& a_def) {
             std::vector<std::pair<RE::ActorValue, float>> out;
-            const auto& spec = g_class[static_cast<std::size_t>(a_cls)];
+            const auto& spec = a_def;
             if (spec.skills.empty()) return out;
 
             const bool bothWeapon =
@@ -358,7 +359,8 @@ namespace MFO::ProgAllocator {
         // points, which are ADDITIVE on top of the class share and survive
         // any class change (the manual override outranks the auto default).
         void RecomputeSkills(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
-            if (a_st.cls == Class::kNone) return;
+            const ClassDef* def = FindClassDef(a_st.clsId);
+            if (!def) return;   // no class picked, or the declaring addon left
             auto* avo = a_actor->AsActorValueOwner();
             if (!avo) {
                 spdlog::warn("[prog] {:08X}: no ActorValueOwner — skill auto-scale skipped",
@@ -378,7 +380,7 @@ namespace MFO::ProgAllocator {
                 static_cast<int>(a_st.manualExcludedLevels));
             const float total = g_econ.skillPointsPerLevel *
                                 static_cast<float>(std::max(0, effAutoLvl - 1));
-            const auto weights = WeightsFor(a_actor, a_st.cls);
+            const auto weights = WeightsFor(a_actor, *def);
 
             // Desired AUTO points per skill (deterministic: round-half-up).
             std::vector<std::pair<RE::ActorValue, float>> desired;
@@ -870,7 +872,7 @@ namespace MFO::ProgAllocator {
             for (const auto& t : cat.skills) total += t.nodes.size();
             a_out.clear();
             a_out.reserve(total);
-            const bool gateable = a_st && a_st->enrolled && a_st->cls != Class::kNone;
+            const bool gateable = a_st && a_st->enrolled && FindClassDef(a_st->clsId) != nullptr;
             for (const auto& tree : cat.skills) {
                 for (const auto& node : tree.nodes) {
                     BoardNodeView v;
@@ -917,7 +919,7 @@ namespace MFO::ProgAllocator {
 
                 RE::Actor* actor = RE::TESForm::LookupByID<RE::Actor>(id);
 
-                if (st.cls != Class::kNone) {
+                if (st.clsId != 0) {
                     const bool active = IsActiveFollower(id);
                     const int  lag    = std::max(0, static_cast<int>(pl) - static_cast<int>(st.progressionLevel));
                     int gain = 0;
@@ -956,7 +958,7 @@ namespace MFO::ProgAllocator {
                 if (actor) {
                     if (!st.applied) {
                         ReapplyFollower(actor, st);   // lazy: runs once the actor resolves
-                    } else if (st.cls != Class::kNone && IsActiveFollower(id)) {
+                    } else if (st.clsId != 0 && IsActiveFollower(id)) {
                         // Drift watch on the active party: an engine recompute
                         // (level-up autocalc, another mod's write) is adopted
                         // and re-topped by the reconcile. Writes only on
@@ -1001,65 +1003,69 @@ namespace MFO::ProgAllocator {
             return a_fallback;
         }
 
-        // Translate an ESL ClassSkills FormList (AVIF forms) into ActorValues.
-        // The AVIF→AV mapping is derived from the live ActorValueList — no
-        // hardcoded AVIF ids in the DLL, so a load order that replaces the
-        // AVIF records still maps correctly.
-        std::vector<RE::ActorValue> ReadSkillList(RE::TESDataHandler* a_dh, RE::FormID a_id,
-                                                  const char* a_name) {
-            std::vector<RE::ActorValue> out;
-            auto* list = a_dh->LookupForm<RE::BGSListForm>(a_id, Progression::kAddonPlugin);
-            if (!list) {
-                spdlog::warn("[prog] class list {} (0x{:03X}) missing from {} — DLL fallback weights",
-                             a_name, a_id, Progression::kAddonPlugin);
-                return out;
-            }
+        // ── §18.6 manifest class parsing (Init helpers) ─────────────────────
+        // NO fixed ids: classes are declared through the enumerated manifests.
+        // A class-def is ONE BGSListForm whose entries dispatch by form type:
+        // MESG (display name) | AVIF (a skill, order = weight) | PERK (auto-
+        // pick priority) | GLOB suffixed "_Stance" (#65 combat-stance mirror).
+
+        // True iff the global's runtime editor id ends with a_suffix. Globals
+        // keep their editor ids at runtime (console-addressable), so the
+        // stance knob is matched by suffix, never a fixed id.
+        bool EdidEndsWith(RE::TESGlobal* a_glob, std::string_view a_suffix) {
+            const char* e = a_glob->GetFormEditorID();
+            if (!e) return false;
+            const std::string_view id{ e };
+            return id.size() >= a_suffix.size() &&
+                   id.substr(id.size() - a_suffix.size()) == a_suffix;
+        }
+
+        // AVIF → ActorValue through the LIVE ActorValueList — no hardcoded
+        // AVIF ids, so a load order that replaces the records still maps.
+        RE::ActorValue MapSkillAvif(RE::TESForm* a_form) {
             auto* avl = RE::ActorValueList::GetSingleton();
-            for (auto* form : list->forms) {
-                if (!form) continue;
-                RE::ActorValue matched = RE::ActorValue::kNone;
-                if (avl) {
-                    for (const auto& s : kSkillNames) {
-                        auto* avi = avl->GetActorValue(s.av);
-                        if (avi && avi->GetFormID() == form->GetFormID()) { matched = s.av; break; }
-                    }
-                }
-                if (matched == RE::ActorValue::kNone) {
-                    spdlog::warn("[prog] class list {}: entry {:08X} is not a known skill AVIF — skipped",
-                                 a_name, form->GetFormID());
-                    continue;
-                }
-                out.push_back(matched);
+            if (!avl) return RE::ActorValue::kNone;
+            for (const auto& s : kSkillNames) {
+                auto* avi = avl->GetActorValue(s.av);
+                if (avi && avi->GetFormID() == a_form->GetFormID()) return s.av;
             }
-            return out;
+            return RE::ActorValue::kNone;
         }
 
-        std::vector<RE::FormID> ReadPerkList(RE::TESDataHandler* a_dh, RE::FormID a_id,
-                                             const char* a_name) {
-            std::vector<RE::FormID> out;
-            auto* list = a_dh->LookupForm<RE::BGSListForm>(a_id, Progression::kAddonPlugin);
-            if (!list) return out;   // absent == empty == fallback; shipped lists ARE empty
-            for (auto* form : list->forms)
-                if (form) out.push_back(form->GetFormID());
-            if (!out.empty())
-                spdlog::info("[prog] class perk-priority {}: {} authored entr(ies)", a_name, out.size());
-            return out;
+        // One class-def FLST → a ClassDef. Type-dispatched, order-free except
+        // within-type order (AVIF order = weight, PERK order = pick priority).
+        // Robust: an unresolved/unknown entry is skipped with a warning, never
+        // a crash. Returns false when the list declares no usable skills.
+        bool ParseClassDef(RE::BGSListForm* a_list, ClassDef& a_out) {
+            a_out.id = a_list->GetFormID();
+            for (auto* form : a_list->forms) {
+                if (!form) continue;
+                if (auto* msg = form->As<RE::BGSMessage>()) {
+                    const char* full = msg->GetFullName();
+                    if (full && *full && a_out.name.empty()) a_out.name = full;
+                } else if (auto* glob = form->As<RE::TESGlobal>()) {
+                    if (EdidEndsWith(glob, "_Stance"))
+                        a_out.stance = static_cast<std::uint8_t>(
+                            std::clamp(static_cast<int>(glob->value), 0, 3));
+                } else if (form->Is(RE::FormType::Perk)) {
+                    a_out.perkPriority.push_back(form->GetFormID());
+                } else if (const auto av = MapSkillAvif(form); av != RE::ActorValue::kNone) {
+                    a_out.skills.push_back(av);
+                } else {
+                    spdlog::warn("[prog] class-def {:08X}: entry {:08X} is not a MESG/"
+                                 "GLOB/PERK/skill-AVIF — skipped",
+                                 a_list->GetFormID(), form->GetFormID());
+                }
+            }
+            if (a_out.name.empty())
+                a_out.name = std::format("Class {:08X}", a_out.id);
+            return !a_out.skills.empty();
         }
 
-        void FallbackClassSkills() {
-            using AV = RE::ActorValue;
-            // Mirrors the shipped ESL lists exactly, so "record missing" and
-            // "record default" behave identically (§6 weights after pruning:
-            // Melee 40/30/20/10, Ranged 40/30/20/10, Mage 33/27/20/13/7).
-            if (g_class[1].skills.empty())
-                g_class[1].skills = { AV::kOneHanded, AV::kTwoHanded, AV::kHeavyArmor,
-                                      AV::kLightArmor, AV::kBlock, AV::kArchery };
-            if (g_class[2].skills.empty())
-                g_class[2].skills = { AV::kArchery, AV::kLightArmor, AV::kHeavyArmor,
-                                      AV::kSneak, AV::kOneHanded };
-            if (g_class[3].skills.empty())
-                g_class[3].skills = { AV::kDestruction, AV::kAlteration, AV::kRestoration,
-                                      AV::kConjuration, AV::kIllusion };
+        // Class display name by id — "none" for 0/unknown (log convenience).
+        const char* ClsName(RE::FormID a_id) {
+            const auto* def = FindClassDef(a_id);
+            return def ? def->name.c_str() : "none";
         }
 
         // ── the dev harness (bProgHarness) ──────────────────────────────────
@@ -1097,7 +1103,7 @@ namespace MFO::ProgAllocator {
                          "{} perk point(s) available (§17: floor(lvl/{}) − {} pre-trained − "
                          "{} spent) | {} perk(s) allocated | {} | "
                          "sharedRemainder {} | level-matched {} | provenance PFF={}",
-                         NameOf(a_actor), id, ClassName(st.cls), st.progressionLevel,
+                         NameOf(a_actor), id, ClsName(st.clsId), st.progressionLevel,
                          PerkPointsAvailable(st), kLevelsPerPerkPoint,
                          st.nativeTreePerksAtEnroll, AllocatedRanks(st), st.perks.size(),
                          IsActiveFollower(id) ? "ACTIVE" : "benched",
@@ -1114,14 +1120,14 @@ namespace MFO::ProgAllocator {
 
         void HarnessSkillDump(RE::Actor* a_actor) {
             auto it = g_prog.find(a_actor->GetFormID());
-            if (it == g_prog.end() || !it->second.enrolled || it->second.cls == Class::kNone) {
+            if (it == g_prog.end() || !it->second.enrolled || it->second.clsId == 0) {
                 spdlog::info("[prog] skills {}: no class set — nothing auto-scaled", NameOf(a_actor));
                 return;
             }
             auto* avo = a_actor->AsActorValueOwner();
             if (!avo) return;
             spdlog::info("[prog] skills {} (class {}, level {}):", NameOf(a_actor),
-                         ClassName(it->second.cls), it->second.progressionLevel);
+                         ClsName(it->second.clsId), it->second.progressionLevel);
             for (const auto& e : it->second.skills) {
                 spdlog::info("[prog]   {:<12} natural {:.1f} + alloc {:.0f} = base {:.1f} "
                              "(effective {:.1f})",
@@ -1155,13 +1161,13 @@ namespace MFO::ProgAllocator {
         return std::max(0, earned - AllocatedRanks(a_st));
     }
 
-    const char* ClassName(Class a_cls) {
-        switch (a_cls) {
-        case Class::kMelee:  return "Melee";
-        case Class::kRanged: return "Ranged";
-        case Class::kMage:   return "Mage";
-        default:             return "none";
-        }
+    const std::vector<ClassDef>& Classes() { return g_classes; }
+
+    const ClassDef* FindClassDef(RE::FormID a_id) {
+        if (a_id == 0) return nullptr;
+        for (const auto& def : g_classes)
+            if (def.id == a_id) return &def;
+        return nullptr;
     }
 
     bool Active() { return g_ready; }
@@ -1190,25 +1196,65 @@ namespace MFO::ProgAllocator {
         // The harness selector is the ONE live-read glob (console-set).
         g_devCmd = dh->LookupForm<RE::TESGlobal>(kGlobDevCmd, Progression::kAddonPlugin);
 
-        // Class lists (ESL-authored; DLL fallback mirrors the shipped lists).
-        g_class[1].skills = ReadSkillList(dh, kListClassSkillsMelee,  "MFOP_ClassSkills_Melee");
-        g_class[2].skills = ReadSkillList(dh, kListClassSkillsRanged, "MFOP_ClassSkills_Ranged");
-        g_class[3].skills = ReadSkillList(dh, kListClassSkillsMage,   "MFOP_ClassSkills_Mage");
-        g_class[1].perkPriority = ReadPerkList(dh, kListClassPerksMelee,  "MFOP_ClassPerks_Melee");
-        g_class[2].perkPriority = ReadPerkList(dh, kListClassPerksRanged, "MFOP_ClassPerks_Ranged");
-        g_class[3].perkPriority = ReadPerkList(dh, kListClassPerksMage,   "MFOP_ClassPerks_Mage");
-        FallbackClassSkills();
+        // §18.6 Stage 2: CLASSES are declared through the enumerated manifests
+        // (§18.1 registration), not fixed FormLists. For each registered
+        // manifest, the ONE non-sentinel FLST is the classes list; its entries
+        // are class-def FLSTs (ParseClassDef). Manifest-level GLOBs (economy —
+        // Stage 3) are TOLERATED and skipped here; the economy still reads its
+        // fixed-id GLOBs above until Stage 3 moves it onto the manifest.
+        for (const auto& addon : Progression::Addons()) {
+            auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
+            if (!manifest) continue;   // enumerated moments ago; belt and braces
+            RE::BGSListForm* classesList = nullptr;
+            for (auto* form : manifest->forms) {
+                if (!form || form == Forms::g_addonSentinel) continue;
+                if (auto* flst = form->As<RE::BGSListForm>()) {
+                    if (!classesList) classesList = flst;
+                    else spdlog::warn("[prog] manifest {:08X}: extra FLST {:08X} ignored "
+                                      "(one classes list per manifest)",
+                                      addon.manifestID, flst->GetFormID());
+                } else {
+                    // Economy GLOBs land here in Stage 3 — tolerated, not read yet.
+                    spdlog::info("[prog] manifest {:08X}: non-FLST entry {:08X} ignored "
+                                 "(Stage 2 reads only the classes list)",
+                                 addon.manifestID, form->GetFormID());
+                }
+            }
+            int parsed = 0;
+            if (classesList) {
+                for (auto* form : classesList->forms) {
+                    auto* defList = form ? form->As<RE::BGSListForm>() : nullptr;
+                    if (!defList) {
+                        spdlog::warn("[prog] classes list {:08X}: entry is not a class-def "
+                                     "FLST — skipped", classesList->GetFormID());
+                        continue;
+                    }
+                    if (FindClassDef(defList->GetFormID())) continue;   // dedupe across addons
+                    ClassDef def;
+                    if (ParseClassDef(defList, def)) {
+                        spdlog::info("[prog] class \"{}\" ({:08X}): {} skill(s), {} perk "
+                                     "priorit(ies), stance {}",
+                                     def.name, def.id, def.skills.size(),
+                                     def.perkPriority.size(), def.stance);
+                        g_classes.push_back(std::move(def));
+                        ++parsed;
+                    } else {
+                        spdlog::warn("[prog] class-def {:08X} (\"{}\") declares no usable "
+                                     "skills — dropped", def.id, def.name);
+                    }
+                }
+            }
+            spdlog::info("[prog] addon \"{}\" ({:08X}): {} class(es) registered",
+                         addon.plugin, addon.manifestID, parsed);
+        }
 
         g_ready = true;
         spdlog::info("[prog] allocator ready: perk = 1 per {} levels (§17 derived), "
-                     "skill/lvl {:g}, sharedDiv {}, "
-                     "respec {:g} rapport, cap {:g}, class lists {}/{}/{} skill(s), "
-                     "perk priorities {}/{}/{}, devCmd {}",
+                     "skill/lvl {:g}, sharedDiv {}, respec {:g} rapport, cap {:g}, "
+                     "{} declared class(es), devCmd {}",
                      kLevelsPerPerkPoint, g_econ.skillPointsPerLevel,
                      g_econ.sharedGrowthDivisor, g_econ.respecRapportCost, g_econ.skillCap,
-                     g_class[1].skills.size(), g_class[2].skills.size(), g_class[3].skills.size(),
-                     g_class[1].perkPriority.size(), g_class[2].perkPriority.size(),
-                     g_class[3].perkPriority.size(),
+                     g_classes.size(),
                      g_devCmd ? "resolved" : "MISSING (harness cmds default to 0)");
     }
 
@@ -1250,6 +1296,11 @@ namespace MFO::ProgAllocator {
         if (snap->active) {
             snap->respecRapportCost = g_econ.respecRapportCost;
             snap->skillCap          = g_econ.skillCap;
+            // §18.6: the declared classes, in declaration order — the board's
+            // dynamic-N class prompt draws exactly these.
+            snap->classes.reserve(g_classes.size());
+            for (const auto& def : g_classes)
+                snap->classes.emplace_back(def.id, def.name);
 
             const RE::FormID focus = g_boardFocus.load();
             for (const auto& h : Followers::g_active) {
@@ -1267,7 +1318,8 @@ namespace MFO::ProgAllocator {
                     st = &it->second;
                 if (st) {
                     v.enrolled       = true;
-                    v.cls            = static_cast<std::uint8_t>(st->cls);
+                    v.clsId          = st->clsId;
+                    if (const auto* def = FindClassDef(st->clsId)) v.clsName = def->name;
                     v.level          = st->progressionLevel;
                     v.unspentPerk    = static_cast<float>(PerkPointsAvailable(*st));   // §17 derived
                     v.nativeAtEnroll = st->nativeTreePerksAtEnroll;
@@ -1332,7 +1384,7 @@ namespace MFO::ProgAllocator {
         }
         auto& st = g_prog[id];
         if (st.enrolled) {
-            spdlog::info("[prog] {} already enrolled (class {})", NameOf(a_actor), ClassName(st.cls));
+            spdlog::info("[prog] {} already enrolled (class {})", NameOf(a_actor), ClsName(st.clsId));
             return false;
         }
         st.enrolled = true;
@@ -1367,7 +1419,7 @@ namespace MFO::ProgAllocator {
         return true;
     }
 
-    bool SetClass(RE::Actor* a_actor, Class a_cls) {
+    bool SetClass(RE::Actor* a_actor, RE::FormID a_classId) {
         if (!g_ready) { spdlog::info("[prog] set-class refused: addon absent"); return false; }
         if (!a_actor) return false;
         const auto id = a_actor->GetFormID();
@@ -1376,8 +1428,11 @@ namespace MFO::ProgAllocator {
             spdlog::info("[prog] set-class refused {}: not enrolled", NameOf(a_actor));
             return false;
         }
-        if (a_cls == Class::kNone) {
-            spdlog::info("[prog] set-class refused {}: a concrete class is required (§15)", NameOf(a_actor));
+        const ClassDef* def = FindClassDef(a_classId);
+        if (!def) {
+            // §15 + §18.6: a concrete DECLARED class is required.
+            spdlog::info("[prog] set-class refused {}: {:08X} is not a declared class",
+                         NameOf(a_actor), a_classId);
             return false;
         }
         auto& st = it->second;
@@ -1397,20 +1452,21 @@ namespace MFO::ProgAllocator {
                          st.nativeTreePerksAtEnroll);
         }
 
-        const auto before = st.cls;
-        st.cls = a_cls;
+        const auto beforeName = std::string(ClsName(st.clsId));
+        st.clsId = def->id;
 
-        // #65 alignment: the progression class IS the combat class — mirror
-        // it into the FollowerState override (same ordinals by construction)
-        // so the stance machinery follows the chosen class immediately.
+        // #65 alignment: the class's DECLARED stance mirrors into the
+        // FollowerState override (0 = no override) so the stance machinery
+        // follows the chosen class immediately (§18.6: the ordinal coupling
+        // is gone — the addon declares the stance explicitly).
         if (auto* rec = Followers::TryEnsureRecord(id)) {
-            rec->combatClassOverride = static_cast<std::uint8_t>(a_cls);
+            rec->combatClassOverride = def->stance;
         }
 
         RecomputeSkills(a_actor, st, /*log*/ true);
-        spdlog::info("[prog] {} class {} -> {} — skills auto-scaled to level {} "
+        spdlog::info("[prog] {} class {} -> \"{}\" ({:08X}) — skills auto-scaled to level {} "
                      "({} skill(s) allocated), perk allocation unlocked",
-                     NameOf(a_actor), ClassName(before), ClassName(a_cls),
+                     NameOf(a_actor), beforeName, def->name, def->id,
                      st.progressionLevel, st.skills.size());
         return true;
     }
@@ -1426,7 +1482,7 @@ namespace MFO::ProgAllocator {
             return false;
         }
         auto& st = it->second;
-        if (st.cls == Class::kNone) {
+        if (FindClassDef(st.clsId) == nullptr) {
             spdlog::info("[prog] allocate refused {}: no class set (the §15 gate)", NameOf(a_actor));
             return false;
         }
@@ -1453,16 +1509,18 @@ namespace MFO::ProgAllocator {
         auto* base = a_actor->GetActorBase();
         if (!base) return false;
         auto it = g_prog.find(a_actor->GetFormID());
-        if (it == g_prog.end() || !it->second.enrolled || it->second.cls == Class::kNone) {
+        const ClassDef* def = (it != g_prog.end() && it->second.enrolled)
+                                  ? FindClassDef(it->second.clsId) : nullptr;
+        if (!def) {
             spdlog::info("[prog] auto-pick refused {}: not enrolled or no class", NameOf(a_actor));
             return false;
         }
         auto& st = it->second;
         std::string whyNot;
 
-        // 1) the ESL-authored perk priority for this class, in list order.
+        // 1) the addon-declared perk priority for this class, in list order.
         // An entry may be any rank form of a node — match either way.
-        for (const auto fid : g_class[static_cast<std::size_t>(st.cls)].perkPriority) {
+        for (const auto fid : def->perkPriority) {
             for (const auto& tree : Progression::Get().skills) {
                 for (const auto& node : tree.nodes) {
                     const bool match = node.perkFormID == fid ||
@@ -1480,7 +1538,7 @@ namespace MFO::ProgAllocator {
         // order; within a tree, nodes in catalog (BFS ≈ depth) order —
         // deterministic under any overhaul, no EDIDs anywhere. Effective
         // ranks first; marginal only when nothing effective is takeable.
-        const auto weights = WeightsFor(a_actor, st.cls);
+        const auto weights = WeightsFor(a_actor, *def);
         for (const bool wantEffective : { true, false }) {
             for (const auto& [av, w] : weights) {
                 const auto* tree = FindTree(av);
@@ -1560,7 +1618,7 @@ namespace MFO::ProgAllocator {
         if (!g_ready) { spdlog::info("[prog] manual-skills refused: addon absent"); return false; }
         if (!a_actor) return false;
         auto it = g_prog.find(a_actor->GetFormID());
-        if (it == g_prog.end() || !it->second.enrolled || it->second.cls == Class::kNone) {
+        if (it == g_prog.end() || !it->second.enrolled || it->second.clsId == 0) {
             spdlog::info("[prog] manual-skills refused {}: not enrolled or no class (§15 gate)",
                          NameOf(a_actor));
             return false;
@@ -1599,7 +1657,7 @@ namespace MFO::ProgAllocator {
         if (!g_ready) { spdlog::info("[prog] apply-skill refused: addon absent"); return false; }
         if (!a_actor) return false;
         auto it = g_prog.find(a_actor->GetFormID());
-        if (it == g_prog.end() || !it->second.enrolled || it->second.cls == Class::kNone) {
+        if (it == g_prog.end() || !it->second.enrolled || it->second.clsId == 0) {
             spdlog::info("[prog] apply-skill refused {}: not enrolled or no class", NameOf(a_actor));
             return false;
         }
@@ -1693,7 +1751,11 @@ namespace MFO::ProgAllocator {
                 (st.veteranConsumed ? 4u : 0u) | (st.wasInPotentialFollowerFaction ? 8u : 0u) |
                 (st.manualSkills ? 16u : 0u);   // v2 (§16) — spare bit in the same byte
             a_intfc->WriteRecordData(flags);
-            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.cls));
+            // v3 (§18.6): the class is a FORMID now — the class-def FLST
+            // (ResolveFormID-stable identity), not an index into a list whose
+            // order the load order can change. Replaces the v1/v2 1-byte
+            // ordinal at the SAME field position.
+            a_intfc->WriteRecordData(st.clsId);
             a_intfc->WriteRecordData(st.progressionLevel);
             a_intfc->WriteRecordData(st.sharedGrowthRemainder);
             // v2: BASELINES only, never a pool value — both the §16 manual
@@ -1764,9 +1826,18 @@ namespace MFO::ProgAllocator {
             const bool resolved = a_intfc->ResolveFormID(rawID, resolvedID);
 
             ProgState st{};
-            std::uint8_t flags = 0, clsRaw = 0;
+            std::uint8_t flags = 0, legacyClsRaw = 0;
+            RE::FormID   rawClsId = 0;
             if (!a_intfc->ReadRecordData(flags)) return;
-            if (!a_intfc->ReadRecordData(clsRaw)) return;
+            // v3 widened the class field from a 1-byte ordinal to a 4-byte
+            // FormID at the SAME position. Consume exactly the bytes the
+            // save's version wrote (INVARIANT #12 — field order preserved).
+            if (a_version < 3) {
+                // v1/v2 stored the fixed-3 ordinal (1=Melee 2=Ranged 3=Mage).
+                if (!a_intfc->ReadRecordData(legacyClsRaw)) return;
+            } else {
+                if (!a_intfc->ReadRecordData(rawClsId)) return;
+            }
             if (!a_intfc->ReadRecordData(st.progressionLevel)) return;
             if (!a_intfc->ReadRecordData(st.sharedGrowthRemainder)) return;
             if (a_version < 2) {
@@ -1782,7 +1853,31 @@ namespace MFO::ProgAllocator {
             st.veteranConsumed                = (flags & 4u) != 0;
             st.wasInPotentialFollowerFaction  = (flags & 8u) != 0;
             st.manualSkills                   = (flags & 16u) != 0;   // v2 (§16)
-            st.cls = static_cast<Class>(std::min<std::uint8_t>(clsRaw, 3));
+            if (a_version < 3) {
+                // MIGRATION (§18.6 PRGN discipline): the legacy ordinal maps
+                // to the k-th DECLARED class. Pre-v3 saves were only ever
+                // written with MFO_Progression.esl as the sole addon, whose
+                // manifest declares Melee/Ranged/Mage in exactly that order,
+                // so ordinal k = the k-th declared class. No class declared at
+                // slot k → class cleared with a named line (the §15 prompt
+                // reappears), never a silent drop of the whole record.
+                const int ord = std::min<int>(legacyClsRaw, 3);
+                if (ord >= 1 && ord <= static_cast<int>(g_classes.size())) {
+                    st.clsId = g_classes[ord - 1].id;
+                } else if (ord != 0) {
+                    spdlog::warn("[cosave] legacy class ordinal {} has no declared "
+                                 "class — cleared (re-pick on the board)", ord);
+                }
+            } else if (rawClsId != 0) {
+                RE::FormID resolvedCls = 0;
+                if (a_intfc->ResolveFormID(rawClsId, resolvedCls) &&
+                    FindClassDef(resolvedCls)) {
+                    st.clsId = resolvedCls;
+                } else {
+                    spdlog::warn("[cosave] class {:08X} unresolvable or no longer "
+                                 "declared — cleared (re-pick on the board)", rawClsId);
+                }
+            }
             if (a_version >= 2) {
                 if (!a_intfc->ReadRecordData(st.manualBaselineLevel)) return;
                 if (!a_intfc->ReadRecordData(st.manualPointsApplied)) return;
@@ -1916,12 +2011,15 @@ namespace MFO::ProgAllocator {
                 spdlog::info("[prog] harness: {} not enrolled — cmd 1 first", NameOf(f));
                 break;
             }
-            const auto cur = it->second.cls;
-            const auto next = (cur == Class::kNone)   ? Class::kMelee
-                              : (cur == Class::kMelee) ? Class::kRanged
-                              : (cur == Class::kRanged) ? Class::kMage
-                                                        : Class::kMelee;
-            SetClass(f, next);
+            if (g_classes.empty()) {
+                spdlog::info("[prog] harness: no classes declared by any addon");
+                break;
+            }
+            // Cycle through the DECLARED classes (§18.6 dynamic-N).
+            std::size_t idx = 0;
+            for (std::size_t k = 0; k < g_classes.size(); ++k)
+                if (g_classes[k].id == it->second.clsId) { idx = k + 1; break; }
+            SetClass(f, g_classes[idx % g_classes.size()].id);
             break;
         }
         case 3:

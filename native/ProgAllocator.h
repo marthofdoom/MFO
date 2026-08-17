@@ -78,11 +78,27 @@ namespace MFO::ProgAllocator {
     // write this module has no probe data for).
     inline constexpr RE::FormID kKywdEnrolled          = 0x820;
 
-    // ── classes (§15) — SAME ordinals as FollowerState::combatClassOverride
-    // (0=none, 1=Melee, 2=Ranged, 3=Cast/Mage) so SetClass can mirror into
-    // the #65 override without a mapping table.
-    enum class Class : std::uint8_t { kNone = 0, kMelee = 1, kRanged = 2, kMage = 3 };
-    const char* ClassName(Class a_cls);
+    // ── classes: N-DECLARED, not fixed (§18.6 Stage 2) ──────────────────────
+    // The fixed enum Class + g_class[4] + ClassName is gone. Classes are now
+    // declared by the addon: the manifest points to ONE classes-list FLST
+    // whose entries are class-def FLSTs. Each class-def declares its display
+    // name (a MESG's FULL), its skills (AVIF forms, order = weight), an
+    // optional perk-priority list (PERK forms), and a #65 combat-stance
+    // mirror (a GLOB whose editor id ends "_Stance", 0-3).
+    //
+    // Identity = the class-def FLST's FormID — STABLE across sessions and
+    // load-order changes (ResolveFormID on the co-save side, PRGN v3), unlike
+    // an index into the enumerated list.
+    struct ClassDef {
+        RE::FormID   id{ 0 };            // the class-def FLST (serialized identity)
+        std::string  name;               // the MESG's FULL
+        std::uint8_t stance{ 0 };        // #65 combatClassOverride mirror (0 = none)
+        std::vector<RE::ActorValue> skills;        // order = weight
+        std::vector<RE::FormID>     perkPriority;  // optional, tried first
+    };
+    // Frozen after Init (the catalog discipline) — lock-free reads.
+    const std::vector<ClassDef>& Classes();
+    const ClassDef* FindClassDef(RE::FormID a_id);
 
     // ── per-follower progression state (co-save record 'PRGN', §8) ──────────
     struct PerkAlloc {
@@ -113,7 +129,10 @@ namespace MFO::ProgAllocator {
         bool wasInPotentialFollowerFaction{ false }; // provenance at enroll (§9.5)
         bool manualSkills{ false };                  // §16 manual skill points ON
 
-        Class         cls{ Class::kNone };
+        // §18.6: the CLASS-DEF FLST FormID (0 = no class picked yet — the
+        // §15 gate). Serialized as a FormID (PRGN v3) so it survives load-
+        // order changes via ResolveFormID; v2's fixed ordinal is migrated.
+        RE::FormID    clsId{ 0 };
         std::uint16_t progressionLevel{ 0 };
         std::uint16_t sharedGrowthRemainder{ 0 };    // banked player-levels while benched
 
@@ -176,7 +195,8 @@ namespace MFO::ProgAllocator {
 
     // ── the backend verbs (main thread; named [prog] reject lines) ──────────
     bool Enroll(RE::Actor* a_actor);
-    bool SetClass(RE::Actor* a_actor, Class a_cls);       // auto-scales skills
+    // a_classId = a declared ClassDef's id (§18.6). Auto-scales skills.
+    bool SetClass(RE::Actor* a_actor, RE::FormID a_classId);
     // §5 double gate (prereq perk(s)/rank order + perkConditions.IsTrue on
     // the follower at apply time). a_nodePerkID = the catalog node's rank-1
     // form; takes the NEXT untaken rank.
@@ -230,7 +250,8 @@ namespace MFO::ProgAllocator {
         bool          eligible{ false };
         std::string   blocker;           // why enrollment is refused (empty when eligible)
         bool          enrolled{ false };
-        std::uint8_t  cls{ 0 };          // Class ordinal (0 = class not chosen yet, §15 gate)
+        RE::FormID    clsId{ 0 };        // class-def id (0 = not chosen yet, §15 gate)
+        std::string   clsName;           // resolved display name ("" when none)
         std::uint16_t level{ 0 };
         float         unspentPerk{ 0.0f };    // §17 DERIVED pool (PerkPointsAvailable)
         std::uint16_t nativeAtEnroll{ 0 };    // §17: pre-trained tree ranks (the budget debit)
@@ -243,6 +264,8 @@ namespace MFO::ProgAllocator {
         bool  active{ false };           // addon detected + catalog built → tab exists
         float respecRapportCost{ 500.0f };
         float skillCap{ 100.0f };        // §16 apply gate — the board disables at cap
+        // §18.6: the declared classes for the board's dynamic-N prompt.
+        std::vector<std::pair<RE::FormID, std::string>> classes;
         std::vector<BoardFollowerView> rows;  // the active party, g_active order
         RE::FormID treeFor{ 0 };              // whose nodes[] below describe
         std::vector<BoardNodeView> nodes;     // catalog order; empty until a focus published

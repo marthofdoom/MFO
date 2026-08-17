@@ -995,9 +995,30 @@ PGID_ENROLLED_KYWD      = OWN_PROG | 0x820  # KYWD enrollment tag — RESERVED f
                                             #      stamp it (no probe data for base
                                             #      keyword-array writes)
 # §18.6 the ADDON MANIFEST — ONE FLST the DLL enumerates; entry[0] = the MFO.esp
-# sentinel keyword. Stages 2-3 append the classes-list FLST + economy GLOBs.
+# sentinel keyword, entry[1] = the classes-list FLST (Stage 2). Stage 3 appends
+# economy GLOBs as further entries.
 PGID_MANIFEST           = OWN_PROG | 0x821
-PROG_NEXT_OBJECT_ID     = 0x822
+
+# §18.6 Stage 2 — N-DECLARED CLASSES. The manifest points at ONE classes-list
+# FLST; its entries are class-def FLSTs. Each class-def FLST declares: ONE MESG
+# (display name = its FULL), its AVIF skills (order = weight), an OPTIONAL PERK
+# priority list (shipped empty), and ONE GLOB whose editor id ends "_Stance"
+# (the #65 combat-stance mirror, 1=Melee 2=Ranged 3=Mage). New frozen band.
+PGID_CLASSNAME_MELEE    = OWN_PROG | 0x830  # MESG display name
+PGID_CLASSNAME_RANGED   = OWN_PROG | 0x831
+PGID_CLASSNAME_MAGE     = OWN_PROG | 0x832
+# 0x833-0x83F reserved: more class display names
+PGID_STANCE_MELEE       = OWN_PROG | 0x840  # GLOB _Stance mirror (1 = Melee)
+PGID_STANCE_RANGED      = OWN_PROG | 0x841  #                     (2 = Ranged)
+PGID_STANCE_MAGE        = OWN_PROG | 0x842  #                     (3 = Mage/Cast)
+# 0x843-0x84F reserved: more class stance mirrors
+PGID_CLASSDEF_MELEE     = OWN_PROG | 0x850  # FLST class-def (MESG + AVIF + PERK + _Stance)
+PGID_CLASSDEF_RANGED    = OWN_PROG | 0x851
+PGID_CLASSDEF_MAGE      = OWN_PROG | 0x852
+# 0x853-0x85E reserved: more class-def FLSTs
+PGID_CLASSES            = OWN_PROG | 0x85F  # FLST classes list — manifest entry[1]
+
+PROG_NEXT_OBJECT_ID     = 0x860
 
 # Vanilla AVIF forms (Skyrim.esm) for the class-skill lists — DUMPED from the
 # shipped master (doctrine: mirror the disk, never a wiki). AVOneHanded ..
@@ -1059,6 +1080,27 @@ PROG_PERK_LISTS = [
     (PGID_PERKS_MAGE,   "MFOP_ClassPerks_Mage"),
 ]
 
+# §18.6 Stage 2 — the N-declared classes, as the reference addon ships them
+# (the worked API example). Each row → ONE class-def FLST + its MESG name +
+# its _Stance GLOB. The classes-list FLST (PGID_CLASSES) references the three
+# class-def FLSTs IN THIS ORDER — and that order is load-bearing: PRGN v<3
+# saves stored a fixed ordinal (1=Melee 2=Ranged 3=Mage) that the DLL migrates
+# to the k-th declared class, so Melee/Ranged/Mage MUST stay rows 0/1/2. The
+# AVIF skill orders mirror PROG_CLASS_SKILLS exactly (order = weight); the
+# stance value mirrors the old combatClassOverride ordinal.
+#   (defFid, defEdid, nameFid, nameEdid, display, stanceFid, stanceEdid, stanceVal, [AVIF skills])
+PROG_CLASSES = [
+    (PGID_CLASSDEF_MELEE,  "MFOP_ClassDef_Melee",  PGID_CLASSNAME_MELEE,  "MFOP_ClassName_Melee",
+     "Melee",  PGID_STANCE_MELEE,  "MFOP_ClassMelee_Stance",  1,
+     [AVIF_ONEHANDED, AVIF_TWOHANDED, AVIF_HEAVYARMOR, AVIF_LIGHTARMOR, AVIF_BLOCK, AVIF_MARKSMAN]),
+    (PGID_CLASSDEF_RANGED, "MFOP_ClassDef_Ranged", PGID_CLASSNAME_RANGED, "MFOP_ClassName_Ranged",
+     "Ranged", PGID_STANCE_RANGED, "MFOP_ClassRanged_Stance", 2,
+     [AVIF_MARKSMAN, AVIF_LIGHTARMOR, AVIF_HEAVYARMOR, AVIF_SNEAK, AVIF_ONEHANDED]),
+    (PGID_CLASSDEF_MAGE,   "MFOP_ClassDef_Mage",   PGID_CLASSNAME_MAGE,   "MFOP_ClassName_Mage",
+     "Mage",   PGID_STANCE_MAGE,   "MFOP_ClassMage_Stance",   3,
+     [AVIF_DESTRUCTION, AVIF_ALTERATION, AVIF_RESTORATION, AVIF_CONJURATION, AVIF_ILLUSION]),
+]
+
 
 def make_prog_tes4():
     # ESL flag 0x200. TWO masters (§18.6): Skyrim.esm (index 0x00) for the AVIF
@@ -1093,6 +1135,20 @@ def prog_flst(fid, edid, forms):
     return record('FLST', fid, 0, body)
 
 
+def prog_mesg(fid, edid, full):
+    # §18.6 Stage 2: a class-def's display name. MESG shape dumped from
+    # Skyrim.esm (a minimal message needs EDID + FULL; DESC is the body text,
+    # DNAM the flags). The DLL reads ONLY the FULL (BGSMessage::GetFullName);
+    # DESC mirrors it and DNAM=0 marks it a plain message (not a message box),
+    # so it never pops on screen. Strings are inline (this plugin is not
+    # localized), ASCII-only like every other zstr here.
+    body = subrec('EDID', zstr(edid))
+    body += subrec('FULL', zstr(full))
+    body += subrec('DESC', zstr(full))
+    body += subrec('DNAM', struct.pack('<I', 0))   # flags: 0 = not a message box
+    return record('MESG', fid, 0, body)
+
+
 def make_progression_esl():
     data = make_prog_tes4()
     # Top-group order mirrors Skyrim.esm's relative order: KYWD < GLOB < FLST.
@@ -1101,17 +1157,36 @@ def make_progression_esl():
     glob_body = b''
     for fid, edid, value, fnam in PROG_GLOBS:
         glob_body += prog_glob(fid, edid, value, fnam)
+    # §18.6 Stage 2: each class's #65 combat-stance mirror — a whole-number
+    # GLOB whose editor id ends "_Stance" (the DLL matches by suffix).
+    for _df, _de, _nf, _ne, _disp, stanceFid, stanceEdid, stanceVal, _sk in PROG_CLASSES:
+        glob_body += prog_glob(stanceFid, stanceEdid, float(stanceVal), 's')
     data += group('GLOB', glob_body)
     flst_body = b''
     # §18.6 the addon MANIFEST — enumerated by the DLL; entry[0] MUST be the
-    # MFO.esp sentinel keyword. (Stages 2-3 append the classes-list FLST +
-    # economy GLOBs as further entries.)
-    flst_body += prog_flst(PGID_MANIFEST, "MFOP_AddonManifest", [ESLREF_ADDON_SENTINEL])
+    # MFO.esp sentinel keyword, entry[1] the classes-list FLST (Stage 2).
+    flst_body += prog_flst(PGID_MANIFEST, "MFOP_AddonManifest",
+                           [ESLREF_ADDON_SENTINEL, PGID_CLASSES])
     for fid, edid, forms in PROG_CLASS_SKILLS:
         flst_body += prog_flst(fid, edid, forms)
     for fid, edid in PROG_PERK_LISTS:
         flst_body += prog_flst(fid, edid, [])
+    # §18.6 Stage 2: the classes-list FLST (manifest entry[1]) → the three
+    # class-def FLSTs in Melee/Ranged/Mage order (the PRGN v<3 migration
+    # ordinal depends on this order). Each class-def references its MESG name,
+    # its AVIF skills (order = weight), and its _Stance GLOB; the PERK
+    # priority is shipped empty (an overhaul patch fills it in xEdit).
+    flst_body += prog_flst(PGID_CLASSES, "MFOP_Classes",
+                           [defFid for defFid, *_ in PROG_CLASSES])
+    for defFid, defEdid, nameFid, _ne, _disp, stanceFid, _se, _sv, skills in PROG_CLASSES:
+        flst_body += prog_flst(defFid, defEdid, [nameFid] + skills + [stanceFid])
     data += group('FLST', flst_body)
+    # MESG group last — mirrors Skyrim.esm's late top-group position (MESG
+    # sorts after FLST/PERK/AVIF). One display-name message per class.
+    mesg_body = b''
+    for _df, _de, nameFid, nameEdid, disp, _sf, _se, _sv, _sk in PROG_CLASSES:
+        mesg_body += prog_mesg(nameFid, nameEdid, disp)
+    data += group('MESG', mesg_body)
     return data
 
 
@@ -1197,6 +1272,15 @@ def main():
         print(f"  FLST  0x{fid & 0xFFF:03X}        {edid} ({len(forms)} AVIF entries, order = weight)")
     for fid, edid in PROG_PERK_LISTS:
         print(f"  FLST  0x{fid & 0xFFF:03X}        {edid} (shipped EMPTY — xEdit extension point)")
+    # §18.6 Stage 2 — the N-declared classes.
+    for _df, _de, nameFid, nameEdid, disp, _sf, _se, _sv, _sk in PROG_CLASSES:
+        print(f"  MESG  0x{nameFid & 0xFFF:03X}        {nameEdid} (FULL \"{disp}\" — class display name)")
+    for _df, _de, _nf, _ne, disp, stanceFid, stanceEdid, stanceVal, _sk in PROG_CLASSES:
+        print(f"  GLOB  0x{stanceFid & 0xFFF:03X}        {stanceEdid} = {stanceVal} (#65 stance mirror)")
+    for defFid, defEdid, _nf, _ne, _disp, _sf, _se, _sv, skills in PROG_CLASSES:
+        print(f"  FLST  0x{defFid & 0xFFF:03X}        {defEdid} (class-def: MESG + {len(skills)} AVIF + _Stance)")
+    print(f"  FLST  0x{PGID_CLASSES & 0xFFF:03X}        MFOP_Classes ({len(PROG_CLASSES)} class-def(s); manifest entry[1])")
+    print(f"  FLST  0x{PGID_MANIFEST & 0xFFF:03X}        MFOP_AddonManifest (entry[0]=MFO.esp sentinel, entry[1]=MFOP_Classes)")
 
 
 if __name__ == "__main__":

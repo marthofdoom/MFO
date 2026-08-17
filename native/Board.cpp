@@ -1258,11 +1258,11 @@ namespace MFO::Board {
                         if (ImGui::SmallButton(">##nextpf")) switchFollower(+1);
                         ImGui::EndDisabled();
                         ImGui::SameLine();
-                        if (who->enrolled && who->cls != 0) {
+                        if (who->enrolled && who->clsId != 0) {
                             ImGui::TextDisabled("level %u", (unsigned)who->level);
                             ImGui::SameLine();
                             std::string cl = std::string("Class: ") +
-                                ProgAllocator::ClassName(static_cast<ProgAllocator::Class>(who->cls));
+                                (who->clsName.empty() ? "?" : who->clsName.c_str());
                             if (ImGui::SmallButton(cl.c_str())) ImGui::OpenPopup("##pclass");
                         } else {
                             ImGui::TextDisabled("not enrolled");
@@ -1276,15 +1276,15 @@ namespace MFO::Board {
                         // this tab pops the picker ONCE per selection: nothing
                         // is assigned until the player explicitly picks; B
                         // backs out (popup cascade) and the button below
-                        // reopens. The class ordinals are the allocator's own
-                        // (#65-aligned); their skill weights come from the
-                        // ESL FormLists read at Init — nothing hardcoded here.
+                        // reopens. The classes are addon-DECLARED (§18.6): the
+                        // picker draws prog.classes (dynamic-N), each carrying
+                        // its class-def FormID — nothing hardcoded here.
                         // P2 (deck round 3): ENROLLED-FIRST branching. The
                         // eligibility check (teammate/dismissal quirks) can
                         // flap at runtime — it must gate ENROLLMENT only,
                         // never blank the UI of an already-enrolled follower
                         // (that read as "skills not visible at all").
-                        const bool progReady  = who->enrolled && who->cls != 0;
+                        const bool progReady  = who->enrolled && who->clsId != 0;
                         const bool needsClass = !progReady && who->eligible;
                         if (needsClass && s_promptedFor != s_psel && !popupOpen) {
                             ImGui::OpenPopup("##pclass");
@@ -1303,13 +1303,20 @@ namespace MFO::Board {
                             ImGui::TextDisabled("Skills auto-scale to level by class; perks stay yours to pick.");
                             ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
                             ImGui::Separator();
-                            for (int k = 1; k <= 3; ++k) {
-                                const bool cur = (who->cls == k);
-                                ImGui::PushID(k);
-                                if (ImGui::Selectable(
-                                        ProgAllocator::ClassName(static_cast<ProgAllocator::Class>(k)),
-                                        cur)) {
-                                    QueueEdit({ EditKind::ProgSetClass, s_psel, 0, 0u, (float)k });
+                            // §18.6: the addon-declared classes (dynamic-N).
+                            // Each Selectable carries its class-def FormID in
+                            // the EditCmd's perk field (a float param can't
+                            // hold a 32-bit FormID losslessly).
+                            if (prog.classes.empty())
+                                ImGui::TextDisabled("(no classes declared by the addon)");
+                            int k = 0;
+                            for (const auto& [classId, className] : prog.classes) {
+                                const bool cur = (who->clsId == classId);
+                                ImGui::PushID(k++);
+                                if (ImGui::Selectable(className.c_str(), cur)) {
+                                    EditCmd e{ EditKind::ProgSetClass, s_psel, 0, 0u, 0.0f };
+                                    e.perk = classId;
+                                    QueueEdit(e);
                                     ImGui::CloseCurrentPopup();
                                 }
                                 if (cur) ImGui::SetItemDefaultFocus();
@@ -2945,11 +2952,9 @@ namespace MFO::Board {
                 c.kind == EditKind::ProgApplySkillPoint) {
                 const auto  kind  = c.kind;
                 const auto  fid   = c.fid;
-                const auto  perk  = c.perk;
+                const auto  perk  = c.perk;   // §18.6: ProgSetClass carries the class-def id here
                 const float param = c.param;
-                const auto  cls   = static_cast<ProgAllocator::Class>(
-                    std::clamp(static_cast<int>(c.param + 0.5f), 0, 3));
-                MainThread::Post([kind, fid, perk, cls, param]() {
+                MainThread::Post([kind, fid, perk, param]() {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
                     if (!actor) {
                         spdlog::info("[prog] board edit dropped: actor {:08X} unresolvable", fid);
@@ -2960,10 +2965,11 @@ namespace MFO::Board {
                         // The §15 onboarding as ONE player action: enroll on
                         // first contact (refuses with a named line when
                         // already enrolled), then the class pick auto-scales.
+                        // §18.6: perk holds the declared class-def FormID.
                         if (auto it2 = ProgAllocator::g_prog.find(fid);
                             it2 == ProgAllocator::g_prog.end() || !it2->second.enrolled)
                             ProgAllocator::Enroll(actor);
-                        ProgAllocator::SetClass(actor, cls);
+                        ProgAllocator::SetClass(actor, perk);
                         break;
                     case EditKind::ProgAllocPerk:
                         ProgAllocator::AllocatePerk(actor, perk);
