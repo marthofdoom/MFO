@@ -8,13 +8,27 @@
   long as that order's condition is true; the moment it goes false (or the fight ends)
   the hold releases and the follower goes back to normal -- a mage can cast again. Off
   switch: bWeaponStyleControl.
+- A follower's melee/ranged ORDER now overrides their assigned combat class while it's
+  true -- a follower you've set to the Mage class actually draws and holds the dagger
+  when you order it, instead of its caster class quietly cancelling the order (the
+  reason a mage-classed follower still thrashed). A higher-priority cast gambit still
+  fires in between -- they left-hand-cast the ordered spell without dropping the
+  weapon.
+- The weapon/stance swap now reads HUMAN: when an order goes false the follower commits
+  to the stance for a short beat before switching back, so a foe stepping in and out of
+  range no longer makes them flick between spell and blade every second. Each follower's
+  commit is slightly their own, so the party never swaps in robotic unison.
 - Followers now loot gear for equip slots they have EMPTY, not only slots they're
   already wearing something in -- a helmetless follower will pick up a helmet instead
   of ignoring every one until you place one on them first. Still never downgrades real
   worn armour.
-- A mage keeps acquiring and upgrading their sidearm even while dual-wielding spells
-  (their weapon hand reads "empty," which used to stop them looting a better dagger).
-  Stock-only -- it's kept for when they switch, never force-drawn.
+- Your follower's COMBAT CLASS now decides their melee sidearm: a base Mage keeps a
+  DAGGER (loots and draws daggers only, never a full sword or mace) even when it has a
+  melee order, while a base warrior or archer who also casts -- a spellsword -- gets
+  the full weapon role. Off switch: bMageDaggersOnly.
+- Followers now walk to and pick up LOOSE potions sitting out in the world -- on
+  tables, shelves, altars -- not just potions inside containers and corpses. Owned
+  inn / shop / home stock is still left alone.
 - Coin purses are now counted as lootable gold, not just loose septims.
 - The "ally" gambit target now includes the PLAYER, so an ally-targeted order (e.g.
   heal the lowest-health ally) can target you.
