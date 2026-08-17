@@ -31,15 +31,19 @@
 > - **NEXT (two tracks, ALONGSIDE):** (A) **CRASH QUEUE** ([[crash-reports-cast-target-1.5.x]]): 3
 >   pastebins — MFO AV in `act.cast_target` (poisoned ptr +0x13) on SE 1.5.97 + a tbbmalloc/EngineFixes
 >   heap crash. Diagnose via [bc] + CI PDB. (B) **FORCED SELF-CAST** — spec at
->   `Docs/SPEC-self-cast-forced.md`. Self-concentration gambits (ward, self-heal, any chosen self-spell)
->   are barred every tick (log-proven: Lucien rule 0 `concentration self-cast unreachable`); the
->   self-heal marth sees is the AUTONOMOUS AI, not MFO. AI-first is INSUFFICIENT (can't force the chosen
->   spell; can't guarantee reactive timing vs a power-attack windup). Fix = dedicated **no-QNAM t6 self
->   package** (avoids the QNAM+t6 rev-4 CTD cell), bounded via CastHold; PROBE the no-QNAM t6 shape in
->   isolation FIRST (P0 risk), then wire Begin/ConcentrationCast. Acceptance incl. a deck LATENCY
->   measurement (force-dispatch→ward-up ms by weapon class). **Delegate to a worktree-isolated agent**
->   (big files: Packages.cpp 3278 + ESP gen + probe) to keep main context lean — see
->   [[be-token-efficient-right-size-effort]] / [[never-two-agents-same-build]]. Robust authoring pattern:
+>   `Docs/SPEC-self-cast-forced.md`. **BUILT, GATED, awaiting deck probe** (branch
+>   `worktree-agent-a9afe7fd5fe8c8e26`): dedicated **no-QNAM t6 self package** `MFO_CastPackageSelf`
+>   (Forms `0x835`) on command-quest **alias 2**; `Packages::Begin`/`ConcentrationCast` self routes wired,
+>   bounded via CastHold; ReleaseAll sweeps alias 2. Whole route is behind **`bCastSelf` (INI, default
+>   OFF)** — it MUST NOT ship active until the isolation probe passes. §0.22 already field-proved probe
+>   6's t6+no-QNAM ward casts clean (REVOKED #67) — the record shape is not the open risk; the untested
+>   part is the PRODUCTION path (arbitrary self spell, in combat, alias fill/evict). **DECK PROBE (do
+>   before trusting):** (1) load a save with the new ESP + `bCastSelf=0` → game loads = record shape is
+>   load-safe. (2) `bCastSelf=1`, author ONE `cast_self` ward/self-heal gambit on ONE follower, trigger
+>   in combat. CLEAN = `[pkg] … requested cast … on self (alias 2)` → `[cast] … CONCENTRATION … on self …
+>   stream` and the ward raises, NO CTD. CTD at the cast = the production path still hits the cell → fall
+>   back to a direct `ActorMagicCaster` channel + timed interrupt (spec §Risks). Still owed after a clean
+>   probe: the deck LATENCY number (force-dispatch→ward-up ms by weapon class). Robust authoring pattern:
 >   proactive "ward WHILE threatened" held as a stream, not reactive race.
 > - Also owed: Nexus bbcode 1.0.62→64; Progression Add-On release + kit; MAP.md full refresh.
 > - **CONCENTRATION (answered marth):** works v1.0.53+ (ConcentrationCast, Actuation.cpp:224) IFF

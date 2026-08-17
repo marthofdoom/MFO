@@ -32,6 +32,10 @@ namespace MFO::Forms {
         // ── M9 records ──────────────────────────────────────────────────
         g_commandQuest = Look<RE::TESQuest>(kCommandQuest, "MFO_CommandQuest");
         g_castPackage  = Look<RE::TESPackage>(kCastPackage, "MFO_CastPackage");
+        // FORCED SELF-CAST (SPEC-self-cast-forced): t6/no-QNAM self package on
+        // command-quest alias 2. A miss disables ONLY the self route (named log
+        // line via Look), never a hard requirement.
+        g_castPackageSelf = Look<RE::TESPackage>(kCastPackageSelf, "MFO_CastPackageSelf");
         g_lootQuest    = Look<RE::TESQuest>(kLootQuest, "MFO_LootQuest");        // Option A
         g_travelPackage = Look<RE::TESPackage>(kTravelPackage, "MFO_TravelPackage");  // Option A (slot 0)
         // P7 slots 1-3. Diagnostic-only (WALK readout); a missing extra disables

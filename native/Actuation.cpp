@@ -234,14 +234,13 @@ namespace MFO::Actuation {
                          "concentration needs the cast package (bForceCastOnMiss+bUsePackages)",
                          true };
             }
-            // The package self route is BARRED (QNAM+t6, the unprobed rev-4
-            // CTD cell -- Packages::Begin). No bounded self-stream exists
-            // yet, and an unbounded one is not an acceptable substitute.
-            if (self) {
-                return { Result::FailedOther,
-                         "concentration self-cast unreachable (package self route barred)",
-                         true };
-            }
+            // SELF concentration (SPEC-self-cast-forced): self-heal, self-ward,
+            // any authored cast_self channel. Served by the dedicated no-QNAM t6
+            // self package via Packages::CastSelf, GATED behind bCastSelf. With
+            // the gate off, CastSelf returns Decline::SelfRoute and this falls to
+            // the transparent structural decline below -- the caller's rules run,
+            // exactly the pre-feature behaviour. A self-cast needs NO line-of-
+            // fire gate (nothing to friendly-fire) and no target-LoS check.
             // PACING -- the same fCastCooldown every other gambit cast obeys,
             // consulted directly (no equip machinery on this path to consult
             // it for us). This is what spaces one bounded stream from the
@@ -249,20 +248,20 @@ namespace MFO::Actuation {
             if (Loadout::CoolingDown(id)) {
                 return { Result::NoOp, "cast cooling down", true };
             }
-            // LoS: never stream into a wall (the forced shot's gate).
-            if (Sightline::Check(id, a_target->GetFormID()) ==
+            // LoS: never stream into a wall (the forced shot's gate). Foe only.
+            if (!self && Sightline::Check(id, a_target->GetFormID()) ==
                 Sightline::Verdict::Occluded) {
                 return { Result::NoOp, "forced cast held (no line of sight)", true };
             }
 
             const auto kind = CasterConsent::ClassifySpell(a_spell);
 
-            // THE LINE-OF-FIRE GATE, hostile streams, NOT optional: friendly
+            // THE LINE-OF-FIRE GATE, hostile FOE streams, NOT optional: friendly
             // fire from a stream is what triggered the freeze; the #63 quash
             // is a backstop, never a license. The same check re-runs every
             // Pump tick mid-stream (ffWatch) and cuts the beam if someone
-            // walks into it.
-            if (kind == CasterConsent::SpellKind::Offense &&
+            // walks into it. A SELF stream has no line of fire, so it is exempt.
+            if (!self && kind == CasterConsent::SpellKind::Offense &&
                 Sightline::TeammateInFireLine(id, a_target->GetFormID())) {
                 return { Result::NoOp,
                          "concentration held (teammate in the line of fire)", true };
@@ -272,17 +271,19 @@ namespace MFO::Actuation {
             const char*        kindName = "utility";
             if (kind == CasterConsent::SpellKind::Offense) {
                 hold.holdSeconds = 1.0f + 3.0f * Temperament(id);   // 1-4 s, flair #1
-                hold.ffWatch     = true;
-                kindName         = "hostile";
+                hold.ffWatch     = !self;   // no line of fire to watch on a self stream
+                kindName         = self ? "self-offense" : "hostile";
             } else if (kind == CasterConsent::SpellKind::Heal) {
                 hold.holdSeconds = kConcHealCap;
-                hold.healWatch   = a_target->GetFormID();
-                kindName         = "heal";
+                hold.healWatch   = self ? id : a_target->GetFormID();
+                kindName         = self ? "self-heal" : "heal";
             } else {
                 hold.holdSeconds = kConcUtilityHold;
+                kindName         = self ? "self-utility" : "utility";
             }
 
-            const auto d = Packages::CastAt(a_follower, a_spell, a_target, hold);
+            const auto d = self ? Packages::CastSelf(a_follower, a_spell, hold)
+                                : Packages::CastAt(a_follower, a_spell, a_target, hold);
             if (d == Packages::Decline::None) {
                 // Exclusive control while the rule governs: the latch's DENY
                 // of other spells is the exact-mode bounding, and the
@@ -291,12 +292,14 @@ namespace MFO::Actuation {
                 // cooldown paces the next stream.
                 CasterConsent::Want(id, a_spell->GetFormID());
                 Loadout::StartCooldown(id);
-                spdlog::info("[cast] {:08X} {} CONCENTRATION {} ({:08X}) at {:08X} -- "
+                spdlog::info("[cast] {:08X} {} CONCENTRATION {} ({:08X}) {} -- "
                              "{} stream, hold {:.1f}s{}",
                              id, a_follower->GetName() ? a_follower->GetName() : "?",
                              a_spell->GetName() ? a_spell->GetName() : "?",
-                             a_spell->GetFormID(), a_target->GetFormID(), kindName,
-                             hold.holdSeconds,
+                             a_spell->GetFormID(),
+                             self ? std::string("on self")
+                                  : std::format("at {:08X}", a_target->GetFormID()),
+                             kindName, hold.holdSeconds,
                              hold.healWatch ? " (or until healed)" : "");
                 return { Result::Fired, "concentration stream (bounded)" };
             }

@@ -1365,11 +1365,41 @@ def mode_selftest(args):
             ck('MFO PACK puts QNAM immediately before PKCU',
                names.index('PKCU') - names.index('QNAM')
                if 'QNAM' in names and 'PKCU' in names else None, 1)
+        # ── the FORCED SELF-CAST package (SPEC-self-cast-forced) ──────────────
+        # §0.22's proven-clean shape: rides UseMagic, targType-6 self, and NO
+        # QNAM (a QNAM on a record whose inputs name no alias is the rev-4 crash
+        # cell -- probe 6 with no QNAM cast cleanly and REVOKED #67).
+        ps = mfo.by_fid.get(0x01000835)
+        ck('MFO_CastPackageSelf 01000835 exists', ps is not None, True)
+        if ps is not None:
+            snames = [t for t, _ in ps.subs()]
+            ck('MFO self PACK carries NO QNAM (names no alias)', 'QNAM' in snames, False)
+            ck('MFO self PACK type == 18 (instance)', pack_type_of(ps), 18)
+            ck('MFO self PACK rides UseMagic 000504F5',
+               f'{pack_template_of(ps):08X}', '000504F5')
+            _, svals, _, _ = pack_inputs(ps)
+            starg = svals[2] if len(svals) > 2 else None
+            ck('MFO self "Target" slot holds PTDA type 6 (self)',
+               (starg[1], struct.unpack_from('<i', starg[2], 0)[0])
+               if starg else None, ('PTDA', 6))
         q = mfo.by_fid.get(0x0100080A)
         ck('MFO_CommandQuest 0100080A is a QUST', q.sig if q else None, 'QUST')
         if q:
             blocks = alias_blocks(q)
-            ck('MFO_CommandQuest has 2 aliases', len(blocks), 2)
+            # 0 = foe carrier, 1 = foe target, 2 = self carrier (self-cast).
+            ck('MFO_CommandQuest has 3 aliases', len(blocks), 3)
+            # alias 2 (MFO_CommandSelfActor) carries the self package in release
+            # builds (POC leaves it bare -- the probe ladder rides alias 0).
+            if len(blocks) >= 3:
+                s2 = dict(blocks[2]['subs'])
+                ck('alias 2 is MFO_CommandSelfActor',
+                   _zstr(s2.get('ALID', b'')), 'MFO_CommandSelfActor')
+                alpc2 = [f'{_u32.unpack_from(d, 0)[0]:08X}'
+                         for t, d in blocks[2]['subs'] if t == 'ALPC']
+                if '01000820' in [f'{_u32.unpack_from(d, 0)[0]:08X}'
+                                  for t, d in blocks[0]['subs'] if t == 'ALPC']:
+                    ck('alias 2 carries ALPC -> the self cast package',
+                       alpc2, ['01000835'])
             if blocks:
                 sub = dict(blocks[0]['subs'])
                 ck('alias 0 is MFO_CommandActor',

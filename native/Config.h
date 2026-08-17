@@ -166,6 +166,21 @@ namespace MFO::Config {
     // seed file; sections are cosmetic to the parser), then a full restart.
     inline std::atomic<bool>  g_probeCastStyle{ false };
 
+    // FORCED SELF-CAST GATE (Docs/SPEC-self-cast-forced.md), DEFAULT OFF --
+    // dev/opt-in ONLY, INI-only (the bProbeCastStyle precedent). Arms the
+    // dedicated no-QNAM targType-6 self package (MFO_CastPackageSelf, command-
+    // quest alias 2): with it OFF, Packages::Begin's self route stays BARRED
+    // (Decline::SelfRoute) exactly as it shipped, and an authored act.cast_self
+    // gambit falls through to the silent legacy apply. With it ON, a cast_self
+    // gambit -- concentration self-heal/self-ward OR fire-and-forget -- is
+    // FORCED through the self package, bounded by the same CastHold discipline
+    // as the target stream. §0.22 proved the record shape casts cleanly and
+    // REVOKED #67; the gate exists because the PRODUCTION path (arbitrary self
+    // spell, in combat, via alias fill/evict) is not yet deck-confirmed -- it
+    // must not ship active until the isolation probe passes. bCastSelf = 1 in
+    // Data/SKSE/Plugins/MFO.ini, then a restart.
+    inline std::atomic<bool>  g_castSelf{ false };
+
     // FOLLOWER-PROGRESSION SINKER PROBE (design doc §13 P1/P2/P3), DEFAULT
     // OFF — dev opt-in ONLY, INI-only (an experiment, not a setting; the
     // bProbeCastStyle precedent). Arms ProgProbe: a LOG-ONLY throwaway that

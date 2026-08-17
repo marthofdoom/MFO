@@ -185,10 +185,21 @@ releases **by eviction** with a non-actor XMarker.
   Timeouts `kFillTimeout=3.0`/`kRunTimeout=12.0` (`:126-127`).
 - `CastAt`/`CastSelf`/`Available`/`StreamLive` — callers `Actuation.cpp:135-136,
   266,113,213`, `Logistics.cpp:3841-3842`, `CasterConsent.cpp:163` (reads the
-  atomic mirror). **`CastSelf` always declines `SelfRoute`** (`:702`) — targType-6
-  into the QNAM-carrying cast package is an unprobed CTD cell. One `MFO_CastPackage`
-  + one alias 0 → single holder forced by shared `TESPackage::refCount` (`:734`),
-  not a preference; multi-holder needs per-verb records minted at 0x821+.
+  atomic mirror). **`CastSelf` is GATED behind `Config::g_castSelf` (bCastSelf,
+  default OFF)** — off → declines `Decline::SelfRoute` (caller falls back to the
+  silent apply, the pre-feature behaviour); on → runs the DEDICATED self package
+  (SPEC-self-cast-forced). Self is delivered by command-quest **alias 2**
+  (`kAliasCommandSelfActor`) carrying `MFO_CastPackageSelf` (Forms `0x835`,
+  `g_castPackageSelf`): authored **t6 self, NO QNAM** — §0.22's proven-clean
+  probe-6 shape, which REVOKED #67 (the rev-4 crash was the QNAM, not the t6).
+  `SetSelfSpell` writes ONLY the Spell input at runtime; the t6 target is
+  authored statically and never rewritten (writing t6 into a QNAM-carrying
+  record was the crash). `g_holder.self` selects alias/package for every
+  observe/release helper (`HolderActorAlias`/`HolderPackage`); **ReleaseAll now
+  sweeps BOTH alias 0 and alias 2** (the self fill is engine-serialized like the
+  foe fill). Self is AE-only (VM fallback fills alias 0). One `MFO_CastPackage`/
+  `MFO_CastPackageSelf` each on their own alias → single holder forced by shared
+  `TESPackage::refCount` (`:734`); multi-holder needs per-verb records at 0x821+.
 - `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1265-1494`)
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and

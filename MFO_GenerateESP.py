@@ -61,6 +61,15 @@ FID_CAST_STYLE      = OWN | 0x832  # P1 PROBE: caster-forward CSTY the DLL swaps
 FID_MELEE_STYLE     = OWN | 0x833  # melee-dominant CSTY: swapped in when act.equip_melee
                                    # wins the hand so the AI stops re-drawing the bow (v1.0.33)
 FID_RANGED_STYLE    = OWN | 0x834  # ranged-dominant CSTY: swapped in for act.equip_ranged
+# FORCED SELF-CAST (Docs/SPEC-self-cast-forced.md): the dedicated no-QNAM
+# targType-6 self package, delivered by the command quest's own alias 2. §0.22
+# proved probe 6's t6+no-QNAM self-cast CASTS cleanly (and REVOKED #67); the
+# shipped MFO_CastPackage cannot serve self because it carries a QNAM (its foe
+# target is t4 -> alias 1), and writing t6 into a QNAM-carrying record at runtime
+# is the rev-4 crash cell. So self gets its OWN record, authored t6 with NO QNAM
+# -- probe 6's proven-clean shape. Wiring is DLL-gated (bCastSelf) until the
+# production path is deck-confirmed.
+FID_CAST_PACKAGE_SELF = OWN | 0x835  # UseMagic PACK, targType-6 self, no QNAM
 NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x900-0x902 = P7 travel packages)
 
 # Vanilla refs
@@ -429,7 +438,7 @@ def make_command_quest():
     # quests that have aliases do it that way -- 1607 before, 0 after. The
     # generator's own doctrine is to mirror vanilla order exactly rather than
     # rely on the engine's Load() tolerating a reordering.
-    body += subrec('ANAM', struct.pack('<I', 2))
+    body += subrec('ANAM', struct.pack('<I', 3))   # aliases 0,1,2 (2 = self-cast)
 
     # ── alias 0: the actor MFO is commanding, and the package it carries ──
     # Flags: Optional (0x02) so the quest starts unfilled, Allow Reuse In Quest
@@ -467,6 +476,24 @@ def make_command_quest():
         # The player: always loaded, always near the follower, and a vanilla
         # ALFR precedent (72 vanilla aliases force-fill PlayerRef).
         body += subrec('ALFR', struct.pack('<I', FREF_PLAYER))
+    body += subrec('VTCK', struct.pack('<I', 0))
+    body += subrec('ALED', b'')
+
+    # ── alias 2: the SELF-CAST carrier (SPEC-self-cast-forced). ──
+    # Same DialogueFollower shape as alias 0 -- a bare Optional slot the DLL
+    # fills on demand -- but its ALPC is MFO_CastPackageSelf (t6 self, NO QNAM,
+    # §0.22's proven-clean probe-6 shape), NOT the foe package. A follower is
+    # only ever in alias 0 (foe cast) OR alias 2 (self cast), never both, so
+    # each alias still carries exactly one package -- no ALPC arbitration, the
+    # same "one package per alias" discipline loot/retreat keep. Self needs no
+    # target alias: t6 aims the caster at himself, authored in the record.
+    body += subrec('ALST', struct.pack('<I', 2))
+    body += subrec('ALID', zstr("MFO_CommandSelfActor"))
+    body += subrec('FNAM', struct.pack('<I', 0x0002 | 0x0008 | 0x0200))
+    if not POC_ENABLED:
+        # Probe builds keep alias 2 bare (the probe ladder rides alias 0); a
+        # release build carries the self package here.
+        body += subrec('ALPC', struct.pack('<I', FID_CAST_PACKAGE_SELF))
     body += subrec('VTCK', struct.pack('<I', 0))
     body += subrec('ALED', b'')
     return record('QUST', FID_COMMAND_QUEST, 0, body)
@@ -640,16 +667,28 @@ def build_usemagic(fid, edid, spell, target, bounds, ctda=b'', qnam=None, waiver
     """
     tkind, tval = target
     if tkind == 't6':
-        # A PROBE may waive this deliberately -- that is how precedent gets
-        # made. Production records never can: the waiver has to be written at
-        # the call site, with a reason, and it only ever applies to one record.
-        if waiver == 't6' and not POC_ENABLED:
-            raise SystemExit(f"REFUSED {edid}: a waiver is a PROBE instrument and "
-                             "must never reach a release build.")
-        if waiver != 't6':
+        # PRODUCTION SELF-CAST (waiver 't6-self'): §0.22 proved probe 6's t6 +
+        # NO-QNAM self-cast casts cleanly and REVOKED #67 -- t6 was never the
+        # crash, the QNAM was. This record IS that proven shape, so it ships.
+        # It stays FENCED: t6 forbids a QNAM (the record names no alias), and the
+        # DLL keeps the route behind bCastSelf until the production path (arbitrary
+        # self spell, in combat, via alias fill/evict) is deck-confirmed
+        # (Docs/SPEC-self-cast-forced.md).
+        if waiver == 't6-self':
+            if qnam is not None:
+                raise SystemExit(f"REFUSED {edid}: a t6 self record must carry NO "
+                                 "QNAM -- a QNAM on a record whose inputs name no "
+                                 "alias is the rev-4 crash cell (ENGINE_NOTES 0.22)")
+        # The 't6' probe waiver is a PROBE instrument -- that is how precedent
+        # gets made -- and must never reach a release build.
+        elif waiver == 't6':
+            if not POC_ENABLED:
+                raise SystemExit(f"REFUSED {edid}: a 't6' probe waiver is a PROBE "
+                                 "instrument and must never reach a release build.")
+        else:
             raise SystemExit(f"REFUSED {edid}: targType 6 in the target slot of an "
-                         "alias-delivered package -- 0 vanilla precedents, "
-                         "field CTD (ENGINE_NOTES 0.20 / INVARIANTS 67)")
+                         "alias-delivered package without a waiver -- ENGINE_NOTES "
+                         "0.22 (the QNAM, not the t6, was the rev-4 crash)")
     if tkind == 't4' and qnam is None:
         raise SystemExit(f"REFUSED {edid}: alias-valued target without QNAM -- "
                          "626/626 vanilla packages with an alias input carry "
@@ -747,6 +786,31 @@ def make_cast_package():
     return build_usemagic(FID_CAST_PACKAGE, "MFO_CastPackage",
                           FREF_SEED_SPELL, ('t4', 1), BOUNDS_FF,
                           qnam=FID_COMMAND_QUEST)
+
+
+def make_cast_self_package():
+    """The FORCED SELF-CAST package (Docs/SPEC-self-cast-forced.md): cast the
+    chosen spell ON THE FOLLOWER HIMSELF.
+
+    BYTE-IDENTICAL to make_cast_package EXCEPT the target slot: t6 (self) with
+    NO QNAM, instead of t4 -> alias 1 with QNAM. That is the whole difference,
+    and it is the whole point: §0.22 proved probe 6's t6 + no-QNAM self ward
+    CASTS cleanly and REVOKED #67 -- the rev-4 crash was the QNAM (a QNAM on a
+    record whose inputs name no alias), not the t6. The shipped MFO_CastPackage
+    carries a QNAM (it aims at alias 1), so it can never serve self without
+    writing t6 into a QNAM-carrying record at runtime -- the crash cell. This
+    dedicated record is authored t6/no-QNAM statically, so the DLL never writes
+    a targType at runtime for self; it only points the Spell input.
+
+    The self target needs no alias (t6 IS the caster), so this record has no
+    QNAM and no alias-1 dependency. Delivered by command-quest alias 2. BOUNDS_FF
+    matches the foe package; the real per-stream bound (concentration hold,
+    heal-topped, linger) is enforced by the DLL's CastHold + InterruptCast,
+    exactly as it is for the foe cast.
+    """
+    return build_usemagic(FID_CAST_PACKAGE_SELF, "MFO_CastPackageSelf",
+                          FREF_SEED_SPELL, ('t6', 0), BOUNDS_FF,
+                          waiver='t6-self')
 
 
 def build_travel(fid, edid, alias_idx, radius, qnam, pkdt_flags=0x00002000):
@@ -869,6 +933,7 @@ def make_poc_packages():
 
 def make_pack():
     body = make_cast_package()
+    body += make_cast_self_package()   # SPEC-self-cast-forced: t6 self, no QNAM
     if POC_ENABLED:
         body += make_poc_packages()
     body += make_travel_package()
@@ -1409,12 +1474,13 @@ def main():
     print(f"  SPEL  0x{FID_ORDERS_SPELL & 0xFFF:03X}        MFO_FieldOrdersPower (lesser power)")
     print(f"  QUST  0x{FID_STARTUP_QUEST & 0xFFF:03X}        MFO_StartupQuest (run once, no VMAD)")
     print(f"  QUST  0x{FID_MCM_QUEST & 0xFFF:03X}        MFO_MCMQuest (MFO_MCM script)")
-    print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (2 aliases, DLL-filled)")
+    print(f"  QUST  0x{FID_COMMAND_QUEST & 0xFFF:03X}        MFO_CommandQuest (3 aliases: foe carrier/foe target/self carrier, DLL-filled)")
     print(f"  QUST  0x{FID_LOOT_QUEST & 0xFFF:03X}        MFO_LootQuest (8 aliases = 4 loot slots, DLL-filled; static prio {LOOT_PRIORITY})")
     print(f"  QUST  0x{FID_RETREAT_QUEST & 0xFFF:03X}        MFO_RetreatQuest (2 aliases, DLL-filled; static prio {RETREAT_PRIORITY})")
     print(f"  QUST  0x{FID_TRADE_QUEST & 0xFFF:03X}        MFO_TradeQuest (MFO_Trade script; econ bridge)")
     print(f"  PACK  0x{FID_CAST_PACKAGE & 0xFFF:03X}        MFO_CastPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X}"
           + ("  [NOT attached under POC]" if POC_ENABLED else ""))
+    print(f"  PACK  0x{FID_CAST_PACKAGE_SELF & 0xFFF:03X}        MFO_CastPackageSelf -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X} (t6 self, NO QNAM; DLL bCastSelf-gated)")
     print(f"  PACK  0x{FID_TRAVEL_PACKAGE & 0xFFF:03X}        MFO_TravelPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X}")
     print(f"  PACK  0x{FID_RETREAT_PACKAGE & 0xFFF:03X}        MFO_RetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat")
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
