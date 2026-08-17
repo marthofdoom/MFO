@@ -83,13 +83,19 @@ SEQ_EXPECTED = {0x808, 0x80A, 0x80C, 0x830, 0x80E}
 PROG_REQUIRED = {
     0x800: ('GLOB', "MFOP_Version",             ['EDID', 'FNAM', 'FLTV']),
     0x801: ('GLOB', "MFOP_Reserved",            ['EDID', 'FNAM', 'FLTV']),
-    0x802: ('GLOB', "MFOP_PerkPointsPerLevel",  ['EDID', 'FNAM', 'FLTV']),
+    # §18.6 Stage 3: 0x802 repurposed (was MFOP_PerkPointsPerLevel) → the perk
+    # divisor; 0x809 added (manual rate). The DLL now finds every economy GLOB
+    # by editor-id SUFFIX off the manifest, not by these ids — but the ids stay
+    # frozen own-form ids and the editor id is the suffix contract, so keep them
+    # in lockstep with PROG_GLOBS.
+    0x802: ('GLOB', "MFOP_LevelsPerPerkPoint",  ['EDID', 'FNAM', 'FLTV']),
     0x803: ('GLOB', "MFOP_SkillPointsPerLevel", ['EDID', 'FNAM', 'FLTV']),
     0x804: ('GLOB', "MFOP_SharedGrowthDivisor", ['EDID', 'FNAM', 'FLTV']),
     0x805: ('GLOB', "MFOP_RespecRapportCost",   ['EDID', 'FNAM', 'FLTV']),
     0x806: ('GLOB', "MFOP_VeteranCatchupMult",  ['EDID', 'FNAM', 'FLTV']),
     0x807: ('GLOB', "MFOP_SkillCap",            ['EDID', 'FNAM', 'FLTV']),
     0x808: ('GLOB', "MFOP_DevCmd",              ['EDID', 'FNAM', 'FLTV']),
+    0x809: ('GLOB', "MFOP_ManualSkillPointsPerLevel", ['EDID', 'FNAM', 'FLTV']),
     # Class skill lists carry entries (LNAM); the perk lists ship EMPTY on
     # purpose (xEdit extension point) so LNAM is not required there.
     0x810: ('FLST', "MFOP_ClassSkills_Melee",   ['EDID', 'LNAM']),
@@ -100,7 +106,7 @@ PROG_REQUIRED = {
     0x81A: ('FLST', "MFOP_ClassPerks_Mage",     ['EDID']),
     0x820: ('KYWD', "MFOP_Enrolled",            ['EDID']),
     # §18.6 the addon MANIFEST the DLL enumerates (entry[0]=MFO.esp sentinel,
-    # entry[1]=the classes-list FLST).
+    # entry[1]=the classes-list FLST, entries[2..]=the economy GLOBs — Stage 3).
     0x821: ('FLST', "MFOP_AddonManifest",       ['EDID', 'LNAM']),
     # §18.6 Stage 2 — N-declared classes: MESG display names, _Stance mirrors,
     # class-def FLSTs, and the classes-list FLST the manifest points at.
@@ -127,9 +133,12 @@ REC_HDR = 24
 
 
 def parse_subrecords(body):
-    """Return {type: bytes} for a record body. Handles no compressed records
-    (we emit none) and stops cleanly on truncation rather than guessing."""
+    """Return {type: bytes} for a record body (FIRST occurrence of each type),
+    plus '#LNAM' = the COUNT of LNAM entries (FLST entry count — the manifest
+    check needs it, since setdefault keeps only the first LNAM). Handles no
+    compressed records (we emit none) and stops cleanly on truncation."""
     out = {}
+    lnam_count = 0
     i = 0
     while i + 6 <= len(body):
         t = body[i:i + 4].decode('ascii', 'replace')
@@ -137,7 +146,10 @@ def parse_subrecords(body):
         if i + 6 + ln > len(body):
             break
         out.setdefault(t, body[i + 6:i + 6 + ln])
+        if t == 'LNAM':
+            lnam_count += 1
         i += 6 + ln
+    out['#LNAM'] = lnam_count
     return out
 
 
@@ -280,8 +292,10 @@ def audit_one(esp):
         # The fractional multiplier knobs must be FLOAT-typed ('f') so authors
         # can set 0.5/2.5-style values in the CK/xEdit (a short-typed GLOB
         # floors them in the editor UI). Keep in lockstep with PROG_GLOBS.
-        for local, edid in ((0x802, "MFOP_PerkPointsPerLevel"),
-                            (0x803, "MFOP_SkillPointsPerLevel"),
+        # §18.6 Stage 3: 0x802 is now MFOP_LevelsPerPerkPoint, a whole-number
+        # level COUNT ('s'), so it drops off this list — only the genuinely
+        # fractional multiplier knobs stay float-typed.
+        for local, edid in ((0x803, "MFOP_SkillPointsPerLevel"),
                             (0x804, "MFOP_SharedGrowthDivisor"),
                             (0x806, "MFOP_VeteranCatchupMult")):
             if local in by_local:
@@ -289,6 +303,20 @@ def audit_one(esp):
                 if fnam != b'f':
                     errors.append(f"GLOB 0x{local:03X} {edid}: FNAM {fnam!r}, expected b'f' "
                                   f"(float-typed so fractional values are authorable)")
+        # §18.6 Stage 3: the addon MANIFEST FLST must carry the economy GLOBs
+        # the DLL reads off it — entry[0] MFO.esp sentinel, entry[1] the
+        # classes-list FLST, entries[2..] the 7 economy GLOBs (perk divisor,
+        # skill/lvl, manual/lvl, shared divisor, respec, cap, dev-cmd). A short
+        # manifest means the DLL falls back to DLL defaults for the missing
+        # knobs -- silent, so audit it.
+        MANIFEST_ENTRIES = 2 + 7
+        if 0x821 in by_local:
+            n = by_local[0x821][1].get('#LNAM', 0)
+            if n != MANIFEST_ENTRIES:
+                errors.append(f"FLST 0x821 MFOP_AddonManifest has {n} LNAM entr(ies), "
+                              f"expected {MANIFEST_ENTRIES} (MFO.esp sentinel + classes-list "
+                              f"+ 7 economy GLOBs)")
+
         # Class-skill lists: every LNAM entry must point into Skyrim.esm
         # (master index 0x00) -- the ESL cannot legally reference anything else.
         for local in (0x810, 0x811, 0x812):

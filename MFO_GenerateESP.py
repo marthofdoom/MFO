@@ -972,14 +972,17 @@ PROG_VERSION_STAMP = 1.0               # MFOP_Version FLTV — the addon version
 
 PGID_VERSION            = OWN_PROG | 0x800  # GLOB detection anchor + version stamp
 PGID_RESERVED           = OWN_PROG | 0x801  # GLOB spare future gate (design §10)
-PGID_PERK_PER_LEVEL     = OWN_PROG | 0x802  # GLOB perk points per player level (§15: copies the player)
-PGID_SKILL_PER_LEVEL    = OWN_PROG | 0x803  # GLOB auto-scale skill points per level
+# §18.6 Stage 3: 0x802 REPURPOSED — was the unread MFOP_PerkPointsPerLevel
+# (§17 legacy); now MFOP_LevelsPerPerkPoint, the perk divisor floor(level/N).
+PGID_LEVELS_PER_PERK    = OWN_PROG | 0x802  # GLOB perk divisor (1 point / N levels; default 2)
+PGID_SKILL_PER_LEVEL    = OWN_PROG | 0x803  # GLOB auto-scale skill points per level (default 2)
 PGID_SHARED_DIVISOR     = OWN_PROG | 0x804  # GLOB benched growth divisor (2 = half rate, §15)
 PGID_RESPEC_RAPPORT     = OWN_PROG | 0x805  # GLOB respec cost in rapport (§15: 500)
-PGID_VETERAN_MULT       = OWN_PROG | 0x806  # GLOB veteran catch-up multiplier
+PGID_VETERAN_MULT       = OWN_PROG | 0x806  # GLOB veteran catch-up multiplier (UNREAD legacy, §17)
 PGID_SKILL_CAP          = OWN_PROG | 0x807  # GLOB auto-scale base-AV ceiling
 PGID_DEV_CMD            = OWN_PROG | 0x808  # GLOB dev-harness verb selector (console: set MFOP_DevCmd to N)
-# 0x809-0x80F reserved: more economy knobs
+PGID_MANUAL_SKILL       = OWN_PROG | 0x809  # GLOB manual skill points / level (§16; default 2)
+# 0x80A-0x80F reserved: more economy knobs
 PGID_SKILLS_MELEE       = OWN_PROG | 0x810  # FLST ordered AVIF skill priority per class
 PGID_SKILLS_RANGED      = OWN_PROG | 0x811
 PGID_SKILLS_MAGE        = OWN_PROG | 0x812
@@ -995,8 +998,10 @@ PGID_ENROLLED_KYWD      = OWN_PROG | 0x820  # KYWD enrollment tag — RESERVED f
                                             #      stamp it (no probe data for base
                                             #      keyword-array writes)
 # §18.6 the ADDON MANIFEST — ONE FLST the DLL enumerates; entry[0] = the MFO.esp
-# sentinel keyword, entry[1] = the classes-list FLST (Stage 2). Stage 3 appends
-# economy GLOBs as further entries.
+# sentinel keyword, entry[1] = the classes-list FLST (Stage 2), entries[2..] =
+# every economy GLOB the DLL reads (Stage 3, PROG_MANIFEST_ECONOMY, matched by
+# editor-id suffix). The DLL type-dispatches manifest entries: the sentinel is
+# skipped, the ONE FLST is the classes list, each GLOB is an economy knob.
 PGID_MANIFEST           = OWN_PROG | 0x821
 
 # §18.6 Stage 2 — N-DECLARED CLASSES. The manifest points at ONE classes-list
@@ -1057,21 +1062,37 @@ PROG_CLASS_SKILLS = [
 ]
 
 # (fid, edid, default, FNAM type). Type 'f' (float) on the fractional
-# MULTIPLIER knobs — perk/lvl, skill/lvl, the shared-growth divisor and the
-# veteran mult — so an author can set 0.5/2.5-style values in the CK/xEdit
-# (a short-typed GLOB floors them in the editor UI). The DLL reads g->value
-# (a float) either way, so no DLL change rides this. Whole-number knobs and
-# the version/dev stamps stay 's' (short), the vanilla quest-control shape.
+# MULTIPLIER knobs — auto skill/lvl and the shared-growth divisor — so an
+# author can set 0.5/2.5-style values in the CK/xEdit (a short-typed GLOB
+# floors them in the editor UI). The DLL reads g->value (a float) either way,
+# so no DLL change rides this. Whole-number knobs (the perk divisor and the
+# manual rate are level COUNTS, respec/cap are whole) and the version/dev
+# stamps stay 's' (short), the vanilla quest-control shape.
+# §18.6 Stage 3: the DLL matches every economy GLOB by editor-id SUFFIX (the
+# trailing "_LevelsPerPerkPoint", "_SkillPointsPerLevel", … part), NOT by
+# fixed local id — the editor id here is the CONTRACT; the local id only has
+# to be a stable, unique own-form id. Defaults (marth 2026-08-17): skill and
+# manual rates → 2, perk divisor → 2.
 PROG_GLOBS = [
-    (PGID_VERSION,        "MFOP_Version",            PROG_VERSION_STAMP, 's'),
-    (PGID_RESERVED,       "MFOP_Reserved",           0.0,                's'),
-    (PGID_PERK_PER_LEVEL, "MFOP_PerkPointsPerLevel", 1.0,                'f'),
-    (PGID_SKILL_PER_LEVEL,"MFOP_SkillPointsPerLevel",3.0,                'f'),
-    (PGID_SHARED_DIVISOR, "MFOP_SharedGrowthDivisor",2.0,                'f'),
-    (PGID_RESPEC_RAPPORT, "MFOP_RespecRapportCost",  500.0,              's'),
-    (PGID_VETERAN_MULT,   "MFOP_VeteranCatchupMult", 1.0,                'f'),
-    (PGID_SKILL_CAP,      "MFOP_SkillCap",           100.0,              's'),
-    (PGID_DEV_CMD,        "MFOP_DevCmd",             0.0,                's'),
+    (PGID_VERSION,        "MFOP_Version",                 PROG_VERSION_STAMP, 's'),
+    (PGID_RESERVED,       "MFOP_Reserved",                0.0,   's'),
+    (PGID_LEVELS_PER_PERK,"MFOP_LevelsPerPerkPoint",      2.0,   's'),
+    (PGID_SKILL_PER_LEVEL,"MFOP_SkillPointsPerLevel",     2.0,   'f'),
+    (PGID_MANUAL_SKILL,   "MFOP_ManualSkillPointsPerLevel",2.0,  's'),
+    (PGID_SHARED_DIVISOR, "MFOP_SharedGrowthDivisor",     2.0,   'f'),
+    (PGID_RESPEC_RAPPORT, "MFOP_RespecRapportCost",       500.0, 's'),
+    (PGID_VETERAN_MULT,   "MFOP_VeteranCatchupMult",      1.0,   'f'),
+    (PGID_SKILL_CAP,      "MFOP_SkillCap",                100.0, 's'),
+    (PGID_DEV_CMD,        "MFOP_DevCmd",                  0.0,   's'),
+]
+
+# §18.6 Stage 3: the economy GLOBs the DLL reads — APPENDED to the addon
+# MANIFEST FLST (after entry[1] the classes-list) so the DLL enumerates them
+# off the manifest, never by fixed id. Order here is the manifest entry order
+# (last-writer-wins is per-manifest anyway, and this addon is the sole one).
+PROG_MANIFEST_ECONOMY = [
+    PGID_LEVELS_PER_PERK, PGID_SKILL_PER_LEVEL, PGID_MANUAL_SKILL,
+    PGID_SHARED_DIVISOR, PGID_RESPEC_RAPPORT, PGID_SKILL_CAP, PGID_DEV_CMD,
 ]
 
 PROG_PERK_LISTS = [
@@ -1164,9 +1185,10 @@ def make_progression_esl():
     data += group('GLOB', glob_body)
     flst_body = b''
     # §18.6 the addon MANIFEST — enumerated by the DLL; entry[0] MUST be the
-    # MFO.esp sentinel keyword, entry[1] the classes-list FLST (Stage 2).
+    # MFO.esp sentinel keyword, entry[1] the classes-list FLST (Stage 2), then
+    # every economy GLOB the DLL reads (Stage 3 — matched by editor-id suffix).
     flst_body += prog_flst(PGID_MANIFEST, "MFOP_AddonManifest",
-                           [ESLREF_ADDON_SENTINEL, PGID_CLASSES])
+                           [ESLREF_ADDON_SENTINEL, PGID_CLASSES] + PROG_MANIFEST_ECONOMY)
     for fid, edid, forms in PROG_CLASS_SKILLS:
         flst_body += prog_flst(fid, edid, forms)
     for fid, edid in PROG_PERK_LISTS:
@@ -1280,7 +1302,8 @@ def main():
     for defFid, defEdid, _nf, _ne, _disp, _sf, _se, _sv, skills in PROG_CLASSES:
         print(f"  FLST  0x{defFid & 0xFFF:03X}        {defEdid} (class-def: MESG + {len(skills)} AVIF + _Stance)")
     print(f"  FLST  0x{PGID_CLASSES & 0xFFF:03X}        MFOP_Classes ({len(PROG_CLASSES)} class-def(s); manifest entry[1])")
-    print(f"  FLST  0x{PGID_MANIFEST & 0xFFF:03X}        MFOP_AddonManifest (entry[0]=MFO.esp sentinel, entry[1]=MFOP_Classes)")
+    print(f"  FLST  0x{PGID_MANIFEST & 0xFFF:03X}        MFOP_AddonManifest ({2 + len(PROG_MANIFEST_ECONOMY)} entries: "
+          f"MFO.esp sentinel + MFOP_Classes + {len(PROG_MANIFEST_ECONOMY)} economy GLOB(s))")
 
 
 if __name__ == "__main__":

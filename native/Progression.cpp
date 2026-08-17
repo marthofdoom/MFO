@@ -23,7 +23,6 @@ namespace MFO::Progression {
         // thread), read-only forever after. No locks: freeze-then-publish.
         bool                  g_detected     = false;
         std::vector<AddonRef> g_addons;              // §18.6 enumerated manifests
-        std::uint32_t         g_addonVersion = 0;    // transitional (reference addon)
         Catalog               g_catalog;
 
         // ── the 18 skill AVIFs (§2.1) ───────────────────────────────────────
@@ -619,8 +618,6 @@ namespace MFO::Progression {
 
     const std::vector<AddonRef>& Addons() { return g_addons; }
 
-    std::uint32_t AddonVersion() { return g_addonVersion; }
-
     const Catalog& Get() { return g_catalog; }
 
     void Init() {
@@ -653,11 +650,6 @@ namespace MFO::Progression {
                 // Absent = feature off with ONE named line, never an error
                 // (§1, the Forms failure doctrine — addons are optional).
                 spdlog::info("[prog] no addon manifests found — progression off");
-            } else if (auto* glob = dh->LookupForm<RE::TESGlobal>(kAddonVersionGlob, kAddonPlugin)) {
-                // Transitional version stamp for the reference addon (Stages
-                // 2-3 move version onto the manifest). RECORD DEFAULT at
-                // kDataLoaded (§10 — post-load GLOB values are save-stale).
-                g_addonVersion = static_cast<std::uint32_t>(glob->value);
             }
         }
 

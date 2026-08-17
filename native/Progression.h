@@ -37,12 +37,6 @@ namespace MFO::Progression {
         std::string plugin;            // source file — logs/migration only
     };
 
-    // TRANSITIONAL (removed once ProgAllocator reads config off the manifest,
-    // Stages 2-3): the reference addon's plugin name + version glob, still
-    // used by the fixed-FormID economy/class reads.
-    inline constexpr const char* kAddonPlugin      = "MFO_Progression.esl";
-    inline constexpr RE::FormID  kAddonVersionGlob = 0x800;   // GLOB MFOP_Version
-
     // ── the frozen catalog (§2.3) ───────────────────────────────────────────
 
     // §3 verdicts. kDead never appears inside a kept PerkNodeView — perks
@@ -147,11 +141,6 @@ namespace MFO::Progression {
     // Every enumerated addon manifest, load-order stable (latched at Init,
     // immutable after — lock-free reads, the catalog discipline).
     const std::vector<AddonRef>& Addons();
-
-    // MFOP_Version GLOB's RECORD DEFAULT (0 = absent/unresolved). Read at
-    // kDataLoaded on purpose: GLOB *values* are save-persisted, so a value
-    // read after a load could be a stale saved number, never trusted (§10).
-    std::uint32_t AddonVersion();
 
     // The frozen catalog. `built == false` (empty) when the addon is absent
     // and no dump was forced. Immutable after Init() — lock-free reads.

@@ -27,30 +27,29 @@ namespace MFO::ProgAllocator {
 
     namespace {
 
-        // ── economy — the ESL's GLOB record defaults, latched at Init ───────
-        // (§10: GLOB values are save-persisted; only the kDataLoaded read of
-        // the record default is trustworthy. The DLL defaults below are what
-        // a missing record degrades to, each with its own named log line.)
+        // ── economy — FULLY addon-declared (§18.6 Stage 3) ─────────────────
+        // EVERY field here is declared by the addon via a manifest GLOB matched
+        // by editor-id SUFFIX (see AssignEconomyGlob). These initializers ARE
+        // the documented DLL DEFAULTS a missing GLOB degrades to — each fall-
+        // back gets its own named [prog] line at Init. Read the RECORD DEFAULT
+        // at kDataLoaded (§10: GLOB *values* are save-persisted, so a post-load
+        // read could be a stale saved number). The perk divisor and the manual
+        // rate were C++ constexprs before Stage 3; they now live here so an
+        // addon owns them like every other knob.
         struct Economy {
-            float skillPointsPerLevel = 3.0f;    // §6 proposal, ESL-tunable
-            int   sharedGrowthDivisor = 2;       // §15: benched = half rate
-            float respecRapportCost   = 500.0f;  // §15: respec costs rapport
-            float skillCap            = 100.0f;
+            // §17: perk cadence — 1 point per N follower levels, floor(level/N).
+            // (was constexpr kLevelsPerPerkPoint; default 2 — marth 2026-08-13.)
+            int   levelsPerPerkPoint    = 2;
+            // §6 auto-scale skill points per level (was 3 — marth 2026-08-17).
+            float skillPointsPerLevel   = 2.0f;
+            // §16 manual pool — flat points/level while the toggle is on (was
+            // constexpr kManualSkillPtsPerLevel=5; default 2 — marth 2026-08-17).
+            int   manualSkillPtsPerLevel = 2;
+            int   sharedGrowthDivisor   = 2;       // §15: benched = half rate
+            float respecRapportCost     = 500.0f;  // §15: respec costs rapport
+            float skillCap              = 100.0f;
         };
         Economy g_econ;
-
-        // §17 (marth, round 3): the perk cadence. One point per three
-        // follower levels — scarce enough that each point matters. The old
-        // rate/scarcity GLOBs (0x802/0x806) are deliberately unread now; the
-        // formula in PerkPointsAvailable is the single authority.
-        constexpr int kLevelsPerPerkPoint = 2;   // 1 perk point / 2 levels (was /3 — too few, marth 2026-08-13)
-
-        // §16 (marth, same round): manual SKILL points accrue at a FLAT 5
-        // per follower level while the toggle is on — no detection, no GLOB,
-        // by decree ("5 skill points per level when manual mode is on").
-        // A separate economy from the perk points above. g_econ's
-        // skillPointsPerLevel (0x803) remains the AUTO-scale total only.
-        constexpr int kManualSkillPtsPerLevel = 5;
 
         bool           g_ready  = false;    // Detected + economy latched
         RE::TESGlobal* g_devCmd = nullptr;  // harness selector — read LIVE on
@@ -206,7 +205,7 @@ namespace MFO::ProgAllocator {
             if (!a_st.manualSkills || a_st.manualBaselineLevel == 0) return 0;
             const int lvls = std::max(0, static_cast<int>(a_st.progressionLevel) -
                                           static_cast<int>(a_st.manualBaselineLevel));
-            const int accrued = lvls * kManualSkillPtsPerLevel;
+            const int accrued = lvls * g_econ.manualSkillPtsPerLevel;
             return std::max(0, accrued - static_cast<int>(a_st.manualPointsApplied));
         }
 
@@ -669,7 +668,8 @@ namespace MFO::ProgAllocator {
             }
             if (PerkPointsAvailable(a_st) < 1) {
                 a_whyNot = std::format("no perk points (earned {}, {} pre-trained, {} spent)",
-                                       static_cast<int>(a_st.progressionLevel) / kLevelsPerPerkPoint,
+                                       static_cast<int>(a_st.progressionLevel) /
+                                           std::max(1, g_econ.levelsPerPerkPoint),
                                        a_st.nativeTreePerksAtEnroll, AllocatedRanks(a_st));
                 return 0;
             }
@@ -950,7 +950,7 @@ namespace MFO::ProgAllocator {
                         spdlog::info("[prog] {:08X} level {} (+{}) — {} perk point(s) available "
                                      "(floor(level/{}) − {} spent)",
                                      id, st.progressionLevel, gain, PerkPointsAvailable(st),
-                                     kLevelsPerPerkPoint, AllocatedRanks(st));
+                                     g_econ.levelsPerPerkPoint, AllocatedRanks(st));
                         if (actor) RecomputeSkills(actor, st, /*log*/ true);
                     }
                 }
@@ -993,16 +993,6 @@ namespace MFO::ProgAllocator {
             MainThread::Post([a_gen]() { PollTick(a_gen); });
         }
 
-        // ── ESL reads (Init helpers) ────────────────────────────────────────
-
-        float ReadGlob(RE::TESDataHandler* a_dh, RE::FormID a_id, const char* a_name, float a_fallback) {
-            if (auto* g = a_dh->LookupForm<RE::TESGlobal>(a_id, Progression::kAddonPlugin))
-                return g->value;
-            spdlog::warn("[prog] economy GLOB {} (0x{:03X}) missing from {} — using DLL default {:g}",
-                         a_name, a_id, Progression::kAddonPlugin, a_fallback);
-            return a_fallback;
-        }
-
         // ── §18.6 manifest class parsing (Init helpers) ─────────────────────
         // NO fixed ids: classes are declared through the enumerated manifests.
         // A class-def is ONE BGSListForm whose entries dispatch by form type:
@@ -1018,6 +1008,54 @@ namespace MFO::ProgAllocator {
             const std::string_view id{ e };
             return id.size() >= a_suffix.size() &&
                    id.substr(id.size() - a_suffix.size()) == a_suffix;
+        }
+
+        // ── §18.6 Stage 3: economy is FULLY addon-declared ──────────────────
+        // Each economy knob is a manifest GLOB matched by editor-id SUFFIX.
+        // Order in this list == index order in AssignEconomyGlob's returns; it
+        // exists only so Init can name the knobs that fell back to the default.
+        constexpr std::string_view kEconKnobSuffixes[] = {
+            "_LevelsPerPerkPoint", "_ManualSkillPointsPerLevel", "_SkillPointsPerLevel",
+            "_SharedGrowthDivisor", "_RespecRapportCost", "_SkillCap",
+        };
+        constexpr int kEconKnobCount = 6;
+
+        // Assign ONE manifest GLOB to its g_econ field by editor-id SUFFIX and
+        // return its kEconKnobSuffixes index (0..5); 6 = the _DevCmd selector
+        // (pointer stored, read LIVE); -1 = no economy/dev suffix matched.
+        // Manual rate is tested BEFORE the auto rate so the longer id wins even
+        // if a future suffix would otherwise be a tail of another. Same clamp
+        // discipline the old fixed-id reads used (int knobs floored at 1/0).
+        int AssignEconomyGlob(RE::TESGlobal* a_glob) {
+            if (EdidEndsWith(a_glob, "_LevelsPerPerkPoint")) {
+                g_econ.levelsPerPerkPoint = std::max(1, static_cast<int>(a_glob->value));
+                return 0;
+            }
+            if (EdidEndsWith(a_glob, "_ManualSkillPointsPerLevel")) {
+                g_econ.manualSkillPtsPerLevel = std::max(0, static_cast<int>(a_glob->value));
+                return 1;
+            }
+            if (EdidEndsWith(a_glob, "_SkillPointsPerLevel")) {
+                g_econ.skillPointsPerLevel = a_glob->value;
+                return 2;
+            }
+            if (EdidEndsWith(a_glob, "_SharedGrowthDivisor")) {
+                g_econ.sharedGrowthDivisor = std::max(1, static_cast<int>(a_glob->value));
+                return 3;
+            }
+            if (EdidEndsWith(a_glob, "_RespecRapportCost")) {
+                g_econ.respecRapportCost = a_glob->value;
+                return 4;
+            }
+            if (EdidEndsWith(a_glob, "_SkillCap")) {
+                g_econ.skillCap = a_glob->value;
+                return 5;
+            }
+            if (EdidEndsWith(a_glob, "_DevCmd")) {
+                g_devCmd = a_glob;   // pointer only — the ONE live-read knob
+                return 6;
+            }
+            return -1;
         }
 
         // AVIF → ActorValue through the LIVE ActorValueList — no hardcoded
@@ -1104,7 +1142,7 @@ namespace MFO::ProgAllocator {
                          "{} spent) | {} perk(s) allocated | {} | "
                          "sharedRemainder {} | level-matched {} | provenance PFF={}",
                          NameOf(a_actor), id, ClsName(st.clsId), st.progressionLevel,
-                         PerkPointsAvailable(st), kLevelsPerPerkPoint,
+                         PerkPointsAvailable(st), g_econ.levelsPerPerkPoint,
                          st.nativeTreePerksAtEnroll, AllocatedRanks(st), st.perks.size(),
                          IsActiveFollower(id) ? "ACTIVE" : "benched",
                          st.sharedGrowthRemainder,
@@ -1141,12 +1179,13 @@ namespace MFO::ProgAllocator {
         void HarnessEconomyDump() {
             const auto& c = Progression::Get();
             spdlog::info("[prog] economy: perk = 1 per {} level(s) (§17 derived, minus "
-                         "pre-trained + spent) | skill/lvl {:g} | sharedDiv {} | "
-                         "respec rapport {:g} | cap {:g} | catalog ranks {}/{} | "
+                         "pre-trained + spent) | skill/lvl {:g} | manual skill/lvl {} | "
+                         "sharedDiv {} | respec rapport {:g} | cap {:g} | catalog ranks {}/{} | "
                          "lastPlayerLevel {}",
-                         kLevelsPerPerkPoint, g_econ.skillPointsPerLevel,
-                         g_econ.sharedGrowthDivisor, g_econ.respecRapportCost,
-                         g_econ.skillCap, c.effectiveRanks, c.totalRanks, g_lastPlayerLevel);
+                         g_econ.levelsPerPerkPoint, g_econ.skillPointsPerLevel,
+                         g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
+                         g_econ.respecRapportCost, g_econ.skillCap, c.effectiveRanks,
+                         c.totalRanks, g_lastPlayerLevel);
         }
 
     }   // anonymous namespace
@@ -1155,7 +1194,8 @@ namespace MFO::ProgAllocator {
     // across reloads and level-ups by construction; clamped at 0 so a
     // heavily pre-trained follower is simply "ahead", never negative.
     int PerkPointsAvailable(const ProgState& a_st) {
-        const int earned = static_cast<int>(a_st.progressionLevel) / kLevelsPerPerkPoint;
+        const int earned = static_cast<int>(a_st.progressionLevel) /
+                           std::max(1, g_econ.levelsPerPerkPoint);
         // native tree perks NO LONGER subtracted (marth 2026-08-13): a follower's
         // starting perks are their build, not a debt to earn back. available = earned - spent.
         return std::max(0, earned - AllocatedRanks(a_st));
@@ -1175,7 +1215,7 @@ namespace MFO::ProgAllocator {
     void Init() {
         if (!Progression::Detected()) {
             // One named line, never an error — the addon is optional (§1).
-            spdlog::info("[prog] allocator inert ({} absent)", Progression::kAddonPlugin);
+            spdlog::info("[prog] allocator inert (addon absent)");
             return;
         }
         auto* dh = RE::TESDataHandler::GetSingleton();
@@ -1184,24 +1224,17 @@ namespace MFO::ProgAllocator {
             return;
         }
 
-        // Economy GLOBs — the RECORD DEFAULTS (kDataLoaded is pre-save, §10).
-        // 0x802/0x806 (perk rate / veteran mult) are NO LONGER READ — the §17
-        // derived formula replaced the whole perk-grant economy.
-        g_econ.skillPointsPerLevel = ReadGlob(dh, kGlobSkillPointsPerLevel, "MFOP_SkillPointsPerLevel", 3.0f);
-        g_econ.sharedGrowthDivisor = std::max(1, static_cast<int>(
-            ReadGlob(dh, kGlobSharedGrowthDivisor, "MFOP_SharedGrowthDivisor", 2.0f)));
-        g_econ.respecRapportCost   = ReadGlob(dh, kGlobRespecRapportCost,   "MFOP_RespecRapportCost",   500.0f);
-        g_econ.skillCap            = ReadGlob(dh, kGlobSkillCap,            "MFOP_SkillCap",            100.0f);
-
-        // The harness selector is the ONE live-read glob (console-set).
-        g_devCmd = dh->LookupForm<RE::TESGlobal>(kGlobDevCmd, Progression::kAddonPlugin);
-
-        // §18.6 Stage 2: CLASSES are declared through the enumerated manifests
-        // (§18.1 registration), not fixed FormLists. For each registered
-        // manifest, the ONE non-sentinel FLST is the classes list; its entries
-        // are class-def FLSTs (ParseClassDef). Manifest-level GLOBs (economy —
-        // Stage 3) are TOLERATED and skipped here; the economy still reads its
-        // fixed-id GLOBs above until Stage 3 moves it onto the manifest.
+        // §18.6 Stage 3: CLASSES **and** ECONOMY are declared through the
+        // enumerated manifests — NO fixed-id GLOB reads survive. Per registered
+        // manifest, the ONE non-sentinel FLST is the classes list (its entries
+        // are class-def FLSTs, ParseClassDef); every GLOB entry is an economy
+        // knob matched by editor-id SUFFIX (AssignEconomyGlob), last-writer-wins
+        // across manifests in load order. g_econ's initializers stand as the
+        // documented DEFAULT for any knob no manifest declares. Values are the
+        // RECORD DEFAULTS (kDataLoaded is pre-save, §10); _DevCmd stores the
+        // pointer (read LIVE). unused (unread) legacy GLOBs — perk rate 0x802 /
+        // veteran mult 0x806 — are simply never in the manifest.
+        bool resolvedEcon[kEconKnobCount] = {};   // which knobs a manifest set
         for (const auto& addon : Progression::Addons()) {
             auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
             if (!manifest) continue;   // enumerated moments ago; belt and braces
@@ -1213,10 +1246,22 @@ namespace MFO::ProgAllocator {
                     else spdlog::warn("[prog] manifest {:08X}: extra FLST {:08X} ignored "
                                       "(one classes list per manifest)",
                                       addon.manifestID, flst->GetFormID());
+                } else if (auto* glob = form->As<RE::TESGlobal>()) {
+                    const int idx = AssignEconomyGlob(glob);
+                    const char* edid = glob->GetFormEditorID();
+                    if (idx < 0) {
+                        spdlog::warn("[prog] manifest {:08X}: GLOB {:08X} \"{}\" matches no "
+                                     "economy knob — ignored", addon.manifestID,
+                                     glob->GetFormID(), edid ? edid : "");
+                    } else {
+                        if (idx < kEconKnobCount) resolvedEcon[idx] = true;
+                        spdlog::info("[prog] economy: {} = {:g} (from {})",
+                                     idx < kEconKnobCount ? kEconKnobSuffixes[idx] : "_DevCmd",
+                                     glob->value, edid ? edid : "?");
+                    }
                 } else {
-                    // Economy GLOBs land here in Stage 3 — tolerated, not read yet.
-                    spdlog::info("[prog] manifest {:08X}: non-FLST entry {:08X} ignored "
-                                 "(Stage 2 reads only the classes list)",
+                    spdlog::warn("[prog] manifest {:08X}: entry {:08X} is neither an FLST "
+                                 "(classes) nor a GLOB (economy) — ignored",
                                  addon.manifestID, form->GetFormID());
                 }
             }
@@ -1248,13 +1293,21 @@ namespace MFO::ProgAllocator {
                          addon.plugin, addon.manifestID, parsed);
         }
 
+        // Name every knob that fell back to the DLL default (diagnosable — the
+        // old ReadGlob warned per missing GLOB; this preserves that on the
+        // manifest path).
+        for (int k = 0; k < kEconKnobCount; ++k)
+            if (!resolvedEcon[k])
+                spdlog::info("[prog] economy: {} absent from all manifests — DLL default",
+                             kEconKnobSuffixes[k]);
+
         g_ready = true;
-        spdlog::info("[prog] allocator ready: perk = 1 per {} levels (§17 derived), "
-                     "skill/lvl {:g}, sharedDiv {}, respec {:g} rapport, cap {:g}, "
+        spdlog::info("[prog] allocator ready: perk = 1 per {} level(s), skill/lvl {:g}, "
+                     "manual skill/lvl {}, sharedDiv {}, respec {:g} rapport, cap {:g}, "
                      "{} declared class(es), devCmd {}",
-                     kLevelsPerPerkPoint, g_econ.skillPointsPerLevel,
-                     g_econ.sharedGrowthDivisor, g_econ.respecRapportCost, g_econ.skillCap,
-                     g_classes.size(),
+                     g_econ.levelsPerPerkPoint, g_econ.skillPointsPerLevel,
+                     g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
+                     g_econ.respecRapportCost, g_econ.skillCap, g_classes.size(),
                      g_devCmd ? "resolved" : "MISSING (harness cmds default to 0)");
     }
 
@@ -1649,7 +1702,7 @@ namespace MFO::ProgAllocator {
                      "flat {}/level, {} level(s) excluded from auto — manual REPLACES "
                      "auto growth while ON)",
                      NameOf(a_actor), a_on ? "ON" : "OFF", st.manualBaselineLevel,
-                     ManualAvail(st), kManualSkillPtsPerLevel, st.manualExcludedLevels);
+                     ManualAvail(st), g_econ.manualSkillPtsPerLevel, st.manualExcludedLevels);
         return true;
     }
 
@@ -1675,7 +1728,7 @@ namespace MFO::ProgAllocator {
             spdlog::info("[prog] apply-skill refused {}: no pooled points "
                          "(level {} - baseline {} at flat {}/level, {} applied)",
                          NameOf(a_actor), st.progressionLevel, st.manualBaselineLevel,
-                         kManualSkillPtsPerLevel, st.manualPointsApplied);
+                         g_econ.manualSkillPtsPerLevel, st.manualPointsApplied);
             return false;
         }
         auto* avo = a_actor->AsActorValueOwner();
@@ -1987,8 +2040,7 @@ namespace MFO::ProgAllocator {
     void OnHarnessHotkey() {
         if (!Config::g_progHarness.load()) return;
         if (!g_ready) {
-            spdlog::info("[prog] harness: addon absent ({}) — nothing to exercise",
-                         Progression::kAddonPlugin);
+            spdlog::info("[prog] harness: addon absent — nothing to exercise");
             return;
         }
         const int cmd = g_devCmd ? static_cast<int>(g_devCmd->value) : 0;

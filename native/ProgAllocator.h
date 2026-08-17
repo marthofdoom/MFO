@@ -42,24 +42,16 @@ namespace MFO::ProgAllocator {
     // profile in MFO_GenerateESP.py, exactly like Forms.h ids are with the
     // MFO.esp emitter. 0x800/0x801 are owned by Progression.h (detection).
     //
-    // ECONOMY GLOBs: the DLL reads the RECORD DEFAULT at kDataLoaded (§10 —
-    // GLOB *values* are save-persisted, a post-load read could be stale).
-    // Author-tunable in xEdit; a missing record degrades to the DLL default
-    // beside it with a named log line, never an error.
-    // UNUSED since the round-3 perk economy (marth, 2026-08-12): perk points
-    // are now DERIVED — floor(level/3) − native tree perks at enroll − ranks
-    // MFO allocated (design doc §17) — so the per-level rate and the veteran
-    // multiplier have no consumer. The records stay in the ESL (frozen ids,
-    // author-visible); the DLL simply no longer reads them.
-    inline constexpr RE::FormID kGlobPerkPointsPerLevel = 0x802;  // UNUSED (§17)
-    inline constexpr RE::FormID kGlobSkillPointsPerLevel = 0x803; // default 3
-    inline constexpr RE::FormID kGlobSharedGrowthDivisor = 0x804; // default 2
-    inline constexpr RE::FormID kGlobRespecRapportCost   = 0x805; // default 500
-    inline constexpr RE::FormID kGlobVeteranCatchupMult  = 0x806; // UNUSED (§17)
-    inline constexpr RE::FormID kGlobSkillCap            = 0x807; // default 100
-    // Dev-harness command selector — the ONE glob read LIVE on purpose (the
-    // console writes the live value: `set MFOP_DevCmd to N`). Dev-only.
-    inline constexpr RE::FormID kGlobDevCmd              = 0x808;
+    // §18.6 Stage 3: ECONOMY is FULLY addon-declared. The DLL no longer reads
+    // any economy GLOB by fixed local id — every knob (perk divisor, skill
+    // pts/level, manual pts/level, shared-growth divisor, respec rapport cost,
+    // skill cap, dev-cmd selector) is a manifest FLST GLOB entry matched by
+    // editor-id SUFFIX (ProgAllocator.cpp AssignEconomyGlob), with the DLL's
+    // g_econ initializers as the documented default. The old fixed-id GLOB
+    // constants (kGlob*) are therefore gone — the generator still emits the
+    // records at their frozen local ids, but the DLL finds them via the
+    // manifest, not by id/plugin. (Legacy perk-rate 0x802 / veteran-mult 0x806
+    // GLOBs remain unread; 0x802 is repurposed to MFOP_LevelsPerPerkPoint.)
     // Per-class AUTO-PICK FormLists. ClassSkills: ordered AVIF forms = the
     // skill priority (position → triangular weight, see the .cpp); authored
     // in the plugin so class behaviour is data, not code. ClassPerks: ordered
