@@ -13,6 +13,7 @@
 					"type": "header"
 				},
 				{
+					"id": "iLevelsPerPerkPoint:Economy",
 					"text": "Levels per perk point",
 					"type": "slider",
 					"help": "Follower earns one perk point every N levels. Lower = more perks.",
@@ -20,12 +21,12 @@
 						"min": 1,
 						"max": 10,
 						"step": 1,
-						"sourceType": "GlobalValue",
-						"sourceForm": "MFO_Progression.esl|0x802",
+						"sourceType": "ModSettingInt",
 						"defaultValue": 2
 					}
 				},
 				{
+					"id": "iSkillPointsPerLevel:Economy",
 					"text": "Auto skill points per level",
 					"type": "slider",
 					"help": "Skill points auto-scaled onto a class follower each level (class builds). 0 disables class auto-scaling.",
@@ -33,12 +34,12 @@
 						"min": 0,
 						"max": 10,
 						"step": 1,
-						"sourceType": "GlobalValue",
-						"sourceForm": "MFO_Progression.esl|0x803",
+						"sourceType": "ModSettingInt",
 						"defaultValue": 2
 					}
 				},
 				{
+					"id": "iManualSkillPointsPerLevel:Economy",
 					"text": "Manual skill points per level",
 					"type": "slider",
 					"help": "Skill points a follower on MANUAL allocation earns each level (you spend them by hand for mage / multiclass builds). 0 disables the manual pool.",
@@ -46,12 +47,12 @@
 						"min": 0,
 						"max": 10,
 						"step": 1,
-						"sourceType": "GlobalValue",
-						"sourceForm": "MFO_Progression.esl|0x809",
+						"sourceType": "ModSettingInt",
 						"defaultValue": 2
 					}
 				},
 				{
+					"id": "iSharedGrowthDivisor:Economy",
 					"text": "Benched growth divisor",
 					"type": "slider",
 					"help": "A benched (not-following) follower grows at 1/N the rate. 1 = full rate, 2 = half.",
@@ -59,12 +60,12 @@
 						"min": 1,
 						"max": 10,
 						"step": 1,
-						"sourceType": "GlobalValue",
-						"sourceForm": "MFO_Progression.esl|0x804",
+						"sourceType": "ModSettingInt",
 						"defaultValue": 2
 					}
 				},
 				{
+					"id": "iRespecRapportCost:Economy",
 					"text": "Respec rapport cost",
 					"type": "slider",
 					"help": "Rapport spent to respec a follower's perks.",
@@ -72,12 +73,12 @@
 						"min": 0,
 						"max": 2000,
 						"step": 25,
-						"sourceType": "GlobalValue",
-						"sourceForm": "MFO_Progression.esl|0x805",
+						"sourceType": "ModSettingInt",
 						"defaultValue": 500
 					}
 				},
 				{
+					"id": "iSkillCap:Economy",
 					"text": "Skill cap",
 					"type": "slider",
 					"help": "Ceiling the auto-scaler may raise a follower's base skill to.",
@@ -85,8 +86,7 @@
 						"min": 50,
 						"max": 100,
 						"step": 5,
-						"sourceType": "GlobalValue",
-						"sourceForm": "MFO_Progression.esl|0x807",
+						"sourceType": "ModSettingInt",
 						"defaultValue": 100
 					}
 				}

@@ -102,12 +102,16 @@ def walk_all_controls(node, acc):
             walk_all_controls(v, acc)
 
 
-def audit_globalvalue_config(path):
-    """Standalone gate for a GlobalValue-bound config (e.g. an addon that ships
-    its economy tab entirely in its own ESL + config, with NO ModSetting store /
-    Config.cpp wiring). Checks the MCM Helper schema is well-formed: modName /
-    displayName / minMcmVersion present, and every GlobalValue slider carries a
-    sane sourceForm + min/max/step + in-range defaultValue."""
+def audit_addon_config(path):
+    """Standalone gate for an ADDON's self-contained config (its own ESL +
+    config + its OWN settings.ini, read live by the DLL — NO Config.cpp wiring).
+    The economy sliders are ModSetting-bound (perk-bug fix 2026-08-17: a
+    GlobalValue is save-persisted and corrupts the economy). Checks: MCM Helper
+    schema well-formed (modName/displayName/minMcmVersion); every ModSetting
+    slider has an 'id' of the form 'key:Section' with a valid Hungarian prefix +
+    sane min/max/step + in-range default; and EACH id-key exists in the addon's
+    OWN settings.ini (config.json <-> settings.ini agreement — the pair the DLL
+    relies on)."""
     errs = []
     p = Path(path)
     if not p.exists():
@@ -127,18 +131,29 @@ def audit_globalvalue_config(path):
         errs.append(f"minMcmVersion must be a positive int (got {mmv!r}) -- "
                     "MCM Helper silently drops a config without it")
 
+    ini = parse_ini(p.parent / "settings.ini")   # the addon's OWN store
+
     controls = []
     walk_all_controls(cfg, controls)
-    gv = [c for c in controls if str(c.get("valueOptions", {}).get("sourceType", "")) == "GlobalValue"]
-    if not gv:
-        errs.append("no GlobalValue controls found -- is this the right config?")
+    ms = [c for c in controls
+          if str(c.get("valueOptions", {}).get("sourceType", "")).startswith("ModSetting")]
+    if not ms:
+        errs.append("no ModSetting controls found -- is this the right config?")
 
-    for c in gv:
-        cid = c.get("id", "?")
+    for c in ms:
+        cid = c.get("id")
         vo = c["valueOptions"]
-        sf = vo.get("sourceForm")
-        if not (isinstance(sf, str) and "|" in sf):
-            errs.append(f"{cid} | GlobalValue sourceForm must be 'Plugin|FormID' (got {sf!r})")
+        st = vo.get("sourceType", "")
+        if not (isinstance(cid, str) and ":" in cid):
+            errs.append(f"{cid!r} | ModSetting id must be 'key:Section'")
+            continue
+        key, _, section = cid.partition(":")
+        pfx = prefix_of(key)
+        if SRC_BY_PREFIX.get(pfx) != st:
+            errs.append(f"{cid} | prefix '{pfx}' does not match sourceType {st!r}")
+        if key not in ini.get(section, {}):
+            errs.append(f"{cid} | key '{key}' missing from settings.ini "
+                        f"[{section}] -- MFO.dll reads the INI, not the GLOB")
         if c.get("type") == "slider":
             mn, mx, step, dv = vo.get("min"), vo.get("max"), vo.get("step"), vo.get("defaultValue")
             nums = {"min": mn, "max": mx, "step": step, "defaultValue": dv}
@@ -153,8 +168,8 @@ def audit_globalvalue_config(path):
                 if not (mn <= dv <= mx):
                     errs.append(f"{cid} | slider defaultValue {dv} out of range [{mn},{mx}]")
 
-    print(f"MFO MCM audit (GlobalValue) -- {path}")
-    print(f"  modName {cfg.get('modName')!r}, {len(gv)} GlobalValue control(s), minMcmVersion {mmv}")
+    print(f"MFO MCM audit (addon ModSetting) -- {path}")
+    print(f"  modName {cfg.get('modName')!r}, {len(ms)} ModSetting control(s), minMcmVersion {mmv}")
     if errs:
         print(f"\nFAIL ({len(errs)}):", file=sys.stderr)
         for e in sorted(errs):
@@ -165,10 +180,10 @@ def audit_globalvalue_config(path):
 
 
 def main():
-    # A config.json path argument runs the GlobalValue-config gate (addon tab);
-    # no argument runs the MFO 5-way ModSetting audit (the default merge gate).
+    # A config.json path argument runs the addon-config gate (its own settings.ini,
+    # no Config.cpp); no argument runs the MFO 5-way ModSetting audit (default gate).
     if len(sys.argv) > 1:
-        return audit_globalvalue_config(sys.argv[1])
+        return audit_addon_config(sys.argv[1])
     for p in (CONFIG_JSON, DEFAULTS_INI, USER_INI, CONFIG_CPP):
         if not p.exists():
             print(f"FAIL: missing {p.relative_to(ROOT)}", file=sys.stderr)

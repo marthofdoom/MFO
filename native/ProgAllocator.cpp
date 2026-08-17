@@ -1,5 +1,6 @@
 #include "PCH.h"
-#include <cmath>   // std::floor / std::isfinite — not guaranteed via the PCH
+#include <cmath>     // std::floor / std::isfinite — not guaranteed via the PCH
+#include <fstream>   // ApplyEconomyOverride reads the addon's MCM Settings INI
 #include "ProgAllocator.h"
 #include "Progression.h"
 #include "Forms.h"   // §18.6: the addon-manifest sentinel keyword
@@ -50,6 +51,13 @@ namespace MFO::ProgAllocator {
             float skillCap              = 100.0f;
         };
         Economy g_econ;
+        // The RECORD DEFAULTS latched at kDataLoaded (before any save loads, so
+        // GLOB values are genuine record defaults, §10). g_econ is reset to this
+        // and then re-overlaid from the addon's MCM INI on every re-apply — so
+        // a save's stale GLOB runtime values NEVER re-enter the economy (the
+        // 2026-08-17 perk-pool corruption: a repurposed GLOB's saved value read
+        // floor(level/1) = double the perk pool).
+        Economy g_econDefaults;
 
         bool           g_ready  = false;    // Detected + economy latched
         RE::TESGlobal* g_devCmd = nullptr;  // harness selector — read LIVE on
@@ -1099,6 +1107,72 @@ namespace MFO::ProgAllocator {
                                  kEconKnobSuffixes[k]);
         }
 
+        // Case-insensitive "does key end with core". INI keys are the addon's
+        // MCM ModSetting ids (e.g. "iLevelsPerPerkPoint") — a type char prefix,
+        // no leading underscore, so we match the knob core, not the GLOB suffix.
+        bool KeyEndsWith(const std::string& a_key, std::string_view a_core) {
+            if (a_key.size() < a_core.size()) return false;
+            return _stricmp(a_key.c_str() + (a_key.size() - a_core.size()),
+                            std::string(a_core).c_str()) == 0;
+        }
+
+        // §18.6 (perk-bug fix 2026-08-17): the LIVE MCM override. Reset g_econ to
+        // the cached record DEFAULTS, then overlay each registered addon's MCM
+        // Settings INI — Data/MCM/Settings/<addon-basename>.ini, which MCM Helper
+        // ModSetting controls write and which is NOT save-persisted, so a slider
+        // edit is live WITHOUT the stale-save-GLOB perk corruption. The path is
+        // derived from the addon plugin name (AddonRef.plugin) — never hardcoded,
+        // so the DLL stays addon-agnostic. Main-thread only (writes g_econ).
+        // "Manual" is tested before the shorter "SkillPointsPerLevel" tail.
+        void ApplyEconomyOverride() {
+            g_econ = g_econDefaults;
+            auto trim = [](std::string s) {
+                s.erase(0, s.find_first_not_of(" \t\r\n"));
+                if (auto p = s.find_last_not_of(" \t\r\n"); p != std::string::npos) s.erase(p + 1);
+                else s.clear();
+                return s;
+            };
+            for (const auto& addon : Progression::Addons()) {
+                std::string mod = addon.plugin;
+                if (auto d = mod.rfind('.'); d != std::string::npos) mod.erase(d);
+                if (mod.empty()) continue;
+                std::ifstream f("Data/MCM/Settings/" + mod + ".ini");
+                if (!f) continue;
+                std::string line;
+                int applied = 0;
+                while (std::getline(f, line)) {
+                    const auto eq = line.find('=');
+                    if (eq == std::string::npos) continue;
+                    const std::string key = trim(line.substr(0, eq));
+                    const std::string valS = trim(line.substr(eq + 1));
+                    if (key.empty() || valS.empty() || key.front() == '[' || key.front() == ';') continue;
+                    float v;
+                    try { v = std::stof(valS); } catch (...) { continue; }
+                    if (KeyEndsWith(key, "LevelsPerPerkPoint"))
+                        g_econ.levelsPerPerkPoint = std::max(1, static_cast<int>(v));
+                    else if (KeyEndsWith(key, "ManualSkillPointsPerLevel"))
+                        g_econ.manualSkillPtsPerLevel = std::max(0, static_cast<int>(v));
+                    else if (KeyEndsWith(key, "SkillPointsPerLevel"))
+                        g_econ.skillPointsPerLevel = v;
+                    else if (KeyEndsWith(key, "SharedGrowthDivisor"))
+                        g_econ.sharedGrowthDivisor = std::max(1, static_cast<int>(v));
+                    else if (KeyEndsWith(key, "RespecRapportCost"))
+                        g_econ.respecRapportCost = v;
+                    else if (KeyEndsWith(key, "SkillCap"))
+                        g_econ.skillCap = v;
+                    else
+                        continue;
+                    ++applied;
+                }
+                if (applied)
+                    spdlog::info("[prog] economy override from {}.ini: {} knob(s) — perk 1/{} lvl, "
+                                 "skill/lvl {:g}, manual/lvl {}, sharedDiv {}, respec {:g}, cap {:g}",
+                                 mod, applied, g_econ.levelsPerPerkPoint, g_econ.skillPointsPerLevel,
+                                 g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
+                                 g_econ.respecRapportCost, g_econ.skillCap);
+            }
+        }
+
         // AVIF → ActorValue through the LIVE ActorValueList — no hardcoded
         // AVIF ids, so a load order that replaces the records still maps.
         RE::ActorValue MapSkillAvif(RE::TESForm* a_form) {
@@ -1280,6 +1354,8 @@ namespace MFO::ProgAllocator {
         // once here for the initial (record-default) latch; the loop below then
         // parses only the CLASSES (static — parsed once at Init).
         ReloadEconomy();
+        g_econDefaults = g_econ;    // cache the RECORD DEFAULTS (§10) before any
+        ApplyEconomyOverride();     // save loads; overlay the MCM INI (if present)
         for (const auto& addon : Progression::Addons()) {
             auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
             if (!manifest) continue;   // enumerated moments ago; belt and braces
@@ -1344,10 +1420,15 @@ namespace MFO::ProgAllocator {
                              "inert this session (data preserved, nothing applied)", g_prog.size());
             return;
         }
-        // (a) A save persists GLOB *values*, so a slider the player set last
-        // session is in the loaded globals now — re-read the economy so it is
-        // live, not the record default latched at kDataLoaded (§10).
-        ReloadEconomy();
+        // §10 (perk-bug fix 2026-08-17): DO NOT re-read the economy from GLOB
+        // values here. GLOB values are SAVE-PERSISTED — a save made before an
+        // economy GLOB was repurposed/re-defaulted carries a STALE value (e.g.
+        // 0x802 held 1 under the old MFOP_PerkPointsPerLevel; reading it post-
+        // load gave floor(level/1) = double the perk pool). The economy stays
+        // at the RECORD DEFAULTS latched at kDataLoaded. A live MCM override
+        // rides a NON-save-persisted INI instead (ApplyEconomyOverride), never
+        // the globals.
+        ApplyEconomyOverride();   // re-overlay the addon MCM INI (defaults cached)
         // Fresh session: everything reapplies lazily (the poll retries until
         // each enrolled actor resolves — P3's guarded shape, never eager).
         for (auto& [id, st] : g_prog) st.applied = false;
@@ -1365,20 +1446,14 @@ namespace MFO::ProgAllocator {
     }
 
     void OnMenuClose() {
-        // (b) The MenuSink calls this on MCM/Journal close from its task worker.
-        // An MCM GlobalValue slider writes the economy GLOB's RUNTIME value; we
-        // re-read it so the change is live this session (mirrors the Config::Read
-        // MenuSink). g_econ / g_ready are touched ONLY on the true main thread,
-        // so all of it rides MainThread::Post (ProgAllocator's g_prog idiom),
-        // never the AddTask worker — do NOT read/write g_econ off-thread.
+        // (b) The MenuSink calls this on MCM/Journal close. A live MCM override
+        // re-applies here from a NON-save-persisted INI (ApplyEconomyOverride),
+        // never from the GLOB runtime values (those are save-persisted — the
+        // 2026-08-17 perk-pool corruption). Marshals to the true main thread:
+        // g_econ / g_ready are touched ONLY there.
         MainThread::Post([]() {
-            if (!g_ready) return;   // addon absent — nothing to reload
-            ReloadEconomy();
-            spdlog::info("[prog] economy reloaded on menu close: skill/lvl={:g}, "
-                         "perk 1/{} lvl, manual/lvl {}, sharedDiv {}, respec {:g}, cap {:g}",
-                         g_econ.skillPointsPerLevel, g_econ.levelsPerPerkPoint,
-                         g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
-                         g_econ.respecRapportCost, g_econ.skillCap);
+            if (!g_ready) return;   // addon absent — nothing to apply
+            ApplyEconomyOverride();
         });
     }
 

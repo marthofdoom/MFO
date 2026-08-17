@@ -1276,22 +1276,36 @@ PROG_MCM_SLIDERS = [
 ]
 
 
+# INI key per slider (perk-bug fix 2026-08-17): the MCM binds to a ModSetting,
+# NOT a GlobalValue. GlobalValue writes the GLOB's save-persisted runtime value,
+# which a stale save then feeds back into the economy (the doubled-perk-pool
+# bug). ModSetting persists to Data/MCM/Settings/MFO_Progression.ini — NOT in
+# the save — and MFO.dll reads THAT as its live economy override (matched by the
+# key TAIL, e.g. "iLevelsPerPerkPoint" -> LevelsPerPerkPoint), agnostic of the
+# addon. The ":Economy" suffix is the INI section MCM Helper writes under.
+PROG_MCM_KEYS = {
+    PGID_LEVELS_PER_PERK: "iLevelsPerPerkPoint",
+    PGID_SKILL_PER_LEVEL: "iSkillPointsPerLevel",
+    PGID_MANUAL_SKILL:    "iManualSkillPointsPerLevel",
+    PGID_SHARED_DIVISOR:  "iSharedGrowthDivisor",
+    PGID_RESPEC_RAPPORT:  "iRespecRapportCost",
+    PGID_SKILL_CAP:       "iSkillCap",
+}
+
+
 def prog_mcm_config():
-    """The MFO_Progression config.json dict — one Economy page of GlobalValue
-    sliders. minMcmVersion mirrors MFO/MEO (9)."""
-    # NOTE: GlobalValue controls carry NO "id" — binding is via sourceForm, and
-    # the proven installed configs (Requiem Customizable Spells, TrueHUD) omit
-    # it. An "id" is the ModSetting key, which does not apply here.
+    """The MFO_Progression config.json dict — one Economy page of ModSettingInt
+    sliders (persist to the addon's own INI, which the DLL reads live). minMcmVersion 9."""
     content = [{"text": "Economy", "type": "header"}]
     for fid, label, help_, mn, mx, step, dflt in PROG_MCM_SLIDERS:
         content.append({
+            "id": f"{PROG_MCM_KEYS[fid]}:Economy",   # control-level (MFO/MEO shape)
             "text": label,
             "type": "slider",
             "help": help_,
             "valueOptions": {
                 "min": mn, "max": mx, "step": step,
-                "sourceType": "GlobalValue",
-                "sourceForm": f"{PROG_MCM_PLUGIN}|0x{fid & 0xFFF:03X}",
+                "sourceType": "ModSettingInt",
                 "defaultValue": dflt,
             },
         })
@@ -1310,17 +1324,19 @@ def prog_mcm_config():
 
 def write_prog_mcm_files(out_dir):
     """Emit Data/MCM/Config/MFO_Progression/{config.json,settings.ini}.
-    settings.ini is minimal — GlobalValue sliders need no ModSetting defaults
-    store; the folder is mirrored from MEO/MFO so MCM Helper finds the config."""
+    settings.ini seeds the ModSetting defaults under [Economy] — the store MCM
+    Helper writes and MFO.dll reads live (ApplyEconomyOverride)."""
     cdir = os.path.join(out_dir, 'MCM', 'Config', 'MFO_Progression')
     os.makedirs(cdir, exist_ok=True)
     with open(os.path.join(cdir, 'config.json'), 'w') as f:
         json.dump(prog_mcm_config(), f, indent='\t')
-    # No ModSetting-backed controls => no default keys to register. A minimal
-    # (comment-only) settings.ini keeps the folder shape consistent with MFO/MEO.
+    # [Economy] key=default for each ModSettingInt slider. MCM Helper rewrites
+    # this as the player moves sliders; the DLL re-reads it on menu close. NOT
+    # save-persisted (unlike a GlobalValue), so no stale-save economy.
     with open(os.path.join(cdir, 'settings.ini'), 'w', encoding='utf-8-sig') as f:
-        f.write("; MFO_Progression MCM: all controls are GlobalValue-bound "
-                "(no ModSetting store).\n")
+        f.write("[Economy]\n")
+        for fid, label, help_, mn, mx, step, dflt in PROG_MCM_SLIDERS:
+            f.write(f"{PROG_MCM_KEYS[fid]}={int(dflt)}\n")
     return cdir
 
 
@@ -1354,7 +1370,7 @@ def main():
     with open(prog_path, 'wb') as f:
         f.write(prog_data)
 
-    # The addon's own MCM config (GlobalValue economy sliders) — everything the
+    # The addon's own MCM config (ModSetting economy sliders) — everything the
     # tab needs ships with the ESL; MFO.esp / MFO.dll stay ignorant of it.
     prog_mcm_dir = write_prog_mcm_files(out_dir)
 
@@ -1384,7 +1400,7 @@ def main():
     print(f"Written: {prog_path} ({len(prog_data):,} bytes) — optional progression addon")
     print(f"Written: {prog_seq_path} (1 start-game-enabled quest: MFOP MCM)")
     print(f"Written: {prog_mcm_dir}/config.json + settings.ini "
-          f"({len(PROG_MCM_SLIDERS)} GlobalValue economy sliders)")
+          f"({len(PROG_MCM_SLIDERS)} ModSetting economy sliders)")
     print()
     print("Records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{NEXT_OBJECT_ID:03X}")
