@@ -8,6 +8,8 @@
 #include "Targeting.h"
 #include "Logistics.h"
 #include "Followers.h"   // #68: g_active -- NearestAlly walks the maintained teammate list
+#include "Serialization.h" // #76: FWPN record ids for the force-hold co-save
+#include "MainThread.h"   // #76: defer the load-time force-lock release to the main thread
 #include <limits>        // #68: std::numeric_limits for NearestAlly's distance seed
 #include "Packages.h"    // #35: act.flee reuses the retreat package; hybrid forced cast
 #include "Sightline.h"   // LoS gate on the forced cast -- no firebolts into walls
@@ -990,5 +992,70 @@ namespace MFO::Actuation {
     }
 
     void ClearForcedWeapons() { g_forcedWeapon.clear(); }
+
+    // #76 force-hold co-save. Persist the force-equip locks so a load clears the
+    // stale ones the .ess carried (the engine's forceEquip serializes; the map
+    // does not). INDEPENDENT record — its own version guard + ResolveFormID/DROP.
+    constexpr std::uint32_t kMaxForcedWeapons = 64;   // party is tiny; a generous cap
+
+    void CoSaveForcedWeapons(SKSE::SerializationInterface* a_intfc) {
+        if (!a_intfc->OpenRecord(Serialization::kRecForcedWeapon,
+                                 Serialization::kForcedWeaponVersion)) {
+            spdlog::error("[cosave] OpenRecord('FWPN') failed -- force-holds NOT saved");
+            return;
+        }
+        std::uint32_t persistable = 0;
+        for (const auto& [id, w] : g_forcedWeapon)
+            if (w && Followers::IsPersistableID(id)) ++persistable;
+        a_intfc->WriteRecordData(persistable);
+
+        std::uint32_t written = 0, skipped = 0;
+        for (const auto& [id, w] : g_forcedWeapon) {
+            if (!w) continue;
+            if (!Followers::IsPersistableID(id)) { ++skipped; continue; }   // #9: never write 0xFF ids
+            a_intfc->WriteRecordData(id);
+            const RE::FormID wid = w->GetFormID();
+            a_intfc->WriteRecordData(wid);
+            ++written;
+        }
+        spdlog::info("[cosave] saved {} force-hold(s), schema v{}{}", written,
+                     Serialization::kForcedWeaponVersion,
+                     skipped ? std::format(" -- SKIPPED {} runtime (0xFF)", skipped) : std::string{});
+    }
+
+    void CoLoadForcedWeapons(SKSE::SerializationInterface* a_intfc, std::uint32_t /*a_version*/) {
+        std::uint32_t count = 0;
+        if (!a_intfc->ReadRecordData(count)) return;
+        if (count > kMaxForcedWeapons) {
+            spdlog::error("[cosave] implausible force-hold count {} -- ABORTING FWPN load", count);
+            return;
+        }
+        std::uint32_t released = 0, dropped = 0;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            RE::FormID rawFollower = 0, rawWeapon = 0;
+            if (!a_intfc->ReadRecordData(rawFollower)) return;
+            if (!a_intfc->ReadRecordData(rawWeapon))   return;
+            RE::FormID follower = 0, weapon = 0;
+            if (!a_intfc->ResolveFormID(rawFollower, follower) ||
+                !a_intfc->ResolveFormID(rawWeapon, weapon)) { ++dropped; continue; }
+            // The lock lives in the actor's inventory extra-data, not the map, so
+            // clear it on the follower. Defer to the main thread (the load callback
+            // is off it and the actor may not be 3D-loaded yet; the force-unequip
+            // is an inventory op). NO repopulation: a session starts hold-free; the
+            // equip gambit re-forces next combat if its condition still holds.
+            MainThread::Post([follower, weapon]() {
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(follower);
+                auto* obj   = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon);
+                if (!actor || !obj) return;
+                if (auto* mgr = RE::ActorEquipManager::GetSingleton())
+                    mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);   // force clears the lock
+                g_forcedWeapon.erase(follower);   // fresh map has none; belt-and-braces
+                spdlog::info("[equip] {:08X}: stale force-hold cleared on load", follower);
+            });
+            ++released;
+        }
+        spdlog::info("[cosave] loaded {} force-hold(s) to clear on load ({} dropped unresolvable)",
+                     released, dropped);
+    }
 
 }

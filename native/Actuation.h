@@ -72,4 +72,10 @@ namespace MFO::Actuation {
     // the world is being replaced (mirrors CombatStyle::ClearAll).
     void ClearForcedWeapons();
 
+    // #76 force-hold co-save (kRecForcedWeapon/'FWPN'): persist the force-equip
+    // locks so a load can clear stale ones. CoLoad releases (never repopulates) —
+    // a session starts with no force-hold; the gambit re-forces if still true.
+    void CoSaveForcedWeapons(SKSE::SerializationInterface* a_intfc);
+    void CoLoadForcedWeapons(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version);
+
 }

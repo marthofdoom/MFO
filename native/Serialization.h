@@ -35,6 +35,15 @@ namespace MFO {
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
     inline constexpr std::uint32_t kProgVersion    = 3;   // v3: §18.6 N-declared class FormID
 
+    // #76 force-hold: a FOURTH independent record — the weapons MFO force-equipped
+    // (prevent-removal) for an active equip gambit. The engine's forceEquip lock
+    // serializes into the .ess, but g_forcedWeapon does not, so without this a
+    // save made mid-hold reloads with a latent lock and no record to release it
+    // (the follower stuck holding the weapon, unable to cast). Persisting it lets
+    // the load path clear every stale lock (Actuation::CoLoad releases them).
+    inline constexpr std::uint32_t kRecForcedWeapon  = 'FWPN';
+    inline constexpr std::uint32_t kForcedWeaponVersion = 1;
+
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.
     //

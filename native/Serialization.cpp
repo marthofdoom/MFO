@@ -225,6 +225,11 @@ namespace MFO {
         // destroyed by the next save. Layout + bounds live with the state
         // owner (ProgAllocator.cpp).
         ProgAllocator::CoSaveSave(a_intfc);
+
+        // #76 force-hold (kRecForcedWeapon/'FWPN') -- a FOURTH independent record,
+        // same isolation contract. Persists the force-equip locks so a load can
+        // clear stale ones (Actuation owns the layout + bounds).
+        Actuation::CoSaveForcedWeapons(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -326,6 +331,19 @@ namespace MFO {
                     continue;
                 }
                 ProgAllocator::CoSaveLoad(a_intfc, version);
+                continue;
+            }
+            if (type == kRecForcedWeapon) {
+                // #76: same independence contract. A newer record skips (never
+                // aborts). CoLoad resolves + releases every stale force-lock.
+                if (version > kForcedWeaponVersion) {
+                    spdlog::error("[cosave] FORCED-WEAPON SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; a mid-hold force-lock in it will NOT be cleared.",
+                                  version, kForcedWeaponVersion);
+                    g_sawNewerSave.store(true);
+                    continue;
+                }
+                Actuation::CoLoadForcedWeapons(a_intfc, version);
                 continue;
             }
             if (type != kRecFollowers) {
