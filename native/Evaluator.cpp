@@ -333,21 +333,29 @@ namespace MFO::Eval {
         // radius. Walks the maintained g_active list (not a world sweep), which
         // is updated on the same serial SKSE task this evaluator runs on, so it
         // is stable here. Yields both the truth value and the ally target.
-        RE::ActorHandle PickAlly(RE::Actor* a_self, float a_param) {
+        //
+        // The PLAYER counts as an ally too (marth): an ally-targeted support/heal
+        // gambit should be able to name the player, so a low-health player is a
+        // valid pick alongside the follower's teammates. The follower themselves
+        // is still excluded here (ally != self) -- self is a separate subject.
+        RE::ActorHandle PickAlly(RE::Actor* a_self, RE::Actor* a_player, float a_param) {
             RE::ActorHandle best;
             if (!a_self) return best;
             const auto selfPos = a_self->GetPosition();
             const float radius = Config::g_sharedRadius.load();
             float lowest = a_param;   // must be strictly under the threshold
-            for (const auto& h : Followers::g_active) {
-                auto ptr = h.get();   // HOLD the NiPointer (Targeting rule)
-                auto* ally = ptr.get();
-                if (!ally || ally == a_self) continue;
-                if (ally->IsDead() || ally->IsDisabled()) continue;
-                if (selfPos.GetDistance(ally->GetPosition()) > radius) continue;
+            auto consider = [&](RE::Actor* ally) {
+                if (!ally || ally == a_self) return;
+                if (ally->IsDead() || ally->IsDisabled()) return;
+                if (selfPos.GetDistance(ally->GetPosition()) > radius) return;
                 const float hp = Vocab::HealthPct(ally);
                 if (hp < lowest) { lowest = hp; best = ally->GetHandle(); }
+            };
+            for (const auto& h : Followers::g_active) {
+                auto ptr = h.get();   // HOLD the NiPointer (Targeting rule)
+                consider(ptr.get());
             }
+            consider(a_player);   // the player is an ally candidate too
             return best;
         }
 
@@ -457,7 +465,7 @@ namespace MFO::Eval {
             } else if (IsAllySelector(g.conditionOpcode)) {
                 // Same shape, ally side: true iff a wounded teammate is found,
                 // and that teammate becomes the target (Cast at ally / Heal Other).
-                chosen = PickAlly(a_follower, g.conditionParam);
+                chosen = PickAlly(a_follower, player, g.conditionParam);
                 if (!chosen) continue;
             } else if (!ConditionTrue(g, a_follower, player)) {
                 continue;

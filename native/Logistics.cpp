@@ -291,10 +291,16 @@ namespace MFO::Logistics {
             return moved;
         }
 
-        // Is this armor a strict upgrade on at least one slot it covers, and
-        // beaten on none? "Better" is the item's OWN rating vs what the follower
-        // wears in the same slots -- the §4.8.2 derived-vocabulary principle, so
-        // modded gear works with no patch. Reads the named follower.
+        // Is this armor worth acquiring? Two ways to qualify on a slot it covers:
+        // it STRICTLY beats real worn armor there (an upgrade), OR it DRESSES a
+        // BARE slot -- one with nothing worn, or only rating-0 clothing/rags. It
+        // must be beaten on NO filled slot (never a downgrade). A slot the
+        // follower has EMPTY is acquirable on its own (marth field: a helmetless
+        // follower must pick up a helmet with no helmet already on him to
+        // "upgrade") -- this mirrors the mage clothing path's bare-slot dress.
+        // "Better" is the item's OWN rating vs what the follower wears in the same
+        // slots -- the §4.8.2 derived-vocabulary principle, so modded gear works
+        // with no patch. Reads the named follower.
         //
         // SCOPED (see the module report): "weighted by their armor skill" and
         // the light/heavy-skill steer are a refinement not implemented here --
@@ -333,12 +339,17 @@ namespace MFO::Logistics {
                 if (!(mask & static_cast<std::uint32_t>(slot))) continue;
                 overlapsAny = true;
                 auto* worn = a_follower->GetWornArmor(slot);
-                if (worn && worn->GetArmorRating() >= cand) {
-                    return false;   // beaten on a slot it would replace
-                }
+                // BARE slot -- nothing worn, or only rating-0 clothing/rags: this
+                // piece DRESSES it. Valid to acquire even with no armor to upgrade
+                // (the helmetless-follower case). Not a downgrade -> keep scanning.
+                if (!worn || worn->GetArmorRating() <= 0.0f) continue;
+                // Real worn armor here: only a strictly higher rating may replace
+                // it. A tie or worse is beaten -> never downgrade real worn armor.
+                if (worn->GetArmorRating() >= cand) return false;
             }
-            // Better only if it actually covers an armor slot (skip amulets/rings
-            // whose bits are not in kSlots) and nothing it replaces is >= it.
+            // Acquirable if it actually covers an armor slot (skip amulets/rings
+            // whose bits are not in kSlots) and was beaten on none it would
+            // replace -- i.e. it upgrades every filled slot and/or dresses a bare one.
             return overlapsAny;
         }
 
@@ -1055,7 +1066,7 @@ namespace MFO::Logistics {
             const bool wantCrossbow = roles.wantCrossbow;
             std::uint16_t baseDmg      = 0;
             std::uint16_t myRangedDmg  = 0;
-            bool          hasBackup    = false;   // magic user already carries a qualifying sidearm
+            std::uint16_t myBackupDmg  = 0;       // best qualifying sidearm the mage already OWNS (not the wielded hand)
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
@@ -1069,7 +1080,7 @@ namespace MFO::Logistics {
                 // is not a backup).
                 if (wantBackup && WeaponClassOf(w->GetWeaponType()) == WepClass::OneHand &&
                     (!daggersOnly || w->GetWeaponType() == WT::kOneHandDagger))
-                    hasBackup = true;
+                    myBackupDmg = std::max(myBackupDmg, w->GetAttackDamage());
                 if (doRanged && w->GetWeaponType() == (wantCrossbow ? WT::kCrossbow : WT::kBow))
                     myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
             }
@@ -1082,8 +1093,8 @@ namespace MFO::Logistics {
             std::uint16_t       bestRangedDmg = myRangedDmg;
             RE::TESBoundObject* bestMage      = nullptr;   // school/fanciness apparel (magic user)
             MageKey             bestMageKey{};             // {0, -1} so any real key beats it
-            RE::TESBoundObject* bestBackup    = nullptr;   // the mage's one melee sidearm
-            std::uint16_t       bestBackupDmg = 0;
+            RE::TESBoundObject* bestBackup    = nullptr;   // the mage's melee sidearm (upgrade past best owned)
+            std::uint16_t       bestBackupDmg = myBackupDmg;   // beat his best-OWNED sidearm, not the wielded hand
 
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
@@ -1166,13 +1177,19 @@ namespace MFO::Logistics {
                             bestRanged    = obj;
                         }
                     }
-                    // MAGE BACKUP (v1.0.29): the sidearm a caster's own AI
-                    // draws when his magicka is gone. Daggers only by default
-                    // (bMageDaggersOnly); the toggle opens it to the best of
-                    // any one-hander. Only fires while he carries NONE -- one
-                    // sidearm, never an armory, and no upgrade churn to
-                    // re-trigger on every corpse.
-                    if (wantBackup && !hasBackup && wc == WepClass::OneHand &&
+                    // MAGE BACKUP (v1.0.29): the sidearm a caster's own AI draws
+                    // when his magicka is gone. Daggers only by default
+                    // (bMageDaggersOnly); the toggle opens it to the best of any
+                    // one-hander. Baselined on his BEST-OWNED sidearm (bestBackupDmg
+                    // = myBackupDmg), not the momentarily wielded hand: a caster
+                    // dual-wielding SPELLS reads an empty weapon hand, so the old
+                    // carries-none gate skipped every better dagger while he cast
+                    // (marth field: "ignores better daggers while casting"). Now he
+                    // restocks when he carries none (myBackupDmg==0) AND upgrades to
+                    // a STRICTLY better sidearm -- one at a time (§4.3), and NEVER
+                    // force-equipped (equipIt=false below), so it stays a stocked
+                    // backup he switches to, not an armory or a per-corpse equip thrash.
+                    if (wantBackup && wc == WepClass::OneHand &&
                         (!daggersOnly || weap->GetWeaponType() == WT::kOneHandDagger) &&
                         weap->GetAttackDamage() > bestBackupDmg) {
                         bestBackupDmg = weap->GetAttackDamage();
@@ -1362,24 +1379,77 @@ namespace MFO::Logistics {
             return true;
         }
 
+        // COIN-PURSE / LOOSE-COIN detection (marth field: coin purses count as
+        // gold). LOAD-ORDER-AGNOSTIC via OCF (Object Categorization Framework,
+        // this list's curated item classifier): OCF_MiscTreasure_Coinpurse marks
+        // bags that yield gold (vanilla TGCoinpurse*, modded purses),
+        // OCF_MiscTreasure_Coin marks loose septims/coins. KID mints these
+        // keywords at runtime with no stable FormID, so they are resolved by
+        // EditorID ONCE and cached. A coin purse is a MISC object whose gold is
+        // granted by a PICKUP SCRIPT (e.g. TGCoinpurseScript) only once the
+        // PHYSICAL object reaches the player -- so MFO loots the object itself
+        // (held for the player like any valuable, delivered on trade) and NEVER
+        // value-credits it. Requiem's REQ_GoldWeightDisplayPurse carries the
+        // coinpurse keyword but is a weightless gold-weight DISPLAY proxy, not
+        // loot -- excluded by EditorID. FAIL-CLOSED: with no OCF/KID the keywords
+        // resolve null and only Gold001 is taken, exactly as before. The one-time
+        // log records which signal was available.
+        bool IsCoinLoot(RE::TESBoundObject* a_obj) {
+            struct Kw { RE::BGSKeyword* purse; RE::BGSKeyword* coin; RE::FormID proxy; };
+            static const Kw s = [] {
+                Kw k{};
+                k.purse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("OCF_MiscTreasure_Coinpurse");
+                k.coin  = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("OCF_MiscTreasure_Coin");
+                auto* px = RE::TESForm::LookupByEditorID("REQ_GoldWeightDisplayPurse");
+                k.proxy = px ? px->GetFormID() : 0;
+                spdlog::info("[loot] coin detection: OCF coinpurse-kw={}, coin-kw={} (both null => "
+                             "OCF/KID absent, only Gold001 is looted)",
+                             k.purse ? "found" : "null", k.coin ? "found" : "null");
+                return k;
+            }();
+            if (!a_obj) return false;
+            if (s.proxy && a_obj->GetFormID() == s.proxy) return false;   // Requiem display proxy, not loot
+            auto* kwf = a_obj->As<RE::BGSKeywordForm>();
+            if (!kwf) return false;
+            return (s.purse && kwf->HasKeyword(s.purse)) ||
+                   (s.coin  && kwf->HasKeyword(s.coin));
+        }
+
         // Take all the gold on a corpse/container. Gold001 is the one hardcoded
-        // FormID in the game (0x0000000F, Skyrim.esm) -- there is no "gold type"
-        // to derive, so this is the sole by-FormID check in the loot code, and
-        // it is stable (a base-game record every load order carries). Weightless,
-        // so no carry-weight gate; nothing to equip. Held for the player, who
-        // gets it back by trading -- which is why gold WAITS out first dibs
-        // (below), same as gear: you want first pick of the coin.
+        // FormID in the game (0x0000000F, Skyrim.esm); coin PURSES and loose
+        // coins are matched by OCF keyword (IsCoinLoot) so the take is not blind
+        // to modded currency. Weightless / near-weightless, so no carry-weight
+        // gate; nothing to equip. Held for the player, who gets it back by trading
+        // -- which is why gold WAITS out first dibs (below), same as gear: you
+        // want first pick of the coin. Collect-then-transfer (RemoveItem mutates
+        // the inventory map, so never transfer mid-iteration) now that more than
+        // one stack can match.
         bool LootGold(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             constexpr RE::FormID kGold001 = 0x0000000F;
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; };
+            std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                if (obj->GetFormID() != kGold001) continue;
+                if (obj->GetFormID() != kGold001 && !IsCoinLoot(obj)) continue;
                 if (a_peek) return true;
-                a_src->RemoveItem(obj, data.first, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                  nullptr, a_follower);
-                return true;
+                takes.push_back({ obj, data.first });
             }
-            return false;
+            if (a_peek || takes.empty()) return false;
+            for (const auto& t : takes) {
+                // Log a matched coin PURSE/coin once per form (never plain Gold001,
+                // which would flood): surfaces exactly what the OCF rule caught.
+                if (t.obj->GetFormID() != kGold001) {
+                    static std::unordered_set<RE::FormID> s_seen;
+                    if (s_seen.insert(t.obj->GetFormID()).second)
+                        spdlog::info("[loot] coin item {:08X} '{}' x{} -> follower (OCF-classified; "
+                                     "converts to gold when it reaches the player)",
+                                     t.obj->GetFormID(),
+                                     t.obj->GetName() ? t.obj->GetName() : "?", t.count);
+                }
+                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                  nullptr, a_follower);
+            }
+            return true;
         }
 
         // Take all the lockpicks on a corpse/container. Same shape as LootGold:
