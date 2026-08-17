@@ -743,9 +743,22 @@ namespace MFO::Actuation {
             // visible weapon thrash while her own AI fought back for the
             // spell). The rule's goal is a weapon CATEGORY in hand -- EITHER
             // hand satisfies it.
-            const auto holdsCategory = [a_ranged](RE::TESForm* a_held) {
+            // marth: a base MAGE's melee sidearm is a DAGGER -- the same base-class
+            // rule the loot path uses (#65 combatClassOverride==3/Cast, gated by
+            // bMageDaggersOnly). For such a follower a MELEE equip order means a
+            // dagger specifically: a looted sword/mace he still owns must NOT count
+            // as "already holding the category" (else the satisfied NoOp below keeps
+            // him on it forever) and must NOT win the draw. baseClass read on the
+            // worker's g_followers-serial path (same as Scheduler / Actuation:25).
+            std::uint8_t baseClass = 0;
+            if (auto it = g_followers.find(a_follower->GetFormID()); it != g_followers.end())
+                baseClass = it->second.combatClassOverride;
+            const bool daggerMelee = !a_ranged && baseClass == 3 && Config::g_mageDaggersOnly.load();
+            const auto holdsCategory = [a_ranged, daggerMelee](RE::TESForm* a_held) {
                 auto* w = a_held ? a_held->As<RE::TESObjectWEAP>() : nullptr;
-                return w && !w->IsStaff() && ((w->IsBow() || w->IsCrossbow()) == a_ranged);
+                if (!w || w->IsStaff()) return false;
+                if ((w->IsBow() || w->IsCrossbow()) != a_ranged) return false;
+                return !daggerMelee || w->GetWeaponType() == RE::WEAPON_TYPE::kOneHandDagger;
             };
             // TRANSPARENT (satisfied): the rule's goal already holds, so
             // the scan falls past it -- AND the scheduler reads this
@@ -767,6 +780,8 @@ namespace MFO::Actuation {
                 // player-given stray must not win the combat equip either.
                 if ((w->GetFormFlags() & (1u << 2)) != 0) continue;
                 if ((w->IsBow() || w->IsCrossbow()) != a_ranged) continue;
+                // base MAGE melee = daggers only (see holdsCategory above).
+                if (daggerMelee && w->GetWeaponType() != RE::WEAPON_TYPE::kOneHandDagger) continue;
                 if (w->GetAttackDamage() >= bestDmg) { bestDmg = w->GetAttackDamage(); best = w; }
             }
             if (!best) return { Result::FailedSkill, a_ranged ? "no ranged weapon carried"

@@ -1043,8 +1043,20 @@ namespace MFO::Logistics {
             // staff, never his carried sidearm -- so the stable carries-based
             // signal has to say it explicitly. (Shed still KEEPS his carried gear;
             // this only bars LOOTING new weapon upgrades for a pure caster.)
+            // marth: the BASE CLASS decides the melee-loot contract, NOT the mere
+            // presence of an equip-melee gambit. A base MAGE (Cast class, #65
+            // combatClassOverride==3) keeps the daggers-only sidearm even when he
+            // melees via a gambit -- "a base mage who melees", not a spellsword.
+            // A base WARRIOR/ARCHER who casts (Melee/Ranged class == a spellsword)
+            // earns the full weapon-upgrade role. Auto (0, no explicit class)
+            // keeps the old gambit heuristic (mageMode && !wantsMelee). Ordinals
+            // match CombatStyle::Stance by construction (State.h:82).
+            const std::uint8_t baseClass   = g_svc ? g_svc->combatClassOverride : 0;
+            const bool baseCaster          = baseClass == 3;
+            const bool baseWeaponUser      = baseClass == 1 || baseClass == 2;
             const WepClass meleeTargetClass =
-                (mageMode && !wantsMelee)  ? WepClass::Other : roles.melee;
+                (mageMode && !baseWeaponUser && (baseCaster || !wantsMelee))
+                    ? WepClass::Other : roles.melee;
             // Ranged is a primary if a gambit wants it OR they carry one.
             const bool doRanged =
                 (mageMode && !wantsRanged) ? false           : roles.doRanged;
