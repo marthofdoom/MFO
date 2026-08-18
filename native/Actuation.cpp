@@ -1119,6 +1119,28 @@ namespace MFO::Actuation {
             return a_mgef->IsDetrimental() || a_mgef->IsHostile();
         }
 
+        // A BENEFICIAL Health effect = a heal (restore/fortify Health, instant or
+        // over time) -- the mirror of IsDamageEffect: primaryAV Health but NOT
+        // detrimental/hostile. Field #2: the per-target need gate must key off the
+        // spell's EFFECTS, not solely CasterConsent::ClassifySpell -- a restore-
+        // health spell the classifier does NOT tag kHeal was falling through to the
+        // generic whole-party beneficial fan, so a full-HP player got healed merely
+        // because a DIFFERENT ally was hurt. Any spell carrying a heal effect is now
+        // gated by each target's own HP.
+        bool IsHealEffect(RE::EffectSetting* a_mgef) {
+            if (!a_mgef) return false;
+            if (a_mgef->data.primaryAV != RE::ActorValue::kHealth) return false;
+            return !a_mgef->IsDetrimental() && !a_mgef->IsHostile();
+        }
+
+        // Does a_spell restore Health to its target? (Any heal effect at all.)
+        bool SpellHealsHealth(RE::SpellItem* a_spell) {
+            if (!a_spell) return false;
+            for (auto* eff : a_spell->effects)
+                if (eff && IsHealEffect(eff->baseEffect)) return true;
+            return false;
+        }
+
         // WORKER-SIDE per-target gate for the AUTO fan-out (F2/F3/F4). Decides,
         // BEFORE any main-thread post, whether this cast should actually land on
         // the target -- so an all-covered fan-out returns a transparent NoOp
@@ -1467,11 +1489,20 @@ namespace MFO::Actuation {
                 // WHOLE PARTY: every active follower + the player within range who
                 // NEEDS it -- the CASTER INCLUDED (he is one of N, so a self-buff
                 // like Candlelight still lights him too). The already-active guard
-                // in ApplyEffectFromTo skips anyone who already has the effect;
-                // heals are filtered to HP < full here. No delivery gate.
+                // in ApplyEffectFromTo skips anyone who already has the effect; a
+                // health-restoring spell is filtered PER TARGET to the firing rule's
+                // HP threshold below (#2). No delivery gate.
                 radius = Config::g_sharedRadius.load();
                 const auto selfPos = a_follower->GetPosition();
-                const bool heal    = (kind == CasterConsent::SpellKind::Heal);
+                // Field #2: drive the per-target need gate off the SPELL'S EFFECTS,
+                // not solely ClassifySpell. A restore-health spell the classifier
+                // does not tag kHeal was bypassing the gate and fanning to the whole
+                // party -- a full-HP player got healed because a DIFFERENT ally was
+                // hurt. Treat the spell as a heal if EITHER classified Heal OR it
+                // carries any heal effect, so ANY health-restoring spell heals only
+                // those who actually need it (player and followers alike, below).
+                const bool heal = (kind == CasterConsent::SpellKind::Heal) ||
+                                  SpellHealsHealth(spell);
                 auto consider = [&](RE::Actor* ally) {
                     if (!ally) return;
                     if (ally->IsDead() || ally->IsDisabled() || !ally->Is3DLoaded()) return;

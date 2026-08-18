@@ -263,11 +263,16 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   within `Confidence::ChaseRadius` (OOC: no group → NoOp); **beneficial → the WHOLE
   PARTY** (every active follower + the player within `g_sharedRadius` who NEEDS it —
   the caster included as one of N, so a self-delivery Candlelight lights everyone;
-  **#2:** heals filtered to the FIRING gambit's own health threshold, not HP<full —
-  Fire plumbs the rule's `cond.*_hp_pct_below` param through `CastAuto`'s
-  `a_healThreshold` (default 1.0 = anyone-below-full for `Always`/world-gated buffs
-  and the Logistics caller); a `Choice` now carries `conditionOpcode`/
-  `conditionParam` for this. **Per-target apply guard `ShouldApplyTo` (`:1140`):**
+  **#2:** a health-restoring spell is filtered PER TARGET to the FIRING gambit's own
+  health threshold, not HP<full — Fire plumbs the rule's `cond.*_hp_pct_below` param
+  through `CastAuto`'s `a_healThreshold` (default 1.0 = anyone-below-full for
+  `Always`/world-gated buffs and the Logistics caller); a `Choice` now carries
+  `conditionOpcode`/`conditionParam` for this. The heal gate keys off the SPELL'S
+  EFFECTS (`SpellHealsHealth`/`IsHealEffect`) **OR** `ClassifySpell==Heal`, so a
+  restore-health spell the classifier does NOT tag Heal is still gated per target
+  (field fix: a full-HP player was being healed because a different ally was hurt).
+  The player runs the SAME `consider` gate as followers — full-HP members are never
+  in the fan. **Per-target apply guard `ShouldApplyTo` (`:1140`):**
   **#5:** a CONCENTRATION spell (Healing Hands, streams) returns true immediately —
   never blocked by the already-active/DoT gate; **#6a:** already-active detection is
   robust — HasMagicEffect(costliest) OR an active-effect-list scan for THIS spell
