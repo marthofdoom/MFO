@@ -332,8 +332,8 @@ a job worker here, not main).
   `VTABLE_PlayerCharacter[0]` slot `0x0AD`; VR index differs → `g_dead=true`,
   `Post` becomes a no-op. Writing `0x0AD` on VR = instant CTD.
 - `Post(fn)` (`:73`) — callers: Sightline LoS (`Sightline.cpp:112`), Rapport quash
-  (`Rapport.cpp:394`), Logistics 3D/merchant/activate (`Logistics.cpp:1304,3082,
-  3658,3977`), Board/ProgProbe/ProgAllocator hotkeys+polls. Callers that must still
+  (`Rapport.cpp:394`), Logistics 3D/merchant/activate (`Logistics.cpp:1372,3286,
+  3489,3579,3921,4412`), Board/ProgProbe/ProgAllocator hotkeys+polls. Callers that must still
   run on VR check `IsInstalled()` and fall back to a direct call.
 - `Clear()` (`:79`) — caller `Serialization.cpp:572`; drops pending work whose
   captured handles would re-resolve against the next session's reused handle table.
@@ -451,39 +451,52 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
 `MainThread::Post`. Owns the serialized `g_stockGear` ('MSTK') map.
 
 ### Logistics.cpp / Logistics.h
-- **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics.cpp:1936`, guarded `g_stockMx`
-  `:1935`, the one cross-thread map here): the only serialized state the cluster
-  owns. `CopyStockGear` (`:4035`) → `Serialization.cpp:191`; `LoadStockRecord`
-  (`:4040`) → `:307`; `ClearStockGear` (`:4045`) → `:231,587`. Only
+- **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics.cpp:2073`, guarded `g_stockMx`
+  `:2072`, the one cross-thread map here): the only serialized state the cluster
+  owns. `CopyStockGear` (`:4470`) → `Serialization.cpp:191`; `LoadStockRecord`
+  (`:4476`) → `:307`; `ClearStockGear` (`:4481`) → `:231,587`. Only
   `IsPersistableID` FormIDs written, sets capped 512, unresolvable IDs dropped.
   Changing the map's key/value shape or record framing breaks the shed-protection
   ("Gauldurbow fix") — signature gear could get shed to the player after a load.
   **Not** cleared by `ClearTransientState` — cleared separately by `ClearStockGear`.
-- `ServiceFollower` (`:3429`) — sole caller `Scheduler.cpp:225` (worker). Sets
-  `g_svc` (`:840`) raw pointer valid only for that call — safe only because the
+- `ServiceFollower` (`:3678`) — sole caller `Scheduler.cpp:225` (worker). Sets
+  `g_svc` (`:885`) raw pointer valid only for that call — safe only because the
   worker services followers sequentially; parallelizing dangles it.
-- `ClearTransientState` (`:3983`) → `Serialization.cpp:582`, after StopPump. Wipes
+- `ClearTransientState` (`:4418`) → `Serialization.cpp:582`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
-- Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`:3135`),
-  `AmmoIsBolt` (`:3191`), `CountPotions`/`ArrowCount`/`BoltCount` (`:3233-3247`) →
+- Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`:3353`),
+  `AmmoIsBolt` (`:3409`), `CountPotions`/`ArrowCount`/`BoltCount` (`:3451-3465`) →
   `Evaluator.cpp:397-409` + `TradeBridge.cpp:52-71` (buy side shares them so bought
-  supply matches looted). `ComputeWeakPotionFloor` (`:3205`) ← `plugin.cpp:288`
+  supply matches looted). `ComputeWeakPotionFloor` (`:3423`) ← `plugin.cpp:288`
   (after `Catalog::Load`).
-- **Alias/travel:** `g_travelSlots` (`:1638`, `kMaxLootSlots=4`) maps follower→loot
+- **Alias/travel:** `g_travelSlots` (`:1767`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
-  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `:4005` ←
+  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `:4441` ←
   `Scheduler.cpp:236`; cap/leash/dismissal/revert). Leash hysteresis guards
-  (`followerBeyondLeash` `:2528`, ×1.15 `:3522`) prevent the ~1/sec claim/evict churn.
-- **Sinks** (`RegisterSinks` `:3944` ← `plugin.cpp:297`): `ContainerSink`
+  (`followerBeyondLeash` `:2713`, ×1.15 `:3773`) prevent the ~1/sec claim/evict churn.
+  **Theft guard (RC#4):** the Walking driver (`:3949`) detects an EXTERNAL package
+  holding a claimed follower (scene/framework; onTravelPkg=false mid-walk), pauses
+  the stall/deadline clocks (`stolenSince`, `kStealGrace=10s` `:1810`) and re-asserts
+  via `EvaluatePackage(true,false)`; only a genuine on-package zero-move stall
+  (`kNoProgress=5s`) reaches the sticky blocklist — routing theft through the stall
+  path re-poisons reachable loot 5 min at a time (the 12:25 deck trace).
+- **Loot scan is MULTI-CELL** (`LootNearby` `:2353`; cell set built `:2440-2458`):
+  follower's + player's + live travel-target's ATTACHED parent cells, all anchored
+  to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
+  (crash4). Dropping back to one cell re-blinds exterior scans across cell borders
+  ("second gold pile on the same table"). Idle blocklist reassess (`:4306`) is
+  AGE-GATED (≥10s): a full wipe let follower B erase follower A's 200ms-old fail
+  verdict → instant same-target redispatch churn.
+- **Sinks** (`RegisterSinks` `:4379` ← `plugin.cpp:297`): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
-  PlayerID()` `:3107`) or it re-fires on its own removal (MAO infinite-credit loop);
+  PlayerID()` `:3311`) or it re-fires on its own removal (MAO infinite-credit loop);
   only QUEUES to the worker. `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
-  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`:3963`) ← `plugin.cpp:360`.
-- `OnFollowerRemoved` (`:4018`) ← `Followers.cpp:306` (dismissal alias eviction).
+  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`:4398`) ← `plugin.cpp:360`.
+- `OnFollowerRemoved` (`:4454`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
-- Economy probe (`EconomyProbe` `:2834`, worker, `Config::g_economy && Po3Present`)
+- Economy probe (`EconomyProbe` `:3037`, worker, `Config::g_economy && Po3Present`)
   pushes the actual merchant read to Papyrus via TradeBridge — native `GetInventory`/
   `GetGoldAmount` CTD on merchant chests. **Do not** move the read back to native.
 

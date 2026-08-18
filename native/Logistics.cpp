@@ -1744,6 +1744,14 @@ namespace MFO::Logistics {
             // ends -> he follows.
             RE::NiPoint3        lastPos{};          // his position at progressAt
             Clock::time_point   progressAt{};       // last time he actually moved
+            // PACKAGE-THEFT episode start (deck 12:25:18: onTravelPkg flipped
+            // false mid-walk, curPkg=FF001780 -- a runtime scene/framework
+            // package took the follower while the loot alias was STILL filled).
+            // While an external package holds him, the leg's stall/deadline
+            // clocks must not run -- the REF is not to blame -- and the claim is
+            // re-asserted (EvaluatePackage) each tick for a bounded grace.
+            // Zero = currently on the travel package.
+            Clock::time_point   stolenSince{};
             // ACQUIRE PROBE (route 2b) readback: after an Activate dispatch at a
             // LOOSE ref, the NEXT tick observes what the engine actually did
             // (dispatch is asynchronous -- Papyrus.h -- so same-tick reads lie).
@@ -1786,12 +1794,20 @@ namespace MFO::Logistics {
             return false;
         }
         constexpr float kMoveEps    = 50.0f;                  // real-movement threshold (units)
-        // 7s, not 4: the deck showed reachable bodies transiently flagged
-        // "unreachable" at 4s (a momentary stall while repositioning / the player
-        // moving) then reached on the next dispatch. More grace kills the false
-        // positive; the navmesh gate already catches genuinely off-mesh bodies, so
-        // this only needs to catch a follower truly wedged with no path.
-        constexpr auto  kNoProgress = std::chrono::seconds(7);
+        // 5s (was 7, was 4). 4s false-positived on momentary repositioning; 7s was
+        // the fix -- but most of what 7s actually absorbed turned out to be the
+        // PACKAGE-THEFT case (a scene/framework package holding the follower, deck
+        // 12:25:18), which the excursion driver now detects and exempts from the
+        // stall clock entirely (stolenSince). With theft out of the stall path, a
+        // genuine on-package zero-movement stall is a much cleaner geometric
+        // verdict, so it can fail FASTER (marth RC#4: ~9s wasted per dead leg).
+        constexpr auto  kNoProgress = std::chrono::seconds(5);
+        // How long a stolen leg re-asserts the alias claim before giving the leg
+        // up (transient blocklist ONLY, never sticky -- the ref was reachable for
+        // all we know). Long enough to outlast a follower one-liner/idle scene,
+        // short enough that a standing external hold (a long scripted scene)
+        // releases the batch instead of parking the excursion.
+        constexpr auto  kStealGrace = std::chrono::seconds(10);
 
         // Set by an excursion-mode scan when it found loot it could NOT act on
         // because the player's dibs have not released yet (dNotYet > 0). The Hold
@@ -2361,18 +2377,28 @@ namespace MFO::Logistics {
             // PLAYER HOME: don't loot your own house unless opted in (default OFF).
             if (!Config::g_lootInPlayerHomes.load() && InPlayerHome())
                 return false;
-            // WALK THE FOLLOWER'S OWN CELL, NOT TES::ForEachReferenceInRange.
+            // WALK ACTOR-ANCHORED CELLS, NOT TES::ForEachReferenceInRange.
             // crash4 (2026-07-22, exterior Wilderness): TES::ForEachReferenceInRange
             // ends its exterior branch with `worldSpace->GetSkyCell()`, and
             // TES::worldSpace was a TORN pointer (0x450FE000_45242000 -- two
             // mismatched 32-bit halves) because the engine was mid worldspace/cell
             // stream. It chases three engine-owned pointers (gridCells, worldSpace,
-            // skycell) that churn during a transition. The follower's parent cell,
-            // when ATTACHED, iterates only its own reference list (no worldspace
-            // deref at all -- see TESObjectCELL::ForEachReferenceInRange), and the
-            // loot radius is clamped to one 4096u cell, so nothing real is lost.
-            // The IsAttached gate also skips the walk outright during a transition,
-            // which is exactly when those pointers are unstable.
+            // skycell) that churn during a transition. A ref's parent cell, when
+            // ATTACHED, iterates only its own reference list (no worldspace deref
+            // at all -- see TESObjectCELL::ForEachReferenceInRange). The IsAttached
+            // gate also skips the walk outright during a transition, which is
+            // exactly when those pointers are unstable.
+            //
+            // RC#4 (marth: "skipped a second gold pile on the SAME table"): a
+            // single-cell walk goes BLIND across exterior cell borders -- the deck
+            // scan's ref count swung 1394 -> 132 -> 84 as the follower crossed
+            // boundaries, and the table's other pile/potions sat unseen in the
+            // neighbour cell. So scan up to three ACTOR-ANCHORED attached cells --
+            // the follower's, the player's, and the live travel TARGET's -- each
+            // reached through a ref we already hold (same safety class as before;
+            // still zero TES/worldspace derefs). The target's cell is the one that
+            // makes an excursion loot a table OUT: once he walks at pile 1, pile 2
+            // beside it becomes visible even from another cell.
             auto* cell = a_follower->GetParentCell();
             if (!cell || !cell->IsAttached()) return false;
             const auto origin = a_follower->GetPosition();
@@ -2411,7 +2437,26 @@ namespace MFO::Logistics {
             // drops the corpse). Logged rate-limited below.
             int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0, dLeash = 0, dEmpty = 0;
 
-            cell->ForEachReferenceInRange(origin, kLootRadius,
+            // The scanned cell set (see the crash4/RC#4 note above): follower's
+            // cell always; player's and live travel-target's when attached and
+            // distinct. All anchored to refs in hand -- never TES globals.
+            RE::TESObjectCELL* cells[3] = { cell, nullptr, nullptr };
+            int nCells = 1;
+            auto addCell = [&](RE::TESObjectREFR* a_anchor) {
+                if (!a_anchor) return;
+                auto* c = a_anchor->GetParentCell();
+                if (!c || !c->IsAttached()) return;
+                for (int i = 0; i < nCells; ++i)
+                    if (cells[i] == c) return;   // dedupe (interiors: all one cell)
+                if (nCells < 3) cells[nCells++] = c;
+            };
+            addCell(pc);
+            if (auto* sl = SlotOf(a_follower->GetFormID())) {
+                auto tp = sl->target.get();
+                addCell(tp.get());
+            }
+
+            auto scanOne =
                 [&](RE::TESObjectREFR& a_ref) {
                     if (candidates.size() >= kMaxCandidates) return RE::BSContainer::ForEachResult::kStop;
                     ++dRefs;
@@ -2608,7 +2653,11 @@ namespace MFO::Logistics {
                         candidates.push_back(ref->GetHandle());
                     else ++dNotYet;
                     return RE::BSContainer::ForEachResult::kContinue;
-                });
+                };
+            for (int ci = 0; ci < nCells; ++ci) {
+                cells[ci]->ForEachReferenceInRange(origin, kLootRadius, scanOne);
+                if (candidates.size() >= kMaxCandidates) break;   // cap hit mid-set
+            }
 
             // One diagnostic line per follower PER CATEGORY per ~10 s, so the walk
             // composition is visible without flooding the ~1 s tick. Keyed by
@@ -2738,6 +2787,7 @@ namespace MFO::Logistics {
                         tr.phase    = TravelPhase::Walking;
                         tr.lastPos    = origin;   // reset no-progress tracker
                         tr.progressAt = a_now;
+                        tr.stolenSince = {};      // fresh leg -> fresh theft episode
                         return true;   // new leg -- the excursion continues at 60
                     }
                     continue;
@@ -2785,6 +2835,7 @@ namespace MFO::Logistics {
                         g_travelSlots[s].startTime = a_now;   // excursion begins now
                         g_travelSlots[s].lastPos    = origin;  // reset no-progress tracker
                         g_travelSlots[s].progressAt = a_now;
+                        g_travelSlots[s].stolenSince = {};     // slots are reused -- clear stale episode
                         return true;   // committed to the walk; transfer on arrival
                     }
                     // Travel UNAVAILABLE (off AE, records unresolved, quest not
@@ -3895,10 +3946,63 @@ namespace MFO::Logistics {
                     return;   // the transfer IS this tick's action; seek next tick
                 }
 
+                // ── PACKAGE-THEFT GUARD (RC#4, deck 12:25:18): the loot alias was
+                // still filled at 60 yet curPkg flipped to a runtime FF package (a
+                // scene / dialogue / framework claim) and pathSpeed died -- the
+                // follower stood there while the stall clock convicted the REF and
+                // 5-min stickied a perfectly reachable gold pile. An external hold
+                // is NOT a reachability verdict: pause the stall/deadline clocks,
+                // re-assert the claim (EvaluatePackage; the fill is intact, so the
+                // engine re-picks travel the moment the scene lets go), and only
+                // after kStealGrace concede the leg -- TRANSIENT blocklist, never
+                // sticky/strike. Arrival above still runs during the hold, so a
+                // steal beside the pile still grabs it.
+                bool stealAbandon = false;
+                if (!gone && tref) {
+                    if (!Forms::IsTravelPackage(a_follower->GetCurrentPackage())) {
+                        if (tr.stolenSince.time_since_epoch().count() == 0) {
+                            tr.stolenSince = now;
+                            auto* curp = a_follower->GetCurrentPackage();
+                            spdlog::info("[loot] {:08X} travel pkg stolen mid-walk "
+                                         "(curPkg={:08X}) -- re-asserting claim, grace {}s",
+                                         id, curp ? curp->GetFormID() : 0u,
+                                         std::chrono::duration_cast<std::chrono::seconds>(kStealGrace).count());
+                        }
+                        if (now - tr.stolenSince <= kStealGrace) {
+                            tr.progressAt = now;   // stolen time never counts against the ref
+                            if (tr.deadline < now + std::chrono::seconds(4))
+                                tr.deadline = now + std::chrono::seconds(4);
+                            a_follower->EvaluatePackage(true, false);   // nudge; never resetAI
+                            return;   // hold the leg -- reclaim pending
+                        }
+                        // External claim outlasted the grace: give the LEG up, keep
+                        // the ref honest (25s transient only) and seek/release below.
+                        MarkTravelFailed(tref->GetFormID(), now);
+                        spdlog::info("[loot] {:08X} leg {:08X} abandoned -- package held "
+                                     "externally past grace -- transient skip",
+                                     id, tref->GetFormID());
+                        tr.stolenSince = {};
+                        stealAbandon = true;
+                        tr.phase = TravelPhase::Holding;
+                        tr.lingerUntil = now + std::chrono::seconds(
+                                                  static_cast<int>(Config::g_batchLinger.load()));
+                        // no return -- fall into Holding
+                    } else if (tr.stolenSince.time_since_epoch().count() != 0) {
+                        // Reclaimed: resume the leg with a fresh movement budget
+                        // AND a fresh distance-scaled deadline (the steal-era one
+                        // was only ever nudged 4 s ahead -- too short to walk out).
+                        tr.stolenSince = {};
+                        tr.progressAt  = now;
+                        tr.deadline    = TravelDeadline(dist, now);
+                    }
+                }
+
                 // NOT arrived: leg fails on vanished target, no-progress (no path),
                 // or the leg deadline. Blacklist it and seek another leg THIS tick.
                 const bool stalled = tref && now - tr.progressAt > kNoProgress;
-                if (gone || stalled || now > tr.deadline) {
+                if (stealAbandon) {
+                    // handled above -- skip the stall/deadline blame path
+                } else if (gone || stalled || now > tr.deadline) {
                     if (tref) {
                         // A stall (zero progress) is a reachability verdict -> strike
                         // toward sticky; a vanished target or a plain deadline is not.
@@ -4199,8 +4303,18 @@ namespace MFO::Logistics {
                 if (ic >= kIdleReassessCycles && !g_travelFailed.empty() &&
                     (g_lastBlocklistReassess.time_since_epoch().count() == 0 ||
                      now - g_lastBlocklistReassess >= kReassessCooldown)) {
-                    const size_t n = g_travelFailed.size();
-                    g_travelFailed.clear();
+                    // AGE-GATED wipe (RC#4 churn): the map is GLOBAL, so follower
+                    // B's idle reassess used to erase a verdict follower A recorded
+                    // 200 ms earlier (deck 12:25:09.988) -- A instantly re-picked
+                    // the just-failed target and burned another whole trip on it.
+                    // Only entries that have aged past kReassessMinAge are cleared;
+                    // fresh verdicts ride out their own cooldown.
+                    constexpr auto kReassessMinAge = std::chrono::seconds(10);
+                    const size_t before = g_travelFailed.size();
+                    std::erase_if(g_travelFailed, [&](const auto& kv) {
+                        return now - kv.second >= kReassessMinAge;
+                    });
+                    const size_t n = before - g_travelFailed.size();
                     // NOTE: g_stallStrikes deliberately SURVIVES the reassess. Wiping
                     // it here defeated the 2-strike sticky entirely: a geometrically
                     // unreachable body (navmesh path ends short -- e.g. deck 0002CFBF
@@ -4210,10 +4324,15 @@ namespace MFO::Logistics {
                     // excursions. Strikes now accumulate across excursions; a body that
                     // proves reachable has its strike cleared on ARRIVAL (below), so a
                     // merely-transient block never falsely reaches sticky.
-                    g_lastBlocklistReassess = now;
-                    g_idleCycles[id] = 0;
-                    spdlog::info("[loot] {:08X} idle {} ticks -- cleared {} blocklisted "
-                                 "bodies to reassess", id, ic, n);
+                    if (n > 0) {
+                        // Commit only on a real wipe: an all-fresh map keeps the
+                        // idle counter armed and retries once entries age, without
+                        // burning the cooldown on a no-op.
+                        g_lastBlocklistReassess = now;
+                        g_idleCycles[id] = 0;
+                        spdlog::info("[loot] {:08X} idle {} ticks -- cleared {} blocklisted "
+                                     "bodies to reassess", id, ic, n);
+                    }
                 }
             }
             // Heartbeat so "serviced, nothing to do" is distinguishable from
