@@ -464,11 +464,25 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
   (`:4476`) → `:307`; `ClearStockGear` (`:4481`) → `:231,587`. Only
   `IsPersistableID` FormIDs written, sets capped 512, unresolvable IDs dropped.
   Changing the map's key/value shape or record framing breaks the shed-protection
-  ("Gauldurbow fix") — signature gear could get shed to the player after a load.
+  ("Gauldurbow fix") — signature gear could get shed (dropped on the floor) after a load.
   **Not** cleared by `ClearTransientState` — cleared separately by `ClearStockGear`.
-- `ServiceFollower` (`:3678`) — sole caller `Scheduler.cpp:225` (worker). Sets
+- `ServiceFollower` (`:3748`) — sole caller `Scheduler.cpp:225` (worker). Sets
   `g_svc` (`:885`) raw pointer valid only for that call — safe only because the
   worker services followers sequentially; parallelizing dangles it.
+- `ShedOffRoleWeapon` (`:3617`) — one off-role weapon per idle tick, **DROPPED on
+  the floor** (no longer handed to the player; no value split, no knob — marth
+  simplified). Disposal is `Actor::DropObject` (a world-ref/3D create) so it MUST
+  go through `MainThread::Post` (`doDrop`, mirrors the #62 equip / ActivateRef
+  hops in this file); on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
+  drop off-worker. **POST-BATTLE GATE:** early-returns until `kShedPostBattleDwell`
+  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`:4523`) ←
+  `Scheduler.cpp:293` (the in-combat branch — the only place combat=true is seen,
+  since this path is out-of-combat-only). Survives an `IsInCombat()` mid-fight
+  flap: a real combat frame re-stamps `now`, so the dwell can't mature inside a
+  lull (the field 2h-follower-hands-a-looted-mace bug). `g_lastCombatSeen`
+  worker-only/no-lock (#4), cleared in `ClearTransientState`. Guards unchanged
+  (never disarm/`inRoleWeapons>0`, `IsStockGear`, `IsCreatureWeapon`, socketed,
+  `Catalog::IsExcluded`).
 - `ClearTransientState` (`:4418`) → `Serialization.cpp:582`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).

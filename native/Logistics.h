@@ -106,6 +106,13 @@ namespace MFO::Logistics {
     // keep him claimed at priority 60 straight through the fight. No-op otherwise.
     void ReleaseTravelOnCombat(RE::Actor* a_follower);
 
+    // Called from the Scheduler's COMBAT branch, once per in-combat follower per
+    // tick. Stamps the follower's "last seen in combat" time -- the post-battle
+    // gate ShedOffRoleWeapon reads so it drops off-role weapons only AFTER a fight
+    // ends, never during a mid-fight IsInCombat() lull (the field mace-hand-off).
+    // Worker-only, no lock: same BSJobs tick as the shed that reads it (#4).
+    void NoteInCombat(RE::FormID a_id);
+
     // Called from the roster-removal (dismissal) path. If a_id was mid travel-
     // to-loot, EVICT them from the loot alias: a dismissed follower can't be
     // freed by dropping quest priority (nothing reclaims him) and the alias fill
