@@ -55,11 +55,17 @@ namespace MFO::Board {
         std::atomic<bool> g_cursorInit{ false };
         std::atomic<float> g_cursorX{ 0.0f }, g_cursorY{ 0.0f };
         std::atomic<std::uint64_t> g_frame{ 0 };
-        // CLOSE GRACE: the frame up to which the input hook keeps swallowing after a
-        // board close, so the button PRESS that closed the board doesn't leak its
-        // release (or a held edge) to the game and pop the Tween menu. Ends early on
-        // the first release; this is only the safety cap. Set by CloseBoard().
-        std::atomic<std::uint64_t> g_closeGrace{ 0 };
+        // CLOSE GRACE: a steady_clock DEADLINE (ns since the steady epoch, 0 =
+        // inactive) up to which the input hook keeps swallowing after a board
+        // close, so the button PRESS that closed the board doesn't leak its
+        // release (or a held edge) to the game and pop the Tween menu. Ends early
+        // on the first release; this is only the safety cap. Set by CloseBoard().
+        // NOTE: keyed to WALL time, not g_frame — g_frame ticks only in
+        // PublishSnapshot (~532ms while the board is CLOSED), so the old
+        // "g_frame + 30" cap was ~16s, not ~0.5s: a missed release could swallow
+        // real input for up to 16s.
+        std::atomic<std::int64_t> g_closeGrace{ 0 };
+        constexpr std::chrono::milliseconds kCloseGraceMs{ 500 };   // ~30 frames @60fps
 
         // io.DisplaySize LIES under Proton/upscalers: the Win32 backend reads
         // GetClientRect, which can disagree with the backbuffer. Cache the real
@@ -420,10 +426,13 @@ namespace MFO::Board {
 
         // Close the board AND open the input-swallow grace, so the button press
         // that closed it can't leak its release to the game (Tween menu). The
-        // grace ends early on the first release; 30 frames is only the safety cap.
+        // grace ends early on the first release; kCloseGraceMs is only the safety
+        // cap. WALL-clock deadline (see g_closeGrace) so a missed release can't
+        // swallow input for the ~16s the old frame-count cap allowed.
         inline void CloseBoard() {
             g_open.store(false);
-            g_closeGrace.store(g_frame.load() + 30);
+            g_closeGrace.store((std::chrono::steady_clock::now() + kCloseGraceMs)
+                                   .time_since_epoch().count());
         }
 
         void DrawFieldKit(const Snapshot& snap) {
@@ -2733,7 +2742,8 @@ namespace MFO::Board {
                 // closed the board can't leak its release/held edge to the game and
                 // pop the Tween menu. End the grace the instant we see a release, so
                 // the dead window is only as long as the closing button is held.
-                if (a_events && !g_open.load() && g_frame.load() < g_closeGrace.load()) {
+                if (a_events && !g_open.load() && g_closeGrace.load() != 0 &&
+                    std::chrono::steady_clock::now().time_since_epoch().count() < g_closeGrace.load()) {
                     for (auto* e = *a_events; e; e = e->next)
                         if (e->eventType == RE::INPUT_EVENT_TYPE::kButton &&
                             !static_cast<RE::ButtonEvent*>(e)->IsDown()) { g_closeGrace.store(0); break; }
@@ -2984,7 +2994,18 @@ namespace MFO::Board {
                 const auto  fid   = c.fid;
                 const auto  perk  = c.perk;   // §18.6: ProgSetClass carries the class-def id here
                 const float param = c.param;
-                MainThread::Post([kind, fid, perk, param]() {
+                // Capture the revert/reload generation at POST time. If a revert
+                // (ClearAll) or reload (OnPostLoad) bumps it before this closure
+                // runs, MainThread::Clear was meant to drop us — but if the queue
+                // raced the Clear, bail here so a stale edit can't land on the
+                // NEXT save's same-FormID actor.
+                const int gen = ProgAllocator::PollGeneration();
+                MainThread::Post([kind, fid, perk, param, gen]() {
+                    if (ProgAllocator::PollGeneration() != gen) {
+                        spdlog::info("[prog] board edit dropped: superseded by revert/reload "
+                                     "(actor {:08X})", fid);
+                        return;
+                    }
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
                     if (!actor) {
                         spdlog::info("[prog] board edit dropped: actor {:08X} unresolvable", fid);
@@ -3124,7 +3145,23 @@ namespace MFO::Board {
                 const int tn = (table == 1) ? (int)std::size(kCondsLogi)
                                             : (int)std::size(kCondsCombat);
                 const int n = std::clamp((int)(c.param + 0.5f), 0, tn - 1);
-                tab[i].conditionOpcode = t[n].op; break; }
+                // When the ParamKind changes (e.g. Percent -> Count), the old
+                // param is meaningless in the new kind — a stale 0.5 left on a
+                // Count condition reads as silently always/never-true. Snap it to
+                // the new kind's default.
+                const ParamKind oldKind = kindFor(tab[i].conditionOpcode, t, tn);
+                const ParamKind newKind = t[n].kind;
+                tab[i].conditionOpcode = t[n].op;
+                if (oldKind != newKind) {
+                    switch (newKind) {
+                    case ParamKind::Percent:  tab[i].conditionParam = 0.5f;   break;
+                    case ParamKind::Count:    tab[i].conditionParam = 5.0f;   break;
+                    case ParamKind::Distance: tab[i].conditionParam = 500.0f; break;
+                    case ParamKind::None:
+                    default:                  tab[i].conditionParam = 0.0f;   break;
+                    }
+                }
+                break; }
             case EditKind::SetAct: {
                 const VocabEntry* t = (table == 1) ? kActsLogi : kActsCombat;
                 const int tn = (table == 1) ? (int)std::size(kActsLogi)
@@ -3196,7 +3233,7 @@ namespace MFO::Board {
             if (!a) continue;
             FollowerRow r;
             r.id        = a->GetFormID();
-            r.name      = a->GetName();
+            r.name      = a->GetName() ? a->GetName() : "?";   // null-guard like every sibling
             r.active    = true;
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();

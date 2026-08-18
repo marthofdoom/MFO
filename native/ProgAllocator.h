@@ -216,6 +216,13 @@ namespace MFO::ProgAllocator {
     bool AllocateNextEligible(RE::Actor* a_actor);
     bool Respec(RE::Actor* a_actor);                      // refunds points, −500 rapport
 
+    // Revert/reload generation — bumped by ClearAll (revert) and OnPostLoad.
+    // A board prog-edit captures this at post time and bails inside its
+    // MainThread::Post closure if it moved, so an edit that survives a revert
+    // (MainThread::Clear raced the queue) can't land on the NEXT save's
+    // same-FormID actor. Main-thread-only value.
+    int PollGeneration();
+
     // ── §16 manual skill points (design doc §16 — auto is a default, not a
     // cage; this is the escape hatch for mage/multiclass builds) ────────────
     // Toggle per follower. First enable latches manualBaselineLevel at the
