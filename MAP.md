@@ -213,15 +213,16 @@ releases **by eviction** with a non-actor XMarker.
   **follower-agnostic** (deck-proven on Lucien). Gated behind `Config::g_castSelf`
   (bCastSelf). Callers: `CastOn` self-intercept (combat, BEFORE the
   concentration fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
-  `act.cast_self` branch (out-of-combat, `selfPkg`). **SAME-TIME-LIMIT self bound
-  (`SelfCastReconcile`):** a self-cast **concentration HEAL** is capped at
-  `kConcHealCap` (6 s) of continuous channelling via the shared `ConcentrationHold`
-  numbers — the direct-apply analog of the non-self stream's "until topped" bound
-  (dispelling a restore-Health effect is a no-op, the next winning tick re-streams).
-  The cap is **HEAL-ONLY / CONCENTRATION-ONLY**: an FF self buff and a self **ward**
-  keep their authored duration (the NO-time-cap fix — capping those re-broke the
-  mid-duration dispel churn; an un-rooted self buff has no rooting to release on a
-  fixed cadence). **v1.0.6x UNIFY:** the Logistics immediate path no longer SKIPS a
+  `act.cast_self` branch (out-of-combat, `selfPkg`). **SAME-TIME-LIMIT self cap
+  (`SelfCastReconcile`, CONCENTRATION-ONLY):** a self-cast concentration channel is
+  hard-capped by nature, then released + re-streamed on the next winning tick —
+  **HEAL → `kConcHealCap` (6 s)** "until topped" (matches every non-self heal stream;
+  dispelling a restore-Health effect is a no-op, re-stream seamless); **WARD/UTILITY →
+  `kConcSelfUtilityCap` (15 s)** (marth's call — NOT the 4 s package hold: CastSelfDirect
+  doesn't root, so a short cap only FLICKERS a self ward; 15 s bounds a stuck ward with
+  negligible flicker). An **FF self buff keeps its authored duration** (the NO-time-cap
+  fix — capping FF re-broke the mid-duration dispel churn; an un-rooted FF buff has no
+  rooting to release on a fixed cadence). **v1.0.6x UNIFY:** the Logistics immediate path no longer SKIPS a
   concentration ward nor runs the `healStream` direct-apply stopgap (ff0cb48, REMOVED):
   **every NON-self concentration cast now routes to `Actuation::CastConcentrationAt`**
   (the bounded package stream — see below), exactly like combat. So OOC and combat

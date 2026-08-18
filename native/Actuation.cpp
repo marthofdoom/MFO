@@ -173,7 +173,14 @@ namespace MFO::Actuation {
         // is bounded: a dispatched hold, a transparent wait, or a legible
         // failure (§5.3) -- never "leave it to their AI".
         constexpr float kConcHealCap     = 6.0f;   // heal stream hard cap
-        constexpr float kConcUtilityHold = 4.0f;   // utility hold cap
+        constexpr float kConcUtilityHold = 4.0f;   // utility PACKAGE hold cap (rooted)
+        // Self ward/utility HARD cap (marth). Deliberately NOT the 4s package
+        // utility hold: a PACKAGE roots the caster, so its hold must be short to
+        // un-root him often; CastSelfDirect does NOT root (it is a paced direct-
+        // apply) and re-streams the very next winning tick, so a short cap only
+        // makes a self ward dispel/re-apply FLICKER -- a real defensive gap. 15s
+        // bounds a stuck self ward while keeping that re-stream flicker negligible.
+        constexpr float kConcSelfUtilityCap = 15.0f;
 
         // ONE source of truth for the concentration TIME-LIMITS, so EVERY
         // concentration cast -- self, player, ally, foe -- is bounded by the
@@ -1361,27 +1368,36 @@ namespace MFO::Actuation {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
             const bool gone   = !a || !a->Is3DLoaded();
             const bool stale  = std::chrono::duration<float>(now - sc.lastFired).count() > releaseSec;
-            // SAME-TIME-LIMIT (marth): a self CONCENTRATION HEAL is bounded by the
-            // identical kConcHealCap "until topped" ceiling every NON-self heal
-            // stream obeys (ConcentrationHold). CastSelfDirect is a paced direct-
-            // apply, not a rooted package, so its natural bound is the HP rule going
-            // false (its own "until topped"); this hard cap is the shared safety
-            // ceiling that matches the package -- after kConcHealCap of continuous
-            // channelling the entry releases (dispelling a restore-Health effect is
-            // a no-op) and the next winning tick re-streams a fresh burst. It is
-            // HEAL-ONLY and CONCENTRATION-ONLY: a fire-and-forget self buff and a
-            // self WARD keep their authored duration (the NO-time-cap fix below --
-            // capping THOSE re-broke the mid-duration dispel churn), because an
-            // un-rooted self buff has no rooting to release on a fixed cadence.
-            bool concHealCapped = false;
+            // SAME-TIME-LIMIT (marth): a self CONCENTRATION cast is bounded by a
+            // hard time cap, then released and re-streamed on the next winning tick
+            // (the same release-and-reapply the non-self stream uses). CastSelfDirect
+            // is a paced direct-apply, NOT a rooted package, so its natural bound is
+            // the rule going false; this cap is the shared safety ceiling. The cap
+            // value depends on the spell's nature:
+            //   HEAL           -> kConcHealCap (6s), the identical "until topped"
+            //                     ceiling every NON-self heal stream obeys; dispelling
+            //                     a restore-Health effect is a no-op and the next tick
+            //                     re-streams, so the heal is seamless.
+            //   WARD / UTILITY -> kConcSelfUtilityCap (15s), marth's call -- NOT the
+            //                     4s package utility hold (that would only FLICKER a
+            //                     self ward; see the constant). 15s bounds a stuck
+            //                     ward while keeping the re-stream flicker negligible.
+            // CONCENTRATION-ONLY: a fire-and-forget self buff keeps its authored
+            // duration (the NO-time-cap fix below -- capping FF re-broke the
+            // mid-duration dispel churn), because an un-rooted FF buff has no rooting
+            // to release on a fixed cadence and lives its authored life.
+            bool concCapped = false;
             if (!gone) {
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell);
-                if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
-                    CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal &&
-                    std::chrono::duration<float>(now - sc.started).count() >= kConcHealCap)
-                    concHealCapped = true;
+                if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                    const float cap =
+                        CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
+                            ? kConcHealCap : kConcSelfUtilityCap;
+                    if (std::chrono::duration<float>(now - sc.started).count() >= cap)
+                        concCapped = true;
+                }
             }
-            if (gone || stale || concHealCapped) {
+            if (gone || stale || concCapped) {
                 // Rule stopped re-firing / follower gone -> RELEASE: dispel a
                 // lingering ward/effect so it cannot persist as a stuck gameplay
                 // buff. There is NO equip to undo -- the self-cast never holds the
