@@ -17,6 +17,7 @@
 #include "Confidence.h"  // AUTO cast: ChaseRadius bounds the "nearby enemies" fan-out
 
 #include <optional>      // ForceCast's tri-state return -- not in the PCH
+#include <random>        // fix #3/#6: jittered beneficial-recast window (worker-serial RNG)
 
 namespace MFO::Actuation {
 
@@ -1022,6 +1023,54 @@ namespace MFO::Actuation {
         // (the g_followers discipline #4); cleared with g_selfCast on revert.
         std::unordered_map<RE::FormID, SelfClock::time_point> g_autoCast;
 
+        // fix #3/#6: BENEFICIAL DURATION recast suppression. Keyed on
+        // (casterFormID<<32 | spellID): the last time this caster fired this
+        // beneficial buff, plus the JITTERED window it must wait before re-firing.
+        // A light applied hands-free (Magelight/Candlelight) never registers as
+        // "already active", so the already-active gate never caught it and MFO
+        // respammed it as fast as magicka regenerated (deck 2026-08-18). This map
+        // is the second layer: even an undetectable light is held off until near
+        // its own authored expiry, and the per-fire jitter keeps the recast beat
+        // human (never a fixed cadence). Worker-serial, no lock (same #4 discipline
+        // as g_autoCast/g_selfCast); cleared with them on revert. INSTANT
+        // beneficial spells (authoredDuration 0) and concentration streams are
+        // never entered here -- they must re-fire on demand.
+        struct BeneficialRecast {
+            SelfClock::time_point lastCast{};
+            float                 windowSec = 0.0f;
+        };
+        std::unordered_map<std::uint64_t, BeneficialRecast> g_beneficialRecast;
+
+        std::uint64_t RecastKey(RE::FormID a_caster, RE::FormID a_spell) {
+            return (static_cast<std::uint64_t>(a_caster) << 32) | a_spell;
+        }
+
+        // The spell's own authored duration = the longest effectItem.duration over
+        // its effects (0 = an instant spell -> exempt from recast suppression).
+        float AuthoredDuration(RE::SpellItem* a_spell) {
+            float d = 0.0f;
+            if (!a_spell) return d;
+            for (auto* eff : a_spell->effects) {
+                if (!eff) continue;
+                const float dur = static_cast<float>(eff->effectItem.duration);
+                if (dur > d) d = dur;
+            }
+            return d;
+        }
+
+        // A jittered fraction of the authored duration, recomputed per fire so the
+        // recast beat is never a robotic constant (marth: "needs a larger more
+        // variable delay to look more human"). Worker-serial context -> a
+        // function-local static RNG is safe (single-threaded access). The window is
+        //   authoredDuration * fBeneficialRecastFrac * (1 +/- fBeneficialRecastJitter).
+        float JitteredRecastWindow(float a_authoredDuration) {
+            static std::mt19937 rng{ std::random_device{}() };
+            const float frac   = Config::g_beneficialRecastFrac.load();
+            const float jitter = std::clamp(Config::g_beneficialRecastJitter.load(), 0.0f, 0.95f);
+            std::uniform_real_distribution<float> dist(-jitter, jitter);
+            return a_authoredDuration * frac * (1.0f + dist(rng));
+        }
+
         // Apply a_spell's effect FROM a caster TO an arbitrary target, hands-free
         // (CastSpellImmediate, kInstant), and deduct the caster's REAL magicka
         // cost (§56: CastSpellImmediate spends nothing, so we deduct). This is
@@ -1070,6 +1119,28 @@ namespace MFO::Actuation {
             return a_mgef->IsDetrimental() || a_mgef->IsHostile();
         }
 
+        // A BENEFICIAL Health effect = a heal (restore/fortify Health, instant or
+        // over time) -- the mirror of IsDamageEffect: primaryAV Health but NOT
+        // detrimental/hostile. Field #2: the per-target need gate must key off the
+        // spell's EFFECTS, not solely CasterConsent::ClassifySpell -- a restore-
+        // health spell the classifier does NOT tag kHeal was falling through to the
+        // generic whole-party beneficial fan, so a full-HP player got healed merely
+        // because a DIFFERENT ally was hurt. Any spell carrying a heal effect is now
+        // gated by each target's own HP.
+        bool IsHealEffect(RE::EffectSetting* a_mgef) {
+            if (!a_mgef) return false;
+            if (a_mgef->data.primaryAV != RE::ActorValue::kHealth) return false;
+            return !a_mgef->IsDetrimental() && !a_mgef->IsHostile();
+        }
+
+        // Does a_spell restore Health to its target? (Any heal effect at all.)
+        bool SpellHealsHealth(RE::SpellItem* a_spell) {
+            if (!a_spell) return false;
+            for (auto* eff : a_spell->effects)
+                if (eff && IsHealEffect(eff->baseEffect)) return true;
+            return false;
+        }
+
         // WORKER-SIDE per-target gate for the AUTO fan-out (F2/F3/F4). Decides,
         // BEFORE any main-thread post, whether this cast should actually land on
         // the target -- so an all-covered fan-out returns a transparent NoOp
@@ -1090,11 +1161,37 @@ namespace MFO::Actuation {
         // that calls it (PickFoe/PickAlly context).
         bool ShouldApplyTo(RE::Actor* a_target, RE::SpellItem* a_spell, bool a_hostile) {
             if (!a_target || !a_spell) return false;
+            // #5: CONCENTRATION spells (Healing Hands, damage streams) are meant to
+            // re-apply continuously while the need holds -- the already-active skip
+            // AND the burst-vs-tail DoT math both misfire on a stream, which is the
+            // inconsistent healing/concentration behaviour marth reported. Never
+            // let this gate block a concentration cast; the caller's own need gate
+            // (the heal HP-threshold in CastAuto) still decides WHETHER it is wanted.
+            if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+                return true;
+
             auto* mt   = a_target->AsMagicTarget();
             auto* ei   = a_spell->GetCostliestEffectItem();
             auto* mgef = ei ? ei->baseEffect : nullptr;
+            // #6a: ROBUST already-active detection. HasMagicEffect(costliest
+            // baseEffect) MISSES light-archetype spells (Magelight/Candlelight
+            // applied via CastSpellImmediate never register that effect), so it
+            // returned true every cooldown and MFO respammed the light as fast as
+            // magicka regenerated (deck 2026-08-18). So ALSO scan the target's
+            // active-effect list for an effect cast by THIS spell that still has
+            // remaining duration -- a light that never registers via HasMagicEffect
+            // is caught here and treated as active, same as HasMagicEffect true.
+            bool active = (mgef && mt && mt->HasMagicEffect(mgef));
+            if (!active && mt) {
+                if (auto* list = mt->GetActiveEffectList()) {
+                    for (auto* ae : *list) {
+                        if (!ae || ae->spell != a_spell) continue;
+                        if ((ae->duration - ae->elapsedSeconds) > 0.0f) { active = true; break; }
+                    }
+                }
+            }
             // Not currently affected (covers EVERY instant spell) -> apply.
-            if (!mgef || !mt || !mt->HasMagicEffect(mgef)) return true;
+            if (!active) return true;
             // Already affected. Beneficial / allies: do not re-stack -> skip.
             // Only a hostile DURATION spell gets the burst-vs-tail recast test.
             if (!a_hostile) return false;
@@ -1250,7 +1347,8 @@ namespace MFO::Actuation {
         // Revert/load: drop the channels. No engine call -- the world is being
         // replaced, and the self-cast holds no equip/debt to undo.
         g_selfCast.clear();
-        g_autoCast.clear();   // AUTO fan-out pacing is session-scoped too
+        g_autoCast.clear();           // AUTO fan-out pacing is session-scoped too
+        g_beneficialRecast.clear();   // fix #3/#6: per-buff recast windows likewise
     }
 
     // AUTO TARGET INFERENCE for act.cast_target (marth). The board's default
@@ -1285,7 +1383,7 @@ namespace MFO::Actuation {
     // cast, touches only actors (follower-agnostic), and needs no animation
     // (deferred project-wide). Friendly fire is structurally impossible: the
     // effect is placed on the CHOSEN actor, never launched as a projectile.
-    Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID) {
+    Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold) {
             // AE-only, mirroring CastOn / CastSelfDirect (the SE crash path #67).
             if (!REL::Module::IsAE())
                 return { Result::FailedOther,
@@ -1317,6 +1415,25 @@ namespace MFO::Actuation {
             if (auto it = g_autoCast.find(id); it != g_autoCast.end() &&
                 std::chrono::duration<float>(now - it->second).count() < interval)
                 return { Result::NoOp, "auto-cast cooling down", true };
+
+            // fix #3/#6: BENEFICIAL DURATION recast suppression -- ADDITIVE to the
+            // fCastCooldown pace above, NOT a replacement. A beneficial buff with an
+            // authored duration (a light, ward, fortify) must not re-fire until it
+            // is near its own real expiry, so even a light that never registers as
+            // "already active" (the Magelight spam) is held off, on a jittered/human
+            // beat. HOSTILE spells, INSTANT beneficial spells (authoredDuration 0,
+            // e.g. instant heals) and CONCENTRATION streams (Healing Hands) are NOT
+            // suppressed here -- they re-fire on demand.
+            const bool concentration =
+                spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+            const float authoredDur  = AuthoredDuration(spell);
+            const bool  suppressible = !hostile && !concentration && authoredDur > 0.0f;
+            const auto  recastKey    = RecastKey(id, a_spellID);
+            if (suppressible) {
+                if (auto it = g_beneficialRecast.find(recastKey); it != g_beneficialRecast.end() &&
+                    std::chrono::duration<float>(now - it->second.lastCast).count() < it->second.windowSec)
+                    return { Result::NoOp, "beneficial recast suppressed (buff still up)", true };
+            }
 
             // Running magicka budget on the WORKER (the real deducts are posted to
             // main and have not run yet): read once, subtract each planned cast,
@@ -1372,16 +1489,33 @@ namespace MFO::Actuation {
                 // WHOLE PARTY: every active follower + the player within range who
                 // NEEDS it -- the CASTER INCLUDED (he is one of N, so a self-buff
                 // like Candlelight still lights him too). The already-active guard
-                // in ApplyEffectFromTo skips anyone who already has the effect;
-                // heals are filtered to HP < full here. No delivery gate.
+                // in ApplyEffectFromTo skips anyone who already has the effect; a
+                // health-restoring spell is filtered PER TARGET to the firing rule's
+                // HP threshold below (#2). No delivery gate.
                 radius = Config::g_sharedRadius.load();
                 const auto selfPos = a_follower->GetPosition();
-                const bool heal    = (kind == CasterConsent::SpellKind::Heal);
+                // Field #2: drive the per-target need gate off the SPELL'S EFFECTS,
+                // not solely ClassifySpell. A restore-health spell the classifier
+                // does not tag kHeal was bypassing the gate and fanning to the whole
+                // party -- a full-HP player got healed because a DIFFERENT ally was
+                // hurt. Treat the spell as a heal if EITHER classified Heal OR it
+                // carries any heal effect, so ANY health-restoring spell heals only
+                // those who actually need it (player and followers alike, below).
+                const bool heal = (kind == CasterConsent::SpellKind::Heal) ||
+                                  SpellHealsHealth(spell);
                 auto consider = [&](RE::Actor* ally) {
                     if (!ally) return;
                     if (ally->IsDead() || ally->IsDisabled() || !ally->Is3DLoaded()) return;
                     if (selfPos.GetDistance(ally->GetPosition()) > radius) return;
-                    if (heal && Vocab::HealthPct(ally) >= 1.0f) return;   // only those who need it
+                    // #2: heal only allies whose status matches the FIRING gambit's
+                    // own condition, not everyone below full. a_healThreshold is the
+                    // firing rule's health-below fraction (1.0 = the old blanket
+                    // "anyone below full" when the rule carries no health gate, e.g.
+                    // "Always -> Heal (Auto)" or the Logistics caller's default). A
+                    // "Self: Health < 30% -> Heal (Auto)" rule thus heals only allies
+                    // under 30%. Non-heal buffs skip this entirely (heal==false), so
+                    // Candlelight still fans to the whole party.
+                    if (heal && Vocab::HealthPct(ally) >= a_healThreshold) return;
                     // F2/F3: skip anyone already carrying a duration buff from
                     // this spell (an instant heal leaves no effect and re-fires),
                     // so an all-covered party fans to nobody -> transparent NoOp.
@@ -1410,6 +1544,10 @@ namespace MFO::Actuation {
             if (fired == 0)
                 return { Result::NoOp, "auto-cast: all targets skipped (magicka/LoS)", true };
             g_autoCast[id] = now;
+            // fix #3/#6: a beneficial duration buff just landed -- arm its jittered
+            // recast window so it is not re-fired until near real expiry.
+            if (suppressible)
+                g_beneficialRecast[recastKey] = { now, JitteredRecastWindow(authoredDur) };
             spdlog::info("[cast] {:08X} {} AUTO {} {} ({:08X}) -- fanned to {} target(s), {} skipped "
                          "(radius {:.0f}, cost {:.0f} each)",
                          id, a_follower->GetName() ? a_follower->GetName() : "?",
@@ -1492,8 +1630,20 @@ namespace MFO::Actuation {
                 a_choice.subjectActorForm == 0 &&
                 static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Self &&
                 !tp.get();
-            if (autoPick)
-                return CastAuto(a_follower, a_choice.actionParam);
+            if (autoPick) {
+                // #2: a beneficial HEAL AUTO fan must match the firing gambit's own
+                // status requirement, not blanket-heal everyone below full. When the
+                // firing rule's condition is a health-below gate, its param IS the
+                // threshold (heal only allies under it); otherwise 1.0 keeps the
+                // whole-party / anyone-below-full behaviour ("Always -> Heal (Auto)",
+                // world-gated buffs). Non-heal spells ignore the threshold entirely.
+                float healThreshold = 1.0f;
+                if (a_choice.conditionOpcode == Vocab::kCondSelfHpBelow   ||
+                    a_choice.conditionOpcode == Vocab::kCondPlayerHpBelow ||
+                    a_choice.conditionOpcode == Vocab::kCondAllyHpBelow)
+                    healThreshold = a_choice.conditionParam;
+                return CastAuto(a_follower, a_choice.actionParam, healThreshold);
+            }
 
             // #68: the full resolution ladder -- a selector/condition target
             // first, then the row's explicit subject, then the player as the

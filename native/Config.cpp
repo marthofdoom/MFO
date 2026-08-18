@@ -106,6 +106,8 @@ namespace MFO::Config {
             else if (a_key == "fMagickaReserve")    setF(g_magickaReserve, 0.0f, 0.9f);
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
             else if (a_key == "fDotRecastBurstRatio") setF(g_dotRecastBurstRatio, 0.0f, 10.0f);
+            else if (a_key == "fBeneficialRecastFrac")   setF(g_beneficialRecastFrac, 0.1f, 2.0f);
+            else if (a_key == "fBeneficialRecastJitter") setF(g_beneficialRecastJitter, 0.0f, 0.9f);
             else if (a_key == "bDriveCaster")       setB(g_driveCaster);
             else if (a_key == "bProbeCastStyle")    setB(g_probeCastStyle);   // P1 probe, dev-only
             else if (a_key == "bCastSelf")          setB(g_castSelf);         // forced self-cast gate, dev-only
@@ -228,6 +230,8 @@ namespace MFO::Config {
             g_magickaReserve     = 0.0f;
             g_castCooldown       = 4.0f;
             g_dotRecastBurstRatio = 1.0f;
+            g_beneficialRecastFrac   = 0.85f;   // fix #3/#6: recast a light/buff at ~85% of its life
+            g_beneficialRecastJitter = 0.20f;   //           +/-20% jitter so the beat is not robotic
             g_driveCaster        = false;
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
             g_castSelf           = false;   // forced self-cast route -- OFF (gated) until deck-confirmed
@@ -303,6 +307,8 @@ namespace MFO::Config {
             { "bDollsMode", "0" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },
             { "fDotRecastBurstRatio", "1.000000" },
+            { "fBeneficialRecastFrac", "0.850000" },
+            { "fBeneficialRecastJitter", "0.200000" },
             { "fMagickaReserve", "0.000000" }, { "bLogistics", "1" },
             { "fFirstDibsDelay", "4.000000" }, { "fQuickLootWaiver", "4.000000" },
             { "fChanceRadius", "512.000000" }, { "fFairChance", "6.000000" },

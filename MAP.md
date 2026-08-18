@@ -263,7 +263,20 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   within `Confidence::ChaseRadius` (OOC: no group → NoOp); **beneficial → the WHOLE
   PARTY** (every active follower + the player within `g_sharedRadius` who NEEDS it —
   the caster included as one of N, so a self-delivery Candlelight lights everyone;
-  heals filtered to HP<full). **Per-target apply guard `ShouldApplyTo` (`:1085`):**
+  **#2:** a health-restoring spell is filtered PER TARGET to the FIRING gambit's own
+  health threshold, not HP<full — Fire plumbs the rule's `cond.*_hp_pct_below` param
+  through `CastAuto`'s `a_healThreshold` (default 1.0 = anyone-below-full for
+  `Always`/world-gated buffs and the Logistics caller); a `Choice` now carries
+  `conditionOpcode`/`conditionParam` for this. The heal gate keys off the SPELL'S
+  EFFECTS (`SpellHealsHealth`/`IsHealEffect`) **OR** `ClassifySpell==Heal`, so a
+  restore-health spell the classifier does NOT tag Heal is still gated per target
+  (field fix: a full-HP player was being healed because a different ally was hurt).
+  The player runs the SAME `consider` gate as followers — full-HP members are never
+  in the fan. **Per-target apply guard `ShouldApplyTo` (`:1140`):**
+  **#5:** a CONCENTRATION spell (Healing Hands, streams) returns true immediately —
+  never blocked by the already-active/DoT gate; **#6a:** already-active detection is
+  robust — HasMagicEffect(costliest) OR an active-effect-list scan for THIS spell
+  with remaining duration (catches lights that never register HasMagicEffect);
   not-currently-affected → apply; beneficial/ally already-affected → skip (no
   re-stack); a hostile DURATION (DoT) spell is NOT blanket-skipped — it recasts
   when `burst >= dotRate * timeRemaining * fDotRecastBurstRatio` (`Config`), so a
@@ -272,7 +285,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   magicka deduct — NOT the single-holder foe package), **collecting FormIDs never
   raw `Actor*` past the combat-group read-lock (UAF)**, per-cast magicka with
   reserve floor (cost clamped to available, never negative magicka), one broadcast
-  per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). A manual target
+  per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). **#3/#6b:** a
+  BENEFICIAL DURATION buff (light/ward/fortify) is additionally held off by a
+  per-`(caster,spellID)` `g_beneficialRecast` window sized to the spell's authored
+  duration × `fBeneficialRecastFrac` × a per-fire ±`fBeneficialRecastJitter` jitter
+  (instant + concentration exempt) so a light that never registers as active is not
+  respammed and the recast beat looks human. A manual target
   pick keeps the single-target `CastOn` path. `CastSelfDirect` now returns
   `SelfCast{Declined,Refreshed,Applied}` so a pacing REFRESH doesn't count as an
   action that suppresses lower rules (logistics starvation, F3); its

@@ -501,6 +501,8 @@ namespace MFO::Eval {
             out.subject      = g.subjectSelector;
             out.subjectActorForm = g.subjectActorForm;   // #68
             out.target       = chosen;
+            out.conditionOpcode = g.conditionOpcode;      // #2: for AUTO heal narrowing
+            out.conditionParam  = g.conditionParam;
             return out;
         }
         return out;   // ruleIndex == -1 -> caller does nothing

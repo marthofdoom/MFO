@@ -100,7 +100,15 @@ namespace MFO::Actuation {
     // one broadcast per fCastCooldown. Called from BOTH Fire (combat) and Logistics
     // (out of combat); out of combat the hostile branch finds no enemies and NoOps.
     // Returns Fired when at least one cast landed, else a transparent NoOp/decline.
-    Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID);
+    //
+    // #2: a_healThreshold narrows the BENEFICIAL HEAL fan to only allies whose
+    // health matches the FIRING gambit's own condition, instead of the old blanket
+    // "everyone below full". Fire passes the firing rule's health-below threshold
+    // (a fraction in [0,1]) when its condition carries one; otherwise it stays 1.0
+    // (heal anyone below full -- the prior behaviour), which the Logistics caller
+    // also keeps via the default. It is a HEAL-only narrowing: buffs with no status
+    // condition (Candlelight) fan to the whole party regardless.
+    Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold = 1.0f);
 
     // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired
