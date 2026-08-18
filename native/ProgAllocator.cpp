@@ -144,12 +144,44 @@ namespace MFO::ProgAllocator {
             const Progression::PerkNodeView* node = nullptr;
         };
 
-        // Find a node by its identity (the rank-1 perk FormID). Linear scan —
-        // a few hundred nodes, and only on user-driven verbs, never per tick.
-        NodeRef FindNode(RE::FormID a_nodePerkID) {
-            for (const auto& tree : Progression::Get().skills)
+        // O(1) node index over the FROZEN catalog. FindNode / OwnsAnyRank /
+        // PerkAllocatableInCatalog were each a full skill-major scan; called per
+        // parent per node inside BuildNodeViews (the ~500ms board publish) they
+        // made it O(N^2) — a main-thread hitch. The catalog is frozen after
+        // Progression::Init, so one map keyed by EVERY rank's perk FormID -> its
+        // NodeRef replaces the scans. Rebuilt only when the catalog identity
+        // changes (revert/reload), detected by an O(1) (trees-buffer, tree-count)
+        // signature so the lookup path stays O(1) and never re-walks the catalog.
+        std::unordered_map<RE::FormID, NodeRef> g_nodeIndex;
+        const void* g_nodeIndexBase  = reinterpret_cast<const void*>(-1);   // != any real ptr
+        std::size_t g_nodeIndexTrees = 0;
+
+        const std::unordered_map<RE::FormID, NodeRef>& NodeIndex() {
+            const auto& skills = Progression::Get().skills;
+            const void* base = skills.empty() ? nullptr : static_cast<const void*>(skills.data());
+            if (base == g_nodeIndexBase && skills.size() == g_nodeIndexTrees)
+                return g_nodeIndex;   // catalog unchanged — reuse
+            g_nodeIndex.clear();
+            std::size_t total = 0;
+            for (const auto& t : skills) total += t.nodes.size();
+            g_nodeIndex.reserve(total * 2 + 1);
+            for (const auto& tree : skills)
                 for (const auto& node : tree.nodes)
-                    if (node.perkFormID == a_nodePerkID) return { &tree, &node };
+                    for (const auto& r : node.ranks)
+                        g_nodeIndex.emplace(r.perkFormID, NodeRef{ &tree, &node });
+            g_nodeIndexBase  = base;
+            g_nodeIndexTrees = skills.size();
+            return g_nodeIndex;
+        }
+
+        // Find a node by its identity (the rank-1 perk FormID). O(1) via the
+        // index; preserves the old scan's rank-1-only semantics (the id must be
+        // the node's IDENTITY, not merely one of its later ranks).
+        NodeRef FindNode(RE::FormID a_nodePerkID) {
+            const auto& idx = NodeIndex();
+            auto it = idx.find(a_nodePerkID);
+            if (it != idx.end() && it->second.node->perkFormID == a_nodePerkID)
+                return it->second;
             return {};
         }
 
@@ -455,15 +487,13 @@ namespace MFO::ProgAllocator {
         // already bridges around it — §5.2 must NOT hard-block on it.
         bool PerkAllocatableInCatalog(RE::FormID a_perk) {
             if (!a_perk) return false;
-            for (const auto& tree : Progression::Get().skills)
-                for (const auto& node : tree.nodes) {
-                    bool hasThis = false, anyKept = false;
-                    for (const auto& r : node.ranks) {
-                        if (r.perkFormID == a_perk) hasThis = true;
-                        if (r.verdict != Progression::Verdict::kDead) anyKept = true;
-                    }
-                    if (hasThis && anyKept) return true;
-                }
+            // O(1) via the index: the map ties a_perk to the sole node holding it
+            // (as one of its ranks); allocatable iff that node has any non-dead rank.
+            const auto& idx = NodeIndex();
+            auto it = idx.find(a_perk);
+            if (it == idx.end() || !it->second.node) return false;
+            for (const auto& r : it->second.node->ranks)
+                if (r.verdict != Progression::Verdict::kDead) return true;
             return false;
         }
 
@@ -932,8 +962,10 @@ namespace MFO::ProgAllocator {
         // ── activity + economy (the poll body) ──────────────────────────────
 
         bool IsActiveFollower(RE::FormID a_id) {
-            return std::find(Followers::g_activeIds.begin(), Followers::g_activeIds.end(), a_id)
-                   != Followers::g_activeIds.end();
+            // Off-worker membership probe: g_activeIds is reassigned by Refresh on
+            // the worker, so walk the lock-guarded FormID mirror instead of the
+            // live list (SEV-1 cluster).
+            return Followers::IsTrackedFast(a_id);
         }
 
         void PollWork() {
@@ -1078,11 +1110,14 @@ namespace MFO::ProgAllocator {
                 return 3;
             }
             if (EdidEndsWith(a_glob, "_RespecRapportCost")) {
-                g_econ.respecRapportCost = a_glob->value;
+                // Clamp ≥0: a negative respec cost would make Rapport::Spend a
+                // GRANT (respec pays the follower).
+                g_econ.respecRapportCost = std::max(0.0f, a_glob->value);
                 return 4;
             }
             if (EdidEndsWith(a_glob, "_SkillCap")) {
-                g_econ.skillCap = a_glob->value;
+                // Clamp ≥1: skillCap ≤ 0 neutralizes every auto-scale skill write.
+                g_econ.skillCap = std::max(1.0f, a_glob->value);
                 return 5;
             }
             if (EdidEndsWith(a_glob, "_DevCmd")) {
@@ -1187,9 +1222,9 @@ namespace MFO::ProgAllocator {
                     else if (KeyEndsWith(key, "SharedGrowthDivisor"))
                         g_econ.sharedGrowthDivisor = std::max(1, static_cast<int>(v));
                     else if (KeyEndsWith(key, "RespecRapportCost"))
-                        g_econ.respecRapportCost = v;
+                        g_econ.respecRapportCost = std::max(0.0f, v);   // ≥0: negative = a grant
                     else if (KeyEndsWith(key, "SkillCap"))
-                        g_econ.skillCap = v;
+                        g_econ.skillCap = std::max(1.0f, v);            // ≥1: ≤0 kills skill writes
                     else
                         continue;
                     ++applied;
@@ -1272,8 +1307,12 @@ namespace MFO::ProgAllocator {
         RE::Actor* PickFollower() {
             RE::Actor* first = nullptr;
             RE::Actor* firstUnique = nullptr;
-            for (const auto& h : Followers::g_active) {
-                auto* a = h.get().get();
+            // Iterate the immutable snapshot, not live g_active (Refresh rebuilds
+            // it on the worker -> UAF for this off-worker poll). Resolve each id
+            // on the form table (main-thread safe here).
+            auto snap = Followers::ActiveSnapshot();
+            for (RE::FormID id : *snap) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
                 if (!a) continue;
                 if (!first) first = a;
                 auto* base = a->GetActorBase();
@@ -1526,8 +1565,11 @@ namespace MFO::ProgAllocator {
                 snap->classes.emplace_back(def.id, def.name);
 
             const RE::FormID focus = g_boardFocus.load();
-            for (const auto& h : Followers::g_active) {
-                auto* a = h.get().get();
+            // Immutable snapshot, not live g_active: Refresh reassigns it on the
+            // worker while this poll runs on the MainThread::Post chain (SEV-1).
+            auto activeSnap = Followers::ActiveSnapshot();
+            for (RE::FormID snapId : *activeSnap) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(snapId);
                 if (!a) continue;
                 BoardFollowerView v;
                 v.id   = a->GetFormID();
@@ -2143,25 +2185,41 @@ namespace MFO::ProgAllocator {
             st.wasInPotentialFollowerFaction  = (flags & 8u) != 0;
             st.manualSkills                   = (flags & 16u) != 0;   // v2 (§16)
             if (a_version < 3) {
-                // MIGRATION (§18.6 PRGN discipline): the legacy ordinal maps
-                // to the k-th DECLARED class. Pre-v3 saves were only ever
-                // written with MFO_Progression.esl as the sole addon, whose
-                // manifest declares Melee/Ranged/Mage (1/2/3) in exactly that
-                // order, so ordinal k = the k-th declared class. No class
-                // declared at slot k → class cleared with a named line (the
-                // §15 prompt reappears), never a silent drop of the whole record.
+                // MIGRATION (§18.6 PRGN discipline). Pre-v3 saves were ONLY ever
+                // written by MFO_Progression.esl as the sole addon, at the FIXED
+                // ordinals 1=Melee 2=Ranged 3=Mage. Resolve the ordinal against
+                // THAT plugin's known class-def local ids (SEV-3: NOT an index
+                // into the global g_classes, which a 2nd addon would shift), and
+                // SYNTHESIZE the v4 plugin-qualified identity so the class is KEPT
+                // even when the addon is absent this session (SEV-3: the old code
+                // cleared clsId when g_classes was empty, then the v4 save wrote an
+                // EMPTY identity → class lost forever). Mirrors the v4 reader:
+                // keep clsPlugin/clsLocal always, resolve to a runtime clsId only
+                // when the plugin is present.
+                static constexpr const char* kProgPlugin = "MFO_Progression.esl";
+                // Class-def FLST local ids — FROZEN contract with
+                // MFO_GenerateESP.py (PGID_CLASSDEF_MELEE/RANGED/MAGE = 0x850/1/2).
+                static constexpr RE::FormID kClassDefLocal[3] = { 0x850, 0x851, 0x852 };
                 const int ord = static_cast<int>(legacyClsRaw);
-                if (ord >= 1 && ord <= 3 && ord <= static_cast<int>(g_classes.size())) {
-                    st.clsId = g_classes[ord - 1].id;
+                if (ord >= 1 && ord <= 3) {
+                    st.clsPlugin = kProgPlugin;
+                    st.clsLocal  = kClassDefLocal[ord - 1];
+                    auto* dh = RE::TESDataHandler::GetSingleton();
+                    RE::TESForm* form = dh ? dh->LookupForm(st.clsLocal, st.clsPlugin) : nullptr;
+                    if (form && FindClassDef(form->GetFormID())) {
+                        st.clsId = form->GetFormID();
+                    } else {
+                        spdlog::info("[cosave] legacy class ordinal {} migrated to {}|{:06X} — "
+                                     "not resolvable this session (addon absent), identity KEPT "
+                                     "(running class-less until it returns)", ord, kProgPlugin, st.clsLocal);
+                    }
                 } else if (ord > 3) {
-                    // Parser nit fix: DON'T silently clamp a corrupt ordinal to
-                    // 3 (Mage). Warn and leave class-less.
+                    // DON'T silently clamp a corrupt ordinal to 3 (Mage). Warn and
+                    // leave class-less (nothing to keep).
                     spdlog::warn("[cosave] corrupt legacy class ordinal {} (>3) — left "
                                  "class-less (re-pick on the board), NOT mapped to Mage", ord);
-                } else if (ord != 0) {
-                    spdlog::warn("[cosave] legacy class ordinal {} has no declared "
-                                 "class — cleared (re-pick on the board)", ord);
                 }
+                // ord == 0: never had a class; leave class-less silently.
             } else if (a_version < 4) {
                 // v3: bare runtime FormID. ResolveFormID + FindClassDef; on
                 // FAILURE (addon absent) clsId stays 0 for the session — a v3
@@ -2306,6 +2364,8 @@ namespace MFO::ProgAllocator {
         std::scoped_lock lk(g_viewMx);
         g_boardSnap.reset();
     }
+
+    int PollGeneration() { return g_pollGen; }
 
     // ── dev harness ─────────────────────────────────────────────────────────
 

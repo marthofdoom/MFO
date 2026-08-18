@@ -87,13 +87,20 @@ namespace MFO::Eval {
         // dark" covers both the dungeon case and the outdoor-night case in one
         // rule. Fails toward NOT dark on a missing API (Calendar unavailable),
         // matching every other condition's "fail closed, never fabricate" rule.
+        // Shared dusk-to-dawn read (20:00-06:00). kCondIsNight and IsDark both
+        // key off this one window so it lives in a single place. Fails toward
+        // NOT-night when the clock is unavailable, matching every condition's
+        // fail-closed rule.
+        bool IsNightNow() {
+            auto* cal = RE::Calendar::GetSingleton();
+            if (!cal) return false;            // no clock -> can't call it night
+            const float h = cal->GetHour();    // [0,24)
+            return h >= 20.0f || h < 6.0f;     // dusk to dawn
+        }
         bool IsDark(RE::Actor* a_self) {
             auto* cell = a_self ? a_self->GetParentCell() : nullptr;
             if (cell && cell->IsInteriorCell()) return true;
-            auto* cal = RE::Calendar::GetSingleton();
-            if (!cal) return false;   // no clock -> can't call it dark
-            const float h = cal->GetHour();   // [0,24)
-            return h >= 20.0f || h < 6.0f;     // dusk to dawn, same window as kCondIsNight
+            return IsNightNow();               // outdoor-night half of the heuristic
         }
 
         // Surface the ALL-OCCLUDED fallback (throttled, outside the lock): every
@@ -383,12 +390,7 @@ namespace MFO::Eval {
                 auto* cell = a_self ? a_self->GetParentCell() : nullptr;
                 return cell && cell->IsInteriorCell();
             }
-            if (op == Vocab::kCondIsNight) {
-                auto* cal = RE::Calendar::GetSingleton();
-                if (!cal) return false;
-                const float h = cal->GetHour();   // [0,24)
-                return h >= 20.0f || h < 6.0f;     // dusk to dawn
-            }
+            if (op == Vocab::kCondIsNight) return IsNightNow();
             if (op == Vocab::kCondDark) return IsDark(a_self);
 
             // Foe-COUNT gate -- reads the group, picks no target.
@@ -467,6 +469,15 @@ namespace MFO::Eval {
                 // and that teammate becomes the target (Cast at ally / Heal Other).
                 chosen = PickAlly(a_follower, player, g.conditionParam);
                 if (!chosen) continue;
+                // An ally selector names a wounded teammate/PLAYER as the target.
+                // Attack/PowerAttack force-write the combat target with no
+                // hostility check, so "Ally HP below -> Attack" would turn the
+                // follower on the wounded ally -- the same friendly-fire hole the
+                // kCondPlayerHpBelow gate below closes for CastTarget. Refuse it:
+                // treat as no-match so the rule falls through to the next one.
+                if (g.actionOpcode == Vocab::kActAttack ||
+                    g.actionOpcode == Vocab::kActPowerAttack)
+                    continue;
             } else if (!ConditionTrue(g, a_follower, player)) {
                 continue;
             }
