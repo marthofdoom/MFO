@@ -105,6 +105,7 @@ namespace MFO::Config {
             else if (a_key == "fAiCastGrace")       setF(g_aiCastGrace, 0.0f, 30.0f);
             else if (a_key == "fMagickaReserve")    setF(g_magickaReserve, 0.0f, 0.9f);
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
+            else if (a_key == "fDotRecastBurstRatio") setF(g_dotRecastBurstRatio, 0.0f, 10.0f);
             else if (a_key == "bDriveCaster")       setB(g_driveCaster);
             else if (a_key == "bProbeCastStyle")    setB(g_probeCastStyle);   // P1 probe, dev-only
             else if (a_key == "bCastSelf")          setB(g_castSelf);         // forced self-cast gate, dev-only
@@ -226,6 +227,7 @@ namespace MFO::Config {
             g_aiCastGrace        = 3.0f;
             g_magickaReserve     = 0.0f;
             g_castCooldown       = 4.0f;
+            g_dotRecastBurstRatio = 1.0f;
             g_driveCaster        = false;
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
             g_castSelf           = false;   // forced self-cast route -- OFF (gated) until deck-confirmed
@@ -300,6 +302,7 @@ namespace MFO::Config {
             { "iOverlayX", "12" },             { "iOverlayY", "12" },
             { "bDollsMode", "0" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },
+            { "fDotRecastBurstRatio", "1.000000" },
             { "fMagickaReserve", "0.000000" }, { "bLogistics", "1" },
             { "fFirstDibsDelay", "4.000000" }, { "fQuickLootWaiver", "4.000000" },
             { "fChanceRadius", "512.000000" }, { "fFairChance", "6.000000" },

@@ -114,6 +114,15 @@ namespace MFO::Config {
     // fight. What looked wrong in the field was the interval, not the total.
     inline std::atomic<float> g_castCooldown{ 4.0f };
 
+    // AUTO fan-out DoT recast threshold (fix #4). For a HOSTILE duration spell
+    // already ticking on a foe, MFO does not blanket-skip: it decomposes the
+    // spell into instant BURST damage vs per-second DOT and recasts when
+    //   burst >= dotRate * timeRemaining * fDotRecastBurstRatio.
+    // 1.0 = recast once the up-front burst outweighs the DoT still to be
+    // delivered; >1 waits longer (favours letting the tail run), <1 recasts
+    // more eagerly. Pure-burst spells always fire; pure-DoT spells wait.
+    inline std::atomic<float> g_dotRecastBurstRatio{ 1.0f };
+
     // PACKAGE ACTUATION (M9, DESIGN §4.5c). Fill MFO_CommandQuest's alias 0
     // with a follower so the engine instances MFO_CastPackage onto them --
     // vanilla's own follower mechanism, pointed at one action.

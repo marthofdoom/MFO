@@ -233,9 +233,21 @@ namespace MFO::Actuation {
             // fall to the inert alias package, which equips but never fires and
             // is declined outright on package-locked custom followers.
             if (self) {
-                if (Config::g_castSelf.load() &&
-                    CastSelfDirect(a_follower, a_spell) != SelfCast::Declined)
-                    return { Result::Fired, "self-cast (direct trigger)" };
+                // F3 tri-state (mirrors Logistics.cpp:3987-3996 + CastOn's self
+                // fork): only a real Applied is this tick's action; a Refreshed
+                // (channel paced, nothing applied) is TRANSPARENT so it does not
+                // starve the rules below it, and the fired log never lies.
+                if (Config::g_castSelf.load()) {
+                    switch (CastSelfDirect(a_follower, a_spell)) {
+                    case SelfCast::Applied:
+                        return { Result::Fired, "self-cast (direct trigger)" };
+                    case SelfCast::Refreshed:
+                        return { Result::NoOp, "self-cast refresh (paced)", true };
+                    case SelfCast::Declined:
+                    default:
+                        break;
+                    }
+                }
                 return { Result::FailedOther, "self-cast could not fire", true };
             }
 
@@ -247,13 +259,10 @@ namespace MFO::Actuation {
                          "concentration needs the cast package (bForceCastOnMiss+bUsePackages)",
                          true };
             }
-            // SELF concentration (SPEC-self-cast-forced): self-heal, self-ward,
-            // any authored cast_self channel. Served by the dedicated no-QNAM t6
-            // self package via Packages::CastSelf, GATED behind bCastSelf. With
-            // the gate off, CastSelf returns Decline::SelfRoute and this falls to
-            // the transparent structural decline below -- the caller's rules run,
-            // exactly the pre-feature behaviour. A self-cast needs NO line-of-
-            // fire gate (nothing to friendly-fire) and no target-LoS check.
+            // FOE concentration only from here down -- the self fork above ALWAYS
+            // returns, so `self` is false throughout the rest of this function
+            // (the SPEC-self-cast-forced package route via Packages::CastSelf is
+            // NOT used here -- it was the barred self path; do not re-introduce it).
             // PACING -- the same fCastCooldown every other gambit cast obeys,
             // consulted directly (no equip machinery on this path to consult
             // it for us). This is what spaces one bounded stream from the
@@ -261,8 +270,8 @@ namespace MFO::Actuation {
             if (Loadout::CoolingDown(id)) {
                 return { Result::NoOp, "cast cooling down", true };
             }
-            // LoS: never stream into a wall (the forced shot's gate). Foe only.
-            if (!self && Sightline::Check(id, a_target->GetFormID()) ==
+            // LoS: never stream into a wall (the forced shot's gate).
+            if (Sightline::Check(id, a_target->GetFormID()) ==
                 Sightline::Verdict::Occluded) {
                 return { Result::NoOp, "forced cast held (no line of sight)", true };
             }
@@ -273,8 +282,8 @@ namespace MFO::Actuation {
             // fire from a stream is what triggered the freeze; the #63 quash
             // is a backstop, never a license. The same check re-runs every
             // Pump tick mid-stream (ffWatch) and cuts the beam if someone
-            // walks into it. A SELF stream has no line of fire, so it is exempt.
-            if (!self && kind == CasterConsent::SpellKind::Offense &&
+            // walks into it.
+            if (kind == CasterConsent::SpellKind::Offense &&
                 Sightline::TeammateInFireLine(id, a_target->GetFormID())) {
                 return { Result::NoOp,
                          "concentration held (teammate in the line of fire)", true };
@@ -284,19 +293,18 @@ namespace MFO::Actuation {
             const char*        kindName = "utility";
             if (kind == CasterConsent::SpellKind::Offense) {
                 hold.holdSeconds = 1.0f + 3.0f * Temperament(id);   // 1-4 s, flair #1
-                hold.ffWatch     = !self;   // no line of fire to watch on a self stream
-                kindName         = self ? "self-offense" : "hostile";
+                hold.ffWatch     = true;
+                kindName         = "hostile";
             } else if (kind == CasterConsent::SpellKind::Heal) {
                 hold.holdSeconds = kConcHealCap;
-                hold.healWatch   = self ? id : a_target->GetFormID();
-                kindName         = self ? "self-heal" : "heal";
+                hold.healWatch   = a_target->GetFormID();
+                kindName         = "heal";
             } else {
                 hold.holdSeconds = kConcUtilityHold;
-                kindName         = self ? "self-utility" : "utility";
+                kindName         = "utility";
             }
 
-            const auto d = self ? Packages::CastSelf(a_follower, a_spell, hold)
-                                : Packages::CastAt(a_follower, a_spell, a_target, hold);
+            const auto d = Packages::CastAt(a_follower, a_spell, a_target, hold);
             if (d == Packages::Decline::None) {
                 // Exclusive control while the rule governs: the latch's DENY
                 // of other spells is the exact-mode bounding, and the
@@ -310,8 +318,7 @@ namespace MFO::Actuation {
                              id, a_follower->GetName() ? a_follower->GetName() : "?",
                              a_spell->GetName() ? a_spell->GetName() : "?",
                              a_spell->GetFormID(),
-                             self ? std::string("on self")
-                                  : std::format("at {:08X}", a_target->GetFormID()),
+                             std::format("at {:08X}", a_target->GetFormID()),
                              kindName, hold.holdSeconds,
                              hold.healWatch ? " (or until healed)" : "");
                 return { Result::Fired, "concentration stream (bounded)" };
@@ -453,11 +460,24 @@ namespace MFO::Actuation {
             // refreshes the channel + applies the effect at fCastCooldown
             // cadence); the reconcile releases it when the rule goes false.
             if (a_target == a_follower && Config::g_castSelf.load()) {
-                if (CastSelfDirect(a_follower, spell) != SelfCast::Declined)
+                // F3 tri-state (mirrors Logistics.cpp:3987-3996): only a real
+                // Applied is THIS tick's action. A Refreshed tick (the channel is
+                // winning but paced out -- nothing applied) is TRANSPARENT so a
+                // persistently-true combat cast_self does not starve attack/drink/
+                // heal below it, and `lastFired`/`[eval] fired` never lies on a
+                // no-op tick.
+                switch (CastSelfDirect(a_follower, spell)) {
+                case SelfCast::Applied:
                     return { Result::Fired, "self-cast channel (direct trigger)" };
-                // Unaffordable / off-AE / no caster: transparent, the rules
-                // below run (the follower is not stuck on a cast that can't go).
-                return { Result::FailedOther, "self-cast could not fire", true };
+                case SelfCast::Refreshed:
+                    // Channel kept alive, no effect/magicka this tick -- fall past.
+                    return { Result::NoOp, "self-cast refresh (paced)", true };
+                case SelfCast::Declined:
+                default:
+                    // Unaffordable / off-AE / no caster: transparent, the rules
+                    // below run (the follower is not stuck on a cast that can't go).
+                    return { Result::FailedOther, "self-cast could not fire", true };
+                }
             }
 
             // CONCENTRATION forks off HERE -- after the range and competence
@@ -745,8 +765,14 @@ namespace MFO::Actuation {
             // than duplicating one -- the same call DAC makes.
             if (avo) {
                 // On ActorValueOwner, not Actor -- and `avo` is already in hand.
-                avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                       RE::ActorValue::kMagicka, -cost);
+                // Clamp to the pool NOW (#6): magicka can have drained since the
+                // §5.3 gate above, and a deduct past zero drives the value
+                // negative (RestoreActorValue does not floor at 0).
+                const float spend = std::min(cost,
+                    avo->GetActorValue(RE::ActorValue::kMagicka));
+                if (spend > 0.0f)
+                    avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                           RE::ActorValue::kMagicka, -spend);
             }
 
             // Restart the AI's window. Without this the grace is a ONE-SHOT:
@@ -957,10 +983,13 @@ namespace MFO::Actuation {
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
-                const float cost = sp->CalculateMagickaCost(a);
-                if (avo && cost > 0.0f)
+                const float cost  = sp->CalculateMagickaCost(a);
+                // #6: clamp to the current pool so a deduct never drives magicka
+                // negative (AUTO/self validate cost against ONE worker snapshot).
+                const float spend = avo ? std::min(cost, before) : 0.0f;
+                if (avo && spend > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                           RE::ActorValue::kMagicka, -cost);
+                                           RE::ActorValue::kMagicka, -spend);
                 const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 spdlog::info("[cast] {:08X} {} SELF-CAST {} ({:08X}) -- effect applied, "
                              "magicka {:.0f}->{:.0f} (cost {:.0f})",
@@ -993,9 +1022,12 @@ namespace MFO::Actuation {
         // ApplySelfEffect generalised to a non-self target so AUTO can heal an
         // ally / damage a foe with the SAME proven mechanism -- effect + magicka
         // only, NO equip and NO channel (animation deferred, ENGINE_NOTES §0.13).
-        // Runs on the main thread; the already-active guard on the TARGET is
-        // byte-identical to the self one-shot's (do not re-buff / re-stack a
-        // still-active effect). a_hostile only tunes the log label.
+        // Runs on the main thread. The already-active / DoT-recast decision is
+        // made WORKER-SIDE by ShouldApplyTo before the post (F2/F3/F4) -- it owns
+        // the "is this target worth a cast?" gate for BOTH allies and enemies, so
+        // this must NOT re-apply the old blanket already-active skip here: that
+        // would defeat the hostile DoT burst-vs-tail recast the worker approved.
+        // a_hostile only tunes the log label. (Sole caller: CastAuto.)
         void ApplyEffectFromTo(RE::FormID a_casterID, RE::FormID a_targetID,
                                RE::FormID a_spellID, bool a_hostile) {
             MainThread::Post([a_casterID, a_targetID, a_spellID, a_hostile] {
@@ -1003,23 +1035,18 @@ namespace MFO::Actuation {
                 auto* target = RE::TESForm::LookupByID<RE::Actor>(a_targetID);
                 auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
                 if (!caster || !target || !sp) return;
-                auto* ei   = sp->GetCostliestEffectItem();
-                auto* mgef = ei ? ei->baseEffect : nullptr;
-                if (auto* mt = target->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
-                    spdlog::info("[cast] {:08X} AUTO {} -> {:08X} skipped -- {} ({:08X}) already active",
-                                 a_casterID, a_hostile ? "foe" : "ally", a_targetID,
-                                 sp->GetName() ? sp->GetName() : "?", a_spellID);
-                    return;
-                }
                 auto* avo  = caster->AsActorValueOwner();
                 auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
-                const float cost = sp->CalculateMagickaCost(caster);
-                if (avo && cost > 0.0f)
+                const float cost  = sp->CalculateMagickaCost(caster);
+                // #6: clamp to the current pool so a deduct never drives magicka
+                // negative (AUTO validates N casts against ONE worker snapshot).
+                const float spend = avo ? std::min(cost, before) : 0.0f;
+                if (avo && spend > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                           RE::ActorValue::kMagicka, -cost);
+                                           RE::ActorValue::kMagicka, -spend);
                 const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 spdlog::info("[cast] {:08X} {} AUTO {} {} ({:08X}) -> {:08X} -- effect applied, "
                              "magicka {:.0f}->{:.0f} (cost {:.0f})",
@@ -1028,6 +1055,66 @@ namespace MFO::Actuation {
                              sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
                              before, after, cost);
             });
+        }
+
+        // A detrimental Health effect = damage (an instant hit OR a per-second DoT).
+        bool IsDamageEffect(RE::EffectSetting* a_mgef) {
+            if (!a_mgef) return false;
+            if (a_mgef->data.primaryAV != RE::ActorValue::kHealth) return false;
+            return a_mgef->IsDetrimental() || a_mgef->IsHostile();
+        }
+
+        // WORKER-SIDE per-target gate for the AUTO fan-out (F2/F3/F4). Decides,
+        // BEFORE any main-thread post, whether this cast should actually land on
+        // the target -- so an all-covered fan-out returns a transparent NoOp
+        // instead of burning the tick + suppression window on posts that every
+        // one of them would skip. Mirrors ApplyEffectFromTo's own already-active
+        // guard, applied to allies AND enemies (F3): an INSTANT spell leaves no
+        // lingering effect, never matches HasMagicEffect, and so ALWAYS fires; a
+        // duration buff/DoT/debuff already on the target is skipped.
+        //
+        // HOSTILE DURATION refinement (F4): do not blanket-skip an active DoT.
+        // Decompose the spell -- burst = Sigma magnitude of INSTANT (duration==0)
+        // damage effects, dotRate = Sigma magnitude of DURATION damage effects
+        // (per second) -- read the target's remaining DoT time, and recast when
+        //   burst >= dotRate * timeRemaining * fDotRecastBurstRatio.
+        // Pure-burst always fires (dotRate==0 -> RHS 0), pure-DoT waits, a
+        // big-burst+small-tail spell re-lands as the tail decays. Reads the
+        // target's effect list on the worker, same discipline as the enumeration
+        // that calls it (PickFoe/PickAlly context).
+        bool ShouldApplyTo(RE::Actor* a_target, RE::SpellItem* a_spell, bool a_hostile) {
+            if (!a_target || !a_spell) return false;
+            auto* mt   = a_target->AsMagicTarget();
+            auto* ei   = a_spell->GetCostliestEffectItem();
+            auto* mgef = ei ? ei->baseEffect : nullptr;
+            // Not currently affected (covers EVERY instant spell) -> apply.
+            if (!mgef || !mt || !mt->HasMagicEffect(mgef)) return true;
+            // Already affected. Beneficial / allies: do not re-stack -> skip.
+            // Only a hostile DURATION spell gets the burst-vs-tail recast test.
+            if (!a_hostile) return false;
+
+            float burst = 0.0f, dotRate = 0.0f;
+            for (auto* eff : a_spell->effects) {
+                if (!eff || !IsDamageEffect(eff->baseEffect)) continue;
+                const float mag = eff->effectItem.magnitude;
+                if (eff->effectItem.duration == 0) burst   += mag;   // instant hit
+                else                               dotRate += mag;   // per-second DoT
+            }
+            // No DoT component -> nothing to wait out, always recast.
+            if (dotRate <= 0.0f) return true;
+
+            // DoT time still to be delivered = max (duration - elapsed) across the
+            // spell's active effects on this target.
+            float timeRemaining = 0.0f;
+            if (auto* list = mt->GetActiveEffectList()) {
+                for (auto* ae : *list) {
+                    if (!ae || ae->spell != a_spell) continue;
+                    const float rem = ae->duration - ae->elapsedSeconds;
+                    if (rem > timeRemaining) timeRemaining = rem;
+                }
+            }
+            const float ratio = Config::g_dotRecastBurstRatio.load();
+            return burst >= dotRate * timeRemaining * ratio;
         }
     }
 
@@ -1120,7 +1207,20 @@ namespace MFO::Actuation {
         // thing shortening it. Release now hinges solely on the rule going stale
         // (or the follower unloading), so a long buff lives its authored life and
         // re-casts at its real expiry.
-        const float releaseSec = 2.0f;
+        // #5 DISPEL-BEAT: a fixed 2 s window is too short in COMBAT. There the
+        // rule only re-fires when the follower is BOTH serviced (round-robin,
+        // ~133 ms x party) AND past his suppression window (fSuppressWindow x
+        // temperament, up to ~1.12x). For party >= 3 that gap exceeds 2 s, so the
+        // channel goes "stale", we DISPEL the live self-buff, and the next fire
+        // re-applies it -- the exact re-cast beat the 300 s-cap fix removed, back
+        // at window cadence. Size the release to out-wait the worst-case gap:
+        //   fSuppressWindow*1.12 (max temperament) + 0.133*partySize + margin,
+        // floored at the old 2 s so it never releases SLOWER-to-react than before
+        // when the party is small / the window short.
+        const float suppress   = std::max(0.0f, Config::g_suppressWindow.load());
+        const float partySize  = static_cast<float>(Followers::g_active.size() + 1);  // + player
+        const float releaseSec = std::max(2.0f,
+                                          suppress * 1.12f + 0.133f * partySize + 0.5f);
         std::vector<RE::FormID> done;
         for (auto& [id, sc] : g_selfCast) {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
@@ -1249,9 +1349,19 @@ namespace MFO::Actuation {
                         if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
                         if (!foe->IsHostileToActor(a_follower)) continue;   // brawl gate (#34)
                         if (selfPos.GetDistance(foe->GetPosition()) > radius) continue;
-                        targets.push_back(foe->GetFormID());
+                        // F2/F3/F4: only fan to a foe this cast will actually
+                        // affect -- an instant spell always, a duration DoT only
+                        // when it is not already covered (burst-vs-tail test).
+                        // Filtering here (worker, foe ptr still valid) means an
+                        // all-covered fan-out NoOps transparently below.
+                        if (ShouldApplyTo(foe, spell, true))
+                            targets.push_back(foe->GetFormID());
                     }
                 }
+                // F7: warm the LoS cache for the foes we will try to hit, so the
+                // apply loop's Sightline::Check stops being fail-open Unknown
+                // forever (the verdict lands a frame later; walls do not move).
+                if (!targets.empty()) Sightline::Want(id, targets);
             } else {
                 // WHOLE PARTY: every active follower + the player within range who
                 // NEEDS it -- the CASTER INCLUDED (he is one of N, so a self-buff
@@ -1266,6 +1376,10 @@ namespace MFO::Actuation {
                     if (ally->IsDead() || ally->IsDisabled() || !ally->Is3DLoaded()) return;
                     if (selfPos.GetDistance(ally->GetPosition()) > radius) return;
                     if (heal && Vocab::HealthPct(ally) >= 1.0f) return;   // only those who need it
+                    // F2/F3: skip anyone already carrying a duration buff from
+                    // this spell (an instant heal leaves no effect and re-fires),
+                    // so an all-covered party fans to nobody -> transparent NoOp.
+                    if (!ShouldApplyTo(ally, spell, false)) return;
                     targets.push_back(ally->GetFormID());
                 };
                 for (const auto& h : Followers::g_active) { auto p = h.get(); consider(p.get()); }
@@ -1288,7 +1402,7 @@ namespace MFO::Actuation {
             }
 
             if (fired == 0)
-                return { Result::NoOp, "auto-cast: all targets skipped (magicka/LoS/active)", true };
+                return { Result::NoOp, "auto-cast: all targets skipped (magicka/LoS)", true };
             g_autoCast[id] = now;
             spdlog::info("[cast] {:08X} {} AUTO {} {} ({:08X}) -- fanned to {} target(s), {} skipped "
                          "(radius {:.0f}, cost {:.0f} each)",
@@ -1583,12 +1697,15 @@ namespace MFO::Actuation {
                     if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon))
                         mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
                 } else {
-                    // Unknown weapon (created/enchanted): force-unequip whatever
-                    // bound object is in EITHER hand to clear the lock regardless.
+                    // Unknown weapon (created/enchanted): force-unequip the held
+                    // WEAPON in either hand to clear the lock. #8: the force-hold
+                    // only ever locks a weapon, but GetEquippedObject also returns
+                    // spells, shields and torches -- unequipping one of those would
+                    // strip an unrelated off-hand item on load. Weapons only.
                     for (bool leftHand : { false, true }) {
                         if (auto* held = actor->GetEquippedObject(leftHand))
-                            if (auto* obj = held->As<RE::TESBoundObject>())
-                                mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                            if (auto* wep = held->As<RE::TESObjectWEAP>())
+                                mgr->UnequipObject(actor, wep, nullptr, 1, nullptr, true, true);
                     }
                 }
                 spdlog::info("[equip] {:08X}: stale force-hold cleared on load", follower);

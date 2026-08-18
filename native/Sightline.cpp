@@ -141,11 +141,11 @@ namespace MFO::Sightline {
 
     }
 
-    // NOTE on g_active: rebuilt by Followers::Refresh on the MAIN thread and
-    // read here on the worker with no guard -- the same inherited, unguarded
-    // pattern Scheduler::Tick, Actuation's NearestAlly and the [cast] sink's
-    // IsTracked already use (there is no snapshot idiom to borrow). This adds
-    // a reader to an existing pattern, not a new one.
+    // #10 SEV-1: this can be called off the pump domain (the mid-stream ffWatch
+    // runs from Packages::Pump), so it must NOT walk the live g_active vector the
+    // job worker reallocates in Refresh. It reads the immutable FormID snapshot
+    // Refresh publishes atomically under g_mx (ActiveSnapshot) and re-resolves
+    // each id -- lock-free and UAF-free from any thread.
     bool TeammateInFireLine(RE::FormID a_caster, RE::FormID a_target) {
         if (!a_caster || !a_target || a_caster == a_target) return false;
         auto* cf = RE::TESForm::LookupByID<RE::Actor>(a_caster);
@@ -165,12 +165,13 @@ namespace MFO::Sightline {
             SegDist(pc->GetPosition(), cpos, tpos) <= kFireLinePad) {
             return true;
         }
-        for (const auto& h : Followers::g_active) {
-            auto ptr = h.get();   // HOLD the NiPointer (Targeting rule)
-            auto* ally = ptr.get();
-            if (!ally || ally == cf || ally == tf) continue;
-            if (ally->IsDead() || !ally->Is3DLoaded()) continue;
-            if (SegDist(ally->GetPosition(), cpos, tpos) <= kFireLinePad) return true;
+        if (auto active = Followers::ActiveSnapshot()) {
+            for (const RE::FormID id : *active) {
+                auto* ally = RE::TESForm::LookupByID<RE::Actor>(id);
+                if (!ally || ally == cf || ally == tf) continue;
+                if (ally->IsDead() || !ally->Is3DLoaded()) continue;
+                if (SegDist(ally->GetPosition(), cpos, tpos) <= kFireLinePad) return true;
+            }
         }
         return false;
     }

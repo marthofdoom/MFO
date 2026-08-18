@@ -145,8 +145,8 @@ namespace MFO::CasterConsent {
         // categories stay the AI's to keep; castControl<=0 and log mode stay
         // fully hands-off; non-concentration spells fall straight through.
         // Ordered cheap-first: two atomics, then immutable form reads, and
-        // the g_active walk (Followers::IsTracked -- the [cast] sink's
-        // event-thread precedent) only ever runs for a concentration spell.
+        // the membership probe (Followers::IsTrackedFast -- the g_mx mirror,
+        // combat-thread-safe) only ever runs for a concentration spell.
         bool ConcUnboundedDeny(RE::FormID a_fid, RE::MagicItem* a_mi) {
             const int lvl = Config::g_castControl.load();
             // EXACT-ONLY (marth). The latch-independent AI-channel bound fires
@@ -159,7 +159,11 @@ namespace MFO::CasterConsent {
             auto* sp = a_mi->As<RE::SpellItem>();
             if (!sp || sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration)
                 return false;
-            if (!Followers::IsTracked(a_fid)) return false;   // world casters: not ours
+            // #9 SEV-1: this runs on the COMBAT thread (CheckStartCast/CheckCast
+            // thunks). IsTracked walks the UNLOCKED g_active vector, which the job
+            // worker reallocates in Refresh -> UAF. IsTrackedFast probes the
+            // g_mx-guarded FormID mirror instead (membership only, any thread).
+            if (!Followers::IsTrackedFast(a_fid)) return false;   // world casters: not ours
             if (Packages::StreamLive(a_fid, a_mi->GetFormID()))
                 return false;                                 // OUR bounded stream -> pass
             const SpellKind k = ClassifySpell(a_mi);
