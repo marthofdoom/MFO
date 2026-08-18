@@ -484,6 +484,13 @@ namespace MFO::Rapport {
         // reset). Deliberately NOT rate-scaled: a cost is a price tag, not an
         // accrual, and fRapportRate must not discount it.
         if (a_amount <= 0.0f) return;
+        // item 2b: Spend's sole caller is the progression respec, which runs on
+        // the MAIN thread (Board prog edit -> MainThread::Post). TryEnsureRecord
+        // would INSERT (g_followers rehash vs the worker) if the record were
+        // absent, but a respec targets an enrolled, board-addressable follower
+        // that Refresh already TryEnsureRecord'd, so it FINDS, never inserts. The
+        // BoardEditScope tripwire (Board.cpp) logs a HAZARD if that breaks. (Award
+        // above legitimately inserts — it runs on the worker via the queued sinks.)
         auto* rec = Followers::TryEnsureRecord(a_actorID);
         if (!rec) return;
         auto& st = *rec;

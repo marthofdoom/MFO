@@ -8,8 +8,8 @@ regressions here; the ripple notes are why the map exists.
 ## Working rules
 
 - **Navigate by `file:line` from MAP.md.** Grep to a symbol, read a narrow
-  window — do NOT read whole files. The big ones (Logistics.cpp 4050, Board.cpp
-  3278, ProgAllocator.cpp 1743, Packages.cpp 1542, CasterConsent.cpp 1062) must
+  window — do NOT read whole files. The big ones (Logistics.cpp 4355, Board.cpp
+  3347, ProgAllocator.cpp 2427, Packages.cpp 1657, CasterConsent.cpp 1066) must
   never linger in context.
 - **Delegate bulk file-reads to a subagent** and keep only its conclusion, so
   large files never sit in the main context.
@@ -25,7 +25,8 @@ regressions here; the ripple notes are why the map exists.
 ## The five things that corrupt saves or crash — verify before touching
 
 1. **Co-save layout** (`Serialization.cpp`, `ProgAllocator::CoSaveSave/Load`,
-   `State.h`, `Vocabulary.h`): 3 records FLWR v4 / MSTK v1 / PRGN v2. Changing a
+   `State.h`, `Vocabulary.h`): 4 records FLWR v4 / MSTK v1 / PRGN v4 / FWPN v1
+   (`Serialization.h`). Changing a
    field order/type/count, bumping a version without a matching `if(version>=N)`
    reader, renaming a serialized opcode string, or renumbering the `Subject` /
    `Stance` / `combatClassOverride` enums corrupts live saves. Keep readers for

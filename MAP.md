@@ -14,8 +14,8 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (Logistics 4050, Board 3278, ProgAllocator 1743,
-   Packages 1542, CasterConsent 1062) should never sit in context — grep to a
+   whole files. Big files (Logistics 4355, Board 3347, ProgAllocator 2427,
+   Packages 1657, CasterConsent 1066) should never sit in context — grep to a
    symbol, read a narrow window.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
    changing a subsystem, re-read its "What breaks" entry *against current code*
@@ -34,7 +34,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (3 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v2` (`Serialization.h:7-50`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v4`, FWPN `v1` (`Serialization.h:7-70`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:562-622` | `StopPump()` MUST run first (`:568`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:302-322`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -82,11 +82,11 @@ The single source of truth for ordering. Everything below depends on it.
 
 ## 1. Co-save & authoritative state — `Serialization.*`, `State.h`  ⚠️ HIGHEST BLAST RADIUS
 
-**Responsibility.** Owns the SKSE serialization callbacks and the three
+**Responsibility.** Owns the SKSE serialization callbacks and the four
 independent co-save records. `State.h` defines the authoritative in-memory
 state (`g_followers`, `Gambit`, `FollowerState`).
 
-**Three records (`Serialization.h`), each with its own version + reader:**
+**Four records (`Serialization.h`), each with its own version + reader:**
 - **`'FLWR'` / `kSchemaVersion=4`** (`Serialization.h:8,50`) — per-follower
   `{rapport, rank, combatClassOverride(v4), tables[Combat,Logistics][], overrides[]}`.
   Written `SaveCallback` `Serialization.cpp:82`; read `LoadCallback` `:229`.
@@ -95,9 +95,15 @@ state (`g_followers`, `Gambit`, `FollowerState`).
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:187-217`, read `:239-313`. Owner: `Logistics.cpp`.
-- **`'PRGN'` / `kProgVersion=2`** (`Serialization.h:26`) — progression state;
-  layout + I/O live in `ProgAllocator.cpp` (`CoSaveSave` called `:226`,
-  `CoSaveLoad` `:327`). Written **even when the addon ESL is absent** (`:220`).
+- **`'PRGN'` / `kProgVersion=4`** (`Serialization.h:35`) — progression state;
+  layout + I/O live in `ProgAllocator.cpp` (`CoSaveSave` `:1472`, `CoSaveLoad`
+  `:1535`). Written **even when the addon ESL is absent**. v-history v1→v4 in
+  `Serialization.h:21-49` (v4 = plugin-qualified class identity; v3 reader KEPT).
+- **`'FWPN'` / `kForcedWeaponVersion=1`** (`Serialization.h:59`) — #76 force-hold:
+  the weapons MFO force-equipped for an active equip gambit. Owner
+  `Actuation.cpp` (`CoSaveForcedWeapons`/`CoLoadForcedWeapons`); **CoLoad
+  RELEASES the locks, never repopulates** (a session starts with no force-hold,
+  the gambit re-forces if still true). Fourth independent record.
 
 **Ingestion discipline (INVARIANTS #8–#12), all enforced here:** every persisted
 FormID passes `ResolveFormID` or is DROPPED (`:367,447,511`); runtime `0xFF` IDs
@@ -164,25 +170,24 @@ Force-fills MFO's quest aliases at static priority 60 to run MFO's packages
 (cast / loot-travel / retreat), observes engine state to advance a phase machine,
 releases **by eviction** with a non-actor XMarker.
 
-- `g_holder` (`Packages.cpp:163`) single-writer cast state (no lock);
-  `g_liveStream` atomic mirror (`:173`) is the ONLY holder field the caster-thread
+- `g_holder` (`Packages.cpp:174`) single-writer cast state (no lock);
+  `g_liveStream` atomic mirror (`:195`) is the ONLY holder field the caster-thread
   consent hooks may read.
-- `EnsureEvictMarker` (`:1125`) — caller `plugin.cpp:349` only, **before** the
+- `EnsureEvictMarker` (`:1215`) — caller `plugin.cpp:349` only, **before** the
   post-load reconcile. **What breaks:** if it stops minting, `EvictionRef` falls
-  back to the PLAYER (`:884`) → furniture-ejection bug (v1.0.25/26) re-breaks.
-  Must be main-thread (`PlaceObjectAtMe` mutates the cell) + force-persisted
-  (`:1137`). Base-`0x3B` revalidation (`:877`) is load-bearing (handle indices
-  rebuild per load).
-- `ReleaseAll(why)` (`:1150`) — callers `plugin.cpp:321,355`, `Serialization.cpp:610`.
+  back to the PLAYER → furniture-ejection bug (v1.0.25/26) re-breaks.
+  Must be main-thread (`PlaceObjectAtMe` mutates the cell) + force-persisted.
+  Base-`0x3B` revalidation is load-bearing (handle indices rebuild per load).
+- `ReleaseAll(why)` (`:1240`) — callers `plugin.cpp:321,355`, `Serialization.cpp:610`.
   The save-corruption backstop: sweeps all 4 loot aliases + retreat + command,
   evicting any actor occupant including the player (#48b) with the marker.
   **Ordering:** at kPreLoadGame runs after `StopPump` (can't race `Pump`); the
-  player-sweep requires the marker (`haveMarker` guard `:1175`).
-- `Pump()` (`:997`) — caller `Scheduler.cpp:135`, unconditional before every early
+  player-sweep requires the marker (`haveMarker` guard `:1265`).
+- `Pump()` (`:1087`) — caller `Scheduler.cpp:135`, unconditional before every early
   return. Only advancer of `Requested→Filled→Running→Done`. `EvaluatePackage(true,
-  false)` at `:1028` — **`resetAI` must stay false** everywhere (`:1028,1296,1319,
-  1384,1462,1483,661`); `true` clears the combat group → zero-damage next hit.
-  Timeouts `kFillTimeout=3.0`/`kRunTimeout=12.0` (`:126-127`).
+  false)` at `:1118` — **`resetAI` must stay false** everywhere (`:713,1118,1411,
+  1434,1499,1577,1598`); `true` clears the combat group → zero-damage next hit.
+  Timeouts `kFillTimeout=3.0`/`kRunTimeout=12.0` (`:132-133`).
 - **SELF-CAST does NOT use the package (SPEC-self-cast-forced, superseded 2026-08-17).**
   Deck-proven: a no-QNAM/t6 package can be DELIVERED (equips the spell) but never
   TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
@@ -201,7 +206,8 @@ releases **by eviction** with a non-actor XMarker.
   sp->GetCostliestEffectItem()->baseEffect)` — so a duration self-buff/light is NOT
   re-applied while active (exactly one light per effect-duration cycle); an instant
   heal (no lingering effect) re-fires when the condition recurs. RELEASE
-  (`SelfCastReconcile`, on rule-stale / 30 s cap / follower gone): `DispelSpellEffectsOn`
+  (`SelfCastReconcile`, on rule-stale / follower gone — **NO time cap**, a long
+  self-buff lives its authored duration while the rule wins): `DispelSpellEffectsOn`
   removes a lingering **ward/buff** so it cannot persist as a stuck gameplay effect
   (functional bounding); nothing to unequip. Touches only the ACTOR, no alias →
   **follower-agnostic** (deck-proven on Lucien). Gated behind `Config::g_castSelf`
@@ -219,8 +225,8 @@ releases **by eviction** with a non-actor XMarker.
 - `CastAt`/`Available`/`StreamLive` (FOE cast) — callers `Actuation.cpp` (ForceCast +
   ConcentrationCast foe), `CasterConsent.cpp:163` (reads the atomic mirror). One
   `MFO_CastPackage` on alias 0 → single holder forced by shared `TESPackage::refCount`
-  (`:734`); multi-holder needs per-verb records at 0x821+.
-- `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1265-1494`)
+  (`:790`); multi-holder needs per-verb records at 0x821+.
+- `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1380-1623`)
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and
   can't be lowered to release. `LootTravelRetarget` refills only the TARGET alias,
@@ -246,24 +252,38 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
-  (`Logistics.cpp:~3909`) — the logistics `cast_target` handler used to SKIP an
-  empty target, dropping AUTO out of combat (the field-test miss). Classifies
+  (`Logistics.cpp:~4023`). A NON-auto MANUAL pick (Target=Nearest-ally/named/
+  Player) on the OOC path resolves through the shared **public**
+  `Actuation::ResolveCastTarget` (`Actuation.cpp`, moved out of the anon namespace
+  — same ladder combat `Fire` uses) so it fires instead of being dropped (Wave 6
+  #1); AUTO still routes to `CastAuto`. Classifies
   HOSTILE via `CasterConsent::ClassifySpell` — **delivery is NOT consulted** (MFO
   applies effects DIRECTLY to the target actor, bypassing the engine delivery
   system, so no spell is "self-only"): hostile → every foe in the combat group
   within `Confidence::ChaseRadius` (OOC: no group → NoOp); **beneficial → the WHOLE
   PARTY** (every active follower + the player within `g_sharedRadius` who NEEDS it —
   the caster included as one of N, so a self-delivery Candlelight lights everyone;
-  heals filtered to HP<full; already-active guard skips the covered). Fans out via
-  `ApplyEffectFromTo` (direct `CastSpellImmediate` + manual magicka deduct — NOT the
-  single-holder foe package), **collecting FormIDs never raw `Actor*` past the
-  combat-group read-lock (UAF)**, per-cast magicka with reserve floor, one broadcast
+  heals filtered to HP<full). **Per-target apply guard `ShouldApplyTo` (`:1085`):**
+  not-currently-affected → apply; beneficial/ally already-affected → skip (no
+  re-stack); a hostile DURATION (DoT) spell is NOT blanket-skipped — it recasts
+  when `burst >= dotRate * timeRemaining * fDotRecastBurstRatio` (`Config`), so a
+  big-burst/small-tail spell re-lands as the tail decays while a pure DoT waits it
+  out. Fans out via `ApplyEffectFromTo` (direct `CastSpellImmediate` + manual
+  magicka deduct — NOT the single-holder foe package), **collecting FormIDs never
+  raw `Actor*` past the combat-group read-lock (UAF)**, per-cast magicka with
+  reserve floor (cost clamped to available, never negative magicka), one broadcast
   per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). A manual target
   pick keeps the single-target `CastOn` path. `CastSelfDirect` now returns
   `SelfCast{Declined,Refreshed,Applied}` so a pacing REFRESH doesn't count as an
   action that suppresses lower rules (logistics starvation, F3); its
   `SelfCastReconcile` release has NO time cap — an earlier 30 s cap dispelled long
   self-buffs mid-duration (~30 s re-cast beat); release is stale/follower-gone only.
+  **F3 tri-state maps the SAME in BOTH combat call sites** (`CastOn` self fork +
+  `ConcentrationCast` self guard) as in logistics: `Applied → Fired`,
+  `Refreshed → transparent NoOp` (a paced channel-refresh does NOT occupy the tick
+  or suppress the rules below), `Declined → transparent`. The combat suppression
+  window (`releaseSec`) is tuned so a party's round-robin gap can't outlast the
+  self-buff and re-open the dispel/re-cast beat.
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:28`), pumps packages
@@ -626,6 +646,15 @@ that re-checks the epoch, sets `TickActiveGuard`, then runs `Followers::Refresh`
   error `:429`). **`kPumpMs` is the evaluator deadline** — changing it re-times the
   scheduler, not just diagnostics. `DumpReport` uses `find()` not `operator[]`
   (`:365`) to avoid persisting a spurious `0xFF`-keyed record.
+- **Wave-1 worker-quiesce API:** every MFO `AddTask` body now runs under a
+  `PumpTickGate(epoch)` RAII (`:77`) — STOREs `g_tickActive=true` (seq_cst) then
+  re-checks the epoch (Dekker handshake, closes the check-then-set TOCTOU), and
+  bails if a `StopPump`/`PausePump` is in progress. `PausePump()`/`ResumePump()`
+  (`:515`/`:532`) are the RESUMABLE quiesce for `SaveCallback` (SEV-1): PausePump
+  drains the worker like StopPump but WITHOUT tearing the pump down, so the save
+  can iterate `g_followers` with no worker insert racing it; ResumePump lifts it.
+  MUST be paired (RAII across the save). Off-worker sink bodies gate on
+  `IsTrackedFast` before taking the epoch.
 
 ### Probe.cpp / Probe.h — M4 debug/research harness
 Fires one engine primitive at a follower and records emergent behavior; nothing
@@ -642,8 +671,15 @@ enum entry points have **no in-tree C++ caller** (the ImGui probe panel isn't wi
 
 ## 8. Core state / evaluator / config / forms — `Followers.*`, `Rapport.*`, `Evaluator.*`, `Vocabulary.h`, `Config.*`, `Forms.*`
 
-Shared foundation. `g_active`/`g_activeIds`/`g_followers` are **main-thread / serial-
-SKSE-task only**; combat-thread hooks go through FormIDs + cached reads, never these.
+Shared foundation. `g_active`/`g_activeIds`/`g_followers` are **serial worker /
+main pump only** (#4, #74) — mutated only on that domain. **Off-worker readers
+(combat cast hooks, event sinks, `SaveCallback`, the progression main-thread
+poll) MUST use the Wave-1 any-thread mirror, never the live lists:**
+`Followers::IsTrackedFast(FormID)` (`:209`, membership; locks `g_mx`, tests the
+mirror `Refresh` republishes) and `Followers::ActiveSnapshot()` (`:214`, an
+immutable `shared_ptr<const vector<FormID>>` iterated lock-free). The unlocked
+`IsTracked` walk is worker/main-domain ONLY. See #74 for the BSJobs-vs-main
+concurrency question (distinct threads, mutual exclusion UNPROVEN).
 
 ### Followers.cpp / Followers.h
 - `g_active` (`Followers.h:33`) + parallel `g_activeIds` (`:39`) — read in ~15 files
@@ -655,17 +691,26 @@ SKSE-task only**; combat-thread hooks go through FormIDs + cached reads, never t
 - `IsPersistableID` (`:176`, `(id>>24)!=0xFF`) — the **single authority** on what
   reaches co-saves (#9), used across Serialization/ProgAllocator/Logistics/ProgProbe.
   Loosening lets `0xFF` runtime IDs into the `.ess`; tightening drops legit followers.
-- `TryEnsureRecord` (`:190`) vs `EnsureRecord` (`:205`): Rapport/ProgAllocator use
+- `TryEnsureRecord` (`:233`) vs `EnsureRecord` (`:248`): Rapport/ProgAllocator use
   `TryEnsureRecord` because `g_active` holds `0xFF` cloned teammates; `EnsureRecord`
-  would mint a doomed record SaveCallback skips (F2).
+  would mint a doomed record SaveCallback skips (F2). **`TryEnsureRecord` INSERTS
+  (rehash).** `Followers::IsTrackedFast`/`ActiveSnapshot` (`:209`/`:214`) are the
+  Wave-1 off-worker accessors; `BoardEditScope` (`Followers.h`) is a tripwire that
+  logs a HAZARD if a MAIN-thread board Prog edit (SetClass/Respec →
+  `MainThread::Post`) ever inserts (item 2b — proven safe because a board-
+  addressable follower already has a record, so it FINDS not inserts).
 - `ApplyDefaultKit` (`:24`) — 3 combat + 4 logistics; called on record creation
   (`:198`) and as the empty-board load backfill (`Serialization.cpp:539`). **Verified
   to fit Rank I** (3/4); adding a rule overflows and the load clamp silently drops it.
-- `Refresh` (`:211`, the eviction hub) — on drop calls `Loadout::Restore`,
-  `Targeting::Clear`, `CombatStyle::Clear`, `CasterConsent::Clear`, `Packages::Release`,
-  `Logistics::OnFollowerRemoved`, `Packages::RetreatEvictIf` (`:275-309`). Several
-  release engine-serialized alias fills — removing any leaves a latch that re-fills on
-  every future load. Callers `plugin.cpp:357`, `Rapport.cpp:147`, `Diagnostics.cpp:253`.
+- `Refresh` (`:254`, the eviction hub) — **runs on the JOB WORKER** (`Diagnostics.cpp`
+  tick), not the main thread; it rebuilds `g_active`/`g_activeIds` and republishes the
+  `IsTrackedFast`/`ActiveSnapshot` mirror under `g_mx` (`PublishActiveMirror`). On drop
+  calls `Loadout::Restore`, `Targeting::Clear`, `CombatStyle::Clear`,
+  `CasterConsent::Clear`, `Packages::Release`, `Logistics::OnFollowerRemoved`,
+  `Packages::RetreatEvictIf`. Several release engine-serialized alias fills — removing
+  any leaves a latch that re-fills on every future load. Callers `plugin.cpp:357`,
+  `Rapport.cpp:147`, `Diagnostics.cpp:253`. (Followers.h's per-symbol header comments
+  predate the worker move — the DOMAIN is the serial worker/main pump, #4/#74.)
 
 ### Rapport.cpp / Rapport.h
 Per-follower rapport/rank + death/combat sinks + the ally-combat quash.

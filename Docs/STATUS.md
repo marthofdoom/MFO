@@ -6,9 +6,38 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-08-13 (SHIPPED v1.0.63 — tag pushed, releases/v1.0.63/, Nexus bbcode ready) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
+> **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶▶ RESUME HERE (2026-08-17 PM) — v1.0.64 SHIPPED; crash queue next.**
+> **▶▶ RESUME HERE (2026-08-18) — v1.0.65 IN PROGRESS: self-cast + AUTO + review-fix batch merged; NOT yet cut.**
+> - **What v1.0.65 is:** the UNIVERSAL forced self-cast (`Actuation::CastSelfDirect`, direct effect+magicka,
+>   NO equip/channel — see MAP §2 & `SPEC-self-cast-forced.md`) + **AUTO cast-target inference**
+>   (`Actuation::CastAuto`: hostile → nearby foes, beneficial → whole party who needs it) + the full
+>   **comprehensive review-fix batch** (`Docs/REVIEW-2026-08-18-comprehensive.md`, 6 Fable reviewers).
+> - **All 6 waves MERGED to main** (`ec0e04f` = Wave 2 head; Waves 3/5 in `cb0d9ab`/`69fe287`; Wave 6 this):
+>   - **Wave 1** — threading accessors: `Followers::IsTrackedFast(FormID)` + `ActiveSnapshot()` (any-thread
+>     mirror, closes the combat-thread `IsTracked` UAF); `Diagnostics::PausePump/ResumePump` +
+>     `PumpTickGate` (resumable worker-quiesce for `SaveCallback`, Dekker TOCTOU close).
+>   - **Waves 2–5** — combat F3 tri-state (Refreshed→transparent NoOp), combat dispel-beat window, ally-
+>     selector friendly-fire refusal, progression snapshot reads, economy stock-gear/StripCorpse dibs,
+>     worker-equip race, magicka clamp, DoT recast (`fDotRecastBurstRatio`), + more.
+>   - **Wave 6 (this)** — (1) logistics `cast_target` MANUAL pick now fires via the shared public
+>     `Actuation::ResolveCastTarget` (was silently dropped); (2) `Board::PublishSnapshot` roster reads
+>     moved to `ActiveSnapshot`/`IsTrackedFast`; (3) item-2b `Followers::BoardEditScope` tripwire —
+>     documents+asserts that a main-thread board Prog edit never INSERTS into g_followers (rehash);
+>     (4) new **INVARIANT #74** (BSJobs-vs-main distinct threads, mutual exclusion UNPROVEN → off-worker
+>     reads use the Wave-1 mirror); (5) docs refresh (CLAUDE/MAP co-save 4 records/PRGN v4/FWPN v1,
+>     Wave-1 API, cast semantics, Refresh-on-worker, Packages line drift).
+> - **STILL PENDING before the v1.0.65 cut:** (a) **vendor spell-tome feature** (buy teachable spell
+>   books from merchants — the field-notes ask; not yet built); (b) **deck field test** of the whole
+>   batch (self-cast + AUTO live, `bCastSelf`/AUTO on); (c) **cut + tag** v1.0.65 + Nexus bbcode
+>   (still owed 1.0.62→65) + changelog. Saves are VERIFIED SAFE — no co-save regression in the batch.
+> - **DESIGN DECISIONS AWAITING MARTH (do not decide unilaterally):**
+>   - **#75 equip-gate policy** — how aggressively the CheckShouldEquip gate should clamp the AI's own
+>     re-arm vs. letting it drink/scroll/shout; current 30-vtable list excludes weapon/potion/scroll/shout.
+>   - **§16 manual skill points** — retroactive repricing on level-up + NO undo of an allocated point
+>     (a spent manual point can't be refunded). Flagged as a deliberate design choice to confirm, not a bug.
+>
+> **▶ (superseded) RESUME (2026-08-17 PM) — v1.0.64 SHIPPED; crash queue next.**
 > - **v1.0.64 RELEASED & TAGGED — DLL `3832128e`, deployed custom-modlist (Tuxborn PENDING deck wake).**
 >   Field-verified good by marth (Lucien: dagger-only, clean cast↔melee handoffs). Tag `v1.0.64` pushed;
 >   `releases/v1.0.64/` archived. Main files only (release.sh excludes the addon). Last PUBLIC Nexus =

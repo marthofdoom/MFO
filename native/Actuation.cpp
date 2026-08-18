@@ -60,60 +60,12 @@ namespace MFO::Actuation {
             return best;
         }
 
-        // THE RESOLUTION LADDER (#68). Given a cast-target choice, decides WHO
-        // gets cast at, first rung to match wins:
-        //   1 (+3) a selector (or Evaluate()'s player-HP-condition special
-        //     case) already named someone THIS TICK -- a_choice.target.
-        //   2   an explicit subject the player picked on the row: a SPECIFIC
-        //       follower (subjectActorForm) takes precedence over the enum
-        //       when both are somehow set; Self/Player always resolve;
-        //       NearestAlly falls on down the ladder if nobody is in range.
-        //   4   otherwise -- THE PLAYER. The catch-all for actor-agnostic
-        //       rules ("when dark -> cast Magelight") that would otherwise
-        //       resolve to nobody. a_outIsFallbackPlayer marks this rung so
-        //       CastOn's out-of-range skip (below) knows to WAIVE it -- a
-        //       fallback must always fire, never quietly vanish because the
-        //       player happens to be far away.
-        RE::Actor* ResolveCastTarget(RE::Actor* a_follower, const Eval::Choice& a_choice,
-                                     bool& a_outIsFallbackPlayer) {
-            a_outIsFallbackPlayer = false;
-            if (auto ptr = a_choice.target.get(); ptr.get()) return ptr.get();
-
-            auto* player = RE::PlayerCharacter::GetSingleton();
-
-            // A SPECIFIC follower, gone/dead/unloaded falls on down the
-            // ladder rather than bailing -- a "questionable" target must
-            // never wall off the whole rule (the #68 problem statement).
-            if (a_choice.subjectActorForm != 0) {
-                if (auto* specific = RE::TESForm::LookupByID<RE::Actor>(a_choice.subjectActorForm)) {
-                    if (!specific->IsDead() && specific->Is3DLoaded()) return specific;
-                }
-            }
-
-            switch (static_cast<Vocab::Subject>(a_choice.subject)) {
-            case Vocab::Subject::Player:
-                return player;
-            case Vocab::Subject::NearestAlly:
-                if (auto* ally = NearestAlly(a_follower)) return ally;
-                break;   // nobody in range -- fall to the player default below
-            case Vocab::Subject::Self:
-            default:
-                // #68 (marth): on a CAST-AT-TARGET row the default subject
-                // (Self=0 -- what every pre-#68 row and every freshly-added row
-                // carries) means AUTO: run the ladder to the PLAYER fallback, so
-                // an actor-agnostic rule ("when dark -> cast Magelight") lights
-                // up around the player instead of resolving to nobody (the #68
-                // bug) or to the caster. Deliberate self-casting is the separate
-                // "Cast on self" action (kActCastSelf), which never routes
-                // through this ladder. A stale specific-follower sentinel (0xFF)
-                // lands here too and correctly falls through rather than
-                // disarming the rule.
-                break;
-            }
-
-            a_outIsFallbackPlayer = true;
-            return player;
-        }
+        // ResolveCastTarget moved OUT of this anon namespace to public
+        // MFO::Actuation scope (just below, after this block closes) so the
+        // logistics OOC cast_target path (Logistics.cpp) can share the exact
+        // same resolution ladder as the combat Fire path. It still calls
+        // NearestAlly (anon, above) -- an internal-linkage helper is visible
+        // throughout this TU.
 
         // THE HYBRID'S FORCE HALF. The AI-first grace (below, in CastOn) stays
         // the preferred path because it is MOBILE -- the follower strafes and
@@ -902,6 +854,60 @@ namespace MFO::Actuation {
 
         // (EquipTorch moved to Logistics -- torch is upkeep, not a combat action, #35.)
 
+    }
+
+    // THE RESOLUTION LADDER (#68) -- PUBLIC so combat (Fire) AND logistics
+    // (out-of-combat cast_target) resolve a manual target the SAME way. Given a
+    // cast-target choice, decides WHO gets cast at, first rung to match wins:
+    //   1 (+3) a selector (or Evaluate()'s player-HP-condition special case)
+    //       already named someone THIS TICK -- a_choice.target.
+    //   2   an explicit subject the player picked on the row: a SPECIFIC
+    //       follower (subjectActorForm) takes precedence over the enum when both
+    //       are somehow set; Self/Player always resolve; NearestAlly falls on
+    //       down the ladder if nobody is in range.
+    //   4   otherwise -- THE PLAYER. The catch-all for actor-agnostic rules
+    //       ("when dark -> cast Magelight") that would otherwise resolve to
+    //       nobody. a_outIsFallbackPlayer marks this rung so CastOn's out-of-
+    //       range skip knows to WAIVE it -- a fallback must always fire, never
+    //       quietly vanish because the player happens to be far away.
+    RE::Actor* ResolveCastTarget(RE::Actor* a_follower, const Eval::Choice& a_choice,
+                                 bool& a_outIsFallbackPlayer) {
+        a_outIsFallbackPlayer = false;
+        if (auto ptr = a_choice.target.get(); ptr.get()) return ptr.get();
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+
+        // A SPECIFIC follower, gone/dead/unloaded falls on down the ladder
+        // rather than bailing -- a "questionable" target must never wall off the
+        // whole rule (the #68 problem statement).
+        if (a_choice.subjectActorForm != 0) {
+            if (auto* specific = RE::TESForm::LookupByID<RE::Actor>(a_choice.subjectActorForm)) {
+                if (!specific->IsDead() && specific->Is3DLoaded()) return specific;
+            }
+        }
+
+        switch (static_cast<Vocab::Subject>(a_choice.subject)) {
+        case Vocab::Subject::Player:
+            return player;
+        case Vocab::Subject::NearestAlly:
+            if (auto* ally = NearestAlly(a_follower)) return ally;
+            break;   // nobody in range -- fall to the player default below
+        case Vocab::Subject::Self:
+        default:
+            // #68 (marth): on a CAST-AT-TARGET row the default subject (Self=0 --
+            // what every pre-#68 row and every freshly-added row carries) means
+            // AUTO: run the ladder to the PLAYER fallback, so an actor-agnostic
+            // rule ("when dark -> cast Magelight") lights up around the player
+            // instead of resolving to nobody (the #68 bug) or to the caster.
+            // Deliberate self-casting is the separate "Cast on self" action
+            // (kActCastSelf), which never routes through this ladder. A stale
+            // specific-follower sentinel (0xFF) lands here too and correctly
+            // falls through rather than disarming the rule.
+            break;
+        }
+
+        a_outIsFallbackPlayer = true;
+        return player;
     }
 
     // ── FORCED SELF-CAST: the UNIVERSAL direct trigger (SPEC-self-cast-forced) ──

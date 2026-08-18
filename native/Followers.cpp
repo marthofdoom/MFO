@@ -230,6 +230,17 @@ namespace MFO::Followers {
         return (a_actorID >> 24) != 0xFF;
     }
 
+    // item 2b tripwire: nonzero while a MAIN-thread Board prog-edit body runs.
+    // Main-thread-only counter (BoardEditScope wraps the MainThread::Post body),
+    // so no lock is needed. A TryEnsureRecord INSERT observed while this is set
+    // means a board edit hit a follower with no record -- the "already has a
+    // record" invariant (see Followers.h BoardEditScope) was violated and we are
+    // one rehash away from racing the worker's g_followers iteration.
+    static int g_boardEditDepth = 0;
+
+    BoardEditScope::BoardEditScope()  { ++g_boardEditDepth; }
+    BoardEditScope::~BoardEditScope() { --g_boardEditDepth; }
+
     FollowerState* TryEnsureRecord(RE::FormID a_actorID) {
         if (!IsPersistableID(a_actorID)) {
             spdlog::debug("[follower] {:08X} is a runtime (0xFF) form -- session-only, no record",
@@ -238,6 +249,17 @@ namespace MFO::Followers {
         }
         auto [it, created] = g_followers.try_emplace(a_actorID);
         if (created) {
+            if (g_boardEditDepth > 0) {
+                // item 2b: a main-thread board edit just INSERTED (rehash) while
+                // the worker may be iterating g_followers. This is not supposed to
+                // be reachable (board-addressable followers already have records);
+                // shout so a future regression that breaks the invariant is caught
+                // in the log instead of as an intermittent load-screen crash.
+                spdlog::error("[follower] HAZARD (item 2b): main-thread board edit INSERTED a new "
+                              "record for {:08X} -- g_followers rehash may race the worker. The "
+                              "'board-addressable follower already has a record' invariant broke.",
+                              a_actorID);
+            }
             ApplyDefaultKit(it->second);   // editable base gambits, every follower
             spdlog::info("[follower] {:08X} new record -- seeded {} combat / {} logistics defaults",
                          a_actorID, it->second.combat().size(), it->second.logistics().size());
