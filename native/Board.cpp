@@ -1042,12 +1042,14 @@ namespace MFO::Board {
                                         struct TargetOpt {
                                             std::uint8_t kind; RE::FormID form; const std::string* label;
                                         };
-                                        // #68: subject 0 (Vocab::Subject::Self) on a cast-AT-target
-                                        // row means AUTO -- the ladder resolves the selector/
-                                        // condition target if any, else the player. It is NOT
-                                        // "cast on the follower" (that is the separate Cast-on-self
-                                        // action). Labelled Auto so the picker reads true.
-                                        static const std::string kAutoLbl = "Auto (target, else you)";
+                                        // subject 0 (Vocab::Subject::Self) on a cast-AT-target row
+                                        // is AUTO -- MFO infers WHO from the spell: hostile -> all
+                                        // nearby enemies, a beneficial self-buff -> the caster, a
+                                        // beneficial heal/aimed buff -> the party members who need
+                                        // it. It is NOT "cast on the follower" (that is the separate
+                                        // Cast-on-self action). The manual picks below still target
+                                        // exactly who you choose.
+                                        static const std::string kAutoLbl = "Auto (infer from spell)";
                                         static const std::string kAllyLbl = "Nearest ally";
                                         std::vector<TargetOpt> opts;
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Self,        0, &kAutoLbl });

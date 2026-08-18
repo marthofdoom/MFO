@@ -14,6 +14,7 @@
 #include "Packages.h"    // #35: act.flee reuses the retreat package; hybrid forced cast
 #include "Sightline.h"   // LoS gate on the forced cast -- no firebolts into walls
 #include "Temperament.h" // flair #1: per-follower timing seed (grace offset)
+#include "Confidence.h"  // AUTO cast: ChaseRadius bounds the "nearby enemies" fan-out
 
 #include <optional>      // ForceCast's tri-state return -- not in the PCH
 
@@ -973,6 +974,54 @@ namespace MFO::Actuation {
                     DispelSpellEffectsOn(a, a_spellID);
             });
         }
+
+        // AUTO fan-out pacing: last broadcast per follower, so a rule that keeps
+        // winning every ~133 ms tick re-fans only once per fCastCooldown instead
+        // of every tick (no thrash, no magicka spike). Worker-serial, no lock
+        // (the g_followers discipline #4); cleared with g_selfCast on revert.
+        std::unordered_map<RE::FormID, SelfClock::time_point> g_autoCast;
+
+        // Apply a_spell's effect FROM a caster TO an arbitrary target, hands-free
+        // (CastSpellImmediate, kInstant), and deduct the caster's REAL magicka
+        // cost (§56: CastSpellImmediate spends nothing, so we deduct). This is
+        // ApplySelfEffect generalised to a non-self target so AUTO can heal an
+        // ally / damage a foe with the SAME proven mechanism -- effect + magicka
+        // only, NO equip and NO channel (animation deferred, ENGINE_NOTES §0.13).
+        // Runs on the main thread; the already-active guard on the TARGET is
+        // byte-identical to the self one-shot's (do not re-buff / re-stack a
+        // still-active effect). a_hostile only tunes the log label.
+        void ApplyEffectFromTo(RE::FormID a_casterID, RE::FormID a_targetID,
+                               RE::FormID a_spellID, bool a_hostile) {
+            MainThread::Post([a_casterID, a_targetID, a_spellID, a_hostile] {
+                auto* caster = RE::TESForm::LookupByID<RE::Actor>(a_casterID);
+                auto* target = RE::TESForm::LookupByID<RE::Actor>(a_targetID);
+                auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+                if (!caster || !target || !sp) return;
+                auto* ei   = sp->GetCostliestEffectItem();
+                auto* mgef = ei ? ei->baseEffect : nullptr;
+                if (auto* mt = target->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
+                    spdlog::info("[cast] {:08X} AUTO {} -> {:08X} skipped -- {} ({:08X}) already active",
+                                 a_casterID, a_hostile ? "foe" : "ally", a_targetID,
+                                 sp->GetName() ? sp->GetName() : "?", a_spellID);
+                    return;
+                }
+                auto*       avo    = caster->AsActorValueOwner();
+                const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                if (auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant))
+                    inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
+                const float cost = sp->CalculateMagickaCost(caster);
+                if (avo && cost > 0.0f)
+                    avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                           RE::ActorValue::kMagicka, -cost);
+                const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                spdlog::info("[cast] {:08X} {} AUTO {} {} ({:08X}) -> {:08X} -- effect applied, "
+                             "magicka {:.0f}->{:.0f} (cost {:.0f})",
+                             a_casterID, caster->GetName() ? caster->GetName() : "?",
+                             a_hostile ? "HOSTILE" : "BENEFICIAL",
+                             sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
+                             before, after, cost);
+            });
+        }
     }
 
     bool CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
@@ -1073,6 +1122,143 @@ namespace MFO::Actuation {
         // Revert/load: drop the channels. No engine call -- the world is being
         // replaced, and the self-cast holds no equip/debt to undo.
         g_selfCast.clear();
+        g_autoCast.clear();   // AUTO fan-out pacing is session-scoped too
+    }
+
+    namespace {
+        // AUTO TARGET INFERENCE for act.cast_target (marth). The board's default
+        // target pick ("Auto", Subject::Self on a cast-target row) no longer just
+        // falls back to the player -- it INFERS the set from the spell's nature
+        // and fans the cast out, one direct effect-application per member, each
+        // paying the spell's full magicka cost (N targets = N x cost), reserve-
+        // floored and paced by fCastCooldown so it neither thrashes nor spikes.
+        // A MANUAL pick (Player / Nearest ally / a specific follower) or a
+        // selector-chosen target still takes the single-target CastOn path
+        // unchanged -- AUTO only fills the "nobody obvious" default.
+        //
+        // ROUTING (classification via CasterConsent::ClassifySpell + delivery):
+        //   hostile (Offense)              -> every nearby enemy (own combat group, chase radius)
+        //   beneficial + self-delivery     -> SELF (a self-delivery buff/ward/flesh cannot be
+        //                                     placed on an ally) -> CastOn(self) -> CastSelfDirect
+        //   beneficial + other-deliverable -> every party member who NEEDS it (injured for a
+        //                                     heal, shared radius; the player + active teammates)
+        //
+        // The fan-out uses the DIRECT effect applier (ApplyEffectFromTo), the same
+        // proven hands-free mechanism as the self-cast, rather than the foe cast
+        // PACKAGE: the package is a single-holder (one MFO_CastPackage on alias 0,
+        // MAP §2) and cannot address N targets at once, and it is declined outright
+        // on package-locked custom followers. Direct application costs magicka per
+        // cast, touches only actors (follower-agnostic), and needs no animation
+        // (deferred project-wide). Friendly fire is structurally impossible: the
+        // effect is placed on the CHOSEN actor, never launched as a projectile.
+        Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID) {
+            // AE-only, mirroring CastOn / CastSelfDirect (the SE crash path #67).
+            if (!REL::Module::IsAE())
+                return { Result::FailedOther,
+                         "cast control is AE-only (SE/VR use the follower's own AI casting)", true };
+            auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+            if (!spell)
+                return { Result::FailedOther,
+                         std::format("spell {:08X} not in load order", a_spellID), true };
+
+            const auto id       = a_follower->GetFormID();
+            const auto kind     = CasterConsent::ClassifySpell(spell);
+            const bool hostile  = (kind == CasterConsent::SpellKind::Offense);
+            const auto delivery = spell->GetDelivery();
+
+            // BENEFICIAL + SELF-DELIVERY collapses to SELF. A self-delivery buff
+            // (flesh / most wards / candlelight) cannot be placed on an ally, so
+            // AUTO routes it to the proven direct self path exactly as a manual
+            // Cast-on-self would (CastOn -> CastSelfDirect, gated bCastSelf).
+            if (!hostile && delivery == RE::MagicSystem::Delivery::kSelf)
+                return CastOn(a_follower, a_spellID, a_follower);
+
+            // PACING: one broadcast per fCastCooldown per follower. The rule keeps
+            // winning every tick; between cooldowns AUTO is a TRANSPARENT NoOp so
+            // lower rules can still run.
+            const auto  now      = SelfClock::now();
+            const float interval = std::max(1.0f, Config::g_castCooldown.load());
+            if (auto it = g_autoCast.find(id); it != g_autoCast.end() &&
+                std::chrono::duration<float>(now - it->second).count() < interval)
+                return { Result::NoOp, "auto-cast cooling down", true };
+
+            // Running magicka budget on the WORKER (the real deducts are posted to
+            // main and have not run yet): read once, subtract each planned cast,
+            // and STOP the moment the next cast would breach the reserve floor or
+            // empty the pool. §5.3 -- competence is not permission.
+            auto* avo = a_follower->AsActorValueOwner();
+            if (!avo) return { Result::FailedOther, "no magicka pool", true };
+            float       budget  = avo->GetActorValue(RE::ActorValue::kMagicka);
+            const float cost    = spell->CalculateMagickaCost(a_follower);
+            const float reserve = Config::g_magickaReserve.load();
+            const float mx      = avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
+                a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
+                                                  RE::ActorValue::kMagicka);
+            const float floor   = (reserve > 0.0f && mx > 0.0f) ? reserve * mx : 0.0f;
+            auto affordable = [&] { return cost <= budget && (budget - cost) >= floor; };
+
+            // ENUMERATE the inferred set (worker-safe reads, same context/precedent
+            // as Evaluator::PickFoe / PickAlly which run on this same tick).
+            std::vector<RE::Actor*> targets;
+            float radius = 0.0f;
+            if (hostile) {
+                radius = Confidence::ChaseRadius(a_follower);
+                auto& rt = a_follower->GetActorRuntimeData();
+                if (auto* cc = rt.combatController; cc && cc->combatGroup) {
+                    const auto selfPos = a_follower->GetPosition();
+                    RE::BSReadLockGuard lk(cc->combatGroup->lock);
+                    for (const auto& t : cc->combatGroup->targets) {
+                        auto  ptr = t.targetHandle.get();
+                        auto* foe = ptr.get();
+                        if (!foe || foe == a_follower) continue;
+                        if (foe->IsDead() || foe->IsDisabled() || !foe->Is3DLoaded()) continue;
+                        if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
+                        if (!foe->IsHostileToActor(a_follower)) continue;   // brawl gate (#34)
+                        if (selfPos.GetDistance(foe->GetPosition()) > radius) continue;
+                        targets.push_back(foe);
+                    }
+                }
+            } else {
+                radius = Config::g_sharedRadius.load();
+                const auto selfPos = a_follower->GetPosition();
+                const bool heal    = (kind == CasterConsent::SpellKind::Heal);
+                auto consider = [&](RE::Actor* ally) {
+                    if (!ally || ally == a_follower) return;   // an aimed Heal-Other cannot self-target
+                    if (ally->IsDead() || ally->IsDisabled() || !ally->Is3DLoaded()) return;
+                    if (selfPos.GetDistance(ally->GetPosition()) > radius) return;
+                    if (heal && Vocab::HealthPct(ally) >= 1.0f) return;   // only those who need it
+                    targets.push_back(ally);
+                };
+                for (const auto& h : Followers::g_active) { auto p = h.get(); consider(p.get()); }
+                consider(RE::PlayerCharacter::GetSingleton());
+            }
+
+            if (targets.empty())
+                return { Result::NoOp,
+                         hostile ? "auto-cast: no enemies in range" : "auto-cast: nobody needs it", true };
+
+            int fired = 0, skipped = 0;
+            for (auto* tgt : targets) {
+                if (!affordable()) { ++skipped; break; }   // insufficient magicka -> stop the fan-out
+                if (hostile && Sightline::Check(id, tgt->GetFormID()) == Sightline::Verdict::Occluded) {
+                    ++skipped; continue;                    // no line of sight -- fail-open on Unknown
+                }
+                ApplyEffectFromTo(id, tgt->GetFormID(), a_spellID, hostile);
+                budget -= cost;
+                ++fired;
+            }
+
+            if (fired == 0)
+                return { Result::NoOp, "auto-cast: all targets skipped (magicka/LoS/active)", true };
+            g_autoCast[id] = now;
+            spdlog::info("[cast] {:08X} {} AUTO {} {} ({:08X}) -- fanned to {} target(s), {} skipped "
+                         "(radius {:.0f}, cost {:.0f} each)",
+                         id, a_follower->GetName() ? a_follower->GetName() : "?",
+                         hostile ? "HOSTILE" : "BENEFICIAL",
+                         spell->GetName() ? spell->GetName() : "?", a_spellID,
+                         fired, skipped, radius, cost);
+            return { Result::Fired, "auto-cast fan-out" };
+        }
     }
 
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice) {
@@ -1136,6 +1322,21 @@ namespace MFO::Actuation {
             return CastOn(a_follower, a_choice.actionParam, RE::PlayerCharacter::GetSingleton());
         }
         if (op == Vocab::kActCastTarget) {
+            // AUTO (marth): the board's DEFAULT target pick ("Auto", carried as
+            // Subject::Self on a cast-target row) infers the set from the spell's
+            // nature and fans the cast out (CastAuto). It engages ONLY when
+            // nothing more specific named a target -- no explicit subject actor,
+            // no selector/condition target this tick. A MANUAL pick (Player /
+            // Nearest ally / a specific follower) or a selector that chose a foe
+            // keeps the single-target ladder path below, unchanged.
+            auto tp = a_choice.target.get();
+            const bool autoPick =
+                a_choice.subjectActorForm == 0 &&
+                static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Self &&
+                !tp.get();
+            if (autoPick)
+                return CastAuto(a_follower, a_choice.actionParam);
+
             // #68: the full resolution ladder -- a selector/condition target
             // first, then the row's explicit subject, then the player as the
             // last rung. a_rangeGate is OFF only for that last rung (the
