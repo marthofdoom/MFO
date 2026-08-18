@@ -622,11 +622,24 @@ Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`
 (native `GetInventory`/`GetGoldAmount` CTD on merchant chests). `RegisterFuncs()`
 (`:207`) ← `plugin.cpp:407`, registers **10 Papyrus natives** on class `MFO_Trade`
 (`:209-218`) called by the shipped `MFO_Trade.pex` — renaming/re-signing any breaks
-trading silently. `VendorTrade` (`:223`) ← `Logistics.cpp:2960`. `SellRow`/`NeedCat::
-Kind` (`TradeBridge.h:25,35`) are the wire vocabulary with Logistics. Cross-save
+trading silently. `VendorTrade` (`:223`) ← `Logistics.cpp` EconomyProbe. `SellRow`/`NeedCat::
+Kind` (`TradeBridge.h:25,35`) are the native-internal vocabulary with Logistics
+(NOT a wire/save contract — carried in the token'd order, never crosses Papyrus;
+appending a `Kind` is free). Cross-save
 safety: per-chest in-flight guard (`:250`) + `ClearTransientState`'s `g_nextToken +=
 1'000'000` jump (`:282` ← `Serialization.cpp:612`) so a resumed stale token can't name
 a fresh order.
+- **Follower-buy-spells** (town-update, gated `Config::g_followerBuySpells`, dark by
+  default): `NeedCat::kSpellTome` + `ClassifyBuy` book branch classify tome stock;
+  `FollowerCanUseTome` (TradeBridge.cpp, per-follower gate in `PlanBuy`) buys only a
+  castable tome the follower doesn't know/carry, whose school-skill meets the spell's
+  `GetAVEffect()->GetMinimumSkillLevel()` tier and whose `CalculateMagickaCost` fits
+  the follower's magicka pool. `TradeOrder::ownedTomeSpells` (collected worker-side in
+  EconomyProbe, passed through `VendorTrade`'s new trailing arg) blocks re-buying an
+  un-learned tome. `MFO_Trade.psc` needs NO change — `AddAllItemsToArray` already
+  enumerates books and the plan executes generically. The board teach-path (Board.cpp
+  ApplyEdits `TeachSpell` + snapshot) also consumes/lists tomes from the follower's OWN
+  inventory, not just the player's.
 
 ### Diagnostics.cpp / Diagnostics.h — event sinks + THE WORKER PUMP ⚠️ RACE LINCHPIN
 Owns the one persistent sleeper thread driving the per-follower tick, four event

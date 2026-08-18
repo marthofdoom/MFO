@@ -376,6 +376,16 @@ namespace MFO::Config {
     // scan enabled while tuning. bEconomy.
     inline std::atomic<bool>  g_economy{ false };
 
+    // TOWN-UPDATE groundwork: a caster follower buys SPELL TOMES suited to its own
+    // skill / magicka / gold, on the SAME econ scan as the supply buy (rides the
+    // MFO_Trade bridge). The buy is gated against the FOLLOWER's magic skill (not
+    // the player's), so a skilled mage follower can acquire a tome the follower
+    // qualifies for -- never a tome it can't cast, can't afford, lacks the skill
+    // tier for, or already knows/carries. Requires bEconomy ON to actually spend
+    // (OFF -> the plan is a dry run, same as the supply buy). Ships DARK. Default
+    // OFF. bFollowerBuySpells.
+    inline std::atomic<bool>  g_followerBuySpells{ false };
+
     // AUTO-RETREAT (combat-sense 3, the outnumbered DEFAULT rule). ON by default
     // (marth): a follower who is badly outnumbered/hurt (confidence below the 0.25
     // floor -- foe count feeds confidence) AND far from you in combat falls back to

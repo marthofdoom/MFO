@@ -3124,20 +3124,29 @@ namespace MFO::Board {
                 auto* spell    = c.spell ? RE::TESForm::LookupByID<RE::SpellItem>(c.spell) : nullptr;
                 auto* book     = c.book ? RE::TESForm::LookupByID<RE::TESBoundObject>(c.book) : nullptr;
                 auto* pc       = RE::PlayerCharacter::GetSingleton();
-                bool hasBook = false;
-                if (pc && book)
-                    for (auto& [o, d] : pc->GetInventory())
-                        if (o == book && d.first > 0) { hasBook = true; break; }
+                // #4: the book may live in the PLAYER's pack OR the FOLLOWER's OWN
+                // inventory (a follower who bought/carries the tome can be taught from
+                // it). Prefer the player's copy (unchanged behavior), then fall back to
+                // the follower's; consume ONE from whichever actually holds it.
+                auto holdsBook = [&](RE::TESObjectREFR* who) -> bool {
+                    if (!who || !book) return false;
+                    for (auto& [o, d] : who->GetInventory())
+                        if (o == book && d.first > 0) return true;
+                    return false;
+                };
+                RE::TESObjectREFR* bookHolder = nullptr;
+                if (holdsBook(pc))            bookHolder = pc;
+                else if (holdsBook(follower)) bookHolder = follower;
                 if (follower && spell) {
                     if (follower->HasSpell(spell)) {
                         // already learned (a prior edit taught it) -> just assign,
                         // never consume a second book.
                         tab[i].actionParamForm = c.spell;
-                    } else if (hasBook) {
+                    } else if (bookHolder) {
                         follower->AddSpell(spell);
-                        pc->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                        spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X}",
-                                     c.fid, c.spell, c.book);
+                        bookHolder->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                        spdlog::info("[board] taught {:08X} spell {:08X}, consumed book {:08X} from {:08X}",
+                                     c.fid, c.spell, c.book, bookHolder->GetFormID());
                         tab[i].actionParamForm = c.spell;
                     }
                     // else: book gone AND spell unknown -> do NOT set an uncastable spell.
@@ -3301,23 +3310,32 @@ namespace MFO::Board {
                 } vis; vis.out = &r.knownSpells;
                 a->VisitSpells(vis);
 
-                // #4: teachable spells -- books in the PLAYER's pack whose spell
-                // this follower does not yet know. Offered in the picker as
-                // "Name (spellbook)"; teaching consumes the book. Read-only here
-                // (a snapshot); the actual AddSpell + book consume runs in
-                // ApplyEdits on the main thread.
-                if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
-                    for (auto& [obj, data] : pc->GetInventory()) {
+                // #4: teachable spells -- books whose spell this follower does not yet
+                // know, from the PLAYER's pack OR the follower's OWN inventory (a
+                // follower who bought/carries a tome can be taught from it). Offered in
+                // the picker as "Name (spellbook)"; teaching consumes the book from
+                // whichever holds it. Read-only here (a snapshot); the actual AddSpell +
+                // book consume runs in ApplyEdits on the main thread. Dedup by spell so
+                // a tome the player AND follower both carry is listed once.
+                auto scanTeach = [&](RE::TESObjectREFR* owner) {
+                    if (!owner) return;
+                    for (auto& [obj, data] : owner->GetInventory()) {
                         if (!obj || data.first <= 0) continue;
                         auto* book = obj->As<RE::TESObjectBOOK>();
                         if (!book || !book->TeachesSpell()) continue;
                         auto* sp = book->data.teaches.spell;
                         if (!sp || !MFO::Vocab::IsCastableSpell(sp)) continue;
                         if (a->HasSpell(sp)) continue;   // already known -> not teachable
-                        r.teachableSpells.push_back({ sp->GetFormID(), book->GetFormID(),
+                        const RE::FormID spid = sp->GetFormID();
+                        bool listed = false;
+                        for (auto& t : r.teachableSpells) if (t.spell == spid) { listed = true; break; }
+                        if (listed) continue;
+                        r.teachableSpells.push_back({ spid, book->GetFormID(),
                                                       sp->GetName() ? sp->GetName() : "?" });
                     }
-                }
+                };
+                scanTeach(RE::PlayerCharacter::GetSingleton());
+                scanTeach(a);   // the follower's own tomes
             }
             r.combatSlots    = SlotsForRank(r.rank, Table::Combat);
             r.logisticsSlots = SlotsForRank(r.rank, Table::Logistics);
