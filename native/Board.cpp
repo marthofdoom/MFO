@@ -3011,6 +3011,12 @@ namespace MFO::Board {
                         spdlog::info("[prog] board edit dropped: actor {:08X} unresolvable", fid);
                         return;
                     }
+                    // item 2b: SetClass/Respec below reach Followers::TryEnsureRecord
+                    // on THIS main thread. That is only safe because a board-
+                    // addressable follower already has a g_followers record (so
+                    // TryEnsureRecord finds, never inserts). This scope arms the
+                    // tripwire that logs a HAZARD if any of them ever inserts.
+                    Followers::BoardEditScope boardEditGuard;
                     switch (kind) {
                     case EditKind::ProgSetClass:
                         // The §15 onboarding as ONE player action: enroll on
@@ -3228,8 +3234,19 @@ namespace MFO::Board {
         auto* player = RE::PlayerCharacter::GetSingleton();
 
         // Active followers first, with live vitals.
-        for (const auto& h : Followers::g_active) {
-            auto* a = h.get().get();
+        //
+        // THREADING (#4 + Wave-1): this drain runs on the serial TASK WORKER —
+        // the same domain that owns g_active/g_followers and runs Scheduler::Tick
+        // and Followers::Refresh — so the roster reads here do not race those.
+        // The one cross-thread writer that CAN touch state mid-drain is a Board
+        // Prog edit (SetClass/Respec) that rides MainThread::Post; item 2b proves
+        // that path never INSERTS into g_followers for a rostered follower. For
+        // defence-in-depth we still walk the Wave-1 any-thread FormID mirror
+        // (Followers::ActiveSnapshot) instead of the raw g_active handle vector,
+        // matching the discipline every other off-serial reader now follows.
+        auto activeIds = Followers::ActiveSnapshot();
+        for (RE::FormID fid : *activeIds) {
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
             if (!a) continue;
             FollowerRow r;
             r.id        = a->GetFormID();
@@ -3252,10 +3269,11 @@ namespace MFO::Board {
             }
             // #68: the cast-target picker's follower list -- every OTHER
             // active teammate by name (never this row's own actor). Same
-            // g_active walk Actuation::NearestAlly does at cast time.
-            for (const auto& h2 : Followers::g_active) {
-                auto* ally = h2.get().get();
-                if (!ally || ally == a) continue;
+            // roster ActiveSnapshot feeds the outer loop.
+            for (RE::FormID aid : *activeIds) {
+                if (aid == fid) continue;
+                auto* ally = RE::TESForm::LookupByID<RE::Actor>(aid);
+                if (!ally) continue;
                 r.alliesForPicker.emplace_back(ally->GetFormID(),
                                                ally->GetName() ? ally->GetName() : "?");
             }
@@ -3307,9 +3325,13 @@ namespace MFO::Board {
         }
 
         // Then retained-but-inactive records, so dismissal is visibly
-        // non-destructive rather than something you take on faith.
+        // non-destructive rather than something you take on faith. This g_followers
+        // iteration is worker-domain (see the threading note above); the only
+        // rehash hazard is a MAIN-thread insert, which item 2b closes by proving
+        // the Board Prog-edit path never inserts for a rostered follower. Active
+        // membership goes through the Wave-1 any-thread mirror (IsTrackedFast).
         for (const auto& [id, st] : g_followers) {
-            if (Followers::IsTracked(id)) continue;
+            if (Followers::IsTrackedFast(id)) continue;
             FollowerRow r;
             r.id      = id;
             r.name    = std::format("{:08X}", id);

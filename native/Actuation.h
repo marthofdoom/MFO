@@ -43,6 +43,16 @@ namespace MFO::Actuation {
     // (§5.3 -- a rule that could not run says why, it is not silent).
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice);
 
+    // THE CAST-TARGET RESOLUTION LADDER (#68). Resolves WHO a cast_target row
+    // aims at: a live selector target -> a named specific follower -> Subject
+    // Player/NearestAlly -> the PLAYER fallback (a_outIsFallbackPlayer marks that
+    // last rung so a caller's range check can WAIVE it). Public so BOTH the
+    // combat Fire path and the out-of-combat Logistics cast_target path resolve a
+    // manual target identically -- a logistics "Cast at foe/ally, Target=Nearest
+    // ally" rule fires instead of being silently dropped. Main-thread / worker.
+    RE::Actor* ResolveCastTarget(RE::Actor* a_follower, const Eval::Choice& a_choice,
+                                 bool& a_outIsFallbackPlayer);
+
     // FORCED SELF-CAST — the UNIVERSAL direct trigger (Docs/SPEC-self-cast-forced.md).
     // Fires an authored `act.cast_self` (concentration OR fire-and-forget) as a
     // REAL cast on the follower himself, bypassing the alias/package machinery

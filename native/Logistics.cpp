@@ -4040,12 +4040,24 @@ namespace MFO::Logistics {
                         if (acted) break;
                         start = choice.ruleIndex + 1; continue;
                     }
-                    // Foe selectors never fill the target out of combat -- an empty
-                    // handle must SKIP, not fall back to self (a package cast at
-                    // self is not barred and would fire a hostile spell at the
-                    // follower). cast on self/player is what the immediate route is for.
-                    if (!p.get()) { start = choice.ruleIndex + 1; continue; }
-                    tgt = p.get();
+                    if (p.get()) {
+                        tgt = p.get();
+                    } else {
+                        // NOT auto, and no selector target this tick: a MANUAL pick
+                        // (Target = Nearest ally / a named follower / Player).
+                        // Resolve it through the SAME ladder the combat Fire path
+                        // uses (Actuation::ResolveCastTarget) so a logistics "Cast
+                        // at foe/ally, Target = Nearest ally" rule actually FIRES out
+                        // of combat instead of being silently dropped (Wave 3 #9 /
+                        // review SEV-2). A foe selector that found nobody OOC already
+                        // routed through the AUTO branch above (Self + no-actor +
+                        // no-target -> CastAuto, which NoOps with no combat group),
+                        // so reaching here is a beneficial manual pick -- the ladder's
+                        // player fallback rung is safe, never a hostile self-cast.
+                        bool castFallbackPlayer = false;
+                        tgt = Actuation::ResolveCastTarget(a_follower, choice, castFallbackPlayer);
+                        if (!tgt) { start = choice.ruleIndex + 1; continue; }   // unresolvable -> next rule
+                    }
                 }
                 if (!tgt) { start = choice.ruleIndex + 1; continue; }
                 const bool conc = sp->GetCastingType() ==

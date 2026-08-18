@@ -89,6 +89,24 @@ namespace MFO::Followers {
     // is entirely empty. See the definition for the full contract.
     void ApplyDefaultKit(FollowerState& st);
 
+    // ── item 2b: main-thread board-edit INSERT tripwire ──────────────────────
+    // g_followers mutation belongs to the serial worker/main pump (#4). A Board
+    // Prog edit (SetClass/Respec) runs on the true MAIN thread via
+    // MainThread::Post and calls TryEnsureRecord, which would INSERT (rehash =
+    // UB) if the target record did not already exist while the worker iterates
+    // the map. It is proven safe because every board-addressable follower is
+    // active/retained and therefore already has a record (Refresh TryEnsureRecord'd
+    // it, or it is a retained entry). This RAII scope makes that assumption
+    // ASSERTABLE: while one is live, any TryEnsureRecord that actually CREATES a
+    // record logs a loud hazard line (the invariant was violated). Wrap the
+    // MainThread::Post prog-edit body in a BoardEditScope. Nesting-safe (counter).
+    struct BoardEditScope {
+        BoardEditScope();
+        ~BoardEditScope();
+        BoardEditScope(const BoardEditScope&)            = delete;
+        BoardEditScope& operator=(const BoardEditScope&) = delete;
+    };
+
     // Is this actor currently one of ours? Resolves handles by walking the live
     // g_active vector -- UNLOCKED, so MAIN-THREAD / JOB-WORKER callers ONLY (the
     // serial pump domain). NEVER call this from the combat thread or an event

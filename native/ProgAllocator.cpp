@@ -1724,6 +1724,12 @@ namespace MFO::ProgAllocator {
         // FollowerState override (0 = no override) so the stance machinery
         // follows the chosen class immediately (§18.6: the ordinal coupling
         // is gone — the addon declares the stance explicitly).
+        // item 2b: this runs on the MAIN thread (Board prog edit -> MainThread::Post)
+        // and TryEnsureRecord would INSERT (g_followers rehash vs the worker) if the
+        // record were absent. It is proven present — this follower is enrolled
+        // (g_prog.find succeeded above) and board-addressable, so Refresh already
+        // TryEnsureRecord'd it. The BoardEditScope tripwire (Board.cpp) logs a HAZARD
+        // if that ever stops holding.
         if (auto* rec = Followers::TryEnsureRecord(id)) {
             rec->combatClassOverride = def->stance;
         }

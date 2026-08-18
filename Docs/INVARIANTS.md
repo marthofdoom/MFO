@@ -954,3 +954,43 @@ Two rules, both mandatory:
   readback (`VerifyDetachedFrom`) proving the clean actually happened. The
   deck-log signature that distinguishes standing state from live churn:
   "marker minted, zero evictions all session, symptom persists."
+
+### 74. The job worker and the true main thread are DISTINCT threads with UNPROVEN mutual exclusion — off-worker roster reads go through the Wave-1 mirror
+
+The per-follower tick is `AddTask`'d and drains on a **BSJobs `JobThread`**
+(ENGINE_NOTES §0.37); `MainThread::Post` drains inside the player's `Update`
+vfunc on the **true main thread**. These are TWO threads. Nothing in the engine
+we can read PROVES they are mutually exclusive — the "one serial domain" that
+#4 leans on is an assumption about phasing, not a demonstrated fact, and it
+cannot be settled from our code alone. Treat them as potentially concurrent.
+
+Consequences, all mandatory:
+
+- **`g_active` / `g_activeIds` / `g_followers` mutate only on the serial
+  worker / main pump path (#4).** `Refresh` (worker) is the sole roster
+  rebuilder; record inserts belong to the worker (or a proven-no-insert main
+  path — see below). No global lock (#4): the fix for cross-thread access is a
+  snapshot, never a lock.
+- **Every OFF-worker read of the roster goes through the Wave-1 any-thread
+  accessors, never the live lists.** `Followers::IsTrackedFast(FormID)`
+  (membership; locks `g_mx`, tests the mirror `Refresh` republishes under the
+  same lock) and `Followers::ActiveSnapshot()` (an immutable `shared_ptr`
+  FormID copy, iterate lock-free) REPLACE the unlocked `IsTracked` /
+  `g_active` walk for the combat-thread cast hooks, the event sinks,
+  `SaveCallback`, and the progression main-thread poll. This is the concrete
+  form of CLAUDE.md's "combat-thread hooks read FormIDs / atomic mirrors, never
+  the follower lists." The unlocked `Followers::IsTracked` remains valid ONLY on
+  the worker/main pump domain (#4, #72).
+- **A main-thread path that must touch `g_followers` must not INSERT.** The
+  Board Prog edits (`SetClass`/`Respec` -> `MainThread::Post` ->
+  `Followers::TryEnsureRecord`) are safe only because a board-addressable
+  follower already has a record (`Refresh` created it), so `TryEnsureRecord`
+  FINDS, never inserts — no rehash to race a worker iteration. That assumption
+  is armed by `Followers::BoardEditScope`, which logs a HAZARD if any
+  main-thread board edit ever actually inserts.
+
+The one case that is UNAMBIGUOUS regardless of the phasing question: a combat
+cast hook walking the raw `g_active` list is a use-after-free (the old
+CasterConsent `IsTracked` bug), because `Refresh` reallocates the vector on the
+worker while the combat thread reads it. `IsTrackedFast` exists precisely to
+close that. See #4, #72; ENGINE_NOTES §0.37.
