@@ -3943,25 +3943,26 @@ namespace MFO::Logistics {
                 // blocking an OOC heal). Composite key like g_drinkUntil.
                 static std::unordered_map<std::uint64_t, Clock::time_point> s_logiCastUntil;
                 const std::uint64_t castKey = (static_cast<std::uint64_t>(id) << 32) | sp->GetFormID();
-                if (auto it = s_logiCastUntil.find(castKey); it != s_logiCastUntil.end() && now < it->second) {
-                    start = choice.ruleIndex + 1; continue;   // within this spell's window
-                }
+                // SELF bypasses this window: it is a self-PACED channel that must
+                // be re-fired every service to stay refreshed (the channel's own
+                // registry paces the effect + releases when the rule stops). The
+                // window would starve those re-fires and tear the channel down.
+                if (!selfPkg)
+                    if (auto it = s_logiCastUntil.find(castKey); it != s_logiCastUntil.end() && now < it->second) {
+                        start = choice.ruleIndex + 1; continue;   // within this spell's window
+                    }
                 if (selfPkg) {
                     // The UNIVERSAL DIRECT TRIGGER (SPEC-self-cast-forced). The
                     // MFO_CastPackageSelf alias route only EQUIPS the spell -- it
-                    // never fires the cast (deck 2026-08-17: equip, no anim, no
-                    // magicka) and is DECLINED outright on package-locked custom
-                    // followers (Lucien, prio-80). So self bypasses packages:
-                    // Actuation::CastSelfDirect equips + drives the caster for the
-                    // animation + applies the effect + spends magicka. ONE-SHOT,
-                    // so a concentration ward can never stick (each dispatch is a
-                    // bounded action); it re-casts each cooldown while still hurt,
-                    // and stops the moment the rule goes false.
+                    // never fires the cast (deck 2026-08-17) and is DECLINED on
+                    // package-locked custom followers. Actuation::CastSelfDirect
+                    // runs a self-paced CHANNEL: equip + hold + drive the caster
+                    // for the animation + apply the effect at fCastCooldown
+                    // cadence + release when the rule stops (stopping the effect
+                    // VFX). Re-fire it EVERY service so the channel stays alive
+                    // while the rule wins -- no s_logiCastUntil window here.
                     if (Actuation::CastSelfDirect(a_follower, sp)) {
                         acted = true;
-                        const float pace = std::max(1.0f, Config::g_castCooldown.load());
-                        s_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(
-                                                            std::chrono::duration<float>(pace));
                     } else {
                         // Unaffordable / off-AE / equip failed. Do NOT silent-apply
                         // a concentration spell (the stuck-ward footgun) -- skip

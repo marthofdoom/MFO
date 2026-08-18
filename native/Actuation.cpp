@@ -440,19 +440,19 @@ namespace MFO::Actuation {
 
             // SELF-CAST forks off FIRST (SPEC-self-cast-forced): a bCastSelf-
             // armed cast_self -- concentration OR fire-and-forget -- fires
-            // through the UNIVERSAL direct trigger, BEFORE the concentration
-            // fork and before the equip/grace/package machinery. Self needs
-            // neither AI-grace nor an alias package (which package-locked custom
-            // followers decline), so it bypasses both. One-shot + cooldown-
-            // paced: the exact-bounding invariant holds with no held channel to
-            // leak, and re-fires re-cast while the rule keeps winning.
+            // through the UNIVERSAL direct trigger (CastSelfDirect), BEFORE the
+            // concentration fork and before the equip/grace/package machinery.
+            // Self needs neither AI-grace nor an alias package (which package-
+            // locked custom followers decline), so it bypasses both. It is a
+            // CHANNEL, self-paced by its own registry -- do NOT gate on
+            // Loadout::CoolingDown or call StartCooldown: StartCooldown ->
+            // ReleaseSpell would rip the spell out of the hand and kill the
+            // animation. Re-fire it every combat tick while the rule wins (it
+            // refreshes the channel + applies the effect at fCastCooldown
+            // cadence); the reconcile releases it when the rule goes false.
             if (a_target == a_follower && Config::g_castSelf.load()) {
-                if (Loadout::CoolingDown(a_follower->GetFormID()))
-                    return { Result::NoOp, "cast cooling down", true };
-                if (CastSelfDirect(a_follower, spell)) {
-                    Loadout::StartCooldown(a_follower->GetFormID());
-                    return { Result::Fired, "self-cast (direct trigger)" };
-                }
+                if (CastSelfDirect(a_follower, spell))
+                    return { Result::Fired, "self-cast channel (direct trigger)" };
                 // Unaffordable / off-AE / no caster: transparent, the rules
                 // below run (the follower is not stuck on a cast that can't go).
                 return { Result::FailedOther, "self-cast could not fire", true };
@@ -905,7 +905,8 @@ namespace MFO::Actuation {
             RE::FormID            spell = 0;
             bool                  driven = false;   // caster driven into the cast state yet?
             SelfClock::time_point started{};
-            SelfClock::time_point lastFired{};
+            SelfClock::time_point lastFired{};   // last time the rule re-fired (release clock)
+            SelfClock::time_point lastApply{};   // last effect/magicka application (apply pacing)
         };
         std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
 
@@ -1007,24 +1008,36 @@ namespace MFO::Actuation {
                 return false;
             Loadout::HoldStow(id);
             auto& sc = g_selfCast[id];
-            sc.spell = spellID; sc.driven = false; sc.started = now; sc.lastFired = now;
+            sc.spell = spellID; sc.driven = false; sc.started = now;
+            sc.lastFired = now; sc.lastApply = {};   // epoch -> apply the effect immediately
+            it = g_selfCast.find(id);
         } else {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
         }
 
-        // Apply the effect + spend magicka on THIS fire (paced by the caller's
-        // cooldown). The sustained cast pose is driven by the reconcile.
-        ApplySelfEffect(id, spellID);
+        // SELF-PACE the effect application -- this channel does NOT use
+        // Loadout::StartCooldown (that calls ReleaseSpell, which would rip the
+        // spell out of the hand and kill the animation). Callers refresh this
+        // every service/combat tick while the rule wins; we apply the effect +
+        // spend magicka only once per fCastCooldown, so a self-heal ticks at the
+        // configured cadence rather than every 133 ms.
+        const float interval = std::max(1.0f, Config::g_castCooldown.load());
+        if (std::chrono::duration<float>(now - it->second.lastApply).count() >= interval) {
+            it->second.lastApply = now;
+            ApplySelfEffect(id, spellID);
+        }
         return true;
     }
 
     void SelfCastReconcile() {
         if (g_selfCast.empty()) return;
         const auto  now = SelfClock::now();
-        // Release when the rule stops re-firing. Must EXCEED the cast cooldown
-        // (the gap between paced re-fires) or a still-winning rule tears down
-        // between fires.
-        const float releaseSec = std::max(3.0f, Config::g_castCooldown.load() * 1.5f + 1.5f);
+        // Release when the rule stops re-firing. The callers refresh lastFired
+        // every service/combat tick while the rule wins, so this only needs to
+        // out-wait the round-robin gap (one follower serviced per ~133 ms tick),
+        // not the cast cooldown. 2 s covers a large party and still releases
+        // promptly when the rule goes false / is disabled.
+        const float releaseSec = 2.0f;
         std::vector<RE::FormID> done;
         for (auto& [id, sc] : g_selfCast) {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
