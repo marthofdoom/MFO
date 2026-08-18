@@ -122,8 +122,10 @@
 >   (hostile 1-4s LoF-gated / heal-until-topped 6s / utility 4s), IFF bForceCastOnMiss+bUsePackages ON.
 >   The old OOC `healStream` instant-apply stopgap (ff0cb48) is REMOVED. **Self-concentration is NOT
 >   barred** — INVARIANT #67 was REVOKED (2026-07-22); a self concentration cast routes to
->   `CastSelfDirect` (direct-apply, no package/QNAM, gated by bCastSelf), and a self HEAL is bounded by
->   the SAME `kConcHealCap` (6s "until topped") via `SelfCastReconcile`'s shared `ConcentrationHold`. AUTO
+>   `CastSelfDirect` (direct-apply, no package/QNAM, gated by bCastSelf), hard-capped in `SelfCastReconcile`
+>   by nature: self HEAL → `kConcHealCap` (6s "until topped"); self WARD/UTILITY → `kConcSelfUtilityCap`
+>   (15s, marth — not the 4s package hold, which would only flicker a non-rooting self ward). FF self buffs
+>   keep authored duration. AUTO
 >   (`CastAuto`) keeps its instant-apply broadcast for concentration (one package stream can't fan to N —
 >   see report). Old "not working" report predates 1.0.53.
 > - **THEN roadmap:** town update (#31), then the Roster addon (2nd ESL).
