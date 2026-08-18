@@ -42,7 +42,12 @@ namespace MFO::Scheduler {
         // ticks (INVARIANTS #22).
         struct Recent {
             std::chrono::steady_clock::time_point until{};
-            int         firedRule = -1;     // which rule bought the quiet
+            int         firedRule = -1;     // which rule INDEX bought the quiet
+            // #11: the fired rule's IDENTITY (runtime uid), so a board Del/Move
+            // during the window re-anchors the positional suppress to the rule's
+            // NEW index instead of suppressing whatever slid into the old slot.
+            // 0 = unassigned -> fall back to firedRule's index.
+            std::uint32_t firedUID = 0;
             int         failRule  = -1;     // last failure reported, for #22j
             std::string failReason;
             std::string lastChain;          // last skip-chain line logged (1.4 dedup)
@@ -85,6 +90,12 @@ namespace MFO::Scheduler {
         // stays snappy. Keyed like g_recent; cleared on combat end.
         std::unordered_map<RE::FormID, RE::ActorHandle> g_proposedTarget;
 
+        // #11 (#23 combat-sense throttle): last-per-follower next-sample time.
+        // Hoisted out of Tick's body so ClearTransientState can drop it on
+        // revert -- a function-local static would leak stale FormIDs across a
+        // load into a fresh world (the escaping-static pattern).
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_nextSense;
+
         std::atomic<double>        g_lastTickMs{ 0.0 };
         std::atomic<std::uint32_t> g_ticks{ 0 };
 
@@ -119,6 +130,7 @@ namespace MFO::Scheduler {
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
+        g_nextSense.clear();          // #11: was a Tick-local static that leaked
         g_lastServiced = 0;
         g_lastTick = {};
         g_lastTickMs = 0.0;
@@ -313,8 +325,7 @@ namespace MFO::Scheduler {
         // field test can watch a growing pack tighten the leash and, past a few
         // foes, arm auto-retreat. Purely observational; throttled ~3 s / follower.
         {
-            static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_nextSense;
-            auto& nxt = s_nextSense[id];
+            auto& nxt = g_nextSense[id];
             if (nxt.time_since_epoch().count() == 0 || now >= nxt) {
                 nxt = now + std::chrono::seconds(3);
                 spdlog::info("[sense] {:08X}: foes={} confidence={:.2f} leash={:.0f} chase={:.0f}",
@@ -457,6 +468,22 @@ namespace MFO::Scheduler {
         // cast-grace wait -- those legitimately occupy the tick).
         auto& recent = g_recent[id];
         const bool inWindow = now < recent.until;
+        // #11: re-anchor the positional suppression window to the fired rule's
+        // IDENTITY. Suppression is positional (INVARIANTS #26), but the anchor is
+        // the rule that FIRED, not a frozen index -- a board Del/Move during the
+        // window shifts every index, so a stored index would suppress the wrong
+        // rule. Re-resolve the fired uid to its CURRENT index each tick; if the
+        // rule was deleted, the window is void.
+        int firedRuleNow = recent.firedRule;   // fallback for a pre-#11 (uid==0) entry
+        if (inWindow && recent.firedUID != 0) {
+            firedRuleNow = -1;
+            if (const auto rr = g_followers.find(id); rr != g_followers.end()) {
+                const auto& tbl = rr->second.combat();
+                for (int i = 0; i < static_cast<int>(tbl.size()); ++i)
+                    if (tbl[i].uid == recent.firedUID) { firedRuleNow = i; break; }
+            }
+        }
+        const bool windowActive = inWindow && firedRuleNow >= 0;
 
         bool castSeen   = false;   // H3: some cast rule's condition held this tick
         int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
@@ -496,7 +523,7 @@ namespace MFO::Scheduler {
             // index; it never scans past it. Rules ABOVE the fired rule are
             // still tried first (transparent ones fall through as usual), so a
             // dying follower's rule-1 heal preempts exactly as before.
-            if (inWindow && choice.ruleIndex >= recent.firedRule) {
+            if (windowActive && choice.ruleIndex >= firedRuleNow) {
                 if (isCast) castSeen = true;   // its condition held: keep the loan (H3)
                 // #76: same shape for the equip force-hold -- the equip rule's
                 // condition held this tick (that is why Evaluate returned it),
@@ -862,6 +889,12 @@ namespace MFO::Scheduler {
                 Config::g_suppressWindow.load() * 1000.0f *
                 (0.88f + 0.24f * Temperament(id))));
             recent.firedRule = choice.ruleIndex;
+            // #11: record the fired rule's IDENTITY so the next tick's window
+            // re-anchors to its current index after any board edit.
+            recent.firedUID = 0;
+            if (const auto fr = g_followers.find(id); fr != g_followers.end() &&
+                choice.ruleIndex < static_cast<int>(fr->second.combat().size()))
+                recent.firedUID = fr->second.combat()[choice.ruleIndex].uid;
             recent.failRule  = -1;
             recent.failReason.clear();
             recent.lastChain.clear();
