@@ -1,3 +1,22 @@
+## v1.0.65 -- followers cast on themselves and the whole party, plus a deep stability pass
+
+- NEW (on by default): followers can now cast on themselves and the party automatically.
+  Set a "Cast at foe/ally" gambit's target to **Auto** and MFO reads the spell -- a heal or
+  buff goes to whichever party members (followers + you) actually need it, a self-only buff
+  like Candlelight lights the caster, and an offensive spell is spread across nearby enemies,
+  each paying its own magicka. Self-heal, self-ward, and "When Dark -> Candlelight" gambits
+  work too. Off switch: bCastSelf. (No cast animation yet -- a later polish pass; the effect,
+  magicka cost, and timing are real.)
+- Smarter damage-over-time: a follower won't waste magicka re-casting a DoT that's still
+  ticking unless the spell's up-front hit outweighs the tail still to be delivered. Tunable
+  with fDotRecastBurstRatio.
+- Fixed a board condition that displayed as "When When dark" -- now "When Dark".
+- Large stability & correctness pass (a full internal code review): closed a class of rare
+  threading crashes around the follower roster, an "Ally HP -> Attack" gambit that could turn
+  a follower on a wounded teammate, several loot/economy edge cases (dibs timing, selling a
+  follower's own signature gear), and progression save-data edge cases. No save-format change
+  -- existing saves are unaffected.
+
 ## v1.0.64 -- followers hold the weapon you ordered, and dress the slots they're missing
 
 - Fixed a caster ordered to melee (or ranged) OSCILLATING between the weapon and a
