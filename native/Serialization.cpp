@@ -650,6 +650,7 @@ namespace MFO {
         // clears it even when this module believes it holds nothing, because
         // after a revert that belief is worth nothing (#16).
         Packages::ReleaseAll("revert");
+        Packages::ClearTransientState();  // #53 heartbeat counters + retreat hold are session-scoped like every sibling
         Papyrus::ClearTransientState();   // counters are session-scoped like every sibling
         TradeBridge::ClearTransientState();   // #21: drop pending trade orders -- their
                                               // actor/chest handles are this-session only,

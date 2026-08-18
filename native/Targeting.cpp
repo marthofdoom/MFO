@@ -100,6 +100,21 @@ namespace MFO::Targeting {
 
                 rt.currentCombatTarget = wanted;
                 if (auto* cc = rt.combatController) {
+                    // AE +8 LAYOUT GUARD (§0.29, CLAUDE.md #4). This runs on the
+                    // combat thread; both handles must sit BELOW the 0x68 AE
+                    // divergence (the pinned header inserts an AE-only BSSpinLock
+                    // at 0x68, so every member past it is +8 at runtime and a
+                    // header-declared offset would be WRONG). targetHandle is at
+                    // 0x2C and previousTargetHandle at 0x30 today (ENGINE_NOTES
+                    // §310) -- the asserts are the tripwire against a CommonLib
+                    // bump moving either past 0x68, exactly as CasterConsent /
+                    // CombatStyle assert every member they touch.
+                    static_assert(offsetof(RE::CombatController, targetHandle) < 0x68,
+                                  "targetHandle is past the AE layout divergence point (0x68) "
+                                  "-- its compiled offset is WRONG on AE runtimes");
+                    static_assert(offsetof(RE::CombatController, previousTargetHandle) < 0x68,
+                                  "previousTargetHandle is past the AE layout divergence point "
+                                  "(0x68) -- its compiled offset is WRONG on AE runtimes");
                     cc->previousTargetHandle = cc->targetHandle;
                     cc->targetHandle = wanted;
                 }
