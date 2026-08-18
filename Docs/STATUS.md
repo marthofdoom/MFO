@@ -8,10 +8,24 @@
 >
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶▶ RESUME HERE (2026-08-18 PM) — v1.0.65 RC field-fix batch MERGED + CI-GREEN (`1fad7e5`); NOT yet cut.**
-> - **⛔ STILL HOLDING the cut.** The 6 RC field issues marth found on the deck build are ALL FIXED,
->   merged to main, and CI-GREEN (`1fad7e5`, run 32181118780). Re-cut ONLY after marth field-re-probes a
->   FRESH deck build of `1fad7e5` AND says go. **The 6 fixes** (3 worktree agents, disjoint files):
+> **▶▶ RESUME HERE (2026-08-18 PM) — v1.0.65 RC field-fix batch MERGED + CI-GREEN (`6831959`); NOT yet cut.**
+> - **⛔ STILL HOLDING the cut.** The 6 RC field issues + 2 follow-up field reports are ALL FIXED, merged
+>   to main, CI-GREEN, and DEPLOYED to the deck (`6831959`, sha `bd2592a4`). Re-cut ONLY after marth
+>   field-re-probes AND says go. **Two follow-ups on top of the 6 (`1fad7e5`):**
+>   (A) **`8a369d5` — logistics "Ally HP below" now heals the PLAYER.** The ally SELECTOR (`PickAlly`)
+>   already included the player, but the OOC cast dispatch routed a beneficial `cast_target` onto a
+>   resolved ally through `Packages::CastAt` (the FOE-aimed alias-0 package), so it never landed. Fix:
+>   `immediate = !selfPkg && !castAtFoe` where `castAtFoe = cast_target && hostile spell && foe target`;
+>   beneficial/ally casts now DIRECT-apply (CastSpellImmediate) like combat `CastOn`/`CastAuto`. Combat
+>   had no hole. (`Logistics.cpp`.)
+>   (B) **`6831959` — off-role weapons: no combat shedding, DROPPED on the floor after battle (no player
+>   handoff).** `ShedOffRoleWeapon` was firing during `IsInCombat` flaps mid-fight and HANDING the player
+>   the weapon. Now: a 3s post-battle dwell (`g_lastCombatSeen`, stamped by `Logistics::NoteInCombat` from
+>   Scheduler's in-combat branch — resets on any real combat frame so a lull can't mature it) gates it;
+>   ALL off-role weapons `DropObject` on the floor via `MainThread::Post` (FormID-capture, VR skips+logs);
+>   the RemoveItem-to-player handoff + "hands you a X" toast are GONE; no INI knob. Guards kept (never
+>   disarm, skip stock/creature/socketed/excluded). marth: MFO never looted the mace (weapon loot is
+>   upgrade-only in the dominant class) — vanilla follower AI grabbed it; MFO now just disposes of it. **The 6 fixes** (3 worktree agents, disjoint files):
 >   (1) **prog prereq `==`→`>=`** — `OwnsPerkForm` walks `nextPerk` forward so owning a HIGHER perk rank
 >   satisfies a lower-rank prereq (`ProgAllocator.cpp`); (2) **AUTO heal fanned to full-HP members** —
 >   effect-driven `SpellHealsHealth`/`IsHealEffect` gate so ANY health-restoring spell is filtered by
