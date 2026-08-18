@@ -22,6 +22,14 @@ namespace MFO::Eval {
         // for self/player rules. Carried as a HANDLE, never a pointer -- the
         // scheduler acts on it after the evaluator returns (#2).
         RE::ActorHandle target;
+
+        // #2: the FIRING rule's own condition, carried verbatim so Actuation can
+        // re-apply the rule's status requirement to an AUTO beneficial fan-out --
+        // a "Self: Health < 30% -> Heal (Auto)" then heals only allies under 30%,
+        // not everyone below full. Runtime-only, never serialized (Choice is the
+        // evaluator's per-tick output, not save state). Empty/0 when no rule matched.
+        std::string conditionOpcode;
+        float       conditionParam = 0.0f;
     };
 
     // Scan ONE of a_follower's tables top-down; first true condition wins.

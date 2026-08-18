@@ -123,6 +123,24 @@ namespace MFO::Config {
     // more eagerly. Pure-burst spells always fire; pure-DoT spells wait.
     inline std::atomic<float> g_dotRecastBurstRatio{ 1.0f };
 
+    // BENEFICIAL DURATION recast suppression (fix #3/#6). A beneficial DURATION
+    // buff (Candlelight/Magelight and other lights, wards, fortifies) must NOT be
+    // re-cast until it is near real expiry -- the field bug was Magelight
+    // respamming every ~2 s while magicka lasted (a light applied via
+    // CastSpellImmediate never registers HasMagicEffect, so the already-active
+    // gate never caught it). MFO suppresses re-firing that spell on that caster
+    // until the elapsed time reaches the spell's own authored duration x a
+    // JITTERED fraction, so the recast beat lands near true expiry AND looks
+    // human (never a fixed cadence). INSTANT beneficial spells (duration 0, e.g.
+    // instant heals) are EXEMPT -- they legitimately re-fire on demand.
+    //   window = authoredDuration * fBeneficialRecastFrac * (1 +/- jitter),
+    //   jitter uniform in [-fBeneficialRecastJitter, +fBeneficialRecastJitter].
+    // 0.85 fires the recast at ~85% of the buff's life (a small safety margin so
+    // it never lapses); the +/-20% jitter breaks the robotic cadence. Additive to
+    // fCastCooldown, not a replacement.
+    inline std::atomic<float> g_beneficialRecastFrac{ 0.85f };
+    inline std::atomic<float> g_beneficialRecastJitter{ 0.20f };
+
     // PACKAGE ACTUATION (M9, DESIGN §4.5c). Fill MFO_CommandQuest's alias 0
     // with a follower so the engine instances MFO_CastPackage onto them --
     // vanilla's own follower mechanism, pointed at one action.
