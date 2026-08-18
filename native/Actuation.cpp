@@ -1125,33 +1125,37 @@ namespace MFO::Actuation {
         g_autoCast.clear();   // AUTO fan-out pacing is session-scoped too
     }
 
-    namespace {
-        // AUTO TARGET INFERENCE for act.cast_target (marth). The board's default
-        // target pick ("Auto", Subject::Self on a cast-target row) no longer just
-        // falls back to the player -- it INFERS the set from the spell's nature
-        // and fans the cast out, one direct effect-application per member, each
-        // paying the spell's full magicka cost (N targets = N x cost), reserve-
-        // floored and paced by fCastCooldown so it neither thrashes nor spikes.
-        // A MANUAL pick (Player / Nearest ally / a specific follower) or a
-        // selector-chosen target still takes the single-target CastOn path
-        // unchanged -- AUTO only fills the "nobody obvious" default.
-        //
-        // ROUTING (classification via CasterConsent::ClassifySpell + delivery):
-        //   hostile (Offense)              -> every nearby enemy (own combat group, chase radius)
-        //   beneficial + self-delivery     -> SELF (a self-delivery buff/ward/flesh cannot be
-        //                                     placed on an ally) -> CastOn(self) -> CastSelfDirect
-        //   beneficial + other-deliverable -> every party member who NEEDS it (injured for a
-        //                                     heal, shared radius; the player + active teammates)
-        //
-        // The fan-out uses the DIRECT effect applier (ApplyEffectFromTo), the same
-        // proven hands-free mechanism as the self-cast, rather than the foe cast
-        // PACKAGE: the package is a single-holder (one MFO_CastPackage on alias 0,
-        // MAP §2) and cannot address N targets at once, and it is declined outright
-        // on package-locked custom followers. Direct application costs magicka per
-        // cast, touches only actors (follower-agnostic), and needs no animation
-        // (deferred project-wide). Friendly fire is structurally impossible: the
-        // effect is placed on the CHOSEN actor, never launched as a projectile.
-        Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID) {
+    // AUTO TARGET INFERENCE for act.cast_target (marth). The board's default
+    // target pick ("Auto", Subject::Self on a cast-target row) no longer just
+    // falls back to the player -- it INFERS the set from the spell's nature
+    // and fans the cast out, one direct effect-application per member, each
+    // paying the spell's full magicka cost (N targets = N x cost), reserve-
+    // floored and paced by fCastCooldown so it neither thrashes nor spikes.
+    // A MANUAL pick (Player / Nearest ally / a specific follower) or a
+    // selector-chosen target still takes the single-target CastOn path
+    // unchanged -- AUTO only fills the "nobody obvious" default.
+    //
+    // PUBLIC: called from BOTH Fire (combat) and Logistics::ServiceFollower (out
+    // of combat), so an authored "always -> Candlelight (Auto)" lights the
+    // follower while exploring, and OOC heals/buffs reach the party. Out of
+    // combat the hostile branch finds no combat group and NoOps cleanly.
+    //
+    // ROUTING (classification via CasterConsent::ClassifySpell + delivery):
+    //   hostile (Offense)              -> every nearby enemy (own combat group, chase radius)
+    //   beneficial + self-delivery     -> SELF (a self-delivery buff/ward/flesh cannot be
+    //                                     placed on an ally) -> CastSelfDirect, gated bCastSelf
+    //   beneficial + other-deliverable -> every party member who NEEDS it (injured for a
+    //                                     heal, shared radius; the player + active teammates)
+    //
+    // The fan-out uses the DIRECT effect applier (ApplyEffectFromTo), the same
+    // proven hands-free mechanism as the self-cast, rather than the foe cast
+    // PACKAGE: the package is a single-holder (one MFO_CastPackage on alias 0,
+    // MAP §2) and cannot address N targets at once, and it is declined outright
+    // on package-locked custom followers. Direct application costs magicka per
+    // cast, touches only actors (follower-agnostic), and needs no animation
+    // (deferred project-wide). Friendly fire is structurally impossible: the
+    // effect is placed on the CHOSEN actor, never launched as a projectile.
+    Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID) {
             // AE-only, mirroring CastOn / CastSelfDirect (the SE crash path #67).
             if (!REL::Module::IsAE())
                 return { Result::FailedOther,
@@ -1168,10 +1172,16 @@ namespace MFO::Actuation {
 
             // BENEFICIAL + SELF-DELIVERY collapses to SELF. A self-delivery buff
             // (flesh / most wards / candlelight) cannot be placed on an ally, so
-            // AUTO routes it to the proven direct self path exactly as a manual
-            // Cast-on-self would (CastOn -> CastSelfDirect, gated bCastSelf).
-            if (!hostile && delivery == RE::MagicSystem::Delivery::kSelf)
-                return CastOn(a_follower, a_spellID, a_follower);
+            // AUTO routes it to the proven direct self path -- CastSelfDirect,
+            // gated bCastSelf, exactly as a manual Cast-on-self would. Called
+            // DIRECTLY (not via CastOn) so the OOC caller never runs CastOn's
+            // combat equip/AI-grace machinery, which does not fire out of combat.
+            if (!hostile && delivery == RE::MagicSystem::Delivery::kSelf) {
+                if (Config::g_castSelf.load() && CastSelfDirect(a_follower, spell))
+                    return { Result::Fired, "auto-cast self-buff (direct trigger)" };
+                return { Result::FailedOther,
+                         "auto-cast self-buff not fired (bCastSelf off / unaffordable / off-AE)", true };
+            }
 
             // PACING: one broadcast per fCastCooldown per follower. The rule keeps
             // winning every tick; between cooldowns AUTO is a TRANSPARENT NoOp so
@@ -1258,7 +1268,6 @@ namespace MFO::Actuation {
                          spell->GetName() ? spell->GetName() : "?", a_spellID,
                          fired, skipped, radius, cost);
             return { Result::Fired, "auto-cast fan-out" };
-        }
     }
 
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice) {

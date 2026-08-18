@@ -3907,11 +3907,29 @@ namespace MFO::Logistics {
                 if (op == Vocab::kActCastPlayer) {
                     tgt = RE::PlayerCharacter::GetSingleton();
                 } else if (op == Vocab::kActCastTarget) {
+                    // AUTO (marth): the board's default "Auto" pick (Subject::Self,
+                    // no subject actor, no selector target) infers the set from the
+                    // spell. Out of combat only the BENEFICIAL branches have targets
+                    // -- a self-delivery buff (Candlelight) -> the caster, an aimed
+                    // heal/buff -> injured/uncovered party -- and the hostile branch
+                    // finds no combat group and NoOps. Actuation::CastAuto owns the
+                    // whole routing/cadence/magicka/already-active guard, so run it
+                    // and fall through (fired -> stop this tick; NoOp -> next rule).
+                    auto p = choice.target.get();
+                    const bool autoPick =
+                        choice.subjectActorForm == 0 &&
+                        static_cast<Vocab::Subject>(choice.subject) == Vocab::Subject::Self &&
+                        !p.get();
+                    if (autoPick) {
+                        acted = (Actuation::CastAuto(a_follower, sp->GetFormID()).result ==
+                                 Actuation::Result::Fired);
+                        if (acted) break;
+                        start = choice.ruleIndex + 1; continue;
+                    }
                     // Foe selectors never fill the target out of combat -- an empty
                     // handle must SKIP, not fall back to self (a package cast at
                     // self is not barred and would fire a hostile spell at the
                     // follower). cast on self/player is what the immediate route is for.
-                    auto p = choice.target.get();
                     if (!p.get()) { start = choice.ruleIndex + 1; continue; }
                     tgt = p.get();
                 }

@@ -242,16 +242,21 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   concentration fork → equip + **AI-first grace** (`:461`, follower's own AI casts
   first) → on miss `ForceCast` (`:110`) via `Packages::CastAt`. Off-AE the whole
   path declines transparently (#67) so vanilla AI keeps casting.
-- `CastAuto` (anon, before `Fire`) — AUTO target inference for `act.cast_target`,
+- `CastAuto` (PUBLIC, before `Fire`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
-  subject actor, no selector target). Classifies via `CasterConsent::ClassifySpell`
-  + `GetDelivery`: hostile → every foe in the combat group within `Confidence::
-  ChaseRadius`; beneficial self-delivery → `CastOn(self)` (→ `CastSelfDirect`);
-  beneficial other-delivery → party (active + player, `g_sharedRadius`, injured-only
-  for heals). Fans out via `ApplyEffectFromTo` (the generalised self-cast applier,
-  effect + magicka only — NOT the single-holder foe package), per-cast magicka with
-  reserve floor, one broadcast per `fCastCooldown` (`g_autoCast`, cleared in
-  `ClearSelfCasts`). A manual target pick keeps the single-target `CastOn` path.
+  subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
+  `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
+  (`Logistics.cpp:~3909`) — the logistics `cast_target` handler used to SKIP an
+  empty target, dropping AUTO out of combat (the field-test miss). Classifies via
+  `CasterConsent::ClassifySpell` + `GetDelivery`: hostile → every foe in the combat
+  group within `Confidence::ChaseRadius` (OOC: no group → NoOp); beneficial
+  self-delivery → `CastSelfDirect` directly (gated `bCastSelf`, NOT via `CastOn` so
+  the OOC caller never runs combat equip/grace machinery); beneficial other-delivery
+  → party (active + player, `g_sharedRadius`, injured-only for heals). Fans out via
+  `ApplyEffectFromTo` (the generalised self-cast applier, effect + magicka only —
+  NOT the single-holder foe package), per-cast magicka with reserve floor, one
+  broadcast per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). A manual
+  target pick keeps the single-target `CastOn` path.
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:28`), pumps packages
