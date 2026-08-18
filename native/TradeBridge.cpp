@@ -5,7 +5,9 @@
 #include "Config.h"
 #include "ItemCatalog.h"
 #include "Logistics.h"   // Logistics::PotionRestores -- the SAME classifier CountPotions uses
+#include "Vocabulary.h"  // Vocab::IsCastableSpell -- the one gate for what counts as a spell
 #include <mutex>
+#include <unordered_set>
 
 namespace MFO::TradeBridge {
 
@@ -22,6 +24,10 @@ namespace MFO::TradeBridge {
             std::int32_t         budget = 0; // follower purse; PlanBuy spends it down
             std::int32_t         buySpent = 0;
             bool                 probeOnly = true;
+            // Taught-spell FormIDs the follower ALREADY carries a tome for (collected
+            // worker-side). PlanBuy skips buying a second copy before the first is
+            // learned. Empty unless bFollowerBuySpells.
+            std::unordered_set<RE::FormID> ownedTomeSpells;
         };
 
         std::mutex                                    g_mtx;
@@ -70,7 +76,54 @@ namespace MFO::TradeBridge {
                 // vendor ammo still classifies and gets bought (P5).
                 return Logistics::AmmoIsBolt(am) ? NeedCat::kBolts : NeedCat::kArrows;
             }
+            // SPELL TOME (town-update follower-buy-spells). Form-only classification;
+            // the per-FOLLOWER gate (skill tier / magicka / already-known) is applied
+            // in PlanBuy where the follower handle is in hand. IGNORED entirely unless
+            // the scan actually asked for kSpellTome (feature gated in the econ scan).
+            if (auto* book = a_form->As<RE::TESObjectBOOK>()) {
+                if (book->TeachesSpell()) {
+                    auto* sp = book->data.teaches.spell;
+                    if (sp && MFO::Vocab::IsCastableSpell(sp)) return NeedCat::kSpellTome;
+                }
+            }
             return -1;
+        }
+
+        // Per-FOLLOWER spell-tome gate (Parts 1+3 of the town-update spec). True only
+        // if this follower should actually acquire THIS tome: it teaches a castable
+        // spell the follower does not already know or carry, the follower's OWN magic
+        // skill meets the spell's minimum-skill tier (so a skilled mage follower can
+        // buy a tier the player's skill-gated menu might have hidden -- MFO buys via
+        // RemoveItem, not the barter menu), and the follower's magicka pool covers a
+        // single cast. Gold is bounded separately by the shared purse in PlanBuy.
+        bool FollowerCanUseTome(RE::Actor* a_fol, RE::TESForm* a_form,
+                                const std::unordered_set<RE::FormID>& a_owned) {
+            if (!a_fol || !a_form) return false;
+            auto* book = a_form->As<RE::TESObjectBOOK>();
+            if (!book || !book->TeachesSpell()) return false;
+            auto* sp = book->data.teaches.spell;
+            if (!sp || !MFO::Vocab::IsCastableSpell(sp)) return false;
+            if (a_fol->HasSpell(sp))              return false;   // already knows it
+            if (a_owned.count(sp->GetFormID()))   return false;   // already carries a tome for it
+            auto* avo = a_fol->AsActorValueOwner();
+            if (!avo) return false;
+            // MAGICKA: pool must cover at least one cast (else uncastable -> pointless).
+            const float cost = sp->CalculateMagickaCost(a_fol);
+            const float maxMag = avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
+                                 a_fol->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
+                                                              RE::ActorValue::kMagicka);
+            if (cost > 0.0f && maxMag < cost) return false;
+            // SKILL TIER: the spell's associated school skill on the FOLLOWER must meet
+            // the effect's minimum-skill level (Novice 0 / Apprentice 25 / Adept 50 /
+            // Expert 75 / Master 100). +0.5 guards float slop on the base AV read.
+            if (auto* eff = sp->GetAVEffect()) {
+                const int          minSkill = eff->GetMinimumSkillLevel();
+                const RE::ActorValue school = sp->GetAssociatedSkill();
+                if (minSkill > 0 && school != RE::ActorValue::kNone &&
+                    avo->GetActorValue(school) + 0.5f < static_cast<float>(minSkill))
+                    return false;
+            }
+            return true;
         }
 
         // ── Registered natives (called by MFO_Trade, on the VM thread) ────────
@@ -131,6 +184,10 @@ namespace MFO::TradeBridge {
             auto* o = Find(a_token);
             if (!o || o->needs.empty()) return plan;
 
+            // The follower is needed to gate spell-tome candidates (its own skill /
+            // magicka / already-known). A null handle just skips the tome gate.
+            RE::Actor* const fol = o->follower.get().get();
+
             // Candidate stock lines of a needed category, value-desc.
             struct Cand { std::size_t idx; std::int32_t kind, value, avail; };
             std::vector<Cand> cands;
@@ -141,6 +198,12 @@ namespace MFO::TradeBridge {
                 if (Catalog::IsExcluded(f->GetFormID())) continue;
                 const int kind = ClassifyBuy(f);
                 if (kind < 0) continue;
+                // SPELL TOME: only a candidate if THIS follower should actually
+                // acquire it (Parts 1+3). Filters the tome to the follower's skill,
+                // magicka, and not-already-known/carried -- so a warrior never buys a
+                // Master tome and a mage never buys a spell it can't cast.
+                if (kind == NeedCat::kSpellTome &&
+                    !FollowerCanUseTome(fol, f, o->ownedTomeSpells)) continue;
                 const int val = BaseValue(f);
                 if (val <= 0) continue;   // free/valueless stock isn't a real buy
                 cands.push_back(Cand{ i, kind, val, avail });
@@ -148,13 +211,27 @@ namespace MFO::TradeBridge {
             std::sort(cands.begin(), cands.end(),
                       [](const Cand& a, const Cand& b) { return a.value > b.value; });
 
+            // Within one plan, never buy two tomes that teach the SAME spell (two
+            // vendor lines of the same book, or two books of one spell).
+            std::unordered_set<RE::FormID> plannedTomeSpells;
+
             for (const auto& c : cands) {
                 if (o->budget < c.value) continue;   // can't afford even one
                 // Remaining quota for this category.
                 NeedCat* need = nullptr;
                 for (auto& n : o->needs) if (n.kind == c.kind && n.quota > 0) { need = &n; break; }
                 if (!need) continue;
+                RE::FormID tomeSpell = 0;
+                if (c.kind == NeedCat::kSpellTome) {
+                    // One tome grants the spell for good -- never stock duplicates,
+                    // and dedup same-spell lines within this plan.
+                    auto* bk = a_forms[c.idx]->As<RE::TESObjectBOOK>();
+                    auto* sp = bk && bk->TeachesSpell() ? bk->data.teaches.spell : nullptr;
+                    tomeSpell = sp ? sp->GetFormID() : 0;
+                    if (tomeSpell && plannedTomeSpells.count(tomeSpell)) continue;
+                }
                 int qty = c.avail;
+                if (c.kind == NeedCat::kSpellTome) qty = 1;   // one copy is enough
                 if (qty > need->quota)              qty = need->quota;
                 if (qty > o->budget / c.value)      qty = o->budget / c.value;
                 if (qty <= 0) continue;
@@ -162,6 +239,7 @@ namespace MFO::TradeBridge {
                 need->quota  -= qty;
                 o->budget    -= qty * c.value;
                 o->buySpent  += qty * c.value;
+                if (tomeSpell) plannedTomeSpells.insert(tomeSpell);
             }
             return plan;
         }
@@ -223,7 +301,8 @@ namespace MFO::TradeBridge {
     bool VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
-                     std::int32_t a_budget) {
+                     std::int32_t a_budget,
+                     std::unordered_set<RE::FormID> a_ownedTomeSpells) {
         auto* q = Forms::g_tradeQuest;
         if (!q || !q->IsRunning()) return false;
         if (!a_follower || !a_chest)  return false;
@@ -261,6 +340,7 @@ namespace MFO::TradeBridge {
             o.needs     = std::move(a_needs);
             o.budget    = a_budget;
             o.probeOnly = !Config::g_economy.load();
+            o.ownedTomeSpells = std::move(a_ownedTomeSpells);
             g_orders[token] = std::move(o);
         }
         if (!Papyrus::DispatchTradeRun(q, token)) {

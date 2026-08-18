@@ -3111,6 +3111,12 @@ namespace MFO::Logistics {
 
                 std::vector<TradeBridge::SellRow> sell;
                 int purse = 0;
+                // TOWN-UPDATE follower-buy-spells (gated dark). Collect the taught-
+                // spell IDs of any tome the follower ALREADY carries, in this same
+                // worker-safe GetInventory pass, so the buy plan never re-buys a tome
+                // it hasn't learned yet. Empty unless bFollowerBuySpells.
+                const bool buySpells = Config::g_followerBuySpells.load();
+                std::unordered_set<RE::FormID> ownedTomeSpells;
                 // A MEO-socketed instance carries an ExtraUniqueID -- NEVER sell one:
                 // the sale discards the follower's socketed gems with the weapon
                 // (marth). Worn gear is already barred below; this catches an UNWORN
@@ -3128,6 +3134,9 @@ namespace MFO::Logistics {
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
+                    if (buySpells)
+                        if (auto* bk = obj->As<RE::TESObjectBOOK>(); bk && bk->TeachesSpell())
+                            if (auto* sp = bk->data.teaches.spell) ownedTomeSpells.insert(sp->GetFormID());
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
@@ -3174,12 +3183,32 @@ namespace MFO::Logistics {
                     else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
                 }
 
+                // SPELL-TOME NEED (town-update, gated dark). A caster follower browses
+                // for tomes suited to its OWN skill/magicka/gold -- PlanBuy applies the
+                // per-tome gate (FollowerCanUseTome). Caster heuristic: at least one
+                // magic school at Apprentice (25) so a pure warrior never buys tomes;
+                // the quota caps how many distinct tomes one trade may acquire.
+                if (buySpells) {
+                    constexpr std::int32_t kMaxTomesPerTrade = 2;
+                    float bestSchool = 0.0f;
+                    if (auto* avo = a_follower->AsActorValueOwner()) {
+                        for (auto av : { RE::ActorValue::kAlteration, RE::ActorValue::kConjuration,
+                                         RE::ActorValue::kDestruction, RE::ActorValue::kIllusion,
+                                         RE::ActorValue::kRestoration })
+                            bestSchool = std::max(bestSchool, avo->GetActorValue(av));
+                    }
+                    if (bestSchool >= 25.0f)
+                        needs.push_back({ static_cast<std::int32_t>(TradeBridge::NeedCat::kSpellTome),
+                                          kMaxTomesPerTrade });
+                }
+
                 // Only burn the cooldown + stop scanning if a trade ACTUALLY
                 // dispatched (Fable audit #8): a chest already busy with another
                 // follower's order, or the bridge being down, must not cost this
                 // follower its 20 s window -- try the next vendor / next scan.
                 if (TradeBridge::VendorTrade(a_follower, vendor, chest,
-                                             std::move(sell), std::move(needs), purse)) {
+                                             std::move(sell), std::move(needs), purse,
+                                             std::move(ownedTomeSpells))) {
                     g_econTrade[fid] = a_now + std::chrono::seconds(20);
                     break;
                 }

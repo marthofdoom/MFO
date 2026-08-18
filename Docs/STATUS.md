@@ -33,8 +33,16 @@
 >     (4) new **INVARIANT #74** (BSJobs-vs-main distinct threads, mutual exclusion UNPROVEN → off-worker
 >     reads use the Wave-1 mirror); (5) docs refresh (CLAUDE/MAP co-save 4 records/PRGN v4/FWPN v1,
 >     Wave-1 API, cast semantics, Refresh-on-worker, Packages line drift).
-> - **STILL PENDING before the v1.0.65 cut:** (a) **vendor spell-tome feature** (buy teachable spell
->   books from merchants — the field-notes ask; not yet built); (b) **deck field test** of the whole
+> - **STILL PENDING before the v1.0.65 cut:** (a) **vendor spell-tome feature** — FIRST PIECE BUILT on a
+>   town-update worktree branch (gated dark behind new INI `bFollowerBuySpells`, default OFF; NOT tagged,
+>   NOT in the v1.0.65 cut): follower auto-BUYS tomes suited to its own skill/magicka/gold via the econ
+>   bridge (`FollowerCanUseTome` gate in `TradeBridge::PlanBuy`, `NeedCat::kSpellTome`), the board
+>   teach-path now also reads/consumes tomes from the FOLLOWER's own inventory, and the buy gate is
+>   evaluated against the FOLLOWER's magic skill (Part-1 "unlock on follower skill" — see the report's
+>   scope note: the merchant's SHOWN stock is engine-side/player-gated, MFO buys from what's physically in
+>   the chest). Needs review + deck field test with `bEconomy`+`bFollowerBuySpells` ON. Design knobs to
+>   confirm with marth: tomes-per-trade cap (2), Apprentice-25 caster gate, budget = pre-sell purse.
+>   (b) **deck field test** of the whole
 >   batch (self-cast + AUTO live, `bCastSelf`/AUTO on); (c) **cut + tag** v1.0.65 + Nexus bbcode
 >   (still owed 1.0.62→65) + changelog. Saves are VERIFIED SAFE — no co-save regression in the batch.
 > - **DESIGN DECISIONS AWAITING MARTH (do not decide unilaterally):**

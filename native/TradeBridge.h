@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include <unordered_set>
 
 // #21 ECON BRIDGE -- native side (Fable's ECON_PAPYRUS_PLAN).
 //
@@ -32,7 +33,11 @@ namespace MFO::TradeBridge {
     // One buy need -- a supply category the follower is below threshold on. quota
     // is how many MORE to acquire. PlanBuy matches enumerated stock to these.
     struct NeedCat {
-        enum Kind : std::int32_t { kPotHealth = 0, kPotStamina, kPotMagicka, kArrows, kBolts };
+        // APPEND-ONLY (kSpellTome added for the town-update follower-buy-spells
+        // feature). This enum is native-internal -- carried in the token'd order
+        // between the econ scan and PlanBuy, NEVER crosses the Papyrus wire and is
+        // NOT serialized -- so appending a kind is free (no save/script contract).
+        enum Kind : std::int32_t { kPotHealth = 0, kPotStamina, kPotMagicka, kArrows, kBolts, kSpellTome };
         std::int32_t kind  = 0;
         std::int32_t quota = 0;
     };
@@ -48,10 +53,15 @@ namespace MFO::TradeBridge {
     // Returns true only if an order was actually dispatched. False = the bridge is
     // unavailable, the chest already has a live order (per-chest guard), or the
     // dispatch failed -- so the caller must NOT burn its trade cooldown.
+    // a_ownedTomeSpells: taught-spell FormIDs the follower ALREADY carries a tome
+    // for -- collected worker-side in the econ scan (the follower's own inventory
+    // read is safe there), so PlanBuy never re-buys a tome the follower hasn't
+    // learned yet. Empty when the buy-spells feature is off.
     bool VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
-                     std::int32_t a_budget);
+                     std::int32_t a_budget,
+                     std::unordered_set<RE::FormID> a_ownedTomeSpells = {});
 
     // Drop any pending orders (revert/quit). Token map is transient state.
     void ClearTransientState();
