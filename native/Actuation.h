@@ -57,6 +57,18 @@ namespace MFO::Actuation {
     // rest of Actuation. Callers: CastOn (combat) + Logistics (out-of-combat).
     bool CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
+    // Per-tick reconcile for the forced self-cast channels: drives the caster
+    // into the cast state once the async equip lands (the sustained animation),
+    // and RELEASES a channel when its rule stops re-firing -- stopping the
+    // effect VFX, cutting the channel, unequipping, and giving the weapon back.
+    // Worker context; marshals actor mutations to the main thread. Call once per
+    // tick, right before Loadout::Tick (so the stow-hold is set before Tick runs).
+    void SelfCastReconcile();
+
+    // Drop every self-cast channel (revert/load). Clears the Loadout stow-holds;
+    // no engine call -- the world is being replaced (mirrors ClearForcedWeapons).
+    void ClearSelfCasts();
+
     // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired
     // weapon is FORCE-equipped (ActorEquipManager forceEquip=true = the engine's

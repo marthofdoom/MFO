@@ -188,15 +188,23 @@ releases **by eviction** with a non-actor XMarker.
   TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
   EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
   followers (Lucien, prio-80 quest). So self routes through
-  **`Actuation::CastSelfDirect`** (`Actuation.cpp`, public): equip via
-  `Loadout::Prepare` → drive the caster's own state machine (`RequestCastImpl`) for
-  the ANIMATION (§0.13: the only animated path) → `CastSpellImmediate` + hand-deduct
-  for the effect + magicka (§5.3). Touches only the ACTOR, no alias → **follower-
-  agnostic** (vanilla AND custom-framework). ONE-SHOT + cooldown-paced → the exact-
-  bounding invariant holds with no held channel to leak; re-casts while the rule
-  wins, stops when it goes false. Gated behind `Config::g_castSelf` (bCastSelf,
-  default OFF). Callers: `CastOn` self-intercept (combat, BEFORE the concentration
-  fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
+  **`Actuation::CastSelfDirect`** (`Actuation.cpp`, public) — a per-follower CHANNEL,
+  not a one-shot (registry `g_selfCast`, worker-serial; `SelfCastReconcile` ticks it
+  from `Diagnostics` right BEFORE `Loadout::Tick`; `ClearSelfCasts` on revert):
+  FIRE equips via `Loadout::Prepare` + `Loadout::HoldStow` (blocks Tick's ~500 ms
+  weapon-restore that amputated the animation) and applies the effect + magicka
+  each paced fire (`ApplySelfEffect`, main thread, dispel-then-apply so the VFX
+  shader can't stack). RECONCILE DRIVES the caster into the cast state ONCE, the
+  moment the async equip lands (`currentSpell==spell`) — entering the state is what
+  plays the animation IN FULL and stops the AI unequipping mid-cast (no per-tick
+  re-equip → no thrash); it drives NO package/PLDT so the follower keeps moving
+  (§0.27). RELEASE when the rule stops re-firing (or a 30 s safety cap): `Dispel`
+  the effect VFX + `InterruptCast` + `DeselectSpell` + sheathe + `Loadout::Restore`
+  — the exact-bounding + no-stuck-VFX teardown, also covering rule-disabled/
+  condition-false. Touches only the ACTOR, no alias → **follower-agnostic** (vanilla
+  AND custom-framework; deck-proven on Lucien). Gated behind `Config::g_castSelf`
+  (bCastSelf, default OFF). Callers: `CastOn` self-intercept (combat, BEFORE the
+  concentration fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
   `act.cast_self` branch (out-of-combat). The Logistics immediate path still SKIPS
   concentration spells legibly (self-gate-off / player) — instant-apply has no
   channel and stuck forever (deck 2026-08-17).

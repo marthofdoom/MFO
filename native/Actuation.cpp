@@ -877,33 +877,106 @@ namespace MFO::Actuation {
     }
 
     // ── FORCED SELF-CAST: the UNIVERSAL direct trigger (SPEC-self-cast-forced) ──
-    // The MFO_CastPackageSelf alias route EQUIPS the spell but never TRIGGERS
-    // the cast (deck 2026-08-17: equip only, no animation, no magicka -- a
-    // no-QNAM/t6 package can deliver a package but the QNAM+target-alias linkage
-    // is what drives the engine to EXECUTE the cast), and it is declined
-    // outright on package-locked custom followers (Lucien, prio-80 framework).
-    // So self-cast bypasses packages: equip, drive the caster's OWN state
-    // machine for the animation (§0.13 -- the only animated path; CastSpellImmediate
-    // is silent), and apply the effect + spend magicka through CastSpellImmediate
-    // (the shipped §5.3 verb). Touches only the ACTOR, never an alias, so it is
-    // follower-agnostic. ONE-SHOT: no held channel to leak (the exact-bounding
-    // invariant is met trivially -- each call is a bounded action); the caller
-    // paces re-fires while the rule wins and stops when it goes false.
+    // The MFO_CastPackageSelf alias route EQUIPS the spell but never TRIGGERS the
+    // cast, and is declined outright on package-locked custom followers (Lucien).
+    // So self-cast bypasses packages and drives the ACTOR directly -- follower-
+    // agnostic. It is a proper CHANNEL, not a one-shot, tracked per follower:
+    //
+    //   FIRE (CastSelfDirect, paced by the caller's cooldown):
+    //     * first fire  -> equip the spell (Loadout stows the weapon) and
+    //       HoldStow so Tick can't auto-restore it ~500 ms in (the amputation
+    //       marth saw). Register the channel.
+    //     * every fire  -> apply the effect + spend magicka (§5.3), refreshing
+    //       the VFX (dispel-then-apply so the shader never stacks across fires).
+    //   RECONCILE (each tick, SelfCastReconcile):
+    //     * DRIVE ONCE, the moment the async equip lands (currentSpell == spell)
+    //       -- entering the caster's cast state is what makes the animation play
+    //       IN FULL and stops the AI unequipping mid-cast. Driving on the FIRST
+    //       fire read currentSpell before the equip settled -> the field's
+    //       0->0. No per-tick re-equip -> no thrash / erratic animation.
+    //     * RELEASE when the rule stops re-firing (or a safety cap): stop the
+    //       VFX (Dispel), InterruptCast the channel, DeselectSpell, sheathe, and
+    //       give the weapon back. This is the exact-bounding + no-stuck-VFX
+    //       teardown, and it also fires on rule-disabled / condition-false
+    //       (the rule simply stops firing -> the entry goes stale).
+    namespace {
+        using SelfClock = std::chrono::steady_clock;
+        struct SelfCastState {
+            RE::FormID            spell = 0;
+            bool                  driven = false;   // caster driven into the cast state yet?
+            SelfClock::time_point started{};
+            SelfClock::time_point lastFired{};
+        };
+        std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
+
+        // Stop a spell's lingering effect VFX -- the concentration hit-shader
+        // that never terminates when the spell is applied one-shot (deck
+        // 2026-08-17: the healing glow ran on after the pose ended). Main thread.
+        void DispelSpellEffectsOn(RE::Actor* a_actor, RE::FormID a_spellID) {
+            auto* mt = a_actor ? a_actor->AsMagicTarget() : nullptr;
+            if (!mt) return;
+            auto* list = mt->GetActiveEffectList();
+            if (!list) return;
+            for (auto* ae : *list)
+                if (ae && ae->spell && ae->spell->GetFormID() == a_spellID)
+                    ae->Dispel(true);
+        }
+
+        // Apply the effect + spend magicka for ONE fire (main thread). §5.3:
+        // CastSpellImmediate spends nothing (§0.22), so deduct the real cost.
+        // Dispel any prior instance of THIS spell first so the shader can't stack.
+        void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID) {
+            MainThread::Post([a_id, a_spellID] {
+                auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_id);
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+                if (!a || !sp) return;
+                auto*       avo    = a->AsActorValueOwner();
+                const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                DispelSpellEffectsOn(a, a_spellID);
+                if (auto* inst = a->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant))
+                    inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
+                const float cost = sp->CalculateMagickaCost(a);
+                if (avo && cost > 0.0f)
+                    avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                           RE::ActorValue::kMagicka, -cost);
+                const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                spdlog::info("[cast] {:08X} {} SELF-CAST {} ({:08X}) -- effect applied, "
+                             "magicka {:.0f}->{:.0f} (cost {:.0f})",
+                             a_id, a->GetName() ? a->GetName() : "?",
+                             sp->GetName() ? sp->GetName() : "?", a_spellID, before, after, cost);
+            });
+        }
+
+        // End a channel on the actor (main thread): stop the VFX, cut the
+        // channel, take the spell out of the hand, sheathe.
+        void SelfCastEndActor(RE::FormID a_id, RE::FormID a_spellID) {
+            MainThread::Post([a_id, a_spellID] {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id);
+                if (!a) return;
+                DispelSpellEffectsOn(a, a_spellID);
+                using CS = RE::MagicSystem::CastingSource;
+                for (const auto s : { CS::kLeftHand, CS::kRightHand, CS::kInstant })
+                    if (auto* mc = a->GetMagicCaster(s)) mc->InterruptCast(false);
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+                    sp && a->GetEquippedObject(true) == sp)
+                    a->DeselectSpell(sp);
+                a->DrawWeaponMagicHands(false);   // sheathe
+            });
+        }
+    }
+
     bool CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
-        // AE-only, mirroring CastOn: the drive/equip surface is the SE crash
-        // path (#67). Off AE the caller falls back transparently.
+        // AE-only, mirroring CastOn (the SE crash path #67). Off AE -> transparent.
         if (!REL::Module::IsAE())    return false;
         if (!a_follower || !a_spell) return false;
-        const auto id = a_follower->GetFormID();
-        using CS = RE::MagicSystem::CastingSource;
+        const auto id      = a_follower->GetFormID();
+        const auto spellID = a_spell->GetFormID();
 
-        // §5.3 COMPETENCE: the follower's real cost gates the cast, and the
-        // reserve floor keeps a self-heal from emptying the pool. Same reads as
-        // CastOn. Unaffordable -> transparent decline, the caller's rules run.
-        auto*       avo  = a_follower->AsActorValueOwner();
-        const float cost = a_spell->CalculateMagickaCost(a_follower);
-        const float have = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-        if (avo) {
+        // §5.3 COMPETENCE: real cost gates the cast; the reserve floor keeps a
+        // self-heal from emptying the pool. Unaffordable -> transparent decline.
+        if (auto* avo = a_follower->AsActorValueOwner()) {
+            const float cost = a_spell->CalculateMagickaCost(a_follower);
+            const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
             if (cost > have) return false;
             const float reserve = Config::g_magickaReserve.load();
             if (reserve > 0.0f) {
@@ -914,59 +987,97 @@ namespace MFO::Actuation {
             }
         }
 
-        // 1. EQUIP the spell to a hand (+ draws magic hands). Universal, no alias
-        //    -- this is the half that already worked on the deck.
-        std::string why;
-        if (Loadout::Prepare(a_follower, a_spell, why) == Loadout::Ready::Failed)
-            return false;
-        const CS src = (a_follower->GetEquippedObject(false) == a_spell &&
-                        a_follower->GetEquippedObject(true)  != a_spell)
-                           ? CS::kRightHand : CS::kLeftHand;
+        const auto now = SelfClock::now();
+        auto it = g_selfCast.find(id);
 
-        // 2. DRIVE the caster for the ANIMATION. The visible cast comes ONLY from
-        //    the caster's own state machine advancing (§0.13); CastSpellImmediate
-        //    below is silent. Clear any prior wedge (charge-glow hands from a
-        //    previous tick), then request the cast from rest with the spell
-        //    selected and self as the desired target. CheckCast is logged so the
-        //    field can see whether the engine accepted or refused the drive.
-        RE::MagicSystem::CannotCastReason reason{};
-        std::uint32_t stBefore = 0, stAfter = 0;
-        if (auto* hand = a_follower->GetMagicCaster(src)) {
-            stBefore = static_cast<std::uint32_t>(hand->state.get());
-            if (hand->state.get() != RE::MagicCaster::State::kNone)
-                hand->InterruptCast(true);          // clear wedge, refund its charge
-            if (hand->currentSpell == a_spell) {
-                hand->desiredTarget = a_follower->CreateRefHandle();   // self
-                float strength = 1.0f;
-                hand->CheckCast(a_spell, false, &strength, &reason, false);
-                hand->RequestCastImpl();
-            }
-            stAfter = static_cast<std::uint32_t>(hand->state.get());
+        // A DIFFERENT spell was channeling -> end it (stop its VFX) before this
+        // one, so shaders never stack.
+        if (it != g_selfCast.end() && it->second.spell != spellID) {
+            SelfCastEndActor(id, it->second.spell);
+            g_selfCast.erase(it);
+            it = g_selfCast.end();
         }
 
-        // 3. GUARANTEE the effect + the magicka spend -- marth's proof-of-cast
-        //    tell (zero magicka == it did not really cast). kInstant so it does
-        //    not fight the hand animation (the DAC pattern, §0.13). A self-
-        //    delivery spell applies to the caster regardless of target.
-        //    CastSpellImmediate spends nothing on its own (§0.22), so MFO deducts
-        //    the follower's real cost -- the identical §5.3 accounting every
-        //    other cast path in the mod uses (Actuation ~695, Logistics ~4018).
-        auto* inst = a_follower->GetMagicCaster(CS::kInstant);
-        if (!inst) inst = a_follower->GetMagicCaster(src);
-        if (inst)
-            inst->CastSpellImmediate(a_spell, false, a_follower, 1.0f, false, 0.0f, a_follower);
-        if (avo && cost > 0.0f)
-            avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                   RE::ActorValue::kMagicka, -cost);
+        if (it == g_selfCast.end()) {
+            // FIRST fire: equip (Loadout stows the weapon + records the debt) and
+            // HOLD the restore. The DRIVE waits for the reconcile -- the equip is
+            // async, so currentSpell is not the spell yet on this pass.
+            std::string why;
+            if (Loadout::Prepare(a_follower, a_spell, why) == Loadout::Ready::Failed)
+                return false;
+            Loadout::HoldStow(id);
+            auto& sc = g_selfCast[id];
+            sc.spell = spellID; sc.driven = false; sc.started = now; sc.lastFired = now;
+        } else {
+            it->second.lastFired = now;   // rule still winning -> keep the channel open
+        }
 
-        const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-        spdlog::info("[cast] {:08X} {} SELF-CAST {} ({:08X}) -- equipped {}H, driven caster "
-                     "state {}->{} (CheckCast reason {}), magicka {:.0f}->{:.0f} (cost {:.0f})",
-                     id, a_follower->GetName() ? a_follower->GetName() : "?",
-                     a_spell->GetName() ? a_spell->GetName() : "?", a_spell->GetFormID(),
-                     src == CS::kRightHand ? "R" : "L", stBefore, stAfter,
-                     static_cast<std::uint32_t>(reason), have, after, cost);
+        // Apply the effect + spend magicka on THIS fire (paced by the caller's
+        // cooldown). The sustained cast pose is driven by the reconcile.
+        ApplySelfEffect(id, spellID);
         return true;
+    }
+
+    void SelfCastReconcile() {
+        if (g_selfCast.empty()) return;
+        const auto  now = SelfClock::now();
+        // Release when the rule stops re-firing. Must EXCEED the cast cooldown
+        // (the gap between paced re-fires) or a still-winning rule tears down
+        // between fires.
+        const float releaseSec = std::max(3.0f, Config::g_castCooldown.load() * 1.5f + 1.5f);
+        std::vector<RE::FormID> done;
+        for (auto& [id, sc] : g_selfCast) {
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+            const bool gone   = !a || !a->Is3DLoaded();
+            const bool stale  = std::chrono::duration<float>(now - sc.lastFired).count() > releaseSec;
+            const bool capped = std::chrono::duration<float>(now - sc.started).count()   > 30.0f;
+            if (gone || stale || capped) {
+                if (a) SelfCastEndActor(id, sc.spell);   // stop VFX + unequip + sheathe
+                Loadout::EndStowHold(id);
+                Loadout::Restore(id);                    // give the weapon back
+                done.push_back(id);
+                continue;
+            }
+            // DRIVE ONCE, the moment the async equip lands. Entering the cast
+            // state plays the animation in full AND stops the AI unequipping
+            // mid-cast -- no per-tick re-equip, no thrash. currentSpell is read
+            // off the worker (the bDriveCaster precedent); the drive itself is
+            // marshalled to the main thread where the animation graph ticks.
+            if (!sc.driven && a) {
+                using CS = RE::MagicSystem::CastingSource;
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell);
+                const CS src = (sp && a->GetEquippedObject(false) == sp &&
+                                a->GetEquippedObject(true) != sp) ? CS::kRightHand : CS::kLeftHand;
+                auto* hand = sp ? a->GetMagicCaster(src) : nullptr;
+                if (hand && hand->currentSpell == sp) {
+                    sc.driven = true;
+                    const auto spellID = sc.spell;
+                    MainThread::Post([id, spellID, src] {
+                        auto* ac = RE::TESForm::LookupByID<RE::Actor>(id);
+                        auto* s2 = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
+                        if (!ac || !s2) return;
+                        ac->DrawWeaponMagicHands(true);
+                        if (auto* h = ac->GetMagicCaster(src)) {
+                            h->desiredTarget = ac->CreateRefHandle();   // self
+                            float strength = 1.0f;
+                            RE::MagicSystem::CannotCastReason reason{};
+                            h->CheckCast(s2, false, &strength, &reason, false);
+                            h->RequestCastImpl();
+                            spdlog::info("[cast] {:08X} self-cast DRIVEN -- caster state {} "
+                                         "(CheckCast reason {})", id,
+                                         static_cast<std::uint32_t>(h->state.get()),
+                                         static_cast<std::uint32_t>(reason));
+                        }
+                    });
+                }
+            }
+        }
+        for (const auto id : done) g_selfCast.erase(id);
+    }
+
+    void ClearSelfCasts() {
+        for (auto& [id, sc] : g_selfCast) Loadout::EndStowHold(id);
+        g_selfCast.clear();
     }
 
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice) {
