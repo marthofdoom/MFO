@@ -188,22 +188,24 @@ releases **by eviction** with a non-actor XMarker.
   TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
   EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
   followers (Lucien, prio-80 quest). So self routes through
-  **`Actuation::CastSelfDirect`** (`Actuation.cpp`, public) — a per-follower CHANNEL,
-  not a one-shot (registry `g_selfCast`, worker-serial; `SelfCastReconcile` ticks it
-  from `Diagnostics` right BEFORE `Loadout::Tick`; `ClearSelfCasts` on revert):
-  FIRE equips via `Loadout::Prepare` + `Loadout::HoldStow` (blocks Tick's ~500 ms
-  weapon-restore that amputated the animation) and applies the effect + magicka
-  each paced fire (`ApplySelfEffect`, main thread, dispel-then-apply so the VFX
-  shader can't stack). RECONCILE DRIVES the caster into the cast state ONCE, the
-  moment the async equip lands (`currentSpell==spell`) — entering the state is what
-  plays the animation IN FULL and stops the AI unequipping mid-cast (no per-tick
-  re-equip → no thrash); it drives NO package/PLDT so the follower keeps moving
-  (§0.27). RELEASE when the rule stops re-firing (or a 30 s safety cap): `Dispel`
-  the effect VFX + `InterruptCast` + `DeselectSpell` + sheathe + `Loadout::Restore`
-  — the exact-bounding + no-stuck-VFX teardown, also covering rule-disabled/
-  condition-false. Touches only the ACTOR, no alias → **follower-agnostic** (vanilla
-  AND custom-framework; deck-proven on Lucien). Gated behind `Config::g_castSelf`
-  (bCastSelf, default OFF). Callers: `CastOn` self-intercept (combat, BEFORE the
+  **`Actuation::CastSelfDirect`** (`Actuation.cpp`, public) — effect + magicka only,
+  **NO equip, NO channel** (registry `g_selfCast`, worker-serial; `SelfCastReconcile`
+  ticks it from `Diagnostics` before `Loadout::Tick`; `ClearSelfCasts` on revert).
+  **NEVER equips the spell**: `CastSpellImmediate`(kInstant) applies the effect
+  hands-free. Leaving a light spell equipped let the follower's OWN AI spam-cast it
+  → 55+ non-MFO lights → `ShadowSceneNode` light-limit CTD (deck 2026-08-19); the
+  equip/`HoldStow`/caster-drive scaffolding was REMOVED (animation deferred to a
+  polish pass). FIRE (`CastSelfDirect`, every tick the rule wins): refresh the entry
+  and — once per `fCastCooldown` — `ApplySelfEffect` (main thread). Its **already-
+  active guard is the foe cast's own predicate** — `AsMagicTarget()->HasMagicEffect(
+  sp->GetCostliestEffectItem()->baseEffect)` — so a duration self-buff/light is NOT
+  re-applied while active (exactly one light per effect-duration cycle); an instant
+  heal (no lingering effect) re-fires when the condition recurs. RELEASE
+  (`SelfCastReconcile`, on rule-stale / 30 s cap / follower gone): `DispelSpellEffectsOn`
+  removes a lingering **ward/buff** so it cannot persist as a stuck gameplay effect
+  (functional bounding); nothing to unequip. Touches only the ACTOR, no alias →
+  **follower-agnostic** (deck-proven on Lucien). Gated behind `Config::g_castSelf`
+  (bCastSelf). Callers: `CastOn` self-intercept (combat, BEFORE the
   concentration fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
   `act.cast_self` branch (out-of-combat). The Logistics immediate path still SKIPS
   concentration spells legibly (self-gate-off / player) — instant-apply has no
