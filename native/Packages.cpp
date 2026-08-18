@@ -110,8 +110,14 @@ namespace MFO::Packages {
         // target. ALPC delivers the package BY the actor being in the alias,
         // so the follower cannot be in alias 1; that inversion is the single
         // most important structural fact in this system.
-        constexpr std::uint32_t kAliasCommandActor  = 0;   // carries the package
+        constexpr std::uint32_t kAliasCommandActor  = 0;   // carries the foe package
         constexpr std::uint32_t kAliasCommandTarget = 1;   // the victim, for the foe route
+        // FORCED SELF-CAST (SPEC-self-cast-forced): the follower's OTHER carrier
+        // alias, whose ALPC is MFO_CastPackageSelf (t6 self, NO QNAM). A follower
+        // is only ever in alias 0 (foe cast) OR alias 2 (self cast), never both
+        // -- the single holder guarantees it -- so each alias still carries
+        // exactly one package. No target alias: t6 aims the caster at himself.
+        constexpr std::uint32_t kAliasCommandSelfActor = 2;
 
         // §4.5c: an action is BOUNDED. Both halves -- a completion condition
         // and a hard timeout -- or a stuck package is a follower MFO has
@@ -159,8 +165,24 @@ namespace MFO::Packages {
             // single-writer discipline as every other g_holder field.
             CastHold          hold{};
             RE::FormID        targetID   = 0;
+            // FORCED SELF-CAST: this holder is a self-cast (carrier alias 2,
+            // MFO_CastPackageSelf) rather than a foe cast (alias 0, MFO_
+            // CastPackage). Selects which alias/package every lifecycle helper
+            // observes and releases. Default false = the unchanged foe route.
+            bool              self       = false;
         };
         Holder g_holder;
+
+        // Which carrier alias / package the CURRENT holder occupies. Every
+        // observe/release helper routes through these so the self and foe
+        // streams share one state machine without duplicating it. Both read the
+        // single-writer g_holder, same discipline as every other holder access.
+        std::uint32_t HolderActorAlias() {
+            return g_holder.self ? kAliasCommandSelfActor : kAliasCommandActor;
+        }
+        RE::TESPackage* HolderPackage() {
+            return g_holder.self ? Forms::g_castPackageSelf : Forms::g_castPackage;
+        }
 
         // THE LIVE-STREAM MIRROR, for the CONSENT HOOKS. g_holder is single-
         // writer (the serialized task queue) and lock-free, so the caster-
@@ -500,17 +522,35 @@ namespace MFO::Packages {
                 targetTarget->target.aliasID = kAliasCommandTarget;
                 targetTarget->value          = 0;
             } else {
-                // SELF ROUTE -- UNREACHABLE from Begin() (v1.0.32), kept only
-                // as defence in depth should a future caller bypass the bar.
-                // targType 6 itself is field-proven (probe 6) but ONLY on a
-                // record with NO QNAM; the shipped MFO_CastPackage carries an
-                // authored QNAM, and QNAM + t6 is the rev-4 CTD's surviving
-                // zero-precedent cell (§0.22). Begin() declines SelfRoute
-                // before SetInputs can be reached with a null target.
+                // SELF ROUTE -- UNREACHABLE from Begin(): SetInputs is called
+                // ONLY with a foe target. The forced self-cast (SPEC-self-cast-
+                // forced) uses SetSelfSpell() on the SEPARATE MFO_CastPackageSelf
+                // record instead, whose t6 target is authored STATICALLY (the
+                // DLL never writes a targType at runtime for self). Kept only as
+                // defence in depth should a future caller bypass that.
                 targetTarget->targType      = kTargTypeSelf;
                 targetTarget->target.object = nullptr;
                 targetTarget->value         = 0;
             }
+            return true;
+        }
+
+        // FORCED SELF-CAST: point MFO_CastPackageSelf's Spell input at the chosen
+        // spell, and NOTHING ELSE. The Target input stays as the ESP authored it
+        // -- targType 6 (self), no QNAM -- so at runtime the DLL never writes a
+        // targType into a self record (writing t6 into a QNAM-carrying record
+        // was the rev-4 crash; §0.22 proved the static t6/no-QNAM shape clean).
+        // Returns false without writing if the input fails its layout guard.
+        bool SetSelfSpell(RE::SpellItem* a_spell) {
+            auto* pkg = Forms::g_castPackageSelf;
+            if (!pkg) return false;
+            auto* spellPd = FindInput(pkg, kInputSpell);
+            if (!spellPd) return false;
+            auto* spellTarget = ReadTarget(spellPd, "Spell(self)");
+            if (!spellTarget) return false;
+            spellTarget->targType      = kTargTypeObjectID;
+            spellTarget->target.object = a_spell;
+            spellTarget->value         = 0;
             return true;
         }
 
@@ -582,7 +622,9 @@ namespace MFO::Packages {
             auto* quest = Forms::g_commandQuest;
             if (!quest || !a_actorID) return false;
             RE::ObjectRefHandle handle{};
-            quest->CreateRefHandleByAliasID(handle, kAliasCommandActor);
+            // The holder's OWN carrier alias -- 0 (foe) or 2 (self). Called only
+            // for the live holder (Pump), so g_holder.self is authoritative.
+            quest->CreateRefHandleByAliasID(handle, HolderActorAlias());
             auto ref = handle.get();
             return ref && ref->GetFormID() == a_actorID;
         }
@@ -602,13 +644,15 @@ namespace MFO::Packages {
         // disagree -- the alias can offer a package the actor has not switched
         // to yet -- and that gap is exactly the Filled->Running edge.
         bool PackageOffered(RE::Actor* a_actor) {
-            if (!a_actor || !Forms::g_castPackage) return false;
-            return a_actor->CheckForCurrentAliasPackage() == Forms::g_castPackage;
+            auto* pkg = HolderPackage();
+            if (!a_actor || !pkg) return false;
+            return a_actor->CheckForCurrentAliasPackage() == pkg;
         }
 
         bool PackageRunning(RE::Actor* a_actor) {
-            if (!a_actor || !Forms::g_castPackage) return false;
-            return a_actor->GetCurrentPackage() == Forms::g_castPackage;
+            auto* pkg = HolderPackage();
+            if (!a_actor || !pkg) return false;
+            return a_actor->GetCurrentPackage() == pkg;
         }
 
         void ResetHolder() {
@@ -637,9 +681,11 @@ namespace MFO::Packages {
             auto*      quest = Forms::g_commandQuest;
             auto*      mark  = EvictMarkerRef();   // marker or null -- no player fallback here
 
+            const std::uint32_t actorAlias = HolderActorAlias();   // 0 foe / 2 self
             bool released = false;
-            if (quest && mark && ForceRefToNative(quest, kAliasCommandActor, mark)) {
-                spdlog::info("[pkg] {:08X}: released ({}) -- evicted (marker)", id, a_why);
+            if (quest && mark && ForceRefToNative(quest, actorAlias, mark)) {
+                spdlog::info("[pkg] {:08X}: released ({}) -- evicted (marker){}", id, a_why,
+                             g_holder.self ? " [self]" : "");
                 released = true;
             } else if (DispatchAlias("Clear", nullptr)) {
                 spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear (no marker/off-AE)",
@@ -686,30 +732,37 @@ namespace MFO::Packages {
             if (!Config::g_usePackages.load()) return Decline::Disabled;
             if (!a_follower || !a_spell)       return Decline::NoRecord;
 
-            // THE SELF ROUTE IS BARRED from the package -- deliberately, and
-            // this must hold even now that FindInput works (v1.0.32). For a
-            // self-cast SetInputs writes targType 6 into a record that CARRIES
-            // AN AUTHORED QNAM (the shipped MFO_CastPackage names the command
-            // quest because its authored Target is t4 -> alias 1). QNAM on a
-            // record none of whose inputs names an alias is the rev-4 CTD's
-            // surviving suspect (§0.22 re-explained the crash as the QNAM, not
-            // the t6): probe 6's clean t6 cast had NO QNAM, and QNAM+t6 is a
-            // ZERO-PRECEDENT cell nothing has ever probed. Before v1.0.32 the
-            // FindInput bug made this decline moot (every Begin died at
-            // BadInputs); fixing that bug must not silently arm an unprobed
-            // CTD-class shape, so cast_self stays on the silent fallback --
-            // today's behaviour -- until a dedicated probe clears the cell.
-            if (!a_target) {
-                spdlog::debug("[pkg] {:08X}: cast_self declined -- package self route "
-                              "barred (QNAM + targType 6 is an unprobed zero-precedent "
-                              "cell); silent fallback instead", a_follower->GetFormID());
+            const bool self = (a_target == nullptr);
+
+            // FORCED SELF-CAST GATE (SPEC-self-cast-forced). Self is served by a
+            // DEDICATED record (MFO_CastPackageSelf, command-quest alias 2):
+            // authored targType 6, NO QNAM -- §0.22's proven-clean probe-6 shape,
+            // the one that REVOKED #67. It is deliberately NOT the shipped
+            // MFO_CastPackage: that carries a QNAM (foe target t4 -> alias 1),
+            // and writing t6 into a QNAM-carrying record at runtime is the rev-4
+            // crash cell. The route stays behind bCastSelf until the production
+            // path (arbitrary self spell, in combat, via alias fill/evict) is
+            // deck-confirmed; with the gate OFF (default) self declines exactly
+            // as it always has and the caller falls back to the silent apply.
+            if (self && !Config::g_castSelf.load()) {
+                spdlog::debug("[pkg] {:08X}: cast_self declined -- self route gated OFF "
+                              "(bCastSelf); silent fallback", a_follower->GetFormID());
                 return Decline::SelfRoute;
             }
 
             auto* quest = Forms::g_commandQuest;
-            auto* pkg   = Forms::g_castPackage;
+            auto* pkg   = self ? Forms::g_castPackageSelf : Forms::g_castPackage;
             if (!quest || !pkg)                return Decline::NoRecord;
             if (!VM() || !CommandAlias())      return Decline::NoVM;
+
+            // The self route is native-only (AE): the VM fallback fills alias 0,
+            // the FOE carrier -- wrong for self. The foe route is already
+            // effectively AE-only (its alias-1 target fill is), so this loses
+            // nothing. Off AE, self declines and the caller falls back.
+            if (self && !REL::Module::IsAE()) return Decline::NoVM;
+
+            const std::uint32_t actorAlias = self ? kAliasCommandSelfActor
+                                                  : kAliasCommandActor;
 
             // A start-game-enabled, non-run-once quest that is not in the SEQ
             // NEVER STARTS on an existing save, and the whole mechanism is then
@@ -744,21 +797,22 @@ namespace MFO::Packages {
                 return Decline::Contention;
             }
 
-            if (!SetInputs(a_spell, a_target)) return Decline::BadInputs;
+            // INPUTS. Foe: point Spell (t1) AND Target (t4 -> alias 1). Self:
+            // point ONLY the Spell on MFO_CastPackageSelf -- its t6 Target is
+            // authored statically and MUST NOT be rewritten at runtime (that
+            // write, into a QNAM-carrying record, was the rev-4 crash; the self
+            // record carries no QNAM and we never touch its target).
+            const bool inputsOk = self ? SetSelfSpell(a_spell)
+                                       : SetInputs(a_spell, a_target);
+            if (!inputsOk) return Decline::BadInputs;
 
             // FOE ROUTE: fill the TARGET alias (1) with the victim BEFORE the
             // actor alias, the same no-rooting order as loot/retreat -- the
             // package's t4 target must resolve when alias 0 instances it.
-            //
-            // THIS FILL WAS MISSING when the route had zero callers: SetInputs
-            // points the package at alias 1, but nothing ever put the victim
-            // IN alias 1 (the old probe ESP force-filled it with the player,
-            // and the shipped ESP authors no fill at all). An empty target
-            // alias resolves nothing -- the §0.19 stall class -- and a stale
-            // one casts at the WRONG actor. Native-only: alias 1 has no VM
-            // fallback machinery, so off AE the foe route declines and the
-            // caller falls back, exactly like loot/retreat travel.
-            if (a_target) {
+            // Native-only: alias 1 has no VM fallback, so off AE the foe route
+            // declines and the caller falls back. Self skips this entirely --
+            // t6 aims the caster at himself, no target alias.
+            if (!self) {
                 if (!REL::Module::IsAE()) return Decline::NoVM;
                 if (!ForceRefToNative(quest, kAliasCommandTarget, a_target)) {
                     spdlog::error("[pkg] {:08X}: TARGET alias {} fill failed -- refusing to "
@@ -767,15 +821,17 @@ namespace MFO::Packages {
                 }
             }
 
-            // Native first -- synchronous, so the alias is filled when this
-            // returns. VM only if the native is unavailable (SE).
-            bool filled = ForceRefToNative(Forms::g_commandQuest, kAliasCommandActor, a_follower);
+            // Fill the holder's carrier alias (0 foe / 2 self). Native first --
+            // synchronous, so the alias is filled when this returns. VM fallback
+            // only for the FOE route on SE (self already returned NoVM off AE,
+            // and the VM fallback fills alias 0 regardless of route).
+            bool filled = ForceRefToNative(quest, actorAlias, a_follower);
             if (filled) {
-                spdlog::info("[pkg] {:08X}: alias {} filled NATIVELY (synchronous)",
-                             id, kAliasCommandActor);
-            } else if (DispatchAlias("ForceRefTo", a_follower)) {
+                spdlog::info("[pkg] {:08X}: alias {} filled NATIVELY (synchronous){}",
+                             id, actorAlias, self ? " [self]" : "");
+            } else if (!self && DispatchAlias("ForceRefTo", a_follower)) {
                 spdlog::info("[pkg] {:08X}: alias {} fill DISPATCHED via VM (async)",
-                             id, kAliasCommandActor);
+                             id, actorAlias);
             } else {
                 spdlog::error("[pkg] {:08X}: ForceRefTo failed on BOTH routes", id);
                 return Decline::NoVM;
@@ -783,6 +839,7 @@ namespace MFO::Packages {
 
             ResetHolder();
             g_holder.actorID  = id;
+            g_holder.self     = self;
             g_holder.spellID  = a_spell->GetFormID();
             g_holder.targetID = a_target ? a_target->GetFormID() : 0;
             g_holder.hold     = a_hold;
@@ -798,7 +855,7 @@ namespace MFO::Packages {
 
             spdlog::info("[pkg] {:08X}: requested cast of {:08X} ({}){} -- fill DISPATCHED, "
                          "not yet observed", id, g_holder.spellID,
-                         a_target ? "at reference" : "self/alias-0",
+                         self ? "on self (alias 2)" : "at reference",
                          a_hold.holdSeconds > 0.0f
                              ? std::format(" [concentration hold {:.1f}s]", a_hold.holdSeconds)
                              : std::string());
@@ -920,8 +977,8 @@ namespace MFO::Packages {
                CommandAlias() != nullptr;
     }
 
-    Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell) {
-        const auto r = Begin(a_follower, a_spell, nullptr, {});
+    Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell, const CastHold& a_hold) {
+        const auto r = Begin(a_follower, a_spell, nullptr, a_hold);
         if (r != Decline::None) {
             ++g_declines;
             spdlog::debug("[pkg] {:08X}: declined -- {}",
@@ -938,7 +995,7 @@ namespace MFO::Packages {
 
     Decline CastAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
                    RE::TESObjectREFR* a_target, const CastHold& a_hold) {
-        if (!a_target) return CastSelf(a_follower, a_spell);
+        if (!a_target) return CastSelf(a_follower, a_spell, a_hold);
         const auto r = Begin(a_follower, a_spell, a_target, a_hold);
         if (r != Decline::None) {
             ++g_declines;
@@ -1228,21 +1285,27 @@ namespace MFO::Packages {
         // whether or not this session's holder mirror knows anything (a
         // PREVIOUS session's latch is exactly the case the mirror cannot see).
         // Evict any ACTOR occupant, the player included (#48b); the VM Clear
-        // is the off-AE fallback only.
+        // is the off-AE fallback only. BOTH carrier aliases are swept: alias 0
+        // (foe cast) AND alias 2 (self cast, SPEC-self-cast-forced) -- the self
+        // fill is engine-serialized exactly like the foe fill, so a save written
+        // mid-self-stream latches alias 2 on every subsequent load unless it is
+        // evicted here too.
         if (auto* quest = Forms::g_commandQuest) {
-            RE::ObjectRefHandle h{};
-            quest->CreateRefHandleByAliasID(h, kAliasCommandActor);
-            auto* held = h.get() ? h.get().get() : nullptr;
-            if (held && player && held->As<RE::Actor>() &&
-                (held != player || haveMarker)) {
-                if (!ForceRefToNative(quest, kAliasCommandActor, ev))
-                    DispatchAlias("Clear", nullptr);   // off-AE: scriptless-alias
-                                                       // Clear may no-op; AE never
-                                                       // reaches this arm
-                spdlog::info("[pkg] {} -- cast alias held {:08X}{}; evicted (marker)",
-                             a_why, held->GetFormID(),
-                             held == player ? " (the PLAYER, #48b)" : "");
-                if (held == player) sweptPlayer = true;
+            for (const std::uint32_t aliasID : { kAliasCommandActor, kAliasCommandSelfActor }) {
+                RE::ObjectRefHandle h{};
+                quest->CreateRefHandleByAliasID(h, aliasID);
+                auto* held = h.get() ? h.get().get() : nullptr;
+                if (held && player && held->As<RE::Actor>() &&
+                    (held != player || haveMarker)) {
+                    if (!ForceRefToNative(quest, aliasID, ev))
+                        DispatchAlias("Clear", nullptr);   // off-AE: scriptless-alias
+                                                           // Clear may no-op; AE never
+                                                           // reaches this arm
+                    spdlog::info("[pkg] {} -- cast alias {} held {:08X}{}; evicted (marker)",
+                                 a_why, aliasID, held->GetFormID(),
+                                 held == player ? " (the PLAYER, #48b)" : "");
+                    if (held == player) sweptPlayer = true;
+                }
             }
         }
 

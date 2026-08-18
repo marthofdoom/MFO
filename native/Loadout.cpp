@@ -3,6 +3,7 @@
 #include "Config.h"
 #include "Followers.h"
 #include "CasterConsent.h"   // v1.0.32: StartCooldown mirrors into the hook's permit
+#include <unordered_set>     // self-cast stow-hold set (SPEC-self-cast-forced)
 
 namespace MFO::Loadout {
 
@@ -55,6 +56,11 @@ namespace MFO::Loadout {
         // outlive that or the limiter never fires for the followers it matters
         // most for.
         std::unordered_map<RE::FormID, RE::FormID> g_mfoSpell;
+
+        // Followers with a LIVE forced self-cast channel (Actuation): Tick must
+        // NOT auto-restore their stowed gear -- that restore re-equipped the
+        // weapon and deselected the spell ~500 ms in, amputating the animation.
+        std::unordered_set<RE::FormID> g_stowHeld;
 
         const RE::BGSEquipSlot* LeftHandSlot() {
             // NOTE: <d3d11.h> elsewhere in this project #defines GetObject ->
@@ -389,6 +395,12 @@ namespace MFO::Loadout {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
             if (!actor) continue;
 
+            // A LIVE forced self-cast holds its gear back: restoring the stowed
+            // weapon here is exactly what deselected the spell mid-animation
+            // (SPEC-self-cast-forced). Actuation's reconcile clears the hold and
+            // restores the gear when the channel ends.
+            if (g_stowHeld.count(id)) continue;
+
             // THE DEBT MAY ALREADY BE PAID. Skyrim's combat AI re-evaluates
             // equipment and will happily take its own shield back mid-fight,
             // displacing MFO's spell. If we keep the entry open, the "already
@@ -518,9 +530,12 @@ namespace MFO::Loadout {
         if (fixed == 0) spdlog::info("[loadout] reconcile: nothing to undo");
     }
 
+    void HoldStow(RE::FormID a_actorID)    { g_stowHeld.insert(a_actorID); }
+    void EndStowHold(RE::FormID a_actorID) { g_stowHeld.erase(a_actorID); }
+
     void ClearTransientState() {
         g_debt.clear(); g_lastStow.clear(); g_equipClock.clear();
-        g_coolUntil.clear(); g_mfoSpell.clear();
+        g_coolUntil.clear(); g_mfoSpell.clear(); g_stowHeld.clear();
     }
 
     int PendingRestores() {

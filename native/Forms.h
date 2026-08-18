@@ -61,6 +61,14 @@ namespace MFO::Forms {
     // hand, so the engine stops re-drawing the weapon MFO didn't pick.
     inline constexpr RE::FormID kMeleeStyle       = 0x833;
     inline constexpr RE::FormID kRangedStyle      = 0x834;
+    // FORCED SELF-CAST (Docs/SPEC-self-cast-forced.md): the dedicated no-QNAM
+    // targType-6 self package, delivered by MFO_CommandQuest's own alias 2.
+    // §0.22 proved probe 6's t6+no-QNAM self-cast casts cleanly (REVOKED #67);
+    // the shipped kCastPackage carries a QNAM (foe target t4 -> alias 1), so it
+    // cannot serve self without writing t6 into a QNAM-carrying record at
+    // runtime -- the rev-4 crash cell. Route is DLL-gated (bCastSelf) pending a
+    // deck-confirmed production run.
+    inline constexpr RE::FormID kCastPackageSelf  = 0x835;
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -72,6 +80,10 @@ namespace MFO::Forms {
     // after the ESP round-trip?
     inline RE::TESQuest*   g_commandQuest = nullptr;
     inline RE::TESPackage* g_castPackage  = nullptr;
+    // FORCED SELF-CAST: the t6/no-QNAM self package on command-quest alias 2. A
+    // miss (old ESP) disables ONLY the self route -- Packages::Begin's self
+    // branch declines NoRecord and the caller falls back, never a crash.
+    inline RE::TESPackage* g_castPackageSelf = nullptr;
     inline RE::TESQuest*   g_lootQuest    = nullptr;   // Option A
     inline RE::TESPackage* g_travelPackage  = nullptr; // Option A (slot 0)
     inline RE::TESPackage* g_travelPackage1 = nullptr; // P7 slot 1

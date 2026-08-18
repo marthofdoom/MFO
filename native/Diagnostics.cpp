@@ -9,6 +9,7 @@
 #include "Probe.h"
 #include "Scheduler.h"
 #include "Loadout.h"
+#include "Actuation.h"   // SelfCastReconcile -- the forced self-cast channel lifecycle
 #include "Papyrus.h"
 #include "Targeting.h"
 #include "Packages.h"
@@ -260,6 +261,7 @@ namespace MFO::Diagnostics {
                         if (diagTurn) Followers::Refresh();
 
                         Scheduler::Tick();
+                        Actuation::SelfCastReconcile();   // drive/release self-cast channels; set stow-holds BEFORE Tick
                         Loadout::Tick();   // hand back stowed two-handers
 
                         if (diagTurn) Probe::Tick();

@@ -3883,10 +3883,21 @@ namespace MFO::Logistics {
                 // SELF or on the PLAYER (light follows you), magelight, self-buffs,
                 // out-of-combat heals. Out of combat the follower's AI never casts
                 // on its own, so the combat AI-grace path never fired (deck
-                // 2026-08-06). SELF and PLAYER go through CastSpellImmediate (the
-                // package route bars self-delivery, Decline::SelfRoute; the immediate
-                // route applies the effect to any target). A FOE target goes through
-                // the animated package (CastAt).
+                // 2026-08-06). ROUTING:
+                //   * SELF + bCastSelf ON  -> Actuation::CastSelfDirect, the
+                //     UNIVERSAL direct trigger (SPEC-self-cast-forced): equip +
+                //     drive the caster + apply the effect + spend magicka, no
+                //     package/alias so it drives package-locked custom followers
+                //     too. This is the ONLY self route while the gate is on -- a
+                //     concentration ward instant-applied here had no channel and
+                //     STUCK forever, even after the rule was disabled (deck
+                //     2026-08-17); the direct trigger is a bounded one-shot.
+                //   * SELF (gate off) + PLAYER, FIRE-AND-FORGET -> CastSpellImmediate
+                //     (applies the effect to any target; no animation, but it lands).
+                //   * SELF (gate off) + PLAYER, CONCENTRATION -> SKIPPED legibly:
+                //     an instant-apply of a per-second effect has no channel and
+                //     would stick. (Self needs bCastSelf; player has no channel here.)
+                //   * FOE target -> the animated package (CastAt).
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
                 if (!sp || !a_follower->HasSpell(sp)) {
                     start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
@@ -3905,11 +3916,21 @@ namespace MFO::Logistics {
                     tgt = p.get();
                 }
                 if (!tgt) { start = choice.ruleIndex + 1; continue; }
-                const bool immediate = (op != Vocab::kActCastTarget);   // self/player -> immediate route
+                const bool conc = sp->GetCastingType() ==
+                                  RE::MagicSystem::CastingType::kConcentration;
+                // FORCED SELF-CAST (SPEC-self-cast-forced): a bCastSelf-armed SELF
+                // cast channels through the ANIMATED no-QNAM package (alias 2), NOT
+                // the silent instant-apply -- so self never takes the immediate
+                // route while the gate is on.
+                const bool selfPkg   = (op == Vocab::kActCastSelf) && Config::g_castSelf.load();
+                const bool immediate = (op != Vocab::kActCastTarget) && !selfPkg;   // self/player -> immediate route
                 // Skip re-casting a buff still on the TARGET (candlelight up on him
                 // or the player), then pace by the spell's DURATION (a 60s light
                 // refreshes as it expires; a 3s floor keeps instant spells off the
-                // ~1s tick -- heals stay condition-gated).
+                // ~1s tick -- heals stay condition-gated). The package self route
+                // does NOT skip on effect-present: a still-active channel is paced
+                // by its own hold below, and a stuck instant-applied ward from an
+                // old build must not block the animated re-cast that replaces it.
                 if (immediate) {
                     auto* ei   = sp->GetCostliestEffectItem();
                     auto* mgef = ei ? ei->baseEffect : nullptr;
@@ -3922,10 +3943,47 @@ namespace MFO::Logistics {
                 // blocking an OOC heal). Composite key like g_drinkUntil.
                 static std::unordered_map<std::uint64_t, Clock::time_point> s_logiCastUntil;
                 const std::uint64_t castKey = (static_cast<std::uint64_t>(id) << 32) | sp->GetFormID();
-                if (auto it = s_logiCastUntil.find(castKey); it != s_logiCastUntil.end() && now < it->second) {
-                    start = choice.ruleIndex + 1; continue;   // within this spell's window
-                }
-                if (immediate) {
+                // SELF bypasses this window: it is a self-PACED channel that must
+                // be re-fired every service to stay refreshed (the channel's own
+                // registry paces the effect + releases when the rule stops). The
+                // window would starve those re-fires and tear the channel down.
+                if (!selfPkg)
+                    if (auto it = s_logiCastUntil.find(castKey); it != s_logiCastUntil.end() && now < it->second) {
+                        start = choice.ruleIndex + 1; continue;   // within this spell's window
+                    }
+                if (selfPkg) {
+                    // The UNIVERSAL DIRECT TRIGGER (SPEC-self-cast-forced). The
+                    // MFO_CastPackageSelf alias route only EQUIPS the spell -- it
+                    // never fires the cast (deck 2026-08-17) and is DECLINED on
+                    // package-locked custom followers. Actuation::CastSelfDirect
+                    // runs a self-paced CHANNEL: equip + hold + drive the caster
+                    // for the animation + apply the effect at fCastCooldown
+                    // cadence + release when the rule stops (stopping the effect
+                    // VFX). Re-fire it EVERY service so the channel stays alive
+                    // while the rule wins -- no s_logiCastUntil window here.
+                    if (Actuation::CastSelfDirect(a_follower, sp)) {
+                        acted = true;
+                    } else {
+                        // Unaffordable / off-AE / equip failed. Do NOT silent-apply
+                        // a concentration spell (the stuck-ward footgun) -- skip
+                        // legibly to the next rule.
+                        start = choice.ruleIndex + 1; continue;
+                    }
+                } else if (immediate) {
+                    // A CONCENTRATION spell has no instant apply: CastSpellImmediate
+                    // stamps the per-second effect with NO channel and it STICKS
+                    // forever (the stuck-ward bug). Self routes to the package above
+                    // when bCastSelf is on; otherwise -- self with the gate off, or
+                    // any cast_player concentration -- skip it LEGIBLY rather than
+                    // apply an unreleasable effect.
+                    if (conc) {
+                        spdlog::info("[cast] {:08X} concentration {:08X} SKIPPED on {} -- an "
+                                     "instant-apply has no channel to release (it would stick). "
+                                     "Enable bCastSelf to channel self-casts through the package.",
+                                     id, sp->GetFormID(),
+                                     op == Vocab::kActCastPlayer ? "player" : "self");
+                        start = choice.ruleIndex + 1; continue;
+                    }
                     // CastSpellImmediate applies the effect to `tgt` for any delivery.
                     // No charge animation, but the light/buff/heal lands. Spends no
                     // magicka, so gate on affordability and deduct the cost by hand.
@@ -3943,7 +4001,7 @@ namespace MFO::Logistics {
                 } else if (Packages::Available()) {
                     acted = (Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None);
                 }
-                if (acted) {
+                if (acted && !selfPkg) {
                     auto* ei = sp->GetCostliestEffectItem();
                     const float dur = std::max(3.0f, ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f);
                     s_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(

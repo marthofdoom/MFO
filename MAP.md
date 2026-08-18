@@ -183,12 +183,41 @@ releases **by eviction** with a non-actor XMarker.
   false)` at `:1028` — **`resetAI` must stay false** everywhere (`:1028,1296,1319,
   1384,1462,1483,661`); `true` clears the combat group → zero-damage next hit.
   Timeouts `kFillTimeout=3.0`/`kRunTimeout=12.0` (`:126-127`).
-- `CastAt`/`CastSelf`/`Available`/`StreamLive` — callers `Actuation.cpp:135-136,
-  266,113,213`, `Logistics.cpp:3841-3842`, `CasterConsent.cpp:163` (reads the
-  atomic mirror). **`CastSelf` always declines `SelfRoute`** (`:702`) — targType-6
-  into the QNAM-carrying cast package is an unprobed CTD cell. One `MFO_CastPackage`
-  + one alias 0 → single holder forced by shared `TESPackage::refCount` (`:734`),
-  not a preference; multi-holder needs per-verb records minted at 0x821+.
+- **SELF-CAST does NOT use the package (SPEC-self-cast-forced, superseded 2026-08-17).**
+  Deck-proven: a no-QNAM/t6 package can be DELIVERED (equips the spell) but never
+  TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
+  EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
+  followers (Lucien, prio-80 quest). So self routes through
+  **`Actuation::CastSelfDirect`** (`Actuation.cpp`, public) — a per-follower CHANNEL,
+  not a one-shot (registry `g_selfCast`, worker-serial; `SelfCastReconcile` ticks it
+  from `Diagnostics` right BEFORE `Loadout::Tick`; `ClearSelfCasts` on revert):
+  FIRE equips via `Loadout::Prepare` + `Loadout::HoldStow` (blocks Tick's ~500 ms
+  weapon-restore that amputated the animation) and applies the effect + magicka
+  each paced fire (`ApplySelfEffect`, main thread, dispel-then-apply so the VFX
+  shader can't stack). RECONCILE DRIVES the caster into the cast state ONCE, the
+  moment the async equip lands (`currentSpell==spell`) — entering the state is what
+  plays the animation IN FULL and stops the AI unequipping mid-cast (no per-tick
+  re-equip → no thrash); it drives NO package/PLDT so the follower keeps moving
+  (§0.27). RELEASE when the rule stops re-firing (or a 30 s safety cap): `Dispel`
+  the effect VFX + `InterruptCast` + `DeselectSpell` + sheathe + `Loadout::Restore`
+  — the exact-bounding + no-stuck-VFX teardown, also covering rule-disabled/
+  condition-false. Touches only the ACTOR, no alias → **follower-agnostic** (vanilla
+  AND custom-framework; deck-proven on Lucien). Gated behind `Config::g_castSelf`
+  (bCastSelf, default OFF). Callers: `CastOn` self-intercept (combat, BEFORE the
+  concentration fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
+  `act.cast_self` branch (out-of-combat). The Logistics immediate path still SKIPS
+  concentration spells legibly (self-gate-off / player) — instant-apply has no
+  channel and stuck forever (deck 2026-08-17).
+- **DEAD/superseded: the package self-route.** `Packages::CastSelf`, `Begin`'s self
+  branch, command-quest **alias 2** (`kAliasCommandSelfActor` → `MFO_CastPackageSelf`,
+  Forms `0x835`), `SetSelfSpell`, `HolderActorAlias`/`HolderPackage`'s self side, and
+  the alias-2 `ReleaseAll` sweep are all still present but NO LONGER on the live path
+  (nothing calls `CastSelf` with the gate on). Left in place (harmless; the ESP record
+  never fills) rather than churn the frozen `0x835` FormID; can be removed later.
+- `CastAt`/`Available`/`StreamLive` (FOE cast) — callers `Actuation.cpp` (ForceCast +
+  ConcentrationCast foe), `CasterConsent.cpp:163` (reads the atomic mirror). One
+  `MFO_CastPackage` on alias 0 → single holder forced by shared `TESPackage::refCount`
+  (`:734`); multi-holder needs per-verb records at 0x821+.
 - `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1265-1494`)
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and

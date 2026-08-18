@@ -107,6 +107,7 @@ namespace MFO::Config {
             else if (a_key == "fCastCooldown")      setF(g_castCooldown, 0.0f, 60.0f);
             else if (a_key == "bDriveCaster")       setB(g_driveCaster);
             else if (a_key == "bProbeCastStyle")    setB(g_probeCastStyle);   // P1 probe, dev-only
+            else if (a_key == "bCastSelf")          setB(g_castSelf);         // forced self-cast gate, dev-only
             else if (a_key == "bProgProbe")         setB(g_progProbe);        // progression sinker probe, dev-only
             else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
             else if (a_key == "bProgCatalogDump")   setB(g_progCatalogDump);  // catalog census dump, dev-only
@@ -227,6 +228,7 @@ namespace MFO::Config {
             g_castCooldown       = 4.0f;
             g_driveCaster        = false;
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
+            g_castSelf           = false;   // forced self-cast route -- OFF (gated) until deck-confirmed
             g_progProbe          = false;   // progression sinker probe -- OFF everywhere by default
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
             g_progCatalogDump    = false;   // progression catalog dump -- OFF everywhere by default

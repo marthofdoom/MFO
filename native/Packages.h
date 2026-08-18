@@ -153,23 +153,6 @@ namespace MFO::Packages {
     // below declines, and the caller must fall back rather than assume.
     bool Available();
 
-    // Command a follower to cast a spell ON THEMSELVES.
-    //
-    // CURRENTLY ALWAYS DECLINES (Decline::SelfRoute, v1.0.32) -- deliberately.
-    // targType 6 alone is field-proven (probe 6), but probe 6's record carried
-    // NO QNAM; the shipped MFO_CastPackage carries an AUTHORED QNAM (its
-    // authored Target is t4 -> alias 1), and writing t6 into a QNAM-carrying
-    // record at runtime is the rev-4 CTD's surviving zero-precedent cell
-    // (§0.20/§0.22 -- the crash was re-explained as the QNAM, not the t6).
-    // Until a dedicated probe clears QNAM+t6, cast_self misses fall through
-    // to Actuation's silent apply, exactly the pre-v1.0.32 behaviour.
-    //
-    // When it is eventually armed: Target input = PTDA **targType 6**, value 0.
-    // NOT targType 4 -> alias 0 -- an alias indirection back to the DELIVERING
-    // alias is FIELD-REFUTED (§0.19, #65): it stalls, owning the actor while
-    // resolving nothing.
-    Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell);
-
     // A CONCENTRATION HOLD (v1.0.53 deck freeze -> bounded streams). A
     // fire-and-forget package cast ends itself: the [cast] sink observes the
     // release and Pump lets go one linger later. A CONCENTRATION cast has no
@@ -187,6 +170,22 @@ namespace MFO::Packages {
         RE::FormID healWatch   = 0;      // release early when this actor tops off
         bool       ffWatch     = false;  // release early on a teammate in the line
     };
+
+    // Command a follower to cast a spell ON THEMSELVES (SPEC-self-cast-forced).
+    //
+    // GATED behind bCastSelf (Config::g_castSelf), DEFAULT OFF. With the gate
+    // off this DECLINES Decline::SelfRoute exactly as it shipped, and the caller
+    // falls back to Actuation's silent apply. With it on, the follower is filled
+    // into command-quest alias 2, whose ALPC is the DEDICATED MFO_CastPackageSelf
+    // record: authored targType 6 (self), NO QNAM -- §0.22's proven-clean
+    // probe-6 shape, which REVOKED #67. This is NOT the shipped MFO_CastPackage
+    // (that carries a QNAM for its alias-1 foe target, and writing t6 into a
+    // QNAM-carrying record at runtime is the rev-4 crash cell). Only the Spell
+    // input is set at runtime; the t6 target is authored statically and never
+    // rewritten. a_hold bounds the stream identically to the target path (self
+    // needs no ffWatch -- nothing to friendly-fire).
+    Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                     const CastHold& a_hold = {});
 
     // Command a follower to cast at another actor.
     //
