@@ -81,6 +81,15 @@ namespace MFO {
     }
 
     void SaveCallback(SKSE::SerializationInterface* a_intfc) {
+        // SEV-1 #3: quiesce the AddTask worker for the whole callback so the
+        // count pass (below) and the write pass see the SAME g_followers. Without
+        // this, the worker's Refresh/TryEnsureRecord insert (map rehash) or
+        // Scheduler::Tick rule-write between the two passes tears the FLWR record
+        // or invalidates the iterator (co-save corruption). RAII so every early
+        // return still resumes; no epoch bump, so gameplay resumes untouched.
+        Diagnostics::PausePump();
+        struct ResumeGuard { ~ResumeGuard() { Diagnostics::ResumePump(); } } _resume;
+
         if (!a_intfc->OpenRecord(kRecFollowers, kSchemaVersion)) {
             spdlog::error("[cosave] OpenRecord('{}') failed -- NOTHING SAVED", "FLWR");
             return;
@@ -354,13 +363,22 @@ namespace MFO {
             // INVARIANTS.md #12: SKSE does not round-trip unread records. A
             // newer save read by this older DLL loses data on the next save.
             // Warn LOUDLY -- never log a comforting falsehood.
+            //
+            // CONTINUE, not return: this record is INDEPENDENT of MSTK/PRGN/FWPN,
+            // and GetNextRecordInfo seeks past this unread FLWR body on the next
+            // loop (same as the sibling newer-version guards above). Returning
+            // here abandoned those siblings unread, so a downgraded DLL wrote them
+            // back EMPTY on the next save -- destroying stock-gear/progression/
+            // force-hold data the user could otherwise recover by re-upgrading.
+            // We read nothing from the FLWR body before this point, so there is no
+            // mid-stream desync to fear.
             if (version > kSchemaVersion) {
                 spdlog::error("[cosave] SAVE IS NEWER (v{}) THAN THIS DLL (v{}). "
                               "Records this build cannot read WILL BE DESTROYED on the next save. "
                               "Do not save over this file with this version.",
                               version, kSchemaVersion);
                 g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
-                return;
+                continue;
             }
 
             std::uint32_t count = 0;
