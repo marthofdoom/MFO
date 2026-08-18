@@ -8,13 +8,33 @@
 >
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶▶ RESUME HERE (2026-08-18) — v1.0.65 IN PROGRESS: self-cast + AUTO + review-fix batch merged; NOT yet cut.**
-> - **⛔ HOLD THE RELEASE — do NOT cut/tag v1.0.65 yet.** marth has a LIST OF ISSUES to fix FIRST (they
->   go INTO v1.0.65). A 12:30 auto-timer accidentally cut v1.0.65 (bump+tag+push) during a usage-limit
->   reset; it was fully UNDONE (tag deleted local+remote, main force-reset to `7693867`, VERSION back to
->   1.0.64, releases/v1.0.65 removed). Re-cut ONLY after the issue list is fixed AND marth says go.
->   Vendor spell-tome feature = MOVED to the TOWN UPDATE (not v1.0.65). Design-calls still open: #75
->   equip-gate policy, §16 manual-points undo.
+> **▶▶ RESUME HERE (2026-08-18 PM) — v1.0.65 RC field-fix batch MERGED + CI-GREEN (`1fad7e5`); NOT yet cut.**
+> - **⛔ STILL HOLDING the cut.** The 6 RC field issues marth found on the deck build are ALL FIXED,
+>   merged to main, and CI-GREEN (`1fad7e5`, run 32181118780). Re-cut ONLY after marth field-re-probes a
+>   FRESH deck build of `1fad7e5` AND says go. **The 6 fixes** (3 worktree agents, disjoint files):
+>   (1) **prog prereq `==`→`>=`** — `OwnsPerkForm` walks `nextPerk` forward so owning a HIGHER perk rank
+>   satisfies a lower-rank prereq (`ProgAllocator.cpp`); (2) **AUTO heal fanned to full-HP members** —
+>   effect-driven `SpellHealsHealth`/`IsHealEffect` gate so ANY health-restoring spell is filtered by
+>   per-target need (player runs the same `consider` gate); `Choice` now carries the firing rule's HP
+>   threshold (`Actuation.cpp`/`Evaluator.*`); (3) **robotic recast** — `g_beneficialRecast` per-(caster,
+>   spell) suppression = authored duration × `fBeneficialRecastFrac`(0.85) × ±`fBeneficialRecastJitter`(0.20)
+>   jitter (new INI knobs); (5) **concentration caught by DoT filter** — concentration spells bypass the
+>   already-active/DoT gate entirely; (6) **Magelight "when dark" spam** — robust active detection
+>   (HasMagicEffect OR active-effect-list scan by spell) + the #3 suppression; (4) **looting broken**
+>   (Fable) — scene-package THEFT mid-walk no longer stickies loose piles (theft guard pauses stall clocks,
+>   re-asserts claim, transient-blocklist only), sibling-follower fail-map churn age-gated (≥10s), single-cell
+>   scan → 3 actor-anchored attached cells (crash4-safe) so a table loots OUT (`Logistics.cpp`).
+>   `kNoProgress` 7s→5s. See scratchpad `RC-issues.md` for the deck evidence.
+> - **VENDOR FEATURE REVERTED OFF MAIN (marth's call).** The town-update vendor spell-tome feature had been
+>   auto-merged to main+origin (errant 12:30 cron, gated dark) and re-bumped VERSION to 1.0.65. Reverted:
+>   main force-reset to the clean pre-vendor base + the 3 RC fixes, VERSION back to `1.0.64`. Vendor work
+>   PRESERVED on branch `feature/vendor-spell-tomes` (origin) for the TOWN UPDATE — do NOT re-merge to a
+>   mage-patch release. Design-calls still open: #75 equip-gate policy, §16 manual-points undo.
+> - **#2 caveat (for marth):** the per-target heal gate covers the AUTO *fan* path (`Self/Always/world-gate
+>   → Cast (Auto)`). An `Ally: Health < X% → Heal (Auto)` still routes to SINGLE-target (heals the one
+>   wounded ally), so it never over-fanned. If marth wants "Ally < X%" to fan as an AoE heal, that's a small
+>   `autoPick`-gate routing change — NOT yet done. **#3 caveat:** a non-concentration duration HoT heal is
+>   now under the recast suppression like any buff (instant + concentration heals exempt).
 > - **What v1.0.65 is:** the UNIVERSAL forced self-cast (`Actuation::CastSelfDirect`, direct effect+magicka,
 >   NO equip/channel — see MAP §2 & `SPEC-self-cast-forced.md`) + **AUTO cast-target inference**
 >   (`Actuation::CastAuto`: hostile → nearby foes, beneficial → whole party who needs it) + the full
@@ -33,10 +53,11 @@
 >     (4) new **INVARIANT #74** (BSJobs-vs-main distinct threads, mutual exclusion UNPROVEN → off-worker
 >     reads use the Wave-1 mirror); (5) docs refresh (CLAUDE/MAP co-save 4 records/PRGN v4/FWPN v1,
 >     Wave-1 API, cast semantics, Refresh-on-worker, Packages line drift).
-> - **STILL PENDING before the v1.0.65 cut:** (a) **vendor spell-tome feature** (buy teachable spell
->   books from merchants — the field-notes ask; not yet built); (b) **deck field test** of the whole
->   batch (self-cast + AUTO live, `bCastSelf`/AUTO on); (c) **cut + tag** v1.0.65 + Nexus bbcode
->   (still owed 1.0.62→65) + changelog. Saves are VERIFIED SAFE — no co-save regression in the batch.
+> - **STILL PENDING before the v1.0.65 cut:** (a) **deck field re-probe** of `1fad7e5` — confirm the 6 RC
+>   fixes hold (no Magelight spam, humanlike light recast, heal only the wounded, concentration heals steady,
+>   prereq ranks unlock, looting completes a room fast); (b) **cut + tag** v1.0.65 + Nexus bbcode (still owed
+>   1.0.62→65) + changelog. Vendor feature is NO LONGER pending here — reverted to `feature/vendor-spell-tomes`
+>   for the town update. Saves are VERIFIED SAFE — no co-save regression in the batch.
 > - **DESIGN DECISIONS AWAITING MARTH (do not decide unilaterally):**
 >   - **#75 equip-gate policy** — how aggressively the CheckShouldEquip gate should clamp the AI's own
 >     re-arm vs. letting it drink/scroll/shout; current 30-vtable list excludes weapon/potion/scroll/shout.
