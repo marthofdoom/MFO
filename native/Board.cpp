@@ -234,7 +234,7 @@ namespace MFO::Board {
         { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
         { Vocab::kCondIsInterior,    "In an interior",       ParamKind::None    },
         { Vocab::kCondIsNight,       "At night",             ParamKind::None    },
-        { Vocab::kCondDark,          "When dark",            ParamKind::None    },
+        { Vocab::kCondDark,          "Dark",                 ParamKind::None    },
     };
     inline constexpr VocabEntry kActsCombat[] = {
         { Vocab::kActWait,              "Wait" },
@@ -270,7 +270,7 @@ namespace MFO::Board {
         { Vocab::kCondAllyHpBelow,         "Ally HP % below",       ParamKind::Percent },
         { Vocab::kCondIsInterior,          "In an interior",        ParamKind::None    },
         { Vocab::kCondIsNight,             "At night",              ParamKind::None    },
-        { Vocab::kCondDark,                "When dark",             ParamKind::None    },
+        { Vocab::kCondDark,                "Dark",                  ParamKind::None    },
     };
     inline constexpr VocabEntry kActsLogi[] = {
         { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
