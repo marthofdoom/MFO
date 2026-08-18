@@ -8,9 +8,23 @@
 >
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶▶ RESUME HERE (2026-08-18 PM) — v1.0.65 RC field-fix batch MERGED + CI-GREEN (`6831959`); NOT yet cut.**
-> - **⛔ STILL HOLDING the cut.** The 6 RC field issues + 2 follow-up field reports are ALL FIXED, merged
->   to main, CI-GREEN, and DEPLOYED to the deck (`6831959`, sha `bd2592a4`). Re-cut ONLY after marth
+> **▶▶ RESUME HERE (2026-08-18 PM) — v1.0.65 RC field-fix batch MERGED + CI-GREEN (`5f8e873`); NOT yet cut.**
+> - **CONCENTRATION FULLY UNIFIED (`5f8e873`, sha `5118941`, deployed).** marth pushed hard here — "don't
+>   miss previous solutions, make all cases work." MFO ALREADY had the channel (`ConcentrationCast`,
+>   bounded package stream, v1.0.58) AND the self solution (`CastSelfDirect`, #67 REVOKED — self-conc is
+>   NOT barred). The only gap was the OOC logistics path never ROUTING to them. Fixed: new public wrapper
+>   `Actuation::CastConcentrationAt` over `ConcentrationCast`; OOC concentration (player/ally/foe) routes
+>   through it; self-conc → `CastSelfDirect`. BOUNDS (single source `ConcentrationHold` + caps): foe
+>   offense 1-4s (LoF-gated), heal 6s/until-topped, utility 4s; **self heal 6s cap, self ward/utility 15s
+>   cap** (`kConcSelfUtilityCap`, marth's call — NOT 4s: CastSelfDirect is non-rooting so a shorter cap
+>   only flickers the ward). FF self-buffs keep authored duration. The ff0cb48 instant-apply heal-stream
+>   stopgap is GONE; a latent OOC foe-offense UNBOUNDED-freeze risk was found+fixed. Full spell×target×
+>   context matrix in the feat/unify-concentration-routing agent report — every cell WORKS, none barred.
+>   LESSON (see [[self-concentration-gambits-barred]] memory, now flipped to RESOLVED): read
+>   `ConcentrationCast`/`CastOn`/`CastSelfDirect` + concentration docs BEFORE designing cast behavior.
+> - **⛔ STILL HOLDING the cut.** The 6 RC field issues + 3 follow-up field reports (logistics ally/player
+>   heal, off-role shed-drop, concentration unification) are ALL FIXED, merged, CI-GREEN, and DEPLOYED to
+>   the deck (`5f8e873`, sha `5118941`). Re-cut ONLY after marth
 >   field-re-probes AND says go. **Two follow-ups on top of the 6 (`1fad7e5`):**
 >   (A) **`8a369d5` — logistics "Ally HP below" now heals the PLAYER.** The ally SELECTOR (`PickAlly`)
 >   already included the player, but the OOC cast dispatch routed a beneficial `cast_target` onto a
