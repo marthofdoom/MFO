@@ -213,9 +213,19 @@ releases **by eviction** with a non-actor XMarker.
   **follower-agnostic** (deck-proven on Lucien). Gated behind `Config::g_castSelf`
   (bCastSelf). Callers: `CastOn` self-intercept (combat, BEFORE the
   concentration fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
-  `act.cast_self` branch (out-of-combat). The Logistics immediate path still SKIPS
-  concentration spells legibly (self-gate-off / player / **beneficial cast_target
-  ally-heal**) — instant-apply has no channel and stuck forever (deck 2026-08-17).
+  `act.cast_self` branch (out-of-combat). The Logistics immediate path SKIPS a
+  concentration **ward/buff** legibly (self-gate-off / player / cast_target) —
+  its per-second magnitude has no channel and would stick forever (deck 2026-08-17).
+  EXCEPTION (deck 2026-08-18, `healStream`): a **beneficial concentration HEAL**
+  aimed at an ally/player (NOT a foe) now STREAMS single-target through that same
+  immediate direct-apply — `SpellHealsHealth(sp)` (local mirror of Actuation's
+  IsHealEffect: primaryAV Health, not detrimental/hostile). A restore-Health effect
+  re-applied per tick only heals and leaves NOTHING to release, so it is safe where a
+  ward is not. It bypasses the already-active `HasMagicEffect` pre-skip AND the
+  `g_logiCastUntil` window and writes no window, so it re-fires every ~1s service
+  while the Player/Ally-HP-below rule holds and stops when the target tops up; logs
+  `concentration heal … streamed`. (Lucien Fast-Heal `0002F3B8` was SKIPPED every
+  tick before this — the single-target path never got CastAuto/#5's streaming.)
 - **DEAD/superseded: the package self-route.** `Packages::CastSelf`, `Begin`'s self
   branch, command-quest **alias 2** (`kAliasCommandSelfActor` → `MFO_CastPackageSelf`,
   Forms `0x835`), `SetSelfSpell`, `HolderActorAlias`/`HolderPackage`'s self side, and
