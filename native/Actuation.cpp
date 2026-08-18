@@ -175,6 +175,31 @@ namespace MFO::Actuation {
         constexpr float kConcHealCap     = 6.0f;   // heal stream hard cap
         constexpr float kConcUtilityHold = 4.0f;   // utility hold cap
 
+        // ONE source of truth for the concentration TIME-LIMITS, so EVERY
+        // concentration cast -- self, player, ally, foe -- is bounded by the
+        // identical "same time limit based casting" durations (marth):
+        //   hostile  -- 1-4 s by per-follower Temperament, ffWatch cuts it the
+        //               moment a teammate crosses the line of fire;
+        //   heal     -- kConcHealCap (6 s) "until the target tops off";
+        //   utility  -- a capped kConcUtilityHold (4 s) hold.
+        // Consumed by ConcentrationCast (the non-self package stream, below) AND
+        // by SelfCastReconcile's self-heal cap (the self direct-apply equivalent),
+        // so the two paths can never drift apart on the numbers.
+        Packages::CastHold ConcentrationHold(RE::FormID a_casterID, RE::FormID a_targetID,
+                                             CasterConsent::SpellKind a_kind) {
+            Packages::CastHold hold;
+            if (a_kind == CasterConsent::SpellKind::Offense) {
+                hold.holdSeconds = 1.0f + 3.0f * Temperament(a_casterID);   // 1-4 s, flair #1
+                hold.ffWatch     = true;
+            } else if (a_kind == CasterConsent::SpellKind::Heal) {
+                hold.holdSeconds = kConcHealCap;
+                hold.healWatch   = a_targetID;
+            } else {
+                hold.holdSeconds = kConcUtilityHold;
+            }
+            return hold;
+        }
+
         Outcome ConcentrationCast(RE::Actor* a_follower, RE::SpellItem* a_spell,
                                   RE::Actor* a_target) {
             const auto id   = a_follower->GetFormID();
@@ -242,20 +267,13 @@ namespace MFO::Actuation {
                          "concentration held (teammate in the line of fire)", true };
             }
 
-            Packages::CastHold hold;
-            const char*        kindName = "utility";
-            if (kind == CasterConsent::SpellKind::Offense) {
-                hold.holdSeconds = 1.0f + 3.0f * Temperament(id);   // 1-4 s, flair #1
-                hold.ffWatch     = true;
-                kindName         = "hostile";
-            } else if (kind == CasterConsent::SpellKind::Heal) {
-                hold.holdSeconds = kConcHealCap;
-                hold.healWatch   = a_target->GetFormID();
-                kindName         = "heal";
-            } else {
-                hold.holdSeconds = kConcUtilityHold;
-                kindName         = "utility";
-            }
+            // Shared bounding: ConcentrationHold owns the numbers (see above) so
+            // the self path (SelfCastReconcile) and this non-self stream stay in
+            // lockstep on the durations.
+            const Packages::CastHold hold = ConcentrationHold(id, a_target->GetFormID(), kind);
+            const char* kindName = kind == CasterConsent::SpellKind::Offense ? "hostile"
+                                 : kind == CasterConsent::SpellKind::Heal    ? "heal"
+                                                                             : "utility";
 
             const auto d = Packages::CastAt(a_follower, a_spell, a_target, hold);
             if (d == Packages::Decline::None) {
@@ -1221,6 +1239,20 @@ namespace MFO::Actuation {
         }
     }
 
+    // Public entry to the BOUNDED CONCENTRATION STREAM (Actuation.h). A thin
+    // forwarder to the TU-internal ConcentrationCast so the out-of-combat
+    // Logistics cast dispatch routes a concentration cast at a NON-SELF target
+    // (player, ally, foe) through the SAME bounded package stream combat's CastOn
+    // uses -- one source of truth for hostile/heal/utility bounding, LoS + line-
+    // of-fire gating, cooldown pacing and the CasterConsent latch. A self target
+    // is intercepted INSIDE (routed to CastSelfDirect when bCastSelf is on, else a
+    // legible decline -- never the package), so a caller may pass a self target
+    // and get the direct-trigger self behaviour, identical to combat.
+    Outcome CastConcentrationAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                RE::Actor* a_target) {
+        return ConcentrationCast(a_follower, a_spell, a_target);
+    }
+
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         // AE-only, mirroring CastOn (the SE crash path #67). Off AE -> transparent.
         if (!REL::Module::IsAE())    return SelfCast::Declined;
@@ -1329,7 +1361,27 @@ namespace MFO::Actuation {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
             const bool gone   = !a || !a->Is3DLoaded();
             const bool stale  = std::chrono::duration<float>(now - sc.lastFired).count() > releaseSec;
-            if (gone || stale) {
+            // SAME-TIME-LIMIT (marth): a self CONCENTRATION HEAL is bounded by the
+            // identical kConcHealCap "until topped" ceiling every NON-self heal
+            // stream obeys (ConcentrationHold). CastSelfDirect is a paced direct-
+            // apply, not a rooted package, so its natural bound is the HP rule going
+            // false (its own "until topped"); this hard cap is the shared safety
+            // ceiling that matches the package -- after kConcHealCap of continuous
+            // channelling the entry releases (dispelling a restore-Health effect is
+            // a no-op) and the next winning tick re-streams a fresh burst. It is
+            // HEAL-ONLY and CONCENTRATION-ONLY: a fire-and-forget self buff and a
+            // self WARD keep their authored duration (the NO-time-cap fix below --
+            // capping THOSE re-broke the mid-duration dispel churn), because an
+            // un-rooted self buff has no rooting to release on a fixed cadence.
+            bool concHealCapped = false;
+            if (!gone) {
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell);
+                if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+                    CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal &&
+                    std::chrono::duration<float>(now - sc.started).count() >= kConcHealCap)
+                    concHealCapped = true;
+            }
+            if (gone || stale || concHealCapped) {
                 // Rule stopped re-firing / follower gone -> RELEASE: dispel a
                 // lingering ward/effect so it cannot persist as a stuck gameplay
                 // buff. There is NO equip to undo -- the self-cast never holds the

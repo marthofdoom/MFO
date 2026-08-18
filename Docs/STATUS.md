@@ -116,10 +116,16 @@
 >   probe: the deck LATENCY number (force-dispatch→ward-up ms by weapon class). Robust authoring pattern:
 >   proactive "ward WHILE threatened" held as a stream, not reactive race.
 > - Also owed: Nexus bbcode 1.0.62→64; Progression Add-On release + kit; MAP.md full refresh.
-> - **CONCENTRATION (answered marth):** works v1.0.53+ (ConcentrationCast, Actuation.cpp:224) IFF
->   TARGETED (not self) AND bForceCastOnMiss+bUsePackages ON — bounded package stream (hostile 1-4s LoF-
->   gated / heal-until-healed / utility). Self-cast concentration BARRED (package self route = unprobed
->   CTD cell) — a real gap if someone wants self-channel-heal. Old "not working" report predates 1.0.53.
+> - **CONCENTRATION (UNIFIED v1.0.6x — self, player, ally, foe all work):** the bounded stream
+>   (`ConcentrationCast`) now backs BOTH combat AND out-of-combat. Combat `CastOn` and OOC Logistics both
+>   route every NON-self concentration cast through the SAME public `Actuation::CastConcentrationAt`
+>   (hostile 1-4s LoF-gated / heal-until-topped 6s / utility 4s), IFF bForceCastOnMiss+bUsePackages ON.
+>   The old OOC `healStream` instant-apply stopgap (ff0cb48) is REMOVED. **Self-concentration is NOT
+>   barred** — INVARIANT #67 was REVOKED (2026-07-22); a self concentration cast routes to
+>   `CastSelfDirect` (direct-apply, no package/QNAM, gated by bCastSelf), and a self HEAL is bounded by
+>   the SAME `kConcHealCap` (6s "until topped") via `SelfCastReconcile`'s shared `ConcentrationHold`. AUTO
+>   (`CastAuto`) keeps its instant-apply broadcast for concentration (one package stream can't fan to N —
+>   see report). Old "not working" report predates 1.0.53.
 > - **THEN roadmap:** town update (#31), then the Roster addon (2nd ESL).
 > - Deferred/known: MAP.md now TRACKED but STALE (PRGN v2 era) — full refresh owed (PRGN v4, #76
 >   equip-override/hysteresis, base-class sidearm); PRGN v3-save wipe fully closed only for v4+ saves.
