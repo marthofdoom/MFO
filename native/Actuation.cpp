@@ -879,26 +879,25 @@ namespace MFO::Actuation {
     // ── FORCED SELF-CAST: the UNIVERSAL direct trigger (SPEC-self-cast-forced) ──
     // The MFO_CastPackageSelf alias route EQUIPS the spell but never TRIGGERS the
     // cast, and is declined outright on package-locked custom followers (Lucien).
-    // So self-cast bypasses packages and drives the ACTOR directly -- follower-
-    // agnostic. It is a proper CHANNEL, not a one-shot, tracked per follower:
+    // So self-cast bypasses packages and applies the effect DIRECTLY -- follower-
+    // agnostic, effect + magicka only, NO equip and NO channel:
     //
-    //   FIRE (CastSelfDirect, paced by the caller's cooldown):
-    //     * first fire  -> equip the spell (Loadout stows the weapon) and
-    //       HoldStow so Tick can't auto-restore it ~500 ms in (the amputation
-    //       marth saw). Register the channel.
-    //     * every fire  -> apply the effect + spend magicka (§5.3), refreshing
-    //       the VFX (dispel-then-apply so the shader never stacks across fires).
-    //   RECONCILE (each tick, SelfCastReconcile):
-    //     * DRIVE ONCE, the moment the async equip lands (currentSpell == spell)
-    //       -- entering the caster's cast state is what makes the animation play
-    //       IN FULL and stops the AI unequipping mid-cast. Driving on the FIRST
-    //       fire read currentSpell before the equip settled -> the field's
-    //       0->0. No per-tick re-equip -> no thrash / erratic animation.
-    //     * RELEASE when the rule stops re-firing (or a safety cap): stop the
-    //       VFX (Dispel), InterruptCast the channel, DeselectSpell, sheathe, and
-    //       give the weapon back. This is the exact-bounding + no-stuck-VFX
-    //       teardown, and it also fires on rule-disabled / condition-false
-    //       (the rule simply stops firing -> the entry goes stale).
+    //   * NEVER EQUIP THE SPELL. CastSpellImmediate (kInstant) applies the effect
+    //     without the spell in hand. Leaving a light spell (Candlelight/Magelight)
+    //     equipped let the follower's OWN AI spam-cast it -- 55+ non-MFO lights
+    //     piled up to a ShadowSceneNode light-limit CTD (deck 2026-08-19). The
+    //     cast animation is DEFERRED (polish pass), so the equip/HoldStow/caster-
+    //     drive scaffolding is gone entirely.
+    //   * FIRE (CastSelfDirect, every service/combat tick the rule wins): register
+    //     the entry, refresh lastFired, and -- once per fCastCooldown -- apply the
+    //     effect + spend magicka (§5.3) via ApplySelfEffect. The ALREADY-ACTIVE
+    //     guard there (the foe cast's own HasMagicEffect check) blocks re-applying
+    //     a duration self-buff/light while it is still up, so exactly ONE light
+    //     per effect-duration cycle. An instant heal re-fires when HP drops again.
+    //   * RELEASE (SelfCastReconcile, each tick): when the rule stops re-firing
+    //     (or a 30 s cap / follower gone) DISPEL a lingering ward/effect so it
+    //     cannot persist as a stuck gameplay buff. Covers rule-disabled /
+    //     condition-false (the entry simply goes stale). Nothing to unequip.
     namespace {
         using SelfClock = std::chrono::steady_clock;
         struct SelfCastState {
@@ -963,20 +962,15 @@ namespace MFO::Actuation {
             });
         }
 
-        // End a channel on the actor (main thread): stop the VFX, cut the
-        // channel, take the spell out of the hand, sheathe.
+        // RELEASE a self-cast (main thread): dispel the applied ward/effect so it
+        // does not persist as a stuck gameplay buff after the rule goes false.
+        // The self-cast NEVER equips or channels, so there is nothing to unequip,
+        // interrupt, or sheathe -- and doing any of those would touch the
+        // follower's OWN combat draw/equip state, which is not ours to change.
         void SelfCastEndActor(RE::FormID a_id, RE::FormID a_spellID) {
             MainThread::Post([a_id, a_spellID] {
-                auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id);
-                if (!a) return;
-                DispelSpellEffectsOn(a, a_spellID);
-                using CS = RE::MagicSystem::CastingSource;
-                for (const auto s : { CS::kLeftHand, CS::kRightHand, CS::kInstant })
-                    if (auto* mc = a->GetMagicCaster(s)) mc->InterruptCast(false);
-                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
-                    sp && a->GetEquippedObject(true) == sp)
-                    a->DeselectSpell(sp);
-                a->DrawWeaponMagicHands(false);   // sheathe
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id))
+                    DispelSpellEffectsOn(a, a_spellID);
             });
         }
     }
@@ -1015,13 +1009,15 @@ namespace MFO::Actuation {
         }
 
         if (it == g_selfCast.end()) {
-            // FIRST fire: equip (Loadout stows the weapon + records the debt) and
-            // HOLD the restore. The DRIVE waits for the reconcile -- the equip is
-            // async, so currentSpell is not the spell yet on this pass.
-            std::string why;
-            if (Loadout::Prepare(a_follower, a_spell, why) == Loadout::Ready::Failed)
-                return false;
-            Loadout::HoldStow(id);
+            // FIRST fire. DELIBERATELY DO NOT EQUIP THE SPELL. CastSpellImmediate
+            // (kInstant, in ApplySelfEffect) applies the effect without the spell
+            // in hand, so the follower is NEVER left holding it. Leaving a light
+            // spell (Candlelight/Magelight) equipped let the follower's OWN AI
+            // spam-cast it -- 55 non-MFO lights piled up to a ShadowSceneNode
+            // light-limit CTD (deck 2026-08-19). The animation is deferred anyway,
+            // so the equip/HoldStow/caster-drive scaffolding is dropped: MFO casts
+            // the chosen self-spell ONCE, it applies, and the already-active guard
+            // (ApplySelfEffect) blocks re-casting until the effect expires.
             auto& sc = g_selfCast[id];
             sc.spell = spellID; sc.driven = false; sc.started = now;
             sc.lastFired = now; sc.lastApply = {};   // epoch -> apply the effect immediately
@@ -1030,12 +1026,12 @@ namespace MFO::Actuation {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
         }
 
-        // SELF-PACE the effect application -- this channel does NOT use
-        // Loadout::StartCooldown (that calls ReleaseSpell, which would rip the
-        // spell out of the hand and kill the animation). Callers refresh this
-        // every service/combat tick while the rule wins; we apply the effect +
-        // spend magicka only once per fCastCooldown, so a self-heal ticks at the
-        // configured cadence rather than every 133 ms.
+        // SELF-PACE the effect application. Callers refresh this every
+        // service/combat tick while the rule wins; we apply the effect + spend
+        // magicka only once per fCastCooldown, so a self-heal ticks at the
+        // configured cadence rather than every 133 ms. (A duration self-buff is
+        // additionally capped to once per effect-duration by the already-active
+        // guard in ApplySelfEffect.)
         const float interval = std::max(1.0f, Config::g_castCooldown.load());
         if (std::chrono::duration<float>(now - it->second.lastApply).count() >= interval) {
             it->second.lastApply = now;
@@ -1060,51 +1056,22 @@ namespace MFO::Actuation {
             const bool stale  = std::chrono::duration<float>(now - sc.lastFired).count() > releaseSec;
             const bool capped = std::chrono::duration<float>(now - sc.started).count()   > 30.0f;
             if (gone || stale || capped) {
-                if (a) SelfCastEndActor(id, sc.spell);   // stop VFX + unequip + sheathe
-                Loadout::EndStowHold(id);
-                Loadout::Restore(id);                    // give the weapon back
+                // Rule stopped re-firing / follower gone -> RELEASE: dispel a
+                // lingering ward/effect so it cannot persist as a stuck gameplay
+                // buff. There is NO equip to undo -- the self-cast never holds the
+                // spell (that was the AI-spam CTD). SelfCastEndActor's dispel is
+                // the load-bearing part; its InterruptCast/sheathe are harmless
+                // no-ops now.
+                if (a) SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
-                continue;
-            }
-            // DRIVE ONCE, the moment the async equip lands. Entering the cast
-            // state plays the animation in full AND stops the AI unequipping
-            // mid-cast -- no per-tick re-equip, no thrash. currentSpell is read
-            // off the worker (the bDriveCaster precedent); the drive itself is
-            // marshalled to the main thread where the animation graph ticks.
-            if (!sc.driven && a) {
-                using CS = RE::MagicSystem::CastingSource;
-                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell);
-                const CS src = (sp && a->GetEquippedObject(false) == sp &&
-                                a->GetEquippedObject(true) != sp) ? CS::kRightHand : CS::kLeftHand;
-                auto* hand = sp ? a->GetMagicCaster(src) : nullptr;
-                if (hand && hand->currentSpell == sp) {
-                    sc.driven = true;
-                    const auto spellID = sc.spell;
-                    MainThread::Post([id, spellID, src] {
-                        auto* ac = RE::TESForm::LookupByID<RE::Actor>(id);
-                        auto* s2 = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
-                        if (!ac || !s2) return;
-                        ac->DrawWeaponMagicHands(true);
-                        if (auto* h = ac->GetMagicCaster(src)) {
-                            h->desiredTarget = ac->CreateRefHandle();   // self
-                            float strength = 1.0f;
-                            RE::MagicSystem::CannotCastReason reason{};
-                            h->CheckCast(s2, false, &strength, &reason, false);
-                            h->RequestCastImpl();
-                            spdlog::info("[cast] {:08X} self-cast DRIVEN -- caster state {} "
-                                         "(CheckCast reason {})", id,
-                                         static_cast<std::uint32_t>(h->state.get()),
-                                         static_cast<std::uint32_t>(reason));
-                        }
-                    });
-                }
             }
         }
         for (const auto id : done) g_selfCast.erase(id);
     }
 
     void ClearSelfCasts() {
-        for (auto& [id, sc] : g_selfCast) Loadout::EndStowHold(id);
+        // Revert/load: drop the channels. No engine call -- the world is being
+        // replaced, and the self-cast holds no equip/debt to undo.
         g_selfCast.clear();
     }
 

@@ -94,14 +94,6 @@ namespace MFO::Loadout {
     // Restore a stowed two-handed weapon once its cast is done.
     void Tick();
 
-    // ── FORCED SELF-CAST support (Actuation, SPEC-self-cast-forced) ──────────
-    // While MFO channels a forced self-cast, HOLD its stowed weapon / displaced
-    // shield back -- Tick's auto-restore (after fTwoHandedDebounce) is what
-    // yanked the spell out of the hand mid-animation. Set on each self-cast
-    // fire, cleared when the channel ends.
-    void HoldStow(RE::FormID a_actorID);
-    void EndStowHold(RE::FormID a_actorID);
-
     void ClearTransientState();
 
     int PendingRestores();
