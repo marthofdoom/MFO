@@ -10,6 +10,7 @@
 #include "Forms.h"
 #include "Config.h"
 #include "Vocabulary.h"
+#include <unordered_set>   // SEV-1: off-worker FormID membership mirror (g_tracked)
 
 namespace MFO::Followers {
 
@@ -71,6 +72,33 @@ namespace MFO::Followers {
         constexpr int kMissesBeforeDrop = 3;
         std::unordered_map<RE::FormID, int> g_missStreak;
 
+        // ── off-worker membership mirror + active snapshot (SEV-1) ──────────
+        // g_active / g_activeIds are rebuilt by Refresh on the JOB WORKER
+        // (ENGINE_NOTES §0.37) and are read UNLOCKED by main/worker callers.
+        // Off-worker callers (combat cast-hook, event sinks, SaveCallback,
+        // progression poll) must NOT walk those live lists -- Refresh
+        // reassigns/reallocates them concurrently (UAF/rehash). g_mx guards the
+        // two structures BELOW only; it never wraps g_active itself (keeps the
+        // serial pump domain lock-free, #4). Refresh republishes both under g_mx
+        // whenever it rebuilds the lists, and ClearTransientState empties them
+        // under the same lock on revert.
+        std::mutex                                       g_mx;
+        std::unordered_set<RE::FormID>                   g_tracked;   // FormID membership mirror
+        std::shared_ptr<const std::vector<RE::FormID>>   g_activeSnapshot =
+            std::make_shared<const std::vector<RE::FormID>>();
+
+        // Republish the mirror + snapshot from the current g_activeIds. Call
+        // under NOTHING (it takes g_mx itself); invoked at Refresh's tail and
+        // from ClearTransientState. g_mx is a strict LEAF -- no MFO call is made
+        // while it is held.
+        void PublishActiveMirror() {
+            std::lock_guard<std::mutex> lk(g_mx);
+            g_tracked.clear();
+            g_tracked.reserve(g_activeIds.size());
+            for (const auto id : g_activeIds) g_tracked.insert(id);
+            g_activeSnapshot = std::make_shared<const std::vector<RE::FormID>>(g_activeIds);
+        }
+
         FactionQuirk g_dismissedFactions[] = {
             { "Vilja",  "EMCompViljaSkyrim.esp", 0x0D6867, -1, nullptr },
             { "Tindra", "EMCompViljaSkyrim.esp", 0x1FB779,  0, nullptr },
@@ -114,6 +142,10 @@ namespace MFO::Followers {
         g_missStreak.clear();
         g_lastCombat.clear();
         g_activeIds.clear();
+        // Keep the off-worker mirror consistent with the just-emptied lists, or
+        // IsTrackedFast/ActiveSnapshot would report stale membership across a
+        // revert (g_active is cleared by ResetAllState alongside this call).
+        PublishActiveMirror();
     }
 
     float SecondsSinceCombat(RE::FormID a_actorID) {
@@ -172,6 +204,16 @@ namespace MFO::Followers {
             if (auto* a = h.get().get(); a && a->GetFormID() == a_actorID) return true;
         }
         return false;
+    }
+
+    bool IsTrackedFast(RE::FormID a_actorID) {
+        std::lock_guard<std::mutex> lk(g_mx);
+        return g_tracked.find(a_actorID) != g_tracked.end();
+    }
+
+    std::shared_ptr<const std::vector<RE::FormID>> ActiveSnapshot() {
+        std::lock_guard<std::mutex> lk(g_mx);
+        return g_activeSnapshot;   // shared ownership; pointee is immutable
     }
 
     bool IsPersistableID(RE::FormID a_actorID) {
@@ -324,6 +366,11 @@ namespace MFO::Followers {
 
         g_active   = std::move(next);
         g_activeIds = std::move(nextIds);
+
+        // Republish the off-worker mirror + snapshot from the freshly-rebuilt
+        // g_activeIds. This is the ONLY safe road for the combat cast-hook /
+        // sinks / SaveCallback / progression poll -- they never walk g_active.
+        PublishActiveMirror();
 
         // Log the zero case too, or "found none" and "never ran" look the same.
         spdlog::debug("[follower] refresh: {} active, {} record(s) stored",

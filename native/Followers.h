@@ -59,9 +59,16 @@ namespace MFO::Followers {
     // dismissal in its own way despite still looking like a teammate.
     bool IsDismissedCustomFollower(RE::Actor* a_actor);
 
-    // Rebuild g_active from ProcessLists::highActorHandles. Main thread only.
-    // Logs additions and removals by name; logs the zero case too, or
-    // "found none" and "never ran" are indistinguishable (INVARIANTS #46).
+    // Rebuild g_active from ProcessLists::highActorHandles. Runs on the AddTask
+    // JOB WORKER (Diagnostics' sleeper tick), NOT the main thread -- despite the
+    // "serial SKSE-task" doctrine, the pump body executes on BSJobs::JobThread
+    // (ENGINE_NOTES §0.37). Every reassignment of g_active/g_activeIds here can
+    // therefore race an off-worker READER; that is why Refresh republishes the
+    // g_mx-guarded FormID mirror + immutable snapshot at its tail, and why
+    // off-worker callers MUST use IsTrackedFast / ActiveSnapshot below rather
+    // than walking the live lists. Logs additions and removals by name; logs the
+    // zero case too, or "found none" and "never ran" are indistinguishable
+    // (INVARIANTS #46).
     void Refresh();
 
     // False for runtime (0xFF) FormIDs, which must NEVER be persisted
@@ -82,8 +89,30 @@ namespace MFO::Followers {
     // is entirely empty. See the definition for the full contract.
     void ApplyDefaultKit(FollowerState& st);
 
-    // Is this actor currently one of ours? Reads THE SUBJECT's state.
+    // Is this actor currently one of ours? Resolves handles by walking the live
+    // g_active vector -- UNLOCKED, so MAIN-THREAD / JOB-WORKER callers ONLY (the
+    // serial pump domain). NEVER call this from the combat thread or an event
+    // sink: Refresh reassigns/reallocates g_active on the worker and an
+    // off-domain walk is a use-after-free (SEV-1, CasterConsent's old bug). For
+    // any off-worker caller use IsTrackedFast instead.
     bool IsTracked(RE::FormID a_actorID);
+
+    // Off-worker membership probe: locks g_mx and tests the FormID mirror that
+    // Refresh republishes under the same lock. Resolves no handles, touches no
+    // live list -- safe to call from ANY thread (combat cast-hook, event sinks,
+    // SaveCallback). This is the road CLAUDE.md's "combat-thread hooks read
+    // FormIDs/atomic mirrors, never the follower lists" describes; it REPLACES
+    // the unlocked IsTracked walk for every off-worker caller. Membership only:
+    // it cannot say WHICH handle, only that the id is currently tracked.
+    bool IsTrackedFast(RE::FormID a_actorID);
+
+    // An immutable copy of the active FormID list, published atomically from
+    // Refresh under g_mx. Off-worker readers (progression's main-thread poll,
+    // any sink) hold the returned shared_ptr and iterate it lock-free instead of
+    // walking live g_active/g_activeIds while the worker rebuilds them. The
+    // pointee never mutates; a later Refresh swaps in a NEW vector, leaving
+    // outstanding readers on their stable copy. Safe to call from ANY thread.
+    std::shared_ptr<const std::vector<RE::FormID>> ActiveSnapshot();
 
     // Seconds since this follower was last OBSERVED in combat, or a huge value
     // if never. Rapport needs this because combat state is already gone by the

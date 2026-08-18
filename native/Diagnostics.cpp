@@ -47,15 +47,53 @@ namespace MFO::Diagnostics {
         // mid-sleep across a revert->load exits instead of running alongside
         // its own replacement.
         std::atomic<std::uint64_t> g_pumpEpoch{ 0 };
-        // TRUE while an AddTask tick body is actually executing (set AFTER the
-        // pump-check, so a tick that starts post-StopPump never sets it). StopPump
-        // drains on this so the revert can clear the save-scoped maps without a
-        // worker tick inserting mid-clear (audit: concurrent map insert+clear=UB).
+        // TRUE while an AddTask body that touches save-scoped maps is actually
+        // executing. StopPump/PausePump DRAIN on this so a revert/save can act on
+        // the maps without a worker body inserting mid-clear (concurrent map
+        // insert+clear = UB). See PumpTickGate for the ordering that makes the
+        // drain reliable.
         std::atomic<bool>          g_tickActive{ false };
-        struct TickActiveGuard {
-            TickActiveGuard()  { g_tickActive.store(true); }
-            ~TickActiveGuard() { g_tickActive.store(false); }
+        // Resumable quiesce for SaveCallback (SEV-1 #3): unlike StopPump this
+        // leaves g_pumpRunning/g_pumpEpoch untouched (the sleeper thread keeps
+        // living), and every gated body bails while it is set. PausePump sets it
+        // then drains g_tickActive so the two FLWR passes see a STABLE
+        // g_followers; ResumePump clears it.
+        std::atomic<bool>          g_pumpPaused{ false };
+
+        // THE ONE guard shape for every MFO AddTask body queued in this file
+        // (the sleeper tick and all four sinks). Two jobs:
+        //  1. Dekker handshake with StopPump/PausePump. We STORE g_tickActive=
+        //     true FIRST, THEN load the pump state -- both seq_cst. StopPump
+        //     stores running=false (seq_cst) then loads g_tickActive; with a
+        //     total seq_cst order at least one side sees the other, so a body
+        //     that passed its check can never slip past the drain and mutate a
+        //     map the revert is clearing (the check-then-set TOCTOU this
+        //     replaces).
+        //  2. Staleness bail. Bodies queued at an earlier epoch (or while the
+        //     pump is stopped/paused) run their guard, see the mismatch, and
+        //     return without touching game state. The captured epoch is taken at
+        //     QUEUE time; the guard compares it at RUN time.
+        // Construct it FIRST in the body; test it as a bool; on false, return.
+        struct PumpTickGate {
+            explicit PumpTickGate(std::uint64_t a_queuedEpoch) {
+                g_tickActive.store(true, std::memory_order_seq_cst);
+                m_ok = g_pumpRunning.load(std::memory_order_seq_cst) &&
+                       !g_pumpPaused.load(std::memory_order_seq_cst) &&
+                       g_pumpEpoch.load(std::memory_order_seq_cst) == a_queuedEpoch;
+            }
+            ~PumpTickGate() { g_tickActive.store(false, std::memory_order_seq_cst); }
+            explicit operator bool() const { return m_ok; }
+            PumpTickGate(const PumpTickGate&)            = delete;
+            PumpTickGate& operator=(const PumpTickGate&) = delete;
+        private:
+            bool m_ok = false;
         };
+
+        // The epoch a sink captures at QUEUE time, so its deferred body can tell
+        // it apart from a body queued before a revert/load swapped the pump.
+        std::uint64_t CurrentPumpEpoch() {
+            return g_pumpEpoch.load(std::memory_order_seq_cst);
+        }
 
         // The shield restore trigger (DESIGN §4.5b). A shield only matters when
         // something is hitting you, so that is exactly when MFO gives it back
@@ -70,10 +108,19 @@ namespace MFO::Diagnostics {
                 auto* actor = a_event->target->As<RE::Actor>();
                 if (!actor) return RE::BSEventNotifyControl::kContinue;
                 const auto id = actor->GetFormID();
-                if (!Followers::IsTracked(id)) return RE::BSEventNotifyControl::kContinue;
+                // Off-worker probe: this sink runs on the event thread, so it must
+                // NOT walk the live g_active vector (Refresh races it, SEV-1).
+                if (!Followers::IsTrackedFast(id)) return RE::BSEventNotifyControl::kContinue;
 
-                // Sinks QUEUE; equipping is engine work (INVARIANTS #1).
-                SKSE::GetTaskInterface()->AddTask([id]() { Loadout::OnFollowerHit(id); });
+                // Sinks QUEUE; equipping is engine work (INVARIANTS #1). Capture
+                // the pump epoch now; the deferred body runs under PumpTickGate so
+                // it bails if a revert/save moved the pump after we queued.
+                const auto epoch = CurrentPumpEpoch();
+                SKSE::GetTaskInterface()->AddTask([id, epoch]() {
+                    PumpTickGate gate(epoch);
+                    if (!gate) return;
+                    Loadout::OnFollowerHit(id);
+                });
                 return RE::BSEventNotifyControl::kContinue;
             }
         };
@@ -87,7 +134,10 @@ namespace MFO::Diagnostics {
             RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_e,
                                                   RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override {
                 if (a_e && !a_e->opening && a_e->menuName == RE::JournalMenu::MENU_NAME) {
-                    SKSE::GetTaskInterface()->AddTask([]() {
+                    const auto epoch = CurrentPumpEpoch();
+                    SKSE::GetTaskInterface()->AddTask([epoch]() {
+                        PumpTickGate gate(epoch);   // shared body shape; drains with StopPump
+                        if (!gate) return;
                         Config::Read();
                         // Re-apply settings mirrored into derived UI state --
                         // the raw atomics are live, but g_showHud only reaches
@@ -130,14 +180,22 @@ namespace MFO::Diagnostics {
                 // it was simply filtered to the player).
                 if (!a_event->object->IsPlayerRef()) {
                     auto* caster = a_event->object->As<RE::Actor>();
-                    if (caster && Followers::IsTracked(caster->GetFormID())) {
+                    // Off-worker probe (event thread): the mirror, never a live
+                    // g_active walk that Refresh could be reallocating (SEV-1).
+                    if (caster && Followers::IsTrackedFast(caster->GetFormID())) {
                         // QUEUE. This reads g_followers, which is main-thread-only
                         // like every other MFO map, and the sink runs on the
                         // event thread (#1). Cost of getting this wrong is a
                         // torn read of the very table the evaluator is using.
                         const auto casterID = caster->GetFormID();
                         const auto spellID  = a_event->spell;
-                        SKSE::GetTaskInterface()->AddTask([casterID, spellID]() {
+                        const auto epoch    = CurrentPumpEpoch();
+                        SKSE::GetTaskInterface()->AddTask([casterID, spellID, epoch]() {
+                            // Same shared guard as every body here: the g_followers
+                            // find() below must not race the worker's map rebuild,
+                            // and this participates in StopPump/PausePump's drain.
+                            PumpTickGate gate(epoch);
+                            if (!gate) return;
                             auto* actor = RE::TESForm::LookupByID<RE::Actor>(casterID);
 
                             // Resolve as TESForm, not SpellItem: the field log
@@ -219,7 +277,11 @@ namespace MFO::Diagnostics {
                     return RE::BSEventNotifyControl::kContinue;
 
                 // Sinks queue; they never do engine work inline.
-                SKSE::GetTaskInterface()->AddTask([]() {
+                const auto epoch = CurrentPumpEpoch();
+                SKSE::GetTaskInterface()->AddTask([epoch]() {
+                    // DumpReport / PublishSnapshot read g_followers -- gate them.
+                    PumpTickGate gate(epoch);
+                    if (!gate) return;
                     if (Board::IsAvailable()) {
                         Board::PublishSnapshot();
                         Board::Toggle();
@@ -253,8 +315,13 @@ namespace MFO::Diagnostics {
                 // this thread is still awake.
                 if (auto* task = SKSE::GetTaskInterface()) {
                     task->AddTask([a_epoch, diagTurn]() {
-                        if (!g_pumpRunning.load() || g_pumpEpoch.load() != a_epoch) return;
-                        TickActiveGuard _active;   // marks the tick in-flight for StopPump's drain
+                        // Dekker-ordered guard: publish in-flight FIRST, THEN
+                        // re-check the pump, so StopPump's drain can't miss a tick
+                        // that already passed the old check-then-set (SEV-2
+                        // TOCTOU). Also bails if a save PausePump'd or the epoch
+                        // moved after this was queued.
+                        PumpTickGate gate(a_epoch);
+                        if (!gate) return;
 
                         // Detection and the HUD stay on the old ~532 ms budget;
                         // only the evaluator runs at the deadline.
@@ -419,8 +486,13 @@ namespace MFO::Diagnostics {
         // The guards inside SleeperLoop were dead code while nothing ever
         // cleared this flag, and the "safe across shutdown" comment was
         // therefore fiction. This makes it true.
-        g_pumpRunning.store(false);
-        g_pumpEpoch.fetch_add(1);   // strand any thread still mid-sleep
+        // Dekker pairing with PumpTickGate: STORE running=false (seq_cst) BEFORE
+        // loading g_tickActive below. The gate stores tickActive=true (seq_cst)
+        // before loading running; under the single seq_cst total order at least
+        // one side observes the other, so the drain cannot miss a body that just
+        // passed its check (the TOCTOU this rework closes).
+        g_pumpRunning.store(false, std::memory_order_seq_cst);
+        g_pumpEpoch.fetch_add(1, std::memory_order_seq_cst);   // strand any thread still mid-sleep
         // DRAIN: a tick already past the pump-check may be mid-execution on the
         // job worker (ENGINE_NOTES 0.30), inserting into the save-scoped maps the
         // revert is about to clear. Wait for it to finish so the clear is safe.
@@ -428,16 +500,37 @@ namespace MFO::Diagnostics {
         // flag, so this waits only for the one genuinely in-flight tick and can't
         // deadlock; the cap is a backstop, not an expected path.
         int waited = 0;
-        for (; g_tickActive.load() && waited < 2000; ++waited)
+        for (; g_tickActive.load(std::memory_order_seq_cst) && waited < 2000; ++waited)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         // The cap is a backstop, never an expected path. If it TRIPS, the clears
         // that follow race the still-live tick's map inserts (the unordered_map UB
         // this StopPump rework was built to prevent) -- so make it LOUD rather than
         // silent, per the Fable audit (#9). A crash right after a load-screen would
         // point straight here.
-        if (g_tickActive.load())
+        if (g_tickActive.load(std::memory_order_seq_cst))
             spdlog::error("[diag] StopPump: worker tick STILL active after {}ms cap -- revert "
                           "clears may race its inserts (audit #9); a post-load crash starts here", waited);
+    }
+
+    void PausePump() {
+        // Resumable quiesce for SaveCallback (SEV-1 #3). Unlike StopPump it does
+        // NOT touch g_pumpRunning/g_pumpEpoch -- the sleeper thread keeps living
+        // and StartPump is not needed to resume. It sets g_pumpPaused (which every
+        // PumpTickGate observes and bails on), then DRAINS the one body that may
+        // already be past its gate mutating a save-scoped map. After this returns,
+        // g_followers is stable for the callback's count+write passes. Same Dekker
+        // handshake as StopPump: store paused (seq_cst) before loading tickActive.
+        g_pumpPaused.store(true, std::memory_order_seq_cst);
+        int waited = 0;
+        for (; g_tickActive.load(std::memory_order_seq_cst) && waited < 2000; ++waited)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (g_tickActive.load(std::memory_order_seq_cst))
+            spdlog::error("[diag] PausePump: worker body STILL active after {}ms cap -- "
+                          "SaveCallback may race its g_followers mutation", waited);
+    }
+
+    void ResumePump() {
+        g_pumpPaused.store(false, std::memory_order_seq_cst);
     }
 
     void StartPump() {
