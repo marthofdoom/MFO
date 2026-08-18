@@ -253,15 +253,17 @@ namespace MFO::Packages {
             return true;
         }
 
-        RE::BGSRefAlias* CommandAlias() {
+        RE::BGSRefAlias* AliasByID(std::uint32_t a_aliasID) {
             auto* quest = Forms::g_commandQuest;
             if (!quest) return nullptr;
             for (auto* base : quest->aliases) {
-                if (!base || base->aliasID != kAliasCommandActor) continue;
+                if (!base || base->aliasID != a_aliasID) continue;
                 return skyrim_cast<RE::BGSRefAlias*>(base);
             }
             return nullptr;
         }
+
+        RE::BGSRefAlias* CommandAlias() { return AliasByID(kAliasCommandActor); }
 
         // FILL AND CLEAR THE ALIAS.
         //
@@ -299,15 +301,19 @@ namespace MFO::Packages {
         // Dispatch ReferenceAlias.ForceRefTo / .Clear through the VM.
         // The fallback when the native is unavailable (SE), and the route for
         // Clear, which has no verified native id.
-        bool DispatchAlias(const char* a_fn, RE::TESObjectREFR* a_arg) {
+        bool DispatchAlias(const char* a_fn, RE::TESObjectREFR* a_arg,
+                           std::uint32_t a_aliasID = kAliasCommandActor) {
             auto* vm = VM();
-            auto* alias = CommandAlias();
+            auto* alias = AliasByID(a_aliasID);   // resolve the REQUESTED alias, not always 0 --
+                                                  // a self holder (alias 2) VM-cleared through the
+                                                  // hardcoded alias-0 route would clear the WRONG
+                                                  // alias and log "released" (SEV-3).
             if (!vm || !alias) return false;
 
             RE::VMHandle handle{};
             if (!HandleForAlias(alias, handle)) {
                 spdlog::error("[pkg] no VM handle for alias {} -- the policy refused a "
-                              "non-form object; {} is unreachable", kAliasCommandActor, a_fn);
+                              "non-form object; {} is unreachable", a_aliasID, a_fn);
                 return false;
             }
 
@@ -687,9 +693,9 @@ namespace MFO::Packages {
                 spdlog::info("[pkg] {:08X}: released ({}) -- evicted (marker){}", id, a_why,
                              g_holder.self ? " [self]" : "");
                 released = true;
-            } else if (DispatchAlias("Clear", nullptr)) {
-                spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear (no marker/off-AE)",
-                             id, a_why);
+            } else if (DispatchAlias("Clear", nullptr, actorAlias)) {
+                spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear alias {} (no marker/off-AE)",
+                             id, a_why, actorAlias);
                 released = true;
             }
             if (!released) {
@@ -786,6 +792,20 @@ namespace MFO::Packages {
             // moments to re-point the record.
             if (g_holder.phase != Phase::Idle && g_holder.phase != Phase::Done) {
                 return Decline::Busy;
+            }
+
+            // AT Phase::Done, the PRIOR holder's alias fill has NOT been swept
+            // yet -- ClearAlias runs only on the next Pump. Admitting a new
+            // request here (the same tick, likelier under AUTO fan-out) would
+            // rewrite the shared package and displace the prior holder with NO
+            // InterruptCast / EvaluatePackage, so a hostile concentration beam
+            // the prior holder opened keeps streaming past the point a crossing
+            // teammate should have cut it (defeats ffWatch). Release the prior
+            // holder NOW -- ClearAlias is safe in any phase, evicts the marker
+            // (never the player), interrupts the stream, re-evaluates the prior
+            // holder this tick, and resets the mirror so the fill below is clean.
+            if (g_holder.phase == Phase::Done) {
+                ClearAlias("superseded");
             }
 
             // BEFORE acting, not after.
@@ -1304,20 +1324,39 @@ namespace MFO::Packages {
         // mid-self-stream latches alias 2 on every subsequent load unless it is
         // evicted here too.
         if (auto* quest = Forms::g_commandQuest) {
+            // NEVER the player for THIS alias: alias 0/2 carry the UseMagic
+            // ALPC, and force-filling the player into a package-carrying alias
+            // IS the furniture-ejection bug (#48/#73). So the command sweep
+            // uses the marker DIRECTLY (EvictMarkerRef -> marker or null),
+            // exactly as ClearAlias does -- not EvictionRef, which falls back to
+            // the player when the marker mint failed. Marker null -> the VM
+            // Clear arm (per-alias, #SEV-3) or the RELEASE-FAILED log; the load
+            // sweep re-runs next session. Actor-ness, not identity, decides
+            // whether a slot needs sweeping (a prior session's marker is a
+            // different REFR than this session's).
+            auto* mark = EvictMarkerRef();   // marker or null -- no player fallback here
             for (const std::uint32_t aliasID : { kAliasCommandActor, kAliasCommandSelfActor }) {
                 RE::ObjectRefHandle h{};
                 quest->CreateRefHandleByAliasID(h, aliasID);
                 auto* held = h.get() ? h.get().get() : nullptr;
                 if (held && player && held->As<RE::Actor>() &&
-                    (held != player || haveMarker)) {
-                    if (!ForceRefToNative(quest, aliasID, ev))
-                        DispatchAlias("Clear", nullptr);   // off-AE: scriptless-alias
-                                                           // Clear may no-op; AE never
-                                                           // reaches this arm
-                    spdlog::info("[pkg] {} -- cast alias {} held {:08X}{}; evicted (marker)",
-                                 a_why, aliasID, held->GetFormID(),
-                                 held == player ? " (the PLAYER, #48b)" : "");
-                    if (held == player) sweptPlayer = true;
+                    (held != player || mark)) {
+                    bool released = false;
+                    if (mark && ForceRefToNative(quest, aliasID, mark)) {
+                        released = true;
+                    } else if (DispatchAlias("Clear", nullptr, aliasID)) {   // off-AE / marker-less;
+                        released = true;                                     // per-alias, never alias 0
+                    }
+                    if (released) {
+                        spdlog::info("[pkg] {} -- cast alias {} held {:08X}{}; evicted (marker)",
+                                     a_why, aliasID, held->GetFormID(),
+                                     held == player ? " (the PLAYER, #48b)" : "");
+                        if (held == player) sweptPlayer = true;
+                    } else {
+                        spdlog::error("[pkg] {} -- cast alias {} held {:08X} RELEASE FAILED on both "
+                                      "routes -- the fill persists in the save; the load sweep will "
+                                      "evict it", a_why, aliasID, held->GetFormID());
+                    }
                 }
             }
         }
