@@ -4,6 +4,7 @@
 #include "Vocabulary.h"
 #include "Config.h"
 #include "Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
+#include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -4172,7 +4173,26 @@ namespace MFO::Logistics {
                 // silent immediate apply -- so self never takes the immediate route
                 // while the gate is on. `selfPkg` is a legacy name for that route.
                 const bool selfPkg   = (op == Vocab::kActCastSelf) && Config::g_castSelf.load();
-                const bool immediate = (op != Vocab::kActCastTarget) && !selfPkg;   // self/player -> immediate route
+                // ROUTE A kActCastTarget CAST (field 2026-08-18: "logistics when ally
+                // hp below doesn't seem to count player"). The ally SELECTOR already
+                // resolves the wounded PLAYER as `tgt` (Evaluator::PickAlly considers
+                // the player), but this branch used to send EVERY cast_target through
+                // Packages::CastAt -- the animated FOE package (alias 0, a QNAM foe-
+                // target). A beneficial heal aimed through the foe package does NOT
+                // beneficially land on the player/ally, so the heal never happened.
+                // FIX: only a HOSTILE spell aimed at an actual FOE takes the foe
+                // package. A beneficial spell, OR ANY spell aimed at an ally/player,
+                // is applied DIRECTLY to `tgt` (CastSpellImmediate) exactly like the
+                // self/player immediate route below -- MFO applies effects directly,
+                // bypassing engine delivery, the same way CastAuto/CastSelfDirect and
+                // combat's CastOn already land a heal on whoever needs it.
+                const bool hostileSpell =
+                    CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Offense;
+                const bool foeTarget = tgt != a_follower && tgt->IsHostileToActor(a_follower);
+                const bool castAtFoe = (op == Vocab::kActCastTarget) && hostileSpell && foeTarget;
+                // self(gate off)/player -> immediate; beneficial-or-ally cast_target
+                // -> immediate (direct heal); hostile-on-foe cast_target -> CastAt.
+                const bool immediate = !selfPkg && !castAtFoe;
                 // Skip re-casting a buff still on the TARGET (candlelight up on him
                 // or the player), then pace by the spell's DURATION (a 60s light
                 // refreshes as it expires; a 3s floor keeps instant spells off the
@@ -4228,15 +4248,25 @@ namespace MFO::Logistics {
                     // A CONCENTRATION spell has no instant apply: CastSpellImmediate
                     // stamps the per-second effect with NO channel and it STICKS
                     // forever (the stuck-ward bug). Self routes to the package above
-                    // when bCastSelf is on; otherwise -- self with the gate off, or
-                    // any cast_player concentration -- skip it LEGIBLY rather than
-                    // apply an unreleasable effect.
+                    // when bCastSelf is on; otherwise -- self with the gate off, a
+                    // cast_player concentration, OR a beneficial concentration heal
+                    // aimed at an ally/player (Healing Hands) that now reaches this
+                    // immediate route -- skip it LEGIBLY rather than apply an
+                    // unreleasable effect. CONCENTRATION EDGE (2026-08-18): the core
+                    // fix lands INSTANT beneficial heals on the ally/player reliably;
+                    // a channeled beneficial STREAM is deliberately NOT re-applied
+                    // per tick here (no bounded channel exists on this direct path, so
+                    // a per-second effect would stick). For a streamed OOC heal use an
+                    // AUTO pick (Actuation::CastAuto owns the streamed whole-party fan)
+                    // or the combat cast path (ConcentrationCast's bounded channel).
                     if (conc) {
                         spdlog::info("[cast] {:08X} concentration {:08X} SKIPPED on {} -- an "
                                      "instant-apply has no channel to release (it would stick). "
-                                     "Enable bCastSelf to channel self-casts through the package.",
+                                     "Use an AUTO pick or bCastSelf to channel it.",
                                      id, sp->GetFormID(),
-                                     op == Vocab::kActCastPlayer ? "player" : "self");
+                                     op == Vocab::kActCastPlayer ? "player"
+                                   : op == Vocab::kActCastTarget ? "ally/player"
+                                                                 : "self");
                         start = choice.ruleIndex + 1; continue;
                     }
                     // CastSpellImmediate applies the effect to `tgt` for any delivery.
@@ -4266,9 +4296,11 @@ namespace MFO::Logistics {
                         ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f, 3.0f, 300.0f);
                     g_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(
                                                         std::chrono::duration<float>(dur));
-                    const char* route = op == Vocab::kActCastPlayer ? "player (immediate)"
-                                      : immediate                   ? "self (immediate)"
-                                                                    : "target (package)";
+                    const char* route =
+                          op == Vocab::kActCastPlayer                   ? "player (immediate)"
+                        : (op == Vocab::kActCastTarget && immediate)    ? "ally/player (immediate)"
+                        : immediate                                     ? "self (immediate)"
+                                                                        : "foe (package)";
                     spdlog::info("[logistics] {:08X} OOC cast {:08X} ({}), refresh in {:.0f}s",
                                  id, sp->GetFormID(), route, dur);
                 }

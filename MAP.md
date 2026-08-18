@@ -214,8 +214,8 @@ releases **by eviction** with a non-actor XMarker.
   (bCastSelf). Callers: `CastOn` self-intercept (combat, BEFORE the
   concentration fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
   `act.cast_self` branch (out-of-combat). The Logistics immediate path still SKIPS
-  concentration spells legibly (self-gate-off / player) — instant-apply has no
-  channel and stuck forever (deck 2026-08-17).
+  concentration spells legibly (self-gate-off / player / **beneficial cast_target
+  ally-heal**) — instant-apply has no channel and stuck forever (deck 2026-08-17).
 - **DEAD/superseded: the package self-route.** `Packages::CastSelf`, `Begin`'s self
   branch, command-quest **alias 2** (`kAliasCommandSelfActor` → `MFO_CastPackageSelf`,
   Forms `0x835`), `SetSelfSpell`, `HolderActorAlias`/`HolderPackage`'s self side, and
@@ -252,7 +252,14 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
-  (`Logistics.cpp:~4023`). A NON-auto MANUAL pick (Target=Nearest-ally/named/
+  (`Logistics.cpp:~4098`). On that OOC path a **non-AUTO** resolved `cast_target`
+  now routes by nature (2026-08-18 field fix): `CasterConsent::ClassifySpell` +
+  foe test — a **hostile spell aimed at a foe** takes `Packages::CastAt` (the
+  animated alias-0 foe package); a **beneficial spell OR an ally/player target**
+  is applied DIRECTLY to `tgt` via `CastSpellImmediate` (same immediate route as
+  cast_player), so an "Ally HP<X% → Cast heal" gambit heals the wounded PLAYER
+  (it used to send every cast_target through the foe package and never land).
+  A NON-auto MANUAL pick (Target=Nearest-ally/named/
   Player) on the OOC path resolves through the shared **public**
   `Actuation::ResolveCastTarget` (`Actuation.cpp`, moved out of the anon namespace
   — same ladder combat `Fire` uses) so it fires instead of being dropped (Wave 6
