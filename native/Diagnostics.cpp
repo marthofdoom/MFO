@@ -261,7 +261,7 @@ namespace MFO::Diagnostics {
                         if (diagTurn) Followers::Refresh();
 
                         Scheduler::Tick();
-                        Actuation::SelfCastReconcile();   // drive/release self-cast channels; set stow-holds BEFORE Tick
+                        Actuation::SelfCastReconcile();   // release self-cast channels when their rule goes stale (dispel lingering buffs)
                         Loadout::Tick();   // hand back stowed two-handers
 
                         if (diagTurn) Probe::Tick();

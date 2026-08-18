@@ -247,16 +247,23 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
   (`Logistics.cpp:~3909`) — the logistics `cast_target` handler used to SKIP an
-  empty target, dropping AUTO out of combat (the field-test miss). Classifies via
-  `CasterConsent::ClassifySpell` + `GetDelivery`: hostile → every foe in the combat
-  group within `Confidence::ChaseRadius` (OOC: no group → NoOp); beneficial
-  self-delivery → `CastSelfDirect` directly (gated `bCastSelf`, NOT via `CastOn` so
-  the OOC caller never runs combat equip/grace machinery); beneficial other-delivery
-  → party (active + player, `g_sharedRadius`, injured-only for heals). Fans out via
-  `ApplyEffectFromTo` (the generalised self-cast applier, effect + magicka only —
-  NOT the single-holder foe package), per-cast magicka with reserve floor, one
-  broadcast per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). A manual
-  target pick keeps the single-target `CastOn` path.
+  empty target, dropping AUTO out of combat (the field-test miss). Classifies
+  HOSTILE via `CasterConsent::ClassifySpell` — **delivery is NOT consulted** (MFO
+  applies effects DIRECTLY to the target actor, bypassing the engine delivery
+  system, so no spell is "self-only"): hostile → every foe in the combat group
+  within `Confidence::ChaseRadius` (OOC: no group → NoOp); **beneficial → the WHOLE
+  PARTY** (every active follower + the player within `g_sharedRadius` who NEEDS it —
+  the caster included as one of N, so a self-delivery Candlelight lights everyone;
+  heals filtered to HP<full; already-active guard skips the covered). Fans out via
+  `ApplyEffectFromTo` (direct `CastSpellImmediate` + manual magicka deduct — NOT the
+  single-holder foe package), **collecting FormIDs never raw `Actor*` past the
+  combat-group read-lock (UAF)**, per-cast magicka with reserve floor, one broadcast
+  per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). A manual target
+  pick keeps the single-target `CastOn` path. `CastSelfDirect` now returns
+  `SelfCast{Declined,Refreshed,Applied}` so a pacing REFRESH doesn't count as an
+  action that suppresses lower rules (logistics starvation, F3); its
+  `SelfCastReconcile` release has NO time cap — an earlier 30 s cap dispelled long
+  self-buffs mid-duration (~30 s re-cast beat); release is stale/follower-gone only.
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:28`), pumps packages
