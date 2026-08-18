@@ -69,6 +69,17 @@ namespace MFO::Actuation {
     // no engine call -- the world is being replaced (mirrors ClearForcedWeapons).
     void ClearSelfCasts();
 
+    // AUTO TARGET INFERENCE for act.cast_target. The board's default "Auto" pick
+    // (Subject::Self, no subject actor, no selector target) infers WHO from the
+    // spell and fans the cast out: hostile -> every nearby enemy; beneficial +
+    // self-delivery -> the caster (CastSelfDirect, gated bCastSelf); beneficial +
+    // other-delivery -> the party members who need it. Per-cast magicka (reserve-
+    // floored, insufficient-skip), already-active guard, one broadcast per
+    // fCastCooldown. Called from BOTH Fire (combat) and Logistics (out of combat);
+    // out of combat the hostile branch simply finds no enemies and NoOps. Returns
+    // Fired when at least one cast landed, else a transparent NoOp/decline.
+    Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID);
+
     // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired
     // weapon is FORCE-equipped (ActorEquipManager forceEquip=true = the engine's
