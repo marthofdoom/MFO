@@ -81,6 +81,13 @@ namespace MFO::Logistics {
         // (follower FormID << 8 | av-index).
         std::unordered_map<std::uint64_t, Clock::time_point> g_drinkUntil;
 
+        // Per-(follower,SPELL) OOC cast pacing window. Namespace scope (not a
+        // function-local static) so ClearTransientState wipes it on revert -- an
+        // FF-dynamic follower ID gets reused, and a stale window would MUTE an OOC
+        // cast rule in the next save; unbounded, it would also grow across saves.
+        // Key composed like g_drinkUntil ((follower << 32) | spell).
+        std::unordered_map<std::uint64_t, Clock::time_point> g_logiCastUntil;
+
         // Refs the PLAYER has taken from -- the waiver (#22h). Presence collapses
         // the delay to fQuickLootWaiver, and the timestamp RESETS on every take
         // so the follower moves in that many seconds after the player's LAST
@@ -351,6 +358,33 @@ namespace MFO::Logistics {
             // whose bits are not in kSlots) and was beaten on none it would
             // replace -- i.e. it upgrades every filled slot and/or dresses a bare one.
             return overlapsAny;
+        }
+
+        // #3 STRIP DOUBLE-TAKE: does the follower ALREADY CARRY a playable armor
+        // covering any slot a_armo would fill, at >= its rating? The arm's-reach
+        // strip drains Equipment in ONE worker tick, and each take's EQUIP is
+        // DEFERRED to the main thread (doEquip) -- so GetWornArmor still shows the
+        // OLD worn piece for EVERY take in the drain. Two same-slot upgrades both
+        // pass ArmorIsBetter (both beat the stale worn baseline) and both queue an
+        // equip, and the WORSE one -- queued last -- wins. Baselining against what's
+        // already IN THE PACK (the better piece taken earlier this strip, transferred
+        // synchronously by RemoveItem) stops the second, worse take from being
+        // looted/equipped at all. Outside a strip this is a no-op / a harmless
+        // anti-hoard: no reason to grab a spare worse than one already carried.
+        bool IsCreatureArmor(const RE::TESObjectARMO* a_armo);   // fwd (defined near LootEquipment)
+        bool CarriesSlotArmorAtLeast(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
+            const float cand = a_armo->GetArmorRating();
+            const auto  mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
+            if (mask == 0) return false;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* have = obj->As<RE::TESObjectARMO>();
+                if (!have || have == a_armo || IsCreatureArmor(have)) continue;
+                if (have->GetArmorRating() < cand) continue;   // worse -> not a competing baseline
+                if (static_cast<std::uint32_t>(have->GetSlotMask()) & mask)
+                    return true;   // a carried piece already covers this slot at >= rating
+            }
+            return false;
         }
 
         // ── #62 BROKEN-GEAR EVICTION (root-caused 2026-08-10) ────────────────
@@ -1164,7 +1198,8 @@ namespace MFO::Logistics {
                     // can't strand the actually-best piece.
                     if (!mageMode &&
                         !shieldUseless && ArmorIsBetter(a_follower, armo) &&
-                        armo->GetArmorRating() > bestArmorRat) {
+                        armo->GetArmorRating() > bestArmorRat &&
+                        !CarriesSlotArmorAtLeast(a_follower, armo)) {   // #3: don't re-take/equip a worse same-slot piece already in the pack (strip double-take)
                         bestArmorRat = armo->GetArmorRating();
                         bestArmor    = obj;
                     }
@@ -1219,7 +1254,11 @@ namespace MFO::Logistics {
                                      : bestBackup ? bestBackup
                                      : bestMage   ? bestMage
                                                   : bestArmor;
-            if (a_peek) return best != nullptr;   // just checking for an upgrade
+            // Peek: an upgrade exists AND the follower can actually carry it. Without
+            // the weight gate an overencumbered follower walks a whole excursion leg,
+            // takes nothing at arrival (the real take IS weight-gated below), and the
+            // corpse gets marked DONE -- a wasted trip.
+            if (a_peek) return best != nullptr && FitsCarryWeight(a_follower, best->GetWeight());
             if (!best) return false;
             if (!FitsCarryWeight(a_follower, best->GetWeight())) return false;
 
@@ -1887,7 +1926,7 @@ namespace MFO::Logistics {
 
         // PLAYER-HOME gate. A follower ransacking your own house reads as theft,
         // not tidying, so looting is suppressed wherever the player's current
-        // LOCATION carries vanilla LocTypePlayerHouse (0x01CB85 in Skyrim.esm) --
+        // LOCATION carries vanilla LocTypeHouse (0x01CB85 in Skyrim.esm) --
         // bought houses, Hearthfire builds, and the home mods that set it. The
         // keyword is resolved once by its FormID (LookupByEditorID is unreliable
         // unless a tweak kept EDIDs). Gated by bLootInPlayerHomes (default OFF);
@@ -2093,6 +2132,64 @@ namespace MFO::Logistics {
             if (a_srcPos.GetDistance(a_playerPos) > Config::g_departRadius.load())
                 return true;   // R2: took from it, then walked away
             return false;
+        }
+
+        // CLAIM-AND-RELEASE, factored out of LootNearby's scan so BOTH the scan and
+        // the arm's-reach StripCorpse honour the SAME dibs (a free-tier arrival strip
+        // must not snatch a fresh kill's enchanted sword + gold ahead of the player's
+        // grace -- the #2 bug). Accrues the player's "chance" (near/facing/departed)
+        // on g_claim exactly as the inline scan did, then applies the per-tier rule:
+        //   Free (arrows/bolts/potions/lockpicks): released at once -- the follower's
+        //     own restock, nobody competes.
+        //   Gear (equipment): a short anti-snatch grace, or rejection.
+        //   Valuables (gold/jewellery/soul gems): rejection, fair-chance, departure,
+        //     or the never-came-near abandon backstop.
+        bool TierReleased(Category a_cat, RE::TESObjectREFR* a_src,
+                          const RE::NiPoint3& a_playerPos, Clock::time_point a_now) {
+            if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
+                a_cat == Category::Potions || a_cat == Category::Lockpicks)
+                return true;
+
+            const RE::FormID   srcId  = a_src->GetFormID();
+            const RE::NiPoint3 srcPos = a_src->GetPosition();
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            auto& cl = g_claim[srcId];
+            if (cl.seen.time_since_epoch().count() == 0) { cl.seen = a_now; EvictOldest(g_claim); }
+
+            // Accrue the player's REAL elapsed "chance" since this source last accrued
+            // (capped, so N followers in one ~1 s window can't multiply the clock).
+            {
+                const float dt = cl.lastAccrue.time_since_epoch().count() == 0
+                    ? kTickSecs
+                    : std::min(std::chrono::duration<float>(a_now - cl.lastAccrue).count(), 2.0f);
+                cl.lastAccrue = a_now;
+                const float pdist = a_playerPos.GetDistance(srcPos);
+                if (dt > 0.0f && pdist <= Config::g_chanceRadius.load()) {
+                    cl.everNear = true;
+                    cl.farSince = {};
+                    if (PlayerIsConsidering(srcId))    cl.nearSecs += dt * 3.0f;
+                    else if (PlayerFacing(pc, srcPos)) cl.nearSecs += dt;
+                } else if (pdist > Config::g_departRadius.load() &&
+                           cl.farSince.time_since_epoch().count() == 0) {
+                    cl.farSince = a_now;
+                }
+            }
+
+            const bool rejected = ClaimRejected(srcId, srcPos, a_playerPos, a_now);
+            if (a_cat == Category::Equipment) {          // Gear tier
+                return rejected ||
+                       std::chrono::duration<float>(a_now - cl.seen).count()
+                           >= Config::g_firstDibsDelay.load();
+            }
+            // Gold / Jewelry / SoulGems -> Valuables tier.
+            const bool departed = cl.everNear &&
+                cl.farSince.time_since_epoch().count() != 0 &&
+                std::chrono::duration<float>(a_now - cl.farSince).count() >= kDepartRelease;
+            return rejected || departed ||
+                   cl.nearSecs >= Config::g_fairChance.load() ||
+                   (!cl.everNear &&
+                    std::chrono::duration<float>(a_now - cl.seen).count()
+                        >= Config::g_abandonDelay.load());
         }
 
         // Can this follower open a_ref's lock with their own Lockpicking skill?
@@ -2500,78 +2597,15 @@ namespace MFO::Logistics {
                         ++dEmpty; return RE::BSContainer::ForEachResult::kContinue;
                     }
 
-                    // CLAIM-AND-RELEASE (dibs redesign). Eligibility is per
-                    // value-tier, and the player's claim releases on EVIDENCE
-                    // ABOUT THE PLAYER, not a wall clock.
-                    //   Free (arrows/bolts/potions/lockpicks): released at once --
-                    //     nobody competes for the follower's own restock.
-                    //   Gear (equipment): a short anti-snatch grace, or rejection.
-                    //   Valuables (gold, jewellery, soul gems): rejection,
-                    //     fair-chance (player was near AND could see it and left
-                    //     it), or the abandonment backstop (player never came
-                    //     near).
-                    if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
-                        a_cat == Category::Potions || a_cat == Category::Lockpicks) {
+                    // CLAIM-AND-RELEASE (dibs redesign) -- factored into TierReleased
+                    // so the arm's-reach StripCorpse honours the SAME per-tier grace
+                    // (#2). Eligibility is per value-tier and releases on EVIDENCE
+                    // ABOUT THE PLAYER (near/facing/departed/abandon), not a wall
+                    // clock; Free tiers (ammo/potions/lockpicks) release at once. The
+                    // accrual it runs is idempotent-per-tick (a_now dedupe), so this
+                    // scan drives it exactly as the inline version did.
+                    if (TierReleased(a_cat, ref, playerPos, a_now))
                         candidates.push_back(ref->GetHandle());
-                        return RE::BSContainer::ForEachResult::kContinue;
-                    }
-
-                    const RE::FormID    srcId  = ref->GetFormID();
-                    const RE::NiPoint3  srcPos = ref->GetPosition();
-                    auto& cl = g_claim[srcId];
-                    if (cl.seen.time_since_epoch().count() == 0) { cl.seen = a_now; EvictOldest(g_claim); }
-
-                    // Accrue the player's "chance" as REAL elapsed time since this
-                    // source last accrued, capped -- so N followers servicing in
-                    // one ~1 s window cannot multiply the player's clock (a party
-                    // of four must not release valuables 4x faster; L1). The
-                    // within-tick dedupe still holds: a follower's per-category
-                    // re-walks share a_now, so the second sees dt=0. Near AND
-                    // could-see-it: QuickLoot HUD on it (considering) counts x3
-                    // (the UI literally shows them the contents); else facing x1.
-                    // (Vanilla-menu considering never reaches here -- the walk
-                    // returns at the top while a ContainerMenu is open.)
-                    {
-                        const float dt = cl.lastAccrue.time_since_epoch().count() == 0
-                            ? kTickSecs
-                            : std::min(std::chrono::duration<float>(a_now - cl.lastAccrue).count(), 2.0f);
-                        cl.lastAccrue = a_now;
-                        const float pdist = playerPos.GetDistance(srcPos);
-                        if (dt > 0.0f && pdist <= Config::g_chanceRadius.load()) {
-                            cl.everNear = true;
-                            cl.farSince = {};   // back in range -> the departure timer resets
-                            if (PlayerIsConsidering(srcId))    cl.nearSecs += dt * 3.0f;
-                            else if (PlayerFacing(pc, srcPos)) cl.nearSecs += dt;
-                        } else if (pdist > Config::g_departRadius.load() &&
-                                   cl.farSince.time_since_epoch().count() == 0) {
-                            cl.farSince = a_now;   // player has left the source's vicinity
-                        }
-                    }
-
-                    const bool rejected = ClaimRejected(srcId, srcPos, playerPos, a_now);
-                    bool released;
-                    if (a_cat == Category::Equipment) {          // Gear tier
-                        released = rejected ||
-                                   std::chrono::duration<float>(a_now - cl.seen).count()
-                                       >= Config::g_firstDibsDelay.load();   // gear grace
-                    } else {                                     // Gold / Jewelry / SoulGems -> Valuables
-                        // DEPARTURE release (P3): the player walked near this source
-                        // (everNear) but never took from it and has now left its
-                        // vicinity for kDepartRelease seconds -- the common "fight
-                        // near me, I loot the two I want, walk on" case. Without it,
-                        // everNear disabled the abandon backstop and the rest waited
-                        // forever. Complements: rejection, the 6s near+facing chance,
-                        // and the never-came-near abandon timer.
-                        const bool departed = cl.everNear &&
-                            cl.farSince.time_since_epoch().count() != 0 &&
-                            std::chrono::duration<float>(a_now - cl.farSince).count() >= kDepartRelease;
-                        released = rejected || departed ||
-                                   cl.nearSecs >= Config::g_fairChance.load() ||
-                                   (!cl.everNear &&
-                                    std::chrono::duration<float>(a_now - cl.seen).count()
-                                        >= Config::g_abandonDelay.load());
-                    }
-                    if (released) candidates.push_back(ref->GetHandle());
                     else ++dNotYet;
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
@@ -2609,7 +2643,7 @@ namespace MFO::Logistics {
             // farther ones, so a follower grabs what it is standing next to
             // rather than an arbitrary cell-walk order. Sort the collected
             // handles by distance to the follower; an unresolvable handle sorts
-            // last. (Bounded at 16, so this is a tiny sort.)
+            // last. (Bounded at kMaxCandidates=48, so this is a small sort.)
             std::sort(candidates.begin(), candidates.end(),
                 [&origin](const RE::ObjectRefHandle& a, const RE::ObjectRefHandle& b) {
                     auto pa = a.get(); auto pb = b.get();
@@ -2812,8 +2846,11 @@ namespace MFO::Logistics {
         // never loot a thing the player's rules don't ask for. Wait ends the sweep
         // (the deliberate STOP gambit). Returns true if anything moved.
         bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
-                         RE::TESObjectREFR* a_corpse, Clock::time_point /*a_now*/) {
+                         RE::TESObjectREFR* a_corpse, Clock::time_point a_now,
+                         bool* a_leftWaiting = nullptr) {
             bool moved = false;
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : a_follower->GetPosition();
             for (int start = 0; ; ) {
                 const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
                 if (choice.ruleIndex < 0) break;
@@ -2834,6 +2871,17 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
                 else isLoot = false;
                 if (isLoot) {
+                    // CLAIM-AND-RELEASE parity with the scan (#2): a free-tier
+                    // arm's-reach strip must not snatch a fresh kill's Gear/Valuables
+                    // ahead of the player's dibs. Gate the non-free tiers by the SAME
+                    // predicate LootNearby uses; if it's still the player's, leave it
+                    // and flag WAITING so the caller does NOT mark the body DONE --
+                    // the excursion linger revisits it once the claim releases.
+                    if (!TierReleased(cat, a_corpse, playerPos, a_now)) {
+                        if (a_leftWaiting) *a_leftWaiting = true;
+                        start = choice.ruleIndex + 1;
+                        continue;
+                    }
                     // Equipment moves ONE piece per call (§4.3's shape) while the
                     // other categories take all they want internally -- but this
                     // visit is the corpse's LAST (it's marked DONE right after we
@@ -2841,9 +2889,10 @@ namespace MFO::Logistics {
                     // a body with a better sword AND the bow the equip-ranged
                     // gambit needs (dual-primary) yielded only the sword, and the
                     // bow/cuirass sat blocklisted for 25 s or forever. Drain the
-                    // category: each take raises the inventory-derived baseline,
-                    // so this terminates; the guard is belt-and-braces (2 weapon
-                    // roles + 7 armor slots).
+                    // category: each take raises the inventory-derived baseline
+                    // (armor now baselines against carried pieces too, #3), so this
+                    // terminates; the guard is belt-and-braces (2 weapon roles + 7
+                    // armor slots).
                     int guard = (cat == Category::Equipment) ? 10 : 1;
                     while (guard-- > 0 && LootHere(a_follower, a_corpse, cat, want)) moved = true;
                 }
@@ -2901,15 +2950,16 @@ namespace MFO::Logistics {
         // contract of a probe. First faction with IsVendor() && OffersServices()
         // wins, matching the engine's own barter pick closely enough to verify.
         //
-        // MAIN THREAD ONLY (§0.37). This reads a LIVE merchant's inventory,
-        // which the main thread mutates as it manages the vendor -- read it
-        // from the job worker and a form cast comes back null and is
-        // dereferenced (CTD on Ulfberth/Warmaidens, crash-2026-07-31-13-12-39).
-        // The caller Posts here via MainThread; the statics below are therefore
-        // main-thread-only and unlocked, same discipline as the rest of MFO.
-        // Takes the logistics GAMBITS, not the FollowerState: the caller hands
-        // over a by-value copy because a_state on the worker is a reference
-        // into g_followers, which the main thread itself edits via the board.
+        // WORKER THREAD (§0.37, ServiceFollower's task -- NOT MainThread::Post).
+        // The follower reads (GetInventory / CountPotions / g_travel) must share
+        // the thread with the loot/heal/loadout mutations in that same task or they
+        // race InventoryChanges. This routine is LOG-ONLY: the merchant read + any
+        // transaction run in Papyrus (VM, dispatched worker->VM), so nothing here
+        // touches a live merchant's inventory off the main thread -- the CTD class
+        // the old MainThread::Post existed for. The cadence statics below are the
+        // namespace-scope g_econ* maps, wiped on revert by ClearTransientState.
+        // Takes the logistics GAMBITS by const-reference (a_state.logistics(), a
+        // reference into g_followers) -- shared serially with the same worker task.
 
         // Does the vendor's VEND list trade this item? The list holds KEYWORDS
         // (VendorItemWeapon et al.); notBuySell inverts it into an EXCLUSION
@@ -3081,6 +3131,7 @@ namespace MFO::Logistics {
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
+                    if (IsStockGear(fid, obj->GetFormID())) continue;   // #69: never sell the follower's OWN stock/signature gear (a spare weapon / unworn own armor)
                     if (weap && keepWeapons.count(obj)) continue;   // loadout weapon, not junk
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
@@ -3209,6 +3260,20 @@ namespace MFO::Logistics {
                 if (a_event->newContainer != PlayerID()) return RE::BSEventNotifyControl::kContinue;
                 const RE::FormID srcID = a_event->oldContainer;
                 if (srcID == 0) return RE::BSEventNotifyControl::kContinue;   // spawned into player, no source
+
+                // #5 IGNORE MFO's OWN HAND-BACKS. ShedOffRoleWeapon, HealExcludedWeapon,
+                // KeepHeadClear and TradeBridge deliveries all RemoveItem(follower ->
+                // player); that fires this sink with oldContainer = a follower. Counting
+                // it as a player "take" flips g_lastLootSource / the previous source's
+                // rejected flag on a corpse the player may be mid-looting (a false
+                // release). A genuine player take never comes OUT of a managed follower
+                // or a teammate. IsTrackedFast is the off-worker-safe roster check
+                // (Wave 1); the teammate lookup catches followers MFO doesn't manage.
+                if (Followers::IsTrackedFast(srcID))
+                    return RE::BSEventNotifyControl::kContinue;
+                if (auto* srcActor = RE::TESForm::LookupByID<RE::Actor>(srcID);
+                    srcActor && srcActor->IsPlayerTeammate())
+                    return RE::BSEventNotifyControl::kContinue;
 
                 // Sinks QUEUE; they never touch a main-thread map inline (#1/#4).
                 // The timer RESETS on every take, so multiple QuickLoot takes push
@@ -3358,7 +3423,20 @@ namespace MFO::Logistics {
             if (!obj || data.first <= 0) continue;
             auto* light = obj->As<RE::TESObjectLIGH>();
             if (!light || !light->CanBeCarried()) continue;
-            if (auto* mgr = RE::ActorEquipManager::GetSingleton()) mgr->EquipObject(a_follower, light);
+            // #62 3D-RACE: the equip rebuilds biped 3D -- marshal it to the MAIN
+            // THREAD like doEquip / HealExcludedWeapon, never on this job worker.
+            // Capture FormIDs and re-resolve on the frame that runs.
+            const RE::FormID folID   = a_follower->GetFormID();
+            const RE::FormID lightID = light->GetFormID();
+            auto doTorch = [folID, lightID]() {
+                auto* mgr  = RE::ActorEquipManager::GetSingleton();
+                auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
+                auto* form = RE::TESForm::LookupByID(lightID);
+                auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
+                if (mgr && fol && item) mgr->EquipObject(fol, item);
+            };
+            if (MainThread::IsInstalled()) MainThread::Post(doTorch);
+            else                           doTorch();   // VR: pump is a no-op, keep the direct path
             return true;
         }
         return false;
@@ -3384,8 +3462,7 @@ namespace MFO::Logistics {
     // NonPlayable flag, no catalog needed) OR Catalog::IsExcluded (quest/unique,
     // needs the regenerated catalog). A no-op once healed, so it's safe to poll.
     void HealExcludedWeapon(RE::Actor* a_follower) {
-        auto* em = RE::ActorEquipManager::GetSingleton();
-        if (!em) return;
+        if (!RE::ActorEquipManager::GetSingleton()) return;   // (re-fetched on the main thread in doHeal)
         for (int hand = 0; hand < 2; ++hand) {
             auto* eq  = a_follower->GetEquippedObject(hand == 1);   // false=right, true=left
             auto* bad = eq ? eq->As<RE::TESObjectWEAP>() : nullptr;
@@ -3399,38 +3476,57 @@ namespace MFO::Logistics {
                 if (WeaponClassOf(w->GetWeaponType()) == WepClass::Other) continue;  // no staff/creature
                 if (w->GetAttackDamage() > bestDmg) { bestDmg = w->GetAttackDamage(); best = obj; }
             }
-            if (best) {
-                em->EquipObject(a_follower, best);   // auto-unequips the excluded one
-            } else {
-                em->UnequipObject(a_follower, bad);  // nothing real carried -- just take it off
-            }
-            // CRITICAL: un-equipping alone leaves the weapon in the pack, and the
-            // engine re-wields it as "best weapon" within seconds -- the poll then
-            // just churns forever (field-caught: same 'Dwarven Sphere Crossbow'
-            // re-healed 3 min apart). So it has to LEAVE the follower. Which way
-            // follows the ARMOR fix's rule (KeepHeadClear): a CREATURE weapon is
-            // non-playable -- invisible/broken on the PLAYER too, so handing it over
-            // is just useless clutter -- DELETE it. A merely catalog-excluded weapon
-            // is a real playable quest/unique item -> return it to the player. Count
-            // the copies so a stack leaves entirely.
-            const bool creature = IsCreatureWeapon(bad);
-            std::int32_t haveBad = 0;
-            for (auto& [obj, data] : a_follower->GetInventory())
-                if (obj == bad) { haveBad = data.first; break; }
-            if (haveBad > 0) {
-                if (creature)
-                    a_follower->RemoveItem(bad, haveBad, RE::ITEM_REMOVE_REASON::kRemove,
-                                           nullptr, nullptr);
-                else if (auto* player = RE::PlayerCharacter::GetSingleton())
-                    a_follower->RemoveItem(bad, haveBad, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                           nullptr, player);
-            }
-            spdlog::info("[heal] {:08X} excluded '{}' -> {}, {} {}x",
-                         a_follower->GetFormID(),
-                         bad->GetName() ? bad->GetName() : "?",
-                         best ? (best->GetName() ? best->GetName() : "?") : "(bare hands)",
-                         creature ? "DELETED" : "returned-to-player",
-                         haveBad);
+            // #62 3D-RACE: EquipObject/UnequipObject/RemoveItem all rebuild the
+            // follower's biped 3D and MUST run on the MAIN THREAD, not this AddTask
+            // job worker (§0.37 -- the invisible-head mechanism, same hop #62's
+            // loot-equip doEquip uses). The whole tail is INTERDEPENDENT: the equip
+            // auto-unequips the excluded weapon back into the pack, which the
+            // RemoveItem below then has to find and evict -- so marshal it as ONE
+            // unit. Capture FormIDs + the creature verdict (a pure read, safe now);
+            // re-resolve on the frame that runs.
+            //
+            // CRITICAL (why the RemoveItem, not just an unequip): un-equipping alone
+            // leaves the weapon in the pack, and the engine re-wields it as "best
+            // weapon" within seconds -- the poll then churns forever (field-caught:
+            // same 'Dwarven Sphere Crossbow' re-healed 3 min apart). So it has to
+            // LEAVE the follower. Which way follows the ARMOR fix's rule
+            // (KeepHeadClear): a CREATURE weapon is non-playable -- invisible/broken
+            // on the PLAYER too -- DELETE it; a merely catalog-excluded weapon is a
+            // real playable quest/unique item -> return it to the player. Count the
+            // copies so a stack leaves entirely.
+            const bool       creature = IsCreatureWeapon(bad);
+            const RE::FormID folID    = a_follower->GetFormID();
+            const RE::FormID bestID   = best ? best->GetFormID() : 0;
+            const RE::FormID badID    = bad->GetFormID();
+            auto doHeal = [folID, bestID, badID, creature]() {
+                auto* eq      = RE::ActorEquipManager::GetSingleton();
+                auto* fol     = RE::TESForm::LookupByID<RE::Actor>(folID);
+                auto* badForm = RE::TESForm::LookupByID(badID);
+                auto* badObj  = badForm ? badForm->As<RE::TESBoundObject>() : nullptr;
+                if (!eq || !fol || !badObj) return;
+                RE::TESBoundObject* bestObj = nullptr;
+                if (bestID)
+                    if (auto* f = RE::TESForm::LookupByID(bestID)) bestObj = f->As<RE::TESBoundObject>();
+                if (bestObj) eq->EquipObject(fol, bestObj);   // auto-unequips the excluded one
+                else         eq->UnequipObject(fol, badObj);  // nothing real carried -- just take it off
+                std::int32_t haveBad = 0;
+                for (auto& [obj, data] : fol->GetInventory())
+                    if (obj == badObj) { haveBad = data.first; break; }
+                if (haveBad > 0) {
+                    if (creature)
+                        fol->RemoveItem(badObj, haveBad, RE::ITEM_REMOVE_REASON::kRemove,
+                                        nullptr, nullptr);
+                    else if (auto* player = RE::PlayerCharacter::GetSingleton())
+                        fol->RemoveItem(badObj, haveBad, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                        nullptr, player);
+                }
+                spdlog::info("[heal] {:08X} excluded '{}' -> {}, {} {}x", folID,
+                             badObj->GetName() ? badObj->GetName() : "?",
+                             bestObj ? (bestObj->GetName() ? bestObj->GetName() : "?") : "(bare hands)",
+                             creature ? "DELETED" : "returned-to-player", haveBad);
+            };
+            if (MainThread::IsInstalled()) MainThread::Post(doHeal);
+            else                           doHeal();   // VR: pump is a no-op, keep the direct path
             return;   // one hand per call
         }
     }
@@ -3757,8 +3853,21 @@ namespace MFO::Logistics {
                             auto* f = RE::TESForm::LookupByID<RE::Actor>(folID);
                             if (r && f) r->ActivateRef(f, 0, nullptr, 1, false);   // full processing = the pickup
                         };
-                        if (MainThread::IsInstalled()) MainThread::Post(doActivate);
-                        else                           doActivate();
+                        if (!MainThread::IsInstalled()) {
+                            // NO main-thread pump (VR): ActivateRef is a loose-item
+                            // pickup / 3D teardown that must NEVER run on this job
+                            // worker (the crash4 class). Don't fall back to doActivate()
+                            // off-thread -- sticky the ref and move on, so the batch
+                            // isn't churned re-attempting an unpickable pile.
+                            MarkTravelSticky(tref->GetFormID(), now);
+                            spdlog::info("[acquire] {:08X}: loose ref {:08X} STICKY -- no main-thread pump for ActivateRef",
+                                         id, tref->GetFormID());
+                            tr.phase = TravelPhase::Holding;
+                            tr.lingerUntil = now + std::chrono::seconds(
+                                                      static_cast<int>(Config::g_batchLinger.load()));
+                            return;
+                        }
+                        MainThread::Post(doActivate);
                         spdlog::info("[acquire] {:08X}: ACTIVATE (native/main-thread) ref {:08X} ('{}' x{})",
                                      id, tref->GetFormID(), iname ? iname : "?", icount);
                         tr.acquirePending = true;
@@ -3770,14 +3879,19 @@ namespace MFO::Logistics {
                     // Take EVERYTHING his gambits want in this one visit, not just
                     // the category the trip was for -- else gold trips strand the
                     // arrows (marth's 340u/382u bodies). Only THEN is the corpse
-                    // genuinely DONE and safe to blocklist.
-                    const bool moved = StripCorpse(a_follower, a_state, tref, now);
-                    MarkTravelFailed(tref->GetFormID(), now);   // fully stripped -> DONE
+                    // genuinely DONE and safe to blocklist -- UNLESS a Gear/Valuables
+                    // tier is still under the player's dibs (#2): then DON'T mark it
+                    // DONE, so the linger revisits it once the claim releases.
+                    bool leftWaiting = false;
+                    const bool moved = StripCorpse(a_follower, a_state, tref, now, &leftWaiting);
+                    if (!leftWaiting)
+                        MarkTravelFailed(tref->GetFormID(), now);   // fully stripped -> DONE
                     tr.phase = TravelPhase::Holding;
                     tr.lingerUntil = now + std::chrono::seconds(
                                               static_cast<int>(Config::g_batchLinger.load()));
-                    spdlog::info("[loot] {:08X}: arrived -- {} (batch continues)", id,
-                                 moved ? "looted" : "nothing to take");
+                    spdlog::info("[loot] {:08X}: arrived -- {}{} (batch continues)", id,
+                                 moved ? "looted" : "nothing to take",
+                                 leftWaiting ? " (loot still under player's dibs -- corpse kept)" : "");
                     return;   // the transfer IS this tick's action; seek next tick
                 }
 
@@ -3959,15 +4073,15 @@ namespace MFO::Logistics {
                 }
                 // Pace per (follower, SPELL) -- keying on the follower alone would
                 // let one cast's window starve a sibling cast rule (candlelight
-                // blocking an OOC heal). Composite key like g_drinkUntil.
-                static std::unordered_map<std::uint64_t, Clock::time_point> s_logiCastUntil;
+                // blocking an OOC heal). Composite key like g_drinkUntil. The window
+                // map is g_logiCastUntil at namespace scope (cleared on revert).
                 const std::uint64_t castKey = (static_cast<std::uint64_t>(id) << 32) | sp->GetFormID();
                 // SELF bypasses this window: it is a self-PACED channel that must
                 // be re-fired every service to stay refreshed (the channel's own
                 // registry paces the effect + releases when the rule stops). The
                 // window would starve those re-fires and tear the channel down.
                 if (!selfPkg)
-                    if (auto it = s_logiCastUntil.find(castKey); it != s_logiCastUntil.end() && now < it->second) {
+                    if (auto it = g_logiCastUntil.find(castKey); it != g_logiCastUntil.end() && now < it->second) {
                         start = choice.ruleIndex + 1; continue;   // within this spell's window
                     }
                 if (selfPkg) {
@@ -4028,8 +4142,13 @@ namespace MFO::Logistics {
                 }
                 if (acted && !selfPkg) {
                     auto* ei = sp->GetCostliestEffectItem();
-                    const float dur = std::max(3.0f, ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f);
-                    s_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(
+                    // 3s floor keeps instant spells off the ~1s tick; 300s ceiling
+                    // mirrors the cast duration cap so a pathological effect duration
+                    // can't open an unbounded window (which a stale FF-reused key
+                    // would then carry into the next save).
+                    const float dur = std::clamp(
+                        ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f, 3.0f, 300.0f);
+                    g_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(
                                                         std::chrono::duration<float>(dur));
                     const char* route = op == Vocab::kActCastPlayer ? "player (immediate)"
                                       : immediate                   ? "self (immediate)"
@@ -4170,6 +4289,7 @@ namespace MFO::Logistics {
         g_claim.clear();
         g_lastLootSource = 0;
         g_drinkUntil.clear();
+        g_logiCastUntil.clear();   // OOC cast pacing window -- save-scoped (#6, FF-reuse)
         g_playerLooted.clear();
         g_econScan.clear();   // #21 econ cadence clocks -- save-scoped (Fable audit #7)
         g_econTrade.clear();
