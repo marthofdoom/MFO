@@ -9,6 +9,12 @@
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
 > **▶▶ RESUME HERE (2026-08-18) — v1.0.65 IN PROGRESS: self-cast + AUTO + review-fix batch merged; NOT yet cut.**
+> - **⛔ HOLD THE RELEASE — do NOT cut/tag v1.0.65 yet.** marth has a LIST OF ISSUES to fix FIRST (they
+>   go INTO v1.0.65). A 12:30 auto-timer accidentally cut v1.0.65 (bump+tag+push) during a usage-limit
+>   reset; it was fully UNDONE (tag deleted local+remote, main force-reset to `7693867`, VERSION back to
+>   1.0.64, releases/v1.0.65 removed). Re-cut ONLY after the issue list is fixed AND marth says go.
+>   Vendor spell-tome feature = MOVED to the TOWN UPDATE (not v1.0.65). Design-calls still open: #75
+>   equip-gate policy, §16 manual-points undo.
 > - **What v1.0.65 is:** the UNIVERSAL forced self-cast (`Actuation::CastSelfDirect`, direct effect+magicka,
 >   NO equip/channel — see MAP §2 & `SPEC-self-cast-forced.md`) + **AUTO cast-target inference**
 >   (`Actuation::CastAuto`: hostile → nearby foes, beneficial → whole party who needs it) + the full
