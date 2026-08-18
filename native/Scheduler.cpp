@@ -284,6 +284,13 @@ namespace MFO::Scheduler {
         }
 
         g_outOfCombatTicks.erase(id);   // #76: back in combat -> re-arm the debounce
+        // POST-BATTLE SHED GATE: stamp "seen fighting" so Logistics only drops
+        // off-role weapons once this follower has been stably out of combat for a
+        // dwell -- never during a mid-fight IsInCombat() lull. This in-combat
+        // branch is the ONLY place combat=true is visible (ServiceFollower, which
+        // owns the shed, is skipped for in-combat followers). Same worker tick as
+        // the shed's read, so the map needs no lock (#4).
+        Logistics::NoteInCombat(id);
 
         // IN COMBAT: end any loot excursion for this follower FIRST, so he fights
         // instead of staying claimed by the loot quest at priority 60 (batches

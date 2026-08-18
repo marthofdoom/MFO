@@ -72,6 +72,25 @@ namespace MFO::Logistics {
         // gate; also the natural one-action-per-tick rate limit (§4.8.3).
         std::unordered_map<RE::FormID, Clock::time_point> g_nextTick;
 
+        // POST-BATTLE SHED GATE. The last steady_clock instant each follower was
+        // OBSERVED in combat, stamped by NoteInCombat (below) from the Scheduler's
+        // in-combat branch -- the ONLY place combat=true is visible, because this
+        // whole service path is entered only when the follower reads out of combat
+        // (Scheduler.cpp). ShedOffRoleWeapon requires kShedPostBattleDwell to have
+        // elapsed since that stamp before it drops anything, so a mid-fight
+        // IsInCombat() FLAP (a brief LoS loss / disengage that the Scheduler
+        // services the follower straight through) can never mature the dwell: the
+        // next real combat frame re-stamps `now` and resets the clock. Worker-only,
+        // no lock -- both the stamp and the read run on the same BSJobs worker tick,
+        // sequential across followers (#4). Save-scoped: cleared on revert.
+        std::unordered_map<RE::FormID, Clock::time_point> g_lastCombatSeen;
+
+        // How long a follower must be CONTINUOUSLY out of combat before the shed
+        // will drop an off-role weapon -- long enough that a combat LULL (LoS loss,
+        // a target dying, a disengage) can't be mistaken for "the battle is over".
+        // A vanilla combat lull is sub-second to ~2 s; 3 s clears it with margin.
+        constexpr auto kShedPostBattleDwell = std::chrono::seconds(3);
+
         // The last source the PLAYER took from (Claim-and-Release R1). When their
         // next take is from a DIFFERENT source, the previous one's claim RELEASES
         // -- they took what they wanted there and left the rest. Set by the sink.
@@ -3598,6 +3617,24 @@ namespace MFO::Logistics {
     bool ShedOffRoleWeapon(RE::Actor* a_follower, const FollowerState& a_state) {
         using WT = RE::WEAPON_TYPE;
 
+        // POST-BATTLE GATE (the field fix): only shed AFTER a fight, never during
+        // one. The Scheduler runs this path solely out of combat, but IsInCombat()
+        // FLAPS false mid-fight (a moment of LoS loss / a disengage) and the
+        // follower gets serviced through the lull -- which used to drop a looted
+        // off-role weapon MID-FIGHT (field: a 2h follower handed the player a
+        // looted 1h mace during a combat lull). So require a STABLE out-of-combat
+        // window: NoteInCombat stamps g_lastCombatSeen from the Scheduler's
+        // in-combat branch (the only place combat=true is observable here), and we
+        // bail until kShedPostBattleDwell has passed since that stamp. A one-frame
+        // flap re-stamps the instant combat resumes, so the dwell can never mature
+        // inside a lull -- only once the battle has genuinely ended. Worker-only
+        // read, no lock (same BSJobs tick as the stamp, #4). No entry at all ->
+        // never fought this session -> shed freely (e.g. a freshly recruited
+        // follower carrying off-role gear).
+        if (auto it = g_lastCombatSeen.find(a_follower->GetFormID());
+            it != g_lastCombatSeen.end() && Clock::now() - it->second < kShedPostBattleDwell)
+            return false;
+
         // #69: the SAME stable role signal LootEquipment loots/keeps against
         // (ComputeWeaponRoles, kept in sync by construction) -- never the
         // momentarily-wielded weapon. A follower who carries both a melee and
@@ -3660,16 +3697,48 @@ namespace MFO::Logistics {
         }
         if (!shed || inRoleWeapons == 0) return false;   // don't disarm
 
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return false;
         const char* nm = shed->GetName() ? shed->GetName() : "?";
-        a_follower->RemoveItem(shed, shedCount, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, player);
-        // Tell the player where the weight went (P9): a silent hand-off looks like a
-        // mystery inventory gain. Reuses the HUD-notification toggle.
-        if (Config::g_rapportToasts.load())
-            RE::DebugNotification(std::format("{} hands you a {}.",
-                a_follower->GetName() ? a_follower->GetName() : "Your follower", nm).c_str());
-        spdlog::info("[shed] {:08X}: off-role weapon '{}' x{} (class {}) -> player | meleeRole={} doRanged={} xbow={}",
+
+        // DROP IT ON THE FLOOR near the follower (marth: "drop the handing
+        // entirely"). NOT handed to the player anymore -- the follower just sets
+        // the off-role weapon down where anyone can pick it back up.
+        //
+        // THREADING -- this MUST run on the main thread. DropObject spawns a NEW
+        // world reference (a dropped-item 3D object placed in the cell): a 3D /
+        // cell mutation, exactly the class MainThread::Post exists to marshal off
+        // this BSJobs worker (#4/#14, and the #62 equip / loose-loot ActivateRef
+        // hops right here in this file do the same). Creating a world ref off the
+        // worker races the render/cell threads -> UB/CTD. RemoveItem-to-a-container
+        // is worker-safe, but a floor DROP is not -- so we post the whole
+        // remove+place to main. Capture FormIDs only (never the worker's stale
+        // Actor*/TESBoundObject*) and re-resolve on the frame that runs.
+        const RE::FormID folID  = a_follower->GetFormID();
+        const RE::FormID itemID = shed->GetFormID();
+        const std::int32_t dropCount = shedCount;
+        auto doDrop = [folID, itemID, dropCount]() {
+            auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
+            auto* form = RE::TESForm::LookupByID(itemID);
+            auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
+            // DropObject removes from the actor AND places the world ref in one
+            // engine call (nullptr drop-loc/rotate -> the engine drops it at the
+            // actor's feet). Re-check the count on-frame: the follower may have
+            // used/traded some between the worker read and this main-thread run.
+            if (fol && item)
+                fol->DropObject(item, nullptr, dropCount, nullptr, nullptr);
+        };
+        if (!MainThread::IsInstalled()) {
+            // VR: Post() is a documented no-op, and there is NO main thread to
+            // fall back to -- a direct DropObject would spawn the world ref right
+            // here on the BSJobs worker, the off-thread 3D-create crash class we
+            // are avoiding. The shed is non-critical (the weapon just stays in the
+            // pack another session), so SKIP rather than risk a CTD.
+            spdlog::info("[shed] {:08X}: off-role weapon '{}' SKIPPED -- no main-thread pump for DropObject (VR)",
+                         a_follower->GetFormID(), nm);
+            return false;
+        }
+        MainThread::Post(doDrop);
+
+        spdlog::info("[shed] {:08X}: off-role weapon '{}' x{} (class {}) DROPPED on floor | meleeRole={} doRanged={} xbow={}",
                      a_follower->GetFormID(), nm, shedCount,
                      static_cast<int>(WeaponClassOf(shed->As<RE::TESObjectWEAP>()->GetWeaponType())),
                      static_cast<int>(meleeRole), doRanged, wantCrossbow);
@@ -4447,8 +4516,17 @@ namespace MFO::Logistics {
         MainThread::Post(*self);
     }
 
+    // Stamp "seen in combat" for the post-battle shed gate. Called from the
+    // Scheduler's in-combat branch, once per in-combat follower per tick, on the
+    // SAME BSJobs worker that ServiceFollower/ShedOffRoleWeapon read it on -- so
+    // g_lastCombatSeen needs no lock (#4). Cheap: one map write.
+    void NoteInCombat(RE::FormID a_id) {
+        g_lastCombatSeen[a_id] = Clock::now();
+    }
+
     void ClearTransientState() {
         g_nextTick.clear();
+        g_lastCombatSeen.clear();   // post-battle shed dwell -- save-scoped, live-session only
         g_claim.clear();
         g_lastLootSource = 0;
         g_drinkUntil.clear();
