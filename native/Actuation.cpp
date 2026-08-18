@@ -925,15 +925,30 @@ namespace MFO::Actuation {
 
         // Apply the effect + spend magicka for ONE fire (main thread). §5.3:
         // CastSpellImmediate spends nothing (§0.22), so deduct the real cost.
-        // Dispel any prior instance of THIS spell first so the shader can't stack.
         void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID) {
             MainThread::Post([a_id, a_spellID] {
                 auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_id);
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
                 if (!a || !sp) return;
+                // ALREADY-ACTIVE GUARD -- byte-identical to the TARGET one-shot
+                // cast's own guard (Logistics OOC cast, "skip re-casting a buff
+                // still on the TARGET"): do NOT re-apply a spell whose effect is
+                // already active on the caster. A duration self-buff/LIGHT
+                // (Candlelight) otherwise spawns a fresh light every re-cast and
+                // they accumulate to a ShadowSceneNode null-call CTD (deck
+                // 2026-08-18, "Active Lights 57"). Self and foe now behave
+                // identically; an instant self-heal leaves no active effect, so it
+                // still re-fires when the condition recurs; a ward re-fires after
+                // it drops.
+                auto* ei   = sp->GetCostliestEffectItem();
+                auto* mgef = ei ? ei->baseEffect : nullptr;
+                if (auto* mt = a->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
+                    spdlog::info("[cast] {:08X} cast_self skipped -- {} ({:08X}) already active",
+                                 a_id, sp->GetName() ? sp->GetName() : "?", a_spellID);
+                    return;
+                }
                 auto*       avo    = a->AsActorValueOwner();
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                DispelSpellEffectsOn(a, a_spellID);
                 if (auto* inst = a->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant))
                     inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
                 const float cost = sp->CalculateMagickaCost(a);
