@@ -233,7 +233,8 @@ namespace MFO::Actuation {
             // fall to the inert alias package, which equips but never fires and
             // is declined outright on package-locked custom followers.
             if (self) {
-                if (Config::g_castSelf.load() && CastSelfDirect(a_follower, a_spell))
+                if (Config::g_castSelf.load() &&
+                    CastSelfDirect(a_follower, a_spell) != SelfCast::Declined)
                     return { Result::Fired, "self-cast (direct trigger)" };
                 return { Result::FailedOther, "self-cast could not fire", true };
             }
@@ -452,7 +453,7 @@ namespace MFO::Actuation {
             // refreshes the channel + applies the effect at fCastCooldown
             // cadence); the reconcile releases it when the rule goes false.
             if (a_target == a_follower && Config::g_castSelf.load()) {
-                if (CastSelfDirect(a_follower, spell))
+                if (CastSelfDirect(a_follower, spell) != SelfCast::Declined)
                     return { Result::Fired, "self-cast channel (direct trigger)" };
                 // Unaffordable / off-AE / no caster: transparent, the rules
                 // below run (the follower is not stuck on a cast that can't go).
@@ -896,14 +897,14 @@ namespace MFO::Actuation {
     //     a duration self-buff/light while it is still up, so exactly ONE light
     //     per effect-duration cycle. An instant heal re-fires when HP drops again.
     //   * RELEASE (SelfCastReconcile, each tick): when the rule stops re-firing
-    //     (or a 30 s cap / follower gone) DISPEL a lingering ward/effect so it
-    //     cannot persist as a stuck gameplay buff. Covers rule-disabled /
+    //     (goes stale, or the follower unloads) DISPEL a lingering ward/effect so
+    //     it cannot persist as a stuck gameplay buff. NO time cap -- a long buff
+    //     lives its authored duration while the rule wins. Covers rule-disabled /
     //     condition-false (the entry simply goes stale). Nothing to unequip.
     namespace {
         using SelfClock = std::chrono::steady_clock;
         struct SelfCastState {
             RE::FormID            spell = 0;
-            bool                  driven = false;   // caster driven into the cast state yet?
             SelfClock::time_point started{};
             SelfClock::time_point lastFired{};   // last time the rule re-fired (release clock)
             SelfClock::time_point lastApply{};   // last effect/magicka application (apply pacing)
@@ -918,9 +919,13 @@ namespace MFO::Actuation {
             if (!mt) return;
             auto* list = mt->GetActiveEffectList();
             if (!list) return;
+            // Collect FIRST, then dispel -- Dispel can mutate the active-effect
+            // list, so calling it mid-iteration is unsafe (F5 hardening).
+            std::vector<RE::ActiveEffect*> hits;
             for (auto* ae : *list)
                 if (ae && ae->spell && ae->spell->GetFormID() == a_spellID)
-                    ae->Dispel(true);
+                    hits.push_back(ae);
+            for (auto* ae : hits) ae->Dispel(true);
         }
 
         // Apply the effect + spend magicka for ONE fire (main thread). §5.3:
@@ -947,10 +952,11 @@ namespace MFO::Actuation {
                                  a_id, sp->GetName() ? sp->GetName() : "?", a_spellID);
                     return;
                 }
-                auto*       avo    = a->AsActorValueOwner();
+                auto* avo  = a->AsActorValueOwner();
+                auto* inst = a->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                if (auto* inst = a->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant))
-                    inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
+                inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
                 const float cost = sp->CalculateMagickaCost(a);
                 if (avo && cost > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
@@ -1005,10 +1011,11 @@ namespace MFO::Actuation {
                                  sp->GetName() ? sp->GetName() : "?", a_spellID);
                     return;
                 }
-                auto*       avo    = caster->AsActorValueOwner();
+                auto* avo  = caster->AsActorValueOwner();
+                auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                if (auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant))
-                    inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
+                inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
                 const float cost = sp->CalculateMagickaCost(caster);
                 if (avo && cost > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
@@ -1024,10 +1031,10 @@ namespace MFO::Actuation {
         }
     }
 
-    bool CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+    SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         // AE-only, mirroring CastOn (the SE crash path #67). Off AE -> transparent.
-        if (!REL::Module::IsAE())    return false;
-        if (!a_follower || !a_spell) return false;
+        if (!REL::Module::IsAE())    return SelfCast::Declined;
+        if (!a_follower || !a_spell) return SelfCast::Declined;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
 
@@ -1036,13 +1043,13 @@ namespace MFO::Actuation {
         if (auto* avo = a_follower->AsActorValueOwner()) {
             const float cost = a_spell->CalculateMagickaCost(a_follower);
             const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
-            if (cost > have) return false;
+            if (cost > have) return SelfCast::Declined;
             const float reserve = Config::g_magickaReserve.load();
             if (reserve > 0.0f) {
                 const float mx = avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
                     a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
                                                       RE::ActorValue::kMagicka);
-                if (mx > 0.0f && (have - cost) < reserve * mx) return false;
+                if (mx > 0.0f && (have - cost) < reserve * mx) return SelfCast::Declined;
             }
         }
 
@@ -1068,7 +1075,7 @@ namespace MFO::Actuation {
             // the chosen self-spell ONCE, it applies, and the already-active guard
             // (ApplySelfEffect) blocks re-casting until the effect expires.
             auto& sc = g_selfCast[id];
-            sc.spell = spellID; sc.driven = false; sc.started = now;
+            sc.spell = spellID; sc.started = now;
             sc.lastFired = now; sc.lastApply = {};   // epoch -> apply the effect immediately
             it = g_selfCast.find(id);
         } else {
@@ -1085,8 +1092,12 @@ namespace MFO::Actuation {
         if (std::chrono::duration<float>(now - it->second.lastApply).count() >= interval) {
             it->second.lastApply = now;
             ApplySelfEffect(id, spellID);
+            return SelfCast::Applied;   // effect + magicka landed THIS tick
         }
-        return true;
+        // Rule winning, channel kept alive, but paced out this tick -- a
+        // refresh, NOT an action (F3: the caller must not let it suppress the
+        // rules below it, or an "always -> cast_self" starves loot/drink).
+        return SelfCast::Refreshed;
     }
 
     void SelfCastReconcile() {
@@ -1097,14 +1108,25 @@ namespace MFO::Actuation {
         // out-wait the round-robin gap (one follower serviced per ~133 ms tick),
         // not the cast cooldown. 2 s covers a large party and still releases
         // promptly when the rule goes false / is disabled.
+        //
+        // DURATION FIX (field-confirmed): there is NO time cap here. An earlier
+        // `capped = started > 30 s` force-released the channel -- and thus
+        // DISPELLED the buff -- 30 s after the FIRST cast even while the rule was
+        // still winning. That tore a 300 s Candlelight down at 30 s, so the
+        // already-active guard saw it expire and re-cast on a rock-steady ~30 s
+        // beat (deck 2026: 22:44:49 -> :45:19 -> :45:46 ...). CastSpellImmediate
+        // already applies the spell's FULL authored duration/magnitude
+        // (magnitudeOverride 0 = use the effect's own); the cap was the only
+        // thing shortening it. Release now hinges solely on the rule going stale
+        // (or the follower unloading), so a long buff lives its authored life and
+        // re-casts at its real expiry.
         const float releaseSec = 2.0f;
         std::vector<RE::FormID> done;
         for (auto& [id, sc] : g_selfCast) {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
             const bool gone   = !a || !a->Is3DLoaded();
             const bool stale  = std::chrono::duration<float>(now - sc.lastFired).count() > releaseSec;
-            const bool capped = std::chrono::duration<float>(now - sc.started).count()   > 30.0f;
-            if (gone || stale || capped) {
+            if (gone || stale) {
                 // Rule stopped re-firing / follower gone -> RELEASE: dispel a
                 // lingering ward/effect so it cannot persist as a stuck gameplay
                 // buff. There is NO equip to undo -- the self-cast never holds the
@@ -1140,12 +1162,14 @@ namespace MFO::Actuation {
     // follower while exploring, and OOC heals/buffs reach the party. Out of
     // combat the hostile branch finds no combat group and NoOps cleanly.
     //
-    // ROUTING (classification via CasterConsent::ClassifySpell + delivery):
-    //   hostile (Offense)              -> every nearby enemy (own combat group, chase radius)
-    //   beneficial + self-delivery     -> SELF (a self-delivery buff/ward/flesh cannot be
-    //                                     placed on an ally) -> CastSelfDirect, gated bCastSelf
-    //   beneficial + other-deliverable -> every party member who NEEDS it (injured for a
-    //                                     heal, shared radius; the player + active teammates)
+    // ROUTING (classification via CasterConsent::ClassifySpell; delivery is NOT
+    // consulted -- MFO applies effects directly, so no spell is "self-only"):
+    //   hostile (Offense) -> every nearby enemy (own combat group, chase radius)
+    //   beneficial        -> the WHOLE PARTY within shared radius who NEEDS it --
+    //                        every active follower + the player, the CASTER
+    //                        INCLUDED as one of N (a self-delivery Candlelight thus
+    //                        lights everyone). Heals filtered to HP<full; the
+    //                        already-active guard skips anyone already covered.
     //
     // The fan-out uses the DIRECT effect applier (ApplyEffectFromTo), the same
     // proven hands-free mechanism as the self-cast, rather than the foe cast
@@ -1165,23 +1189,19 @@ namespace MFO::Actuation {
                 return { Result::FailedOther,
                          std::format("spell {:08X} not in load order", a_spellID), true };
 
-            const auto id       = a_follower->GetFormID();
-            const auto kind     = CasterConsent::ClassifySpell(spell);
-            const bool hostile  = (kind == CasterConsent::SpellKind::Offense);
-            const auto delivery = spell->GetDelivery();
+            const auto id      = a_follower->GetFormID();
+            const auto kind    = CasterConsent::ClassifySpell(spell);
+            const bool hostile = (kind == CasterConsent::SpellKind::Offense);
 
-            // BENEFICIAL + SELF-DELIVERY collapses to SELF. A self-delivery buff
-            // (flesh / most wards / candlelight) cannot be placed on an ally, so
-            // AUTO routes it to the proven direct self path -- CastSelfDirect,
-            // gated bCastSelf, exactly as a manual Cast-on-self would. Called
-            // DIRECTLY (not via CastOn) so the OOC caller never runs CastOn's
-            // combat equip/AI-grace machinery, which does not fire out of combat.
-            if (!hostile && delivery == RE::MagicSystem::Delivery::kSelf) {
-                if (Config::g_castSelf.load() && CastSelfDirect(a_follower, spell))
-                    return { Result::Fired, "auto-cast self-buff (direct trigger)" };
-                return { Result::FailedOther,
-                         "auto-cast self-buff not fired (bCastSelf off / unaffordable / off-AE)", true };
-            }
+            // NOTE (marth, verified in the field): AUTO does NOT collapse a
+            // self-delivery spell to the caster. MFO applies effects DIRECTLY to
+            // the target actor (ApplyEffectFromTo -> CastSpellImmediate on that
+            // actor), bypassing the engine's delivery system entirely -- the same
+            // way act.cast_player already lands a self-delivery Candlelight on the
+            // PLAYER. So the spell's authored delivery does NOT limit who MFO can
+            // place the effect on: a beneficial spell fans to the WHOLE PARTY
+            // (every teammate + the player who needs it, the caster included as
+            // one of N), each via the direct applier. There is no delivery gate.
 
             // PACING: one broadcast per fCastCooldown per follower. The rule keeps
             // winning every tick; between cooldowns AUTO is a TRANSPARENT NoOp so
@@ -1208,8 +1228,12 @@ namespace MFO::Actuation {
             auto affordable = [&] { return cost <= budget && (budget - cost) >= floor; };
 
             // ENUMERATE the inferred set (worker-safe reads, same context/precedent
-            // as Evaluator::PickFoe / PickAlly which run on this same tick).
-            std::vector<RE::Actor*> targets;
+            // as Evaluator::PickFoe / PickAlly which run on this same tick). F1:
+            // collect FormIDs, NEVER raw Actor* -- the fan-out below runs AFTER the
+            // combat-group read-lock releases, and a stored pointer could dangle if
+            // the main thread tears the actor down in that window (UAF). Every
+            // post-lock use is FormID-only (LookupByID at apply time).
+            std::vector<RE::FormID> targets;
             float radius = 0.0f;
             if (hostile) {
                 radius = Confidence::ChaseRadius(a_follower);
@@ -1225,19 +1249,24 @@ namespace MFO::Actuation {
                         if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
                         if (!foe->IsHostileToActor(a_follower)) continue;   // brawl gate (#34)
                         if (selfPos.GetDistance(foe->GetPosition()) > radius) continue;
-                        targets.push_back(foe);
+                        targets.push_back(foe->GetFormID());
                     }
                 }
             } else {
+                // WHOLE PARTY: every active follower + the player within range who
+                // NEEDS it -- the CASTER INCLUDED (he is one of N, so a self-buff
+                // like Candlelight still lights him too). The already-active guard
+                // in ApplyEffectFromTo skips anyone who already has the effect;
+                // heals are filtered to HP < full here. No delivery gate.
                 radius = Config::g_sharedRadius.load();
                 const auto selfPos = a_follower->GetPosition();
                 const bool heal    = (kind == CasterConsent::SpellKind::Heal);
                 auto consider = [&](RE::Actor* ally) {
-                    if (!ally || ally == a_follower) return;   // an aimed Heal-Other cannot self-target
+                    if (!ally) return;
                     if (ally->IsDead() || ally->IsDisabled() || !ally->Is3DLoaded()) return;
                     if (selfPos.GetDistance(ally->GetPosition()) > radius) return;
                     if (heal && Vocab::HealthPct(ally) >= 1.0f) return;   // only those who need it
-                    targets.push_back(ally);
+                    targets.push_back(ally->GetFormID());
                 };
                 for (const auto& h : Followers::g_active) { auto p = h.get(); consider(p.get()); }
                 consider(RE::PlayerCharacter::GetSingleton());
@@ -1248,12 +1277,12 @@ namespace MFO::Actuation {
                          hostile ? "auto-cast: no enemies in range" : "auto-cast: nobody needs it", true };
 
             int fired = 0, skipped = 0;
-            for (auto* tgt : targets) {
+            for (const auto tgtID : targets) {
                 if (!affordable()) { ++skipped; break; }   // insufficient magicka -> stop the fan-out
-                if (hostile && Sightline::Check(id, tgt->GetFormID()) == Sightline::Verdict::Occluded) {
+                if (hostile && Sightline::Check(id, tgtID) == Sightline::Verdict::Occluded) {
                     ++skipped; continue;                    // no line of sight -- fail-open on Unknown
                 }
-                ApplyEffectFromTo(id, tgt->GetFormID(), a_spellID, hostile);
+                ApplyEffectFromTo(id, tgtID, a_spellID, hostile);
                 budget -= cost;
                 ++fired;
             }

@@ -3937,9 +3937,10 @@ namespace MFO::Logistics {
                 const bool conc = sp->GetCastingType() ==
                                   RE::MagicSystem::CastingType::kConcentration;
                 // FORCED SELF-CAST (SPEC-self-cast-forced): a bCastSelf-armed SELF
-                // cast channels through the ANIMATED no-QNAM package (alias 2), NOT
-                // the silent instant-apply -- so self never takes the immediate
-                // route while the gate is on.
+                // cast routes to Actuation::CastSelfDirect (direct effect apply +
+                // magicka, self-paced channel, NO package/equip/animation), NOT the
+                // silent immediate apply -- so self never takes the immediate route
+                // while the gate is on. `selfPkg` is a legacy name for that route.
                 const bool selfPkg   = (op == Vocab::kActCastSelf) && Config::g_castSelf.load();
                 const bool immediate = (op != Vocab::kActCastTarget) && !selfPkg;   // self/player -> immediate route
                 // Skip re-casting a buff still on the TARGET (candlelight up on him
@@ -3970,21 +3971,27 @@ namespace MFO::Logistics {
                         start = choice.ruleIndex + 1; continue;   // within this spell's window
                     }
                 if (selfPkg) {
-                    // The UNIVERSAL DIRECT TRIGGER (SPEC-self-cast-forced). The
-                    // MFO_CastPackageSelf alias route only EQUIPS the spell -- it
-                    // never fires the cast (deck 2026-08-17) and is DECLINED on
-                    // package-locked custom followers. Actuation::CastSelfDirect
-                    // runs a self-paced CHANNEL: equip + hold + drive the caster
-                    // for the animation + apply the effect at fCastCooldown
-                    // cadence + release when the rule stops (stopping the effect
-                    // VFX). Re-fire it EVERY service so the channel stays alive
-                    // while the rule wins -- no s_logiCastUntil window here.
-                    if (Actuation::CastSelfDirect(a_follower, sp)) {
+                    // The UNIVERSAL DIRECT TRIGGER (SPEC-self-cast-forced).
+                    // Actuation::CastSelfDirect applies the effect DIRECTLY
+                    // (CastSpellImmediate, kInstant) + spends magicka -- NO equip,
+                    // NO package, NO animation (deferred): a held light spell let
+                    // the follower's AI spam-cast it into a light-limit CTD, so the
+                    // equip/channel scaffolding was removed. It drives package-
+                    // locked custom followers too. Re-fire it EVERY service so the
+                    // channel stays alive while the rule wins -- no s_logiCastUntil
+                    // window here. F3: it returns Applied / Refreshed / Declined, so
+                    // a mere pacing REFRESH (no effect applied this tick) does NOT
+                    // count as this tick's action -- otherwise an "always ->
+                    // cast_self" would break the scan every tick and starve
+                    // loot/drink. Only a real Applied is the action.
+                    const auto r = Actuation::CastSelfDirect(a_follower, sp);
+                    if (r == Actuation::SelfCast::Applied) {
                         acted = true;
                     } else {
-                        // Unaffordable / off-AE / equip failed. Do NOT silent-apply
-                        // a concentration spell (the stuck-ward footgun) -- skip
-                        // legibly to the next rule.
+                        // Refreshed (channel kept alive, paced out this tick) OR
+                        // Declined (unaffordable / off-AE) -- both TRANSPARENT: the
+                        // refresh already happened inside CastSelfDirect, so just
+                        // fall through to let the rules below run this tick.
                         start = choice.ruleIndex + 1; continue;
                     }
                 } else if (immediate) {

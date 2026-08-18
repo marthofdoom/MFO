@@ -977,6 +977,19 @@ namespace MFO::Packages {
                CommandAlias() != nullptr;
     }
 
+    // ⚠ DEAD FILL PATH (unreachable on the live path; kept, not deleted).
+    // SPEC-self-cast-forced superseded the package self-route: self-casts now go
+    // through Actuation::CastSelfDirect (direct effect apply, no alias/package).
+    // Every live caller intercepts the self case BEFORE reaching a
+    // `self ? CastSelf : CastAt` branch (CastOn's self fork + the concentration
+    // self guard), so `self` is always false there and this FILL is never entered;
+    // CastAt's `if(!a_target) return CastSelf(...)` is likewise never called with a
+    // null target on the live path. LEFT IN PLACE deliberately: the frozen 0x835
+    // MFO_CastPackageSelf record and the alias-2 sweep in ReleaseAll() are still
+    // REQUIRED (old saves mid-self-stream re-latch alias 2 on load without it), and
+    // churning the frozen FormID buys nothing. Do not wire this back without
+    // re-proving the alias route actually TRIGGERS a self cast (it did not: it only
+    // equips — deck 2026-08-17). Safe to remove wholesale only alongside the sweep.
     Decline CastSelf(RE::Actor* a_follower, RE::SpellItem* a_spell, const CastHold& a_hold) {
         const auto r = Begin(a_follower, a_spell, nullptr, a_hold);
         if (r != Decline::None) {
