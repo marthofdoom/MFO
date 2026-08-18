@@ -110,6 +110,20 @@ namespace MFO::Actuation {
     // condition (Candlelight) fan to the whole party regardless.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold = 1.0f);
 
+    // BOUNDED CONCENTRATION STREAM at a MANUAL/single target — public so BOTH the
+    // combat Fire path (CastOn's concentration fork) AND the out-of-combat
+    // Logistics cast dispatch route a concentration cast at a NON-SELF target
+    // (player, ally, foe) through the SAME bounded package stream: hostile 1-4 s
+    // (per-follower Temperament, cut the instant a teammate crosses the line of
+    // fire), heal until the target tops off (capped 6 s), utility a capped 4 s
+    // hold; LoS-gated, cooldown-paced, CasterConsent-latched. A SELF target is
+    // intercepted inside — routed to CastSelfDirect when bCastSelf is on, else a
+    // legible decline — so a self-concentration cast never touches the (foe-QNAM)
+    // package. Requires bForceCastOnMiss + bUsePackages (like combat); with either
+    // off it fails legibly and the caller falls through. Main-thread / worker.
+    Outcome CastConcentrationAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                RE::Actor* a_target);
+
     // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired
     // weapon is FORCE-equipped (ActorEquipManager forceEquip=true = the engine's

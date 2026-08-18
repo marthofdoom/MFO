@@ -108,25 +108,10 @@ namespace MFO::Logistics {
         // Key composed like g_drinkUntil ((follower << 32) | spell).
         std::unordered_map<std::uint64_t, Clock::time_point> g_logiCastUntil;
 
-        // Heal-effect predicate (mirrors Actuation.cpp's IsHealEffect/SpellHealsHealth
-        // -- keep the shape identical). A BENEFICIAL Health effect = a heal: primaryAV
-        // is Health but the effect is NOT detrimental and NOT hostile (i.e. a restore/
-        // fortify-Health, instant or per-second). This is exactly what makes a
-        // CONCENTRATION heal safe to STREAM on the direct-apply path below: a restore-
-        // health effect applied per tick simply heals -- it leaves NO residual magnitude
-        // to release, unlike a ward/fortify buff whose per-second stamp would STICK
-        // forever with no channel to end it (the stuck-ward bug this file guards).
-        bool IsHealEffect(RE::EffectSetting* a_mgef) {
-            if (!a_mgef) return false;
-            if (a_mgef->data.primaryAV != RE::ActorValue::kHealth) return false;
-            return !a_mgef->IsDetrimental() && !a_mgef->IsHostile();
-        }
-        bool SpellHealsHealth(RE::SpellItem* a_spell) {
-            if (!a_spell) return false;
-            for (auto* eff : a_spell->effects)
-                if (eff && IsHealEffect(eff->baseEffect)) return true;
-            return false;
-        }
+        // (The OOC heal-effect predicate that classified a streamable concentration
+        // heal was removed with the `healStream` stopgap -- concentration now routes
+        // through Actuation::CastConcentrationAt, which classifies via
+        // CasterConsent::ClassifySpell. See the cast dispatch below.)
 
         // Refs the PLAYER has taken from -- the waiver (#22h). Presence collapses
         // the delay to fQuickLootWaiver, and the timestamp RESETS on every take
@@ -4200,12 +4185,20 @@ namespace MFO::Logistics {
                 //     concentration ward instant-applied here had no channel and
                 //     STUCK forever, even after the rule was disabled (deck
                 //     2026-08-17); the direct trigger is a bounded one-shot.
+                //   * ANY CONCENTRATION spell at a NON-SELF target (player, ally,
+                //     foe) -> Actuation::CastConcentrationAt, the SAME bounded
+                //     package stream combat's CastOn uses (hostile 1-4s LoF-gated,
+                //     heal until-topped/6s, utility 4s hold). This UNIFIES OOC with
+                //     combat and REPLACES the v1.0.58-era `healStream` instant-apply
+                //     stopgap -- a beneficial concentration heal now lands with a
+                //     real bounded channel (probe 8, ENGINE_NOTES §0.22: a
+                //     concentration HealingHands cast AT a ref casts beneficially).
+                //   * SELF (gate off) CONCENTRATION -> CastConcentrationAt's own self
+                //     fork declines it legibly (self needs bCastSelf); it never takes
+                //     the direct route (a per-second effect has no channel and sticks).
                 //   * SELF (gate off) + PLAYER, FIRE-AND-FORGET -> CastSpellImmediate
                 //     (applies the effect to any target; no animation, but it lands).
-                //   * SELF (gate off) + PLAYER, CONCENTRATION -> SKIPPED legibly:
-                //     an instant-apply of a per-second effect has no channel and
-                //     would stick. (Self needs bCastSelf; player has no channel here.)
-                //   * FOE target -> the animated package (CastAt).
+                //   * FIRE-AND-FORGET hostile at a FOE -> the animated package (CastAt).
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
                 if (!sp || !a_follower->HasSpell(sp)) {
                     start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
@@ -4262,6 +4255,47 @@ namespace MFO::Logistics {
                 // silent immediate apply -- so self never takes the immediate route
                 // while the gate is on. `selfPkg` is a legacy name for that route.
                 const bool selfPkg   = (op == Vocab::kActCastSelf) && Config::g_castSelf.load();
+
+                // ── CONCENTRATION -> the BOUNDED STREAM (unify OOC with combat) ──
+                // Every NON-self concentration cast (player, ally, foe) routes
+                // through the SAME bounded package stream combat's CastOn uses
+                // (Actuation::CastConcentrationAt -> ConcentrationCast): hostile
+                // 1-4s line-of-fire-gated, heal until-topped (capped 6s), utility a
+                // capped 4s hold; LoS-gated, cooldown-paced. This REPLACES the
+                // v1.0.58-era `healStream` instant-apply stopgap (ff0cb48): a
+                // beneficial concentration HEAL no longer stamps a channel-less
+                // per-second effect on the direct path -- probe 8 (ENGINE_NOTES
+                // §0.22) proved a concentration HealingHands cast AT a ref casts
+                // beneficially through the package, so the ally/player heal lands
+                // with a real bounded channel instead. A hostile concentration at a
+                // foe is now BOUNDED too (it used to take the unbounded FOE package
+                // below -- a permanent-stream freeze risk). SELF is NOT routed here:
+                // selfPkg (bCastSelf on) already takes CastSelfDirect below; a self
+                // target with the gate OFF is passed through and ConcentrationCast's
+                // own self fork declines it legibly, exactly like combat. The stream
+                // owns its OWN cooldown/pacing, so it bypasses the FF already-active
+                // pre-skip and the g_logiCastUntil window below. Requires
+                // bForceCastOnMiss + bUsePackages (like combat); with either off it
+                // declines legibly and we fall to the next rule.
+                if (!selfPkg && conc) {
+                    const auto oc = Actuation::CastConcentrationAt(a_follower, sp, tgt);
+                    if (oc.result == Actuation::Result::Fired) {
+                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {} (bounded stream)",
+                                     id, sp->GetFormID(),
+                                     op == Vocab::kActCastPlayer ? "player"
+                                   : op == Vocab::kActCastTarget ? "ally/player/foe"
+                                                                 : "self");
+                        break;                          // streamed -> done this tick
+                    }
+                    // Transparent NoOp / legible decline (cooling down, no LoS,
+                    // teammate in the line of fire, packages off, self-gate-off):
+                    // ConcentrationCast already logged the reason. Fall to the next
+                    // rule -- NEVER the FF direct-apply (a per-second effect has no
+                    // channel there and would stick, the old bug).
+                    start = choice.ruleIndex + 1; continue;
+                }
+
+                // ── FIRE-AND-FORGET from here down (concentration handled above) ──
                 // ROUTE A kActCastTarget CAST (field 2026-08-18: "logistics when ally
                 // hp below doesn't seem to count player"). The ally SELECTOR already
                 // resolves the wounded PLAYER as `tgt` (Evaluator::PickAlly considers
@@ -4282,20 +4316,6 @@ namespace MFO::Logistics {
                 // self(gate off)/player -> immediate; beneficial-or-ally cast_target
                 // -> immediate (direct heal); hostile-on-foe cast_target -> CastAt.
                 const bool immediate = !selfPkg && !castAtFoe;
-                // STREAMED CONCENTRATION HEAL (field 2026-08-18: "Lucien won't heal
-                // the player -- concentration Fast Heal SKIPPED every ~1s"). A
-                // concentration spell has no instant apply and normally can't take the
-                // direct route (it would stamp a channel-less per-second effect that
-                // sticks). But a HEAL is the safe exception: SpellHealsHealth means the
-                // effect only RESTORES Health -- re-applying it each tick just tops the
-                // target up and leaves nothing to release, unlike a ward/fortify buff.
-                // So a beneficial (NOT foe-aimed) concentration heal is allowed to
-                // STREAM through the immediate direct-apply below -- re-firing every
-                // service tick while the firing rule (Player/Ally HP-below) stays true,
-                // and stopping the instant the target is topped up and the rule goes
-                // false. The stuck-effect SKIP is preserved for every OTHER
-                // concentration spell (a ward/buff whose magnitude WOULD stick).
-                const bool healStream = conc && !foeTarget && SpellHealsHealth(sp);
                 // Skip re-casting a buff still on the TARGET (candlelight up on him
                 // or the player), then pace by the spell's DURATION (a 60s light
                 // refreshes as it expires; a 3s floor keeps instant spells off the
@@ -4303,12 +4323,10 @@ namespace MFO::Logistics {
                 // does NOT skip on effect-present: a still-active channel is paced
                 // by its own hold below, and a stuck instant-applied ward from an
                 // old build must not block the animated re-cast that replaces it.
-                // A streamed concentration heal BYPASSES this already-active pre-skip:
-                // a restore-Health effect may momentarily register on the target as
-                // active, and blocking on that would stall the stream and leave the
-                // target un-topped (mirrors how CastAuto/#5 lets concentration bypass
-                // the already-active guard). It re-applies until the HP rule goes false.
-                if (immediate && !healStream) {
+                // (Concentration never reaches here -- it routed to the bounded
+                // stream above -- so `immediate` is a FIRE-AND-FORGET beneficial
+                // cast whose duration buff must not be re-stacked while still up.)
+                if (immediate) {
                     auto* ei   = sp->GetCostliestEffectItem();
                     auto* mgef = ei ? ei->baseEffect : nullptr;
                     if (auto* mt = tgt->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
@@ -4324,11 +4342,7 @@ namespace MFO::Logistics {
                 // be re-fired every service to stay refreshed (the channel's own
                 // registry paces the effect + releases when the rule stops). The
                 // window would starve those re-fires and tear the channel down.
-                // A streamed concentration heal also bypasses the window (like selfPkg):
-                // it is a self-limiting stream that must re-fire every service tick to
-                // stay applied while the HP rule holds; the 3s floor would mute it for
-                // three ticks and let the target's HP sag. It writes no window below.
-                if (!selfPkg && !healStream)
+                if (!selfPkg)
                     if (auto it = g_logiCastUntil.find(castKey); it != g_logiCastUntil.end() && now < it->second) {
                         start = choice.ruleIndex + 1; continue;   // within this spell's window
                     }
@@ -4357,35 +4371,11 @@ namespace MFO::Logistics {
                         start = choice.ruleIndex + 1; continue;
                     }
                 } else if (immediate) {
-                    // A CONCENTRATION spell has no instant apply: CastSpellImmediate
-                    // stamps the per-second effect with NO channel and it STICKS
-                    // forever (the stuck-ward bug). Self routes to the package above
-                    // when bCastSelf is on; otherwise -- self with the gate off, a
-                    // cast_player concentration, OR a beneficial concentration heal
-                    // aimed at an ally/player (Healing Hands) that now reaches this
-                    // immediate route -- skip it LEGIBLY rather than apply an
-                    // unreleasable effect. CONCENTRATION EDGE (2026-08-18): the core
-                    // fix lands INSTANT beneficial heals on the ally/player reliably;
-                    // a channeled beneficial STREAM is deliberately NOT re-applied
-                    // per tick here (no bounded channel exists on this direct path, so
-                    // a per-second effect would stick). For a streamed OOC heal use an
-                    // AUTO pick (Actuation::CastAuto owns the streamed whole-party fan)
-                    // or the combat cast path (ConcentrationCast's bounded channel).
-                    // EXCEPTION -- a beneficial HEAL streams safely (see healStream
-                    // above): a restore-Health effect re-applied per tick just heals
-                    // and releases nothing, so it FALLS THROUGH to the direct apply
-                    // below instead of skipping. Only a non-heal concentration spell
-                    // (a ward/fortify buff whose magnitude WOULD stick) still SKIPS.
-                    if (conc && !healStream) {
-                        spdlog::info("[cast] {:08X} concentration {:08X} SKIPPED on {} -- an "
-                                     "instant-apply has no channel to release (it would stick). "
-                                     "Use an AUTO pick or bCastSelf to channel it.",
-                                     id, sp->GetFormID(),
-                                     op == Vocab::kActCastPlayer ? "player"
-                                   : op == Vocab::kActCastTarget ? "ally/player"
-                                                                 : "self");
-                        start = choice.ruleIndex + 1; continue;
-                    }
+                    // FIRE-AND-FORGET beneficial direct-apply (self-gate-off / player /
+                    // ally). Concentration can NEVER reach here -- it routed to the
+                    // bounded stream (CastConcentrationAt) above -- so there is no
+                    // stuck-per-second-effect hazard on this path: an FF spell's effect
+                    // has its own authored duration and releases itself.
                     // CastSpellImmediate applies the effect to `tgt` for any delivery.
                     // No charge animation, but the light/buff/heal lands. Spends no
                     // magicka, so gate on affordability and deduct the cost by hand.
@@ -4403,17 +4393,7 @@ namespace MFO::Logistics {
                 } else if (Packages::Available()) {
                     acted = (Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None);
                 }
-                if (acted && healStream) {
-                    // A streamed heal writes NO pacing window -- it must re-fire next
-                    // service (~1s) while the HP rule holds, and the rule going false
-                    // once the target is topped up is what stops it. Log it legibly so
-                    // the deck log shows the stream working instead of the old SKIP spam.
-                    spdlog::info("[cast] {:08X} concentration heal {:08X} -> {} streamed",
-                                 id, sp->GetFormID(),
-                                 op == Vocab::kActCastPlayer ? "player"
-                               : op == Vocab::kActCastTarget ? "ally/player"
-                                                             : "self");
-                } else if (acted && !selfPkg) {
+                if (acted && !selfPkg) {
                     auto* ei = sp->GetCostliestEffectItem();
                     // 3s floor keeps instant spells off the ~1s tick; 300s ceiling
                     // mirrors the cast duration cap so a pathological effect duration
