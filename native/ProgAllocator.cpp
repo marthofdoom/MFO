@@ -474,9 +474,30 @@ namespace MFO::ProgAllocator {
         // test the base index too, exactly like OwnsAnyRank (§ deck
         // 2026-08-15: Force of Nature read its owned Destruction-Mastery
         // prereq as MISSING because HasPerk-only missed the base perk).
-        bool OwnsPerkForm(RE::Actor* a_actor, RE::TESNPC* a_base, RE::BGSPerk* a_perk) {
+        bool OwnsExactPerk(RE::Actor* a_actor, RE::TESNPC* a_base, RE::BGSPerk* a_perk) {
             return a_perk && ((a_base && a_base->GetPerkIndex(a_perk).has_value()) ||
                               a_actor->HasPerk(a_perk));
+        }
+
+        // RANK-AWARE prereq ownership (RC65 #1). A HasPerk prereq that names
+        // rank J of a MULTI-RANK chain is a ">= J" gate, not "== J": owning a
+        // LATER rank K>J in the same `nextPerk` chain necessarily means the
+        // follower already passed rank J. But the engine's perk list may carry
+        // only the HIGHEST rank held, so an EXACT-form test reports the lower
+        // prereq MISSING (marth's "gated == when the skill has multiple
+        // levels"). So we walk `nextPerk` FORWARD from the required rank and
+        // accept ownership of the rank itself OR any later rank. We deliberately
+        // NEVER walk backward — owning an EARLIER rank must NOT satisfy a
+        // later-rank prereq. Bounded + cycle-guarded (cap 16, like
+        // Progression.cpp:449) against a malformed overhaul record.
+        bool OwnsPerkForm(RE::Actor* a_actor, RE::TESNPC* a_base, RE::BGSPerk* a_perk) {
+            RE::BGSPerk* const head = a_perk;
+            int rankNo = 0;
+            for (RE::BGSPerk* r = a_perk; r && rankNo < 16; r = r->nextPerk, ++rankNo) {
+                if (rankNo > 0 && r == head) break;   // looped chain — bail
+                if (OwnsExactPerk(a_actor, a_base, r)) return true;
+            }
+            return false;
         }
 
         // Is this perk something a follower could actually allocate on the
