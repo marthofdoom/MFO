@@ -162,6 +162,7 @@ namespace MFO::Config {
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
             else if (a_key == "fChaseMin")          setF(g_chaseMin,       64.0f, 8192.0f);
             else if (a_key == "fChaseMax")          setF(g_chaseMax,       64.0f, 8192.0f);
+            else if (a_key == "fMeleeReach")        setF(g_meleeReach,     32.0f, 1024.0f);
             // Unknown keys are ignored in silence: MCM Helper writes keys we
             // may not know yet, and warning on them would cry wolf every load.
         }
@@ -279,6 +280,7 @@ namespace MFO::Config {
             g_leashMax           = 4000.0f;
             g_chaseMin           = 600.0f;
             g_chaseMax           = 3000.0f;
+            g_meleeReach         = 200.0f;
         }
 
     }
@@ -324,6 +326,7 @@ namespace MFO::Config {
             { "fLooseAcquireDist", "300.000000" },
             { "fExcursionMax", "60.000000" },  { "fNavmeshGate", "300.000000" },
             { "fLeashMin", "512.000000" },     { "fLeashMax", "4000.000000" },
+            { "fMeleeReach", "200.000000" },
             { "iMenuStyle", "0" },             { "bShowHud", "0" },
             { "bDebugUnlockSlots", "0" },
         };

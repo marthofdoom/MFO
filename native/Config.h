@@ -502,6 +502,19 @@ namespace MFO::Config {
     inline std::atomic<float> g_chaseMin{ 600.0f };    // scared: only what's on top of him
     inline std::atomic<float> g_chaseMax{ 3000.0f };   // confident: ranges across the field
 
+    // Melee reach -- the power-attack RANGE GATE. How close a follower must be to
+    // the CHOSEN foe before the "-> Power attack" action actually swings. A power
+    // attack is a melee lunge, so firing "attackPowerStartInPlace" from range just
+    // swings at air (marth, field: the follower power-attacked whenever ANY foe
+    // blocked, at whatever distance). The action LATCHES the foe and the engine's
+    // own combat AI walks him in (same approach plain Attack relies on); the anim
+    // fires only once GetDistance(follower, foe) <= this. Two adjacent humanoids
+    // read ~80-130u origin-to-origin, so ~200u leaves margin for the lunge without
+    // swinging at a foe a room away -- matches the authored melee thresholds
+    // (GAMBIT_FLOWS §3.2/3.3, 150/200u). fMeleeReach -- tunable by editing the
+    // synced INI with no rebuild.
+    inline std::atomic<float> g_meleeReach{ 200.0f };
+
     // Which caster a gambit spell goes through. PROVEN 2026-07-21: NO source
     // animates -- kLeftHand/kRightHand/kOther were all tried in the field and
     // behave like kInstant (ENGINE_NOTES §0.10). Kept configurable because it

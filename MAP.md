@@ -326,6 +326,14 @@ Only module that mutates actor state; main-thread only. `Fire(follower, choice)`
 (`:774`) dispatches one action/tick: Wait / Attack (→`Targeting::Command`) /
 Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::RetreatFill`
 / PowerAttack / drink / unknown→fail-closed. First-match-wins.
+- **PowerAttack (`kActPowerAttack`) is RANGE-GATED** (`Actuation.cpp` ~2262): it
+  latches the chosen foe (`Targeting::Command`, so the engine's combat AI closes
+  distance — MFO invents no approach) and fires `attackPowerStartInPlace` ONLY when
+  `GetDistance(follower,foe) <= Config::g_meleeReach` (200u, `fMeleeReach`).
+  Out of reach → latch + `Fired` "closing" (OPAQUE, like Attack); in reach → anim
+  then latch (reject = transparent fall-through, mutates nothing). Foe = PickFoe's
+  target (the specific blocking foe for `kCondFoeBlocking`). Without the gate it
+  swung at air whenever any foe blocked.
 - `Outcome.transparent` (`Actuation.h:38`) is the fall-through contract the
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
