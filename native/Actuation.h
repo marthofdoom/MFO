@@ -117,12 +117,53 @@ namespace MFO::Actuation {
     // equip/debt to undo (mirrors ClearForcedWeapons).
     void ClearSelfCasts();
 
+    // DELIVERY-AWARE EFFECT CASTER (marth: "when a gambit is set, always read the
+    // SPEL for this data"). A SELF-delivery spell's effect ALWAYS lands on the
+    // magic-caster's OWNER, never the TESObjectREFR passed to CastSpellImmediate --
+    // so casting a Self spell FROM the follower heals the FOLLOWER, and a "heal the
+    // player/ally" gambit drains magicka while the intended target's HP stays flat
+    // (deck 2026-08-19: Mysticism's Fast Healing 0002F3B8 is Concentration + SELF
+    // delivery; force-cast "at" the player it healed Lucien, never the player, and
+    // the concentration sustain then searched the PLAYER's effect list, never found
+    // the effect -- it was on Lucien -- and re-attached every beat). To place a
+    // Self-delivery effect on a DIFFERENT actor, THAT actor must be the magic caster
+    // (it self-casts); the follower stays the blame actor and still pays the real
+    // magicka. Non-Self deliveries (Aimed/TargetActor/Touch) place the effect on the
+    // passed target from the follower's own caster, unchanged. Returns the actor
+    // whose GetMagicCaster(kInstant) must perform the cast so the effect lands on
+    // a_target. Reads only the SPEL's Delivery; no engine mutation -- any thread.
+    RE::Actor* EffectCasterFor(RE::Actor* a_follower, RE::Actor* a_target,
+                               RE::SpellItem* a_spell);
+
+    // RE-ATTRIBUTE a freshly-applied effect's CASTER to the follower. When a
+    // SELF-delivery spell is routed through the TARGET's own magic caster (so the
+    // effect lands on the intended target, EffectCasterFor), the engine created
+    // the ActiveEffect(s) with the TARGET as caster -- so it would channel the
+    // TARGET's effective magnitude/rate (the target's skill/perks), not the
+    // follower's. The follower is CONCEPTUALLY the caster, so re-point every fresh
+    // ActiveEffect of a_spell on a_target back to a_follower: the engine then
+    // applies the FOLLOWER's perks/effectiveness at each application, for EVERY
+    // archetype (heal, ward, flesh/armor, waterbreathing, invisibility, muffle,
+    // fear/frenzy, damage/DoT, any buff) and EVERY effect of a multi-effect spell.
+    // NO magnitude math, NO per-effect override (which would collapse a multi-
+    // effect spell) -- pure caster attribution, archetype-agnostic. Reuses the
+    // sustain machinery unchanged: SustainConcentrationEffect re-arms the SAME
+    // re-attributed AE each beat, so the follower's rate persists for the whole
+    // stream, not just the first beat. MAIN THREAD only (walks the live AE list).
+    // Idempotent + a no-op for a normal cast (follower already the caster) and a
+    // genuine self-cast (target == follower), so callers may gate on the Self-
+    // delivery re-route or call unconditionally.
+    void ReattributeEffectCaster(RE::Actor* a_target, RE::SpellItem* a_spell,
+                                 RE::Actor* a_follower);
+
     // AUTO TARGET INFERENCE for act.cast_target. The board's default "Auto" pick
     // (Subject::Self, no subject actor, no selector target) infers WHO from the
     // spell and fans the cast out: hostile -> every nearby enemy; beneficial ->
     // the WHOLE PARTY who needs it (every active follower + the player, the caster
-    // included). Delivery type is NOT consulted -- MFO applies effects directly to
-    // each target (ApplyEffectFromTo), so a self-delivery buff lands on allies too.
+    // included). MFO chooses WHO receives each cast by spell nature, not the SPEL's
+    // Delivery -- but HOW the effect is placed still honours Delivery: a SELF-
+    // delivery buff is applied by having each recipient self-cast it (EffectCasterFor),
+    // so it lands on allies too instead of only the follower.
     // Per-cast magicka (reserve-floored, insufficient-skip), already-active guard,
     // one broadcast per fCastCooldown. Called from BOTH Fire (combat) and Logistics
     // (out of combat); out of combat the hostile branch finds no enemies and NoOps.

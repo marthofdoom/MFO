@@ -211,6 +211,58 @@ the rule wins. Fire-and-forget self-buffs keep their authored duration (no cap).
   job worker (the pre-fix Logistics inline call is the prime suspect for the queued 1.5.x
   `act.cast_target` AV reports).
 
+## SELF-DELIVERY: the effect lands on the CASTER'S OWNER — read the SPEL's Delivery
+
+**`CastSpellImmediate` does NOT apply a spell to the `target` ref for a SELF-delivery
+spell.** A Self-delivery magic effect always lands on the *magic-caster's owner*,
+whatever `TESObjectREFR*` you pass. So `follower->GetMagicCaster()->CastSpellImmediate(sp,
+…, player, …)` on a **Self** spell heals the FOLLOWER, not the player — the old comment
+"CastSpellImmediate applies the effect to `tgt` for any delivery" was simply false.
+
+**Deck field, 2026-08-19 (build c875048 = 47fd0de):** Lucien set to heal the player with
+"Fast Healing" (`0002F3B8`). In the loaded modlist (Mysticism) that record is **Concentration
++ Self delivery** (mag 20 / dur 1 / cost 38) — *not* the vanilla FireForget+Self instant.
+GetCastingType was therefore correct (it IS concentration); the real blocker was **Self
+delivery**: every beat the effect attached on *Lucien*, so the player never healed, Lucien's
+magicka drained, and — because the sustain searched the *player's* effect list and never
+found the effect (it was on Lucien) — `conc effect ATTACHED` re-fired every beat instead of
+FOUND-and-re-armed once. Two symptoms, one cause.
+
+**The rule is DELIVERY-TYPE + CASTING-TYPE driven, ARCHETYPE-AGNOSTIC — no heal/"is a
+heal"/effect-archetype special-casing anywhere.** It holds for EVERY Self-delivery spell
+and EVERY concentration spell alike: heal, ward, flesh/armor, waterbreathing, invisibility,
+muffle, fear/frenzy, damage/DoT stream, or any buff.
+
+1. **WHERE it lands (`Actuation::EffectCasterFor`, reads `GetDelivery()`):** to place a
+   Self-delivery effect on a NON-self target, that TARGET must be the magic caster (it
+   self-casts). Non-Self deliveries (Aimed / TargetActor / Touch) cast from the follower
+   onto the target as before. Casting-type- and archetype-agnostic; a genuine
+   `act.cast_self` (target == follower) is unchanged — which is why self-Candlelight always
+   worked: its target already IS the caster.
+2. **WHOSE rate it uses (`Actuation::ReattributeEffectCaster`):** the target self-casting
+   means the engine created the ActiveEffect(s) with the TARGET as caster — so it would
+   channel the TARGET's effective magnitude/rate (the target's skill/perks). **The follower
+   is conceptually the caster, so every fresh AE of the spell is re-pointed
+   (`ae->caster = follower`) back to the follower.** The engine then applies the FOLLOWER's
+   perks/effectiveness at each application — a master-healer heals at HIS rate on a
+   low-Restoration player; a follower with Mage Armor 3/3 lands the full flesh buff on the
+   player; a follower's Augmented-element DoT burns at his rate. Pure caster attribution —
+   **no magnitude math, no per-effect `magnitudeOverride`** (a single override scalar would
+   collapse a multi-effect spell): every effect of a multi-effect spell carries the
+   follower's rate, and because the sustain re-arms the SAME re-attributed AE each beat, the
+   follower's rate persists for the whole concentration stream, not just the first beat.
+
+The follower stays the blame actor and always pays the real magicka. All five direct-apply
+sites route through both helpers: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s
+combat force-half, and the two Logistics FF direct casts. The
+`FORCE-CAST … at TTTTTTTT (self-delivery: target self-casts)` tag marks a re-route in the log.
+
+**Instant vs concentration is still decided by the real casting type**
+(`GetCastingType() == kConcentration`) — a genuine FireForget spell is delivered as a SINGLE
+`CastSpellImmediate` (full instant magnitude once, paced by `fCastCooldown`), never sustained;
+only real concentration spells enter `SustainConcentrationEffect`. Do not re-derive
+concentration from effect archetype, "is a heal", or effect duration — read the SPEL.
+
 ## THE MATRIX — every cell delivers, bounded, gated. None barred.
 
 | | self | player / ally | foe |
