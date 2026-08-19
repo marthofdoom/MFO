@@ -147,7 +147,13 @@
 >   tested on FF/AI-channeled casts, false premise). `ApplyConcentrationBeat` now applies one second's
 >   worth of each value-modifier effect explicitly per beat (heal clamped to damage taken, damage as a
 >   plain AV hit; wards/non-VM keep the plain call) — wired into self, target, AND AUTO applies. Field
->   check: `[cast] … conc beat on … +N/-M` and the HP bar moving.**
+>   check: `[cast] … conc beat on … +N/-M` and the HP bar moving.** **PRESENTATION (dc856ea): HP climbed
+>   but the per-beat re-cast churned the Active-Effects HUD (stack of duration-0 momentaries, no
+>   sustained glow — and effect VFX IS in scope, only the caster POSE is deferred). Fix
+>   `SustainConcentrationEffect`: attach once per stream, pin duration + reset elapsedSeconds on that ONE
+>   ActiveEffect each beat (magnitude 0 for momentary kinds — beats stay the sole HP source), dispel the
+>   cosmetic effect at end-of-stream only. Field check: ONE continuous HUD entry + visible healing shader
+>   while streaming, HP still climbing at the authored rate.**
 >   Bounded/released by `TargetCastReconcile` (registry `g_targetCast`): hostile 1-4s LoS+LoF-gated on
 >   every apply / heal 6s cap but re-applies while wounded / utility 4s; **dispel-on-release is
 >   STICKY(ward)-ONLY so a heal flows uninterrupted** — release + re-stream, never a stop. Threading: every

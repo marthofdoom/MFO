@@ -81,12 +81,41 @@ effects explicitly** (`ApplyConcentrationBeat`, Actuation.cpp — main thread, c
 - archetype gate: `kValueModifier` / `kDualValueModifier` only (primary AV). Wards,
   lights, paralysis and scripted archetypes keep the `CastSpellImmediate` apply — their
   semantics are not per-second AV ticks.
-The `CastSpellImmediate` call stays alongside for VFX + non-value-modifier effects;
-double-application cannot overheal (clamped) and is ~0 otherwise (the premise above).
 The exchange rate is honest: each beat spends one second's cost and applies one second's
 magnitude — a magicka-starved caster fires sparse beats that each still heal a full
 second's worth. Log line to verify in the field: `[cast] XXXXXXXX conc beat on YYYYYYYY:
 +N/-M (spell ZZZZZZZZ)`.
+
+## THE PRESENTATION CONTRACT (one sustained effect — never a per-beat re-cast)
+
+**Scope correction (dc856ea):** only the caster POSE animation is deferred (post-town
+polish). The **target-side effect VFX — the healing shader/glow — is in scope and must
+display.** And a forced concentration stream must read as **ONE sustained Active-Effect
+HUD entry**, not a rapid-fire stack of momentary effects.
+
+The dc856ea defect: re-invoking `CastSpellImmediate` every beat spawned a fresh
+duration-0 ActiveEffect each ~1 s — HUD churn, and the shader died with each short
+effect. The fix (`SustainConcentrationEffect`, Actuation.cpp, main thread):
+- **Attach once per stream** (stream start, or spell/target change) via
+  `CastSpellImmediate`.
+- **Sustain that single ActiveEffect**: each beat pins a real `duration` (the stream's
+  window — heal 6 s, target offense/utility 4 s, self ward 15 s) and resets
+  `elapsedSeconds`. Instance-local writes on the live AE (the same fields the DoT-recast
+  logic reads) — **never** a shared-form MGEF/SpellItem mutation. One HUD entry; the
+  shader plays continuously for the rolling window.
+- **Momentary kinds (heal/damage): the sustained effect's `magnitude` is zeroed** — it is
+  purely cosmetic (HUD + shader) while the explicit `RestoreActorValue` beats remain the
+  one deterministic source of HP change; double-application is impossible by
+  construction. A concentration **ward/buff keeps its authored magnitude** (zeroing would
+  zero the ward) and gets only the duration sustain.
+- **Release**: a sticky ward dispels on any release (unchanged). A momentary stream's
+  cosmetic effect now dispels at **end-of-stream** (rule stale / actor gone / spell-or-
+  target switch) so the glow dies with the stream — safe, it heals nothing — but is
+  **kept alive across cap-only releases** (the 6 s heal cap re-streams next tick), so
+  the HUD entry is continuous for the whole time the rule wins.
+- **Fallback**: if the engine expires the effect despite the pinned duration (e.g. a
+  no-duration-flagged MGEF), the next beat simply finds nothing and re-attaches —
+  degrading to the old per-beat presentation with zero functional loss.
 
 Known residuals: authored magnitude (no skill/perk scaling — matches the flat per-second
 cost); dual-value secondary AV skipped (`secondAVWeight` unverified in this CommonLib
@@ -165,13 +194,14 @@ Bounding is release + re-stream, never a stop.
 | ally/foe utility | 4 s | `kConcUtilityHold` |
 | **self** ward / utility | **15 s** (marth's call — NOT 4 s: `CastSelfDirect` is non-rooting, so a short cap only flickers a self-ward) | `kConcSelfUtilityCap` |
 
-**The cap must NEVER interrupt a heal that is still needed.** Dispel-on-release is
-**sticky(Buff)-ONLY**: a lingering **ward/utility** buff is dispelled off the target
-(`TargetCastEndActor`/`SelfCastEndActor`) when its channel releases — gone/stale/capped —
-so it can never persist as a stuck gameplay buff. A **heal or damage** is a momentary
-effect: its release is bookkeeping only, it is never dispelled, and it re-applies on the
-next winning tick — the heal flows uninterrupted. Fire-and-forget self-buffs keep their
-authored duration (no cap).
+**The cap must NEVER interrupt a heal that is still needed.** A lingering **ward/utility**
+buff is dispelled off the target (`TargetCastEndActor`/`SelfCastEndActor`) on ANY release
+— gone/stale/capped — so it can never persist as a stuck gameplay buff. A **heal or
+damage** stream's HP flow comes from the explicit beats, which run while the rule wins —
+nothing about release can interrupt it; its magnitude-0 *cosmetic* sustained effect (THE
+PRESENTATION CONTRACT) is dispelled only at **end-of-stream** (stale/gone/switch), never
+on a cap-only release, so the visible effect is one continuous entry while the stream
+re-arms. Fire-and-forget self-buffs keep their authored duration (no cap).
 
 ## GATES (keep on the direct path)
 
