@@ -36,10 +36,12 @@ This is the **known-working force**. It is:
   concentration went through the package (`ConcentrationCast` → `Packages::CastAt`+hold),
   which was **latently package-declined for locked followers even in the public build** —
   the combat lockout below was already live there, just unreported.
-- **Effective.** `CastSpellImmediate` applies the spell's authored effect correctly —
-  including concentration heals. There is **no magnitude problem**; do not add manual
-  `RestoreActorValue` magnitude math to "fix" one. (Field-proven: direct-applied
-  concentration heals work with the plain call.)
+- **Effective — for FIRE-AND-FORGET.** A duration-0 FF instant applies its per-CAST
+  magnitude in full through the plain call (field-proven). **For CONCENTRATION the plain
+  call applies ~0** — see "THE MAGNITUDE CONTRACT" below; MFO applies the beat's worth
+  explicitly. The earlier "no magnitude problem, never add `RestoreActorValue` math"
+  ruling was measured on FF spells and AI-*channeled* casts and was a **false premise**
+  for a forced concentration cast (deck A/B on b63beb9, 2026-08-18).
 - **Consent-coherent.** It passes through NEITHER CasterConsent hook. `CheckStartCast`
   (0x06) advises the *combat AI's* deliberation and `CheckCast` (0x0A) is the pre-charge
   gate of the AI's own casting pipeline (`RequestCastImpl → … → FinishCastImpl`, whose
@@ -55,6 +57,41 @@ Entry points, all the same mechanism:
 - **player / ally / foe** → `Actuation::CastTargetDirect` (registry `g_targetCast`,
   released by `TargetCastReconcile`) — called by BOTH the OOC Logistics dispatch AND
   combat's `ConcentrationCast`. One channel per follower.
+
+## THE MAGNITUDE CONTRACT (forced concentration ≠ the plain call)
+
+**A concentration effect's magnitude is authored PER SECOND, and the engine only applies
+it while a real channel RUNS.** The ActiveEffect a one-shot `CastSpellImmediate` creates
+carries duration 0 and no sustaining channel: it attaches (the hit-shader plays — the
+"healing glow" residue), then dies on its first update, applying ~one *frame's* worth of a
+per-second magnitude — effectively **zero**. Field A/B, deck b63beb9 (2026-08-18): the
+SAME spell (Fast Healing 0002F3B8, concentration in this modlist) fired at SELF via
+`CastSelfDirect` AND at the PLAYER via `CastTargetDirect`; both drained magicka on every
+apply, **neither target's HP moved**. Every heal that "worked with the plain call" in the
+public build was either an FF spell or the follower's own AI *channeling* (which
+accumulates) — never a forced concentration one-shot.
+
+**So each ~1 s beat applies ONE SECOND'S WORTH of the spell's plain value-modifier
+effects explicitly** (`ApplyConcentrationBeat`, Actuation.cpp — main thread, called from
+`ApplySelfEffect` / `ApplyTargetEffect` / AUTO's `ApplyEffectFromTo`):
+- **beneficial** → `RestoreActorValue(kDamage, av, +magnitude × kConcApplyPeriod)`,
+  clamped to the damage actually taken — a beat can never push past max;
+- **detrimental** → `RestoreActorValue(kDamage, av, −magnitude × kConcApplyPeriod)` (the
+  same call every magicka deduct uses), so a foe stream actually damages;
+- archetype gate: `kValueModifier` / `kDualValueModifier` only (primary AV). Wards,
+  lights, paralysis and scripted archetypes keep the `CastSpellImmediate` apply — their
+  semantics are not per-second AV ticks.
+The `CastSpellImmediate` call stays alongside for VFX + non-value-modifier effects;
+double-application cannot overheal (clamped) and is ~0 otherwise (the premise above).
+The exchange rate is honest: each beat spends one second's cost and applies one second's
+magnitude — a magicka-starved caster fires sparse beats that each still heal a full
+second's worth. Log line to verify in the field: `[cast] XXXXXXXX conc beat on YYYYYYYY:
++N/-M (spell ZZZZZZZZ)`.
+
+Known residuals: authored magnitude (no skill/perk scaling — matches the flat per-second
+cost); dual-value secondary AV skipped (`secondAVWeight` unverified in this CommonLib
+rev); foe damage is a plain AV hit (no resist math, no aggro event — the stream runs in
+combat anyway).
 
 ## THE RE-APPLICATION CADENCE (the contract that makes heals feel right)
 
@@ -159,7 +196,8 @@ authored duration (no cap).
 | concentration | `CastSelfDirect`, **1 s beat**, 6 s heal / 15 s ward-utility cap | `CastTargetDirect`, **1 s beat**, 6 s heal / 4 s utility cap | `CastTargetDirect`, **1 s beat**, 1–4 s offense cap (LoS+LoF every apply) |
 
 - Concentration rows are identical IN COMBAT and OUT OF COMBAT — same function, same
-  channel registry, same beat, same caps.
+  channel registry, same beat, same caps — and every beat applies the explicit
+  per-second magnitude (THE MAGNITUDE CONTRACT above), not just the plain call.
 - **Self-concentration is SOLVED, not barred** — INVARIANT #67 was **REVOKED 2026-07-22**;
   `CastSelfDirect` (no package, no QNAM, so no t6 CTD) is the solution.
 - **AUTO fan** is the one exception to per-target streaming: one follower holds one channel,
@@ -173,9 +211,14 @@ authored duration (no cap).
 - **2026-08-18, commit `c539257` ("unify concentration routing"):** rerouted OOC
   concentration from the working direct-apply to the **package** (`CastConcentrationAt →
   Packages::CastAt`). Result: package-locked Lucien stopped healing the player/ally
-  (declined every tick). The "magnitude" theory chased alongside it was a dead end — the
-  direct call heals fine. **Fix (36231d7 + fable-cast-solve): direct force is the ONLY
+  (declined every tick). **Fix (36231d7 + fable-cast-solve): direct force is the ONLY
   concentration delivery, OOC and combat; ~1 s cadence restored; all applies main-threaded.**
+- **2026-08-18, field on `b63beb9`:** delivery fixed (player targeted, zero `[pkg]
+  DECLINED`) but **HP flat on self AND player while magicka drained** — the "magnitude
+  theory is a dead end" dismissal was itself wrong (it was tested against FF/AI-channeled
+  casts, a false premise). A forced concentration one-shot applies ~0 of its per-second
+  magnitude. **Fix: `ApplyConcentrationBeat` — explicit per-second magnitude per beat
+  (see THE MAGNITUDE CONTRACT). Do not re-remove it on the strength of the old ruling.**
 
 ## PROCESS RULE
 

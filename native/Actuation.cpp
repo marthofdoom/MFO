@@ -1029,6 +1029,79 @@ namespace MFO::Actuation {
             for (auto* ae : hits) ae->Dispel(true);
         }
 
+        // ── FORCED-CONCENTRATION MAGNITUDE (the field-corrected premise) ─────
+        // A concentration effect's magnitude is authored PER SECOND, and the
+        // engine only applies it while a real channel RUNS: the ActiveEffect a
+        // one-shot CastSpellImmediate creates carries duration 0 and no
+        // sustaining channel, so a per-second Restore Health accumulates for
+        // ~one frame -> ~0 HP. The hit-shader plays and MFO's deduct spends
+        // the magicka, but the bar never moves. Deck A/B on b63beb9: the SAME
+        // spell (Fast Healing 0002F3B8 -- CONCENTRATION in this modlist) fired
+        // at SELF (CastSelfDirect) and at the PLAYER (CastTargetDirect); both
+        // drained magicka on every apply, NEITHER target's HP climbed. The
+        // earlier "no magnitude problem, never add RestoreActorValue math"
+        // ruling was measured on FF spells and AI-CHANNELED casts (a real
+        // channel accumulates) -- a false premise for a FORCED concentration
+        // cast. FF spells stay on the plain call alone: a duration-0 instant
+        // applies its per-CAST magnitude in full (that path is field-proven).
+        //
+        // So each ~1 s beat (kConcApplyPeriod) applies ONE SECOND'S WORTH of
+        // every plain value-modifier effect EXPLICITLY -- exactly what the
+        // channel would have accumulated, matching the per-second cost the
+        // beat's deduct charges:
+        //   beneficial  -> RestoreActorValue(kDamage, av, +mag*beat), clamped
+        //                  to the damage actually taken -- never past max;
+        //   detrimental -> RestoreActorValue(kDamage, av, -mag*beat) (the
+        //                  same call every magicka deduct uses).
+        // Non-value-modifier archetypes (ward/light/paralyze/script) keep the
+        // CastSpellImmediate apply -- their semantics are not per-second AV
+        // ticks. The plain call stays alongside for VFX + those archetypes;
+        // double-application cannot overheal (clamped) and is ~0 for the rest
+        // (the premise above). Authored magnitude, no skill/perk scaling
+        // (matches the flat per-second cost the deduct charges). A dual-value
+        // modifier applies its PRIMARY AV only (secondAVWeight has no verified
+        // binding in this CommonLib rev -- residual, rare for concentration).
+        // Foe damage lands as a plain AV hit: no resist math, no aggro event
+        // (the stream runs in combat anyway) -- documented balance residual.
+        // MAIN THREAD only (AV writes on a live actor).
+        void ApplyConcentrationBeat(RE::Actor* a_target, RE::SpellItem* a_spell,
+                                    RE::FormID a_casterID) {
+            auto* avo = a_target ? a_target->AsActorValueOwner() : nullptr;
+            if (!avo || !a_spell) return;
+            using Arch = RE::EffectArchetypes::ArchetypeID;
+            float healed = 0.0f, harmed = 0.0f;
+            for (const auto* e : a_spell->effects) {
+                const auto* mgef = e ? e->baseEffect : nullptr;
+                if (!mgef) continue;
+                const auto arch = mgef->data.archetype;
+                if (arch != Arch::kValueModifier && arch != Arch::kDualValueModifier)
+                    continue;
+                const auto av = mgef->data.primaryAV;
+                if (av == RE::ActorValue::kNone) continue;
+                const float beat = e->GetMagnitude() * kConcApplyPeriod;
+                if (beat <= 0.0f) continue;
+                if (mgef->IsDetrimental() || mgef->IsHostile()) {
+                    avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, av, -beat);
+                    harmed += beat;
+                } else {
+                    // The damage modifier is <= 0: restore only what is
+                    // actually missing, so a beat can never push past max.
+                    const float taken = -a_target->GetActorValueModifier(
+                        RE::ACTOR_VALUE_MODIFIER::kDamage, av);
+                    const float amt = std::min(beat, taken);
+                    if (amt > 0.0f) {
+                        avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, av, amt);
+                        healed += amt;
+                    }
+                }
+            }
+            // The field-verification line: HP/AV actually moved this beat.
+            if (healed > 0.0f || harmed > 0.0f)
+                spdlog::info("[cast] {:08X} conc beat on {:08X}: +{:.0f}/-{:.0f} "
+                             "(spell {:08X})", a_casterID, a_target->GetFormID(),
+                             healed, harmed, a_spell->GetFormID());
+        }
+
         // Apply the effect + spend magicka for ONE fire (main thread). §5.3:
         // CastSpellImmediate spends nothing (§0.22), so deduct the real cost.
         void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID) {
@@ -1048,7 +1121,18 @@ namespace MFO::Actuation {
                 // it drops.
                 auto* ei   = sp->GetCostliestEffectItem();
                 auto* mgef = ei ? ei->baseEffect : nullptr;
-                if (auto* mt = a->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
+                // A MOMENTARY concentration effect (value-modifier: heal/drain)
+                // BYPASSES the guard: its one-shot ActiveEffect can linger as a
+                // ~0-magnitude ghost (the "healing glow ran on" residue) and
+                // must never block the next beat of a still-needed heal. The
+                // guard's CTD case (lights/duration buffs) is not value-modifier.
+                const bool concMomentary =
+                    sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+                    mgef &&
+                    (mgef->data.archetype == RE::EffectArchetypes::ArchetypeID::kValueModifier ||
+                     mgef->data.archetype == RE::EffectArchetypes::ArchetypeID::kDualValueModifier);
+                if (auto* mt = a->AsMagicTarget();
+                    !concMomentary && mgef && mt && mt->HasMagicEffect(mgef)) {
                     spdlog::info("[cast] {:08X} cast_self skipped -- {} ({:08X}) already active",
                                  a_id, sp->GetName() ? sp->GetName() : "?", a_spellID);
                     return;
@@ -1058,6 +1142,11 @@ namespace MFO::Actuation {
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
+                // FORCED CONCENTRATION: the plain call applies ~0 of a per-
+                // second magnitude (no channel) -- apply this beat's worth
+                // explicitly (see ApplyConcentrationBeat).
+                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+                    ApplyConcentrationBeat(a, sp, a_id);
                 const float cost  = sp->CalculateMagickaCost(a);
                 // #6: clamp to the current pool so a deduct never drives magicka
                 // negative (AUTO/self validate cost against ONE worker snapshot).
@@ -1085,11 +1174,14 @@ namespace MFO::Actuation {
             });
         }
 
-        // ApplySelfEffect generalized to a NON-self target (main thread). SAME proven
-        // call the public build's CastOn and ff0cb48's healStream used -- the known-
-        // working force, no package. Deducts the CASTER's real magicka (§5.3); does
-        // NOT compute any heal magnitude by hand (CastSpellImmediate applies the
-        // spell's own effect -- the "plain CastSpellImmediate heals fine" ruling).
+        // ApplySelfEffect generalized to a NON-self target (main thread). SAME
+        // direct call the public build's CastOn force-half used -- the known-
+        // working force, no package. Deducts the CASTER's real magicka (§5.3).
+        // MAGNITUDE: an FF spell's effect applies in full through the plain call;
+        // a CONCENTRATION spell applies ~0 (per-second authored, no channel), so
+        // the beat's worth is applied explicitly via ApplyConcentrationBeat --
+        // the old "plain CastSpellImmediate heals fine" ruling was REVOKED after
+        // the b63beb9 field A/B (see ApplyConcentrationBeat's header).
         //   a_guard TRUE  (sticky ward/buff): skip if the buff is already active on
         //                 the target, so a duration buff is not re-stacked.
         //   a_guard FALSE (heal / damage -- MOMENTARY): re-apply EVERY paced tick;
@@ -1118,6 +1210,12 @@ namespace MFO::Actuation {
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
                 inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
+                // FORCED CONCENTRATION: the plain call applies ~0 of a per-second
+                // magnitude (no channel sustains the ActiveEffect) -- apply this
+                // beat's worth explicitly (see ApplyConcentrationBeat above; the
+                // b63beb9 field A/B: magicka drained, HP flat on self AND player).
+                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+                    ApplyConcentrationBeat(tgt, sp, a_casterID);
                 const float cost  = sp->CalculateMagickaCost(caster);
                 const float spend = avo ? std::min(cost, before) : 0.0f;   // #6: never negative
                 if (avo && spend > 0.0f)
@@ -1221,6 +1319,12 @@ namespace MFO::Actuation {
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
+                // FORCED CONCENTRATION under AUTO: same false-premise fix as the
+                // manual streams -- the plain call applies ~0 of a per-second
+                // magnitude, so the pulse's worth is applied explicitly (the AUTO
+                // "group pulse" for concentration is otherwise a no-op heal).
+                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+                    ApplyConcentrationBeat(target, sp, a_casterID);
                 const float cost  = sp->CalculateMagickaCost(caster);
                 // #6: clamp to the current pool so a deduct never drives magicka
                 // negative (AUTO validates N casts against ONE worker snapshot).

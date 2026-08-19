@@ -236,7 +236,14 @@ releases **by eviction** with a non-actor XMarker.
   §0.13), so the AI stays denied while MFO's stream delivers. **CADENCE CONTRACT
   (`kConcApplyPeriod`, 1 s):** a concentration magnitude/cost is authored PER SECOND,
   so the channel re-applies every ~1 s (fCastCooldown pacing quartered heal throughput
-  — the "heals feel broken" bug); FF spells keep the fCastCooldown beat. Bounded/
+  — the "heals feel broken" bug); FF spells keep the fCastCooldown beat. **MAGNITUDE
+  CONTRACT (`ApplyConcentrationBeat`, main thread):** a one-shot `CastSpellImmediate`
+  applies ~0 of a per-second concentration magnitude (no channel sustains the
+  ActiveEffect — b63beb9 field A/B: magicka drained, HP flat on self AND player), so
+  each beat explicitly applies one second's worth of every value-modifier effect
+  (beneficial clamped to damage taken, detrimental as a plain AV hit); wards/lights/
+  non-VM archetypes keep the plain call. Wired into `ApplySelfEffect`,
+  `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`. Bounded/
   released by `TargetCastReconcile` (registry `g_targetCast`, one stream per follower):
   hostile 1-4 s (LoS + line-of-fire re-checked on EVERY apply in `CastTargetDirect`),
   heal 6 s cap but **re-applies while the HP rule wins** so a wounded target tops up,
