@@ -8,42 +8,43 @@
 >
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶▶ RESUME HERE (2026-08-19) — v1.0.65 STAGED (`f1110f2`, VERSION 1.0.65, NO TAG/not published); ONE gate left: the deck field test.**
-> - **⛔ CUT HELD — sole gate = DECK FIELD TEST of the SELF-DELIVERY fix (wave 3 — PIVOT).** main is now at
->   `4e6d4aa` (merge of `f5f6ff9`+`efd7114`). **DLL `2ad0c414`** (green CI run `32297419600`) deployed into the
->   local `custom-modlist/mods/MFO` — supersedes `a8d641bb`→`2ad0c414` (orig `c875048`). Deck AWAKE but not yet
->   synced at deploy — **RE-VERIFY the deck sha == `2ad0c414` before trusting any field result** (syncthing).
-> - **THE FIX (2026-08-19) — SELF-DELIVERY, 3 field-driven waves, ending in an ARCHITECTURAL PIVOT.** Field
->   report: Lucien (package-locked custom follower) healing the player — cast fired, magicka spent, no heal.
->   ROOT CAUSE (not misclassification): **Mysticism** overrides Fast Healing to Concentration/**Self**-delivery;
->   `CastSpellImmediate` applies a Self-delivery effect to the MAGIC-CASTER'S OWNER, ignoring the target.
->   - **Waves 1–2 (REVERTED approach):** re-route via the TARGET self-casting + caster re-attribution + a
->     magicka refund. Field-falsified: making the target self-cast means the **PLAYER is the caster** → engine
->     charges the PLAYER's magicka (drains to empty at cast rate; refund is a no-op vs a per-frame channel) AND
->     the heal STOPS when the player runs dry. Wrong model — a follower heal must be independent of player mana.
->   - **Wave 3 (SHIPPED, the model):** deliver the real effect straight onto the target attributed to the
->     follower via **`RE::MagicTarget::AddTarget(AddTargetData)`** (the engine's own per-effect apply path; NOT
->     the AI package). `Actuation::ApplyEffectsFromCaster` fills `caster=follower, magicItem=spell, effect=<eff>,
->     magnitude=authored base, castingSource=kInstant` per effect and calls `target->AsMagicTarget()->AddTarget`.
->     Gated by `NeedsCasterAttributedDelivery` (Self-delivery + non-self target); else the follower's normal
->     `CastSpellImmediate`. Removed the wave-1/2 band-aids (`EffectCasterFor`/`ReattributeEffectCaster`/
->     `RefundMagicka`). **Three roles, all met, archetype-agnostic:** lands on target / follower's rate (engine-
->     owned, no `magnitudeOverride`, no hand-rolled math) / **player NEVER casts, NEVER pays, needs ZERO magicka**
->     (follower pays via its own hand-deduct only). The created AE carries the spell so `SustainConcentrationEffect`
->     finds+re-arms it → ONE sustained effect (kills the per-beat re-attach). Recipient-HP heal terminator kept
->     (`kHealFullPct` 0.995, reads the HEAL TARGET's Health). Docs: CAST-DELIVERY.md + MAP.md rewritten to the
->     AddTarget model, target-self-cast recorded as REJECTED.
-> - **FIELD-WATCH (wave 3):** with a **0-magicka player** — the on-player heal still LANDS and HP CLIMBS; the
->   **player's magicka bar stays FLAT** (no dip, no drain-to-empty); Lucien's small per-beat deduct shows
->   (`FORCE-CAST … (self-delivery: applied from follower)`); `conc effect ATTACHED` **ONCE per stream** then
->   re-arms silently (no per-beat re-attach); heal stops within ~1s of the player reaching full. Non-heal check:
->   a follower self-buff (flesh/ward) on the player lands at the follower's rank, player mana flat.
-> - **RESIDUAL (wave 3, field-testable):** if the engine's `AddTarget`/AE creation bakes magnitude WITHOUT
->   re-applying the caster's perks, a perk-boosted heal could land at BASE rate (still a real heal, just
->   unboosted). If the field shows a weak follower-rate, the fallback is passing the follower's engine-computed
->   effective magnitude in `AddTargetData.magnitude` (still engine-owned) — NOT a return to player-casting.
->   Deferred alt (marth's fabricated-SPEL idea): a runtime-fabricated FF+TargetActor SpellItem (cached dynamic
->   form, lifetime-managed) would also decouple + enable instant-burst/animated-cast — build later if wanted.
+> **▶▶ RESUME HERE (2026-08-19 late) — v1.0.65 STAGED (`f1110f2`, NO TAG); cast delivery being REBUILT minimal after a scope-creep audit. Cut HELD.**
+> - **⚠️ main (`7d6eb87`) SHIPS BROKEN CAST DELIVERY.** The deployed DLL `2ad0c414` (the wave-3 `MagicTarget::AddTarget`
+>   model) FIELD-FAILED: AddTarget does NOT channel a concentration effect → Lucien heals nobody (deck-confirmed).
+>   Do NOT cut from main as-is. The rebuild (below) REPLACES main's cast delivery.
+> - **THE SAGA, RESOLVED TO A MINIMAL FIX (2026-08-19).** A ~1-day cast rework (AddTarget → target-self-cast →
+>   force-sustain → 2-slot SPEL proxy) OVERREACHED: to fix ONE bug it rewrote the delivery of already-working
+>   spells and chased its own regressions (player-mana drain, no-stop-at-full, FF-fan-lands-on-caster, SEV-1
+>   light-respam CTD). A **read-only AUDIT** (agent, 2026-08-19) pinned it:
+>   - **BASELINE = `00c6fce`** (last shipped-working build, `c875048`; before any rewrite). Delivers via plain
+>     `CastSpellImmediate(sp, target, follower)`; has AUTO light-crash suppression; NO rewrite machinery.
+>   - **The ONE genuinely-broken thing:** a **CONCENTRATION + Self-delivery** spell (Mysticism Fast Healing =
+>     Conc+Self) aimed at a NON-SELF target lands its AE on the FOLLOWER (Self-delivery collapse) → player/ally
+>     concentration heals silently fail. NOT a package-lock issue (fixed pre-baseline by `36231d7`); hits normal
+>     AND locked followers equally. Everything else (Candlelight/flesh fanning, self-casts, normal heals) WORKED
+>     at baseline — marth confirms Candlelight worked in all modes (individual/player/self/AUTO-all-in-dark).
+> - **DEFINITIVE FIX (IN PROGRESS on branch `worktree-agent-a622d046b08b6aefc`, agent a622d046 RUNNING):**
+>   rebuild cast delivery = **baseline `00c6fce` + ONE mechanism**: a delivery-flipped copy (copy data+effects,
+>   set `data.delivery=kTargetActor`, KEEP castingType — targeting-only, NOT an FF conversion) gated strictly to
+>   `kSelf && kConcentration && target!=follower`, wired into `ApplyTargetEffect`'s concentration branch (covers
+>   OOC + combat). **DELETE** all `NeedsCasterAttributedDelivery`/`ApplyEffectsFromCaster`/`AddTarget`. FF
+>   (Candlelight/flesh/self-cast) = baseline byte-for-byte, untouched. **marth's SPEL insight (simplifies it):**
+>   the fabricated SPEL form is only needed MOMENTARILY to fire the cast — once the AE is applied it's
+>   self-sufficient → 2 slots, fill→cast→REUSE-FREELY, NO idle timers / lifetime guards (that machinery solved a
+>   non-problem; the SEV-3 lifetime findings are moot). Diff vs baseline should be ~just the proxy.
+> - **STILL-OPEN QUESTIONS (field-test after the rebuild builds + CI-green + Fable-review):** (1) does the
+>   delivery-flipped concentration copy actually CHANNEL the heal on the recipient? (the real unknown — never
+>   deployed). (2) confirm the baseline FF-Self-on-others mechanism (marth disputes recipients self-cast; agent
+>   to report how baseline delivers Candlelight-on-others so we preserve it). Memories: [[self-delivery-fallback-two-reserved-spels]],
+>   [[cast-fanning-known-good-behavior]].
+> - **POWER-ATTACK GAMBIT FIX — CLEAN, PARKED, ready to merge.** Branch `worktree-agent-ade5a6ffc963fa615`
+>   (`0d487e8`, GREEN CI `32300153193`). Fixes "foe blocking → power attack" swinging at any range: now resolves
+>   the specific blocking foe, latches it so the engine CLOSES to melee (`fMeleeReach` 200u, INI-tunable), and
+>   swings only in reach. Passed Fable review (0 findings). Bundle with the cast rebuild in ONE deploy.
+> - **PROCESS GATE (marth):** Fable review BOTH the cast rebuild AND power-attack BEFORE pushing/merging. When
+>   reviewing a worktree branch, agents MUST read the branch's WORKTREE (`cd <worktree>`), NOT the main repo (a
+>   first review read `main` by mistake and falsely refuted everything). Don't merge the churn branches
+>   (`e32cf14` etc.) — the rebuild supersedes them.
 > - **LOCAL FABLE REVIEW: DONE + CLEAN (2026-08-19).** 6-dimension multi-agent review of the 67-commit diff
 >   (`v1.0.64`..main), each finding adversarially verified. **Zero SEV-1/SEV-2.** Two SEV-3s, both NON-blocking
 >   follow-ups: (a) `Logistics.cpp:4438` OOC hostile cast's LoS wall-gate is inert (Check without a Want seed →
