@@ -228,43 +228,52 @@ magicka drained, and — because the sustain searched the *player's* effect list
 found the effect (it was on Lucien) — `conc effect ATTACHED` re-fired every beat instead of
 FOUND-and-re-armed once. Two symptoms, one cause.
 
-**The rule is DELIVERY-TYPE + CASTING-TYPE driven, ARCHETYPE-AGNOSTIC — no heal/"is a
-heal"/effect-archetype special-casing anywhere.** It holds for EVERY Self-delivery spell
-and EVERY concentration spell alike: heal, ward, flesh/armor, waterbreathing, invisibility,
-muffle, fear/frenzy, damage/DoT stream, or any buff.
+**A Self-delivery spell aimed off-self is DELIVERED, not CAST — real-effect application onto
+the target with the FOLLOWER as caster, the player completely uninvolved (deck a8d641bb).**
+Because a Self effect can only ever land on its magic-caster's OWNER, MFO does **not** make
+the target cast it. A short-lived design that made the TARGET self-cast was WRONG on two
+counts and is banned: (a) the PLAYER became the magic caster, so the engine charged the
+**player's** magicka — a concentration self-cast drained it per-frame to EMPTY (`RefundMagicka`
+around a `MainThread::Post`'d cast is a no-op: the concentration channel drains over later
+frames, outside the single-frame refund; it also re-attached every beat) — and (b) a self-cast
+REQUIRES the caster to have magicka, so the heal STOPPED when the player ran dry. A follower's
+spell must be completely independent of the player's magicka.
 
-1. **WHERE it lands (`Actuation::EffectCasterFor`, reads `GetDelivery()`):** to place a
-   Self-delivery effect on a NON-self target, that TARGET must be the magic caster (it
-   self-casts). Non-Self deliveries (Aimed / TargetActor / Touch) cast from the follower
-   onto the target as before. Casting-type- and archetype-agnostic; a genuine
-   `act.cast_self` (target == follower) is unchanged — which is why self-Candlelight always
-   worked: its target already IS the caster.
-2. **WHOSE rate it uses (`Actuation::ReattributeEffectCaster`):** the target self-casting
-   means the engine created the ActiveEffect(s) with the TARGET as caster — so it would
-   channel the TARGET's effective magnitude/rate (the target's skill/perks). **The follower
-   is conceptually the caster, so every fresh AE of the spell is re-pointed
-   (`ae->caster = follower`) back to the follower.** The engine then applies the FOLLOWER's
-   perks/effectiveness at each application — a master-healer heals at HIS rate on a
-   low-Restoration player; a follower with Mage Armor 3/3 lands the full flesh buff on the
-   player; a follower's Augmented-element DoT burns at his rate. Pure caster attribution —
-   **no magnitude math, no per-effect `magnitudeOverride`** (a single override scalar would
-   collapse a multi-effect spell): every effect of a multi-effect spell carries the
-   follower's rate, and because the sustain re-arms the SAME re-attributed AE each beat, the
-   follower's rate persists for the whole concentration stream, not just the first beat.
-3. **WHO pays the cost (`Actuation::RefundMagicka`):** the target self-casting means the
-   engine charges the TARGET's magicka — `CastSpellImmediate` **deducts from the magic-
-   caster's OWNER** (ENGINE_NOTES §0.9; the "casts are FREE" measurement in §0.22 was on
-   PACKAGE casts, not the direct path). A follower's spell must NEVER cost the player/ally
-   magicka, so each re-routed cast **snapshots the target's magicka before the cast and
-   refunds exactly what the engine took** (a regen tick is left alone). The FOLLOWER still
-   pays via MFO's own hand-deduct, so §5.3 competence still makes a follower run dry.
-   Deck 2026-08-19 falsified the earlier "follower stays blame actor and still pays" claim —
-   blame ≠ who-is-charged; the charge follows the magic-caster's owner, hence the refund.
+**The mechanism (`Actuation::ApplyEffectsFromCaster` → `RE::MagicTarget::AddTarget`), archetype-
+agnostic — no heal/"is a heal"/archetype special-casing.** `AddTarget` is the engine's OWN
+per-effect application entry (how the engine itself lands every effect — **not** the AI package;
+marth's ban is the package, not real-effect application). For each of the spell's effects, MFO
+fills an `AddTargetData` with `caster = follower`, `magicItem = spell`, `effect = <this effect>`,
+`magnitude = effect->effectItem.magnitude` (authored base), `castingSource = kInstant`, and
+calls `target->AsMagicTarget()->AddTarget(data)`. Three roles, all satisfied at once and for
+EVERY archetype (heal, ward, flesh/armor, waterbreathing, invisibility, muffle, fear/frenzy,
+DoT, any buff) and EVERY effect of a multi-effect spell:
 
-All five direct-apply sites route through all three helpers: `ApplyTargetEffect`,
-`ApplyEffectFromTo` (AUTO), `CastOn`'s combat force-half, and the two Logistics FF direct
-casts. The `FORCE-CAST … at TTTTTTTT (self-delivery: target self-casts)` tag marks a re-route
-in the log.
+1. **Lands on the target** — `AddTarget` applies straight onto the target's `MagicTarget`,
+   regardless of the spell's Self delivery.
+2. **Follower's rate** — `caster = follower`, so the engine attributes the effect to the
+   follower and applies the FOLLOWER's skill/perks/effectiveness (a master-healer heals at HIS
+   rate on a 0-Restoration player; Mage Armor 3/3 lands the full flesh buff). Only the authored
+   base magnitude is passed — **no hand-rolled magnitude, no `magnitudeOverride`**; the engine
+   owns the scaling via the caster.
+3. **Player pays nothing, needs nothing** — the player NEVER casts and NEVER pays magicka, and
+   needs **zero** magicka for the effect to land. The FOLLOWER pays via MFO's own hand-deduct
+   only (§5.3 competence: a follower still runs dry). No snapshot/refund exists or is needed.
+
+`NeedsCasterAttributedDelivery(spell, follower, target)` gates it: TRUE only for a Self-delivery
+spell aimed at a non-self target. A genuine `act.cast_self` (target == follower) and every
+non-Self delivery (Aimed / TargetActor / Touch) cast normally from the follower's own magic
+caster — unchanged (why self-Candlelight always worked). The created AE carries the spell, so
+`SustainConcentrationEffect` FINDS and re-arms it — **ONE sustained effect, no per-beat
+re-attach** (this also fixes the `conc effect ATTACHED`-every-beat symptom). All five direct-
+apply sites branch on it: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s combat
+force-half, and the two Logistics FF direct casts. The
+`FORCE-CAST … at TTTTTTTT (self-delivery: applied from follower)` tag marks the applied path.
+
+*Deck history:* c875048/47fd0de — the effect healed Lucien not the player (cast from the
+follower on a Self spell). Wave-1 (target-self-cast) landed it on the player but drained the
+player's magicka; a8d641bb confirmed the drain-to-empty + heal-stops-at-0 failure. This pivot
+(AddTarget from the follower) is the fix.
 
 **HEAL TERMINATOR — stop when the RECIPIENT is full (deck 2026-08-19).** A heal-until-topped
 stream ends the moment the RECIPIENT reaches ~full Health (`kHealFullPct` = 0.995), read off
