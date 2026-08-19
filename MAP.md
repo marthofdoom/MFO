@@ -249,25 +249,28 @@ releases **by eviction** with a non-actor XMarker.
   owns delivery + per-second cost + bounds only. ONE sustained HUD entry, shader plays
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
-  **SELF-DELIVERY off-self = FLIPPED-DELIVERY PROXY through the existing concentration-on-others
-  path (`ProxyDeliverySpell`/`SelfDeliveryProxy`, marth's design):** the ONLY defect is SELF
-  delivery — MFO already channels a natively-aimed concentration/FF spell from a follower onto
-  another actor via `CastTargetDirect`→`ApplyTargetEffect`→the FOLLOWER's `CastSpellImmediate`
-  + `SustainConcentrationEffect` (OOC Logistics + combat `ConcentrationCast`). So for a Self
-  spell aimed off-self MFO fabricates a transient COPY with casting style PRESERVED and ONLY
-  `data.delivery` flipped `kSelf→kTargetActor`, and the FOLLOWER casts THAT through the unchanged
-  path: effect lands on the target (Sustain FINDS+re-arms it → ONE sustained effect, no per-beat
-  re-attach), follower's rate + follower's magicka, PLAYER never casts / never pays / needs zero
-  magicka. `NeedsCasterAttributedDelivery` gates it (Self + non-self target); `cast_self` and
-  non-Self cast the source unchanged. EXACTLY TWO dynamic slots (`IFormFactory`, `0xFF__`),
-  reuse-same-source / claim-idle(5s) / else SKIP — no unbounded cache. SAVE-SAFE: transient
-  dynamic forms are never serialized to the `.ess` nor any MFO co-save; a proxy AE saved
-  mid-stream is dropped on load (no corruption). Stream-end dispel clears the proxy AE too
-  (`TargetCastEndActor`→`ProxyFor`). Five sites branch on `ProxyDeliverySpell`: `ApplyTargetEffect`,
-  `ApplyEffectFromTo` (AUTO), `CastOn` force-half, two Logistics FF casts. **RETIRED:** (a)
-  target-self-cast (deck a8d641bb: player became caster → drained player's magicka to empty,
-  heal stopped at 0; `RefundMagicka` no-op); (b) `MagicTarget::AddTarget` force-apply (does NOT
-  channel). Flipping delivery + the working aimed path is the fix. **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
+  **SELF-DELIVERY off-self = FLIPPED-DELIVERY PROXY, CONCENTRATION ONLY, through the existing
+  concentration-on-others path (`ProxyDeliverySpell`/`SelfDeliveryProxy`, marth's design; scope
+  narrowed by Fable review):** MFO already channels a natively-aimed concentration spell from a
+  follower onto another actor via `CastTargetDirect`→`ApplyTargetEffect`→the FOLLOWER's
+  `CastSpellImmediate` + `SustainConcentrationEffect` (OOC Logistics + combat `ConcentrationCast`).
+  So a **concentration** Self spell aimed off-self is fabricated as a transient COPY with casting
+  style PRESERVED and ONLY `data.delivery` flipped `kSelf→kTargetActor`; the FOLLOWER casts THAT
+  through the unchanged path: lands on the target (Sustain FINDS+re-arms → ONE sustained effect,
+  no per-beat re-attach), follower's rate + magicka, PLAYER never casts/pays/needs magicka.
+  `NeedsCasterAttributedDelivery` = `kSelf` **AND** `kConcentration` AND non-self target. **FF Self
+  spells are NEVER proxied** (a proxy-keyed AE breaks SOURCE-keyed guards → the light "Active
+  Lights" CTD; a shared long buff stripped early) — flesh/light/waterbreathing keep their prior
+  path (the follower's plain `CastSpellImmediate(source,target)`) and never touch the proxy.
+  EXACTLY TWO dynamic slots (`IFormFactory`, `0xFF__`), reuse-same-source / claim-idle(**8 s** >
+  the 6 s `kConcHealCap`, so a slot is never reconfigured under a live proxy AE) / else SKIP — no
+  unbounded cache. VR: `Get` returns nullptr when `!MainThread::IsInstalled()` (no off-main form
+  create). SAVE-SAFE: transient dynamic forms are never serialized to the `.ess` nor any MFO
+  co-save; a proxy AE saved mid-stream is dropped on load (no corruption). Stream-end dispel clears
+  the proxy AE too (`TargetCastEndActor`→`ProxyFor`). **RETIRED:** (a) target-self-cast (deck
+  a8d641bb: player became caster → drained player's magicka to empty, heal stopped at 0); (b)
+  `MagicTarget::AddTarget` force-apply (does NOT channel). Flipping delivery + the working aimed
+  path is the fix. **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
   the RECIPIENT's Health hits ~full — read the intended heal target (`a_target`/follower for
   self-heal), NOT the follower or the re-routed mechanical caster — enforced in
   `CastTargetDirect`/`CastSelfDirect` (end+dispel+decline, so OOC re-dispatch and combat both

@@ -38,17 +38,24 @@ namespace MFO::Actuation {
     // Equip/UnequipObject engine call (the MSTK "copy then act" discipline).
     std::mutex g_forcedMx;
 
-    // TRUE when a spell needs a non-self DELIVERY PROXY: its authored delivery is
-    // SELF but it is aimed at a NON-self target. A Self spell can only land on its
-    // caster's OWNER, so the follower casting it heals the follower, not the ally.
-    // A genuine self-cast (target == follower) and every non-Self delivery
-    // (Aimed/TargetActor/Touch) already reach the target from the follower's own
-    // caster -- route them through the EXISTING concentration-on-others / FF path
-    // unchanged, no proxy. Reads only the SPEL's Delivery; any thread.
+    // TRUE when a spell needs a non-self DELIVERY PROXY: it is a CONCENTRATION spell
+    // whose authored delivery is SELF, aimed at a NON-self target. SCOPE IS
+    // CONCENTRATION ONLY (Fable review + marth): a proxy-keyed ActiveEffect breaks
+    // SOURCE-keyed guards -- a FF Self LIGHT (Candlelight) proxied to an ally would
+    // dodge ShouldApplyTo's source-keyed already-active scan and re-cast every
+    // cooldown into the "Active Lights 57" ShadowSceneNode CTD, and a long FF Self
+    // buff (Ebonyflesh ~120 s) proxied onto a shared slot would be stripped early
+    // when the slot is reused. Only a SHORT, dispelled CONCENTRATION stream may
+    // proxy. Every FF Self spell (flesh/light/waterbreathing/invis/muffle) takes its
+    // prior, already-working path -- the follower's plain CastSpellImmediate onto the
+    // target (ApplyEffectFromTo / CastOn force-half / the Logistics FF casts) -- so
+    // it never touches SelfDeliveryProxy. A self-cast (target == follower) and every
+    // non-Self delivery also cast the source unchanged. Reads only the SPEL; any thread.
     bool NeedsCasterAttributedDelivery(RE::SpellItem* a_spell, RE::Actor* a_follower,
                                        RE::Actor* a_target) {
         return a_spell && a_target && a_follower && a_target != a_follower &&
-               a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+               a_spell->GetDelivery()    == RE::MagicSystem::Delivery::kSelf &&
+               a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
     }
 
     // ── SELF-DELIVERY PROXY (marth's design): fabricate a copy of the source spell
@@ -84,7 +91,14 @@ namespace MFO::Actuation {
             std::chrono::steady_clock::time_point lastUsed{};
         };
         Slot            g_slot[2];
-        constexpr float kProxyIdle = 5.0f;     // a slot frees this long after last use
+        // A slot frees this long after last use. MUST exceed the longest PROXIED
+        // stream window so a slot is never reconfigured under a live proxy AE. Only
+        // NON-self CONCENTRATION streams proxy -> heal 6 s (kConcHealCap) / utility
+        // 4 s (kConcUtilityHold); the 15 s self-utility cap is SELF-target and never
+        // proxies. 8 s > the 6 s kConcHealCap covers every proxied window (SEV-3
+        // slot-window close; kConcHealCap is defined later in the TU, so this is a
+        // documented invariant, not a static_assert).
+        constexpr float kProxyIdle = 8.0f;
 
         // Copy the source's cast data + effects, flip delivery Self -> TargetActor.
         // Effects are copied by POINTER (the Effect objects stay owned by the source
@@ -101,6 +115,13 @@ namespace MFO::Actuation {
         // busy with other recently-active sources (skip this cast).
         RE::SpellItem* Get(RE::SpellItem* a_source) {
             if (!a_source) return nullptr;
+            // VR SAFETY: form creation + g_slot mutation are MAIN-THREAD ONLY. On VR
+            // MainThread::Post is a no-op and callers run INLINE on the worker, so
+            // NEVER fabricate/mutate off-main -- skip the proxy (bounded degradation).
+            // (On AE this is always true: the proxied concentration path is AE-gated
+            // upstream and every caller runs inside a MainThread::Post.) This
+            // guarantees IFormFactory::Create never runs on the worker thread.
+            if (!MainThread::IsInstalled()) return nullptr;
             const auto now = std::chrono::steady_clock::now();
             const auto sid = a_source->GetFormID();
             for (auto& s : g_slot)                       // reuse the same-source slot

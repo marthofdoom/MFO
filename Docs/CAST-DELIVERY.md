@@ -236,30 +236,51 @@ and combat `ConcentrationCast`). Public-build ally/player heals landed through i
 for a **Self** spell is not to invent delivery, and not to force-apply concentration — it is to
 give the existing path a spell it can aim.
 
+**SCOPE — the proxy is CONCENTRATION Self spells ONLY (Fable review + marth).** A proxy-keyed
+ActiveEffect defeats SOURCE-keyed guards, so proxying a **FF Self** spell REGRESSES it: a Self
+**light** (Candlelight/Magelight) fanned to an ally carries the proxy's FormID, so
+`ShouldApplyTo`'s source-keyed already-active scan misses it (and a light registers no MGEF, so
+`HasMagicEffect` misses too) → MFO re-casts every cooldown → the `Active Lights 57`
+ShadowSceneNode CTD; a long FF Self buff (Ebonyflesh ~120 s) on a shared slot is stripped early
+when the slot is reused. So **only a short, dispelled CONCENTRATION stream may proxy.** Every FF
+Self spell (flesh/light/waterbreathing/invis/muffle) keeps its **prior, already-working path** —
+the follower's plain `CastSpellImmediate(source, target)` (`ApplyEffectFromTo` / `CastOn`
+force-half / the two Logistics FF casts) — and **never touches `SelfDeliveryProxy`**.
+`NeedsCasterAttributedDelivery` now requires `delivery == kSelf` **AND** `castingType ==
+kConcentration` (AND non-self target); everything else, including all FF Self, returns the source
+from `ProxyDeliverySpell` and casts unchanged (why self-Candlelight always worked, and why a
+fanned Candlelight is FF-pathed, not proxied).
+
 **The mechanism — a flipped-delivery PROXY, cast normally by the follower (marth's design,
-`Actuation::ProxyDeliverySpell` → `SelfDeliveryProxy`).** For a Self spell aimed off-self MFO
-fabricates a transient COPY of the source with its **casting style PRESERVED** (concentration
-stays concentration; FF stays FF) and **only its delivery flipped `kSelf → kTargetActor`**
-(`proxy->data = source->data; proxy->data.delivery = kTargetActor; proxy->effects = source
-effects`). The FOLLOWER then casts the proxy through the *unchanged* existing path. Because the
-proxy is TargetActor, the effect lands on the **target** (where `SustainConcentrationEffect`
-searches → FOUND + re-armed → **ONE sustained effect, no per-beat re-attach**), and because the
-**follower** is the caster it channels at HIS skill/perks (rate) and costs HIS magicka. The
-**PLAYER never casts, never pays, needs zero magicka.** Archetype-agnostic (heal/ward/flesh/
-waterbreathing/buff), every effect of a multi-effect spell. `NeedsCasterAttributedDelivery`
-gates it (Self delivery + non-self target); a genuine `act.cast_self` (target == follower) and
-every non-Self delivery cast the source unchanged (why self-Candlelight always worked). All five
-sites branch on `ProxyDeliverySpell`: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s
-force-half, the two Logistics FF casts. The `FORCE-CAST … (self-delivery: aimed proxy from
-follower)` tag marks the proxy path. Stream-end dispel clears the proxy AE too
-(`TargetCastEndActor` → `SelfDeliveryProxy::ProxyFor`).
+`Actuation::ProxyDeliverySpell` → `SelfDeliveryProxy`).** For a **concentration** Self spell aimed
+off-self MFO fabricates a transient COPY of the source with its **casting style PRESERVED**
+(concentration stays concentration) and **only its delivery flipped `kSelf → kTargetActor`**
+(`proxy->data = source->data; proxy->data.delivery = kTargetActor;` effects copied by pointer).
+The FOLLOWER then casts the proxy through the *unchanged* existing path. Because the proxy is
+TargetActor, the effect lands on the **target** (where `SustainConcentrationEffect` searches →
+FOUND + re-armed → **ONE sustained effect, no per-beat re-attach**), and because the **follower**
+is the caster it channels at HIS skill/perks (rate) and costs HIS magicka. The **PLAYER never
+casts, never pays, needs zero magicka.** Every effect of a multi-effect spell. Five sites branch
+on `ProxyDeliverySpell`: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s force-half,
+the two Logistics FF casts (the last three proxy only if handed a concentration Self spell, which
+their FF-only flows never are). The `FORCE-CAST … (self-delivery: aimed proxy from follower)` tag
+marks the proxy path. Stream-end dispel clears the proxy AE too (`TargetCastEndActor` →
+`SelfDeliveryProxy::ProxyFor`).
 
 **EXACTLY TWO transient dynamic SPEL slots — no unbounded cache.** `SelfDeliveryProxy::Get`
-reuses a slot for the same source, claims a free/idle slot (a slot frees `kProxyIdle` = 5 s
+reuses a slot for the same source, claims a free/idle slot (a slot frees `kProxyIdle` = **8 s**
 after its last use; a live stream re-uses it every ~1 s so it stays warm) for a new source, or
 returns `nullptr` when both slots are busy with other active sources — the caller then SKIPS the
 cast ("too bad" on a 3rd concurrent one). The two forms are created ONCE via `IFormFactory`
 (dynamic `0xFF__` range) and reconfigured in place; never more than 2 exist for the session.
+`kProxyIdle` (8 s) is deliberately **> the longest proxied window** (`kConcHealCap` 6 s; the only
+proxied streams are non-self concentration heal 6 s / utility 4 s — the 15 s self-utility cap is
+SELF-target and never proxies), so a slot is never reconfigured under a live proxy AE.
+
+**VR.** Form creation + slot mutation are MAIN-THREAD only. On VR `MainThread::Post` is a no-op
+and the FF fallback runs inline on the worker, so `SelfDeliveryProxy::Get` returns `nullptr` when
+`!MainThread::IsInstalled()` — `IFormFactory::Create` **never** runs off the main thread. (In
+practice the concentration proxy path is already AE-gated upstream, so this is belt-and-braces.)
 
 **Save-safety.** The proxies are **transient dynamic forms** (`0xFF__` runtime range): the
 engine does not serialize runtime-created forms into the `.ess`, and they are never added to any
