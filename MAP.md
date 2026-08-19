@@ -249,16 +249,23 @@ releases **by eviction** with a non-actor XMarker.
   owns delivery + per-second cost + bounds only. ONE sustained HUD entry, shader plays
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
-  **SELF-DELIVERY (`Actuation::EffectCasterFor`, marth "read the SPEL"):** a Self-delivery
-  spell's effect lands on its magic-caster's OWNER, not the passed `target` ref — so a
-  "heal the player/ally" cast must be SELF-CAST BY THE TARGET or it heals the follower
-  (deck 2026-08-19: Mysticism Fast Healing `0002F3B8` = Concentration+Self; player never
-  healed + `conc effect ATTACHED` every beat because the sustain searched the player's
-  effect list while the effect was on Lucien). All five direct-apply sites route the
-  `CastSpellImmediate` through `EffectCasterFor(follower,target,spell)->GetMagicCaster` —
-  the TARGET's caster for Self delivery, the follower's otherwise; blame + magicka stay
-  the follower. Casting-type-agnostic; a genuine `cast_self` (target==follower) is
-  unchanged (why self-Candlelight always worked). Momentary
+  **SELF-DELIVERY, ARCHETYPE-AGNOSTIC (`EffectCasterFor` + `ReattributeEffectCaster`, marth
+  "read the SPEL"):** a Self-delivery spell's effect lands on its magic-caster's OWNER, not
+  the passed `target` ref — so any Self spell aimed at a non-self target (heal, ward,
+  flesh/armor, waterbreathing, invisibility, muffle, fear, DoT, buff) must be SELF-CAST BY
+  THE TARGET or it lands on the follower (deck 2026-08-19: Mysticism Fast Healing
+  `0002F3B8` = Concentration+Self; player never healed + `conc effect ATTACHED` every beat
+  because the sustain searched the player's effect list while the effect was on Lucien).
+  All five direct-apply sites (1) route `CastSpellImmediate` through
+  `EffectCasterFor(follower,target,spell)->GetMagicCaster` — the TARGET's caster for Self
+  delivery, the follower's otherwise — then (2) `ReattributeEffectCaster(target,spell,
+  follower)` re-points every fresh `ae->caster` back to the follower so the ENGINE channels
+  the FOLLOWER's rate (skill/perks/effectiveness), every archetype and every effect of a
+  multi-effect spell, persisting across the sustain beats (NO `magnitudeOverride`, which
+  would collapse multi-effect; NO manual magnitude math). Blame + magicka stay the
+  follower. Delivery-type + casting-type driven only; a genuine `cast_self`
+  (target==follower) and normal target-delivery (follower already the caster) are unchanged
+  (why self-Candlelight always worked). Momentary
   sustained effect dispels at END-of-stream (stale/gone/switch) only — it genuinely
   channels, so the stream's end must cut it; a cap-only release keeps the one entry
   alive across re-streams. Evidence line "conc effect ATTACHED": once per stream =

@@ -53,6 +53,24 @@ namespace MFO::Actuation {
                    : a_follower;    // Aimed/TargetActor/Touch -> follower casts at target
     }
 
+    // RE-ATTRIBUTE the fresh effect(s) to the follower (see Actuation.h). Pure
+    // caster re-point on every live ActiveEffect of a_spell on a_target -- no
+    // magnitude/archetype logic. When a Self-delivery spell was routed through the
+    // target's own caster, the engine baked the TARGET as caster; pointing it at
+    // the follower makes the engine channel the FOLLOWER's perks/effectiveness for
+    // every archetype and every effect. MAIN THREAD (live AE list).
+    void ReattributeEffectCaster(RE::Actor* a_target, RE::SpellItem* a_spell,
+                                 RE::Actor* a_follower) {
+        auto* mt = a_target ? a_target->AsMagicTarget() : nullptr;
+        if (!mt || !a_spell || !a_follower) return;
+        auto* list = mt->GetActiveEffectList();
+        if (!list) return;
+        const RE::ActorHandle h = a_follower->GetHandle();
+        for (auto* ae : *list)
+            if (ae && ae->spell == a_spell)
+                ae->caster = h;   // the follower is the conceptual caster
+    }
+
     namespace {
 
         // #68: the nearest living player-teammate that is not a_follower
@@ -783,6 +801,9 @@ namespace MFO::Actuation {
                     auto* mavo = f->AsActorValueOwner();
                     const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                     caster->CastSpellImmediate(sp, false, t, 1.0f, false, 0.0f, f);
+                    // Self-delivery re-route -> re-point the effect to the FOLLOWER
+                    // so the engine channels the follower's rate (all archetypes).
+                    if (t && ec != f) ReattributeEffectCaster(t, sp, f);
                     const float c     = sp->CalculateMagickaCost(f);
                     const float spend = mavo ? std::min(c, pool) : 0.0f;
                     if (mavo && spend > 0.0f)
@@ -1267,13 +1288,19 @@ namespace MFO::Actuation {
                     // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
                     inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
                 }
+                const bool selfDeliv = ecaster != caster;   // Self-delivery re-route
+                // A Self-delivery effect was created with the TARGET as caster, so
+                // re-point it to the FOLLOWER: the engine then channels the
+                // FOLLOWER's rate (skill/perks), every archetype + every effect.
+                // Idempotent on the sustain re-arm beats. (Normal delivery: caster
+                // is already the follower, so the guard skips the AE walk.)
+                if (selfDeliv) ReattributeEffectCaster(tgt, sp, caster);
                 const float cost  = sp->CalculateMagickaCost(caster);
                 const float spend = avo ? std::min(cost, before) : 0.0f;   // #6: never negative
                 if (avo && spend > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                            RE::ActorValue::kMagicka, -spend);
                 const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                const bool selfDeliv = ecaster != caster;   // Self-delivery re-route
                 spdlog::info("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X}{} -- effect applied, "
                              "magicka {:.0f}->{:.0f} (cost {:.0f})",
                              a_casterID, caster->GetName() ? caster->GetName() : "?",
@@ -1399,6 +1426,9 @@ namespace MFO::Actuation {
                 } else {
                     inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
                 }
+                // Self-delivery re-route -> re-point the effect to the FOLLOWER so
+                // the engine channels the follower's rate (all archetypes/effects).
+                if (ecaster != caster) ReattributeEffectCaster(target, sp, caster);
                 const float cost  = sp->CalculateMagickaCost(caster);
                 // #6: clamp to the current pool so a deduct never drives magicka
                 // negative (AUTO validates N casts against ONE worker snapshot).

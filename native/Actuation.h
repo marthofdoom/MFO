@@ -135,6 +135,27 @@ namespace MFO::Actuation {
     RE::Actor* EffectCasterFor(RE::Actor* a_follower, RE::Actor* a_target,
                                RE::SpellItem* a_spell);
 
+    // RE-ATTRIBUTE a freshly-applied effect's CASTER to the follower. When a
+    // SELF-delivery spell is routed through the TARGET's own magic caster (so the
+    // effect lands on the intended target, EffectCasterFor), the engine created
+    // the ActiveEffect(s) with the TARGET as caster -- so it would channel the
+    // TARGET's effective magnitude/rate (the target's skill/perks), not the
+    // follower's. The follower is CONCEPTUALLY the caster, so re-point every fresh
+    // ActiveEffect of a_spell on a_target back to a_follower: the engine then
+    // applies the FOLLOWER's perks/effectiveness at each application, for EVERY
+    // archetype (heal, ward, flesh/armor, waterbreathing, invisibility, muffle,
+    // fear/frenzy, damage/DoT, any buff) and EVERY effect of a multi-effect spell.
+    // NO magnitude math, NO per-effect override (which would collapse a multi-
+    // effect spell) -- pure caster attribution, archetype-agnostic. Reuses the
+    // sustain machinery unchanged: SustainConcentrationEffect re-arms the SAME
+    // re-attributed AE each beat, so the follower's rate persists for the whole
+    // stream, not just the first beat. MAIN THREAD only (walks the live AE list).
+    // Idempotent + a no-op for a normal cast (follower already the caster) and a
+    // genuine self-cast (target == follower), so callers may gate on the Self-
+    // delivery re-route or call unconditionally.
+    void ReattributeEffectCaster(RE::Actor* a_target, RE::SpellItem* a_spell,
+                                 RE::Actor* a_follower);
+
     // AUTO TARGET INFERENCE for act.cast_target. The board's default "Auto" pick
     // (Subject::Self, no subject actor, no selector target) infers WHO from the
     // spell and fans the cast out: hostile -> every nearby enemy; beneficial ->

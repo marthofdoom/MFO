@@ -228,23 +228,40 @@ magicka drained, and — because the sustain searched the *player's* effect list
 found the effect (it was on Lucien) — `conc effect ATTACHED` re-fired every beat instead of
 FOUND-and-re-armed once. Two symptoms, one cause.
 
-**The rule (`Actuation::EffectCasterFor`, read the SPEL's `GetDelivery()`):** to place a
-Self-delivery effect on a NON-self target, that TARGET must be the magic caster (it
-self-casts); the follower stays the blame actor and still pays the real magicka. Non-Self
-deliveries (Aimed / TargetActor / Touch) cast from the follower onto the target as before.
-This is casting-type-agnostic — it fixes FF *and* concentration Self spells — and leaves a
-genuine `act.cast_self` (target == follower) unchanged, which is why self-Candlelight always
-worked: its target already IS the caster. All five direct-apply sites now route through it:
-`ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s combat force-half, and the two
-Logistics FF direct casts. The `FORCE-CAST … at TTTTTTTT (self-delivery: target self-casts)`
-tag marks a re-route in the log.
+**The rule is DELIVERY-TYPE + CASTING-TYPE driven, ARCHETYPE-AGNOSTIC — no heal/"is a
+heal"/effect-archetype special-casing anywhere.** It holds for EVERY Self-delivery spell
+and EVERY concentration spell alike: heal, ward, flesh/armor, waterbreathing, invisibility,
+muffle, fear/frenzy, damage/DoT stream, or any buff.
+
+1. **WHERE it lands (`Actuation::EffectCasterFor`, reads `GetDelivery()`):** to place a
+   Self-delivery effect on a NON-self target, that TARGET must be the magic caster (it
+   self-casts). Non-Self deliveries (Aimed / TargetActor / Touch) cast from the follower
+   onto the target as before. Casting-type- and archetype-agnostic; a genuine
+   `act.cast_self` (target == follower) is unchanged — which is why self-Candlelight always
+   worked: its target already IS the caster.
+2. **WHOSE rate it uses (`Actuation::ReattributeEffectCaster`):** the target self-casting
+   means the engine created the ActiveEffect(s) with the TARGET as caster — so it would
+   channel the TARGET's effective magnitude/rate (the target's skill/perks). **The follower
+   is conceptually the caster, so every fresh AE of the spell is re-pointed
+   (`ae->caster = follower`) back to the follower.** The engine then applies the FOLLOWER's
+   perks/effectiveness at each application — a master-healer heals at HIS rate on a
+   low-Restoration player; a follower with Mage Armor 3/3 lands the full flesh buff on the
+   player; a follower's Augmented-element DoT burns at his rate. Pure caster attribution —
+   **no magnitude math, no per-effect `magnitudeOverride`** (a single override scalar would
+   collapse a multi-effect spell): every effect of a multi-effect spell carries the
+   follower's rate, and because the sustain re-arms the SAME re-attributed AE each beat, the
+   follower's rate persists for the whole concentration stream, not just the first beat.
+
+The follower stays the blame actor and always pays the real magicka. All five direct-apply
+sites route through both helpers: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s
+combat force-half, and the two Logistics FF direct casts. The
+`FORCE-CAST … at TTTTTTTT (self-delivery: target self-casts)` tag marks a re-route in the log.
 
 **Instant vs concentration is still decided by the real casting type**
-(`GetCastingType() == kConcentration`) — a genuine FireForget heal (vanilla Fast Healing,
-Grand Healing, Close Wounds) is delivered as a SINGLE `CastSpellImmediate` (full instant
-magnitude once, paced by `fCastCooldown`), never sustained; only real concentration spells
-enter `SustainConcentrationEffect`. Do not re-derive concentration from effect archetype,
-"is a heal", or effect duration — read the SPEL.
+(`GetCastingType() == kConcentration`) — a genuine FireForget spell is delivered as a SINGLE
+`CastSpellImmediate` (full instant magnitude once, paced by `fCastCooldown`), never sustained;
+only real concentration spells enter `SustainConcentrationEffect`. Do not re-derive
+concentration from effect archetype, "is a heal", or effect duration — read the SPEL.
 
 ## THE MATRIX — every cell delivers, bounded, gated. None barred.
 
