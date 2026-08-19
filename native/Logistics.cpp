@@ -19,6 +19,7 @@
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
+#include "Sightline.h"    // LoS + line-of-fire gate on the OOC hostile-FF direct fallback
 #include "Followers.h"    // #62 on-load beast-head sweep iterates g_active (main thread)
 #include <functional>     // #62 self-reposting on-load sweep closure
 #include <memory>         // std::shared_ptr for that closure
@@ -109,8 +110,8 @@ namespace MFO::Logistics {
         std::unordered_map<std::uint64_t, Clock::time_point> g_logiCastUntil;
 
         // (The OOC heal-effect predicate that classified a streamable concentration
-        // heal was removed with the `healStream` stopgap -- concentration now routes
-        // through Actuation::CastConcentrationAt, which classifies via
+        // heal was removed with the `healStream` stopgap -- concentration now
+        // delivers through Actuation::CastTargetDirect, which classifies via
         // CasterConsent::ClassifySpell. See the cast dispatch below.)
 
         // Refs the PLAYER has taken from -- the waiver (#22h). Presence collapses
@@ -4186,19 +4187,24 @@ namespace MFO::Logistics {
                 //     STUCK forever, even after the rule was disabled (deck
                 //     2026-08-17); the direct trigger is a bounded one-shot.
                 //   * ANY CONCENTRATION spell at a NON-SELF target (player, ally,
-                //     foe) -> Actuation::CastConcentrationAt, the SAME bounded
-                //     package stream combat's CastOn uses (hostile 1-4s LoF-gated,
-                //     heal until-topped/6s, utility 4s hold). This UNIFIES OOC with
-                //     combat and REPLACES the v1.0.58-era `healStream` instant-apply
-                //     stopgap -- a beneficial concentration heal now lands with a
-                //     real bounded channel (probe 8, ENGINE_NOTES §0.22: a
-                //     concentration HealingHands cast AT a ref casts beneficially).
-                //   * SELF (gate off) CONCENTRATION -> CastConcentrationAt's own self
-                //     fork declines it legibly (self needs bCastSelf); it never takes
-                //     the direct route (a per-second effect has no channel and sticks).
+                //     foe) -> Actuation::CastTargetDirect, the KNOWN-WORKING DIRECT
+                //     FORCE (CastSpellImmediate straight onto the target + magicka
+                //     deduct + bounded stream). NO package -- so it beats a package-
+                //     locked custom follower's §4.6 alias lock (Lucien 2F00591F: the
+                //     package route [pkg]-DECLINED every tick and his on-player heal
+                //     never landed; deck build 5f8e873). Bounded/released by
+                //     TargetCastReconcile (hostile 1-4s LoS+LoF-gated, heal 6s but
+                //     re-applies while wounded, utility 4s + dispel-on-stop); the
+                //     apply beats at ~1s (kConcApplyPeriod -- per-second authored
+                //     magnitude, the heal cadence contract).
+                //   * SELF (gate off) CONCENTRATION -> skipped legibly (self needs
+                //     bCastSelf); never direct-applied on self behind the toggle.
                 //   * SELF (gate off) + PLAYER, FIRE-AND-FORGET -> CastSpellImmediate
-                //     (applies the effect to any target; no animation, but it lands).
-                //   * FIRE-AND-FORGET hostile at a FOE -> the animated package (CastAt).
+                //     (applies the effect to any target; no animation, but it lands),
+                //     posted to the MAIN thread (#14).
+                //   * FIRE-AND-FORGET hostile at a FOE -> the animated package (CastAt),
+                //     with a DIRECT-FORCE fallback when the package §4.6-declines
+                //     (package-locked follower) so the cell still delivers.
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
                 if (!sp || !a_follower->HasSpell(sp)) {
                     start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
@@ -4256,42 +4262,45 @@ namespace MFO::Logistics {
                 // while the gate is on. `selfPkg` is a legacy name for that route.
                 const bool selfPkg   = (op == Vocab::kActCastSelf) && Config::g_castSelf.load();
 
-                // ── CONCENTRATION -> the BOUNDED STREAM (unify OOC with combat) ──
-                // Every NON-self concentration cast (player, ally, foe) routes
-                // through the SAME bounded package stream combat's CastOn uses
-                // (Actuation::CastConcentrationAt -> ConcentrationCast): hostile
-                // 1-4s line-of-fire-gated, heal until-topped (capped 6s), utility a
-                // capped 4s hold; LoS-gated, cooldown-paced. This REPLACES the
-                // v1.0.58-era `healStream` instant-apply stopgap (ff0cb48): a
-                // beneficial concentration HEAL no longer stamps a channel-less
-                // per-second effect on the direct path -- probe 8 (ENGINE_NOTES
-                // §0.22) proved a concentration HealingHands cast AT a ref casts
-                // beneficially through the package, so the ally/player heal lands
-                // with a real bounded channel instead. A hostile concentration at a
-                // foe is now BOUNDED too (it used to take the unbounded FOE package
-                // below -- a permanent-stream freeze risk). SELF is NOT routed here:
-                // selfPkg (bCastSelf on) already takes CastSelfDirect below; a self
-                // target with the gate OFF is passed through and ConcentrationCast's
-                // own self fork declines it legibly, exactly like combat. The stream
-                // owns its OWN cooldown/pacing, so it bypasses the FF already-active
-                // pre-skip and the g_logiCastUntil window below. Requires
-                // bForceCastOnMiss + bUsePackages (like combat); with either off it
-                // declines legibly and we fall to the next rule.
+                // ── CONCENTRATION -> DIRECT FORCE (package-lock-proof) ──────────
+                // marth's ruling after the deck fail: OOC concentration delivery
+                // must "always use the known working force" and "avoid the package
+                // route for anything." The package route c539257 added here
+                // §4.6-DECLINED every tick for package-locked custom followers
+                // (Lucien 2F00591F -- prio-80 quest owns the cast alias), so his
+                // on-PLAYER heal never landed. So every NON-self concentration cast
+                // (player, ally, foe) now delivers through Actuation::CastTargetDirect
+                // -- CastSpellImmediate straight onto the target + magicka deduct, NO
+                // package -- the SAME force that already heals SELF (CastSelfDirect).
+                // It is bounded/released by TargetCastReconcile (hostile 1-4s
+                // LoS+LoF-gated, heal 6s but re-applies while the HP rule wins so a
+                // wounded target is topped up, utility 4s + dispel-on-stop for a
+                // lingering ward). SELF is NOT delivered here: selfPkg (bCastSelf on)
+                // took CastSelfDirect above; a self target with the gate OFF is
+                // skipped legibly (never direct-applied on self behind the toggle).
+                // The stream self-paces at ~1s (kConcApplyPeriod -- a concentration
+                // magnitude/cost is authored PER SECOND, so the 4s fCastCooldown
+                // would quarter heal throughput, the "heals feel broken" bug), so
+                // it bypasses the FF already-active pre-skip and the
+                // g_logiCastUntil window below.
                 if (!selfPkg && conc) {
-                    const auto oc = Actuation::CastConcentrationAt(a_follower, sp, tgt);
-                    if (oc.result == Actuation::Result::Fired) {
-                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {} (bounded stream)",
-                                     id, sp->GetFormID(),
-                                     op == Vocab::kActCastPlayer ? "player"
-                                   : op == Vocab::kActCastTarget ? "ally/player/foe"
-                                                                 : "self");
-                        break;                          // streamed -> done this tick
+                    if (tgt == a_follower) {
+                        // Self with the gate off -- self-casting is disabled; decline
+                        // legibly rather than direct-apply behind bCastSelf's back.
+                        spdlog::info("[cast] {:08X} self concentration {:08X} skipped -- "
+                                     "needs bCastSelf", id, sp->GetFormID());
+                        start = choice.ruleIndex + 1; continue;
                     }
-                    // Transparent NoOp / legible decline (cooling down, no LoS,
-                    // teammate in the line of fire, packages off, self-gate-off):
-                    // ConcentrationCast already logged the reason. Fall to the next
-                    // rule -- NEVER the FF direct-apply (a per-second effect has no
-                    // channel there and would stick, the old bug).
+                    const auto r = Actuation::CastTargetDirect(a_follower, sp, tgt);
+                    if (r == Actuation::SelfCast::Applied) {
+                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
+                                     "(direct force, bounded)", id, sp->GetFormID(), tgt->GetFormID());
+                        break;                          // delivered -> done this tick
+                    }
+                    // Refreshed (paced this tick) OR Declined (unaffordable / off-AE /
+                    // LoS+LoF-held for offense): both TRANSPARENT -- fall to the next
+                    // rule. NEVER the FF direct-apply below (a per-second effect there
+                    // has no bounded channel and would stick, the old stuck-ward bug).
                     start = choice.ruleIndex + 1; continue;
                 }
 
@@ -4372,26 +4381,90 @@ namespace MFO::Logistics {
                     }
                 } else if (immediate) {
                     // FIRE-AND-FORGET beneficial direct-apply (self-gate-off / player /
-                    // ally). Concentration can NEVER reach here -- it routed to the
-                    // bounded stream (CastConcentrationAt) above -- so there is no
+                    // ally). Concentration can NEVER reach here -- it delivered via the
+                    // direct-force stream (CastTargetDirect) above -- so there is no
                     // stuck-per-second-effect hazard on this path: an FF spell's effect
                     // has its own authored duration and releases itself.
                     // CastSpellImmediate applies the effect to `tgt` for any delivery.
                     // No charge animation, but the light/buff/heal lands. Spends no
                     // magicka, so gate on affordability and deduct the cost by hand.
+                    // THREADING (#14): the engine cast MUST run on the MAIN thread --
+                    // this block used to call CastSpellImmediate INLINE on the AddTask
+                    // job worker (the prime suspect for the queued 1.5.x act.cast_target
+                    // AV crash reports). Post it like ApplySelfEffect/ApplyTargetEffect
+                    // do: re-resolve by FormID inside (never carry an Actor* across
+                    // threads) and clamp the deduct to the main-thread pool so it can
+                    // never drive magicka negative.
                     const float cost = sp->CalculateMagickaCost(a_follower);
                     auto* avo = a_follower->AsActorValueOwner();
                     if (avo && avo->GetActorValue(RE::ActorValue::kMagicka) < cost) {
                         start = choice.ruleIndex + 1; continue;   // can't afford it
                     }
-                    if (auto* caster = a_follower->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant)) {
-                        caster->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, a_follower);
-                        if (avo) avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                                        RE::ActorValue::kMagicka, -cost);
-                        acted = true;
+                    auto doCast = [casterID = id, tgtID = tgt->GetFormID(),
+                                   spID = sp->GetFormID()] {
+                        auto* f = RE::TESForm::LookupByID<RE::Actor>(casterID);
+                        auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
+                        auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
+                        if (!f || !t || !s) return;
+                        auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                        if (!caster) return;   // F4: no caster -> no cast, no deduct
+                        auto* mavo = f->AsActorValueOwner();
+                        const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                        caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
+                        const float c     = s->CalculateMagickaCost(f);
+                        const float spend = mavo ? std::min(c, pool) : 0.0f;   // never negative
+                        if (mavo && spend > 0.0f)
+                            mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                    RE::ActorValue::kMagicka, -spend);
+                    };
+                    // VR has no pump (Post is a documented no-op there): fall back
+                    // to the old inline call rather than silently casting nothing.
+                    if (MainThread::IsInstalled()) MainThread::Post(doCast);
+                    else                           doCast();
+                    acted = true;   // optimistic, same as the posted self/target applies
+                } else {
+                    // FF HOSTILE at a FOE -> the animated alias-0 foe package. For a
+                    // PACKAGE-LOCKED custom follower (Lucien 2F00591F) that claim
+                    // §4.6-declines every tick, and "packages off" declines it too --
+                    // either way the cell must still deliver (marth: no combo may
+                    // silently not work). DIRECT-FORCE fallback: silent one-shot
+                    // CastSpellImmediate, LoS + line-of-fire gated (never a firebolt
+                    // into a wall or through a teammate), affordability-gated, posted
+                    // to the main thread with the deduct clamped -- the same delivery
+                    // combat's silent force-half uses when ITS package declines.
+                    acted = Packages::Available() &&
+                            Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None;
+                    if (!acted &&
+                        Sightline::Check(id, tgt->GetFormID()) != Sightline::Verdict::Occluded &&
+                        !Sightline::TeammateInFireLine(id, tgt->GetFormID())) {
+                        const float cost = sp->CalculateMagickaCost(a_follower);
+                        auto* avo = a_follower->AsActorValueOwner();
+                        if (!avo || avo->GetActorValue(RE::ActorValue::kMagicka) >= cost) {
+                            auto doCast = [casterID = id, tgtID = tgt->GetFormID(),
+                                           spID = sp->GetFormID()] {
+                                auto* f = RE::TESForm::LookupByID<RE::Actor>(casterID);
+                                auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
+                                auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
+                                if (!f || !t || !s) return;
+                                auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                                if (!caster) return;
+                                auto* mavo = f->AsActorValueOwner();
+                                const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                                caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
+                                const float c     = s->CalculateMagickaCost(f);
+                                const float spend = mavo ? std::min(c, pool) : 0.0f;
+                                if (mavo && spend > 0.0f)
+                                    mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                            RE::ActorValue::kMagicka, -spend);
+                            };
+                            if (MainThread::IsInstalled()) MainThread::Post(doCast);
+                            else                           doCast();   // VR: no pump
+                            spdlog::info("[logistics] {:08X} OOC hostile FF {:08X} at {:08X} -- "
+                                         "package declined, DIRECT FORCE fallback",
+                                         id, sp->GetFormID(), tgt->GetFormID());
+                            acted = true;
+                        }
                     }
-                } else if (Packages::Available()) {
-                    acted = (Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None);
                 }
                 if (acted && !selfPkg) {
                     auto* ei = sp->GetCostliestEffectItem();

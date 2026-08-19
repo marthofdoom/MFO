@@ -328,7 +328,8 @@ namespace MFO::Diagnostics {
                         if (diagTurn) Followers::Refresh();
 
                         Scheduler::Tick();
-                        Actuation::SelfCastReconcile();   // release self-cast channels when their rule goes stale (dispel lingering buffs)
+                        Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
+                        Actuation::TargetCastReconcile();   // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
                         Loadout::Tick();   // hand back stowed two-handers
 
                         if (diagTurn) Probe::Tick();

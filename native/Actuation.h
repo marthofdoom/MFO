@@ -76,6 +76,23 @@ namespace MFO::Actuation {
     enum class SelfCast : std::uint8_t { Declined, Refreshed, Applied };
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
+    // ON-TARGET DIRECT FORCE — CastSelfDirect generalized to a NON-self target
+    // (player / ally / foe). The KNOWN-WORKING, package-lock-proof delivery for a
+    // concentration cast: CastSpellImmediate straight onto the target + magicka
+    // deduct, NO package, so it beats a package-locked custom follower's §4.6 alias
+    // lock (Lucien 2F00591F's on-player heal that the package route [pkg]-DECLINED
+    // every tick). Registers one per-follower stream; a CONCENTRATION spell
+    // re-applies on the ~1 s kConcApplyPeriod beat (per-second authored magnitude
+    // AND per-second cost -- the heal cadence contract), an FF spell keeps the
+    // fCastCooldown beat. Time-bounded + released by TargetCastReconcile. Returns
+    // Applied/Refreshed/Declined (same semantics as CastSelfDirect). LoS +
+    // line-of-fire gate hostile offense on EVERY apply. Callers: Logistics OOC
+    // cast dispatch AND combat ConcentrationCast -- BOTH primary; concentration
+    // delivery touches no package anywhere. A self target is refused (use
+    // CastSelfDirect). Worker-serial state; the engine apply posts to main.
+    SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                              RE::Actor* a_target);
+
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any
     // lingering ward/buff effect so it cannot persist as a stuck gameplay effect.
@@ -84,6 +101,14 @@ namespace MFO::Actuation {
     // the spell). Worker context; marshals the dispel to the main thread. Call
     // once per tick, right before Loadout::Tick.
     void SelfCastReconcile();
+
+    // Per-tick reconcile for the ON-TARGET direct-force streams (CastTargetDirect):
+    // RELEASES a stream when its rule goes stale / the follower or target unloads /
+    // the per-kind time cap elapses (hostile 1-4s, heal 6s, utility 4s). DISPELS only
+    // a lingering STICKY buff (ward/fortify) off the target -- a heal/damage is
+    // release-only and re-streams uninterrupted. Call once per tick, beside
+    // SelfCastReconcile. Worker context; marshals any dispel to the main thread.
+    void TargetCastReconcile();
 
     // Drop every self-cast (and AUTO fan-out pacing) channel on revert/load. No
     // engine call -- the world is being replaced, and the self-cast holds no
@@ -110,19 +135,13 @@ namespace MFO::Actuation {
     // condition (Candlelight) fan to the whole party regardless.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold = 1.0f);
 
-    // BOUNDED CONCENTRATION STREAM at a MANUAL/single target — public so BOTH the
-    // combat Fire path (CastOn's concentration fork) AND the out-of-combat
-    // Logistics cast dispatch route a concentration cast at a NON-SELF target
-    // (player, ally, foe) through the SAME bounded package stream: hostile 1-4 s
-    // (per-follower Temperament, cut the instant a teammate crosses the line of
-    // fire), heal until the target tops off (capped 6 s), utility a capped 4 s
-    // hold; LoS-gated, cooldown-paced, CasterConsent-latched. A SELF target is
-    // intercepted inside — routed to CastSelfDirect when bCastSelf is on, else a
-    // legible decline — so a self-concentration cast never touches the (foe-QNAM)
-    // package. Requires bForceCastOnMiss + bUsePackages (like combat); with either
-    // off it fails legibly and the caller falls through. Main-thread / worker.
-    Outcome CastConcentrationAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                                RE::Actor* a_target);
+    // (CONCENTRATION delivery is DIRECT FORCE everywhere -- Docs/CAST-DELIVERY.md.
+    // COMBAT: CastOn's concentration fork -> ConcentrationCast -> CastTargetDirect
+    // (self -> CastSelfDirect); the v1.0.58-65 package stream is REMOVED -- it
+    // §4.6-declined every tick for package-locked custom followers while the
+    // consent hooks denied their own AI, a total lockout. OUT OF COMBAT: the
+    // Logistics dispatch calls CastTargetDirect directly. Same channel registry,
+    // same 1 s concentration beat, same bounds, both contexts.)
 
     // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired

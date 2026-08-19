@@ -130,16 +130,27 @@
 >   probe: the deck LATENCY number (force-dispatch→ward-up ms by weapon class). Robust authoring pattern:
 >   proactive "ward WHILE threatened" held as a stream, not reactive race.
 > - Also owed: Nexus bbcode 1.0.62→64; Progression Add-On release + kit; MAP.md full refresh.
-> - **CONCENTRATION (UNIFIED v1.0.6x — self, player, ally, foe all work):** the bounded stream
->   (`ConcentrationCast`) now backs BOTH combat AND out-of-combat. Combat `CastOn` and OOC Logistics both
->   route every NON-self concentration cast through the SAME public `Actuation::CastConcentrationAt`
->   (hostile 1-4s LoF-gated / heal-until-topped 6s / utility 4s), IFF bForceCastOnMiss+bUsePackages ON.
->   The old OOC `healStream` instant-apply stopgap (ff0cb48) is REMOVED. **Self-concentration is NOT
->   barred** — INVARIANT #67 was REVOKED (2026-07-22); a self concentration cast routes to
->   `CastSelfDirect` (direct-apply, no package/QNAM, gated by bCastSelf), hard-capped in `SelfCastReconcile`
->   by nature: self HEAL → `kConcHealCap` (6s "until topped"); self WARD/UTILITY → `kConcSelfUtilityCap`
->   (15s, marth — not the 4s package hold, which would only flicker a non-rooting self ward). FF self buffs
->   keep authored duration. AUTO
+> - **CONCENTRATION (FINAL — DIRECT FORCE everywhere; see `Docs/CAST-DELIVERY.md`, canonical):** delivery is
+>   the **known-working DIRECT FORCE** (`Actuation::CastTargetDirect` = `CastSpellImmediate` onto the target
+>   + magicka deduct, NO package) in **BOTH contexts — OOC AND combat** (`ConcentrationCast`'s v1.0.58-65
+>   package stream is REMOVED, marth's ruling), so a **package-locked custom follower (Lucien 2F00591F)
+>   heals the player/ally and damages the foe everywhere** — the package `§4.6`-DECLINED every tick (OOC:
+>   the c539257 regression, deck build 5f8e873; COMBAT: same decline + the consent hooks denying his own AI
+>   = total lockout). The direct apply bypasses `CheckStartCast`/`CheckCast` (they sit on the AI pipeline
+>   `CastSpellImmediate` skips, ENGINE_NOTES §0.13 — deck-proven: SELF-CAST applies land while the same
+>   actor's AI casts are HARD-ABORTED), so deny-the-AI + deliver-directly is coherent. **CADENCE:
+>   concentration re-applies every ~1s (`kConcApplyPeriod` — per-second authored magnitude/cost; the 4s
+>   fCastCooldown pacing quartered heal throughput, "heals feel broken"); FF keeps fCastCooldown.**
+>   Bounded/released by `TargetCastReconcile` (registry `g_targetCast`): hostile 1-4s LoS+LoF-gated on
+>   every apply / heal 6s cap but re-applies while wounded / utility 4s; **dispel-on-release is
+>   STICKY(ward)-ONLY so a heal flows uninterrupted** — release + re-stream, never a stop. Threading: every
+>   `CastSpellImmediate` is `MainThread::Post`ed (the Logistics OOC FF inline call was the last off-main
+>   one — fixed; prime suspect for the queued 1.5.x cast_target AVs). OOC FF-hostile-at-foe keeps the
+>   animated package but now direct-force falls back on a `§4.6` decline (no dead cell for locked
+>   followers). The old OOC `healStream` stopgap (ff0cb48) and the c539257 `CastConcentrationAt` package
+>   wrapper are both REMOVED. **Self-concentration NOT barred** (#67 REVOKED): self → `CastSelfDirect`
+>   (same 1s concentration beat), capped in `SelfCastReconcile` — HEAL `kConcHealCap` 6s / WARD
+>   `kConcSelfUtilityCap` 15s (marth), dispel STICKY-only, FF self buffs keep authored duration. AUTO
 >   (`CastAuto`) keeps its instant-apply broadcast for concentration (one package stream can't fan to N —
 >   see report). Old "not working" report predates 1.0.53.
 > - **THEN roadmap:** town update (#31), then the Roster addon (2nd ESL).
