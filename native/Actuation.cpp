@@ -38,6 +38,21 @@ namespace MFO::Actuation {
     // Equip/UnequipObject engine call (the MSTK "copy then act" discipline).
     std::mutex g_forcedMx;
 
+    // DELIVERY-AWARE EFFECT CASTER (see Actuation.h). Reads the SPEL's Delivery:
+    // a SELF-delivery spell only ever applies to its magic-caster's OWNER, so to
+    // land the effect on a NON-self target that target must be the caster (it
+    // self-casts). Everything else casts from the follower onto the target. Pure
+    // read (no engine mutation) so it is safe on any thread; the callers all cast
+    // through the returned actor's kInstant magic caster on the MAIN thread.
+    RE::Actor* EffectCasterFor(RE::Actor* a_follower, RE::Actor* a_target,
+                               RE::SpellItem* a_spell) {
+        if (!a_follower || !a_target || !a_spell)   return a_follower;
+        if (a_target == a_follower)                 return a_follower;
+        return a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf
+                   ? a_target       // Self-delivery -> the target self-casts it
+                   : a_follower;    // Aimed/TargetActor/Touch -> follower casts at target
+    }
+
     namespace {
 
         // #68: the nearest living player-teammate that is not a_follower
@@ -757,8 +772,13 @@ namespace MFO::Actuation {
                     // a_target through as-is; CastSpellImmediate accepts null).
                     auto* t  = tid ? RE::TESForm::LookupByID<RE::Actor>(tid) : nullptr;
                     if (!f || !sp || (tid && !t)) return;
-                    auto* caster = f->GetMagicCaster(src);
-                    if (!caster) caster = f->GetMagicCaster(CS::kInstant);
+                    // DELIVERY-AWARE (marth: read the SPEL): a Self-delivery spell
+                    // lands on its caster's owner, so a beneficial Self cast aimed
+                    // at an ally must be self-cast BY the ally or it hits the
+                    // follower. Non-Self (Aimed/Touch/foe) casts from the follower.
+                    auto* ec = t ? EffectCasterFor(f, t, sp) : f;
+                    auto* caster = ec->GetMagicCaster(src);
+                    if (!caster) caster = ec->GetMagicCaster(CS::kInstant);
                     if (!caster) return;   // F4: no caster -> no cast, no deduct
                     auto* mavo = f->AsActorValueOwner();
                     const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
@@ -1211,7 +1231,16 @@ namespace MFO::Actuation {
                     }
                 }
                 auto* avo  = caster->AsActorValueOwner();
-                auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                // DELIVERY-AWARE (marth: read the SPEL). A SELF-delivery spell's
+                // effect lands on its caster's OWNER, never the passed target -- so
+                // a "heal the player/ally" cast must be SELF-CAST BY THE TARGET or
+                // it heals the FOLLOWER while the player's HP stays flat (deck
+                // 2026-08-19: Mysticism Fast Healing 0002F3B8 = Concentration+Self;
+                // the sustain then searched the player's effect list, never found
+                // the effect on the follower, and re-attached every beat). The
+                // follower still pays the magicka below (blame stays `caster`).
+                auto* ecaster = EffectCasterFor(caster, tgt, sp);
+                auto* inst = ecaster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
@@ -1244,10 +1273,12 @@ namespace MFO::Actuation {
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                            RE::ActorValue::kMagicka, -spend);
                 const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                spdlog::info("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X} -- effect applied, "
+                const bool selfDeliv = ecaster != caster;   // Self-delivery re-route
+                spdlog::info("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X}{} -- effect applied, "
                              "magicka {:.0f}->{:.0f} (cost {:.0f})",
                              a_casterID, caster->GetName() ? caster->GetName() : "?",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
+                             selfDeliv ? " (self-delivery: target self-casts)" : "",
                              before, after, cost);
             });
         }
@@ -1341,7 +1372,12 @@ namespace MFO::Actuation {
                 auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
                 if (!caster || !target || !sp) return;
                 auto* avo  = caster->AsActorValueOwner();
-                auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                // DELIVERY-AWARE (marth: read the SPEL). A SELF-delivery buff/heal
+                // fanned to an ally lands on the FOLLOWER unless the ally self-casts
+                // it -- the same Self-delivery trap the manual streams hit. Route
+                // through the recipient's own caster; the follower still pays below.
+                auto* ecaster = EffectCasterFor(caster, target, sp);
+                auto* inst = ecaster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {

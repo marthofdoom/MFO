@@ -4385,9 +4385,14 @@ namespace MFO::Logistics {
                     // direct-force stream (CastTargetDirect) above -- so there is no
                     // stuck-per-second-effect hazard on this path: an FF spell's effect
                     // has its own authored duration and releases itself.
-                    // CastSpellImmediate applies the effect to `tgt` for any delivery.
-                    // No charge animation, but the light/buff/heal lands. Spends no
-                    // magicka, so gate on affordability and deduct the cost by hand.
+                    // DELIVERY (marth: read the SPEL): CastSpellImmediate does NOT
+                    // apply a SELF-delivery spell to `tgt` -- a Self spell lands on
+                    // its caster's OWNER, so a beneficial Self heal aimed at the
+                    // player/ally must be self-cast BY the target (EffectCasterFor)
+                    // or it heals the FOLLOWER. Non-Self deliveries cast from the
+                    // follower onto `tgt` as before. No charge animation, but the
+                    // light/buff/heal lands. Spends no magicka, so gate on
+                    // affordability and deduct the cost by hand.
                     // THREADING (#14): the engine cast MUST run on the MAIN thread --
                     // this block used to call CastSpellImmediate INLINE on the AddTask
                     // job worker (the prime suspect for the queued 1.5.x act.cast_target
@@ -4406,7 +4411,10 @@ namespace MFO::Logistics {
                         auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                         auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
                         if (!f || !t || !s) return;
-                        auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                        // Self-delivery -> the TARGET self-casts so the effect lands
+                        // on them (blame + magicka stay the follower).
+                        auto* ec = Actuation::EffectCasterFor(f, t, s);
+                        auto* caster = ec->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                         if (!caster) return;   // F4: no caster -> no cast, no deduct
                         auto* mavo = f->AsActorValueOwner();
                         const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
@@ -4446,7 +4454,10 @@ namespace MFO::Logistics {
                                 auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                                 auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
                                 if (!f || !t || !s) return;
-                                auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                                // Delivery-aware (marth: read the SPEL): a Self-
+                                // delivery effect must be cast by its recipient.
+                                auto* ec = Actuation::EffectCasterFor(f, t, s);
+                                auto* caster = ec->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                                 if (!caster) return;
                                 auto* mavo = f->AsActorValueOwner();
                                 const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;

@@ -211,6 +211,41 @@ the rule wins. Fire-and-forget self-buffs keep their authored duration (no cap).
   job worker (the pre-fix Logistics inline call is the prime suspect for the queued 1.5.x
   `act.cast_target` AV reports).
 
+## SELF-DELIVERY: the effect lands on the CASTER'S OWNER — read the SPEL's Delivery
+
+**`CastSpellImmediate` does NOT apply a spell to the `target` ref for a SELF-delivery
+spell.** A Self-delivery magic effect always lands on the *magic-caster's owner*,
+whatever `TESObjectREFR*` you pass. So `follower->GetMagicCaster()->CastSpellImmediate(sp,
+…, player, …)` on a **Self** spell heals the FOLLOWER, not the player — the old comment
+"CastSpellImmediate applies the effect to `tgt` for any delivery" was simply false.
+
+**Deck field, 2026-08-19 (build c875048 = 47fd0de):** Lucien set to heal the player with
+"Fast Healing" (`0002F3B8`). In the loaded modlist (Mysticism) that record is **Concentration
++ Self delivery** (mag 20 / dur 1 / cost 38) — *not* the vanilla FireForget+Self instant.
+GetCastingType was therefore correct (it IS concentration); the real blocker was **Self
+delivery**: every beat the effect attached on *Lucien*, so the player never healed, Lucien's
+magicka drained, and — because the sustain searched the *player's* effect list and never
+found the effect (it was on Lucien) — `conc effect ATTACHED` re-fired every beat instead of
+FOUND-and-re-armed once. Two symptoms, one cause.
+
+**The rule (`Actuation::EffectCasterFor`, read the SPEL's `GetDelivery()`):** to place a
+Self-delivery effect on a NON-self target, that TARGET must be the magic caster (it
+self-casts); the follower stays the blame actor and still pays the real magicka. Non-Self
+deliveries (Aimed / TargetActor / Touch) cast from the follower onto the target as before.
+This is casting-type-agnostic — it fixes FF *and* concentration Self spells — and leaves a
+genuine `act.cast_self` (target == follower) unchanged, which is why self-Candlelight always
+worked: its target already IS the caster. All five direct-apply sites now route through it:
+`ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s combat force-half, and the two
+Logistics FF direct casts. The `FORCE-CAST … at TTTTTTTT (self-delivery: target self-casts)`
+tag marks a re-route in the log.
+
+**Instant vs concentration is still decided by the real casting type**
+(`GetCastingType() == kConcentration`) — a genuine FireForget heal (vanilla Fast Healing,
+Grand Healing, Close Wounds) is delivered as a SINGLE `CastSpellImmediate` (full instant
+magnitude once, paced by `fCastCooldown`), never sustained; only real concentration spells
+enter `SustainConcentrationEffect`. Do not re-derive concentration from effect archetype,
+"is a heal", or effect duration — read the SPEL.
+
 ## THE MATRIX — every cell delivers, bounded, gated. None barred.
 
 | | self | player / ally | foe |
