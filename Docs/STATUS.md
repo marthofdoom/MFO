@@ -8,19 +8,36 @@
 >
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶▶ RESUME HERE (2026-08-18 PM) — v1.0.65 STAGED (`f1110f2`, VERSION 1.0.65, NO TAG/not published); two gates open before the cut.**
-> - **⛔ CUT HELD — one gate now:** the **CLOUD ULTRAREVIEW is ABANDONED** (2026-08-19 — its output never
->   surfaced in Claude Code / marth has no access; `/ultrareview v1.0.64` likely never actually launched.
->   Do NOT wait on it). Optional replacement: a LOCAL Fable multi-agent review of the 67-commit diff
->   (`v1.0.64` `c36368b`..main) — offered, marth to decide. The remaining hard gate: **DECK FIELD TEST
->   deferred ~12h** (deck asleep as of 2026-08-18 PM). The engine-magnitude cast build (`47fd0de`, DLL `c875048`) is deployed
->   locally; syncthing carries it when the deck wakes — RE-VERIFY the deck sha then. Field verdict needed:
->   HP climbs + `conc effect ATTACHED` appears ONCE per stream (engine honors the sustain) vs every beat
->   (refused → documented `ae->magnitude` fallback). **Phase 1 (bump) is done; Phase 2 (`./release.sh` package
->   + `git tag`) and the tag-push stay HELD** until both gates pass AND marth says go. Then: rewrite the STALE
->   CHANGELOG v1.0.65 entry (it predates the whole cast overhaul + RC fixes — 67 commits) + Nexus bbcode
->   (1.0.62→65). Cast-delivery final design + the whole saga: see `Docs/CAST-DELIVERY.md` (canonical) and
->   [[cast-delivery-direct-force-canonical]] / [[recover-or-recreate-dead-agent-docs]] memories.
+> **▶▶ RESUME HERE (2026-08-19) — v1.0.65 STAGED (`f1110f2`, VERSION 1.0.65, NO TAG/not published); ONE gate left: the deck field test.**
+> - **⛔ CUT HELD — sole gate = DECK FIELD TEST of the SELF-DELIVERY fix.** main is now at `4133212`
+>   (self-delivery cast fix merged, 2 commits `e09590c`+`5fb2fae`). **DLL `32dc5684`** (green CI run
+>   `32287180241`) is deployed into the local `custom-modlist/mods/MFO` — replaces old `c875048`. Deck was
+>   ASLEEP at deploy (SSH timeout = asleep per [[deck-sleeps-ssh-timeout]]); syncthing carries `32dc5684`
+>   when it wakes — **RE-VERIFY the deck sha == `32dc5684` before trusting any field result.**
+> - **THE FIX (2026-08-19):** field report — Lucien force-cast Fast Healing at the player, magicka drained,
+>   HP never moved. ROOT CAUSE (not misclassification): **Mysticism** overrides Fast Healing to
+>   Concentration/**Self**-delivery; `CastSpellImmediate` applies a Self-delivery effect to the MAGIC-CASTER'S
+>   OWNER, ignoring the target ref — so it healed Lucien, and `SustainConcentrationEffect` searched the
+>   player's list, never found it → re-attached every beat. FIX = two-step, archetype-agnostic (ALL
+>   self-delivery + concentration spells, per marth): (1) **where it lands** — a Self spell aimed off-self
+>   routes through the TARGET self-casting (`EffectCasterFor`); (2) **whose rate** — `ReattributeEffectCaster`
+>   re-points the fresh `ae->caster` back to the FOLLOWER so the engine applies HIS perks/effectiveness every
+>   application (persists across the sustain; carries all effects of multi-effect spells). Gated on
+>   `ecaster != follower`, so target-delivery + genuine `cast_self` are untouched no-ops. Docs: SELF-DELIVERY
+>   section in `Docs/CAST-DELIVERY.md` + MAP.md.
+> - **FIELD-WATCH:** `FORCE-CAST … (self-delivery: target self-casts) — effect applied` on the player-heal;
+>   `conc effect ATTACHED on <player>` ONCE per stream (not per beat); **PLAYER HP CLIMBS at the FOLLOWER's
+>   rate** (strong heal on a low-Restoration player). Non-heal check: a follower self-buff (flesh/ward) on the
+>   player lands at the follower's rank. Residual: if HP still won't accrue, that's the separate sustain-refusal
+>   fallback (`ae->magnitude` at attach, engine-owned — documented in CAST-DELIVERY.md), NOT the delivery fix.
+> - **LOCAL FABLE REVIEW: DONE + CLEAN (2026-08-19).** 6-dimension multi-agent review of the 67-commit diff
+>   (`v1.0.64`..main), each finding adversarially verified. **Zero SEV-1/SEV-2.** Two SEV-3s, both NON-blocking
+>   follow-ups: (a) `Logistics.cpp:4438` OOC hostile cast's LoS wall-gate is inert (Check without a Want seed →
+>   Unknown passes); (b) `ProgAllocator.cpp:171` NodeIndex first-wins makes FindNode order-dependent on a
+>   duplicate FormID (only bites a malformed/overlapping catalog — PLAUSIBLE, pathological). Cloud ultrareview
+>   stays ABANDONED (no access). **Phase 2 (`./release.sh` package + `git tag`) + tag-push stay HELD** until the
+>   field test passes AND marth says go. Then: rewrite the STALE CHANGELOG v1.0.65 entry (predates the cast
+>   overhaul + RC fixes — 69 commits) + Nexus bbcode (1.0.62→65). Full cast saga: `Docs/CAST-DELIVERY.md`.
 > - **(prior) v1.0.65 RC field-fix batch MERGED + CI-GREEN (`b63beb9`); cast-delivery rewrite field-pending.**
 > - **CAST DELIVERY = UNIVERSAL DIRECT FORCE (`b63beb9`, sha `b0c65aae`, deployed). READ `Docs/CAST-DELIVERY.md` (canonical) BEFORE touching ANY cast path.** The concentration-unification `5f8e873` (below) REGRESSED heals: it routed OOC concentration through the AI PACKAGE (`ConcentrationCast`→`Packages::CastAt`), which §4.6-declines every tick for PACKAGE-LOCKED custom followers (Lucien 2F00591F, his quest owns the alias at prio 80 > MFO 60) — so his player/ally heals stopped. marth: heals worked in the public build, "avoid that [package] route for anything, always use the known working force." Fable OWNED the fix end-to-end (`fable-cast-solve`) after ~10 high-effort turns of my incremental mis-steps + a Fable review. FINAL: every concentration cast + forced effect delivers via DIRECT `CastSpellImmediate` onto the target (package-lock-proof), self+target, combat+OOC unified via `CastTargetDirect`/`CastSelfDirect`. Package removed from concentration delivery; 2 FF paths keep it WITH direct fallback (no dead cell for locked followers). Gaps closed: **1s heal re-apply cadence** (`kConcApplyPeriod`; was silently 4s=¼ throughput), **all `CastSpellImmediate` MainThread::Post'd** (fixed 2 off-worker calls incl. `CastOn` combat FF = the 1.5.x `act.cast_target` AV frame), **combat consent-coherence proven** (AI stays denied, direct channel always delivers, can't deadlock), ward-release + magicka-clamp. Bounds unchanged (self heal 6s/ward 15s; foe 1-4s; heal-until-topped). **FIELD-WATCH:** `FORCE-CAST … magicka X→Y` ~1/s while wounded + HP climbing, `concentration (direct force)` in combat, ZERO concentration `[pkg] DECLINED`. Residual risk (Fable-flagged): if a log shows `[consent] HARD-ABORTED … (concentration unbounded)` naming the GAMBIT spell mid-stream, add a `StreamLive`-style registry-keyed CheckCast exemption (per doc), NOT a package return.
 > - **(superseded) CONCENTRATION FULLY UNIFIED (`5f8e873`, sha `5118941`, deployed).** marth pushed hard here — "don't
