@@ -249,34 +249,19 @@ releases **by eviction** with a non-actor XMarker.
   owns delivery + per-second cost + bounds only. ONE sustained HUD entry, shader plays
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
-  **CASTER-ATTRIBUTED SELF-DELIVERY off-self = SPLIT BY CASTING TYPE (Fable review).** Any Self
-  spell aimed off-self (`NeedsCasterAttributedDelivery` = `kSelf` AND non-self target — FF *and*
-  conc) must land on the target with the follower as caster (a Self spell cast normally lands on
-  the caster's OWNER). Mechanism split (casting STYLE never converted): **FF/instant →
-  `ApplyEffectsFromCaster` (`MagicTarget::AddTarget`)** — real effect onto the target, follower as
-  caster, AE keyed on the SOURCE spell (so `ShouldApplyTo`'s source-keyed already-active scan
-  recognises it → no light-respam CTD, no shared-slot hijack); the known-good path for
-  flesh/light/waterbreathing/invis/muffle, fanned via AUTO to the whole party or aimed at one, each
-  recipient GAINS it. **CONCENTRATION → the PROXY** (`ProxyDeliverySpell`/`SelfDeliveryProxy`):
-  AddTarget cannot channel concentration, so fabricate a transient COPY with casting style
-  PRESERVED and ONLY `data.delivery` flipped `kSelf→kTargetActor`, and the FOLLOWER casts it through
-  the existing concentration-on-others path (`CastTargetDirect`→`ApplyTargetEffect`→
-  `CastSpellImmediate`+`SustainConcentrationEffect`) → lands on target, Sustain FINDS+re-arms (ONE
-  sustained effect), follower's rate+magicka. BOTH: PLAYER/ally never casts/pays/needs magicka;
-  follower pays via its hand-deduct. Proxy: EXACTLY TWO dynamic slots (`IFormFactory`, `0xFF__`),
-  reuse-same-source / claim-idle(**8 s** > 6 s `kConcHealCap`) / else SKIP — no unbounded cache; VR
-  `Get` returns nullptr when `!MainThread::IsInstalled()` (no off-main form create); SAVE-SAFE
-  (transient dynamic forms never serialized; a proxy AE mid-stream dropped on load); stream-end
-  dispel clears the proxy AE (`TargetCastEndActor`→`ProxyFor`). Five sites dispatch on
-  `NeedsCasterAttributedDelivery`+casting type: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO),
-  `CastOn` force-half, two Logistics FF casts. **RETIRED:** target-self-cast (deck a8d641bb: player
-  became caster → drained player's magicka to empty, heal stopped at 0); AddTarget for
-  **concentration** (does NOT channel — but AddTarget IS correct for FF). Do NOT merge the split. **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
-  the RECIPIENT's Health hits ~full — read the intended heal target (`a_target`/follower for
-  self-heal), NOT the follower or the re-routed mechanical caster — enforced in
-  `CastTargetDirect`/`CastSelfDirect` (end+dispel+decline, so OOC re-dispatch and combat both
-  stop) with a `TargetCastReconcile`/`SelfCastReconcile` backstop; 6 s cap is the time
-  backstop. HEAL only (a buff runs its window). Momentary
+  **CONCENTRATION + SELF-delivery off-self → DELIVERY-FLIPPED PROXY (`ConcProxy`/`DeliverySpell`,
+  Actuation.cpp):** baseline `CastSpellImmediate(sp,target,follower)` lands an FF Self effect on
+  `target` (Candlelight/flesh work — do NOT touch), but a `kSelf` CONCENTRATION channel binds to
+  the caster's OWNER, so a player/ally conc heal collapses onto the follower. Gated on
+  `kSelf && kConcentration && target!=follower`, MFO casts a transient COPY with casting style
+  PRESERVED and ONLY `data.delivery` flipped `kSelf→kTargetActor` (via the unchanged
+  `ApplyTargetEffect`/AUTO conc branch + `SustainConcentrationEffect` keyed on the copy) — lands
+  on the recipient, follower is caster (rate+cost), player uninvolved. TWO transient dynamic
+  (`0xFF__`) slots, FILL-CAST-REUSE-FREELY (no idle/lifetime guards — the applied AE is
+  self-sufficient), round-robin evict on a 3rd source; never serialized; main-thread-only (source
+  returned off-main/VR). Stream-end dispel clears the proxy AE (`TargetCastEndActor`→`FormFor`).
+  FF/self-cast/non-Self UNTOUCHED. (Reverted the 2026-08-19 rewrite that changed FF Self delivery
+  + caused the light-respam CTD.) Momentary
   sustained effect dispels at END-of-stream (stale/gone/switch) only — it genuinely
   channels, so the stream's end must cut it; a cap-only release keeps the one entry
   alive across re-streams. Evidence line "conc effect ATTACHED": once per stream =

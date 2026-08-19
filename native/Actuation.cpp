@@ -38,152 +38,6 @@ namespace MFO::Actuation {
     // Equip/UnequipObject engine call (the MSTK "copy then act" discipline).
     std::mutex g_forcedMx;
 
-    // TRUE when a SELF-delivery spell is aimed at a NON-self target -- it needs
-    // CASTER-ATTRIBUTED delivery so the effect lands on the target with the follower
-    // as caster (a Self spell cast normally lands on the caster's OWNER). The
-    // MECHANISM then splits by casting type at the call site: CONCENTRATION -> proxy
-    // (ProxyDeliverySpell, so it CHANNELS); FF/instant -> ApplyEffectsFromCaster
-    // (AddTarget real-effect apply, keyed on the source spell -> no proxy hazards).
-    // A self-cast (target == follower) and every non-Self delivery cast the source
-    // directly. Reads only the SPEL's Delivery; any thread.
-    bool NeedsCasterAttributedDelivery(RE::SpellItem* a_spell, RE::Actor* a_follower,
-                                       RE::Actor* a_target) {
-        return a_spell && a_target && a_follower && a_target != a_follower &&
-               a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
-    }
-
-    // FF / INSTANT Self-delivery mechanism (see Actuation.h): apply the spell's REAL
-    // effect(s) onto a_target's MagicTarget with an explicit caster (the follower)
-    // via the engine's OWN per-effect entry MagicTarget::AddTarget. Lands on
-    // a_target, attributed to a_caster, keyed on the SOURCE spell (so source-keyed
-    // guards recognise it -- no proxy-slot / light-respam hazard). Every effect of a
-    // multi-effect spell. MAIN THREAD (mutates the AE list). Concentration must NOT
-    // use this (AddTarget does not channel -- that is the whole reason the proxy
-    // exists); the call sites route concentration to the proxy instead.
-    bool ApplyEffectsFromCaster(RE::Actor* a_target, RE::SpellItem* a_spell,
-                                RE::Actor* a_caster) {
-        auto* mt = a_target ? a_target->AsMagicTarget() : nullptr;
-        if (!mt || !a_spell || !a_caster) return false;
-        bool any = false;
-        for (auto* eff : a_spell->effects) {
-            if (!eff || !eff->baseEffect) continue;
-            RE::MagicTarget::AddTargetData data{};   // zero-init all bytes
-            data.caster        = a_caster;                  // follower -> attribution + rate
-            data.magicItem     = a_spell;                   // SOURCE form -> source-keyed guards work
-            data.effect        = eff;
-            data.magnitude     = eff->effectItem.magnitude; // engine adds skill/perks via caster
-            data.castingSource = RE::MagicSystem::CastingSource::kInstant;
-            mt->AddTarget(data);
-            any = true;
-        }
-        return any;
-    }
-
-    // ── SELF-DELIVERY PROXY (marth's design): fabricate a copy of the source spell
-    // with its CASTING STYLE PRESERVED (concentration stays concentration) and ONLY
-    // its DELIVERY flipped Self -> kTargetActor, then route it through MFO's EXISTING,
-    // already-working concentration/FF-on-others delivery (CastTargetDirect ->
-    // ApplyTargetEffect -> the FOLLOWER's CastSpellImmediate onto the target +
-    // SustainConcentrationEffect). The follower casts it: HIS skill/perks (rate) +
-    // HIS magicka; the effect channels onto the TARGET as a normal aimed cast. The
-    // PLAYER never casts / never pays / needs no magicka. This supersedes the
-    // AddTarget/self-cast/force-sustain detours: force-applying a SELF concentration
-    // does NOT channel (the AE lands on the caster's owner, or a target-self-cast
-    // charges the player) -- flipping DELIVERY is the only defect to fix, because
-    // concentration-on-others already works for a natively-aimed spell.
-    //
-    // EXACTLY TWO transient dynamic SPEL slots, no unbounded cache: reuse a slot
-    // for the same source; claim a free/idle slot for a new source; if BOTH slots
-    // are busy with other recently-active sources, SKIP this cast ("too bad"). A
-    // slot frees itself kProxyIdle seconds after its last use (a live stream re-uses
-    // it every ~1 s, so it stays warm; a stopped stream's slot goes idle and frees).
-    // The two forms are created ONCE via IFormFactory (dynamic 0xFF__ range) and
-    // reconfigured in place -- never more than 2 dynamic forms exist for the session.
-    //
-    // SAVE-SAFETY: dynamic (runtime-created) forms are NOT serialized into the .ess;
-    // they are never added to any MFO co-save record; a proxy's ActiveEffect saved
-    // mid-stream references a 0xFF__ form the engine simply drops on load (no
-    // corruption), and streams are short + dispelled at end. MAIN-THREAD-ONLY (form
-    // table + create); every caller is already inside a MainThread::Post.
-    namespace SelfDeliveryProxy {
-        struct Slot {
-            RE::FormID     source = 0;         // source spell this slot currently proxies
-            RE::SpellItem* proxy  = nullptr;   // the fabricated dynamic form (persists)
-            std::chrono::steady_clock::time_point lastUsed{};
-        };
-        Slot            g_slot[2];
-        // A slot frees this long after last use. MUST exceed the longest PROXIED
-        // stream window so a slot is never reconfigured under a live proxy AE. Only
-        // NON-self CONCENTRATION streams proxy -> heal 6 s (kConcHealCap) / utility
-        // 4 s (kConcUtilityHold); the 15 s self-utility cap is SELF-target and never
-        // proxies. 8 s > the 6 s kConcHealCap covers every proxied window (SEV-3
-        // slot-window close; kConcHealCap is defined later in the TU, so this is a
-        // documented invariant, not a static_assert).
-        constexpr float kProxyIdle = 8.0f;
-
-        // Copy the source's cast data + effects, flip delivery Self -> TargetActor.
-        // Effects are copied by POINTER (the Effect objects stay owned by the source
-        // form -- shared, read-only during a cast), so a slot reuse that clears +
-        // repopulates never frees an object a live ActiveEffect still points at.
-        void Configure(RE::SpellItem* a_proxy, RE::SpellItem* a_source) {
-            a_proxy->data          = a_source->data;   // preserve castingType/cost/charge/etc.
-            a_proxy->data.delivery = RE::MagicSystem::Delivery::kTargetActor;  // the ONLY change
-            a_proxy->effects.clear();
-            for (auto* e : a_source->effects) a_proxy->effects.push_back(e);
-        }
-
-        // MAIN THREAD. The non-self proxy of a_source, or nullptr if both slots are
-        // busy with other recently-active sources (skip this cast).
-        RE::SpellItem* Get(RE::SpellItem* a_source) {
-            if (!a_source) return nullptr;
-            // VR SAFETY: form creation + g_slot mutation are MAIN-THREAD ONLY. On VR
-            // MainThread::Post is a no-op and callers run INLINE on the worker, so
-            // NEVER fabricate/mutate off-main -- skip the proxy (bounded degradation).
-            // (On AE this is always true: the proxied concentration path is AE-gated
-            // upstream and every caller runs inside a MainThread::Post.) This
-            // guarantees IFormFactory::Create never runs on the worker thread.
-            if (!MainThread::IsInstalled()) return nullptr;
-            const auto now = std::chrono::steady_clock::now();
-            const auto sid = a_source->GetFormID();
-            for (auto& s : g_slot)                       // reuse the same-source slot
-                if (s.proxy && s.source == sid) { s.lastUsed = now; return s.proxy; }
-            for (auto& s : g_slot) {                     // claim a free / idle slot
-                const bool idle = !s.proxy ||
-                    std::chrono::duration<float>(now - s.lastUsed).count() > kProxyIdle;
-                if (!idle) continue;
-                if (!s.proxy) {                          // fabricate ONCE per slot, ever
-                    auto* f = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
-                    s.proxy = f ? static_cast<RE::SpellItem*>(f->Create()) : nullptr;
-                    if (!s.proxy) return nullptr;
-                }
-                Configure(s.proxy, a_source);
-                s.source = sid; s.lastUsed = now;
-                return s.proxy;
-            }
-            return nullptr;                              // both slots busy -> skip ("too bad")
-        }
-
-        // MAIN THREAD. The proxy FormID currently backing a_sourceID, or 0 -- so the
-        // stream's dispel can also clear the proxy's ActiveEffect off the target.
-        RE::FormID ProxyFor(RE::FormID a_sourceID) {
-            for (auto& s : g_slot)
-                if (s.proxy && s.source == a_sourceID) return s.proxy->GetFormID();
-            return 0;
-        }
-    }
-
-    // The spell to CAST for the cast-path delivery (see Actuation.h). The PROXY is
-    // CONCENTRATION-ONLY: an FF Self spell is delivered by ApplyEffectsFromCaster at
-    // the call site and never reaches a cast, so here it (and self-cast / non-Self)
-    // returns the source. MAIN THREAD.
-    RE::SpellItem* ProxyDeliverySpell(RE::SpellItem* a_source, RE::Actor* a_follower,
-                                      RE::Actor* a_target) {
-        if (NeedsCasterAttributedDelivery(a_source, a_follower, a_target) &&
-            a_source->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
-            return SelfDeliveryProxy::Get(a_source);   // concentration Self off-self: proxy (or nullptr)
-        return a_source;                               // FF Self / self-cast / non-Self: cast source
-    }
-
     namespace {
 
         // #68: the nearest living player-teammate that is not a_follower
@@ -332,12 +186,6 @@ namespace MFO::Actuation {
         // makes a self ward dispel/re-apply FLICKER -- a real defensive gap. 15s
         // bounds a stuck self ward while keeping that re-stream flicker negligible.
         constexpr float kConcSelfUtilityCap = 15.0f;
-        // STOP-WHEN-FULL terminator for heal-until-topped streams: end the stream
-        // once the RECIPIENT is at/near full Health. 0.995 (not exactly 1.0) so a
-        // last sliver of regen/rounding does not leave a heal chasing the final
-        // half-percent forever. A wounded recipient dropping below this re-arms
-        // the stream next tick. Heal-only -- a fixed-duration buff runs its window.
-        constexpr float kHealFullPct = 0.995f;
 
         // THE CADENCE CONTRACT (critical -- "heals feel broken" regression).
         // A concentration spell's cost is authored PER SECOND, and the ENGINE
@@ -909,26 +757,12 @@ namespace MFO::Actuation {
                     // a_target through as-is; CastSpellImmediate accepts null).
                     auto* t  = tid ? RE::TESForm::LookupByID<RE::Actor>(tid) : nullptr;
                     if (!f || !sp || (tid && !t)) return;
-                    // CASTER-ATTRIBUTED SELF DELIVERY, split by casting type: a FF Self
-                    // buff aimed at an ally (t != f) -> ApplyEffectsFromCaster (AddTarget
-                    // onto the ally, keyed on the source spell); a CONCENTRATION Self ->
-                    // a flipped-delivery PROXY; a self cast (t null / t==f) and non-Self
-                    // -> cast the source. The ally never casts / never pays.
-                    const bool casterAttrib = NeedsCasterAttributedDelivery(sp, f, t);
-                    const bool conc =
-                        sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+                    auto* caster = f->GetMagicCaster(src);
+                    if (!caster) caster = f->GetMagicCaster(CS::kInstant);
+                    if (!caster) return;   // F4: no caster -> no cast, no deduct
                     auto* mavo = f->AsActorValueOwner();
                     const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                    if (casterAttrib && !conc) {
-                        ApplyEffectsFromCaster(t, sp, f);   // FF Self buff -> lands on the ally
-                    } else {
-                        auto* castSpell = ProxyDeliverySpell(sp, f, t);   // conc-Self proxy | source
-                        if (!castSpell) return;   // conc-Self but both slots busy -> skip
-                        auto* caster = f->GetMagicCaster(src);
-                        if (!caster) caster = f->GetMagicCaster(CS::kInstant);
-                        if (!caster) return;   // F4: no caster -> no cast, no deduct
-                        caster->CastSpellImmediate(castSpell, false, t, 1.0f, false, 0.0f, f);
-                    }
+                    caster->CastSpellImmediate(sp, false, t, 1.0f, false, 0.0f, f);
                     const float c     = sp->CalculateMagickaCost(f);
                     const float spend = mavo ? std::min(c, pool) : 0.0f;
                     if (mavo && spend > 0.0f)
@@ -1256,6 +1090,75 @@ namespace MFO::Actuation {
             return found;
         }
 
+        // ── CONCENTRATION + SELF-DELIVERY PROXY (the ONLY delivery fix on top of the
+        // baseline). A fire-and-forget Self spell force-cast at another actor lands on
+        // that actor (baseline, field-proven -- Candlelight/flesh work). A
+        // CONCENTRATION Self spell does NOT: CastSpellImmediate sets up a channeled
+        // cast whose target is resolved by the spell's DELIVERY, and kSelf binds the
+        // sustained AE to the caster's OWNER (the follower), so a player/ally
+        // concentration heal collapses onto the follower and silently fails. FIX:
+        // cast a transient COPY of the source with its casting style PRESERVED and ONLY
+        // data.delivery flipped kSelf -> kTargetActor, so the channel resolves to the
+        // passed target. The follower is still the caster (his rate + magicka); the
+        // player never casts / pays. Used ONLY for concentration+Self+off-self -- FF /
+        // self-cast / non-Self are untouched baseline.
+        //
+        // TWO transient dynamic (0xFF__) slots, FILL-CAST-REUSE-FREELY (marth): once
+        // the AE is applied it captures its own effect/magnitude/caster and no longer
+        // needs the SPEL form, so the slots carry NO lifetime bookkeeping -- reuse a
+        // slot for the same source (so a stream's ~1 s beats re-arm the SAME AE via
+        // SustainConcentrationEffect, no stacking), and evict round-robin when a THIRD
+        // source needs one. Never serialized (dynamic forms are not). MAIN THREAD only
+        // (form table); returns nullptr off-main (VR) so no form is created there.
+        namespace ConcProxy {
+            RE::SpellItem* g_form[2] = { nullptr, nullptr };
+            RE::FormID     g_src[2]  = { 0, 0 };
+            int            g_next    = 0;   // round-robin victim when both slots are taken
+
+            void Configure(RE::SpellItem* a_p, RE::SpellItem* a_src) {
+                a_p->data          = a_src->data;                                 // castingType/cost/etc.
+                a_p->data.delivery = RE::MagicSystem::Delivery::kTargetActor;     // the ONLY change
+                a_p->effects.clear();
+                for (auto* e : a_src->effects) a_p->effects.push_back(e);         // shared effect ptrs
+            }
+            RE::SpellItem* Get(RE::SpellItem* a_src) {
+                if (!a_src || !MainThread::IsInstalled()) return nullptr;         // no off-main create (VR)
+                const auto sid = a_src->GetFormID();
+                for (int i = 0; i < 2; ++i)
+                    if (g_form[i] && g_src[i] == sid) return g_form[i];           // reuse same-source
+                int slot = -1;
+                for (int i = 0; i < 2; ++i) if (!g_form[i]) { slot = i; break; } // prefer an empty slot
+                if (slot < 0) { slot = g_next; g_next ^= 1; }                    // else evict round-robin
+                if (!g_form[slot]) {
+                    auto* f = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
+                    g_form[slot] = f ? static_cast<RE::SpellItem*>(f->Create()) : nullptr;
+                    if (!g_form[slot]) return nullptr;
+                }
+                Configure(g_form[slot], a_src);
+                g_src[slot] = sid;
+                return g_form[slot];
+            }
+            // The proxy FormID currently backing a_srcID (or 0) -- so a stream's dispel
+            // can also clear the proxy-keyed AE off the target.
+            RE::FormID FormFor(RE::FormID a_srcID) {
+                for (int i = 0; i < 2; ++i)
+                    if (g_form[i] && g_src[i] == a_srcID) return g_form[i]->GetFormID();
+                return 0;
+            }
+        }
+
+        // The spell to CAST for a follower delivering a_src at a_tgt: a concentration+
+        // Self spell aimed off-self returns its delivery-flipped proxy (or a_src if the
+        // proxy is unavailable -- VR / factory fail, a safe no-crash fallback); every
+        // other spell (FF, self-cast, non-Self) returns a_src unchanged. MAIN THREAD.
+        RE::SpellItem* DeliverySpell(RE::SpellItem* a_src, RE::Actor* a_follower, RE::Actor* a_tgt) {
+            if (a_src && a_follower && a_tgt && a_tgt != a_follower &&
+                a_src->GetDelivery()    == RE::MagicSystem::Delivery::kSelf &&
+                a_src->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+                if (auto* p = ConcProxy::Get(a_src)) return p;
+            return a_src;
+        }
+
         // Apply the effect + spend magicka for ONE fire (main thread). §5.3:
         // CastSpellImmediate spends nothing (§0.22), so deduct the real cost.
         void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID) {
@@ -1377,44 +1280,40 @@ namespace MFO::Actuation {
                     }
                 }
                 auto* avo  = caster->AsActorValueOwner();
-                // CASTER-ATTRIBUTED SELF DELIVERY, split by casting type. A SELF spell
-                // lands on its caster's OWNER, so to reach `tgt` from the follower:
-                //   FF/instant -> ApplyEffectsFromCaster (AddTarget real-effect apply
-                //     onto tgt, follower as caster, keyed on the SOURCE spell -- no
-                //     proxy hazard); CONCENTRATION -> a flipped-delivery PROXY cast
-                //     through the normal path so it CHANNELS. A self-cast / non-Self
-                //     casts the source. The player never casts / pays / needs magicka.
-                const bool casterAttrib = NeedsCasterAttributedDelivery(sp, caster, tgt);
-                const bool conc =
-                    sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+                auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                bool proxied = false;
-                if (casterAttrib && !conc) {
-                    ApplyEffectsFromCaster(tgt, sp, caster);   // FF Self buff -> lands on tgt
-                } else {
-                    auto* castSpell = ProxyDeliverySpell(sp, caster, tgt);   // conc-Self proxy | source
-                    if (!castSpell) return;   // conc-Self but both slots busy -> skip (no deduct)
-                    proxied = castSpell != sp;
-                    auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
-                    if (!inst) return;   // F4: no caster -> no cast/deduct
-                    if (conc) {
-                        // CONCENTRATION-ON-OTHERS (the existing, working path): the
-                        // follower casts the aimed spell onto tgt; the AE lands on tgt
-                        // and SustainConcentrationEffect re-arms that ONE effect each
-                        // beat (heal 6 s / utility 4 s window bridges sparse beats).
-                        const float window =
-                            CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
-                                ? kConcHealCap : kConcUtilityHold;
-                        if (!SustainConcentrationEffect(tgt, castSpell, window)) {
-                            inst->CastSpellImmediate(castSpell, false, tgt, 1.0f, false, 0.0f, caster);
-                            SustainConcentrationEffect(tgt, castSpell, window);
-                            spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
-                                         "(spell {:08X}, window {:.0f}s)",
-                                         a_casterID, a_targetID, a_spellID, window);
-                        }
-                    } else {
-                        inst->CastSpellImmediate(castSpell, false, tgt, 1.0f, false, 0.0f, caster);
+                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                    // FORCED CONCENTRATION = THE REAL EFFECT with a synthesized
+                    // duration (marth's ruling -- see SustainConcentrationEffect):
+                    // attach ONCE, then re-arm the one ActiveEffect each beat; the
+                    // ENGINE channels the authored magnitude itself (resists,
+                    // hostility, every archetype). Window by kind: heal 6 s
+                    // bridges sparse beats; offense/utility 4 s covers their caps.
+                    // A CONCENTRATION + SELF spell aimed off-self collapses onto the
+                    // FOLLOWER (delivery binds the channel to the caster's owner), so
+                    // cast the delivery-flipped PROXY (kTargetActor) instead -- the
+                    // channel then resolves to tgt. Sustain keys on the SAME spell we
+                    // cast, so a proxy stream re-arms its own AE cleanly.
+                    RE::SpellItem* castSp = DeliverySpell(sp, caster, tgt);
+                    const float window =
+                        CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
+                            ? kConcHealCap : kConcUtilityHold;
+                    if (!SustainConcentrationEffect(tgt, castSp, window)) {
+                        // The KNOWN-WORKING FORCE -- caster casts (proxy of) sp AT tgt.
+                        inst->CastSpellImmediate(castSp, false, tgt, 1.0f, false, 0.0f, caster);
+                        SustainConcentrationEffect(tgt, castSp, window);
+                        // Evidence line: ONCE per stream if the engine honors the
+                        // pinned duration; repeating every beat = sustain refused.
+                        spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
+                                     "(spell {:08X}{}, window {:.0f}s)",
+                                     a_casterID, a_targetID, a_spellID,
+                                     castSp != sp ? " self->target proxy" : "", window);
                     }
+                } else {
+                    // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
+                    // (Baseline: an FF Self spell force-cast here lands on tgt.)
+                    inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
                 }
                 const float cost  = sp->CalculateMagickaCost(caster);
                 const float spend = avo ? std::min(cost, before) : 0.0f;   // #6: never negative
@@ -1422,14 +1321,11 @@ namespace MFO::Actuation {
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                            RE::ActorValue::kMagicka, -spend);
                 const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                const char* mark = (casterAttrib && !conc) ? " (self-delivery: applied from follower)"
-                                 : proxied                 ? " (self-delivery: aimed proxy from follower)"
-                                                           : "";
-                spdlog::info("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X}{} -- effect applied, "
+                spdlog::info("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X} -- effect applied, "
                              "magicka {:.0f}->{:.0f} (cost {:.0f})",
                              a_casterID, caster->GetName() ? caster->GetName() : "?",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
-                             mark, before, after, cost);
+                             before, after, cost);
             });
         }
 
@@ -1445,10 +1341,10 @@ namespace MFO::Actuation {
             MainThread::Post([a_targetID, a_spellID] {
                 if (auto* t = RE::TESForm::LookupByID<RE::Actor>(a_targetID)) {
                     DispelSpellEffectsOn(t, a_spellID);
-                    // A Self-delivery stream channels through a flipped-delivery
-                    // PROXY, so the live AE carries the PROXY's spellID, not the
-                    // source -- dispel it too so a ward/heal cannot linger.
-                    if (auto proxyID = SelfDeliveryProxy::ProxyFor(a_spellID))
+                    // A concentration+Self stream channels through a delivery-flipped
+                    // PROXY, so the live AE carries the PROXY's spellID -- dispel it
+                    // too so a heal/ward cannot linger past the stream.
+                    if (auto proxyID = ConcProxy::FormFor(a_spellID))
                         DispelSpellEffectsOn(t, proxyID);
                 }
             });
@@ -1528,40 +1424,32 @@ namespace MFO::Actuation {
                 auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
                 if (!caster || !target || !sp) return;
                 auto* avo  = caster->AsActorValueOwner();
-                // CASTER-ATTRIBUTED SELF DELIVERY, split by casting type (the whole-
-                // party fan lands on each ally, not the follower): FF/instant Self buff
-                // (Candlelight/flesh/waterbreathing) -> ApplyEffectsFromCaster (AddTarget
-                // onto the ally, follower as caster, keyed on the SOURCE spell so the
-                // light-respam guard recognises it); CONCENTRATION Self -> flipped-
-                // delivery PROXY cast through the normal path (channels). Non-Self / self
-                // cast the source. The ally never casts / never pays.
-                const bool casterAttrib = NeedsCasterAttributedDelivery(sp, caster, target);
-                const bool conc =
-                    sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+                auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                if (casterAttrib && !conc) {
-                    ApplyEffectsFromCaster(target, sp, caster);   // FF Self buff -> lands on the ally
-                } else {
-                    auto* castSpell = ProxyDeliverySpell(sp, caster, target);   // conc-Self proxy | source
-                    if (!castSpell) return;   // conc-Self but both slots busy -> skip (no deduct)
-                    auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
-                    if (!inst) return;   // F4: no caster -> no cast/deduct
-                    if (conc) {
-                        // CONCENTRATION-ON-OTHERS under AUTO: ONE sustained effect per
-                        // fanned target (the 6s/4s window bridges the fCastCooldown re-fan).
-                        const float window =
-                            CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
-                                ? kConcHealCap : kConcUtilityHold;
-                        if (!SustainConcentrationEffect(target, castSpell, window)) {
-                            inst->CastSpellImmediate(castSpell, false, target, 1.0f, false, 0.0f, caster);
-                            SustainConcentrationEffect(target, castSpell, window);
-                            spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
-                                         "(AUTO, spell {:08X}, window {:.0f}s)",
-                                         a_casterID, a_targetID, a_spellID, window);
-                        }
-                    } else {
-                        inst->CastSpellImmediate(castSpell, false, target, 1.0f, false, 0.0f, caster);
+                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                    // FORCED CONCENTRATION under AUTO: same real-effect contract as
+                    // the manual streams -- ONE sustained REAL effect per fanned
+                    // target (the 6s/4s window bridges the fCastCooldown re-fan, so
+                    // the HUD shows a continuous entry, not a pulse stack); the
+                    // ENGINE channels the authored magnitude itself.
+                    // A CONCENTRATION + SELF spell fanned to an ally collapses onto
+                    // the FOLLOWER -- cast the delivery-flipped PROXY so it lands on
+                    // the ally (same one-mechanism fix as the manual streams).
+                    RE::SpellItem* castSp = DeliverySpell(sp, caster, target);
+                    const float window =
+                        CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
+                            ? kConcHealCap : kConcUtilityHold;
+                    if (!SustainConcentrationEffect(target, castSp, window)) {
+                        inst->CastSpellImmediate(castSp, false, target, 1.0f, false, 0.0f, caster);
+                        SustainConcentrationEffect(target, castSp, window);
+                        spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
+                                     "(AUTO, spell {:08X}{}, window {:.0f}s)",
+                                     a_casterID, a_targetID, a_spellID,
+                                     castSp != sp ? " self->target proxy" : "", window);
                     }
+                } else {
+                    inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
                 }
                 const float cost  = sp->CalculateMagickaCost(caster);
                 // #6: clamp to the current pool so a deduct never drives magicka
@@ -1695,21 +1583,6 @@ namespace MFO::Actuation {
         if (!a_follower || !a_spell) return SelfCast::Declined;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
-
-        // STOP-WHEN-FULL (self-heal terminator): a follower healing ITSELF ends
-        // when its OWN Health is ~full (the recipient IS the follower here). End
-        // the self stream and decline so it stops re-casting/draining at full,
-        // even if the gambit carries no HP condition. HEAL only -- a self ward /
-        // Candlelight / any non-heal self-buff still runs its authored window.
-        if (CasterConsent::ClassifySpell(a_spell) == CasterConsent::SpellKind::Heal &&
-            Vocab::HealthPct(a_follower) >= kHealFullPct) {
-            if (auto itf = g_selfCast.find(id);
-                itf != g_selfCast.end() && itf->second.spell == spellID) {
-                SelfCastEndActor(id, itf->second.spell);
-                g_selfCast.erase(itf);
-            }
-            return SelfCast::Declined;   // follower topped off -- transparent
-        }
 
         // §5.3 COMPETENCE: real cost gates the cast; the reserve floor keeps a
         // self-heal from emptying the pool. Unaffordable -> transparent decline.
@@ -1845,24 +1718,18 @@ namespace MFO::Actuation {
                     }
                 }
             }
-            // STOP-WHEN-FULL backstop: a self-HEAL stream also ends when the
-            // follower's OWN Health is at/near full (CastSelfDirect's gate is
-            // primary; this catches a channel whose rule stopped calling in).
-            const bool selfFull =
-                !gone && kind == CasterConsent::SpellKind::Heal && a &&
-                Vocab::HealthPct(a) >= kHealFullPct;
-            if (gone || stale || concCapped || selfFull) {
+            if (gone || stale || concCapped) {
                 // RELEASE. DISPEL a lingering STICKY buff (Buff = ward/fortify,
                 // any release) so it cannot persist as a stuck gameplay effect --
                 // AND a momentary stream's SUSTAINED real effect when the stream
-                // truly ENDED (stale/rule-false/self-full): since the real-effect
-                // sustain that effect genuinely channels, so the stream's end must
-                // cut it rather than let it heal unpaid to its window's end. A
+                // truly ENDED (stale/rule-false): since the real-effect sustain
+                // that effect genuinely channels, so the stream's end must cut
+                // it rather than let it heal unpaid to its window's end. A
                 // CAP-only release re-streams next tick and keeps the ONE
                 // sustained HUD entry alive (no flicker at cap boundaries; the
                 // re-arm continues the same effect). There is NO equip to undo
                 // (the self-cast never holds the spell -- the AI-spam CTD).
-                if (a && (kind == CasterConsent::SpellKind::Buff || stale || selfFull))
+                if (a && (kind == CasterConsent::SpellKind::Buff || stale))
                     SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
             }
@@ -1901,26 +1768,6 @@ namespace MFO::Actuation {
         const auto spellID  = a_spell->GetFormID();
         const auto targetID = a_target->GetFormID();
         const auto kind     = CasterConsent::ClassifySpell(a_spell);
-
-        // STOP-WHEN-FULL (heal terminator, deck 2026-08-19). A heal-until-topped
-        // stream ENDS the moment the RECIPIENT reaches ~full Health -- read
-        // a_target's Health (the intended heal target), NEVER the follower's or
-        // whatever actor became the mechanical caster after the Self-delivery
-        // re-route. End the live stream (dispel the sustained heal) and decline so
-        // no further beat re-casts or drains. HEAL only -- a ward/buff or a
-        // damage/utility stream still runs its own window (archetype-aware). The
-        // gambit condition is no longer the sole terminator; a "cast heal at
-        // player" with no HP gate now still stops at full instead of draining on.
-        if (kind == CasterConsent::SpellKind::Heal &&
-            Vocab::HealthPct(a_target) >= kHealFullPct) {
-            if (auto itf = g_targetCast.find(id);
-                itf != g_targetCast.end() && itf->second.target == targetID &&
-                itf->second.spell == spellID) {
-                TargetCastEndActor(itf->second.target, itf->second.spell);
-                g_targetCast.erase(itf);
-            }
-            return SelfCast::Declined;   // recipient topped off -- transparent
-        }
 
         // §5.3 COMPETENCE: real cost gates the cast; the reserve floor keeps it from
         // emptying the pool. Unaffordable -> transparent decline (mirrors CastSelfDirect).
@@ -2025,24 +1872,15 @@ namespace MFO::Actuation {
                 cap = kConcUtilityHold; break;                                        // Buff: 4s
             }
             const bool capped = std::chrono::duration<float>(now - tc.started).count() >= cap;
-            // STOP-WHEN-FULL backstop: a HEAL stream also ends when the RECIPIENT
-            // is at/near full (CastTargetDirect's gate is primary; this catches a
-            // stream whose rule quietly stopped calling in). Reads the RECIPIENT's
-            // Health (tc.target), never the follower's -- an ended-because-topped
-            // heal dispels its sustained effect like a true end-of-stream.
-            const bool recipientFull =
-                tc.kind == CasterConsent::SpellKind::Heal && t &&
-                Vocab::HealthPct(t) >= kHealFullPct;
-            if (gone || stale || capped || recipientFull) {
+            if (gone || stale || capped) {
                 // DISPEL a sticky ward on ANY release; a momentary stream's
                 // SUSTAINED real effect only when the stream truly ENDED
-                // (gone/stale/recipient-full) -- since the real-effect sustain it
-                // genuinely channels, so the stream's end must cut it rather than
-                // let it run unpaid to its window's end. A CAP-only release
-                // re-streams next tick: keeping the effect alive keeps ONE
-                // continuous HUD entry across cap boundaries, and the next beat
-                // re-arms it.
-                const bool endOfStream = gone || stale || recipientFull;
+                // (gone/stale) -- since the real-effect sustain it genuinely
+                // channels, so the stream's end must cut it rather than let it
+                // run unpaid to its window's end. A CAP-only release re-streams
+                // next tick: keeping the effect alive keeps ONE continuous HUD
+                // entry across cap boundaries, and the next beat re-arms it.
+                const bool endOfStream = gone || stale;
                 if (t && (tc.kind == CasterConsent::SpellKind::Buff || endOfStream))
                     TargetCastEndActor(tc.target, tc.spell);
                 done.push_back(id);
