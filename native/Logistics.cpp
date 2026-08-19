@@ -4418,10 +4418,20 @@ namespace MFO::Logistics {
                         if (!caster) return;   // F4: no caster -> no cast, no deduct
                         auto* mavo = f->AsActorValueOwner();
                         const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                        // ROLE 3: a Self-delivery re-route makes the target the
+                        // engine's caster (§0.9) -- snapshot + refund so the ally
+                        // is not charged; the follower pays via its own deduct.
+                        const bool selfDeliv = ec != f;
+                        auto* tgtAvo = selfDeliv ? t->AsActorValueOwner() : nullptr;
+                        const float tgtBefore =
+                            tgtAvo ? tgtAvo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                         caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
                         // Self-delivery re-route -> re-point the effect to the
-                        // FOLLOWER so the engine channels the follower's rate.
-                        if (ec != f) Actuation::ReattributeEffectCaster(t, s, f);
+                        // FOLLOWER (follower's rate) AND refund the target.
+                        if (selfDeliv) {
+                            Actuation::ReattributeEffectCaster(t, s, f);
+                            if (tgtAvo) Actuation::RefundMagicka(t, tgtBefore);
+                        }
                         const float c     = s->CalculateMagickaCost(f);
                         const float spend = mavo ? std::min(c, pool) : 0.0f;   // never negative
                         if (mavo && spend > 0.0f)
@@ -4464,9 +4474,16 @@ namespace MFO::Logistics {
                                 if (!caster) return;
                                 auto* mavo = f->AsActorValueOwner();
                                 const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                                const bool selfDeliv = ec != f;   // ROLE 3: refund target if re-routed
+                                auto* tgtAvo = selfDeliv ? t->AsActorValueOwner() : nullptr;
+                                const float tgtBefore =
+                                    tgtAvo ? tgtAvo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                                 caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
-                                // Self-delivery re-route -> follower is the caster.
-                                if (ec != f) Actuation::ReattributeEffectCaster(t, s, f);
+                                // Self-delivery re-route -> follower is the caster + pays.
+                                if (selfDeliv) {
+                                    Actuation::ReattributeEffectCaster(t, s, f);
+                                    if (tgtAvo) Actuation::RefundMagicka(t, tgtBefore);
+                                }
                                 const float c     = s->CalculateMagickaCost(f);
                                 const float spend = mavo ? std::min(c, pool) : 0.0f;
                                 if (mavo && spend > 0.0f)

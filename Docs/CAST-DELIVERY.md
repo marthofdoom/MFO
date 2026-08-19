@@ -251,11 +251,31 @@ muffle, fear/frenzy, damage/DoT stream, or any buff.
    collapse a multi-effect spell): every effect of a multi-effect spell carries the
    follower's rate, and because the sustain re-arms the SAME re-attributed AE each beat, the
    follower's rate persists for the whole concentration stream, not just the first beat.
+3. **WHO pays the cost (`Actuation::RefundMagicka`):** the target self-casting means the
+   engine charges the TARGET's magicka — `CastSpellImmediate` **deducts from the magic-
+   caster's OWNER** (ENGINE_NOTES §0.9; the "casts are FREE" measurement in §0.22 was on
+   PACKAGE casts, not the direct path). A follower's spell must NEVER cost the player/ally
+   magicka, so each re-routed cast **snapshots the target's magicka before the cast and
+   refunds exactly what the engine took** (a regen tick is left alone). The FOLLOWER still
+   pays via MFO's own hand-deduct, so §5.3 competence still makes a follower run dry.
+   Deck 2026-08-19 falsified the earlier "follower stays blame actor and still pays" claim —
+   blame ≠ who-is-charged; the charge follows the magic-caster's owner, hence the refund.
 
-The follower stays the blame actor and always pays the real magicka. All five direct-apply
-sites route through both helpers: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s
-combat force-half, and the two Logistics FF direct casts. The
-`FORCE-CAST … at TTTTTTTT (self-delivery: target self-casts)` tag marks a re-route in the log.
+All five direct-apply sites route through all three helpers: `ApplyTargetEffect`,
+`ApplyEffectFromTo` (AUTO), `CastOn`'s combat force-half, and the two Logistics FF direct
+casts. The `FORCE-CAST … at TTTTTTTT (self-delivery: target self-casts)` tag marks a re-route
+in the log.
+
+**HEAL TERMINATOR — stop when the RECIPIENT is full (deck 2026-08-19).** A heal-until-topped
+stream ends the moment the RECIPIENT reaches ~full Health (`kHealFullPct` = 0.995), read off
+the intended heal target (`a_target` / the follower for a self-heal) — **never** the follower's
+or whatever actor became the mechanical caster after the re-route. Enforced at the source in
+`CastTargetDirect` / `CastSelfDirect` (end the stream, dispel the sustained heal, decline —
+so the OOC logistics re-dispatch and combat both stop) with a backstop in
+`TargetCastReconcile` / `SelfCastReconcile`; the 6 s cap remains as a time backstop. HEAL only
+— a ward/flesh/utility buff still runs its authored window. This makes the recipient's HP,
+not the gambit condition alone, the terminator: a "cast heal at player" with no HP gate now
+stops at full instead of draining on.
 
 **Instant vs concentration is still decided by the real casting type**
 (`GetCastingType() == kConcentration`) — a genuine FireForget spell is delivered as a SINGLE
