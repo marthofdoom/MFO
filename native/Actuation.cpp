@@ -306,8 +306,23 @@ namespace MFO::Actuation {
                 // the wait IS the action; transparent like the FF form.
                 return { Result::NoOp, "cast package busy", true };
             }
-            // Structural decline -- Packages already logged the reason.
-            return { Result::FailedOther, "concentration cast declined (see [pkg])", true };
+            // STRUCTURAL decline (§4.6 alias-owned / package-locked custom follower,
+            // no record, quest stopped): the PACKAGE cannot serve this follower.
+            // FALL BACK to the KNOWN-WORKING DIRECT FORCE (CastTargetDirect) -- no
+            // package, so it beats the §4.6 lock that made Lucien's package cast
+            // [pkg]-DECLINE every tick. Non-locked followers never reach here (they
+            // got Decline::None above), so the ANIMATED package path is preserved for
+            // them and ONLY package-locked ones take the direct fallback. LoS/line-of-
+            // fire were already gated above; CastTargetDirect re-checks (idempotent).
+            switch (CastTargetDirect(a_follower, a_spell, a_target)) {
+            case SelfCast::Applied:
+                return { Result::Fired, "concentration (direct force -- package-locked)" };
+            case SelfCast::Refreshed:
+                return { Result::NoOp, "concentration direct refresh (paced)", true };
+            case SelfCast::Declined:
+            default:
+                return { Result::FailedOther, "concentration cast declined (see [pkg])", true };
+            }
         }
 
         // a_rangeGate (#68): true only for an OBVIOUS target (ladder rungs
@@ -969,6 +984,27 @@ namespace MFO::Actuation {
         };
         std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
 
+        // ── ON-TARGET DIRECT FORCE (package-lock-proof; g_selfCast generalized) ──
+        // The SAME known-working force (CastSpellImmediate straight onto the actor +
+        // magicka deduct) applied to a NON-self target -- player / ally / foe. It
+        // touches NO package, so it beats a package-locked custom follower's §4.6
+        // alias lock: Lucien (2F00591F) has a prio-80 quest owning the cast alias,
+        // so the package route [pkg]-DECLINED every tick and his on-PLAYER heal never
+        // landed (deck, build 5f8e873). Direct force lands it. One stream per follower
+        // (single channel, like the package). Worker-serial, no lock (#4 discipline);
+        // cleared with g_selfCast on revert. `kind` (cached at start) decides the
+        // time cap AND whether release DISPELS: only a lingering ward/buff (Buff) is
+        // dispelled; a momentary heal/damage leaves nothing and must re-apply freely.
+        struct TargetCastState {
+            RE::FormID               spell  = 0;
+            RE::FormID               target = 0;
+            CasterConsent::SpellKind kind   = CasterConsent::SpellKind::Buff;
+            SelfClock::time_point    started{};
+            SelfClock::time_point    lastFired{};
+            SelfClock::time_point    lastApply{};
+        };
+        std::unordered_map<RE::FormID, TargetCastState> g_targetCast;
+
         // Stop a spell's lingering effect VFX -- the concentration hit-shader
         // that never terminates when the spell is applied one-shot (deck
         // 2026-08-17: the healing glow ran on after the pose ended). Main thread.
@@ -1039,6 +1075,64 @@ namespace MFO::Actuation {
             MainThread::Post([a_id, a_spellID] {
                 if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id))
                     DispelSpellEffectsOn(a, a_spellID);
+            });
+        }
+
+        // ApplySelfEffect generalized to a NON-self target (main thread). SAME proven
+        // call the public build's CastOn and ff0cb48's healStream used -- the known-
+        // working force, no package. Deducts the CASTER's real magicka (§5.3); does
+        // NOT compute any heal magnitude by hand (CastSpellImmediate applies the
+        // spell's own effect -- the "plain CastSpellImmediate heals fine" ruling).
+        //   a_guard TRUE  (sticky ward/buff): skip if the buff is already active on
+        //                 the target, so a duration buff is not re-stacked.
+        //   a_guard FALSE (heal / damage -- MOMENTARY): re-apply EVERY paced tick;
+        //                 an instant heal leaves no active effect, so the target is
+        //                 topped up steadily while the rule wins.
+        void ApplyTargetEffect(RE::FormID a_casterID, RE::FormID a_targetID,
+                               RE::FormID a_spellID, bool a_guard) {
+            MainThread::Post([a_casterID, a_targetID, a_spellID, a_guard] {
+                auto* caster = RE::TESForm::LookupByID<RE::Actor>(a_casterID);
+                auto* tgt    = RE::TESForm::LookupByID<RE::Actor>(a_targetID);
+                auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+                if (!caster || !tgt || !sp) return;
+                if (a_guard) {
+                    auto* ei   = sp->GetCostliestEffectItem();
+                    auto* mgef = ei ? ei->baseEffect : nullptr;
+                    if (auto* mt = tgt->AsMagicTarget(); mgef && mt && mt->HasMagicEffect(mgef)) {
+                        spdlog::info("[cast] {:08X} force-cast skipped -- {} ({:08X}) already "
+                                     "active on {:08X}", a_casterID,
+                                     sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID);
+                        return;
+                    }
+                }
+                auto* avo  = caster->AsActorValueOwner();
+                auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
+                const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
+                inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
+                const float cost  = sp->CalculateMagickaCost(caster);
+                const float spend = avo ? std::min(cost, before) : 0.0f;   // #6: never negative
+                if (avo && spend > 0.0f)
+                    avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                           RE::ActorValue::kMagicka, -spend);
+                const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                spdlog::info("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X} -- effect applied, "
+                             "magicka {:.0f}->{:.0f} (cost {:.0f})",
+                             a_casterID, caster->GetName() ? caster->GetName() : "?",
+                             sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
+                             before, after, cost);
+            });
+        }
+
+        // RELEASE a target stream (main thread): dispel our lingering ward/buff off
+        // the TARGET. Called ONLY for sticky (Buff) kinds -- a heal/damage leaves
+        // nothing to release and must never be dispelled (it would rip a still-needed
+        // effect and stall the heal). Mirrors SelfCastEndActor, on the target actor.
+        void TargetCastEndActor(RE::FormID a_targetID, RE::FormID a_spellID) {
+            MainThread::Post([a_targetID, a_spellID] {
+                if (auto* t = RE::TESForm::LookupByID<RE::Actor>(a_targetID))
+                    DispelSpellEffectsOn(t, a_spellID);
             });
         }
 
@@ -1246,20 +1340,6 @@ namespace MFO::Actuation {
         }
     }
 
-    // Public entry to the BOUNDED CONCENTRATION STREAM (Actuation.h). A thin
-    // forwarder to the TU-internal ConcentrationCast so the out-of-combat
-    // Logistics cast dispatch routes a concentration cast at a NON-SELF target
-    // (player, ally, foe) through the SAME bounded package stream combat's CastOn
-    // uses -- one source of truth for hostile/heal/utility bounding, LoS + line-
-    // of-fire gating, cooldown pacing and the CasterConsent latch. A self target
-    // is intercepted INSIDE (routed to CastSelfDirect when bCastSelf is on, else a
-    // legible decline -- never the package), so a caller may pass a self target
-    // and get the direct-trigger self behaviour, identical to combat.
-    Outcome CastConcentrationAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                                RE::Actor* a_target) {
-        return ConcentrationCast(a_follower, a_spell, a_target);
-    }
-
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         // AE-only, mirroring CastOn (the SE crash path #67). Off AE -> transparent.
         if (!REL::Module::IsAE())    return SelfCast::Declined;
@@ -1368,43 +1448,38 @@ namespace MFO::Actuation {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
             const bool gone   = !a || !a->Is3DLoaded();
             const bool stale  = std::chrono::duration<float>(now - sc.lastFired).count() > releaseSec;
-            // SAME-TIME-LIMIT (marth): a self CONCENTRATION cast is bounded by a
-            // hard time cap, then released and re-streamed on the next winning tick
-            // (the same release-and-reapply the non-self stream uses). CastSelfDirect
-            // is a paced direct-apply, NOT a rooted package, so its natural bound is
-            // the rule going false; this cap is the shared safety ceiling. The cap
-            // value depends on the spell's nature:
-            //   HEAL           -> kConcHealCap (6s), the identical "until topped"
-            //                     ceiling every NON-self heal stream obeys; dispelling
-            //                     a restore-Health effect is a no-op and the next tick
-            //                     re-streams, so the heal is seamless.
-            //   WARD / UTILITY -> kConcSelfUtilityCap (15s), marth's call -- NOT the
-            //                     4s package utility hold (that would only FLICKER a
-            //                     self ward; see the constant). 15s bounds a stuck
-            //                     ward while keeping the re-stream flicker negligible.
-            // CONCENTRATION-ONLY: a fire-and-forget self buff keeps its authored
-            // duration (the NO-time-cap fix below -- capping FF re-broke the
-            // mid-duration dispel churn), because an un-rooted FF buff has no rooting
-            // to release on a fixed cadence and lives its authored life.
+            // SAME-TIME-LIMIT (marth) + HEAL-MUST-FLOW (coordinator): classify the
+            // channel once, for BOTH the concentration cap AND the sticky-dispel gate.
+            //   * The CAP applies to CONCENTRATION only (an FF buff lives its authored
+            //     duration -- the no-time-cap fix): HEAL -> kConcHealCap (6s), WARD/
+            //     UTILITY(Buff) -> kConcSelfUtilityCap (15s, marth -- not the 4s
+            //     package hold, which would only FLICKER a non-rooting self ward).
+            //   * The cap RELEASES + re-streams; whether release DISPELS is the
+            //     sticky gate below, NOT the cap. A momentary HEAL/DAMAGE is capped
+            //     but NEVER dispelled, so the entry just re-creates and re-applies
+            //     next tick -- the heal FLOWS UNINTERRUPTED (this is why marth's
+            //     "not healing himself either" cannot be this cap: dispel is skipped
+            //     for Heal, and an instant restore-Health has no active effect to rip).
+            CasterConsent::SpellKind kind = CasterConsent::SpellKind::Buff;   // default sticky
             bool concCapped = false;
             if (!gone) {
-                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell);
-                if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
-                    const float cap =
-                        CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
-                            ? kConcHealCap : kConcSelfUtilityCap;
-                    if (std::chrono::duration<float>(now - sc.started).count() >= cap)
-                        concCapped = true;
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell)) {
+                    kind = CasterConsent::ClassifySpell(sp);
+                    if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                        const float cap = (kind == CasterConsent::SpellKind::Heal)
+                                              ? kConcHealCap : kConcSelfUtilityCap;
+                        if (std::chrono::duration<float>(now - sc.started).count() >= cap)
+                            concCapped = true;
+                    }
                 }
             }
             if (gone || stale || concCapped) {
-                // Rule stopped re-firing / follower gone -> RELEASE: dispel a
-                // lingering ward/effect so it cannot persist as a stuck gameplay
-                // buff. There is NO equip to undo -- the self-cast never holds the
-                // spell (that was the AI-spam CTD). SelfCastEndActor's dispel is
-                // the load-bearing part; its InterruptCast/sheathe are harmless
-                // no-ops now.
-                if (a) SelfCastEndActor(id, sc.spell);
+                // RELEASE. DISPEL only a lingering STICKY buff (Buff = ward/fortify)
+                // so it cannot persist as a stuck gameplay effect. A HEAL/DAMAGE is
+                // NEVER dispelled -- it leaves nothing to release and dispelling would
+                // interrupt a still-needed heal. There is NO equip to undo (the self-
+                // cast never holds the spell -- the AI-spam CTD).
+                if (a && kind == CasterConsent::SpellKind::Buff) SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
             }
         }
@@ -1415,8 +1490,124 @@ namespace MFO::Actuation {
         // Revert/load: drop the channels. No engine call -- the world is being
         // replaced, and the self-cast holds no equip/debt to undo.
         g_selfCast.clear();
+        g_targetCast.clear();         // on-target direct-force streams, likewise
         g_autoCast.clear();           // AUTO fan-out pacing is session-scoped too
         g_beneficialRecast.clear();   // fix #3/#6: per-buff recast windows likewise
+    }
+
+    // ON-TARGET DIRECT FORCE = CastSelfDirect generalized to a NON-self target.
+    // The known-working, package-lock-proof delivery for a concentration cast at a
+    // player / ally / foe: no package -> no §4.6 alias-lock decline, so a package-
+    // locked custom follower (Lucien) actually heals the player and damages the foe.
+    // Registers a single per-follower stream, paces the apply by fCastCooldown, and
+    // is time-bounded + released by TargetCastReconcile. Returns Applied/Refreshed/
+    // Declined with the SAME semantics as CastSelfDirect (a paced REFRESH is NOT an
+    // action). LoS + line-of-fire GATE hostile offense (never direct-apply damage
+    // into a wall or through a teammate). Worker/main-thread; posts the apply to main.
+    SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                              RE::Actor* a_target) {
+        if (!REL::Module::IsAE())            return SelfCast::Declined;   // AE-only (#67)
+        if (!a_follower || !a_spell || !a_target) return SelfCast::Declined;
+        if (a_target == a_follower)          return SelfCast::Declined;   // self -> CastSelfDirect
+        const auto id       = a_follower->GetFormID();
+        const auto spellID  = a_spell->GetFormID();
+        const auto targetID = a_target->GetFormID();
+        const auto kind     = CasterConsent::ClassifySpell(a_spell);
+
+        // §5.3 COMPETENCE: real cost gates the cast; the reserve floor keeps it from
+        // emptying the pool. Unaffordable -> transparent decline (mirrors CastSelfDirect).
+        if (auto* avo = a_follower->AsActorValueOwner()) {
+            const float cost = a_spell->CalculateMagickaCost(a_follower);
+            const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
+            if (cost > have) return SelfCast::Declined;
+            const float reserve = Config::g_magickaReserve.load();
+            if (reserve > 0.0f) {
+                const float mx = avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
+                    a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
+                                                      RE::ActorValue::kMagicka);
+                if (mx > 0.0f && (have - cost) < reserve * mx) return SelfCast::Declined;
+            }
+        }
+
+        // HOSTILE offense: LoS + line-of-fire gates on the direct path too (the
+        // package's ffWatch has no analog here, so re-check every tick). Held ->
+        // Declined (transparent): don't apply this tick, and the un-refreshed entry
+        // goes stale so TargetCastReconcile CUTS the beam, exactly like ffWatch.
+        if (kind == CasterConsent::SpellKind::Offense) {
+            if (Sightline::Check(id, targetID) == Sightline::Verdict::Occluded)
+                return SelfCast::Declined;
+            if (Sightline::TeammateInFireLine(id, targetID))
+                return SelfCast::Declined;
+        }
+
+        const auto now = SelfClock::now();
+        auto it = g_targetCast.find(id);
+        // Spell OR target switched -> end the old stream first (dispel a lingering
+        // ward only; a heal/damage leaves nothing) so shaders/buffs never stack.
+        if (it != g_targetCast.end() &&
+            (it->second.spell != spellID || it->second.target != targetID)) {
+            if (it->second.kind == CasterConsent::SpellKind::Buff)
+                TargetCastEndActor(it->second.target, it->second.spell);
+            g_targetCast.erase(it);
+            it = g_targetCast.end();
+        }
+        if (it == g_targetCast.end()) {
+            auto& tc = g_targetCast[id];
+            tc.spell = spellID; tc.target = targetID; tc.kind = kind;
+            tc.started = now; tc.lastFired = now; tc.lastApply = {};   // epoch -> apply now
+            it = g_targetCast.find(id);
+        } else {
+            it->second.lastFired = now;   // rule still winning -> keep the channel open
+        }
+
+        // SELF-PACE the apply (once per fCastCooldown), same cadence as the self and
+        // AUTO paths -- so the stream ticks at the configured beat, not every 133 ms.
+        const float interval = std::max(1.0f, Config::g_castCooldown.load());
+        if (std::chrono::duration<float>(now - it->second.lastApply).count() >= interval) {
+            it->second.lastApply = now;
+            // GUARD only sticky (Buff) buffs; heal/damage re-apply freely (momentary).
+            ApplyTargetEffect(id, targetID, spellID, kind == CasterConsent::SpellKind::Buff);
+            return SelfCast::Applied;
+        }
+        return SelfCast::Refreshed;   // winning but paced out this tick (transparent)
+    }
+
+    void TargetCastReconcile() {
+        if (g_targetCast.empty()) return;
+        const auto now = SelfClock::now();
+        // Same release window as SelfCastReconcile: out-wait the worst-case
+        // round-robin + suppression gap so a still-winning rule is never torn down.
+        const float suppress   = std::max(0.0f, Config::g_suppressWindow.load());
+        const float partySize  = static_cast<float>(Followers::g_active.size() + 1);
+        const float releaseSec = std::max(2.0f, suppress * 1.12f + 0.133f * partySize + 0.5f);
+        std::vector<RE::FormID> done;
+        for (auto& [id, tc] : g_targetCast) {
+            auto* f = RE::TESForm::LookupByID<RE::Actor>(id);
+            auto* t = RE::TESForm::LookupByID<RE::Actor>(tc.target);
+            const bool gone  = !f || !f->Is3DLoaded() || !t || !t->Is3DLoaded() || t->IsDead();
+            const bool stale = std::chrono::duration<float>(now - tc.lastFired).count() > releaseSec;
+            // TIME CAP by nature (shared ConcentrationHold numbers): hostile 1-4s,
+            // heal 6s, utility 4s. The cap RELEASES + re-streams; it only DISPELS for
+            // a sticky Buff (ward). A HEAL/DAMAGE cap is release-only -- the next
+            // winning tick re-creates the entry and re-applies immediately, so a
+            // still-needed heal FLOWS UNINTERRUPTED (marth's critical constraint).
+            float cap;
+            switch (tc.kind) {
+            case CasterConsent::SpellKind::Offense:
+                cap = ConcentrationHold(id, tc.target, tc.kind).holdSeconds; break;   // 1-4s
+            case CasterConsent::SpellKind::Heal:
+                cap = kConcHealCap;     break;                                         // 6s
+            default:
+                cap = kConcUtilityHold; break;                                        // Buff: 4s
+            }
+            const bool capped = std::chrono::duration<float>(now - tc.started).count() >= cap;
+            if (gone || stale || capped) {
+                if (t && tc.kind == CasterConsent::SpellKind::Buff)
+                    TargetCastEndActor(tc.target, tc.spell);   // dispel a lingering ward ONLY
+                done.push_back(id);
+            }
+        }
+        for (const auto id : done) g_targetCast.erase(id);
     }
 
     // AUTO TARGET INFERENCE for act.cast_target (marth). The board's default

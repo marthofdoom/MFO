@@ -76,6 +76,20 @@ namespace MFO::Actuation {
     enum class SelfCast : std::uint8_t { Declined, Refreshed, Applied };
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
+    // ON-TARGET DIRECT FORCE — CastSelfDirect generalized to a NON-self target
+    // (player / ally / foe). The KNOWN-WORKING, package-lock-proof delivery for a
+    // concentration cast: CastSpellImmediate straight onto the target + magicka
+    // deduct, NO package, so it beats a package-locked custom follower's §4.6 alias
+    // lock (Lucien 2F00591F's on-player heal that the package route [pkg]-DECLINED
+    // every tick). Registers one per-follower stream, paces the apply by fCastCooldown,
+    // and is time-bounded + released by TargetCastReconcile. Returns Applied/Refreshed/
+    // Declined (same semantics as CastSelfDirect). LoS + line-of-fire gate hostile
+    // offense. Callers: Logistics OOC cast dispatch (primary, direct-only) and
+    // ConcentrationCast's structural-decline fallback (combat, package-first). A self
+    // target is refused (use CastSelfDirect). Worker/main-thread; posts to main.
+    SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                              RE::Actor* a_target);
+
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any
     // lingering ward/buff effect so it cannot persist as a stuck gameplay effect.
@@ -84,6 +98,14 @@ namespace MFO::Actuation {
     // the spell). Worker context; marshals the dispel to the main thread. Call
     // once per tick, right before Loadout::Tick.
     void SelfCastReconcile();
+
+    // Per-tick reconcile for the ON-TARGET direct-force streams (CastTargetDirect):
+    // RELEASES a stream when its rule goes stale / the follower or target unloads /
+    // the per-kind time cap elapses (hostile 1-4s, heal 6s, utility 4s). DISPELS only
+    // a lingering STICKY buff (ward/fortify) off the target -- a heal/damage is
+    // release-only and re-streams uninterrupted. Call once per tick, beside
+    // SelfCastReconcile. Worker context; marshals any dispel to the main thread.
+    void TargetCastReconcile();
 
     // Drop every self-cast (and AUTO fan-out pacing) channel on revert/load. No
     // engine call -- the world is being replaced, and the self-cast holds no
@@ -110,19 +132,11 @@ namespace MFO::Actuation {
     // condition (Candlelight) fan to the whole party regardless.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold = 1.0f);
 
-    // BOUNDED CONCENTRATION STREAM at a MANUAL/single target — public so BOTH the
-    // combat Fire path (CastOn's concentration fork) AND the out-of-combat
-    // Logistics cast dispatch route a concentration cast at a NON-SELF target
-    // (player, ally, foe) through the SAME bounded package stream: hostile 1-4 s
-    // (per-follower Temperament, cut the instant a teammate crosses the line of
-    // fire), heal until the target tops off (capped 6 s), utility a capped 4 s
-    // hold; LoS-gated, cooldown-paced, CasterConsent-latched. A SELF target is
-    // intercepted inside — routed to CastSelfDirect when bCastSelf is on, else a
-    // legible decline — so a self-concentration cast never touches the (foe-QNAM)
-    // package. Requires bForceCastOnMiss + bUsePackages (like combat); with either
-    // off it fails legibly and the caller falls through. Main-thread / worker.
-    Outcome CastConcentrationAt(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                                RE::Actor* a_target);
+    // (COMBAT concentration at a single target is served internally by CastOn's
+    // concentration fork -> ConcentrationCast, the bounded PACKAGE stream, which now
+    // FALLS BACK to CastTargetDirect on a §4.6 structural decline. OUT OF COMBAT the
+    // Logistics dispatch delivers concentration through CastTargetDirect directly --
+    // no package at all -- see that function above.)
 
     // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired

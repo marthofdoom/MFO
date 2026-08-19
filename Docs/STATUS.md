@@ -116,16 +116,18 @@
 >   probe: the deck LATENCY number (force-dispatch→ward-up ms by weapon class). Robust authoring pattern:
 >   proactive "ward WHILE threatened" held as a stream, not reactive race.
 > - Also owed: Nexus bbcode 1.0.62→64; Progression Add-On release + kit; MAP.md full refresh.
-> - **CONCENTRATION (UNIFIED v1.0.6x — self, player, ally, foe all work):** the bounded stream
->   (`ConcentrationCast`) now backs BOTH combat AND out-of-combat. Combat `CastOn` and OOC Logistics both
->   route every NON-self concentration cast through the SAME public `Actuation::CastConcentrationAt`
->   (hostile 1-4s LoF-gated / heal-until-topped 6s / utility 4s), IFF bForceCastOnMiss+bUsePackages ON.
->   The old OOC `healStream` instant-apply stopgap (ff0cb48) is REMOVED. **Self-concentration is NOT
->   barred** — INVARIANT #67 was REVOKED (2026-07-22); a self concentration cast routes to
->   `CastSelfDirect` (direct-apply, no package/QNAM, gated by bCastSelf), hard-capped in `SelfCastReconcile`
->   by nature: self HEAL → `kConcHealCap` (6s "until topped"); self WARD/UTILITY → `kConcSelfUtilityCap`
->   (15s, marth — not the 4s package hold, which would only flicker a non-rooting self ward). FF self buffs
->   keep authored duration. AUTO
+> - **CONCENTRATION (UNIFIED v1.0.6x — self, player, ally, foe; PACKAGE-LOCK-PROOF):** OOC delivery is now
+>   the **known-working DIRECT FORCE** (`Actuation::CastTargetDirect` = `CastSpellImmediate` onto the target
+>   + magicka deduct, NO package), so a **package-locked custom follower (Lucien 2F00591F) actually heals
+>   the player/ally and damages the foe** — the package route c539257 tried `§4.6`-DECLINED every tick and
+>   his on-player heal never landed (deck fail, build 5f8e873; that RC never shipped). Bounded/released by
+>   `TargetCastReconcile` (registry `g_targetCast`): hostile 1-4s LoS+LoF-gated / heal 6s cap but re-applies
+>   while wounded / utility 4s; **dispel-on-release is STICKY(ward)-ONLY so a heal flows uninterrupted.**
+>   COMBAT keeps the animated PACKAGE (`ConcentrationCast`) but FALLS BACK to `CastTargetDirect` on a `§4.6`
+>   decline (locked followers deliver in combat too). The old OOC `healStream` stopgap (ff0cb48) and the
+>   c539257 `CastConcentrationAt` package wrapper are both REMOVED. **Self-concentration NOT barred** (#67
+>   REVOKED): self → `CastSelfDirect`, capped in `SelfCastReconcile` — HEAL `kConcHealCap` 6s / WARD
+>   `kConcSelfUtilityCap` 15s (marth), dispel STICKY-only, FF self buffs keep authored duration. AUTO
 >   (`CastAuto`) keeps its instant-apply broadcast for concentration (one package stream can't fan to N —
 >   see report). Old "not working" report predates 1.0.53.
 > - **THEN roadmap:** town update (#31), then the Roster addon (2nd ESL).

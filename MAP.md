@@ -216,17 +216,28 @@ releases **by eviction** with a non-actor XMarker.
   `act.cast_self` branch (out-of-combat, `selfPkg`). **SAME-TIME-LIMIT self cap
   (`SelfCastReconcile`, CONCENTRATION-ONLY):** a self-cast concentration channel is
   hard-capped by nature, then released + re-streamed on the next winning tick —
-  **HEAL → `kConcHealCap` (6 s)** "until topped" (matches every non-self heal stream;
-  dispelling a restore-Health effect is a no-op, re-stream seamless); **WARD/UTILITY →
-  `kConcSelfUtilityCap` (15 s)** (marth's call — NOT the 4 s package hold: CastSelfDirect
-  doesn't root, so a short cap only FLICKERS a self ward; 15 s bounds a stuck ward with
-  negligible flicker). An **FF self buff keeps its authored duration** (the NO-time-cap
-  fix — capping FF re-broke the mid-duration dispel churn; an un-rooted FF buff has no
-  rooting to release on a fixed cadence). **v1.0.6x UNIFY:** the Logistics immediate path no longer SKIPS a
-  concentration ward nor runs the `healStream` direct-apply stopgap (ff0cb48, REMOVED):
-  **every NON-self concentration cast now routes to `Actuation::CastConcentrationAt`**
-  (the bounded package stream — see below), exactly like combat. So OOC and combat
-  share one concentration mechanism for all of self / player / ally / foe.
+  **HEAL → `kConcHealCap` (6 s)**; **WARD/UTILITY → `kConcSelfUtilityCap` (15 s)**
+  (marth's call — NOT the 4 s package hold: CastSelfDirect doesn't root, so a short cap
+  only FLICKERS a self ward). **DISPEL-on-release is STICKY(Buff)-ONLY** — a HEAL/damage
+  is release-only and NEVER dispelled (it leaves nothing and dispelling would interrupt
+  a still-needed heal; this is why the 6 s heal cap cannot be marth's "not healing
+  himself"). An **FF self buff keeps its authored duration** (the NO-time-cap fix).
+- **OOC concentration = DIRECT FORCE, no package (`CastTargetDirect`).** The
+  Logistics OOC dispatch delivers EVERY non-self concentration cast (player/ally/foe)
+  through `Actuation::CastTargetDirect` — `CastSpellImmediate` straight onto the target
+  + magicka deduct, the SAME known-working force `CastSelfDirect` uses, touching NO
+  package. This is the fix for the field regression c539257 caused: routing OOC through
+  the package `§4.6`-DECLINED every tick for a **package-locked custom follower**
+  (Lucien 2F00591F, prio-80 quest owns the cast alias), so his on-PLAYER heal never
+  landed. Bounded/released by `TargetCastReconcile` (registry `g_targetCast`, one stream
+  per follower): hostile 1-4 s (LoS + line-of-fire gated in `CastTargetDirect`), heal
+  6 s cap but **re-applies while the HP rule wins** so a wounded target tops up, utility
+  4 s; dispel-on-release **sticky(Buff)-ONLY**. `TargetCastReconcile` runs each tick in
+  `Diagnostics.cpp` beside `SelfCastReconcile`; both cleared in `ClearSelfCasts`. SELF
+  stays on `CastSelfDirect`; self-with-gate-off is skipped legibly (never direct-applied
+  behind bCastSelf). COMBAT still uses the package (`ConcentrationCast`) but now FALLS
+  BACK to `CastTargetDirect` on a `§4.6` structural decline, so a package-locked follower
+  delivers in combat too while non-locked keep the animated package path.
 - **DEAD/superseded: the package self-route.** `Packages::CastSelf`, `Begin`'s self
   branch, command-quest **alias 2** (`kAliasCommandSelfActor` → `MFO_CastPackageSelf`,
   Forms `0x835`), `SetSelfSpell`, `HolderActorAlias`/`HolderPackage`'s self side, and
@@ -240,7 +251,9 @@ releases **by eviction** with a non-actor XMarker.
   by shared `TESPackage::refCount` (`:790`); multi-holder needs per-verb records at
   0x821+. **Concentration bounding** now lives in ONE helper `ConcentrationHold(id,
   targetID, kind)` (Actuation.cpp anon, hostile 1-4s ffWatch / heal 6s healWatch /
-  utility 4s), shared by `ConcentrationCast` and the self-heal cap.
+  utility 4s), shared by `ConcentrationCast` (package stream) and `TargetCastReconcile`
+  (direct-force stream). Note the FOE package `§4.6`-DECLINES for package-locked custom
+  followers — `ConcentrationCast` falls back to `CastTargetDirect` (direct force) there.
 - `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1380-1623`)
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and
@@ -263,19 +276,24 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`:110`) via `Packages::CastAt`.
   Off-AE the whole path declines transparently (#67) so vanilla AI keeps casting.
-- `ConcentrationCast` (anon) = the bounded stream (self→`CastSelfDirect`; non-self→
-  `Packages::CastAt` with a `ConcentrationHold`). **`CastConcentrationAt` (PUBLIC, thin
-  wrapper, Actuation.h)** exposes it so `Logistics` OOC cast dispatch routes EVERY
-  non-self concentration cast through the SAME stream as combat (replacing the removed
-  `healStream` stopgap). Requires bForceCastOnMiss+bUsePackages; `CasterConsent::Want`
-  is a combat-hook mirror — inert-but-harmless OOC, the package does the work.
+- `ConcentrationCast` (anon, COMBAT) = the bounded PACKAGE stream (self→`CastSelfDirect`;
+  non-self→`Packages::CastAt` with a `ConcentrationHold`), then **FALLS BACK to
+  `CastTargetDirect`** on a `§4.6` structural decline (package-locked follower) so it
+  delivers regardless. `CasterConsent::Want` is a combat-hook mirror.
+- `CastTargetDirect` (PUBLIC) = `CastSelfDirect` generalized to a NON-self target: the
+  known-working DIRECT FORCE (`CastSpellImmediate` onto the target + magicka deduct, NO
+  package → beats the `§4.6` lock). Registry `g_targetCast`, paced by fCastCooldown,
+  bounded/released by `TargetCastReconcile`. Callers: **Logistics OOC dispatch (primary,
+  direct-only — no package attempt OOC, marth's ruling)** and `ConcentrationCast`'s
+  combat fallback. LoS+LoF gate hostile offense. (The c539257 `CastConcentrationAt`
+  package wrapper was REMOVED — it caused the Lucien OOC-heal regression.)
 - `CastAuto` (PUBLIC, before `Fire`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
   (`Logistics.cpp:~4098`). On that OOC path a **non-AUTO** resolved `cast_target`
   now routes by nature: a **CONCENTRATION** spell (any non-self target) is
-  intercepted FIRST → `CastConcentrationAt` (bounded stream); the rest is
+  intercepted FIRST → `CastTargetDirect` (direct force, package-lock-proof); the rest is
   FIRE-AND-FORGET, routed by `CasterConsent::ClassifySpell` + foe test — a **hostile
   FF spell aimed at a foe** takes `Packages::CastAt` (the animated alias-0 foe
   package); a **beneficial FF spell OR an ally/player target** is applied DIRECTLY to
