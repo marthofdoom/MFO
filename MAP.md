@@ -243,7 +243,15 @@ releases **by eviction** with a non-actor XMarker.
   each beat explicitly applies one second's worth of every value-modifier effect
   (beneficial clamped to damage taken, detrimental as a plain AV hit); wards/lights/
   non-VM archetypes keep the plain call. Wired into `ApplySelfEffect`,
-  `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`. Bounded/
+  `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`. **PRESENTATION CONTRACT
+  (`SustainConcentrationEffect`, dc856ea):** the plain call attaches ONCE per stream;
+  each beat then pins a real `duration` + resets `elapsedSeconds` on that single
+  ActiveEffect (instance-local, never MGEF mutation) so the HUD shows ONE sustained
+  entry and the healing shader plays continuously (effect VFX is IN scope — only the
+  caster POSE is deferred). Momentary kinds get `magnitude=0` on the sustained effect
+  (beats stay the sole HP source; no double-heal); wards keep authored magnitude.
+  Momentary cosmetic effect dispels at END-of-stream (stale/gone/switch) only — a
+  cap-only release keeps the one HUD entry alive across re-streams. Bounded/
   released by `TargetCastReconcile` (registry `g_targetCast`, one stream per follower):
   hostile 1-4 s (LoS + line-of-fire re-checked on EVERY apply in `CastTargetDirect`),
   heal 6 s cap but **re-applies while the HP rule wins** so a wounded target tops up,

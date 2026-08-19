@@ -1055,9 +1055,11 @@ namespace MFO::Actuation {
         //                  same call every magicka deduct uses).
         // Non-value-modifier archetypes (ward/light/paralyze/script) keep the
         // CastSpellImmediate apply -- their semantics are not per-second AV
-        // ticks. The plain call stays alongside for VFX + those archetypes;
-        // double-application cannot overheal (clamped) and is ~0 for the rest
-        // (the premise above). Authored magnitude, no skill/perk scaling
+        // ticks. The plain call now runs ONCE PER STREAM (the sustain fix --
+        // see SustainConcentrationEffect below) to attach the single visible
+        // effect; its VM magnitudes are zeroed there, so double-application is
+        // impossible by construction (and the heal clamp stands regardless).
+        // Authored magnitude, no skill/perk scaling
         // (matches the flat per-second cost the deduct charges). A dual-value
         // modifier applies its PRIMARY AV only (secondAVWeight has no verified
         // binding in this CommonLib rev -- residual, rare for concentration).
@@ -1102,6 +1104,56 @@ namespace MFO::Actuation {
                              healed, harmed, a_spell->GetFormID());
         }
 
+        // ── THE SUSTAIN (presentation): ONE ActiveEffect per stream ──────────
+        // Field dc856ea: HP climbs (the beats work), but re-invoking
+        // CastSpellImmediate EVERY beat spawned a FRESH duration-0 ActiveEffect
+        // each ~1 s -- marth's Active-Effects HUD showed a rapid-fire stack of
+        // momentary heals, and the healing shader never sustained (it dies with
+        // each short effect). SCOPE: only the caster POSE animation is deferred
+        // (post-town); the target-side effect VFX is IN SCOPE and must display.
+        // So a forced concentration stream now attaches its effect at most ONCE
+        // (stream start / spell-or-target change) and SUSTAINS that single
+        // ActiveEffect: each beat pins a real `duration` (the stream's window)
+        // and resets `elapsedSeconds` -- instance-local writes on the live AE
+        // (the same fields the DoT-recast logic already reads at :1419), NEVER
+        // a shared-form (MGEF/SpellItem) mutation. One HUD entry; the effect
+        // shader plays for the effect's whole (rolling) life.
+        //
+        // MOMENTARY kinds (heal/damage -- a_zeroMagnitude TRUE): the sustained
+        // effect's `magnitude` is zeroed, so whatever the engine does or does
+        // not tick on a force-sustained channel effect contributes ~nothing --
+        // the explicit RestoreActorValue beats (ApplyConcentrationBeat) stay
+        // the ONE deterministic source of HP change; no double-heal possible.
+        // A concentration WARD/BUFF (a_zeroMagnitude FALSE) keeps its authored
+        // magnitude -- zeroing would zero the ward itself -- and only gets the
+        // duration sustain.
+        //
+        // Returns TRUE if a live effect for this spell was found + refreshed
+        // (the caller must NOT re-cast); FALSE -> the caller attaches one via
+        // CastSpellImmediate, then calls this again to pin it. If the engine
+        // refuses the sustain (expires the effect regardless of the pinned
+        // duration -- e.g. a no-duration-flagged MGEF), the find simply fails
+        // on the next beat and the caller re-attaches: graceful fallback to
+        // the previous per-beat presentation, never a functional loss.
+        // MAIN THREAD only (walks the live active-effect list).
+        bool SustainConcentrationEffect(RE::Actor* a_target, RE::SpellItem* a_spell,
+                                        float a_window, bool a_zeroMagnitude) {
+            auto* mt = a_target ? a_target->AsMagicTarget() : nullptr;
+            if (!mt || !a_spell) return false;
+            auto* list = mt->GetActiveEffectList();
+            if (!list) return false;
+            bool found = false;
+            for (auto* ae : *list) {
+                if (!ae || ae->spell != a_spell) continue;
+                ae->duration       = a_window;   // engine-tracked: ONE sustained HUD entry
+                ae->elapsedSeconds = 0.0f;       // rolling refresh, one beat at a time
+                if (a_zeroMagnitude)
+                    ae->magnitude = 0.0f;        // cosmetic only -- the beats do the HP
+                found = true;
+            }
+            return found;
+        }
+
         // Apply the effect + spend magicka for ONE fire (main thread). §5.3:
         // CastSpellImmediate spends nothing (§0.22), so deduct the real cost.
         void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID) {
@@ -1141,12 +1193,25 @@ namespace MFO::Actuation {
                 auto* inst = a->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
-                // FORCED CONCENTRATION: the plain call applies ~0 of a per-
-                // second magnitude (no channel) -- apply this beat's worth
-                // explicitly (see ApplyConcentrationBeat).
-                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
-                    ApplyConcentrationBeat(a, sp, a_id);
+                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                    // ONE SUSTAINED EFFECT, not a per-beat re-cast (the HUD-churn
+                    // fix -- see SustainConcentrationEffect). Attach once, then
+                    // refresh the same ActiveEffect each beat; the explicit beat
+                    // below does the real HP work. Window = the self stream's cap
+                    // (heal 6 s / ward-utility 15 s) so the single entry bridges
+                    // even a magicka-starved caster's sparse beats.
+                    const auto  kind   = CasterConsent::ClassifySpell(sp);
+                    const bool  zero   = kind != CasterConsent::SpellKind::Buff;
+                    const float window = kind == CasterConsent::SpellKind::Heal
+                                             ? kConcHealCap : kConcSelfUtilityCap;
+                    if (!SustainConcentrationEffect(a, sp, window, zero)) {
+                        inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);   // attach ONCE
+                        SustainConcentrationEffect(a, sp, window, zero);                // then pin it
+                    }
+                    ApplyConcentrationBeat(a, sp, a_id);   // the deterministic HP work
+                } else {
+                    inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
+                }
                 const float cost  = sp->CalculateMagickaCost(a);
                 // #6: clamp to the current pool so a deduct never drives magicka
                 // negative (AUTO/self validate cost against ONE worker snapshot).
@@ -1208,14 +1273,27 @@ namespace MFO::Actuation {
                 auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
-                inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
-                // FORCED CONCENTRATION: the plain call applies ~0 of a per-second
-                // magnitude (no channel sustains the ActiveEffect) -- apply this
-                // beat's worth explicitly (see ApplyConcentrationBeat above; the
-                // b63beb9 field A/B: magicka drained, HP flat on self AND player).
-                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                    // FORCED CONCENTRATION: attach ONCE, sustain ONE ActiveEffect
+                    // (HUD entry + shader), and let the explicit beat below do the
+                    // real HP/damage work -- the plain call applies ~0 of a per-
+                    // second magnitude (b63beb9 A/B) and a per-beat re-cast churns
+                    // the HUD (dc856ea). Window by kind: heal 6 s bridges sparse
+                    // beats; offense/utility 4 s covers their caps.
+                    const auto  kind   = CasterConsent::ClassifySpell(sp);
+                    const bool  zero   = kind != CasterConsent::SpellKind::Buff;
+                    const float window = kind == CasterConsent::SpellKind::Heal
+                                             ? kConcHealCap : kConcUtilityHold;
+                    if (!SustainConcentrationEffect(tgt, sp, window, zero)) {
+                        // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, once.
+                        inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
+                        SustainConcentrationEffect(tgt, sp, window, zero);
+                    }
                     ApplyConcentrationBeat(tgt, sp, a_casterID);
+                } else {
+                    // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
+                    inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
+                }
                 const float cost  = sp->CalculateMagickaCost(caster);
                 const float spend = avo ? std::min(cost, before) : 0.0f;   // #6: never negative
                 if (avo && spend > 0.0f)
@@ -1230,10 +1308,13 @@ namespace MFO::Actuation {
             });
         }
 
-        // RELEASE a target stream (main thread): dispel our lingering ward/buff off
-        // the TARGET. Called ONLY for sticky (Buff) kinds -- a heal/damage leaves
-        // nothing to release and must never be dispelled (it would rip a still-needed
-        // effect and stall the heal). Mirrors SelfCastEndActor, on the target actor.
+        // RELEASE a target stream (main thread): dispel our lingering ward/buff --
+        // and, since the sustain fix, the magnitude-0 SUSTAINED cosmetic effect a
+        // momentary stream leaves -- off the TARGET. Safe for heals now: the HP
+        // comes from the explicit beats, so dispelling the cosmetic effect can
+        // never stall a heal. Callers gate WHEN (Buff: any release; momentary:
+        // end-of-stream / switch only, never a cap-only re-stream). Mirrors
+        // SelfCastEndActor, on the target actor.
         void TargetCastEndActor(RE::FormID a_targetID, RE::FormID a_spellID) {
             MainThread::Post([a_targetID, a_spellID] {
                 if (auto* t = RE::TESForm::LookupByID<RE::Actor>(a_targetID))
@@ -1318,13 +1399,24 @@ namespace MFO::Actuation {
                 auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
-                // FORCED CONCENTRATION under AUTO: same false-premise fix as the
-                // manual streams -- the plain call applies ~0 of a per-second
-                // magnitude, so the pulse's worth is applied explicitly (the AUTO
-                // "group pulse" for concentration is otherwise a no-op heal).
-                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+                if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                    // FORCED CONCENTRATION under AUTO: same contract as the manual
+                    // streams -- ONE sustained effect per fanned target (the 6s/4s
+                    // window bridges the fCastCooldown re-fan, so the HUD shows a
+                    // continuous entry, not a pulse stack) + the explicit beat for
+                    // the real HP/damage (the plain call applies ~0 per second).
+                    const auto  kind   = CasterConsent::ClassifySpell(sp);
+                    const bool  zero   = kind != CasterConsent::SpellKind::Buff;
+                    const float window = kind == CasterConsent::SpellKind::Heal
+                                             ? kConcHealCap : kConcUtilityHold;
+                    if (!SustainConcentrationEffect(target, sp, window, zero)) {
+                        inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
+                        SustainConcentrationEffect(target, sp, window, zero);
+                    }
                     ApplyConcentrationBeat(target, sp, a_casterID);
+                } else {
+                    inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
+                }
                 const float cost  = sp->CalculateMagickaCost(caster);
                 // #6: clamp to the current pool so a deduct never drives magicka
                 // negative (AUTO validates N casts against ONE worker snapshot).
@@ -1592,12 +1684,18 @@ namespace MFO::Actuation {
                 }
             }
             if (gone || stale || concCapped) {
-                // RELEASE. DISPEL only a lingering STICKY buff (Buff = ward/fortify)
-                // so it cannot persist as a stuck gameplay effect. A HEAL/DAMAGE is
-                // NEVER dispelled -- it leaves nothing to release and dispelling would
-                // interrupt a still-needed heal. There is NO equip to undo (the self-
-                // cast never holds the spell -- the AI-spam CTD).
-                if (a && kind == CasterConsent::SpellKind::Buff) SelfCastEndActor(id, sc.spell);
+                // RELEASE. DISPEL a lingering STICKY buff (Buff = ward/fortify,
+                // any release) so it cannot persist as a stuck gameplay effect --
+                // AND, since the sustain fix, a momentary stream's COSMETIC
+                // sustained effect when the stream truly ENDED (stale/rule-false):
+                // that effect is magnitude-0 (SustainConcentrationEffect), so
+                // dispelling it can no longer interrupt a heal -- the HP came
+                // from the beats, which stopped with the rule. A CAP-only
+                // release re-streams next tick and keeps its ONE sustained HUD
+                // entry alive (no flicker at cap boundaries). There is NO equip
+                // to undo (the self-cast never holds the spell -- the AI-spam CTD).
+                if (a && (kind == CasterConsent::SpellKind::Buff || stale))
+                    SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
             }
         }
@@ -1664,12 +1762,14 @@ namespace MFO::Actuation {
 
         const auto now = SelfClock::now();
         auto it = g_targetCast.find(id);
-        // Spell OR target switched -> end the old stream first (dispel a lingering
-        // ward only; a heal/damage leaves nothing) so shaders/buffs never stack.
+        // Spell OR target switched -> end the old stream first, ALWAYS: a ward
+        // must not linger, and since the sustain fix a momentary stream leaves
+        // a magnitude-0 SUSTAINED cosmetic effect on the OLD target whose glow
+        // must die with its stream (dispelling it cannot interrupt a heal --
+        // the HP came from the beats). Shaders/buffs never stack or stray.
         if (it != g_targetCast.end() &&
             (it->second.spell != spellID || it->second.target != targetID)) {
-            if (it->second.kind == CasterConsent::SpellKind::Buff)
-                TargetCastEndActor(it->second.target, it->second.spell);
+            TargetCastEndActor(it->second.target, it->second.spell);
             g_targetCast.erase(it);
             it = g_targetCast.end();
         }
@@ -1737,8 +1837,16 @@ namespace MFO::Actuation {
             }
             const bool capped = std::chrono::duration<float>(now - tc.started).count() >= cap;
             if (gone || stale || capped) {
-                if (t && tc.kind == CasterConsent::SpellKind::Buff)
-                    TargetCastEndActor(tc.target, tc.spell);   // dispel a lingering ward ONLY
+                // DISPEL a sticky ward on ANY release; a momentary stream's
+                // magnitude-0 SUSTAINED effect (the sustain fix) only when the
+                // stream truly ENDED (gone/stale) -- a CAP-only release
+                // re-streams next tick, and keeping the effect alive keeps ONE
+                // continuous HUD entry across cap boundaries. Dispelling the
+                // cosmetic effect cannot interrupt a heal: the HP comes from
+                // the beats, which stop with the rule.
+                const bool endOfStream = gone || stale;
+                if (t && (tc.kind == CasterConsent::SpellKind::Buff || endOfStream))
+                    TargetCastEndActor(tc.target, tc.spell);
                 done.push_back(id);
             }
         }
