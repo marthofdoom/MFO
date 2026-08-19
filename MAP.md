@@ -249,28 +249,26 @@ releases **by eviction** with a non-actor XMarker.
   owns delivery + per-second cost + bounds only. ONE sustained HUD entry, shader plays
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
-  **SELF-DELIVERY, ARCHETYPE-AGNOSTIC (`EffectCasterFor` + `ReattributeEffectCaster`, marth
-  "read the SPEL"):** a Self-delivery spell's effect lands on its magic-caster's OWNER, not
-  the passed `target` ref — so any Self spell aimed at a non-self target (heal, ward,
-  flesh/armor, waterbreathing, invisibility, muffle, fear, DoT, buff) must be SELF-CAST BY
-  THE TARGET or it lands on the follower (deck 2026-08-19: Mysticism Fast Healing
-  `0002F3B8` = Concentration+Self; player never healed + `conc effect ATTACHED` every beat
-  because the sustain searched the player's effect list while the effect was on Lucien).
-  All five direct-apply sites (1) route `CastSpellImmediate` through
-  `EffectCasterFor(follower,target,spell)->GetMagicCaster` — the TARGET's caster for Self
-  delivery, the follower's otherwise — then (2) `ReattributeEffectCaster(target,spell,
-  follower)` re-points every fresh `ae->caster` back to the follower so the ENGINE channels
-  the FOLLOWER's rate (skill/perks/effectiveness), every archetype and every effect of a
-  multi-effect spell, persisting across the sustain beats (NO `magnitudeOverride`, which
-  would collapse multi-effect; NO manual magnitude math), then (3) `RefundMagicka(target,
-  before)` adds back the magicka the engine charged the TARGET — `CastSpellImmediate` deducts
-  from the magic-caster's OWNER (ENGINE_NOTES §0.9; §0.22's "free" was PACKAGE casts), so the
-  re-routed self-cast would drain the player/ally (deck 2026-08-19 falsified "blame stays
-  caster ⇒ follower pays"); the FOLLOWER still pays via its own hand-deduct (§5.3 intact).
-  THREE ROLES: lands-on-target / follower-magnitude / follower-pays-cost. Delivery-type +
-  casting-type driven only; a genuine `cast_self` (target==follower) and normal
-  target-delivery (follower already the caster) are unchanged (why self-Candlelight always
-  worked). **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
+  **SELF-DELIVERY off-self = REAL-EFFECT APPLICATION, follower-attributed, player uninvolved
+  (`ApplyEffectsFromCaster` → `RE::MagicTarget::AddTarget`, marth "read the SPEL"):** a Self
+  spell's effect can only land on its magic-caster's OWNER, so it cannot be CAST at another
+  actor. MFO applies the real effect(s) onto the target's `MagicTarget` with `caster =
+  follower` via the engine's own per-effect entry `AddTarget` (NOT the AI package — the ban
+  is the package, not real-effect application). THREE ROLES at once, every archetype
+  (heal/ward/flesh/waterbreathing/buff) + every effect of a multi-effect spell: (1) lands on
+  the target (AddTarget ignores Self delivery); (2) follower's rate — `caster=follower`, only
+  the authored base magnitude passed, engine owns skill/perk scaling (NO `magnitudeOverride`,
+  NO hand-rolled magnitude); (3) player NEVER casts / NEVER pays / needs ZERO magicka — the
+  follower pays via its own hand-deduct only (§5.3 intact). The AE carries the spell so
+  `SustainConcentrationEffect` finds+re-arms it — ONE sustained effect, no per-beat re-attach.
+  `NeedsCasterAttributedDelivery(spell,follower,target)` gates it (Self delivery + non-self
+  target); genuine `cast_self` (target==follower) and non-Self deliveries cast normally from
+  the follower. All five sites branch on it: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO),
+  `CastOn` force-half, two Logistics FF casts. **REJECTED (deck a8d641bb):** making the TARGET
+  self-cast — the player became the magic caster, so the engine drained the PLAYER's magicka
+  to empty and the heal stopped at 0 player-magicka; `RefundMagicka`/`ReattributeEffectCaster`
+  band-aids REMOVED. History: c875048 healed Lucien not the player; wave-1 target-self-cast
+  drained the player; this AddTarget pivot decouples the player entirely. **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
   the RECIPIENT's Health hits ~full — read the intended heal target (`a_target`/follower for
   self-heal), NOT the follower or the re-routed mechanical caster — enforced in
   `CastTargetDirect`/`CastSelfDirect` (end+dispel+decline, so OOC re-dispatch and combat both

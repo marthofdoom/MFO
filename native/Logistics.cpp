@@ -4388,11 +4388,11 @@ namespace MFO::Logistics {
                     // DELIVERY (marth: read the SPEL): CastSpellImmediate does NOT
                     // apply a SELF-delivery spell to `tgt` -- a Self spell lands on
                     // its caster's OWNER, so a beneficial Self heal aimed at the
-                    // player/ally must be self-cast BY the target (EffectCasterFor)
-                    // or it heals the FOLLOWER. Non-Self deliveries cast from the
-                    // follower onto `tgt` as before. No charge animation, but the
-                    // light/buff/heal lands. Spends no magicka, so gate on
-                    // affordability and deduct the cost by hand.
+                    // player/ally is applied onto the target from the FOLLOWER via
+                    // ApplyEffectsFromCaster (player never casts/pays); non-Self
+                    // deliveries cast from the follower onto `tgt`. No charge
+                    // animation, but the light/buff/heal lands. Spends no magicka,
+                    // so gate on affordability and deduct the follower's cost by hand.
                     // THREADING (#14): the engine cast MUST run on the MAIN thread --
                     // this block used to call CastSpellImmediate INLINE on the AddTask
                     // job worker (the prime suspect for the queued 1.5.x act.cast_target
@@ -4411,26 +4411,19 @@ namespace MFO::Logistics {
                         auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                         auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
                         if (!f || !t || !s) return;
-                        // Self-delivery -> the TARGET self-casts so the effect lands
-                        // on them (blame + magicka stay the follower).
-                        auto* ec = Actuation::EffectCasterFor(f, t, s);
-                        auto* caster = ec->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
-                        if (!caster) return;   // F4: no caster -> no cast, no deduct
+                        // Self-delivery -> apply the real effect(s) onto the target
+                        // with the FOLLOWER as caster (ApplyEffectsFromCaster): the
+                        // target never casts / never pays magicka. Non-Self casts
+                        // from the follower. Follower pays via its own deduct.
+                        const bool casterAttrib = Actuation::NeedsCasterAttributedDelivery(s, f, t);
                         auto* mavo = f->AsActorValueOwner();
                         const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                        // ROLE 3: a Self-delivery re-route makes the target the
-                        // engine's caster (§0.9) -- snapshot + refund so the ally
-                        // is not charged; the follower pays via its own deduct.
-                        const bool selfDeliv = ec != f;
-                        auto* tgtAvo = selfDeliv ? t->AsActorValueOwner() : nullptr;
-                        const float tgtBefore =
-                            tgtAvo ? tgtAvo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                        caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
-                        // Self-delivery re-route -> re-point the effect to the
-                        // FOLLOWER (follower's rate) AND refund the target.
-                        if (selfDeliv) {
-                            Actuation::ReattributeEffectCaster(t, s, f);
-                            if (tgtAvo) Actuation::RefundMagicka(t, tgtBefore);
+                        if (casterAttrib) {
+                            Actuation::ApplyEffectsFromCaster(t, s, f);
+                        } else {
+                            auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                            if (!caster) return;   // F4: no caster -> no cast, no deduct
+                            caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
                         }
                         const float c     = s->CalculateMagickaCost(f);
                         const float spend = mavo ? std::min(c, pool) : 0.0f;   // never negative
@@ -4468,21 +4461,18 @@ namespace MFO::Logistics {
                                 auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
                                 if (!f || !t || !s) return;
                                 // Delivery-aware (marth: read the SPEL): a Self-
-                                // delivery effect must be cast by its recipient.
-                                auto* ec = Actuation::EffectCasterFor(f, t, s);
-                                auto* caster = ec->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
-                                if (!caster) return;
+                                // delivery effect is applied onto the target from the
+                                // FOLLOWER (ApplyEffectsFromCaster), never cast by the
+                                // target. Non-Self casts from the follower.
+                                const bool casterAttrib = Actuation::NeedsCasterAttributedDelivery(s, f, t);
                                 auto* mavo = f->AsActorValueOwner();
                                 const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                                const bool selfDeliv = ec != f;   // ROLE 3: refund target if re-routed
-                                auto* tgtAvo = selfDeliv ? t->AsActorValueOwner() : nullptr;
-                                const float tgtBefore =
-                                    tgtAvo ? tgtAvo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                                caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
-                                // Self-delivery re-route -> follower is the caster + pays.
-                                if (selfDeliv) {
-                                    Actuation::ReattributeEffectCaster(t, s, f);
-                                    if (tgtAvo) Actuation::RefundMagicka(t, tgtBefore);
+                                if (casterAttrib) {
+                                    Actuation::ApplyEffectsFromCaster(t, s, f);
+                                } else {
+                                    auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                                    if (!caster) return;
+                                    caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
                                 }
                                 const float c     = s->CalculateMagickaCost(f);
                                 const float spend = mavo ? std::min(c, pool) : 0.0f;
