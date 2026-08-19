@@ -117,33 +117,50 @@ namespace MFO::Actuation {
     // equip/debt to undo (mirrors ClearForcedWeapons).
     void ClearSelfCasts();
 
-    // SELF-DELIVERY PROXY (marth's design, deck 4e6d4aa) -- CONCENTRATION SELF
-    // spells ONLY (scope narrowed by Fable review). MFO already channels a natively-
-    // aimed concentration spell onto an ally via the existing path (CastTargetDirect
-    // -> ApplyTargetEffect -> the follower's CastSpellImmediate + Sustain). So for a
-    // CONCENTRATION SELF spell aimed off-self, MFO fabricates a transient COPY with
-    // its casting style PRESERVED and only its DELIVERY flipped Self -> kTargetActor,
-    // then routes THAT through the existing path: the FOLLOWER casts it (his rate +
-    // his magicka), the effect channels onto the target, the PLAYER never casts /
-    // pays / needs magicka. FF Self spells (flesh/light/waterbreathing/invis/muffle)
-    // are NEVER proxied -- a proxy-keyed AE breaks SOURCE-keyed guards (the light
-    // "Active Lights" CTD, the early-strip of a shared long buff); they keep their
-    // prior path (the follower's plain CastSpellImmediate onto the target). Only a
-    // short, dispelled concentration stream may proxy.
-    //
-    // ProxyDeliverySpell resolves the spell to actually CAST: a_source itself for a
-    // self-cast, any non-Self delivery, OR any FF Self spell; the fabricated non-self
-    // proxy ONLY for a CONCENTRATION Self spell aimed off-self. Returns nullptr ONLY
-    // when a proxy was needed but both of the EXACTLY TWO dynamic slots are busy with
-    // other active sources -- the caller then SKIPS the cast (no unbounded cache).
-    // The two proxies are transient dynamic (0xFF__) forms, never serialized. MAIN
-    // THREAD only (form table); returns nullptr off-main (VR) so no form is created.
+    // CASTER-ATTRIBUTED SELF-DELIVERY (deck 4e6d4aa; SPLIT by casting type per Fable
+    // review). A SELF-delivery spell's effect lands on its magic-caster's OWNER
+    // (Docs/CAST-DELIVERY.md), so a follower casting a Self spell "at" an ally buffs
+    // the FOLLOWER, not the ally. When one is aimed off-self MFO delivers it so it
+    // lands on the intended target with the follower as caster -- but the MECHANISM
+    // splits by casting type (the casting STYLE is never converted, only the delivery
+    // mechanism chosen):
+    //   * CONCENTRATION -> the PROXY: fabricate a transient copy with delivery flipped
+    //     kSelf->kTargetActor and cast it through the existing concentration-on-others
+    //     path (CastTargetDirect -> ApplyTargetEffect -> follower CastSpellImmediate +
+    //     Sustain) so it CHANNELS. AddTarget cannot channel concentration (the heal
+    //     field failure), which is why the proxy exists.
+    //   * FIRE-AND-FORGET / instant -> ApplyEffectsFromCaster: apply the real
+    //     effect(s) onto the target's MagicTarget with caster = follower via the
+    //     engine's own MagicTarget::AddTarget. Correct for instant FF, and the landed
+    //     AE is keyed on the SOURCE spell (no proxy form) -> ShouldApplyTo's source-
+    //     keyed already-active scan recognises it (no light-respam CTD) and there is
+    //     no shared-proxy-slot hijack.
+    // Self-delivery aimed at SELF (target == follower) and every non-Self delivery are
+    // cast directly by the follower, unchanged.
+
+    // Apply a spell's REAL effect(s) onto a_target's MagicTarget with an explicit
+    // caster (the follower) via RE::MagicTarget::AddTarget -- the FF/instant Self
+    // delivery mechanism above (NOT the AI package). The effect lands on a_target,
+    // attributed to a_caster (its rate), keyed on the SOURCE spell; every effect of a
+    // multi-effect spell. MAIN THREAD (mutates the AE list). Returns true if applied.
+    bool ApplyEffectsFromCaster(RE::Actor* a_target, RE::SpellItem* a_spell,
+                                RE::Actor* a_caster);
+
+    // The spell to CAST for the CAST-path delivery: a transient non-self PROXY for a
+    // CONCENTRATION Self spell aimed off-self (delivery flipped kSelf->kTargetActor,
+    // casting style preserved); otherwise a_source unchanged (self-cast, any non-Self,
+    // or -- handled by ApplyEffectsFromCaster at the call site, never reaching a cast
+    // -- an FF Self spell). Returns nullptr ONLY when a concentration proxy was needed
+    // but both of the EXACTLY TWO dynamic slots are busy -> caller SKIPS the cast (no
+    // unbounded cache). Transient dynamic (0xFF__) forms, never serialized. MAIN
+    // THREAD only (form table); returns the source off-main (VR) so no form is created.
     RE::SpellItem* ProxyDeliverySpell(RE::SpellItem* a_source, RE::Actor* a_follower,
                                       RE::Actor* a_target);
 
-    // TRUE only for a CONCENTRATION + SELF-delivery spell aimed at a NON-self target
-    // (needs a proxy). FF Self spells, a self-cast (target == follower), and every
-    // non-Self delivery cast the source unchanged. Reads only the SPEL; any thread.
+    // TRUE when a SELF-delivery spell is aimed at a NON-self target (needs caster-
+    // attributed delivery -- proxy if concentration, AddTarget if FF). A self-cast
+    // (target == follower) and every non-Self delivery cast the source directly.
+    // Reads only the SPEL's Delivery; any thread.
     bool NeedsCasterAttributedDelivery(RE::SpellItem* a_spell, RE::Actor* a_follower,
                                        RE::Actor* a_target);
 

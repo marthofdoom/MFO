@@ -236,36 +236,41 @@ and combat `ConcentrationCast`). Public-build ally/player heals landed through i
 for a **Self** spell is not to invent delivery, and not to force-apply concentration — it is to
 give the existing path a spell it can aim.
 
-**SCOPE — the proxy is CONCENTRATION Self spells ONLY (Fable review + marth).** A proxy-keyed
-ActiveEffect defeats SOURCE-keyed guards, so proxying a **FF Self** spell REGRESSES it: a Self
-**light** (Candlelight/Magelight) fanned to an ally carries the proxy's FormID, so
-`ShouldApplyTo`'s source-keyed already-active scan misses it (and a light registers no MGEF, so
-`HasMagicEffect` misses too) → MFO re-casts every cooldown → the `Active Lights 57`
-ShadowSceneNode CTD; a long FF Self buff (Ebonyflesh ~120 s) on a shared slot is stripped early
-when the slot is reused. So **only a short, dispelled CONCENTRATION stream may proxy.** Every FF
-Self spell (flesh/light/waterbreathing/invis/muffle) keeps its **prior, already-working path** —
-the follower's plain `CastSpellImmediate(source, target)` (`ApplyEffectFromTo` / `CastOn`
-force-half / the two Logistics FF casts) — and **never touches `SelfDeliveryProxy`**.
-`NeedsCasterAttributedDelivery` now requires `delivery == kSelf` **AND** `castingType ==
-kConcentration` (AND non-self target); everything else, including all FF Self, returns the source
-from `ProxyDeliverySpell` and casts unchanged (why self-Candlelight always worked, and why a
-fanned Candlelight is FF-pathed, not proxied).
+**CASTER-ATTRIBUTED Self delivery SPLITS BY CASTING TYPE (Fable review).** For ANY Self spell
+aimed off-self (`NeedsCasterAttributedDelivery` = `delivery == kSelf` AND non-self target — FF
+*and* concentration), the effect must land on the target with the follower as caster; the casting
+STYLE is never converted, only the delivery MECHANISM is chosen:
 
-**The mechanism — a flipped-delivery PROXY, cast normally by the follower (marth's design,
-`Actuation::ProxyDeliverySpell` → `SelfDeliveryProxy`).** For a **concentration** Self spell aimed
-off-self MFO fabricates a transient COPY of the source with its **casting style PRESERVED**
-(concentration stays concentration) and **only its delivery flipped `kSelf → kTargetActor`**
-(`proxy->data = source->data; proxy->data.delivery = kTargetActor;` effects copied by pointer).
-The FOLLOWER then casts the proxy through the *unchanged* existing path. Because the proxy is
-TargetActor, the effect lands on the **target** (where `SustainConcentrationEffect` searches →
-FOUND + re-armed → **ONE sustained effect, no per-beat re-attach**), and because the **follower**
-is the caster it channels at HIS skill/perks (rate) and costs HIS magicka. The **PLAYER never
-casts, never pays, needs zero magicka.** Every effect of a multi-effect spell. Five sites branch
-on `ProxyDeliverySpell`: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s force-half,
-the two Logistics FF casts (the last three proxy only if handed a concentration Self spell, which
-their FF-only flows never are). The `FORCE-CAST … (self-delivery: aimed proxy from follower)` tag
-marks the proxy path. Stream-end dispel clears the proxy AE too (`TargetCastEndActor` →
-`SelfDeliveryProxy::ProxyFor`).
+- **FIRE-AND-FORGET / instant Self → `Actuation::ApplyEffectsFromCaster` (`MagicTarget::AddTarget`).**
+  Apply the real effect(s) straight onto the target's `MagicTarget` with `caster = follower` (the
+  engine's OWN per-effect entry — NOT the AI package). Correct for an instant FF buff, and the
+  landed AE is keyed on the **SOURCE spell** (no proxy form) — so `ShouldApplyTo`'s source-keyed
+  already-active scan recognises it (a fanned Candlelight is **not** re-cast every cooldown → no
+  `Active Lights 57` CTD) and there is **no shared-proxy-slot hijack**. This is the known-good
+  path for flesh (Stoneflesh/Ebonyflesh), lights (Candlelight/Magelight), waterbreathing, invis,
+  muffle — fanned via AUTO to the whole party, or aimed at one target. Each recipient GAINS the
+  buff (it lands on THEM, not the follower); the follower pays once per recipient.
+- **CONCENTRATION Self → the PROXY (`ProxyDeliverySpell` → `SelfDeliveryProxy`).** AddTarget
+  **cannot channel** a concentration effect (the heal field failure that spawned the proxy), so
+  instead MFO fabricates a transient COPY with its casting style PRESERVED and only its delivery
+  flipped `kSelf → kTargetActor` (`proxy->data = source->data; proxy->data.delivery = kTargetActor;`
+  effects copied by pointer), and the FOLLOWER casts the proxy through the **existing
+  concentration-on-others path** (`CastTargetDirect` → `ApplyTargetEffect` → follower
+  `CastSpellImmediate` + `SustainConcentrationEffect`). The effect lands on the target (where
+  Sustain searches → FOUND + re-armed → **ONE sustained effect, no per-beat re-attach**), channels
+  at the follower's rate, costs the follower's magicka. Stream-end dispel clears the proxy AE too
+  (`TargetCastEndActor` → `SelfDeliveryProxy::ProxyFor`).
+
+In BOTH mechanisms the **PLAYER/ally never casts, never pays, needs zero magicka**; the follower
+pays via its own hand-deduct (§5.3 intact). Why the split (do not re-merge): a proxy-keyed AE
+defeats SOURCE-keyed guards — proxying an FF **light** (Candlelight) fanned to an ally would carry
+the proxy's FormID, so the source-keyed already-active scan (and, since a light registers no MGEF,
+`HasMagicEffect`) misses it → re-cast every cooldown → `Active Lights 57` CTD, and a long FF Self
+buff on a shared slot is stripped early on slot reuse. So **FF Self uses AddTarget (source-keyed,
+safe); concentration Self uses the proxy (channels, short + dispelled).** Five sites dispatch on
+`NeedsCasterAttributedDelivery` + casting type: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO),
+`CastOn`'s force-half, the two Logistics FF casts. Log tags: `(self-delivery: applied from
+follower)` = FF AddTarget path; `(self-delivery: aimed proxy from follower)` = concentration proxy.
 
 **EXACTLY TWO transient dynamic SPEL slots — no unbounded cache.** `SelfDeliveryProxy::Get`
 reuses a slot for the same source, claims a free/idle slot (a slot frees `kProxyIdle` = **8 s**
@@ -291,9 +296,12 @@ session the 2 slots start empty and re-fabricate on demand.
 **RETIRED — do not resurrect:** (a) making the TARGET self-cast (deck a8d641bb: the PLAYER became
 the caster → engine drained the player's magicka to EMPTY, and a self-cast needs magicka so the
 heal STOPPED at 0 player-magicka; `RefundMagicka` around a `MainThread::Post`'d cast was a no-op —
-a concentration channel drains over later frames); (b) `MagicTarget::AddTarget` force-application
-from the follower (it does **not** channel — a force-applied concentration effect won't tick).
-**Flipping DELIVERY and reusing the working aimed-concentration path is the fix.**
+a concentration channel drains over later frames); (b) using `MagicTarget::AddTarget` for
+**concentration** (it does **not** channel — a force-applied concentration effect won't tick;
+that is why concentration Self uses the proxy). **AddTarget IS the correct mechanism for FF/instant
+Self** (it lands the instant effect, source-keyed) — it is only wrong for concentration. And
+proxying an FF Self spell is wrong (source-keyed-guard breakage). The split — **FF → AddTarget,
+concentration → proxy** — is the fix; do not merge the two branches.
 
 *Deck history:* c875048/47fd0de — the effect healed Lucien not the player (Self spell cast from
 the follower). Wave-1 (target-self-cast) landed on the player but drained the player. Wave-2

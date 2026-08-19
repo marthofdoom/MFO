@@ -4411,18 +4411,25 @@ namespace MFO::Logistics {
                         auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                         auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
                         if (!f || !t || !s) return;
-                        // Self-delivery -> cast a transient COPY with delivery flipped
-                        // Self->kTargetActor (ProxyDeliverySpell) so the FOLLOWER's own
-                        // cast lands it on the target; the target never casts / never
-                        // pays. Non-Self casts the source. Follower pays via its deduct.
-                        // nullptr = both proxy slots busy -> skip.
-                        auto* castSpell = Actuation::ProxyDeliverySpell(s, f, t);
-                        if (!castSpell) return;
+                        // CASTER-ATTRIBUTED SELF DELIVERY, split by casting type: a FF
+                        // Self buff aimed at the player/ally -> ApplyEffectsFromCaster
+                        // (AddTarget onto the target, follower as caster, keyed on the
+                        // source spell); a CONCENTRATION Self -> flipped-delivery PROXY;
+                        // non-Self -> cast the source. The target never casts / pays.
+                        const bool casterAttrib = Actuation::NeedsCasterAttributedDelivery(s, f, t);
+                        const bool conc =
+                            s->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
                         auto* mavo = f->AsActorValueOwner();
                         const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                        auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
-                        if (!caster) return;   // F4: no caster -> no cast, no deduct
-                        caster->CastSpellImmediate(castSpell, false, t, 1.0f, false, 0.0f, f);
+                        if (casterAttrib && !conc) {
+                            Actuation::ApplyEffectsFromCaster(t, s, f);   // FF Self buff -> lands on target
+                        } else {
+                            auto* castSpell = Actuation::ProxyDeliverySpell(s, f, t);   // conc-Self proxy | source
+                            if (!castSpell) return;   // conc-Self but both slots busy -> skip
+                            auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                            if (!caster) return;   // F4: no caster -> no cast, no deduct
+                            caster->CastSpellImmediate(castSpell, false, t, 1.0f, false, 0.0f, f);
+                        }
                         const float c     = s->CalculateMagickaCost(f);
                         const float spend = mavo ? std::min(c, pool) : 0.0f;   // never negative
                         if (mavo && spend > 0.0f)
@@ -4458,17 +4465,24 @@ namespace MFO::Logistics {
                                 auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                                 auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
                                 if (!f || !t || !s) return;
-                                // Delivery (marth's proxy design): a Self-delivery
-                                // spell is cast as a flipped-delivery COPY from the
-                                // FOLLOWER (ProxyDeliverySpell); non-Self casts the
-                                // source. nullptr = both proxy slots busy -> skip.
-                                auto* castSpell = Actuation::ProxyDeliverySpell(s, f, t);
-                                if (!castSpell) return;
+                                // Caster-attributed Self delivery split by casting
+                                // type (a hostile Self spell is rare, but stay uniform):
+                                // FF Self -> ApplyEffectsFromCaster; CONCENTRATION Self ->
+                                // proxy; non-Self -> cast the source.
+                                const bool casterAttrib = Actuation::NeedsCasterAttributedDelivery(s, f, t);
+                                const bool conc =
+                                    s->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
                                 auto* mavo = f->AsActorValueOwner();
                                 const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-                                auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
-                                if (!caster) return;
-                                caster->CastSpellImmediate(castSpell, false, t, 1.0f, false, 0.0f, f);
+                                if (casterAttrib && !conc) {
+                                    Actuation::ApplyEffectsFromCaster(t, s, f);
+                                } else {
+                                    auto* castSpell = Actuation::ProxyDeliverySpell(s, f, t);
+                                    if (!castSpell) return;   // conc-Self but both slots busy -> skip
+                                    auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                                    if (!caster) return;
+                                    caster->CastSpellImmediate(castSpell, false, t, 1.0f, false, 0.0f, f);
+                                }
                                 const float c     = s->CalculateMagickaCost(f);
                                 const float spend = mavo ? std::min(c, pool) : 0.0f;
                                 if (mavo && spend > 0.0f)
