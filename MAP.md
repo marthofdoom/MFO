@@ -262,10 +262,20 @@ releases **by eviction** with a non-actor XMarker.
   follower)` re-points every fresh `ae->caster` back to the follower so the ENGINE channels
   the FOLLOWER's rate (skill/perks/effectiveness), every archetype and every effect of a
   multi-effect spell, persisting across the sustain beats (NO `magnitudeOverride`, which
-  would collapse multi-effect; NO manual magnitude math). Blame + magicka stay the
-  follower. Delivery-type + casting-type driven only; a genuine `cast_self`
-  (target==follower) and normal target-delivery (follower already the caster) are unchanged
-  (why self-Candlelight always worked). Momentary
+  would collapse multi-effect; NO manual magnitude math), then (3) `RefundMagicka(target,
+  before)` adds back the magicka the engine charged the TARGET — `CastSpellImmediate` deducts
+  from the magic-caster's OWNER (ENGINE_NOTES §0.9; §0.22's "free" was PACKAGE casts), so the
+  re-routed self-cast would drain the player/ally (deck 2026-08-19 falsified "blame stays
+  caster ⇒ follower pays"); the FOLLOWER still pays via its own hand-deduct (§5.3 intact).
+  THREE ROLES: lands-on-target / follower-magnitude / follower-pays-cost. Delivery-type +
+  casting-type driven only; a genuine `cast_self` (target==follower) and normal
+  target-delivery (follower already the caster) are unchanged (why self-Candlelight always
+  worked). **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
+  the RECIPIENT's Health hits ~full — read the intended heal target (`a_target`/follower for
+  self-heal), NOT the follower or the re-routed mechanical caster — enforced in
+  `CastTargetDirect`/`CastSelfDirect` (end+dispel+decline, so OOC re-dispatch and combat both
+  stop) with a `TargetCastReconcile`/`SelfCastReconcile` backstop; 6 s cap is the time
+  backstop. HEAL only (a buff runs its window). Momentary
   sustained effect dispels at END-of-stream (stale/gone/switch) only — it genuinely
   channels, so the stream's end must cut it; a cap-only release keeps the one entry
   alive across re-streams. Evidence line "conc effect ATTACHED": once per stream =

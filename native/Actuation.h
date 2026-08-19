@@ -156,6 +156,16 @@ namespace MFO::Actuation {
     void ReattributeEffectCaster(RE::Actor* a_target, RE::SpellItem* a_spell,
                                  RE::Actor* a_follower);
 
+    // REFUND to a_actor the magicka the engine's `CastSpellImmediate` charged it
+    // (ENGINE_NOTES §0.9 — the direct cast deducts from the magic-caster's OWNER).
+    // ROLE 3 of the Self-delivery re-route: the TARGET self-casts, so the engine
+    // charges the TARGET — but a follower's spell must NEVER cost the player/ally.
+    // Pass the target's magicka snapshot taken immediately BEFORE the cast; this
+    // adds back exactly what was removed (a regen tick is left alone). The FOLLOWER
+    // still pays via its own hand-deduct, so §5.3 accounting is preserved. MAIN
+    // THREAD. No-op for a normal cast (follower is the caster — nothing to refund).
+    void RefundMagicka(RE::Actor* a_actor, float a_before);
+
     // AUTO TARGET INFERENCE for act.cast_target. The board's default "Auto" pick
     // (Subject::Self, no subject actor, no selector target) infers WHO from the
     // spell and fans the cast out: hostile -> every nearby enemy; beneficial ->

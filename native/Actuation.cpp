@@ -71,6 +71,26 @@ namespace MFO::Actuation {
                 ae->caster = h;   // the follower is the conceptual caster
     }
 
+    // REFUND the magicka the engine's cast took from a_actor. ENGINE_NOTES §0.9:
+    // CastSpellImmediate deducts from the magic-caster's OWNER. When a Self-
+    // delivery spell is routed through the TARGET's own caster (so the effect
+    // lands on the target), the engine charges the TARGET -- but a follower's
+    // spell must NEVER cost the player/ally magicka (the FOLLOWER pays via its
+    // own deduct). So snapshot the target's pool before the cast and add back
+    // exactly what the engine removed. Adds back ONLY a real deduction (a regen
+    // tick that leaves the pool higher is left alone). Same kDamage-modifier
+    // accounting MFO uses for the follower deduct, so it nets to the snapshot.
+    // MAIN THREAD (mutates an actor value). (§0.22's "casts are FREE" was measured
+    // on PACKAGE casts, not CastSpellImmediate -- §0.9 governs the direct path.)
+    void RefundMagicka(RE::Actor* a_actor, float a_before) {
+        auto* avo = a_actor ? a_actor->AsActorValueOwner() : nullptr;
+        if (!avo) return;
+        const float taken = a_before - avo->GetActorValue(RE::ActorValue::kMagicka);
+        if (taken > 0.0f)
+            avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                   RE::ActorValue::kMagicka, taken);
+    }
+
     namespace {
 
         // #68: the nearest living player-teammate that is not a_follower
@@ -219,6 +239,12 @@ namespace MFO::Actuation {
         // makes a self ward dispel/re-apply FLICKER -- a real defensive gap. 15s
         // bounds a stuck self ward while keeping that re-stream flicker negligible.
         constexpr float kConcSelfUtilityCap = 15.0f;
+        // STOP-WHEN-FULL terminator for heal-until-topped streams: end the stream
+        // once the RECIPIENT is at/near full Health. 0.995 (not exactly 1.0) so a
+        // last sliver of regen/rounding does not leave a heal chasing the final
+        // half-percent forever. A wounded recipient dropping below this re-arms
+        // the stream next tick. Heal-only -- a fixed-duration buff runs its window.
+        constexpr float kHealFullPct = 0.995f;
 
         // THE CADENCE CONTRACT (critical -- "heals feel broken" regression).
         // A concentration spell's cost is authored PER SECOND, and the ENGINE
@@ -800,10 +826,20 @@ namespace MFO::Actuation {
                     if (!caster) return;   // F4: no caster -> no cast, no deduct
                     auto* mavo = f->AsActorValueOwner();
                     const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                    // ROLE 3: snapshot the target's magicka -- a Self-delivery
+                    // re-route makes the target the engine's caster, and its cost
+                    // must not drain the ally (§0.9); refund it after the cast.
+                    const bool selfDeliv = t && ec != f;
+                    auto* tgtAvo = selfDeliv ? t->AsActorValueOwner() : nullptr;
+                    const float tgtBefore =
+                        tgtAvo ? tgtAvo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                     caster->CastSpellImmediate(sp, false, t, 1.0f, false, 0.0f, f);
                     // Self-delivery re-route -> re-point the effect to the FOLLOWER
-                    // so the engine channels the follower's rate (all archetypes).
-                    if (t && ec != f) ReattributeEffectCaster(t, sp, f);
+                    // (engine channels the follower's rate) AND refund the target.
+                    if (selfDeliv) {
+                        ReattributeEffectCaster(t, sp, f);
+                        if (tgtAvo) RefundMagicka(t, tgtBefore);
+                    }
                     const float c     = sp->CalculateMagickaCost(f);
                     const float spend = mavo ? std::min(c, pool) : 0.0f;
                     if (mavo && spend > 0.0f)
@@ -1263,7 +1299,15 @@ namespace MFO::Actuation {
                 auto* ecaster = EffectCasterFor(caster, tgt, sp);
                 auto* inst = ecaster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
+                const bool selfDeliv = ecaster != caster;   // Self-delivery re-route
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                // ROLE 3 (deck 2026-08-19): the target self-cast charges the TARGET's
+                // magicka (engine, §0.9) -- snapshot it now and refund below, so a
+                // follower's spell never drains the player/ally. The FOLLOWER still
+                // pays via its own deduct.
+                auto* tgtAvo = selfDeliv ? tgt->AsActorValueOwner() : nullptr;
+                const float tgtBefore =
+                    tgtAvo ? tgtAvo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
                     // FORCED CONCENTRATION = THE REAL EFFECT with a synthesized
                     // duration (marth's ruling -- see SustainConcentrationEffect):
@@ -1288,13 +1332,14 @@ namespace MFO::Actuation {
                     // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
                     inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
                 }
-                const bool selfDeliv = ecaster != caster;   // Self-delivery re-route
                 // A Self-delivery effect was created with the TARGET as caster, so
-                // re-point it to the FOLLOWER: the engine then channels the
-                // FOLLOWER's rate (skill/perks), every archetype + every effect.
-                // Idempotent on the sustain re-arm beats. (Normal delivery: caster
-                // is already the follower, so the guard skips the AE walk.)
-                if (selfDeliv) ReattributeEffectCaster(tgt, sp, caster);
+                // re-point it to the FOLLOWER (engine then channels the FOLLOWER's
+                // rate, every archetype + effect) AND refund the magicka the engine
+                // charged the target. Idempotent on the sustain re-arm beats.
+                if (selfDeliv) {
+                    ReattributeEffectCaster(tgt, sp, caster);
+                    if (tgtAvo) RefundMagicka(tgt, tgtBefore);
+                }
                 const float cost  = sp->CalculateMagickaCost(caster);
                 const float spend = avo ? std::min(cost, before) : 0.0f;   // #6: never negative
                 if (avo && spend > 0.0f)
@@ -1406,7 +1451,13 @@ namespace MFO::Actuation {
                 auto* ecaster = EffectCasterFor(caster, target, sp);
                 auto* inst = ecaster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
+                const bool selfDeliv = ecaster != caster;   // Self-delivery re-route
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                // ROLE 3: refund the target's engine-charged magicka (§0.9) so the
+                // fanned Self-delivery cast never drains an ally; the follower pays.
+                auto* tgtAvo = selfDeliv ? target->AsActorValueOwner() : nullptr;
+                const float tgtBefore =
+                    tgtAvo ? tgtAvo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
                     // FORCED CONCENTRATION under AUTO: same real-effect contract as
                     // the manual streams -- ONE sustained REAL effect per fanned
@@ -1426,9 +1477,13 @@ namespace MFO::Actuation {
                 } else {
                     inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
                 }
-                // Self-delivery re-route -> re-point the effect to the FOLLOWER so
-                // the engine channels the follower's rate (all archetypes/effects).
-                if (ecaster != caster) ReattributeEffectCaster(target, sp, caster);
+                // Self-delivery re-route -> re-point the effect to the FOLLOWER (so
+                // the engine channels the follower's rate, all archetypes/effects)
+                // AND refund the target's engine-charged magicka.
+                if (selfDeliv) {
+                    ReattributeEffectCaster(target, sp, caster);
+                    if (tgtAvo) RefundMagicka(target, tgtBefore);
+                }
                 const float cost  = sp->CalculateMagickaCost(caster);
                 // #6: clamp to the current pool so a deduct never drives magicka
                 // negative (AUTO validates N casts against ONE worker snapshot).
@@ -1561,6 +1616,21 @@ namespace MFO::Actuation {
         if (!a_follower || !a_spell) return SelfCast::Declined;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
+
+        // STOP-WHEN-FULL (self-heal terminator): a follower healing ITSELF ends
+        // when its OWN Health is ~full (the recipient IS the follower here). End
+        // the self stream and decline so it stops re-casting/draining at full,
+        // even if the gambit carries no HP condition. HEAL only -- a self ward /
+        // Candlelight / any non-heal self-buff still runs its authored window.
+        if (CasterConsent::ClassifySpell(a_spell) == CasterConsent::SpellKind::Heal &&
+            Vocab::HealthPct(a_follower) >= kHealFullPct) {
+            if (auto itf = g_selfCast.find(id);
+                itf != g_selfCast.end() && itf->second.spell == spellID) {
+                SelfCastEndActor(id, itf->second.spell);
+                g_selfCast.erase(itf);
+            }
+            return SelfCast::Declined;   // follower topped off -- transparent
+        }
 
         // §5.3 COMPETENCE: real cost gates the cast; the reserve floor keeps a
         // self-heal from emptying the pool. Unaffordable -> transparent decline.
@@ -1696,18 +1766,24 @@ namespace MFO::Actuation {
                     }
                 }
             }
-            if (gone || stale || concCapped) {
+            // STOP-WHEN-FULL backstop: a self-HEAL stream also ends when the
+            // follower's OWN Health is at/near full (CastSelfDirect's gate is
+            // primary; this catches a channel whose rule stopped calling in).
+            const bool selfFull =
+                !gone && kind == CasterConsent::SpellKind::Heal && a &&
+                Vocab::HealthPct(a) >= kHealFullPct;
+            if (gone || stale || concCapped || selfFull) {
                 // RELEASE. DISPEL a lingering STICKY buff (Buff = ward/fortify,
                 // any release) so it cannot persist as a stuck gameplay effect --
                 // AND a momentary stream's SUSTAINED real effect when the stream
-                // truly ENDED (stale/rule-false): since the real-effect sustain
-                // that effect genuinely channels, so the stream's end must cut
-                // it rather than let it heal unpaid to its window's end. A
+                // truly ENDED (stale/rule-false/self-full): since the real-effect
+                // sustain that effect genuinely channels, so the stream's end must
+                // cut it rather than let it heal unpaid to its window's end. A
                 // CAP-only release re-streams next tick and keeps the ONE
                 // sustained HUD entry alive (no flicker at cap boundaries; the
                 // re-arm continues the same effect). There is NO equip to undo
                 // (the self-cast never holds the spell -- the AI-spam CTD).
-                if (a && (kind == CasterConsent::SpellKind::Buff || stale))
+                if (a && (kind == CasterConsent::SpellKind::Buff || stale || selfFull))
                     SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
             }
@@ -1746,6 +1822,26 @@ namespace MFO::Actuation {
         const auto spellID  = a_spell->GetFormID();
         const auto targetID = a_target->GetFormID();
         const auto kind     = CasterConsent::ClassifySpell(a_spell);
+
+        // STOP-WHEN-FULL (heal terminator, deck 2026-08-19). A heal-until-topped
+        // stream ENDS the moment the RECIPIENT reaches ~full Health -- read
+        // a_target's Health (the intended heal target), NEVER the follower's or
+        // whatever actor became the mechanical caster after the Self-delivery
+        // re-route. End the live stream (dispel the sustained heal) and decline so
+        // no further beat re-casts or drains. HEAL only -- a ward/buff or a
+        // damage/utility stream still runs its own window (archetype-aware). The
+        // gambit condition is no longer the sole terminator; a "cast heal at
+        // player" with no HP gate now still stops at full instead of draining on.
+        if (kind == CasterConsent::SpellKind::Heal &&
+            Vocab::HealthPct(a_target) >= kHealFullPct) {
+            if (auto itf = g_targetCast.find(id);
+                itf != g_targetCast.end() && itf->second.target == targetID &&
+                itf->second.spell == spellID) {
+                TargetCastEndActor(itf->second.target, itf->second.spell);
+                g_targetCast.erase(itf);
+            }
+            return SelfCast::Declined;   // recipient topped off -- transparent
+        }
 
         // §5.3 COMPETENCE: real cost gates the cast; the reserve floor keeps it from
         // emptying the pool. Unaffordable -> transparent decline (mirrors CastSelfDirect).
@@ -1850,15 +1946,24 @@ namespace MFO::Actuation {
                 cap = kConcUtilityHold; break;                                        // Buff: 4s
             }
             const bool capped = std::chrono::duration<float>(now - tc.started).count() >= cap;
-            if (gone || stale || capped) {
+            // STOP-WHEN-FULL backstop: a HEAL stream also ends when the RECIPIENT
+            // is at/near full (CastTargetDirect's gate is primary; this catches a
+            // stream whose rule quietly stopped calling in). Reads the RECIPIENT's
+            // Health (tc.target), never the follower's -- an ended-because-topped
+            // heal dispels its sustained effect like a true end-of-stream.
+            const bool recipientFull =
+                tc.kind == CasterConsent::SpellKind::Heal && t &&
+                Vocab::HealthPct(t) >= kHealFullPct;
+            if (gone || stale || capped || recipientFull) {
                 // DISPEL a sticky ward on ANY release; a momentary stream's
                 // SUSTAINED real effect only when the stream truly ENDED
-                // (gone/stale) -- since the real-effect sustain it genuinely
-                // channels, so the stream's end must cut it rather than let it
-                // run unpaid to its window's end. A CAP-only release re-streams
-                // next tick: keeping the effect alive keeps ONE continuous HUD
-                // entry across cap boundaries, and the next beat re-arms it.
-                const bool endOfStream = gone || stale;
+                // (gone/stale/recipient-full) -- since the real-effect sustain it
+                // genuinely channels, so the stream's end must cut it rather than
+                // let it run unpaid to its window's end. A CAP-only release
+                // re-streams next tick: keeping the effect alive keeps ONE
+                // continuous HUD entry across cap boundaries, and the next beat
+                // re-arms it.
+                const bool endOfStream = gone || stale || recipientFull;
                 if (t && (tc.kind == CasterConsent::SpellKind::Buff || endOfStream))
                     TargetCastEndActor(tc.target, tc.spell);
                 done.push_back(id);
