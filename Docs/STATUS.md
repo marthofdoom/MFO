@@ -142,18 +142,20 @@
 >   actor's AI casts are HARD-ABORTED), so deny-the-AI + deliver-directly is coherent. **CADENCE:
 >   concentration re-applies every ~1s (`kConcApplyPeriod` — per-second authored magnitude/cost; the 4s
 >   fCastCooldown pacing quartered heal throughput, "heals feel broken"); FF keeps fCastCooldown.**
->   **MAGNITUDE (b63beb9 field): a one-shot CastSpellImmediate applies ~0 of a per-second concentration
->   magnitude (magicka drained, HP flat on self AND player — the old "no magnitude problem" ruling was
->   tested on FF/AI-channeled casts, false premise). `ApplyConcentrationBeat` now applies one second's
->   worth of each value-modifier effect explicitly per beat (heal clamped to damage taken, damage as a
->   plain AV hit; wards/non-VM keep the plain call) — wired into self, target, AND AUTO applies. Field
->   check: `[cast] … conc beat on … +N/-M` and the HP bar moving.** **PRESENTATION (dc856ea): HP climbed
->   but the per-beat re-cast churned the Active-Effects HUD (stack of duration-0 momentaries, no
->   sustained glow — and effect VFX IS in scope, only the caster POSE is deferred). Fix
->   `SustainConcentrationEffect`: attach once per stream, pin duration + reset elapsedSeconds on that ONE
->   ActiveEffect each beat (magnitude 0 for momentary kinds — beats stay the sole HP source), dispel the
->   cosmetic effect at end-of-stream only. Field check: ONE continuous HUD entry + visible healing shader
->   while streaming, HP still climbing at the authored rate.**
+>   **REAL-EFFECT CONTRACT (marth's ruling, FINAL — supersedes the interim RestoreActorValue recreation
+>   AND the magnitude-zeroed sustain): a bare one-shot CastSpellImmediate applies ~0 of a per-second
+>   concentration magnitude (b63beb9 A/B: magicka drained, HP flat on self AND player — rate × ~one
+>   frame), so `SustainConcentrationEffect` attaches the REAL effect once per stream and sustains it:
+>   each ~1s beat pins a real duration (stream window) + re-arms elapsedSeconds on that ONE ActiveEffect,
+>   never touching the ENGINE-COMPUTED per-caster magnitude — the engine channels the number itself
+>   (skill/perks/resists correct, EVERY archetype: waterbreathing/invisibility/ward just last). MFO owns
+>   delivery + per-second cost deduct + bounds only; zero manual magnitude math remains. ONE sustained
+>   HUD entry + continuous shader (effect VFX in scope; only caster POSE deferred); momentary sustained
+>   effect dispels at end-of-stream only (it genuinely channels — cut it, never let it run unpaid).
+>   Wired into self, target, AND AUTO applies. Field check: "conc effect ATTACHED" ONCE per stream (if it
+>   repeats per beat the engine refused the sustain → fallback = engine-computed ae->magnitude per
+>   second, never base values), ONE continuous HUD entry + visible shader, HP climbing at the caster's
+>   own rate.**
 >   Bounded/released by `TargetCastReconcile` (registry `g_targetCast`): hostile 1-4s LoS+LoF-gated on
 >   every apply / heal 6s cap but re-applies while wounded / utility 4s; **dispel-on-release is
 >   STICKY(ward)-ONLY so a heal flows uninterrupted** — release + re-stream, never a stop. Threading: every
