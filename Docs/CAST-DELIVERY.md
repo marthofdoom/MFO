@@ -228,52 +228,56 @@ magicka drained, and — because the sustain searched the *player's* effect list
 found the effect (it was on Lucien) — `conc effect ATTACHED` re-fired every beat instead of
 FOUND-and-re-armed once. Two symptoms, one cause.
 
-**A Self-delivery spell aimed off-self is DELIVERED, not CAST — real-effect application onto
-the target with the FOLLOWER as caster, the player completely uninvolved (deck a8d641bb).**
-Because a Self effect can only ever land on its magic-caster's OWNER, MFO does **not** make
-the target cast it. A short-lived design that made the TARGET self-cast was WRONG on two
-counts and is banned: (a) the PLAYER became the magic caster, so the engine charged the
-**player's** magicka — a concentration self-cast drained it per-frame to EMPTY (`RefundMagicka`
-around a `MainThread::Post`'d cast is a no-op: the concentration channel drains over later
-frames, outside the single-frame refund; it also re-attached every beat) — and (b) a self-cast
-REQUIRES the caster to have magicka, so the heal STOPPED when the player ran dry. A follower's
-spell must be completely independent of the player's magicka.
+**The ONLY defect is SELF delivery. Concentration-on-others already works** — MFO already
+channels a *natively-aimed* concentration (or FF) spell from a follower onto an ally/player/foe
+through the existing path (**`CastTargetDirect` → `ApplyTargetEffect` → the FOLLOWER's
+`CastSpellImmediate` onto the target + `SustainConcentrationEffect`**, entered by OOC Logistics
+and combat `ConcentrationCast`). Public-build ally/player heals landed through it. So the fix
+for a **Self** spell is not to invent delivery, and not to force-apply concentration — it is to
+give the existing path a spell it can aim.
 
-**The mechanism (`Actuation::ApplyEffectsFromCaster` → `RE::MagicTarget::AddTarget`), archetype-
-agnostic — no heal/"is a heal"/archetype special-casing.** `AddTarget` is the engine's OWN
-per-effect application entry (how the engine itself lands every effect — **not** the AI package;
-marth's ban is the package, not real-effect application). For each of the spell's effects, MFO
-fills an `AddTargetData` with `caster = follower`, `magicItem = spell`, `effect = <this effect>`,
-`magnitude = effect->effectItem.magnitude` (authored base), `castingSource = kInstant`, and
-calls `target->AsMagicTarget()->AddTarget(data)`. Three roles, all satisfied at once and for
-EVERY archetype (heal, ward, flesh/armor, waterbreathing, invisibility, muffle, fear/frenzy,
-DoT, any buff) and EVERY effect of a multi-effect spell:
+**The mechanism — a flipped-delivery PROXY, cast normally by the follower (marth's design,
+`Actuation::ProxyDeliverySpell` → `SelfDeliveryProxy`).** For a Self spell aimed off-self MFO
+fabricates a transient COPY of the source with its **casting style PRESERVED** (concentration
+stays concentration; FF stays FF) and **only its delivery flipped `kSelf → kTargetActor`**
+(`proxy->data = source->data; proxy->data.delivery = kTargetActor; proxy->effects = source
+effects`). The FOLLOWER then casts the proxy through the *unchanged* existing path. Because the
+proxy is TargetActor, the effect lands on the **target** (where `SustainConcentrationEffect`
+searches → FOUND + re-armed → **ONE sustained effect, no per-beat re-attach**), and because the
+**follower** is the caster it channels at HIS skill/perks (rate) and costs HIS magicka. The
+**PLAYER never casts, never pays, needs zero magicka.** Archetype-agnostic (heal/ward/flesh/
+waterbreathing/buff), every effect of a multi-effect spell. `NeedsCasterAttributedDelivery`
+gates it (Self delivery + non-self target); a genuine `act.cast_self` (target == follower) and
+every non-Self delivery cast the source unchanged (why self-Candlelight always worked). All five
+sites branch on `ProxyDeliverySpell`: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s
+force-half, the two Logistics FF casts. The `FORCE-CAST … (self-delivery: aimed proxy from
+follower)` tag marks the proxy path. Stream-end dispel clears the proxy AE too
+(`TargetCastEndActor` → `SelfDeliveryProxy::ProxyFor`).
 
-1. **Lands on the target** — `AddTarget` applies straight onto the target's `MagicTarget`,
-   regardless of the spell's Self delivery.
-2. **Follower's rate** — `caster = follower`, so the engine attributes the effect to the
-   follower and applies the FOLLOWER's skill/perks/effectiveness (a master-healer heals at HIS
-   rate on a 0-Restoration player; Mage Armor 3/3 lands the full flesh buff). Only the authored
-   base magnitude is passed — **no hand-rolled magnitude, no `magnitudeOverride`**; the engine
-   owns the scaling via the caster.
-3. **Player pays nothing, needs nothing** — the player NEVER casts and NEVER pays magicka, and
-   needs **zero** magicka for the effect to land. The FOLLOWER pays via MFO's own hand-deduct
-   only (§5.3 competence: a follower still runs dry). No snapshot/refund exists or is needed.
+**EXACTLY TWO transient dynamic SPEL slots — no unbounded cache.** `SelfDeliveryProxy::Get`
+reuses a slot for the same source, claims a free/idle slot (a slot frees `kProxyIdle` = 5 s
+after its last use; a live stream re-uses it every ~1 s so it stays warm) for a new source, or
+returns `nullptr` when both slots are busy with other active sources — the caller then SKIPS the
+cast ("too bad" on a 3rd concurrent one). The two forms are created ONCE via `IFormFactory`
+(dynamic `0xFF__` range) and reconfigured in place; never more than 2 exist for the session.
 
-`NeedsCasterAttributedDelivery(spell, follower, target)` gates it: TRUE only for a Self-delivery
-spell aimed at a non-self target. A genuine `act.cast_self` (target == follower) and every
-non-Self delivery (Aimed / TargetActor / Touch) cast normally from the follower's own magic
-caster — unchanged (why self-Candlelight always worked). The created AE carries the spell, so
-`SustainConcentrationEffect` FINDS and re-arms it — **ONE sustained effect, no per-beat
-re-attach** (this also fixes the `conc effect ATTACHED`-every-beat symptom). All five direct-
-apply sites branch on it: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s combat
-force-half, and the two Logistics FF direct casts. The
-`FORCE-CAST … at TTTTTTTT (self-delivery: applied from follower)` tag marks the applied path.
+**Save-safety.** The proxies are **transient dynamic forms** (`0xFF__` runtime range): the
+engine does not serialize runtime-created forms into the `.ess`, and they are never added to any
+MFO co-save record. A proxy `ActiveEffect` saved mid-stream references a `0xFF__` form the engine
+simply **drops on load** (no corruption) — and streams are short and dispelled at end. On a new
+session the 2 slots start empty and re-fabricate on demand.
 
-*Deck history:* c875048/47fd0de — the effect healed Lucien not the player (cast from the
-follower on a Self spell). Wave-1 (target-self-cast) landed it on the player but drained the
-player's magicka; a8d641bb confirmed the drain-to-empty + heal-stops-at-0 failure. This pivot
-(AddTarget from the follower) is the fix.
+**RETIRED — do not resurrect:** (a) making the TARGET self-cast (deck a8d641bb: the PLAYER became
+the caster → engine drained the player's magicka to EMPTY, and a self-cast needs magicka so the
+heal STOPPED at 0 player-magicka; `RefundMagicka` around a `MainThread::Post`'d cast was a no-op —
+a concentration channel drains over later frames); (b) `MagicTarget::AddTarget` force-application
+from the follower (it does **not** channel — a force-applied concentration effect won't tick).
+**Flipping DELIVERY and reusing the working aimed-concentration path is the fix.**
+
+*Deck history:* c875048/47fd0de — the effect healed Lucien not the player (Self spell cast from
+the follower). Wave-1 (target-self-cast) landed on the player but drained the player. Wave-2
+(AddTarget) landed + attributed but did not channel. This proxy pivot routes through the
+already-working concentration-on-others delivery.
 
 **HEAL TERMINATOR — stop when the RECIPIENT is full (deck 2026-08-19).** A heal-until-topped
 stream ends the moment the RECIPIENT reaches ~full Health (`kHealFullPct` = 0.995), read off

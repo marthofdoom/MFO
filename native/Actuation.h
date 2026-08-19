@@ -117,32 +117,31 @@ namespace MFO::Actuation {
     // equip/debt to undo (mirrors ClearForcedWeapons).
     void ClearSelfCasts();
 
-    // SELF-DELIVERY DELIVERED TO ANOTHER ACTOR, FOLLOWER-ATTRIBUTED, PLAYER
-    // UNINVOLVED (marth: "read the SPEL"; decoupling pivot, deck a8d641bb). A
-    // SELF-delivery spell's effect can only land on its magic-caster's OWNER, so it
-    // cannot be CAST at another actor. Making the TARGET self-cast (rejected) made
-    // the PLAYER the caster -- the engine charged the player's magicka, a
-    // concentration self-cast drained it per-frame to empty, and the heal STOPPED
-    // when the player ran dry. Instead apply the REAL effect(s) straight onto the
-    // target's MagicTarget with the FOLLOWER as caster, via the engine's OWN
-    // per-effect entry `RE::MagicTarget::AddTarget` (how the engine itself lands
-    // effects -- NOT the AI package; marth's ban is the package, not real-effect
-    // application). The player NEVER casts, NEVER pays magicka, needs NONE for it to
-    // land; caster=follower so the engine attributes the effect to the follower and
-    // channels the FOLLOWER's rate; the authored base magnitude is passed and the
-    // engine owns skill/perk scaling via the caster (no hand-rolled magnitude).
-    // Applies EVERY effect (multi-effect), archetype-agnostic (heal/ward/flesh/
-    // waterbreathing/buff). The AE carries the spell so SustainConcentrationEffect
-    // finds + re-arms it -- ONE sustained effect, no per-beat re-attach. MAIN
-    // THREAD (mutates the AE list). Returns true if the target could receive it.
-    bool ApplyEffectsFromCaster(RE::Actor* a_target, RE::SpellItem* a_spell,
-                                RE::Actor* a_caster);
+    // SELF-DELIVERY PROXY (marth's design, deck 4e6d4aa). The ONLY defect for a
+    // follower delivering a spell to another actor is SELF delivery -- MFO already
+    // channels a natively-aimed/target concentration (or FF) spell onto an ally via
+    // the existing path (CastTargetDirect -> ApplyTargetEffect -> the follower's
+    // CastSpellImmediate + SustainConcentrationEffect). So for a SELF spell aimed
+    // off-self, MFO fabricates a transient COPY with its casting style PRESERVED and
+    // only its DELIVERY flipped Self -> kTargetActor, then routes THAT through the
+    // existing path: the FOLLOWER casts it (his rate + his magicka), the effect
+    // channels onto the target, and the PLAYER never casts / never pays / needs no
+    // magicka. This supersedes the AddTarget/self-cast/force-sustain detours (a
+    // force-applied SELF concentration does not channel; flipping delivery is the fix).
+    //
+    // ProxyDeliverySpell resolves the spell to actually CAST: a_source itself for a
+    // self-cast or any non-Self delivery; the fabricated non-self proxy for a Self
+    // spell aimed off-self. Returns nullptr ONLY when a proxy was needed but both of
+    // the EXACTLY TWO dynamic slots are busy with other active sources -- the caller
+    // then SKIPS the cast (no unbounded cache; "too bad" on the 3rd concurrent one).
+    // The two proxies are transient dynamic (0xFF__) forms, never serialized. MAIN
+    // THREAD only (form table); every caller is inside a MainThread::Post.
+    RE::SpellItem* ProxyDeliverySpell(RE::SpellItem* a_source, RE::Actor* a_follower,
+                                      RE::Actor* a_target);
 
-    // TRUE when a spell must be delivered by ApplyEffectsFromCaster rather than by
-    // a cast: a SELF-delivery spell aimed at a NON-self target. A genuine self-cast
-    // (target == follower) and every non-Self delivery (Aimed/TargetActor/Touch)
-    // cast normally from the follower's own magic caster. Reads only the SPEL's
-    // Delivery; no engine mutation -- any thread.
+    // TRUE when a SELF-delivery spell is aimed at a NON-self target (needs a proxy).
+    // A genuine self-cast (target == follower) and every non-Self delivery already
+    // reach the target from the follower. Reads only the SPEL's Delivery; any thread.
     bool NeedsCasterAttributedDelivery(RE::SpellItem* a_spell, RE::Actor* a_follower,
                                        RE::Actor* a_target);
 
@@ -151,10 +150,10 @@ namespace MFO::Actuation {
     // spell and fans the cast out: hostile -> every nearby enemy; beneficial ->
     // the WHOLE PARTY who needs it (every active follower + the player, the caster
     // included). MFO chooses WHO receives each cast by spell nature, not the SPEL's
-    // Delivery -- but HOW the effect is placed still honours Delivery: a SELF-
-    // delivery buff is applied onto each recipient from the follower via
-    // ApplyEffectsFromCaster (MagicTarget::AddTarget), so it lands on allies too
-    // instead of only the follower, with the recipient never casting or paying.
+    // Delivery -- but HOW it reaches them still honours Delivery: a SELF-delivery
+    // buff is cast onto each recipient as a flipped-delivery proxy from the follower
+    // (ProxyDeliverySpell), so it lands on allies too instead of only the follower,
+    // with the recipient never casting or paying.
     // Per-cast magicka (reserve-floored, insufficient-skip), already-active guard,
     // one broadcast per fCastCooldown. Called from BOTH Fire (combat) and Logistics
     // (out of combat); out of combat the hostile branch finds no enemies and NoOps.

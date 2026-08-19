@@ -249,26 +249,25 @@ releases **by eviction** with a non-actor XMarker.
   owns delivery + per-second cost + bounds only. ONE sustained HUD entry, shader plays
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
-  **SELF-DELIVERY off-self = REAL-EFFECT APPLICATION, follower-attributed, player uninvolved
-  (`ApplyEffectsFromCaster` → `RE::MagicTarget::AddTarget`, marth "read the SPEL"):** a Self
-  spell's effect can only land on its magic-caster's OWNER, so it cannot be CAST at another
-  actor. MFO applies the real effect(s) onto the target's `MagicTarget` with `caster =
-  follower` via the engine's own per-effect entry `AddTarget` (NOT the AI package — the ban
-  is the package, not real-effect application). THREE ROLES at once, every archetype
-  (heal/ward/flesh/waterbreathing/buff) + every effect of a multi-effect spell: (1) lands on
-  the target (AddTarget ignores Self delivery); (2) follower's rate — `caster=follower`, only
-  the authored base magnitude passed, engine owns skill/perk scaling (NO `magnitudeOverride`,
-  NO hand-rolled magnitude); (3) player NEVER casts / NEVER pays / needs ZERO magicka — the
-  follower pays via its own hand-deduct only (§5.3 intact). The AE carries the spell so
-  `SustainConcentrationEffect` finds+re-arms it — ONE sustained effect, no per-beat re-attach.
-  `NeedsCasterAttributedDelivery(spell,follower,target)` gates it (Self delivery + non-self
-  target); genuine `cast_self` (target==follower) and non-Self deliveries cast normally from
-  the follower. All five sites branch on it: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO),
-  `CastOn` force-half, two Logistics FF casts. **REJECTED (deck a8d641bb):** making the TARGET
-  self-cast — the player became the magic caster, so the engine drained the PLAYER's magicka
-  to empty and the heal stopped at 0 player-magicka; `RefundMagicka`/`ReattributeEffectCaster`
-  band-aids REMOVED. History: c875048 healed Lucien not the player; wave-1 target-self-cast
-  drained the player; this AddTarget pivot decouples the player entirely. **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
+  **SELF-DELIVERY off-self = FLIPPED-DELIVERY PROXY through the existing concentration-on-others
+  path (`ProxyDeliverySpell`/`SelfDeliveryProxy`, marth's design):** the ONLY defect is SELF
+  delivery — MFO already channels a natively-aimed concentration/FF spell from a follower onto
+  another actor via `CastTargetDirect`→`ApplyTargetEffect`→the FOLLOWER's `CastSpellImmediate`
+  + `SustainConcentrationEffect` (OOC Logistics + combat `ConcentrationCast`). So for a Self
+  spell aimed off-self MFO fabricates a transient COPY with casting style PRESERVED and ONLY
+  `data.delivery` flipped `kSelf→kTargetActor`, and the FOLLOWER casts THAT through the unchanged
+  path: effect lands on the target (Sustain FINDS+re-arms it → ONE sustained effect, no per-beat
+  re-attach), follower's rate + follower's magicka, PLAYER never casts / never pays / needs zero
+  magicka. `NeedsCasterAttributedDelivery` gates it (Self + non-self target); `cast_self` and
+  non-Self cast the source unchanged. EXACTLY TWO dynamic slots (`IFormFactory`, `0xFF__`),
+  reuse-same-source / claim-idle(5s) / else SKIP — no unbounded cache. SAVE-SAFE: transient
+  dynamic forms are never serialized to the `.ess` nor any MFO co-save; a proxy AE saved
+  mid-stream is dropped on load (no corruption). Stream-end dispel clears the proxy AE too
+  (`TargetCastEndActor`→`ProxyFor`). Five sites branch on `ProxyDeliverySpell`: `ApplyTargetEffect`,
+  `ApplyEffectFromTo` (AUTO), `CastOn` force-half, two Logistics FF casts. **RETIRED:** (a)
+  target-self-cast (deck a8d641bb: player became caster → drained player's magicka to empty,
+  heal stopped at 0; `RefundMagicka` no-op); (b) `MagicTarget::AddTarget` force-apply (does NOT
+  channel). Flipping delivery + the working aimed path is the fix. **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
   the RECIPIENT's Health hits ~full — read the intended heal target (`a_target`/follower for
   self-heal), NOT the follower or the re-routed mechanical caster — enforced in
   `CastTargetDirect`/`CastSelfDirect` (end+dispel+decline, so OOC re-dispatch and combat both
