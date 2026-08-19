@@ -149,31 +149,36 @@ namespace MFO::Actuation {
             return std::nullopt;
         }
 
-        // ── CONCENTRATION: the BOUNDED STREAM (v1.0.53 deck freeze) ──────────
+        // ── CONCENTRATION: the BOUNDED DIRECT-FORCE STREAM ───────────────────
         // A concentration spell has no "one cast" for the fire-and-forget
         // machinery to observe: force-YESing it to the AI made a PERMANENT
-        // held stream (Lucien's Flames through Xelzaz -- the freeze), and
-        // skipping it was rejected -- exact bounding must cover EVERY spell
-        // class, no AI escape hatch (marth). So MFO streams it ITSELF through
-        // the proven package route (§0.21/0.22: concentration casts animated
-        // on every probed axis), with the bound stated UP FRONT and enforced
-        // by Packages::Pump each tick:
+        // held stream (Lucien's Flames through Xelzaz -- the v1.0.53 freeze),
+        // and skipping it was rejected -- exact bounding must cover EVERY
+        // spell class, no AI escape hatch (marth). So MFO streams it ITSELF.
+        // DELIVERY IS THE DIRECT FORCE (CastSelfDirect / CastTargetDirect =
+        // CastSpellImmediate straight onto the target + hand magicka deduct),
+        // NEVER the AI package: the package route (v1.0.58-65, Packages::
+        // CastAt + CastHold) §4.6-DECLINED every tick for a package-locked
+        // custom follower (Lucien 2F00591F -- his own quest owns the package
+        // alias at prio 80, MFO claims at 60), which with the consent denies
+        // below meant a TOTAL cast lockout. The bound is stated UP FRONT and
+        // enforced by Self/TargetCastReconcile each tick:
         //   hostile  -- 1-4 s by temperament (each mage's breath is
-        //               consistently their own), cut EARLY the moment a
-        //               teammate crosses the line of fire;
+        //               consistently their own), LoS + line-of-fire re-checked
+        //               on EVERY apply (the ffWatch analog);
         //   heal     -- until the target tops off, capped;
-        //   utility  -- a capped hold; "still relevant" is the rule still
-        //               WINNING, which re-fires another bounded stream after
-        //               the cooldown rather than holding one open forever.
-        // Release is eviction + InterruptCast (Packages::ClearAlias), so the
-        // beam dies with the package. The AI-first grace is deliberately NOT
-        // offered here: the CheckStartCast hook denies the AI's own attempt
-        // at a wanted concentration spell (an AI channel cannot be bounded),
-        // so the package stream is the ONLY open channel. Every exit below
-        // is bounded: a dispatched hold, a transparent wait, or a legible
-        // failure (§5.3) -- never "leave it to their AI".
+        //   utility  -- a capped window, ward dispelled on release.
+        // Bounding is RELEASE + RE-STREAM while the rule keeps winning, never
+        // a stop. The AI-first grace is deliberately NOT offered here: the
+        // CheckStartCast/CheckCast hooks deny the AI's own attempt at a wanted
+        // concentration spell (an AI channel cannot be bounded), so MFO's
+        // direct stream is the ONLY open channel -- and it always delivers,
+        // because a direct apply passes through neither hook (see
+        // ConcentrationCast below). Every exit is bounded: an applied beat, a
+        // transparent pace-out, or a legible failure (§5.3) -- never "leave it
+        // to their AI".
         constexpr float kConcHealCap     = 6.0f;   // heal stream hard cap
-        constexpr float kConcUtilityHold = 4.0f;   // utility PACKAGE hold cap (rooted)
+        constexpr float kConcUtilityHold = 4.0f;   // non-self utility/ward window
         // Self ward/utility HARD cap (marth). Deliberately NOT the 4s package
         // utility hold: a PACKAGE roots the caster, so its hold must be short to
         // un-root him often; CastSelfDirect does NOT root (it is a paced direct-
@@ -182,6 +187,21 @@ namespace MFO::Actuation {
         // bounds a stuck self ward while keeping that re-stream flicker negligible.
         constexpr float kConcSelfUtilityCap = 15.0f;
 
+        // THE CADENCE CONTRACT (critical -- "heals feel broken" regression).
+        // A concentration effect's magnitude is authored PER SECOND, so the
+        // direct-force stream must RE-APPLY it about once per second -- the
+        // beat the last known-working path (ff0cb48 healStream, re-fired every
+        // ~1 s service tick) actually shipped. Pacing it by fCastCooldown
+        // (default 4 s) silently cuts heal/damage throughput ~4x AND the
+        // magicka drain rate with it (CalculateMagickaCost on a concentration
+        // spell returns the PER-SECOND cost, so the 1 s beat is also the
+        // authored drain). Fire-and-forget spells keep the fCastCooldown beat:
+        // their magnitude is per CAST, and a 1 s beat would multiply it.
+        // Sticky concentration buffs (wards) also tick at 1 s, but the
+        // already-active guard in Apply{Self,Target}Effect makes the beat a
+        // no-op while the ward is still up -- no stacking.
+        constexpr float kConcApplyPeriod = 1.0f;
+
         // ONE source of truth for the concentration TIME-LIMITS, so EVERY
         // concentration cast -- self, player, ally, foe -- is bounded by the
         // identical "same time limit based casting" durations (marth):
@@ -189,9 +209,10 @@ namespace MFO::Actuation {
         //               moment a teammate crosses the line of fire;
         //   heal     -- kConcHealCap (6 s) "until the target tops off";
         //   utility  -- a capped kConcUtilityHold (4 s) hold.
-        // Consumed by ConcentrationCast (the non-self package stream, below) AND
-        // by SelfCastReconcile's self-heal cap (the self direct-apply equivalent),
-        // so the two paths can never drift apart on the numbers.
+        // Consumed by TargetCastReconcile (the non-self direct-force stream's
+        // caps) AND by SelfCastReconcile's self-heal cap, so the two paths can
+        // never drift apart on the numbers. (Returns a Packages::CastHold purely
+        // as a numbers carrier -- no package is dispatched with it any more.)
         Packages::CastHold ConcentrationHold(RE::FormID a_casterID, RE::FormID a_targetID,
                                              CasterConsent::SpellKind a_kind) {
             Packages::CastHold hold;
@@ -236,92 +257,64 @@ namespace MFO::Actuation {
                 return { Result::FailedOther, "self-cast could not fire", true };
             }
 
-            // No package, no stream (FOE concentration only). The silent fallback
-            // is meaningless for a channel (an instant apply of a per-second
-            // effect), so this fails LEGIBLY -- transparent, the rules below run.
-            if (!Config::g_forceCastOnMiss.load() || !Packages::Available()) {
-                return { Result::FailedOther,
-                         "concentration needs the cast package (bForceCastOnMiss+bUsePackages)",
-                         true };
-            }
-            // FOE concentration only from here down -- the self fork above ALWAYS
-            // returns, so `self` is false throughout the rest of this function
-            // (the SPEC-self-cast-forced package route via Packages::CastSelf is
-            // NOT used here -- it was the barred self path; do not re-introduce it).
-            // PACING -- the same fCastCooldown every other gambit cast obeys,
-            // consulted directly (no equip machinery on this path to consult
-            // it for us). This is what spaces one bounded stream from the
-            // next. Same reason string as Prepare's, for the transition log.
-            if (Loadout::CoolingDown(id)) {
-                return { Result::NoOp, "cast cooling down", true };
-            }
-            // LoS: never stream into a wall (the forced shot's gate).
-            if (Sightline::Check(id, a_target->GetFormID()) ==
-                Sightline::Verdict::Occluded) {
-                return { Result::NoOp, "forced cast held (no line of sight)", true };
-            }
-
-            const auto kind = CasterConsent::ClassifySpell(a_spell);
-
-            // THE LINE-OF-FIRE GATE, hostile FOE streams, NOT optional: friendly
-            // fire from a stream is what triggered the freeze; the #63 quash
-            // is a backstop, never a license. The same check re-runs every
-            // Pump tick mid-stream (ffWatch) and cuts the beam if someone
-            // walks into it.
-            if (kind == CasterConsent::SpellKind::Offense &&
-                Sightline::TeammateInFireLine(id, a_target->GetFormID())) {
-                return { Result::NoOp,
-                         "concentration held (teammate in the line of fire)", true };
-            }
-
-            // Shared bounding: ConcentrationHold owns the numbers (see above) so
-            // the self path (SelfCastReconcile) and this non-self stream stay in
-            // lockstep on the durations.
-            const Packages::CastHold hold = ConcentrationHold(id, a_target->GetFormID(), kind);
-            const char* kindName = kind == CasterConsent::SpellKind::Offense ? "hostile"
-                                 : kind == CasterConsent::SpellKind::Heal    ? "heal"
-                                                                             : "utility";
-
-            const auto d = Packages::CastAt(a_follower, a_spell, a_target, hold);
-            if (d == Packages::Decline::None) {
-                // Exclusive control while the rule governs: the latch's DENY
-                // of other spells is the exact-mode bounding, and the
-                // concentration deny in CheckStartCast keeps the PERMIT half
-                // off, so the latch can never re-arm an AI stream. The
-                // cooldown paces the next stream.
-                CasterConsent::Want(id, a_spell->GetFormID());
-                Loadout::StartCooldown(id);
-                spdlog::info("[cast] {:08X} {} CONCENTRATION {} ({:08X}) {} -- "
-                             "{} stream, hold {:.1f}s{}",
-                             id, a_follower->GetName() ? a_follower->GetName() : "?",
-                             a_spell->GetName() ? a_spell->GetName() : "?",
-                             a_spell->GetFormID(),
-                             std::format("at {:08X}", a_target->GetFormID()),
-                             kindName, hold.holdSeconds,
-                             hold.healWatch ? " (or until healed)" : "");
-                return { Result::Fired, "concentration stream (bounded)" };
-            }
-            if (d == Packages::Decline::Busy) {
-                // Our own live stream lands here every tick while it runs --
-                // the wait IS the action; transparent like the FF form.
-                return { Result::NoOp, "cast package busy", true };
-            }
-            // STRUCTURAL decline (§4.6 alias-owned / package-locked custom follower,
-            // no record, quest stopped): the PACKAGE cannot serve this follower.
-            // FALL BACK to the KNOWN-WORKING DIRECT FORCE (CastTargetDirect) -- no
-            // package, so it beats the §4.6 lock that made Lucien's package cast
-            // [pkg]-DECLINE every tick. Non-locked followers never reach here (they
-            // got Decline::None above), so the ANIMATED package path is preserved for
-            // them and ONLY package-locked ones take the direct fallback. LoS/line-of-
-            // fire were already gated above; CastTargetDirect re-checks (idempotent).
+            // ── DIRECT FORCE is THE delivery, combat included (marth 2026-08-18:
+            // "always use the known working force; avoid the package route") ──
+            // v1.0.58-65 delivered combat concentration through the AI PACKAGE
+            // (Packages::CastAt + CastHold). For a package-locked custom
+            // follower (Lucien 2F00591F: his own quest owns the package alias
+            // at prio 80, MFO claims at 60) the engine §4.6-DECLINED that claim
+            // EVERY tick -- and because the consent latch denies the AI's own
+            // attempt at a wanted concentration spell (an AI channel cannot be
+            // bounded), the dead package was "the ONLY open channel": a TOTAL
+            // combat cast lockout. CastTargetDirect (CastSpellImmediate straight
+            // onto the target + hand magicka deduct) beats BOTH halves of that
+            // trap:
+            //   * no package -> no §4.6 alias arbitration to lose;
+            //   * no AI deliberation -> the CheckStartCast (0x06, combat-AI
+            //     advisory) and CheckCast (0x0A, pre-charge) consent hooks
+            //     never see it. Both sit on the AI's own casting pipeline
+            //     (RequestCastImpl -> ... -> FinishCastImpl, whose precondition
+            //     is CheckCast -- ENGINE_NOTES §0.13/§0.14); CastSpellImmediate
+            //     skips that state machine entirely (the same reason it never
+            //     animates). Field proof, deck 2026-08-18: Lucien's AI cast of
+            //     Healing (0005AD5C) is "[consent] HARD-ABORTED" while MFO's
+            //     own direct SELF-CAST applies land on the same actor, same
+            //     minute, hooks live.
+            // So the consent hooks may keep DENYING the follower's own AI
+            // stream while MFO's direct stream delivers -- coherent, never a
+            // lockout. The package delivery is REMOVED here, not demoted: two
+            // live delivery paths split the cadence/magicka semantics (the
+            // package stream spends no magicka and ROOTS the caster mid-fight,
+            // and its ~per-hold beat cannot meet the kConcApplyPeriod heal
+            // contract), and the animation it bought is deferred anyway. The
+            // old bForceCastOnMiss+bUsePackages gate went with it -- the direct
+            // force needs neither (OOC already ships without them), so combat
+            // and OOC concentration now run the IDENTICAL delivery. No
+            // Loadout::CoolingDown gate / StartCooldown either: the channel
+            // self-paces (kConcApplyPeriod / fCastCooldown by kind), and a 4 s
+            // cooldown hole would let TargetCastReconcile's ~2 s stale window
+            // tear down a still-winning stream. LoS + line-of-fire for hostile
+            // offense are re-checked on EVERY apply inside CastTargetDirect
+            // (the ffWatch analog); bounding lives in TargetCastReconcile
+            // (hostile 1-4 s Temperament, heal 6 s, utility 4 s + ward dispel)
+            // -- release + re-stream while the rule wins, never a stop.
             switch (CastTargetDirect(a_follower, a_spell, a_target)) {
             case SelfCast::Applied:
-                return { Result::Fired, "concentration (direct force -- package-locked)" };
+                // Exclusive control while the rule governs: keep the consent
+                // latch armed so the slider denies COMPETING AI spells and the
+                // concentration deny keeps the AI's own unbounded attempt at
+                // this spell off. The direct stream is unaffected (above).
+                CasterConsent::Want(id, a_spell->GetFormID());
+                return { Result::Fired, "concentration (direct force)" };
             case SelfCast::Refreshed:
+                // Live stream, paced out this tick -- the wait IS the action;
+                // transparent like the FF form.
                 return { Result::NoOp, "concentration direct refresh (paced)", true };
             case SelfCast::Declined:
             default:
-                return { Result::FailedOther, "concentration cast declined (see [pkg])", true };
+                // Unaffordable (§5.3) / LoS or line-of-fire held (offense) /
+                // off-AE: transparent + legible, the rules below run.
+                return { Result::FailedOther, "concentration direct-force declined", true };
             }
         }
 
@@ -450,8 +443,9 @@ namespace MFO::Actuation {
             // Loadout::CoolingDown or call StartCooldown: StartCooldown ->
             // ReleaseSpell would rip the spell out of the hand and kill the
             // animation. Re-fire it every combat tick while the rule wins (it
-            // refreshes the channel + applies the effect at fCastCooldown
-            // cadence); the reconcile releases it when the rule goes false.
+            // refreshes the channel + applies the effect on the channel's own
+            // beat -- ~1 s kConcApplyPeriod for concentration, fCastCooldown
+            // for FF); the reconcile releases it when the rule goes false.
             if (a_target == a_follower && Config::g_castSelf.load()) {
                 // F3 tri-state (mirrors Logistics.cpp:3987-3996): only a real
                 // Applied is THIS tick's action. A Refreshed tick (the channel is
@@ -734,38 +728,49 @@ namespace MFO::Actuation {
                 }
             }
 
-            auto* caster = a_follower->GetMagicCaster(src);
-            if (!caster) {
-                caster = a_follower->GetMagicCaster(CS::kInstant);
-                if (!caster) return { Result::FailedOther, "no magic caster", true };
-            }
-            caster->CastSpellImmediate(spell, false, a_target, 1.0f, false, 0.0f, a_follower);
-
-            // CHARGE THEM. Measured: package casts and CastSpellImmediate both
-            // spend NOTHING (ENGINE_NOTES §0.22), so without this §5.3's
-            // competence gate is decorative -- the pool never falls, so
-            // "insufficient magicka" can only ever trigger on a pool drained by
-            // vanilla AI.
+            // THREADING (#14): CastOn runs on the AddTask job worker
+            // (Scheduler::Tick -> Fire), and this silent cast used to call
+            // CastSpellImmediate INLINE here -- the same off-main pattern the
+            // queued 1.5.x act.cast_target AV reports point at. Post the engine
+            // apply + deduct to the MAIN thread, re-resolving by FormID inside
+            // (never carry Actor* across threads). Fired is returned
+            // optimistically, the same contract as ApplySelfEffect/
+            // ApplyTargetEffect. `src` is captured by value (an enum).
             //
-            // The cost is CalculateMagickaCost(a_follower), the ACTOR overload,
-            // which accounts for their skill level and perks: a Destruction-
-            // perked follower pays less for the same spell, and a gate that
-            // ignored that would be measuring the wrong thing entirely
-            // (marth, 2026-07-22).
-            //
-            // INVARIANTS #16 forbids hand-writing state a flow PRODUCES. This
-            // flow produces no deduction at all, so this fills a gap rather
-            // than duplicating one -- the same call DAC makes.
-            if (avo) {
-                // On ActorValueOwner, not Actor -- and `avo` is already in hand.
-                // Clamp to the pool NOW (#6): magicka can have drained since the
-                // §5.3 gate above, and a deduct past zero drives the value
-                // negative (RestoreActorValue does not floor at 0).
-                const float spend = std::min(cost,
-                    avo->GetActorValue(RE::ActorValue::kMagicka));
-                if (spend > 0.0f)
-                    avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                           RE::ActorValue::kMagicka, -spend);
+            // CHARGE THEM (inside the post). Measured: package casts and
+            // CastSpellImmediate both spend NOTHING (ENGINE_NOTES §0.22), so
+            // without this §5.3's competence gate is decorative. The cost is
+            // CalculateMagickaCost(a_follower), the ACTOR overload (skill +
+            // perks -- marth, 2026-07-22). INVARIANTS #16 forbids hand-writing
+            // state a flow PRODUCES; this flow produces no deduction at all,
+            // so this fills a gap rather than duplicating one -- the same call
+            // DAC makes. Clamped to the live pool (#6) so a deduct can never
+            // drive magicka negative.
+            {
+                auto doCast = [fid = a_follower->GetFormID(),
+                               tid = a_target ? a_target->GetFormID() : 0,
+                               spid = spell->GetFormID(), src] {
+                    auto* f  = RE::TESForm::LookupByID<RE::Actor>(fid);
+                    auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spid);
+                    // A null target stays null (the original inline call passed
+                    // a_target through as-is; CastSpellImmediate accepts null).
+                    auto* t  = tid ? RE::TESForm::LookupByID<RE::Actor>(tid) : nullptr;
+                    if (!f || !sp || (tid && !t)) return;
+                    auto* caster = f->GetMagicCaster(src);
+                    if (!caster) caster = f->GetMagicCaster(CS::kInstant);
+                    if (!caster) return;   // F4: no caster -> no cast, no deduct
+                    auto* mavo = f->AsActorValueOwner();
+                    const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                    caster->CastSpellImmediate(sp, false, t, 1.0f, false, 0.0f, f);
+                    const float c     = sp->CalculateMagickaCost(f);
+                    const float spend = mavo ? std::min(c, pool) : 0.0f;
+                    if (mavo && spend > 0.0f)
+                        mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                RE::ActorValue::kMagicka, -spend);
+                };
+                // VR has no pump (Post is a documented no-op): fall back inline.
+                if (MainThread::IsInstalled()) MainThread::Post(doCast);
+                else                           doCast();
             }
 
             // Restart the AI's window. Without this the grace is a ONE-SHOT:
@@ -964,7 +969,9 @@ namespace MFO::Actuation {
     //     cast animation is DEFERRED (polish pass), so the equip/HoldStow/caster-
     //     drive scaffolding is gone entirely.
     //   * FIRE (CastSelfDirect, every service/combat tick the rule wins): register
-    //     the entry, refresh lastFired, and -- once per fCastCooldown -- apply the
+    //     the entry, refresh lastFired, and -- once per beat (kConcApplyPeriod ~1 s
+    //     for a CONCENTRATION spell, per-second authored magnitude/cost; once per
+    //     fCastCooldown for FF) -- apply the
     //     effect + spend magicka (§5.3) via ApplySelfEffect. The ALREADY-ACTIVE
     //     guard there (the foe cast's own HasMagicEffect check) blocks re-applying
     //     a duration self-buff/light while it is still up, so exactly ONE light
@@ -1392,12 +1399,19 @@ namespace MFO::Actuation {
         }
 
         // SELF-PACE the effect application. Callers refresh this every
-        // service/combat tick while the rule wins; we apply the effect + spend
-        // magicka only once per fCastCooldown, so a self-heal ticks at the
-        // configured cadence rather than every 133 ms. (A duration self-buff is
-        // additionally capped to once per effect-duration by the already-active
-        // guard in ApplySelfEffect.)
-        const float interval = std::max(1.0f, Config::g_castCooldown.load());
+        // service/combat tick while the rule wins. CADENCE CONTRACT
+        // (kConcApplyPeriod): a CONCENTRATION spell's magnitude/cost is
+        // authored PER SECOND, so its beat is ~1 s -- pacing a concentration
+        // self-heal by fCastCooldown (default 4 s) cut its throughput ~4x
+        // ("heals feel broken"). A FIRE-AND-FORGET spell keeps the configured
+        // fCastCooldown beat (its magnitude is per CAST). A duration buff is
+        // additionally capped to once per effect-duration by the
+        // already-active guard in ApplySelfEffect, so the 1 s concentration
+        // beat can never stack a still-up self ward.
+        const float interval =
+            a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration
+                ? kConcApplyPeriod
+                : std::max(1.0f, Config::g_castCooldown.load());
         if (std::chrono::duration<float>(now - it->second.lastApply).count() >= interval) {
             it->second.lastApply = now;
             ApplySelfEffect(id, spellID);
@@ -1499,11 +1513,15 @@ namespace MFO::Actuation {
     // The known-working, package-lock-proof delivery for a concentration cast at a
     // player / ally / foe: no package -> no §4.6 alias-lock decline, so a package-
     // locked custom follower (Lucien) actually heals the player and damages the foe.
-    // Registers a single per-follower stream, paces the apply by fCastCooldown, and
-    // is time-bounded + released by TargetCastReconcile. Returns Applied/Refreshed/
-    // Declined with the SAME semantics as CastSelfDirect (a paced REFRESH is NOT an
-    // action). LoS + line-of-fire GATE hostile offense (never direct-apply damage
-    // into a wall or through a teammate). Worker/main-thread; posts the apply to main.
+    // Registers a single per-follower stream, paces the apply at kConcApplyPeriod
+    // (~1 s -- a concentration magnitude is authored per second; FF spells keep
+    // fCastCooldown), and is time-bounded + released by TargetCastReconcile.
+    // Returns Applied/Refreshed/Declined with the SAME semantics as CastSelfDirect
+    // (a paced REFRESH is NOT an action). LoS + line-of-fire GATE hostile offense
+    // (never direct-apply damage into a wall or through a teammate). Callers:
+    // Logistics OOC cast dispatch AND combat's ConcentrationCast -- BOTH primary,
+    // no package anywhere on the concentration delivery. Worker-serial state;
+    // the engine apply itself is posted to the MAIN thread (ApplyTargetEffect).
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                               RE::Actor* a_target) {
         if (!REL::Module::IsAE())            return SelfCast::Declined;   // AE-only (#67)
@@ -1560,9 +1578,18 @@ namespace MFO::Actuation {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
         }
 
-        // SELF-PACE the apply (once per fCastCooldown), same cadence as the self and
-        // AUTO paths -- so the stream ticks at the configured beat, not every 133 ms.
-        const float interval = std::max(1.0f, Config::g_castCooldown.load());
+        // SELF-PACE the apply. CADENCE CONTRACT (kConcApplyPeriod): a
+        // CONCENTRATION effect's magnitude/cost is authored PER SECOND, so the
+        // stream beats at ~1 s -- the last known-working heal path (ff0cb48
+        // healStream) re-fired every service tick, and pacing by fCastCooldown
+        // (default 4 s) cut heal throughput ~4x ("heals feel broken"). An FF
+        // spell (this function can be handed one) keeps the fCastCooldown beat;
+        // a sticky concentration ward's 1 s beat is de-duplicated by the
+        // already-active guard in ApplyTargetEffect.
+        const float interval =
+            a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration
+                ? kConcApplyPeriod
+                : std::max(1.0f, Config::g_castCooldown.load());
         if (std::chrono::duration<float>(now - it->second.lastApply).count() >= interval) {
             it->second.lastApply = now;
             // GUARD only sticky (Buff) buffs; heal/damage re-apply freely (momentary).
@@ -1577,6 +1604,10 @@ namespace MFO::Actuation {
         const auto now = SelfClock::now();
         // Same release window as SelfCastReconcile: out-wait the worst-case
         // round-robin + suppression gap so a still-winning rule is never torn down.
+        // (KNOWN SEV-1, shared with SelfCastReconcile: g_active is main-thread/
+        // serial-task-only (#4) and this runs on the job worker -- tracked in
+        // REVIEW-2026-08-18-comprehensive; the whole cluster is being fixed in
+        // one wave, do not half-fix it here.)
         const float suppress   = std::max(0.0f, Config::g_suppressWindow.load());
         const float partySize  = static_cast<float>(Followers::g_active.size() + 1);
         const float releaseSec = std::max(2.0f, suppress * 1.12f + 0.133f * partySize + 0.5f);

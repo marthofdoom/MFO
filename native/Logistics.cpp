@@ -19,6 +19,7 @@
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
+#include "Sightline.h"    // LoS + line-of-fire gate on the OOC hostile-FF direct fallback
 #include "Followers.h"    // #62 on-load beast-head sweep iterates g_active (main thread)
 #include <functional>     // #62 self-reposting on-load sweep closure
 #include <memory>         // std::shared_ptr for that closure
@@ -4193,12 +4194,17 @@ namespace MFO::Logistics {
                 //     package route [pkg]-DECLINED every tick and his on-player heal
                 //     never landed; deck build 5f8e873). Bounded/released by
                 //     TargetCastReconcile (hostile 1-4s LoS+LoF-gated, heal 6s but
-                //     re-applies while wounded, utility 4s + dispel-on-stop).
+                //     re-applies while wounded, utility 4s + dispel-on-stop); the
+                //     apply beats at ~1s (kConcApplyPeriod -- per-second authored
+                //     magnitude, the heal cadence contract).
                 //   * SELF (gate off) CONCENTRATION -> skipped legibly (self needs
                 //     bCastSelf); never direct-applied on self behind the toggle.
                 //   * SELF (gate off) + PLAYER, FIRE-AND-FORGET -> CastSpellImmediate
-                //     (applies the effect to any target; no animation, but it lands).
-                //   * FIRE-AND-FORGET hostile at a FOE -> the animated package (CastAt).
+                //     (applies the effect to any target; no animation, but it lands),
+                //     posted to the MAIN thread (#14).
+                //   * FIRE-AND-FORGET hostile at a FOE -> the animated package (CastAt),
+                //     with a DIRECT-FORCE fallback when the package §4.6-declines
+                //     (package-locked follower) so the cell still delivers.
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
                 if (!sp || !a_follower->HasSpell(sp)) {
                     start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
@@ -4272,8 +4278,11 @@ namespace MFO::Logistics {
                 // lingering ward). SELF is NOT delivered here: selfPkg (bCastSelf on)
                 // took CastSelfDirect above; a self target with the gate OFF is
                 // skipped legibly (never direct-applied on self behind the toggle).
-                // The stream self-paces (fCastCooldown), so it bypasses the FF
-                // already-active pre-skip and the g_logiCastUntil window below.
+                // The stream self-paces at ~1s (kConcApplyPeriod -- a concentration
+                // magnitude/cost is authored PER SECOND, so the 4s fCastCooldown
+                // would quarter heal throughput, the "heals feel broken" bug), so
+                // it bypasses the FF already-active pre-skip and the
+                // g_logiCastUntil window below.
                 if (!selfPkg && conc) {
                     if (tgt == a_follower) {
                         // Self with the gate off -- self-casting is disabled; decline
@@ -4379,19 +4388,83 @@ namespace MFO::Logistics {
                     // CastSpellImmediate applies the effect to `tgt` for any delivery.
                     // No charge animation, but the light/buff/heal lands. Spends no
                     // magicka, so gate on affordability and deduct the cost by hand.
+                    // THREADING (#14): the engine cast MUST run on the MAIN thread --
+                    // this block used to call CastSpellImmediate INLINE on the AddTask
+                    // job worker (the prime suspect for the queued 1.5.x act.cast_target
+                    // AV crash reports). Post it like ApplySelfEffect/ApplyTargetEffect
+                    // do: re-resolve by FormID inside (never carry an Actor* across
+                    // threads) and clamp the deduct to the main-thread pool so it can
+                    // never drive magicka negative.
                     const float cost = sp->CalculateMagickaCost(a_follower);
                     auto* avo = a_follower->AsActorValueOwner();
                     if (avo && avo->GetActorValue(RE::ActorValue::kMagicka) < cost) {
                         start = choice.ruleIndex + 1; continue;   // can't afford it
                     }
-                    if (auto* caster = a_follower->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant)) {
-                        caster->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, a_follower);
-                        if (avo) avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                                        RE::ActorValue::kMagicka, -cost);
-                        acted = true;
+                    auto doCast = [casterID = id, tgtID = tgt->GetFormID(),
+                                   spID = sp->GetFormID()] {
+                        auto* f = RE::TESForm::LookupByID<RE::Actor>(casterID);
+                        auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
+                        auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
+                        if (!f || !t || !s) return;
+                        auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                        if (!caster) return;   // F4: no caster -> no cast, no deduct
+                        auto* mavo = f->AsActorValueOwner();
+                        const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                        caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
+                        const float c     = s->CalculateMagickaCost(f);
+                        const float spend = mavo ? std::min(c, pool) : 0.0f;   // never negative
+                        if (mavo && spend > 0.0f)
+                            mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                    RE::ActorValue::kMagicka, -spend);
+                    };
+                    // VR has no pump (Post is a documented no-op there): fall back
+                    // to the old inline call rather than silently casting nothing.
+                    if (MainThread::IsInstalled()) MainThread::Post(doCast);
+                    else                           doCast();
+                    acted = true;   // optimistic, same as the posted self/target applies
+                } else {
+                    // FF HOSTILE at a FOE -> the animated alias-0 foe package. For a
+                    // PACKAGE-LOCKED custom follower (Lucien 2F00591F) that claim
+                    // §4.6-declines every tick, and "packages off" declines it too --
+                    // either way the cell must still deliver (marth: no combo may
+                    // silently not work). DIRECT-FORCE fallback: silent one-shot
+                    // CastSpellImmediate, LoS + line-of-fire gated (never a firebolt
+                    // into a wall or through a teammate), affordability-gated, posted
+                    // to the main thread with the deduct clamped -- the same delivery
+                    // combat's silent force-half uses when ITS package declines.
+                    acted = Packages::Available() &&
+                            Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None;
+                    if (!acted &&
+                        Sightline::Check(id, tgt->GetFormID()) != Sightline::Verdict::Occluded &&
+                        !Sightline::TeammateInFireLine(id, tgt->GetFormID())) {
+                        const float cost = sp->CalculateMagickaCost(a_follower);
+                        auto* avo = a_follower->AsActorValueOwner();
+                        if (!avo || avo->GetActorValue(RE::ActorValue::kMagicka) >= cost) {
+                            auto doCast = [casterID = id, tgtID = tgt->GetFormID(),
+                                           spID = sp->GetFormID()] {
+                                auto* f = RE::TESForm::LookupByID<RE::Actor>(casterID);
+                                auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
+                                auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
+                                if (!f || !t || !s) return;
+                                auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                                if (!caster) return;
+                                auto* mavo = f->AsActorValueOwner();
+                                const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                                caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
+                                const float c     = s->CalculateMagickaCost(f);
+                                const float spend = mavo ? std::min(c, pool) : 0.0f;
+                                if (mavo && spend > 0.0f)
+                                    mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                            RE::ActorValue::kMagicka, -spend);
+                            };
+                            if (MainThread::IsInstalled()) MainThread::Post(doCast);
+                            else                           doCast();   // VR: no pump
+                            spdlog::info("[logistics] {:08X} OOC hostile FF {:08X} at {:08X} -- "
+                                         "package declined, DIRECT FORCE fallback",
+                                         id, sp->GetFormID(), tgt->GetFormID());
+                            acted = true;
+                        }
                     }
-                } else if (Packages::Available()) {
-                    acted = (Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None);
                 }
                 if (acted && !selfPkg) {
                     auto* ei = sp->GetCostliestEffectItem();

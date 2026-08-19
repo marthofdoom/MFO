@@ -81,12 +81,15 @@ namespace MFO::Actuation {
     // concentration cast: CastSpellImmediate straight onto the target + magicka
     // deduct, NO package, so it beats a package-locked custom follower's §4.6 alias
     // lock (Lucien 2F00591F's on-player heal that the package route [pkg]-DECLINED
-    // every tick). Registers one per-follower stream, paces the apply by fCastCooldown,
-    // and is time-bounded + released by TargetCastReconcile. Returns Applied/Refreshed/
-    // Declined (same semantics as CastSelfDirect). LoS + line-of-fire gate hostile
-    // offense. Callers: Logistics OOC cast dispatch (primary, direct-only) and
-    // ConcentrationCast's structural-decline fallback (combat, package-first). A self
-    // target is refused (use CastSelfDirect). Worker/main-thread; posts to main.
+    // every tick). Registers one per-follower stream; a CONCENTRATION spell
+    // re-applies on the ~1 s kConcApplyPeriod beat (per-second authored magnitude
+    // AND per-second cost -- the heal cadence contract), an FF spell keeps the
+    // fCastCooldown beat. Time-bounded + released by TargetCastReconcile. Returns
+    // Applied/Refreshed/Declined (same semantics as CastSelfDirect). LoS +
+    // line-of-fire gate hostile offense on EVERY apply. Callers: Logistics OOC
+    // cast dispatch AND combat ConcentrationCast -- BOTH primary; concentration
+    // delivery touches no package anywhere. A self target is refused (use
+    // CastSelfDirect). Worker-serial state; the engine apply posts to main.
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                               RE::Actor* a_target);
 
@@ -132,11 +135,13 @@ namespace MFO::Actuation {
     // condition (Candlelight) fan to the whole party regardless.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold = 1.0f);
 
-    // (COMBAT concentration at a single target is served internally by CastOn's
-    // concentration fork -> ConcentrationCast, the bounded PACKAGE stream, which now
-    // FALLS BACK to CastTargetDirect on a §4.6 structural decline. OUT OF COMBAT the
-    // Logistics dispatch delivers concentration through CastTargetDirect directly --
-    // no package at all -- see that function above.)
+    // (CONCENTRATION delivery is DIRECT FORCE everywhere -- Docs/CAST-DELIVERY.md.
+    // COMBAT: CastOn's concentration fork -> ConcentrationCast -> CastTargetDirect
+    // (self -> CastSelfDirect); the v1.0.58-65 package stream is REMOVED -- it
+    // §4.6-declined every tick for package-locked custom followers while the
+    // consent hooks denied their own AI, a total lockout. OUT OF COMBAT: the
+    // Logistics dispatch calls CastTargetDirect directly. Same channel registry,
+    // same 1 s concentration beat, same bounds, both contexts.)
 
     // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired
