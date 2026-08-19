@@ -69,7 +69,6 @@ namespace MFO::Actuation {
             data.magicItem     = a_spell;
             data.effect        = eff;
             data.magnitude     = eff->effectItem.magnitude; // engine adds skill/perks via caster
-            data.power         = 1.0f;                       // full effectiveness
             data.castingSource = RE::MagicSystem::CastingSource::kInstant;
             mt->AddTarget(data);
             any = true;
