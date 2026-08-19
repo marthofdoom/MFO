@@ -9,40 +9,41 @@
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
 > **▶▶ RESUME HERE (2026-08-19) — v1.0.65 STAGED (`f1110f2`, VERSION 1.0.65, NO TAG/not published); ONE gate left: the deck field test.**
-> - **⛔ CUT HELD — sole gate = DECK FIELD TEST of the SELF-DELIVERY fix (wave 2).** main is now at `94281dc`
->   (merge of `40ad50e` on top of the `4133212` wave-1 merge). **DLL `a8d641bb`** (green CI run
->   `32294465948`) is deployed into the local `custom-modlist/mods/MFO` — replaces `32dc5684`→`a8d641bb`
->   (orig `c875048`). Deck was ASLEEP at deploy (SSH timeout = asleep per [[deck-sleeps-ssh-timeout]]);
->   syncthing carries `a8d641bb` when it wakes — **RE-VERIFY the deck sha == `a8d641bb` before trusting any
->   field result.**
-> - **THE FIX (2026-08-19) — SELF-DELIVERY, now THREE ROLES.** field report: Lucien force-cast Fast Healing at
->   the player, magicka drained, HP never moved. ROOT CAUSE (not misclassification): **Mysticism** overrides
->   Fast Healing to Concentration/**Self**-delivery; `CastSpellImmediate` applies a Self-delivery effect to the
->   MAGIC-CASTER'S OWNER, ignoring the target — so it healed Lucien, and `SustainConcentrationEffect` searched
->   the player's list, never found it → re-attached every beat. FIX is archetype-agnostic (ALL self-delivery +
->   concentration spells, per marth) across THREE roles:
->   1. **Where it lands** — a Self spell aimed off-self routes through the TARGET self-casting (`EffectCasterFor`).
->   2. **Whose rate** — `ReattributeEffectCaster` re-points the fresh `ae->caster` back to the FOLLOWER so the
->      engine applies HIS perks/effectiveness every application (persists across the sustain; all effects of a
->      multi-effect spell).
->   3. **Who pays** (wave 2, field-driven) — the target-self-cast made the ENGINE charge the PLAYER's magicka
->      (§0.9: `CastSpellImmediate` bills the magic-caster's owner; §0.22 "free" was PACKAGE-path only). Fix:
->      `RefundMagicka` snapshots+restores the target's magicka around each re-routed cast; the FOLLOWER still
->      pays via its own hand-deduct (runs dry correctly). Gated on `ecaster != follower` so target-delivery +
->      genuine `cast_self` are no-ops.
->   Plus a **recipient-HP heal terminator** (wave 2): stop-when-full (`kHealFullPct` 0.995) reads the intended
->   heal target's Health (not the follower / mechanical caster), so both OOC re-dispatch and the reconcile
->   release+dispel end the stream when the recipient tops off; the 6s cap stays a backstop. HEAL-only —
->   wards/flesh/utility buffs still run their window. Docs: CAST-DELIVERY.md SELF-DELIVERY (three roles) +
->   heal-terminator + MAP.md.
-> - **FIELD-WATCH (wave 2):** on the on-player heal — **PLAYER magicka stays FLAT** while the **follower's**
->   `FORCE-CAST … magicka X→Y (cost N)` ticks down (empty follower pool → stops); **player HP climbs at the
->   FOLLOWER's rate** (strong heal on a low-Restoration player); **stream ENDS within ~1s of the player hitting
->   full HP** (no further FORCE-CAST / `conc effect ATTACHED`, sustained entry dispelled — not lingering).
->   Non-heal check: a follower self-buff (flesh/ward) on the player lands at the follower's rank, player magicka
->   flat. Residual (Fable-flagged, out of scope): normal target-delivery casts still double-charge the FOLLOWER
->   (engine §0.9 + manual) — re-routed heals are slightly cheaper for the follower; future balance pass, not
->   field-flagged.
+> - **⛔ CUT HELD — sole gate = DECK FIELD TEST of the SELF-DELIVERY fix (wave 3 — PIVOT).** main is now at
+>   `4e6d4aa` (merge of `f5f6ff9`+`efd7114`). **DLL `2ad0c414`** (green CI run `32297419600`) deployed into the
+>   local `custom-modlist/mods/MFO` — supersedes `a8d641bb`→`2ad0c414` (orig `c875048`). Deck AWAKE but not yet
+>   synced at deploy — **RE-VERIFY the deck sha == `2ad0c414` before trusting any field result** (syncthing).
+> - **THE FIX (2026-08-19) — SELF-DELIVERY, 3 field-driven waves, ending in an ARCHITECTURAL PIVOT.** Field
+>   report: Lucien (package-locked custom follower) healing the player — cast fired, magicka spent, no heal.
+>   ROOT CAUSE (not misclassification): **Mysticism** overrides Fast Healing to Concentration/**Self**-delivery;
+>   `CastSpellImmediate` applies a Self-delivery effect to the MAGIC-CASTER'S OWNER, ignoring the target.
+>   - **Waves 1–2 (REVERTED approach):** re-route via the TARGET self-casting + caster re-attribution + a
+>     magicka refund. Field-falsified: making the target self-cast means the **PLAYER is the caster** → engine
+>     charges the PLAYER's magicka (drains to empty at cast rate; refund is a no-op vs a per-frame channel) AND
+>     the heal STOPS when the player runs dry. Wrong model — a follower heal must be independent of player mana.
+>   - **Wave 3 (SHIPPED, the model):** deliver the real effect straight onto the target attributed to the
+>     follower via **`RE::MagicTarget::AddTarget(AddTargetData)`** (the engine's own per-effect apply path; NOT
+>     the AI package). `Actuation::ApplyEffectsFromCaster` fills `caster=follower, magicItem=spell, effect=<eff>,
+>     magnitude=authored base, castingSource=kInstant` per effect and calls `target->AsMagicTarget()->AddTarget`.
+>     Gated by `NeedsCasterAttributedDelivery` (Self-delivery + non-self target); else the follower's normal
+>     `CastSpellImmediate`. Removed the wave-1/2 band-aids (`EffectCasterFor`/`ReattributeEffectCaster`/
+>     `RefundMagicka`). **Three roles, all met, archetype-agnostic:** lands on target / follower's rate (engine-
+>     owned, no `magnitudeOverride`, no hand-rolled math) / **player NEVER casts, NEVER pays, needs ZERO magicka**
+>     (follower pays via its own hand-deduct only). The created AE carries the spell so `SustainConcentrationEffect`
+>     finds+re-arms it → ONE sustained effect (kills the per-beat re-attach). Recipient-HP heal terminator kept
+>     (`kHealFullPct` 0.995, reads the HEAL TARGET's Health). Docs: CAST-DELIVERY.md + MAP.md rewritten to the
+>     AddTarget model, target-self-cast recorded as REJECTED.
+> - **FIELD-WATCH (wave 3):** with a **0-magicka player** — the on-player heal still LANDS and HP CLIMBS; the
+>   **player's magicka bar stays FLAT** (no dip, no drain-to-empty); Lucien's small per-beat deduct shows
+>   (`FORCE-CAST … (self-delivery: applied from follower)`); `conc effect ATTACHED` **ONCE per stream** then
+>   re-arms silently (no per-beat re-attach); heal stops within ~1s of the player reaching full. Non-heal check:
+>   a follower self-buff (flesh/ward) on the player lands at the follower's rank, player mana flat.
+> - **RESIDUAL (wave 3, field-testable):** if the engine's `AddTarget`/AE creation bakes magnitude WITHOUT
+>   re-applying the caster's perks, a perk-boosted heal could land at BASE rate (still a real heal, just
+>   unboosted). If the field shows a weak follower-rate, the fallback is passing the follower's engine-computed
+>   effective magnitude in `AddTargetData.magnitude` (still engine-owned) — NOT a return to player-casting.
+>   Deferred alt (marth's fabricated-SPEL idea): a runtime-fabricated FF+TargetActor SpellItem (cached dynamic
+>   form, lifetime-managed) would also decouple + enable instant-burst/animated-cast — build later if wanted.
 > - **LOCAL FABLE REVIEW: DONE + CLEAN (2026-08-19).** 6-dimension multi-agent review of the 67-commit diff
 >   (`v1.0.64`..main), each finding adversarially verified. **Zero SEV-1/SEV-2.** Two SEV-3s, both NON-blocking
 >   follow-ups: (a) `Logistics.cpp:4438` OOC hostile cast's LoS wall-gate is inert (Check without a Want seed →
