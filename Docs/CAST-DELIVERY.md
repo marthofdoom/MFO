@@ -37,11 +37,13 @@ This is the **known-working force**. It is:
   which was **latently package-declined for locked followers even in the public build** —
   the combat lockout below was already live there, just unreported.
 - **Effective — for FIRE-AND-FORGET.** A duration-0 FF instant applies its per-CAST
-  magnitude in full through the plain call (field-proven). **For CONCENTRATION the plain
-  call applies ~0** — see "THE MAGNITUDE CONTRACT" below; MFO applies the beat's worth
-  explicitly. The earlier "no magnitude problem, never add `RestoreActorValue` math"
-  ruling was measured on FF spells and AI-*channeled* casts and was a **false premise**
-  for a forced concentration cast (deck A/B on b63beb9, 2026-08-18).
+  magnitude in full through the plain call (field-proven). **For CONCENTRATION a bare
+  one-shot applies ~0** — see "THE REAL-EFFECT CONTRACT" below: the real effect is
+  attached once and SUSTAINED with a synthesized duration so the ENGINE channels its own
+  computed per-caster magnitude. The earlier "no magnitude problem" ruling was measured
+  on FF spells and AI-*channeled* casts — a false premise for a forced one-shot (deck A/B
+  on b63beb9, 2026-08-18) — and the interim `RestoreActorValue` recreation that followed
+  was equally wrong (base value, VM-only; superseded by marth's real-effect ruling).
 - **Consent-coherent.** It passes through NEITHER CasterConsent hook. `CheckStartCast`
   (0x06) advises the *combat AI's* deliberation and `CheckCast` (0x0A) is the pre-charge
   gate of the AI's own casting pipeline (`RequestCastImpl → … → FinishCastImpl`, whose
@@ -58,78 +60,68 @@ Entry points, all the same mechanism:
   released by `TargetCastReconcile`) — called by BOTH the OOC Logistics dispatch AND
   combat's `ConcentrationCast`. One channel per follower.
 
-## THE MAGNITUDE CONTRACT (forced concentration ≠ the plain call)
+## THE REAL-EFFECT CONTRACT (concentration = the ACTUAL effect, sustained — marth's ruling)
 
-**A concentration effect's magnitude is authored PER SECOND, and the engine only applies
-it while a real channel RUNS.** The ActiveEffect a one-shot `CastSpellImmediate` creates
-carries duration 0 and no sustaining channel: it attaches (the hit-shader plays — the
-"healing glow" residue), then dies on its first update, applying ~one *frame's* worth of a
-per-second magnitude — effectively **zero**. Field A/B, deck b63beb9 (2026-08-18): the
-SAME spell (Fast Healing 0002F3B8, concentration in this modlist) fired at SELF via
-`CastSelfDirect` AND at the PLAYER via `CastTargetDirect`; both drained magicka on every
-apply, **neither target's HP moved**. Every heal that "worked with the plain call" in the
-public build was either an FF spell or the follower's own AI *channeling* (which
-accumulates) — never a forced concentration one-shot.
+**"Shouldn't you be using the ACTUAL spell effect?"** — yes. Two earlier attempts are
+superseded and must not return: the per-beat `CastSpellImmediate` re-cast (dc856ea: HUD
+churn of duration-0 momentaries, no sustained shader) and the `ApplyConcentrationBeat`
+`RestoreActorValue` recreation (REMOVED: it re-derived HP from the BASE authored
+magnitude — ignoring the caster's skill/perks/effectiveness — and only ever covered
+value-modifier AVs; a waterbreathing/invisibility/ward gambit could never work that way).
 
-**So each ~1 s beat applies ONE SECOND'S WORTH of the spell's plain value-modifier
-effects explicitly** (`ApplyConcentrationBeat`, Actuation.cpp — main thread, called from
-`ApplySelfEffect` / `ApplyTargetEffect` / AUTO's `ApplyEffectFromTo`):
-- **beneficial** → `RestoreActorValue(kDamage, av, +magnitude × kConcApplyPeriod)`,
-  clamped to the damage actually taken — a beat can never push past max;
-- **detrimental** → `RestoreActorValue(kDamage, av, −magnitude × kConcApplyPeriod)` (the
-  same call every magicka deduct uses), so a foe stream actually damages;
-- archetype gate: `kValueModifier` / `kDualValueModifier` only (primary AV). Wards,
-  lights, paralysis and scripted archetypes keep the `CastSpellImmediate` apply — their
-  semantics are not per-second AV ticks.
-The exchange rate is honest: each beat spends one second's cost and applies one second's
-magnitude — a magicka-starved caster fires sparse beats that each still heal a full
-second's worth. Log line to verify in the field: `[cast] XXXXXXXX conc beat on YYYYYYYY:
-+N/-M (spell ZZZZZZZZ)`.
+**The premise (field, b63beb9 A/B):** a one-shot `CastSpellImmediate` of a concentration
+spell creates its REAL ActiveEffect — the engine computes the per-caster effective
+magnitude into it — but with duration 0 and no sustaining channel, so it dies within a
+frame: a per-second Restore Health accumulates ~0 (magicka drained, HP flat on self AND
+player; the same spell). Every heal that "worked with the plain call" was FF or
+AI-channeled. Crucially, the ~0 result is itself evidence the effect applies as a **rate
+over its active lifetime** (an instant-apply model would have landed the full magnitude —
+the field ruled that out), so lifetime is the only missing factor.
 
-## THE PRESENTATION CONTRACT (one sustained effect — never a per-beat re-cast)
-
-**Scope correction (dc856ea):** only the caster POSE animation is deferred (post-town
-polish). The **target-side effect VFX — the healing shader/glow — is in scope and must
-display.** And a forced concentration stream must read as **ONE sustained Active-Effect
-HUD entry**, not a rapid-fire stack of momentary effects.
-
-The dc856ea defect: re-invoking `CastSpellImmediate` every beat spawned a fresh
-duration-0 ActiveEffect each ~1 s — HUD churn, and the shader died with each short
-effect. The fix (`SustainConcentrationEffect`, Actuation.cpp, main thread):
-- **Attach once per stream** (stream start, or spell/target change) via
-  `CastSpellImmediate`.
-- **Sustain that single ActiveEffect**: each beat pins a real `duration` (the stream's
-  window — heal 6 s, target offense/utility 4 s, self ward 15 s) and resets
+**The contract (`SustainConcentrationEffect`, Actuation.cpp, main thread — called from
+`ApplySelfEffect` / `ApplyTargetEffect` / AUTO's `ApplyEffectFromTo`):**
+- **Attach once per stream** (stream start, or spell/target change) via plain
+  `CastSpellImmediate` — the real effect, so the ENGINE computes the per-caster
+  magnitude, plays the real shader, creates the real HUD entry, applies resists and
+  hostility, for EVERY archetype.
+- **Sustain that single ActiveEffect**: each ~1 s beat pins a real `duration` (the
+  stream's window — heal 6 s, target offense/utility 4 s, self ward 15 s) and re-arms
   `elapsedSeconds`. Instance-local writes on the live AE (the same fields the DoT-recast
-  logic reads) — **never** a shared-form MGEF/SpellItem mutation. One HUD entry; the
-  shader plays continuously for the rolling window.
-- **Momentary kinds (heal/damage): the sustained effect's `magnitude` is zeroed** — it is
-  purely cosmetic (HUD + shader) while the explicit `RestoreActorValue` beats remain the
-  one deterministic source of HP change; double-application is impossible by
-  construction. A concentration **ward/buff keeps its authored magnitude** (zeroing would
-  zero the ward) and gets only the duration sustain.
+  logic reads) — **never** a shared-form MGEF/SpellItem mutation, **never** touching the
+  engine-computed `magnitude`. Given real lifetime, the engine channels the effect
+  normally: a per-second value-modifier accumulates its own computed rate, a duration
+  archetype (waterbreathing, invisibility, muffle) simply lasts, a ward wards.
+- **MFO owns delivery, cost, and bounds; the ENGINE owns the magnitude.** No manual AV
+  math, no base-authored values, no constants in the heal/damage numbers — the amount is
+  exactly what that NPC casting that spell normally does. The ~1 s beat deducts the
+  per-second cost (clamped) and re-arms the window; that is all it does.
 - **Release**: a sticky ward dispels on any release (unchanged). A momentary stream's
-  cosmetic effect now dispels at **end-of-stream** (rule stale / actor gone / spell-or-
-  target switch) so the glow dies with the stream — safe, it heals nothing — but is
-  **kept alive across cap-only releases** (the 6 s heal cap re-streams next tick), so
-  the HUD entry is continuous for the whole time the rule wins.
-- **Fallback**: if the engine expires the effect despite the pinned duration (e.g. a
-  no-duration-flagged MGEF), the next beat simply finds nothing and re-attaches —
-  degrading to the old per-beat presentation with zero functional loss.
+  sustained effect genuinely channels, so it is dispelled at **end-of-stream** (rule
+  stale / actor gone / spell-or-target switch) — the stream's end must cut it rather
+  than let it run unpaid — but is **kept alive across cap-only releases** (the 6 s heal
+  cap re-streams next tick), so the HUD entry is continuous while the rule wins. An
+  orphan can outlive its stream by at most its remaining window (bounded by design).
+- **Presentation scope:** only the caster POSE animation is deferred (post-town). The
+  target-side effect VFX — shader/glow + ONE sustained HUD entry — is in scope and is
+  exactly what the sustained real effect provides.
+- **Evidence collector / fallback:** the attach logs
+  `[cast] XXXXXXXX conc effect ATTACHED on YYYYYYYY (spell ZZZZZZZZ, window Ws)`. If the
+  engine honors the pinned duration this appears ONCE per stream and HP climbs at the
+  engine's own rate; if a concentration-specific check kills the AE regardless (the one
+  premise CI cannot test), the line repeats every beat and presentation degrades to
+  per-beat re-attach. Should the field prove non-accumulation, the sanctioned fallback is
+  applying the ENGINE-COMPUTED `ae->magnitude` (captured off the created AE — never
+  `Effect::GetMagnitude()` base) per second, or an FF-variant runtime spell — NOT a
+  return to base-value `RestoreActorValue` recreation.
 
-Known residuals: authored magnitude (no skill/perk scaling — matches the flat per-second
-cost); dual-value secondary AV skipped (`secondAVWeight` unverified in this CommonLib
-rev); foe damage is a plain AV hit (no resist math, no aggro event — the stream runs in
-combat anyway).
+## THE BEAT CADENCE (the stream's heartbeat)
 
-## THE RE-APPLICATION CADENCE (the contract that makes heals feel right)
-
-**A concentration effect's magnitude AND cost are authored PER SECOND, so the direct
-stream must re-apply it about once per second** (`kConcApplyPeriod` = 1 s) while its rule
-keeps winning. The last known-working heal path (ff0cb48 `healStream`) re-fired every ~1 s
-service tick — that beat IS why it felt right. Pacing a concentration apply by
-`fCastCooldown` (default **4 s**) silently cuts heal/damage throughput ~4× ("heals feel
-broken") and under-drains magicka by the same factor. Rules:
+**A concentration spell's cost is authored PER SECOND, and the engine channels its
+magnitude continuously through the sustained real effect — so the stream beats about once
+per second** (`kConcApplyPeriod` = 1 s) while its rule keeps winning: each beat **deducts
+one second's cost** (clamped) and **re-arms the sustained effect's rolling window**.
+Pacing the beat by `fCastCooldown` (default **4 s**) would under-charge the channel ~4×
+and let the effect lapse between re-arms (the original "heals feel broken" shape). Rules:
 - **concentration (heal / damage / ward), self or target** → ~1 s beat. A sticky ward's
   beat is de-duplicated by the already-active guard (no stacking).
 - **fire-and-forget** → `fCastCooldown` beat (its magnitude is per CAST; a 1 s beat would
@@ -197,11 +189,11 @@ Bounding is release + re-stream, never a stop.
 **The cap must NEVER interrupt a heal that is still needed.** A lingering **ward/utility**
 buff is dispelled off the target (`TargetCastEndActor`/`SelfCastEndActor`) on ANY release
 — gone/stale/capped — so it can never persist as a stuck gameplay buff. A **heal or
-damage** stream's HP flow comes from the explicit beats, which run while the rule wins —
-nothing about release can interrupt it; its magnitude-0 *cosmetic* sustained effect (THE
-PRESENTATION CONTRACT) is dispelled only at **end-of-stream** (stale/gone/switch), never
-on a cap-only release, so the visible effect is one continuous entry while the stream
-re-arms. Fire-and-forget self-buffs keep their authored duration (no cap).
+damage** stream's sustained REAL effect genuinely channels, so it is dispelled only at
+**end-of-stream** (stale/gone/switch — the stream's end must cut it rather than let it
+run unpaid), never on a cap-only release: the cap re-streams next tick and the next beat
+re-arms the SAME effect, so the heal flows and the visible entry stays continuous while
+the rule wins. Fire-and-forget self-buffs keep their authored duration (no cap).
 
 ## GATES (keep on the direct path)
 
@@ -209,8 +201,9 @@ re-arms. Fire-and-forget self-buffs keep their authored duration (no cap).
 - **Line-of-fire** — hold a hostile stream the instant a teammate crosses it (the ffWatch
   analog; also re-checked every apply).
 - **Already-active guard** — a duration buff/LIGHT (Candlelight/Magelight) must not
-  re-apply while already active (light accumulation → ShadowSceneNode CTD). An instant heal
-  leaves no active effect, so it correctly re-fires while the condition holds.
+  re-apply while already active (light accumulation → ShadowSceneNode CTD). A momentary
+  concentration effect (value-modifier) BYPASSES the guard: its sustained real effect is
+  active by design, and the guard must not block the beat that re-arms it.
 - **Affordability (§5.3)** — real cost + reserve floor gate every apply; the hand deduct is
   clamped `min(cost, pool)` so magicka never goes negative.
 - **THREADING (#14)** — the engine apply always runs via `MainThread::Post`, re-resolving
@@ -226,8 +219,8 @@ re-arms. Fire-and-forget self-buffs keep their authored duration (no cap).
 | concentration | `CastSelfDirect`, **1 s beat**, 6 s heal / 15 s ward-utility cap | `CastTargetDirect`, **1 s beat**, 6 s heal / 4 s utility cap | `CastTargetDirect`, **1 s beat**, 1–4 s offense cap (LoS+LoF every apply) |
 
 - Concentration rows are identical IN COMBAT and OUT OF COMBAT — same function, same
-  channel registry, same beat, same caps — and every beat applies the explicit
-  per-second magnitude (THE MAGNITUDE CONTRACT above), not just the plain call.
+  channel registry, same beat, same caps — and every cell delivers the REAL sustained
+  effect whose magnitude the ENGINE computes and channels (THE REAL-EFFECT CONTRACT).
 - **Self-concentration is SOLVED, not barred** — INVARIANT #67 was **REVOKED 2026-07-22**;
   `CastSelfDirect` (no package, no QNAM, so no t6 CTD) is the solution.
 - **AUTO fan** is the one exception to per-target streaming: one follower holds one channel,
@@ -244,11 +237,15 @@ re-arms. Fire-and-forget self-buffs keep their authored duration (no cap).
   (declined every tick). **Fix (36231d7 + fable-cast-solve): direct force is the ONLY
   concentration delivery, OOC and combat; ~1 s cadence restored; all applies main-threaded.**
 - **2026-08-18, field on `b63beb9`:** delivery fixed (player targeted, zero `[pkg]
-  DECLINED`) but **HP flat on self AND player while magicka drained** — the "magnitude
-  theory is a dead end" dismissal was itself wrong (it was tested against FF/AI-channeled
-  casts, a false premise). A forced concentration one-shot applies ~0 of its per-second
-  magnitude. **Fix: `ApplyConcentrationBeat` — explicit per-second magnitude per beat
-  (see THE MAGNITUDE CONTRACT). Do not re-remove it on the strength of the old ruling.**
+  DECLINED`) but **HP flat on self AND player while magicka drained** — a forced
+  concentration one-shot applies ~0 of its per-second magnitude (rate × ~one frame).
+- **2026-08-18, interim `37d9982`/`ffdfbd7` (superseded):** first fixed HP with an
+  explicit `RestoreActorValue` recreation of the BASE authored magnitude, then zeroed the
+  sustained effect and kept the manual beats. marth's ruling ended both: the base value
+  ignores the caster's skill/perks, the AV writes cover only value-modifiers, and the
+  engine already computes the correct per-caster number into the ActiveEffect. **Final:
+  THE REAL-EFFECT CONTRACT — attach the real effect once, sustain its duration, and let
+  the ENGINE own the magnitude. Do not reintroduce manual magnitude math.**
 
 ## PROCESS RULE
 

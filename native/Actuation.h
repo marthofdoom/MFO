@@ -82,9 +82,11 @@ namespace MFO::Actuation {
     // deduct, NO package, so it beats a package-locked custom follower's §4.6 alias
     // lock (Lucien 2F00591F's on-player heal that the package route [pkg]-DECLINED
     // every tick). Registers one per-follower stream; a CONCENTRATION spell
-    // re-applies on the ~1 s kConcApplyPeriod beat (per-second authored magnitude
-    // AND per-second cost -- the heal cadence contract), an FF spell keeps the
-    // fCastCooldown beat. Time-bounded + released by TargetCastReconcile. Returns
+    // attaches its REAL effect once and SUSTAINS it with a synthesized duration
+    // (the engine channels the authored magnitude itself -- all archetypes),
+    // with a ~1 s kConcApplyPeriod beat deducting the per-second cost and
+    // re-arming the effect's window; an FF spell keeps the fCastCooldown beat.
+    // Time-bounded + released by TargetCastReconcile. Returns
     // Applied/Refreshed/Declined (same semantics as CastSelfDirect). LoS +
     // line-of-fire gate hostile offense on EVERY apply. Callers: Logistics OOC
     // cast dispatch AND combat ConcentrationCast -- BOTH primary; concentration

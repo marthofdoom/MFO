@@ -236,22 +236,25 @@ releases **by eviction** with a non-actor XMarker.
   §0.13), so the AI stays denied while MFO's stream delivers. **CADENCE CONTRACT
   (`kConcApplyPeriod`, 1 s):** a concentration magnitude/cost is authored PER SECOND,
   so the channel re-applies every ~1 s (fCastCooldown pacing quartered heal throughput
-  — the "heals feel broken" bug); FF spells keep the fCastCooldown beat. **MAGNITUDE
-  CONTRACT (`ApplyConcentrationBeat`, main thread):** a one-shot `CastSpellImmediate`
-  applies ~0 of a per-second concentration magnitude (no channel sustains the
-  ActiveEffect — b63beb9 field A/B: magicka drained, HP flat on self AND player), so
-  each beat explicitly applies one second's worth of every value-modifier effect
-  (beneficial clamped to damage taken, detrimental as a plain AV hit); wards/lights/
-  non-VM archetypes keep the plain call. Wired into `ApplySelfEffect`,
-  `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`. **PRESENTATION CONTRACT
-  (`SustainConcentrationEffect`, dc856ea):** the plain call attaches ONCE per stream;
-  each beat then pins a real `duration` + resets `elapsedSeconds` on that single
-  ActiveEffect (instance-local, never MGEF mutation) so the HUD shows ONE sustained
-  entry and the healing shader plays continuously (effect VFX is IN scope — only the
-  caster POSE is deferred). Momentary kinds get `magnitude=0` on the sustained effect
-  (beats stay the sole HP source; no double-heal); wards keep authored magnitude.
-  Momentary cosmetic effect dispels at END-of-stream (stale/gone/switch) only — a
-  cap-only release keeps the one HUD entry alive across re-streams. Bounded/
+  — the "heals feel broken" bug); FF spells keep the fCastCooldown beat. **REAL-EFFECT
+  CONTRACT (`SustainConcentrationEffect`, main thread — marth's ruling, supersedes the
+  removed `ApplyConcentrationBeat` RestoreActorValue recreation):** a bare one-shot
+  `CastSpellImmediate` applies ~0 of a per-second concentration magnitude (rate × ~one
+  frame — b63beb9 field A/B: magicka drained, HP flat on self AND player), so the REAL
+  effect is attached ONCE per stream and SUSTAINED: each beat pins a real `duration`
+  (the stream's window) + re-arms `elapsedSeconds` on that single ActiveEffect
+  (instance-local, never MGEF mutation, never touching the ENGINE-COMPUTED per-caster
+  `magnitude`) — the engine channels the magnitude itself, every archetype
+  (waterbreathing/invisibility/ward just LAST), resists and skill/perks included; MFO
+  owns delivery + per-second cost + bounds only. ONE sustained HUD entry, shader plays
+  continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
+  `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`. Momentary
+  sustained effect dispels at END-of-stream (stale/gone/switch) only — it genuinely
+  channels, so the stream's end must cut it; a cap-only release keeps the one entry
+  alive across re-streams. Evidence line "conc effect ATTACHED": once per stream =
+  engine honors the sustain; repeating per beat = it does not (then: apply the
+  engine-computed `ae->magnitude` per second or an FF-variant spell — NEVER base-value
+  recreation). Bounded/
   released by `TargetCastReconcile` (registry `g_targetCast`, one stream per follower):
   hostile 1-4 s (LoS + line-of-fire re-checked on EVERY apply in `CastTargetDirect`),
   heal 6 s cap but **re-applies while the HP rule wins** so a wounded target tops up,
