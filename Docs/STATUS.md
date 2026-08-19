@@ -9,10 +9,11 @@
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
 > **▶▶ RESUME HERE (2026-08-18 PM) — v1.0.65 STAGED (`f1110f2`, VERSION 1.0.65, NO TAG/not published); two gates open before the cut.**
-> - **⛔ CUT HELD — two gates pending, both open:** (1) **CLOUD ULTRAREVIEW running** on the full 67-commit
->   release diff (`/ultrareview v1.0.64`, base `c36368b`) — act on its findings when they land, checking any
->   cast-path finding against `Docs/CAST-DELIVERY.md` before "fixing"; (2) **DECK FIELD TEST deferred ~12h**
->   (deck asleep as of 2026-08-18 PM). The engine-magnitude cast build (`47fd0de`, DLL `c875048`) is deployed
+> - **⛔ CUT HELD — one gate now:** the **CLOUD ULTRAREVIEW is ABANDONED** (2026-08-19 — its output never
+>   surfaced in Claude Code / marth has no access; `/ultrareview v1.0.64` likely never actually launched.
+>   Do NOT wait on it). Optional replacement: a LOCAL Fable multi-agent review of the 67-commit diff
+>   (`v1.0.64` `c36368b`..main) — offered, marth to decide. The remaining hard gate: **DECK FIELD TEST
+>   deferred ~12h** (deck asleep as of 2026-08-18 PM). The engine-magnitude cast build (`47fd0de`, DLL `c875048`) is deployed
 >   locally; syncthing carries it when the deck wakes — RE-VERIFY the deck sha then. Field verdict needed:
 >   HP climbs + `conc effect ATTACHED` appears ONCE per stream (engine honors the sustain) vs every beat
 >   (refused → documented `ae->magnitude` fallback). **Phase 1 (bump) is done; Phase 2 (`./release.sh` package
