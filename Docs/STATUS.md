@@ -23,7 +23,19 @@
 >     concentration heals silently fail. NOT a package-lock issue (fixed pre-baseline by `36231d7`); hits normal
 >     AND locked followers equally. Everything else (Candlelight/flesh fanning, self-casts, normal heals) WORKED
 >     at baseline — marth confirms Candlelight worked in all modes (individual/player/self/AUTO-all-in-dark).
-> - **DEFINITIVE FIX (IN PROGRESS on branch `worktree-agent-a622d046b08b6aefc`, agent a622d046 RUNNING):**
+> - **✅ DEFINITIVE FIX BUILT — branch `worktree-agent-a622d046b08b6aefc` HEAD `dff4ec1`, GREEN CI `32308308485`.**
+>   Minimal diff vs baseline: `Actuation.cpp` +112/−13 (a `ConcProxy` module + `DeliverySpell` + 3 wire-ins);
+>   **`Actuation.h` + `Logistics.cpp` byte-identical to baseline** (whole rewrite reverted). Not merged, VERSION
+>   untouched. KEY FINDING (Task C): baseline delivers FF Self via plain `CastSpellImmediate(sp,target,follower)`
+>   and for FIRE-AND-FORGET the effect lands on the TARGET regardless of Self delivery (recipients do NOT
+>   self-cast) — only CONCENTRATION Self collapses onto the caster (the channeled AE binds to the magic-caster's
+>   owner). So the "Self always lands on caster" premise that drove the whole rewrite was FALSE for FF — the FF
+>   scope creep was fixing a non-bug. NEXT: Fable-review the worktree diff, then deck field-test whether the
+>   flipped concentration copy CHANNELS the heal (the real unknown). DECISION PENDING: the explicit
+>   `kHealFullPct` stop-at-full terminator was rewrite-added and got reverted; heals now stop via baseline
+>   (gambit "HP below X" + 6s cap). Re-add explicit stop-at-full? (~6-line follow-up; marth to decide — he
+>   earlier wanted stop-at-full, but that was on the broken build where the heal hit the wrong actor).
+> - **(design, now BUILT) DEFINITIVE FIX spec:**
 >   rebuild cast delivery = **baseline `00c6fce` + ONE mechanism**: a delivery-flipped copy (copy data+effects,
 >   set `data.delivery=kTargetActor`, KEEP castingType — targeting-only, NOT an FF conversion) gated strictly to
 >   `kSelf && kConcentration && target!=follower`, wired into `ApplyTargetEffect`'s concentration branch (covers
