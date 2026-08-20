@@ -723,9 +723,17 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
   `GetPerkIndex` absent (`:586`) + native-ownership deferral (`:598`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single
-  `ReconcileSkill` (`:239`) with the enrollment baseline as a **hard floor** — a
+  `ReconcileSkill` (`:298`) with the enrollment baseline as a **hard floor** — a
   shrink can never write below the follower's captured natural. `IsKnownSkillAv`
   (`:117`) validates the raw AV value before Get/SetBaseActorValue (OOB guard).
+  **Two skill models, one write site, live MCM toggle** `g_econ.cancelEngineAwards`
+  (default ON, addon INI `bCancelEngineAwards` via `ApplyEconomyOverride` — no GLOB,
+  no PRGN touch): ON = `natural = enrollmentBaseline` (REVERT — engine per-level/
+  autocalc drift ignored + clobbered each ~2s drift-watch cycle, base = baseline +
+  MFOaward, pure MFO, no inflation); OFF = the shipped `natural = (cur==lastWritten)
+  ? lastWritten-points : cur` ADOPT path (engine leveling + MFO stack). Baseline
+  uncaptured (old save) → ADOPT fallback. Both idempotent/replay-safe; toggle
+  changes NO co-save layout (baseline already serialized).
 - **`Class` enum ordinals (`:84`) MUST stay == `combatClassOverride`** — `SetClass`
   mirrors into it via `Followers::TryEnsureRecord` (`:1204`). Board snapshot is the
   one cross-thread structure (guarded `g_viewMx`); `Rapport::Spend` (`:1346`) is a

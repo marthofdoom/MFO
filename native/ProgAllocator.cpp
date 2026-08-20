@@ -49,6 +49,13 @@ namespace MFO::ProgAllocator {
             int   sharedGrowthDivisor   = 2;       // §15: benched = half rate
             float respecRapportCost     = 500.0f;  // §15: respec costs rapport
             float skillCap              = 100.0f;
+            // §4.2 skill model: when TRUE (default) MFO CANCELS the engine's
+            // per-level/autocalc skill growth and applies ONLY its own award —
+            // natural is FROZEN at the enrollment baseline, engine drift is
+            // reverted each reconcile (see ReconcileSkill). When FALSE (compat)
+            // the old ADOPT-drift path runs: engine gains stack under MFO's
+            // award. Live, non-save addon MCM/INI knob (no GLOB, no PRGN touch).
+            bool  cancelEngineAwards    = true;
         };
         Economy g_econ;
         // The RECORD DEFAULTS latched at kDataLoaded (before any save loads, so
@@ -252,14 +259,27 @@ namespace MFO::ProgAllocator {
         // ── the §4.2 skill reconcile (P2-proven) ────────────────────────────
         //
         //   cur     = GetBaseActorValue(av)
-        //   natural = (cur == lastWrittenBase) ? lastWrittenBase - points : cur
+        //   natural = cancelEngineAwards ? enrollmentBaseline(a_floor)   // REVERT
+        //                                : (cur==lastWrittenBase ? lastWrittenBase-points  // ADOPT
+        //                                                        : cur)
         //   natural = max(natural, baselineFloor)            // hard floor
         //   desired = clamp(natural + newPoints, natural, cap)
         //   desired = max(desired, baselineFloor)            // belt-and-braces
         //   points  = desired - natural                      // APPLIED delta
         //
-        // Idempotent and convergent: an engine recompute (autocalc, Requiem,
-        // level-up) is ADOPTED as the new natural rather than fought.
+        // TWO SKILL MODELS, one call site (marth #74 revert-engine-awards):
+        //  • cancelEngineAwards ON (DEFAULT): natural is FROZEN at the enrollment
+        //    baseline (a_floor IS the serialized enrollBaseline, §8) — engine
+        //    autocalc/level-up drift in `cur` is IGNORED and CLOBBERED by the
+        //    single SetBaseActorValue below, so the base skill is pure MFO
+        //    (enrollBaseline + MFOaward). Because MFO writes the BASE AV the value
+        //    is PERMANENT if MFO is removed; the ~2s drift-watch re-applies each
+        //    cycle so per-level engine gains are cancelled continuously — no new
+        //    event hook. If a_floor<0 (baseline uncaptured, old save) it falls
+        //    back to the ADOPT path so nothing regresses.
+        //  • cancelEngineAwards OFF (compat, byte-identical to the shipped path):
+        //    an engine recompute (autocalc, Requiem, level-up) is ADOPTED as the
+        //    new natural rather than fought — engine leveling + MFO stack.
         //
         // TWO GUARANTEES (adversarial review of 9f45f3b, SEV-1):
         //  1. `points` records the delta actually WRITTEN (desired − natural),
@@ -279,10 +299,19 @@ namespace MFO::ProgAllocator {
                             float a_newPoints, float a_floor,
                             RE::FormID a_who, bool a_log) {
             const float cur = a_avo->GetBaseActorValue(a_e.av);
-            float natural = (a_e.lastWrittenBase < 0.0f)
-                                ? cur
-                                : (cur == a_e.lastWrittenBase ? a_e.lastWrittenBase - a_e.points
-                                                              : cur);
+            float natural;
+            if (g_econ.cancelEngineAwards && a_floor >= 0.0f) {
+                // REVERT mode: freeze natural at the enrollment baseline and
+                // discard engine drift in `cur`. The write below clobbers the
+                // drift; the drift-watch re-runs this each cycle to cancel it.
+                natural = a_floor;
+            } else {
+                // ADOPT mode (compat, or baseline uncaptured): the shipped path.
+                natural = (a_e.lastWrittenBase < 0.0f)
+                              ? cur
+                              : (cur == a_e.lastWrittenBase ? a_e.lastWrittenBase - a_e.points
+                                                            : cur);
+            }
             if (a_floor >= 0.0f && natural < a_floor) natural = a_floor;
             float desired = std::max(natural,
                                      std::min(natural + a_newPoints, g_econ.skillCap));
@@ -1246,16 +1275,19 @@ namespace MFO::ProgAllocator {
                         g_econ.respecRapportCost = std::max(0.0f, v);   // ≥0: negative = a grant
                     else if (KeyEndsWith(key, "SkillCap"))
                         g_econ.skillCap = std::max(1.0f, v);            // ≥1: ≤0 kills skill writes
+                    else if (KeyEndsWith(key, "CancelEngineAwards"))
+                        g_econ.cancelEngineAwards = (v != 0.0f);        // §4.2 revert vs adopt
                     else
                         continue;
                     ++applied;
                 }
                 if (applied)
                     spdlog::info("[prog] economy override from {}.ini: {} knob(s) — perk 1/{} lvl, "
-                                 "skill/lvl {:g}, manual/lvl {}, sharedDiv {}, respec {:g}, cap {:g}",
+                                 "skill/lvl {:g}, manual/lvl {}, sharedDiv {}, respec {:g}, cap {:g}, "
+                                 "cancelEngineAwards {}",
                                  mod, applied, g_econ.levelsPerPerkPoint, g_econ.skillPointsPerLevel,
                                  g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
-                                 g_econ.respecRapportCost, g_econ.skillCap);
+                                 g_econ.respecRapportCost, g_econ.skillCap, g_econ.cancelEngineAwards);
             }
         }
 

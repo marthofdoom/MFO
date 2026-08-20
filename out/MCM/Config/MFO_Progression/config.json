@@ -89,6 +89,16 @@
 						"sourceType": "ModSettingInt",
 						"defaultValue": 100
 					}
+				},
+				{
+					"id": "bCancelEngineAwards:Economy",
+					"text": "Cancel engine skill leveling",
+					"type": "toggle",
+					"help": "ON (default): MFO reverts the engine's per-level skill gains and applies only its own class/manual award (pure MFO, no inflation). OFF: engine leveling stacks on top of MFO's award (compat).",
+					"valueOptions": {
+						"sourceType": "ModSettingBool",
+						"defaultValue": 1
+					}
 				}
 			]
 		}

@@ -75,15 +75,24 @@ MCM-gated `[prog]` dump lists every filtered perk + reason, so over-filtering un
 
 **Shared-base guard:** base-array edits hit every actor sharing that TESNPC. v1 restricts enrollment to unique-flagged bases (housecarls, named/custom followers); generic hirelings show "not eligible (shared template)."
 
-### 4.2 Skill AVs: base-delta with reconciliation
-Perk gates condition on GetBaseActorValue, so allocation must raise the **base**. But NPC base skills are autocalc-derived and can be recomputed on level-up. Design: co-save per skill `{ allocPoints, lastWrittenBase }`; reconcile at apply, kPostLoadGame, and on level change:
+### 4.2 Skill AVs: base-delta with reconciliation (REVERT-engine-awards, default)
+Perk gates condition on GetBaseActorValue, so allocation must raise the **base**. But NPC base skills are autocalc-derived and can be recomputed on level-up. Co-save per skill `{ allocPoints, lastWrittenBase }` plus the frozen enrollment `baseline[]` (the follower's TRUE natural, captured once at class pick); reconcile at apply, kPostLoadGame, and on level change through the SINGLE `SetBaseActorValue` site.
+
+The skill model is a **live MCM toggle** (`Cancel engine skill leveling`, addon INI knob `bCancelEngineAwards`, **default ON** — see §Economy), NOT the old always-adopt scheme:
+
 ```
 cur     = GetBaseActorValue(av)
-natural = (cur == lastWrittenBase) ? lastWrittenBase - allocPoints : cur   // adopt engine recompute
-desired = min(natural + allocPoints, 100)
-SetBaseActorValue(av, desired); lastWrittenBase = desired
+# ── CANCEL ON (default): pure MFO — revert engine growth ──
+natural = enrollmentBaseline               # frozen; engine drift in `cur` IGNORED
+# ── CANCEL OFF (compat): adopt engine growth, MFO stacks on top ──
+natural = (cur == lastWrittenBase) ? lastWrittenBase - allocPoints : cur
+# ── both modes ──
+natural = max(natural, enrollmentBaseline)          # hard floor (SEV-1)
+desired = clamp(natural + allocPoints, natural, skillCap)
+SetBaseActorValue(av, desired); allocPoints = desired - natural; lastWrittenBase = desired
 ```
-Idempotent, converges, survives static-stat (Requiem) and PC-level-mult growth. Attributes (Health/Magicka/Stamina) allocatable via the same path.
+
+**Cancel ON** freezes `natural` at the serialized enrollment baseline and clobbers any per-level/autocalc engine growth on every reconcile — the ~2s drift-watch re-applies continuously, so engine gains are cancelled each cycle with no new event hook. Because MFO writes the **base** AV, the value is PERMANENT if MFO is removed (the engine resumes from there). Result: base skill = `enrollmentBaseline + MFOaward`, no inflation, replay-safe (a pure function of the baseline + level, idempotent on reload). If the baseline was never captured (old save) it falls back to adopt so nothing regresses. **Cancel OFF** is byte-identical to the shipped adopt path (engine leveling + MFO stack) for users who want engine growth. Neither mode touches the co-save format (PRGN unchanged — the baseline is already serialized). Attributes (Health/Magicka/Stamina) allocatable via the same path.
 
 ---
 
@@ -479,3 +488,5 @@ MFO's C++, it belongs behind the API, not baked to our plugin.
 **18.6 Stage 3 SHIPPED — economy record shape (frozen for the Stage 4 API doc).**
 The manifest is ONE FLST; the DLL type-dispatches its entries: entry[0] = the MFO.esp sentinel keyword (skipped), the ONE FLST entry = the classes-list, and **every GLOB entry is an economy knob**. Each knob is matched by **editor-id SUFFIX** (case-sensitive, last-writer-wins across manifests in load order), NOT by fixed FormID — the editor id is the contract, the local id only has to be a stable unique own-form id:
 `_LevelsPerPerkPoint` (perk divisor, floor(level/N), **default 2**), `_SkillPointsPerLevel` (auto skill pts/level, **default 2** — was 3, marth 2026-08-17), `_ManualSkillPointsPerLevel` (manual pool rate, **default 2** — was 5, marth 2026-08-17), `_SharedGrowthDivisor` (default 2), `_RespecRapportCost` (default 500), `_SkillCap` (default 100), and `_DevCmd` (dev-harness selector — the ONE knob read LIVE, its value not a record default). A knob whose suffix is absent from every manifest falls back to the DLL default (each logged). MFO's DLL hardcodes only these defaults; `MFO_Progression.esl` declares its whole economy via manifest GLOBs. Economy is NOT serialized — no PRGN bump.
+
+**The live MCM overlay (`ApplyEconomyOverride`, non-save INI):** the six GLOB record-defaults above are re-overlaid on every post-load / menu-close from `Data/MCM/Settings/<addon>.ini` (MCM-Helper ModSetting store, NOT save-persisted — the 2026-08-17 GLOB-save-corruption fix). Matched by key **suffix** the same way. Beyond the six numeric knobs there is **one bool**: `CancelEngineAwards` (INI key `bCancelEngineAwards`, **default 1/ON**) — the §4.2 skill-model switch (revert engine growth vs. adopt it). It is INI-only (no GLOB, so no ESL record and no PRGN touch); the DLL field `g_econ.cancelEngineAwards` defaults TRUE in code, so absent-from-INI = ON. Wired as the 7th control on the "MFO — Follower Progression" MCM tab (a `toggle`, `ModSettingBool`), audited by `tools/audit_mcm.py <addon config>`.
