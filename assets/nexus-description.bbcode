@@ -55,6 +55,9 @@ Yes. Everything ships off or conservative. Looting, the economy, auto-retreat, t
 [b]Is it safe to add mid-playthrough?[/b]
 Yes. All the state lives in the SKSE co-save and reverts cleanly, so you can add or remove MFO whenever.
 
+[b]How can I develop an add-on?[/b]
+You don't need C++. An add-on is a normal ESP or ESL that declares its content in records MFO reads at game load, so there's no DLL to write and nothing to patch in MFO itself. The follower progression add-on is the worked example. The full API is written up in ADDON-API.md in the [url=https://github.com/marthofdoom/MFO]GitHub repo[/url].
+
 [size=5][b]Roadmap[/b][/size]
 
 [b]Town errands are next.[/b] Followers heading into town on their own business, walking to merchants and doors and buying the gear and supplies they want while they're there. It extends the walk-to-loot movement to full town navigation.
