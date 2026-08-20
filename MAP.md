@@ -206,22 +206,24 @@ releases **by eviction** with a non-actor XMarker.
   sp->GetCostliestEffectItem()->baseEffect)` — so a duration self-buff/light is NOT
   re-applied while active (exactly one light per effect-duration cycle); an instant
   heal (no lingering effect) re-fires when the condition recurs. RELEASE
-  (`SelfCastReconcile`, on rule-stale / follower gone — **NO time cap**, a long
-  self-buff lives its authored duration while the rule wins): `DispelSpellEffectsOn`
+  (`SelfCastReconcile`, on rule-stale / follower gone — **FF self-buffs have NO time cap**,
+  a long light lives its authored duration; only CONCENTRATION self-streams carry the
+  `DrawConcCap` random cap + heal-full): `DispelSpellEffectsOn`
   removes a lingering **ward/buff** so it cannot persist as a stuck gameplay effect
   (functional bounding); nothing to unequip. Touches only the ACTOR, no alias →
   **follower-agnostic** (deck-proven on Lucien). Gated behind `Config::g_castSelf`
   (bCastSelf). Callers: `CastOn` self-intercept (combat, BEFORE the
   concentration fork), `ConcentrationCast` self guard (defence-in-depth), `Logistics.cpp`
-  `act.cast_self` branch (out-of-combat, `selfPkg`). **SAME-TIME-LIMIT self cap
+  `act.cast_self` branch (out-of-combat, `selfPkg`). **RANDOMIZED self cap
   (`SelfCastReconcile`, CONCENTRATION-ONLY):** a self-cast concentration channel is
-  hard-capped by nature, then released + re-streamed on the next winning tick —
-  **HEAL → `kConcHealCap` (6 s)**; **WARD/UTILITY → `kConcSelfUtilityCap` (15 s)**
-  (marth's call — NOT the 4 s package hold: CastSelfDirect doesn't root, so a short cap
-  only FLICKERS a self ward). **DISPEL-on-release is STICKY(Buff)-ONLY** — a HEAL/damage
-  is release-only and NEVER dispelled (it leaves nothing and dispelling would interrupt
-  a still-needed heal; this is why the 6 s heal cap cannot be marth's "not healing
-  himself"). An **FF self buff keeps its authored duration** (the NO-time-cap fix).
+  bounded by a per-stream RANDOM cap drawn at start (`DrawConcCap`, stored in
+  `SelfCastState::cap`): **heal/utility/buff → uniform `[8,15]` s**, offense → `[2,6]` s
+  (loose human timing, never serialized). A **self-HEAL also ends early at ~full own HP**
+  (`kHealFullPct` 0.995). **DISPEL-on-release** for a sticky Buff (any release), a heal on
+  heal-full/stale (true end-of-stream); a plain cap on a still-wanted stream re-streams
+  next tick with a fresh random cap. An **FF self buff keeps its authored duration** (not
+  concentration → no cap). NOTE `kConcHealCap`/`kConcSelfUtilityCap` are now the per-beat
+  SUSTAIN WINDOW (AE duration bridge), NOT the stream cap.
 - **CONCENTRATION = DIRECT FORCE everywhere, no package (`CastTargetDirect`) — see
   `Docs/CAST-DELIVERY.md` (canonical).** BOTH the Logistics OOC dispatch AND combat's
   `ConcentrationCast` deliver EVERY non-self concentration cast (player/ally/foe)
@@ -268,13 +270,16 @@ releases **by eviction** with a non-actor XMarker.
   engine honors the sustain; repeating per beat = it does not (then: apply the
   engine-computed `ae->magnitude` per second or an FF-variant spell — NEVER base-value
   recreation). Bounded/
-  released by `TargetCastReconcile` (registry `g_targetCast`, one stream per follower):
-  hostile 1-4 s (LoS + line-of-fire re-checked on EVERY apply in `CastTargetDirect`),
-  heal 6 s cap but **re-applies while the HP rule wins** so a wounded target tops up,
-  utility 4 s; dispel-on-release **sticky(Buff)-ONLY** (`TargetCastEndActor` dispels a
-  lingering ward off the TARGET; a heal/damage is release-only and re-streams
-  uninterrupted). `TargetCastReconcile` runs each tick in `Diagnostics.cpp` beside
-  `SelfCastReconcile`; both cleared in `ClearSelfCasts`. SELF stays on
+  released by `TargetCastReconcile` (registry `g_targetCast`, one stream per follower)
+  on a RANDOMIZED per-stream cap (`DrawConcCap`, stored `TargetCastState::cap`, drawn at
+  start, never serialized): **heal/utility 8-15 s, offense 2-6 s** (LoS + line-of-fire
+  re-checked on EVERY apply in `CastTargetDirect`). A **HEAL also ends early at ~full
+  recipient HP** (`kHealFullPct` 0.995). Dispel-on-release for a sticky Buff (any
+  release) and for a heal on heal-full/stale (true end-of-stream); a plain cap on a
+  still-wounded heal is release-only and **re-streams with a FRESH random cap** so a
+  wounded target tops up across bursts. `TargetCastReconcile` runs each tick in
+  `Diagnostics.cpp` beside `SelfCastReconcile`; both cleared in `ClearSelfCasts`. SELF
+  stays on
   `CastSelfDirect`; self-with-gate-off is skipped legibly (never direct-applied behind
   bCastSelf). The old combat package stream (`Packages::CastAt` + `CastHold`,
   v1.0.58-65) is REMOVED from `ConcentrationCast`, and its
@@ -293,10 +298,12 @@ releases **by eviction** with a non-actor XMarker.
   `MFO_CastPackage` on alias 0 → single holder forced by shared `TESPackage::refCount`
   (`:790`); multi-holder needs per-verb records at 0x821+. The `CastHold` overload of
   `CastAt` is DORMANT (concentration no longer dispatches a package). **Concentration
-  bounding numbers** live in ONE helper `ConcentrationHold(id, targetID, kind)`
-  (Actuation.cpp anon, hostile 1-4s / heal 6s / utility 4s — returns a
-  `Packages::CastHold` purely as a numbers carrier), consumed by `TargetCastReconcile`
-  and `SelfCastReconcile`. The FOE package `§4.6`-DECLINES for package-locked custom
+  stream time-cap** is drawn per-stream by ONE helper `DrawConcCap(kind)` (Actuation.cpp
+  anon, `std::mt19937` + `uniform_real_distribution`): heal/utility uniform `[8,15]`s,
+  offense `[2,6]`s, stored in `TargetCastState::cap`/`SelfCastState::cap` at stream start,
+  never serialized; consumed by `TargetCastReconcile` and `SelfCastReconcile` (+ heal-full
+  `kHealFullPct`). (Replaced the old fixed `ConcentrationHold` numbers.) The FOE package
+  `§4.6`-DECLINES for package-locked custom
   followers — every concentration path avoids it entirely (`CastTargetDirect`), and
   the FF paths fall back to a direct silent cast.
 - `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1380-1623`)
