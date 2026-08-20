@@ -96,9 +96,14 @@ off-self is the ONLY broken case, and the proxy is the ONLY fix.**
   the SINGLE most-hurt member below the threshold (player OR teammate OR self, `HealthPct` under
   `min(threshold, kHealFull)`), serving it via the safe single-target path — `CastTargetDirect`
   (owner-keyed proxy slot, InterruptCast on release) for another actor, `CastSelfDirect` for
-  self. It runs EVERY tick (no cooldown gate — the stream self-paces at ~1 s), so while a
-  recipient is hurt it stays selected; when it tops off (heal-full RELEASE, slot frees) the
-  next-most-hurt is served next tick — over a few seconds every hurt ally is topped. This uses
+  self. It runs EVERY tick (no cooldown gate — the stream self-paces at ~1 s). **Hysteresis
+  (anti-oscillation):** it STICKS with the current recipient while they are still below the
+  ceiling and only SWITCHES when they top off OR another member is > 15% (`kHealSwitchMargin`)
+  more hurt — otherwise re-picking the lowest-HP each beat would thrash between two similarly-
+  hurt allies (each beat heals one a few HP above the other, flipping the pick + dispel/
+  interrupt/re-cast every second). So it finishes one, then serves the next; a critically-hurt
+  member still interrupts. When a recipient tops off (heal-full RELEASE, slot frees) the
+  next-most-hurt is served — over a few seconds every hurt ally is topped. This uses
   ONE slot at a time (respects the 2-slot cap, never a live-slot collision). FF/instant heals
   and non-heal buffs still FAN below (`ApplyEffectFromTo`) — an instant apply has no channel, so
   N-at-once is fine; a conc-Self **non-heal** buff fanned via AUTO is skipped (no stream to own a
