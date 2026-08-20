@@ -249,31 +249,19 @@ releases **by eviction** with a non-actor XMarker.
   owns delivery + per-second cost + bounds only. ONE sustained HUD entry, shader plays
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
-  **SELF-DELIVERY off-self = REAL-EFFECT APPLICATION, follower-attributed, player uninvolved
-  (`ApplyEffectsFromCaster` → `RE::MagicTarget::AddTarget`, marth "read the SPEL"):** a Self
-  spell's effect can only land on its magic-caster's OWNER, so it cannot be CAST at another
-  actor. MFO applies the real effect(s) onto the target's `MagicTarget` with `caster =
-  follower` via the engine's own per-effect entry `AddTarget` (NOT the AI package — the ban
-  is the package, not real-effect application). THREE ROLES at once, every archetype
-  (heal/ward/flesh/waterbreathing/buff) + every effect of a multi-effect spell: (1) lands on
-  the target (AddTarget ignores Self delivery); (2) follower's rate — `caster=follower`, only
-  the authored base magnitude passed, engine owns skill/perk scaling (NO `magnitudeOverride`,
-  NO hand-rolled magnitude); (3) player NEVER casts / NEVER pays / needs ZERO magicka — the
-  follower pays via its own hand-deduct only (§5.3 intact). The AE carries the spell so
-  `SustainConcentrationEffect` finds+re-arms it — ONE sustained effect, no per-beat re-attach.
-  `NeedsCasterAttributedDelivery(spell,follower,target)` gates it (Self delivery + non-self
-  target); genuine `cast_self` (target==follower) and non-Self deliveries cast normally from
-  the follower. All five sites branch on it: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO),
-  `CastOn` force-half, two Logistics FF casts. **REJECTED (deck a8d641bb):** making the TARGET
-  self-cast — the player became the magic caster, so the engine drained the PLAYER's magicka
-  to empty and the heal stopped at 0 player-magicka; `RefundMagicka`/`ReattributeEffectCaster`
-  band-aids REMOVED. History: c875048 healed Lucien not the player; wave-1 target-self-cast
-  drained the player; this AddTarget pivot decouples the player entirely. **HEAL TERMINATOR (`kHealFullPct`=0.995):** a heal-until-topped stream ends when
-  the RECIPIENT's Health hits ~full — read the intended heal target (`a_target`/follower for
-  self-heal), NOT the follower or the re-routed mechanical caster — enforced in
-  `CastTargetDirect`/`CastSelfDirect` (end+dispel+decline, so OOC re-dispatch and combat both
-  stop) with a `TargetCastReconcile`/`SelfCastReconcile` backstop; 6 s cap is the time
-  backstop. HEAL only (a buff runs its window). Momentary
+  **CONCENTRATION + SELF-delivery off-self → DELIVERY-FLIPPED PROXY (`ConcProxy`/`DeliverySpell`,
+  Actuation.cpp):** baseline `CastSpellImmediate(sp,target,follower)` lands an FF Self effect on
+  `target` (Candlelight/flesh work — do NOT touch), but a `kSelf` CONCENTRATION channel binds to
+  the caster's OWNER, so a player/ally conc heal collapses onto the follower. Gated on
+  `kSelf && kConcentration && target!=follower`, MFO casts a transient COPY with casting style
+  PRESERVED and ONLY `data.delivery` flipped `kSelf→kTargetActor` (via the unchanged
+  `ApplyTargetEffect`/AUTO conc branch + `SustainConcentrationEffect` keyed on the copy) — lands
+  on the recipient, follower is caster (rate+cost), player uninvolved. TWO transient dynamic
+  (`0xFF__`) slots, FILL-CAST-REUSE-FREELY (no idle/lifetime guards — the applied AE is
+  self-sufficient), round-robin evict on a 3rd source; never serialized; main-thread-only (source
+  returned off-main/VR). Stream-end dispel clears the proxy AE (`TargetCastEndActor`→`FormFor`).
+  FF/self-cast/non-Self UNTOUCHED. (Reverted the 2026-08-19 rewrite that changed FF Self delivery
+  + caused the light-respam CTD.) Momentary
   sustained effect dispels at END-of-stream (stale/gone/switch) only — it genuinely
   channels, so the stream's end must cut it; a cap-only release keeps the one entry
   alive across re-streams. Evidence line "conc effect ATTACHED": once per stream =

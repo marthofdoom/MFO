@@ -117,44 +117,12 @@ namespace MFO::Actuation {
     // equip/debt to undo (mirrors ClearForcedWeapons).
     void ClearSelfCasts();
 
-    // SELF-DELIVERY DELIVERED TO ANOTHER ACTOR, FOLLOWER-ATTRIBUTED, PLAYER
-    // UNINVOLVED (marth: "read the SPEL"; decoupling pivot, deck a8d641bb). A
-    // SELF-delivery spell's effect can only land on its magic-caster's OWNER, so it
-    // cannot be CAST at another actor. Making the TARGET self-cast (rejected) made
-    // the PLAYER the caster -- the engine charged the player's magicka, a
-    // concentration self-cast drained it per-frame to empty, and the heal STOPPED
-    // when the player ran dry. Instead apply the REAL effect(s) straight onto the
-    // target's MagicTarget with the FOLLOWER as caster, via the engine's OWN
-    // per-effect entry `RE::MagicTarget::AddTarget` (how the engine itself lands
-    // effects -- NOT the AI package; marth's ban is the package, not real-effect
-    // application). The player NEVER casts, NEVER pays magicka, needs NONE for it to
-    // land; caster=follower so the engine attributes the effect to the follower and
-    // channels the FOLLOWER's rate; the authored base magnitude is passed and the
-    // engine owns skill/perk scaling via the caster (no hand-rolled magnitude).
-    // Applies EVERY effect (multi-effect), archetype-agnostic (heal/ward/flesh/
-    // waterbreathing/buff). The AE carries the spell so SustainConcentrationEffect
-    // finds + re-arms it -- ONE sustained effect, no per-beat re-attach. MAIN
-    // THREAD (mutates the AE list). Returns true if the target could receive it.
-    bool ApplyEffectsFromCaster(RE::Actor* a_target, RE::SpellItem* a_spell,
-                                RE::Actor* a_caster);
-
-    // TRUE when a spell must be delivered by ApplyEffectsFromCaster rather than by
-    // a cast: a SELF-delivery spell aimed at a NON-self target. A genuine self-cast
-    // (target == follower) and every non-Self delivery (Aimed/TargetActor/Touch)
-    // cast normally from the follower's own magic caster. Reads only the SPEL's
-    // Delivery; no engine mutation -- any thread.
-    bool NeedsCasterAttributedDelivery(RE::SpellItem* a_spell, RE::Actor* a_follower,
-                                       RE::Actor* a_target);
-
     // AUTO TARGET INFERENCE for act.cast_target. The board's default "Auto" pick
     // (Subject::Self, no subject actor, no selector target) infers WHO from the
     // spell and fans the cast out: hostile -> every nearby enemy; beneficial ->
     // the WHOLE PARTY who needs it (every active follower + the player, the caster
-    // included). MFO chooses WHO receives each cast by spell nature, not the SPEL's
-    // Delivery -- but HOW the effect is placed still honours Delivery: a SELF-
-    // delivery buff is applied onto each recipient from the follower via
-    // ApplyEffectsFromCaster (MagicTarget::AddTarget), so it lands on allies too
-    // instead of only the follower, with the recipient never casting or paying.
+    // included). Delivery type is NOT consulted -- MFO applies effects directly to
+    // each target (ApplyEffectFromTo), so a self-delivery buff lands on allies too.
     // Per-cast magicka (reserve-floored, insufficient-skip), already-active guard,
     // one broadcast per fCastCooldown. Called from BOTH Fire (combat) and Logistics
     // (out of combat); out of combat the hostile branch finds no enemies and NoOps.

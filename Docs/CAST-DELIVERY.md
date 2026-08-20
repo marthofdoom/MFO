@@ -195,6 +195,37 @@ run unpaid), never on a cap-only release: the cap re-streams next tick and the n
 re-arms the SAME effect, so the heal flows and the visible entry stays continuous while
 the rule wins. Fire-and-forget self-buffs keep their authored duration (no cap).
 
+## CONCENTRATION + SELF delivery → the DELIVERY-FLIPPED PROXY (the one delivery fix)
+
+**Baseline delivers everything by plain `CastSpellImmediate(sp, target, follower)`** — the
+follower's `kInstant` caster, the recipient as the `target`, blame = follower. For
+**fire-and-forget** this lands the one-shot effect on `target` **regardless of the spell's
+Self delivery** (field-proven: Candlelight/flesh cast on an individual / player / self / the
+whole party via AUTO all work — do NOT change FF delivery). For **concentration**,
+`CastSpellImmediate` instead sets up a *channeled* cast whose target is resolved by the spell's
+**delivery**: a `kSelf` concentration binds the sustained ActiveEffect to the magic-caster's
+OWNER (the follower), so a player/ally concentration heal (e.g. Mysticism Fast Healing
+`0002F3B8` = Conc + Self) collapses onto the **follower** and the recipient gets nothing.
+
+**Fix — ONE mechanism, concentration-Self-off-self only (`ConcProxy` / `DeliverySpell` in
+`Actuation.cpp`).** Gated on `delivery == kSelf && castingType == kConcentration && target !=
+follower`, cast a transient **COPY** of the source with its **casting style PRESERVED** and
+**only `data.delivery` flipped `kSelf → kTargetActor`** (data + effects copied; effects shared
+by pointer). The follower casts the copy through the *unchanged* concentration path
+(`ApplyTargetEffect` / AUTO `ApplyEffectFromTo`), so the channel resolves to the recipient; the
+follower is still the caster (his rate + magicka), the player never casts / pays.
+`SustainConcentrationEffect` keys on the copy (what we cast), so a stream re-arms its own AE.
+**TWO transient dynamic (`0xFF__`) slots, FILL-CAST-REUSE-FREELY** (marth): once the AE is
+applied it captures its own effect/magnitude/caster and no longer needs the SPEL form, so the
+slots carry **no lifetime bookkeeping** — reuse a slot for the same source (stream stability),
+evict round-robin when a third source needs one. Dynamic forms are never serialized. Main-thread
+only (`Get` returns the source, not a proxy, off-main / VR — no `IFormFactory::Create` there).
+Stream-end dispel clears the proxy AE too (`TargetCastEndActor` → `ConcProxy::FormFor`).
+**FF / self-cast / non-Self concentration are UNTOUCHED baseline.** (Superseded: the 2026-08-19
+rewrite that changed FF Self delivery too — it broke Candlelight/flesh and caused the light
+re-spam CTD; reverted. Also retired: target-self-cast, which charged the player; and
+`MagicTarget::AddTarget` for concentration, which does not channel.)
+
 ## GATES (keep on the direct path)
 
 - **LoS** — never stream a hostile cast into a wall. Re-checked on EVERY apply.
@@ -210,87 +241,6 @@ the rule wins. Fire-and-forget self-buffs keep their authored duration (no cap).
   actors by FormID inside the post. Never call `CastSpellImmediate` inline on the AddTask
   job worker (the pre-fix Logistics inline call is the prime suspect for the queued 1.5.x
   `act.cast_target` AV reports).
-
-## SELF-DELIVERY: the effect lands on the CASTER'S OWNER — read the SPEL's Delivery
-
-**`CastSpellImmediate` does NOT apply a spell to the `target` ref for a SELF-delivery
-spell.** A Self-delivery magic effect always lands on the *magic-caster's owner*,
-whatever `TESObjectREFR*` you pass. So `follower->GetMagicCaster()->CastSpellImmediate(sp,
-…, player, …)` on a **Self** spell heals the FOLLOWER, not the player — the old comment
-"CastSpellImmediate applies the effect to `tgt` for any delivery" was simply false.
-
-**Deck field, 2026-08-19 (build c875048 = 47fd0de):** Lucien set to heal the player with
-"Fast Healing" (`0002F3B8`). In the loaded modlist (Mysticism) that record is **Concentration
-+ Self delivery** (mag 20 / dur 1 / cost 38) — *not* the vanilla FireForget+Self instant.
-GetCastingType was therefore correct (it IS concentration); the real blocker was **Self
-delivery**: every beat the effect attached on *Lucien*, so the player never healed, Lucien's
-magicka drained, and — because the sustain searched the *player's* effect list and never
-found the effect (it was on Lucien) — `conc effect ATTACHED` re-fired every beat instead of
-FOUND-and-re-armed once. Two symptoms, one cause.
-
-**A Self-delivery spell aimed off-self is DELIVERED, not CAST — real-effect application onto
-the target with the FOLLOWER as caster, the player completely uninvolved (deck a8d641bb).**
-Because a Self effect can only ever land on its magic-caster's OWNER, MFO does **not** make
-the target cast it. A short-lived design that made the TARGET self-cast was WRONG on two
-counts and is banned: (a) the PLAYER became the magic caster, so the engine charged the
-**player's** magicka — a concentration self-cast drained it per-frame to EMPTY (`RefundMagicka`
-around a `MainThread::Post`'d cast is a no-op: the concentration channel drains over later
-frames, outside the single-frame refund; it also re-attached every beat) — and (b) a self-cast
-REQUIRES the caster to have magicka, so the heal STOPPED when the player ran dry. A follower's
-spell must be completely independent of the player's magicka.
-
-**The mechanism (`Actuation::ApplyEffectsFromCaster` → `RE::MagicTarget::AddTarget`), archetype-
-agnostic — no heal/"is a heal"/archetype special-casing.** `AddTarget` is the engine's OWN
-per-effect application entry (how the engine itself lands every effect — **not** the AI package;
-marth's ban is the package, not real-effect application). For each of the spell's effects, MFO
-fills an `AddTargetData` with `caster = follower`, `magicItem = spell`, `effect = <this effect>`,
-`magnitude = effect->effectItem.magnitude` (authored base), `castingSource = kInstant`, and
-calls `target->AsMagicTarget()->AddTarget(data)`. Three roles, all satisfied at once and for
-EVERY archetype (heal, ward, flesh/armor, waterbreathing, invisibility, muffle, fear/frenzy,
-DoT, any buff) and EVERY effect of a multi-effect spell:
-
-1. **Lands on the target** — `AddTarget` applies straight onto the target's `MagicTarget`,
-   regardless of the spell's Self delivery.
-2. **Follower's rate** — `caster = follower`, so the engine attributes the effect to the
-   follower and applies the FOLLOWER's skill/perks/effectiveness (a master-healer heals at HIS
-   rate on a 0-Restoration player; Mage Armor 3/3 lands the full flesh buff). Only the authored
-   base magnitude is passed — **no hand-rolled magnitude, no `magnitudeOverride`**; the engine
-   owns the scaling via the caster.
-3. **Player pays nothing, needs nothing** — the player NEVER casts and NEVER pays magicka, and
-   needs **zero** magicka for the effect to land. The FOLLOWER pays via MFO's own hand-deduct
-   only (§5.3 competence: a follower still runs dry). No snapshot/refund exists or is needed.
-
-`NeedsCasterAttributedDelivery(spell, follower, target)` gates it: TRUE only for a Self-delivery
-spell aimed at a non-self target. A genuine `act.cast_self` (target == follower) and every
-non-Self delivery (Aimed / TargetActor / Touch) cast normally from the follower's own magic
-caster — unchanged (why self-Candlelight always worked). The created AE carries the spell, so
-`SustainConcentrationEffect` FINDS and re-arms it — **ONE sustained effect, no per-beat
-re-attach** (this also fixes the `conc effect ATTACHED`-every-beat symptom). All five direct-
-apply sites branch on it: `ApplyTargetEffect`, `ApplyEffectFromTo` (AUTO), `CastOn`'s combat
-force-half, and the two Logistics FF direct casts. The
-`FORCE-CAST … at TTTTTTTT (self-delivery: applied from follower)` tag marks the applied path.
-
-*Deck history:* c875048/47fd0de — the effect healed Lucien not the player (cast from the
-follower on a Self spell). Wave-1 (target-self-cast) landed it on the player but drained the
-player's magicka; a8d641bb confirmed the drain-to-empty + heal-stops-at-0 failure. This pivot
-(AddTarget from the follower) is the fix.
-
-**HEAL TERMINATOR — stop when the RECIPIENT is full (deck 2026-08-19).** A heal-until-topped
-stream ends the moment the RECIPIENT reaches ~full Health (`kHealFullPct` = 0.995), read off
-the intended heal target (`a_target` / the follower for a self-heal) — **never** the follower's
-or whatever actor became the mechanical caster after the re-route. Enforced at the source in
-`CastTargetDirect` / `CastSelfDirect` (end the stream, dispel the sustained heal, decline —
-so the OOC logistics re-dispatch and combat both stop) with a backstop in
-`TargetCastReconcile` / `SelfCastReconcile`; the 6 s cap remains as a time backstop. HEAL only
-— a ward/flesh/utility buff still runs its authored window. This makes the recipient's HP,
-not the gambit condition alone, the terminator: a "cast heal at player" with no HP gate now
-stops at full instead of draining on.
-
-**Instant vs concentration is still decided by the real casting type**
-(`GetCastingType() == kConcentration`) — a genuine FireForget spell is delivered as a SINGLE
-`CastSpellImmediate` (full instant magnitude once, paced by `fCastCooldown`), never sustained;
-only real concentration spells enter `SustainConcentrationEffect`. Do not re-derive
-concentration from effect archetype, "is a heal", or effect duration — read the SPEL.
 
 ## THE MATRIX — every cell delivers, bounded, gated. None barred.
 
