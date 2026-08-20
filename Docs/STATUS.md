@@ -9,12 +9,18 @@
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
 > **▶▶ RESUME HERE (2026-08-19 late) — v1.0.65 STAGED (`f1110f2`, NO TAG); minimal cast rebuild MERGED + DEPLOYED for field test. Cut HELD.**
-> - **✅ CAST REBUILD MERGED TO main (`814d796`, merge of `665be2c`) + DEPLOYED.** DLL **`27cc3649`** (green CI run
->   `32318675820`; merged native tree == 665be2c so no rebuild needed) staged into local `custom-modlist/mods/MFO`,
->   supersedes the broken `2ad0c414`. Deck AWAKE but not yet synced at deploy — **RE-VERIFY deck sha == `27cc3649`
->   before trusting any field result** (syncthing). FIELD TEST NOW: does the flipped concentration copy CHANNEL
->   the heal on the recipient (player HP climbs at the follower's rate; Candlelight/flesh unchanged; no light CTD)?
->   Power-attack fix (`0d487e8`) NOT bundled (avoid Actuation.cpp conflict) — deploy next round.
+> - **✅ CAST REBUILD WORKS — FIELD-CONFIRMED, then stream-bounding added. main `a800b60`, DLL `344044b7` deployed.**
+>   The concentration proxy CHANNELS the heal on the recipient (deck log 2026-08-19: `conc effect ATTACHED on
+>   <recipient> … self->target proxy`, follower pays magicka, HP climbs) — the core unknown is SOLVED. Follow-up
+>   (this build): concentration streams now bound by RANDOMIZED human-timed caps — **heal/utility 8–15s, offense
+>   2–6s** (`DrawConcCap`, worker-serial mt19937, per-stream, not serialized) + healing stops at ~full recipient
+>   HP (`kHealFullPct` 0.995). This RESOLVES the kHealFullPct decision (marth: yes stop-at-full, time-capped) and
+>   the "won't stop when condition met" issue. **`Docs/CAST-DELIVERY.md` fully REWRITTEN** as the single
+>   authoritative reference (model + delivery table + rejected approaches + scope-creep lesson); MAP.md cast
+>   entries updated. `Actuation.h`/`Logistics.cpp` STILL byte-identical to baseline. DLL `344044b7` (green CI
+>   `32320451089`, merged native tree == b531305) in local mod — **RE-VERIFY deck sha == `344044b7`**. FIELD-WATCH:
+>   streams end within their band (varying durations), heal stops at full, no endless casting; Candlelight/flesh
+>   all modes unchanged. Power-attack fix (`0d487e8`) still NOT bundled — deploy next round.
 > - **(history) main previously shipped BROKEN cast delivery** (`2ad0c414`, wave-3 AddTarget — doesn't channel
 >   concentration, Lucien healed nobody). REPLACED by the rebuild above.
 > - **THE SAGA, RESOLVED TO A MINIMAL FIX (2026-08-19).** A ~1-day cast rework (AddTarget → target-self-cast →
