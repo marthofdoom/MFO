@@ -269,8 +269,13 @@ releases **by eviction** with a non-actor XMarker.
   not-2nd). RELEASE (`TargetCastEndActor(target,spell,owner)`, EVERY release) = dispel source +
   owner proxy AE + **`InterruptCast` the follower's kInstant caster** (stops the engine channel)
   + `ConcProxy::Free`. Reconcile makes every release a true END (heal-full/magicka-out/cap/stale/
-  gone); a wounded heal's cap re-serves a FRESH stream (new slot/channel). AUTO `ApplyEffectFromTo`
-  does NOT proxy conc-Self (no stream to own/free a slot → skips it). `SelfCastEndActor` likewise
+  gone); a wounded heal's cap re-serves a FRESH stream (new slot/channel). **AUTO ally-heal for a
+  CONCENTRATION heal = SEQUENTIAL MOST-HURT** (`CastAuto`, before the fan/g_autoCast gate): one
+  channel per caster, so it picks the single most-hurt member below `min(threshold,kHealFull)`
+  (player/teammate/self) and serves it via `CastTargetDirect`(other) / `CastSelfDirect`(self) EACH
+  tick; when it tops off (heal-full FREE) the next-most-hurt is served — every hurt ally cycled
+  over seconds, one slot at a time. FF/instant heals + non-heal buffs still FAN (`ApplyEffectFromTo`);
+  a conc-Self non-heal buff fanned via AUTO is skipped. `SelfCastEndActor` likewise
   `InterruptCast`s the self channel. Breadcrumbs: `proxy slot ACQUIRE/RECONFIG/FREE/OVERFLOW`,
   `stream RELEASE (reason)`. Never serialized; main-thread-only; `ConcProxy::Reset` on revert/load.
   FF/self-cast/non-Self UNTOUCHED. Momentary

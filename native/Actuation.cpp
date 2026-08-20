@@ -2030,6 +2030,67 @@ namespace MFO::Actuation {
             const auto kind    = CasterConsent::ClassifySpell(spell);
             const bool hostile = (kind == CasterConsent::SpellKind::Offense);
 
+            // AUTO ALLY-HEAL, CONCENTRATION -> SEQUENTIAL MOST-HURT (marth). A
+            // concentration heal starts an ENGINE channel on the follower's caster,
+            // and one caster sustains only ONE channel at a time -- so AUTO cannot fan
+            // a concentration heal to N allies. Pick the SINGLE most-hurt hurt member
+            // below the threshold (player OR teammate OR self) and serve THAT one via
+            // the safe single-target path (CastTargetDirect proxy / CastSelfDirect for
+            // self) -- owner-keyed slot, InterruptCast on release, all hardening
+            // intact. When that recipient tops off (heal-full RELEASE, slot frees), the
+            // next-most-hurt is served next tick, so over a few seconds every hurt ally
+            // is topped. This runs EVERY service tick with NO g_autoCast cooldown gate:
+            // the stream self-paces at ~1 s and must refresh each tick or it goes
+            // stale. (FF/instant heals and non-heal buffs still fan below -- an instant
+            // apply has no channel, so N targets at once is fine.) The 99.95% boundary
+            // (Vocab::kHealFull) means a topped-off member is not re-selected.
+            if (!hostile &&
+                spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+                ((kind == CasterConsent::SpellKind::Heal) || SpellHealsHealth(spell))) {
+                // HYSTERESIS (anti-oscillation): committing to ONE recipient per beat
+                // and re-picking the lowest-HP each tick would THRASH between two
+                // similarly-hurt allies -- each ~1 s beat heals one a few HP above the
+                // other, flipping the pick and dispel+interrupt+re-casting the channel
+                // every second. So STICK with the follower's current heal recipient
+                // while it is still below the ceiling, and only SWITCH when it tops off
+                // OR another member is more than kHealSwitchMargin (15%) more hurt (a
+                // critical drop worth interrupting for). Finish one, then the next.
+                constexpr float kHealSwitchMargin = 0.15f;
+                const float radius  = Config::g_sharedRadius.load();
+                const float ceiling = std::min(a_healThreshold, Vocab::kHealFull);
+                const auto  selfPos = a_follower->GetPosition();
+                RE::Actor*  neediest = nullptr;
+                float       lowest   = ceiling;   // only members strictly under the ceiling
+                auto probe = [&](RE::Actor* m) {
+                    if (!m || m->IsDead() || m->IsDisabled() || !m->Is3DLoaded()) return;
+                    if (selfPos.GetDistance(m->GetPosition()) > radius) return;
+                    const float hp = Vocab::HealthPct(m);
+                    if (hp < lowest) { lowest = hp; neediest = m; }
+                };
+                for (const auto& h : Followers::g_active) { auto p = h.get(); probe(p.get()); }
+                probe(RE::PlayerCharacter::GetSingleton());
+                // Prefer the CURRENT stream's recipient if it is still hurt and no one
+                // else is dramatically worse (the hysteresis above).
+                RE::Actor* target = neediest;
+                if (auto it = g_targetCast.find(id);
+                    it != g_targetCast.end() && it->second.spell == a_spellID) {
+                    if (auto* cur = RE::TESForm::LookupByID<RE::Actor>(it->second.target);
+                        cur && !cur->IsDead() && Vocab::HealthPct(cur) < ceiling &&
+                        (!neediest || Vocab::HealthPct(cur) - lowest <= kHealSwitchMargin))
+                        target = cur;   // keep serving the current recipient
+                }
+                if (!target)
+                    return { Result::NoOp, "auto conc-heal: nobody below threshold", true };
+                const auto r = (target == a_follower)
+                                   ? CastSelfDirect(a_follower, spell)
+                                   : CastTargetDirect(a_follower, spell, target);
+                switch (r) {
+                case SelfCast::Applied:   return { Result::Fired, "auto conc-heal (most-hurt served)" };
+                case SelfCast::Refreshed: return { Result::NoOp,  "auto conc-heal (paced)", true };
+                default:                  return { Result::NoOp,  "auto conc-heal (declined)", true };
+                }
+            }
+
             // NOTE (marth, verified in the field): AUTO does NOT collapse a
             // self-delivery spell to the caster. MFO applies effects DIRECTLY to
             // the target actor (ApplyEffectFromTo -> CastSpellImmediate on that
