@@ -1,3 +1,7 @@
+## v1.0.66 -- Follower economy on by default
+- Follower economy is on out of the box now. Followers sell their unworn junk at merchants and buy the supplies they've run short on, out of their own gold. It was opt-in before, so if you don't want it, turn off Follower economy in the MCM.
+- Removed the "count summon kills" option from the menu. It stays off.
+
 ## v1.0.65 -- followers reliably heal the party, cast on themselves, and power-attack the foe blocking them
 
 - Concentration heals now WORK, and they stop when they should. A caster follower on a
