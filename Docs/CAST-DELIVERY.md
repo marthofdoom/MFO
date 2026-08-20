@@ -64,48 +64,88 @@ off-self is the ONLY broken case, and the proxy is the ONLY fix.**
   concentration path, so the channel resolves to the recipient; the follower is the caster
   (his rate + magicka), the player never casts / pays. `SustainConcentrationEffect` keys on
   the copy (what was cast), so a stream re-arms its own AE.
-- **Two transient `0xFF__` dynamic slots, FILL-CAST-REUSE-FREELY.** The SPEL form is only
-  needed *momentarily* to fire the cast — once the ActiveEffect is applied it is
-  self-sufficient (it captured its own effect / magnitude / caster), so the slots carry **NO
-  lifetime bookkeeping** (no idle timers, no live-AE guards): reuse a slot for the same source
-  (so a stream's ~1 s beats re-arm the SAME AE — no stacking), evict round-robin when a third
-  source needs one. Forms are minted once via `IFormFactory` and reconfigured in place.
-- **Main-thread only.** `ConcProxy::Get` returns the source (not a proxy) when
-  `!MainThread::IsInstalled()`, so `IFormFactory::Create` never runs off the main thread (VR).
-- **Save-safety.** Dynamic forms are never serialized to the `.ess` or any MFO co-save. They
-  do **not** survive a save-load, but their source keys (`g_src`) are stable ESP FormIDs — so
-  `ClearSelfCasts()` (called by `ResetAllState` at kPreLoadGame / post-load / revert) calls
-  **`ConcProxy::Reset()`**, which nulls `g_form[]` / `g_src[]` / `g_next` (drops the dangling
-  pointers so the next cast re-mints fresh forms) and **clears each proxy's borrowed effects
-  first** (so the load-time dynamic-form purge cannot double-free the source spell's shared
-  `Effect*`). This is the cross-load UAF + double-free guard; it is NOT lifetime bookkeeping.
-- **Dispel:** `TargetCastEndActor` dispels both the source and, via `ConcProxy::FormFor`, the
-  proxy-keyed AE, so a proxied ward/heal cannot linger past its stream.
+- **A proxy cast starts a REAL ENGINE CHANNEL.** Casting the kTargetActor concentration proxy
+  via `CastSpellImmediate` does not just apply a one-shot effect — the engine sustains a real
+  concentration channel on the FOLLOWER that drains his magicka **per-second, independent of
+  MFO's per-beat `ApplyTargetEffect`** (which is the only thing that logs `FORCE-CAST` and
+  hand-deducts). So a runaway shows as **magicka draining with no `FORCE-CAST` log line** — that
+  is the engine channel, not MFO. Two consequences drive the design below: the channel must be
+  **explicitly interrupted** to stop (dispelling the target AE does not stop the caster-side
+  channel), and the proxy FORM is **load-bearing for the channel's whole duration**.
+- **Two transient `0xFF__` dynamic slots, SLOT-FOR-DURATION (marth's hard rule).** Reconfiguring
+  or handing a slot's form to another cast while its channel is live corrupts the in-flight cast
+  (**the freeze**) and entangles two streams (**heal-full stops the 1st heal but not the 2nd**,
+  because re-casting the same form re-enters the 1st's residual channel). So each live stream
+  **OWNS** a slot for its duration (owner = follower FormID): `ConcProxy::Acquire(owner, src)`
+  reuses the owner's slot, else `Configure`s a **FREE** slot, else (both owned by other live
+  streams) returns nullptr and the caller **SKIPS** (2-slot overflow). A slot is `Configure`d
+  ONLY when free — never while its channel lives. `ConcProxy::Free(owner)` clears the owner
+  markers (form kept for reuse) after the channel is interrupted.
+- **Release = dispel + INTERRUPT + free, on EVERY release** (`TargetCastEndActor(target, spell,
+  owner)`): dispels the source and the owner's proxy AE off the target, **interrupts the
+  follower's `kInstant` magic caster** (`InterruptCast(false)` — stops the engine channel so the
+  drain ends and the next stream starts clean), then `ConcProxy::Free(owner)`. The reconcile
+  makes every release a true END (heal-full / magicka-out / cap / stale / gone); a still-wounded
+  heal's cap ends the burst and the gambit re-serves a FRESH stream (new slot, new channel) next
+  tick — so the channel always stops (no runaway) and an owned slot is never orphaned. The
+  self path (`SelfCastEndActor`) likewise interrupts the self channel.
+- **AUTO does NOT proxy conc-Self.** The AUTO fan (`ApplyEffectFromTo`) has no per-target
+  stream/reconcile to own and later free a slot, so it **skips** a conc-Self spell fanned to a
+  non-self target (single-target `CastTargetDirect` delivers conc-Self heals; FF and natively-
+  aimed conc heals fan normally). This avoids leaking the 2-slot cap.
+- **Main-thread only.** `ConcProxy::Acquire` returns nullptr when `!MainThread::IsInstalled()`,
+  so `IFormFactory::Create` never runs off the main thread (VR); the caller skips.
+- **Save-safety.** Dynamic forms are never serialized; they do not survive a save-load, but the
+  slots key on stable ESP source FormIDs, so `ClearSelfCasts()` (kPreLoadGame / post-load /
+  revert) calls **`ConcProxy::Reset()`** — nulls each slot and clears each form's borrowed
+  effects first (cross-load UAF + double-free guard).
+- **Breadcrumbs** (terse `[cast]` log): `proxy slot ACQUIRE/RECONFIG/FREE/OVERFLOW owner …` and
+  `stream RELEASE (heal-full | magicka-out | cap | stale | gone) …` — so a field test is legible.
 
 ---
 
-## STREAM BOUNDING — randomized caps + heal-to-full
+## STREAM BOUNDING — long randomized caps, MAGICKA-GATED, heal-to-full at 99.95%
 
 A concentration **stream** (one per follower, in `g_targetCast` / `g_selfCast`, re-armed each
-~1 s beat while its gambit keeps winning) is bounded so it always ends — even if the gambit
-condition check is unreliable ("won't stop when the condition is met").
+~1 s beat while its gambit keeps winning) is bounded three ways so it always ends.
 
 - **Randomized per-stream time cap** (`DrawConcCap`, a `std::mt19937` + `uniform_real_distribution`,
   worker-serial, **never serialized**), drawn ONCE when the stream starts and stored in the
   stream state (`tc.cap` / `sc.cap`) for loose, human timing:
   - **healing / utility / buff → uniform `[8, 15]` s**
   - **offense / hostile → uniform `[2, 6]` s**
-- **Healing also stops early at ~full HP:** the reconciles end a heal stream when the recipient
-  (or, for a self-heal, the follower) is at `Vocab::HealthPct >= kHealFullPct` (0.995) — the
-  random cap is the backstop. This is the resolved answer to "stop at full": **yes for
-  healing, time-capped.**
-- **How a cap ends a stream** (`TargetCastReconcile` / `SelfCastReconcile`): a **heal-full**,
-  **stale** (gambit stopped winning), or **gone** release is a true END-of-stream and dispels
-  the sustained effect. A plain **cap** release on a still-wounded heal is release-only (no
-  dispel) and the next winning tick re-streams it with a **fresh** random cap — varied human
-  bursts, healing flows while wounded. A sticky **Buff** (ward) dispels on any release and is
-  re-served if still wanted. The gambit re-evaluates between bursts, so a satisfied target is
-  not re-served.
+- **Magicka-out stop** (`TargetCastReconcile` / `SelfCastReconcile`): the moment the CASTER can't
+  afford the next beat's cost (`have < CalculateMagickaCost(follower)`), the stream ENDS (dispel)
+  instead of re-applying at 0. This is what makes the LONG caps safe — a channel stops on
+  magicka-out first, so a long cap never over-drains the follower (which had starved the
+  Candlelight AUTO fan mid-party). A dried follower ends the channel; magicka regens; the gambit
+  re-serves a fresh burst.
+- **Heal-to-full at 99.95%** (`kHealFullPct` = `Vocab::kHealFull` = 0.9995): a heal stream ends
+  early when the recipient (or the follower, self-heal) is at `HealthPct >= 0.9995`; the random
+  cap is the backstop. This is the resolved answer to "stop at full": **yes for healing.**
+
+**THE "AT-OR-BELOW-100 NEVER STOPS" BOUNDARY BUG (marth's root-cause).** A heal gambit condition
+is "target HP below X%". At **X = 100** the effective test never fails — `HealthPct` asymptotes
+to but rarely equals exactly 1.0, so a topped-off target keeps satisfying "HP below 100%" and the
+heal **re-dispatches forever** (independent of the stream cap; the stream cap alone just chunks
+the endless cast into bursts). FIX: a heal threshold's TOP is clamped to `Vocab::kHealFull`
+(99.95%) at EVERY heal re-dispatch / target-selection site, so a target at `>= 99.95%` no longer
+satisfies a 100% threshold and stops triggering — and the stream heal-full stop uses the SAME
+value so re-dispatch and stream stop agree. Sites: `Evaluator::ConditionTrue`
+(`kCondSelfHpBelow` / `kCondPlayerHpBelow`, `< min(p, kHealFull)`), `Evaluator::PickAlly`
+(`lowest = min(param, kHealFull)`), `CastAuto` heal fan (`>= min(threshold, kHealFull)`). Only the
+top boundary is clamped (`min`); thresholds under 100% are unchanged.
+
+- **How a cap/stop ends a stream:** a **heal-full**, **magicka-out**, **stale** (gambit stopped
+  winning), or **gone** release is a true END-of-stream and dispels the sustained effect. A plain
+  **cap** release on a still-wounded heal is release-only (no dispel) and the next winning tick
+  re-streams it with a **fresh** random cap — varied human bursts, healing flows while wounded. A
+  sticky **Buff** (ward) dispels on any release and is re-served if still wanted.
+
+**FF affordability** is unchanged: `CastAuto`'s `affordable()` gate `break`s the fan the moment
+the running budget can't afford the next cast (all fan casts share one cost, so once one is
+unaffordable the rest are too — a clean end, never an attempt-and-fail loop). The mid-party fan
+break was the HELD heal draining the caster; the magicka-out stop above prevents that.
 
 Note the three window constants (`kConcHealCap` 6 s, `kConcUtilityHold` 4 s,
 `kConcSelfUtilityCap` 15 s) are the **per-beat SUSTAIN WINDOW** — the duration
@@ -160,8 +200,11 @@ reintroduce AddTarget.
 
 ## KEY SYMBOLS (Actuation.cpp)
 
-`ConcProxy` (namespace: `g_form`/`g_src`/`g_next`, `Configure`, `Get`, `FormFor`, `Reset`) ·
-`DeliverySpell` (the gate) · `ApplyTargetEffect` / `ApplyEffectFromTo` (the two proxy wire-ins) ·
+`ConcProxy` (owner-keyed `Slot g_slot[2]{form,source,owner}`, `Configure`, `Acquire`,
+`FormForOwner`, `Free`, `Reset`) · `DeliverySpell` (gate; nullptr → caller skips) ·
+`ApplyTargetEffect` (the proxy wire-in; AUTO `ApplyEffectFromTo` skips conc-Self) ·
 `SustainConcentrationEffect` (per-beat AE window) · `DrawConcCap` (randomized stream cap) ·
-`TargetCastReconcile` / `SelfCastReconcile` (cap + heal-full release) · `ClearSelfCasts`
-(→ `ConcProxy::Reset` on revert/load) · `TargetCastEndActor` (dispels source + proxy AE).
+`TargetCastReconcile` / `SelfCastReconcile` (cap + heal-full + magicka-out release) ·
+`ClearSelfCasts` (→ `ConcProxy::Reset` on revert/load) · `TargetCastEndActor(target,spell,owner)`
+(dispel source + owner proxy AE, `InterruptCast` the channel, `ConcProxy::Free`) ·
+`SelfCastEndActor` (dispel + `InterruptCast` the self channel).

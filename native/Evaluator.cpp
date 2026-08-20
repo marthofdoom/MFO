@@ -350,7 +350,9 @@ namespace MFO::Eval {
             if (!a_self) return best;
             const auto selfPos = a_self->GetPosition();
             const float radius = Config::g_sharedRadius.load();
-            float lowest = a_param;   // must be strictly under the threshold
+            // HEAL boundary fix: clamp the TOP so a "heal ally below 100%" pick does
+            // not chase a topped-off ally forever (see Vocab::kHealFull).
+            float lowest = std::min(a_param, Vocab::kHealFull);   // strictly under this
             auto consider = [&](RE::Actor* ally) {
                 if (!ally || ally == a_self) return;
                 if (ally->IsDead() || ally->IsDisabled()) return;
@@ -374,11 +376,17 @@ namespace MFO::Eval {
             const auto& op = a_g.conditionOpcode;
             const float p  = a_g.conditionParam;   // a percentage in [0,1] for the *below thresholds
 
+            // HEAL boundary fix: an HP-below threshold of 100% (p >= 1.0) otherwise
+            // NEVER stops -- HealthPct asymptotes to but rarely equals 1.0, so a
+            // topped-off target keeps satisfying "HP below 100%". Clamp the TOP to
+            // Vocab::kHealFull (99.95%) so a full target stops triggering; thresholds
+            // under 100% are unchanged (min keeps them). MP/SP-below are not heals.
+            const float hpP = std::min(p, Vocab::kHealFull);
             if (op == Vocab::kCondAlways)        return true;
-            if (op == Vocab::kCondSelfHpBelow)   return Vocab::HealthPct(a_self)  < p;
+            if (op == Vocab::kCondSelfHpBelow)   return Vocab::HealthPct(a_self)  < hpP;
             if (op == Vocab::kCondSelfMpBelow)   return Vocab::MagickaPct(a_self) < p;
             if (op == Vocab::kCondSelfSpBelow)   return Vocab::StaminaPct(a_self) < p;
-            if (op == Vocab::kCondPlayerHpBelow) return Vocab::HealthPct(a_player) < p;
+            if (op == Vocab::kCondPlayerHpBelow) return Vocab::HealthPct(a_player) < hpP;
 
             // Self ABOVE gates -- the mirror trio.
             if (op == Vocab::kCondSelfHpAbove)   return Vocab::HealthPct(a_self)  > p;
