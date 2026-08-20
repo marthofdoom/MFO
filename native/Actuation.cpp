@@ -177,15 +177,17 @@ namespace MFO::Actuation {
         // ConcentrationCast below). Every exit is bounded: an applied beat, a
         // transparent pace-out, or a legible failure (§5.3) -- never "leave it
         // to their AI".
-        constexpr float kConcHealCap     = 6.0f;   // heal stream hard cap
-        constexpr float kConcUtilityHold = 4.0f;   // non-self utility/ward window
-        // Self ward/utility HARD cap (marth). Deliberately NOT the 4s package
-        // utility hold: a PACKAGE roots the caster, so its hold must be short to
-        // un-root him often; CastSelfDirect does NOT root (it is a paced direct-
-        // apply) and re-streams the very next winning tick, so a short cap only
-        // makes a self ward dispel/re-apply FLICKER -- a real defensive gap. 15s
-        // bounds a stuck self ward while keeping that re-stream flicker negligible.
-        constexpr float kConcSelfUtilityCap = 15.0f;
+        // These three are the per-beat SUSTAIN WINDOW (the duration
+        // SustainConcentrationEffect pins on the live AE each ~1 s beat so it never
+        // lapses between beats) -- NOT the stream's time cap. The STREAM CAP is a
+        // randomized per-stream band (DrawConcCap below); keep each window > the
+        // ~1-1.5 s beat gap so the AE bridges beats.
+        constexpr float kConcHealCap     = 6.0f;   // heal sustain window (per beat)
+        constexpr float kConcUtilityHold = 4.0f;   // non-self utility/ward sustain window
+        constexpr float kConcSelfUtilityCap = 15.0f;   // self utility/ward sustain window
+        // HEAL stop-at-full: a heal stream ends the moment the recipient is at/near
+        // full Health (marth: "heal always to 100%"), with the random cap as backstop.
+        constexpr float kHealFullPct = 0.995f;
 
         // THE CADENCE CONTRACT (critical -- "heals feel broken" regression).
         // A concentration spell's cost is authored PER SECOND, and the ENGINE
@@ -203,30 +205,25 @@ namespace MFO::Actuation {
         // still-up ward from re-stacking.
         constexpr float kConcApplyPeriod = 1.0f;
 
-        // ONE source of truth for the concentration TIME-LIMITS, so EVERY
-        // concentration cast -- self, player, ally, foe -- is bounded by the
-        // identical "same time limit based casting" durations (marth):
-        //   hostile  -- 1-4 s by per-follower Temperament, ffWatch cuts it the
-        //               moment a teammate crosses the line of fire;
-        //   heal     -- kConcHealCap (6 s) "until the target tops off";
-        //   utility  -- a capped kConcUtilityHold (4 s) hold.
-        // Consumed by TargetCastReconcile (the non-self direct-force stream's
-        // caps) AND by SelfCastReconcile's self-heal cap, so the two paths can
-        // never drift apart on the numbers. (Returns a Packages::CastHold purely
-        // as a numbers carrier -- no package is dispatched with it any more.)
-        Packages::CastHold ConcentrationHold(RE::FormID a_casterID, RE::FormID a_targetID,
-                                             CasterConsent::SpellKind a_kind) {
-            Packages::CastHold hold;
-            if (a_kind == CasterConsent::SpellKind::Offense) {
-                hold.holdSeconds = 1.0f + 3.0f * Temperament(a_casterID);   // 1-4 s, flair #1
-                hold.ffWatch     = true;
-            } else if (a_kind == CasterConsent::SpellKind::Heal) {
-                hold.holdSeconds = kConcHealCap;
-                hold.healWatch   = a_targetID;
-            } else {
-                hold.holdSeconds = kConcUtilityHold;
-            }
-            return hold;
+        // ONE source of truth for the concentration STREAM TIME-CAP (marth: loose,
+        // human timing -- each stream lasts a slightly different, RANDOMIZED duration
+        // so channels never feel like a fixed constant). Drawn ONCE when a stream
+        // starts (stored in the stream state, never serialized -> no save/determinism
+        // concern), from a uniform band by nature:
+        //   healing / utility / buff -> [8, 15] s
+        //   offense / hostile        -> [2, 6] s
+        // The cap GUARANTEES every concentration stream ENDS even if the exact gambit
+        // condition check is unreliable ("won't stop when the condition is met"); the
+        // gambit re-evaluates between bursts, so a full/satisfied target is not
+        // re-served. Healing ALSO ends early at ~full recipient HP (kHealFullPct, in
+        // the reconciles), with this cap as the backstop. Consumed by BOTH
+        // TargetCastReconcile (non-self streams) and SelfCastReconcile (self streams),
+        // so the two paths can never drift on the numbers.
+        float DrawConcCap(CasterConsent::SpellKind a_kind) {
+            static std::mt19937 rng{ std::random_device{}() };   // worker-serial, no lock (#4)
+            const float lo = (a_kind == CasterConsent::SpellKind::Offense) ? 2.0f : 8.0f;
+            const float hi = (a_kind == CasterConsent::SpellKind::Offense) ? 6.0f : 15.0f;
+            return std::uniform_real_distribution<float>(lo, hi)(rng);
         }
 
         Outcome ConcentrationCast(RE::Actor* a_follower, RE::SpellItem* a_spell,
@@ -989,6 +986,7 @@ namespace MFO::Actuation {
             SelfClock::time_point started{};
             SelfClock::time_point lastFired{};   // last time the rule re-fired (release clock)
             SelfClock::time_point lastApply{};   // last effect/magicka application (apply pacing)
+            float                 cap   = 0.0f;  // per-stream randomized time cap (DrawConcCap)
         };
         std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
 
@@ -1012,6 +1010,7 @@ namespace MFO::Actuation {
             SelfClock::time_point    started{};
             SelfClock::time_point    lastFired{};
             SelfClock::time_point    lastApply{};
+            float                    cap    = 0.0f;  // per-stream randomized time cap (DrawConcCap)
         };
         std::unordered_map<RE::FormID, TargetCastState> g_targetCast;
 
@@ -1641,6 +1640,7 @@ namespace MFO::Actuation {
             auto& sc = g_selfCast[id];
             sc.spell = spellID; sc.started = now;
             sc.lastFired = now; sc.lastApply = {};   // epoch -> apply the effect immediately
+            sc.cap = DrawConcCap(CasterConsent::ClassifySpell(a_spell));   // per-stream random cap
             it = g_selfCast.find(id);
         } else {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
@@ -1725,29 +1725,33 @@ namespace MFO::Actuation {
             //     for Heal, and an instant restore-Health has no active effect to rip).
             CasterConsent::SpellKind kind = CasterConsent::SpellKind::Buff;   // default sticky
             bool concCapped = false;
+            bool healedFull = false;
             if (!gone) {
                 if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell)) {
                     kind = CasterConsent::ClassifySpell(sp);
                     if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
-                        const float cap = (kind == CasterConsent::SpellKind::Heal)
-                                              ? kConcHealCap : kConcSelfUtilityCap;
-                        if (std::chrono::duration<float>(now - sc.started).count() >= cap)
+                        // RANDOMIZED per-stream cap (sc.cap: heal/utility 8-15s) --
+                        // GUARANTEES the self stream ends; the gambit re-serves a
+                        // still-wanted buff as a fresh burst.
+                        if (std::chrono::duration<float>(now - sc.started).count() >= sc.cap)
                             concCapped = true;
+                        // Self-HEAL stops early at ~full own HP (marth: heal to 100%).
+                        if (kind == CasterConsent::SpellKind::Heal && a &&
+                            Vocab::HealthPct(a) >= kHealFullPct)
+                            healedFull = true;
                     }
                 }
             }
-            if (gone || stale || concCapped) {
-                // RELEASE. DISPEL a lingering STICKY buff (Buff = ward/fortify,
-                // any release) so it cannot persist as a stuck gameplay effect --
-                // AND a momentary stream's SUSTAINED real effect when the stream
-                // truly ENDED (stale/rule-false): since the real-effect sustain
-                // that effect genuinely channels, so the stream's end must cut
-                // it rather than let it heal unpaid to its window's end. A
-                // CAP-only release re-streams next tick and keeps the ONE
-                // sustained HUD entry alive (no flicker at cap boundaries; the
-                // re-arm continues the same effect). There is NO equip to undo
-                // (the self-cast never holds the spell -- the AI-spam CTD).
-                if (a && (kind == CasterConsent::SpellKind::Buff || stale))
+            if (gone || stale || concCapped || healedFull) {
+                // RELEASE. DISPEL a lingering STICKY buff (Buff = ward/fortify, any
+                // release) so it cannot persist as a stuck gameplay effect -- AND a
+                // momentary stream's SUSTAINED real effect when the stream truly
+                // ENDED (stale / rule-false / heal-full): it genuinely channels, so
+                // its end must cut it. A plain CAP-only release re-streams next tick
+                // (fresh random cap), keeping a wanted buff/heal continuous across
+                // bursts. There is NO equip to undo (the self-cast never holds the
+                // spell -- the AI-spam CTD).
+                if (a && (kind == CasterConsent::SpellKind::Buff || stale || healedFull))
                     SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
             }
@@ -1832,6 +1836,7 @@ namespace MFO::Actuation {
             auto& tc = g_targetCast[id];
             tc.spell = spellID; tc.target = targetID; tc.kind = kind;
             tc.started = now; tc.lastFired = now; tc.lastApply = {};   // epoch -> apply now
+            tc.cap = DrawConcCap(kind);   // per-stream random cap (8-15s heal/util, 2-6s offense)
             it = g_targetCast.find(id);
         } else {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
@@ -1877,30 +1882,24 @@ namespace MFO::Actuation {
             auto* t = RE::TESForm::LookupByID<RE::Actor>(tc.target);
             const bool gone  = !f || !f->Is3DLoaded() || !t || !t->Is3DLoaded() || t->IsDead();
             const bool stale = std::chrono::duration<float>(now - tc.lastFired).count() > releaseSec;
-            // TIME CAP by nature (shared ConcentrationHold numbers): hostile 1-4s,
-            // heal 6s, utility 4s. The cap RELEASES + re-streams; it only DISPELS for
-            // a sticky Buff (ward). A HEAL/DAMAGE cap is release-only -- the next
-            // winning tick re-creates the entry and re-applies immediately, so a
-            // still-needed heal FLOWS UNINTERRUPTED (marth's critical constraint).
-            float cap;
-            switch (tc.kind) {
-            case CasterConsent::SpellKind::Offense:
-                cap = ConcentrationHold(id, tc.target, tc.kind).holdSeconds; break;   // 1-4s
-            case CasterConsent::SpellKind::Heal:
-                cap = kConcHealCap;     break;                                         // 6s
-            default:
-                cap = kConcUtilityHold; break;                                        // Buff: 4s
-            }
-            const bool capped = std::chrono::duration<float>(now - tc.started).count() >= cap;
-            if (gone || stale || capped) {
-                // DISPEL a sticky ward on ANY release; a momentary stream's
-                // SUSTAINED real effect only when the stream truly ENDED
-                // (gone/stale) -- since the real-effect sustain it genuinely
-                // channels, so the stream's end must cut it rather than let it
-                // run unpaid to its window's end. A CAP-only release re-streams
-                // next tick: keeping the effect alive keeps ONE continuous HUD
-                // entry across cap boundaries, and the next beat re-arms it.
-                const bool endOfStream = gone || stale;
+            // RANDOMIZED PER-STREAM TIME CAP (tc.cap, drawn at stream start:
+            // heal/utility 8-15s, offense 2-6s). GUARANTEES the stream ends even if
+            // the gambit condition is unreliable; the gambit re-evaluates between
+            // bursts (a satisfied target is not re-served). A plain cap on a still-
+            // needed HEAL is release-only -- the next winning tick re-streams it with
+            // a FRESH random cap (varied human bursts), so it FLOWS while wounded.
+            const bool capped = std::chrono::duration<float>(now - tc.started).count() >= tc.cap;
+            // HEAL also ends EARLY at ~full recipient HP (marth: "heal always to
+            // 100%") -- a true END-of-stream, dispel + stop.
+            const bool healedFull = tc.kind == CasterConsent::SpellKind::Heal && t &&
+                                    Vocab::HealthPct(t) >= kHealFullPct;
+            if (gone || stale || capped || healedFull) {
+                // DISPEL a sticky ward on ANY release, and a momentary stream's
+                // SUSTAINED real effect when the stream truly ENDED (gone / stale /
+                // heal-full) -- it genuinely channels, so its end must cut it. A
+                // plain CAP-only release keeps the effect (no dispel) and re-streams
+                // next tick, so a wounded target's heal is continuous across bursts.
+                const bool endOfStream = gone || stale || healedFull;
                 if (t && (tc.kind == CasterConsent::SpellKind::Buff || endOfStream))
                     TargetCastEndActor(tc.target, tc.spell);
                 done.push_back(id);
