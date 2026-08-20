@@ -35,7 +35,7 @@
 						"max": 10,
 						"step": 1,
 						"sourceType": "ModSettingInt",
-						"defaultValue": 2
+						"defaultValue": 5
 					}
 				},
 				{
@@ -48,7 +48,7 @@
 						"max": 10,
 						"step": 1,
 						"sourceType": "ModSettingInt",
-						"defaultValue": 2
+						"defaultValue": 5
 					}
 				},
 				{

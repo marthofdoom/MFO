@@ -1,0 +1,23 @@
+MFO Progression Add-on v1.0.1
+built:      2026-08-20T20:25:48Z
+requires:   MFO v1.0.66+ (DLL unchanged; this is an add-on-only release)
+zip sha256: 145cee1a11406877aad99b6881ac8e5635d5990e95201664be340daa64e8a3ab
+esl sha256: 3ec1bc8748f20bf5a086a54d6079dab2fbb63a8c694a7fa2c349648ee25cc8bc
+
+Change from the v1.0.66 add-on:
+  - Default skill points per level 2 -> 5, both pools (iSkillPointsPerLevel and
+    iManualSkillPointsPerLevel; class-auto GLOB MFOP_SkillPointsPerLevel 0x803 and
+    manual GLOB MFOP_ManualSkillPointsPerLevel 0x809 both 5.0). Safe to raise now
+    that Cancel engine skill leveling (default ON) reverts the engine's own
+    per-level growth, so the full award is not inflationary.
+
+Zip contents (unchanged layout from v1.0.66 add-on):
+  MFO_Progression.esl
+  Scripts/MFOP_MCM.pex
+  MCM/Config/MFO_Progression/config.json     (7 controls, incl. Cancel engine skill leveling toggle)
+  MCM/Config/MFO_Progression/settings.ini
+  SEQ/MFO_Progression.seq
+
+Source: MFO_GenerateESP.py (generator is now the authority for the add-on MCM
+files; the bCancelEngineAwards toggle is emitted from PROG_MCM_TOGGLES rather than
+hand-edited into out/). Regenerate with: python3 MFO_GenerateESP.py out

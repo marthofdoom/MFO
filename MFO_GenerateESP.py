@@ -1151,8 +1151,8 @@ PROG_GLOBS = [
     (PGID_VERSION,        "MFOP_Version",                 PROG_VERSION_STAMP, 's'),
     (PGID_RESERVED,       "MFOP_Reserved",                0.0,   's'),
     (PGID_LEVELS_PER_PERK,"MFOP_LevelsPerPerkPoint",      2.0,   's'),
-    (PGID_SKILL_PER_LEVEL,"MFOP_SkillPointsPerLevel",     2.0,   'f'),
-    (PGID_MANUAL_SKILL,   "MFOP_ManualSkillPointsPerLevel",2.0,  's'),
+    (PGID_SKILL_PER_LEVEL,"MFOP_SkillPointsPerLevel",     5.0,   'f'),
+    (PGID_MANUAL_SKILL,   "MFOP_ManualSkillPointsPerLevel",5.0,  's'),
     (PGID_SHARED_DIVISOR, "MFOP_SharedGrowthDivisor",     2.0,   'f'),
     (PGID_RESPEC_RAPPORT, "MFOP_RespecRapportCost",       500.0, 's'),
     (PGID_VETERAN_MULT,   "MFOP_VeteranCatchupMult",      1.0,   'f'),
@@ -1323,11 +1323,11 @@ PROG_MCM_SLIDERS = [
     (PGID_SKILL_PER_LEVEL, "Auto skill points per level",
      "Skill points auto-scaled onto a class follower each level (class builds). "
      "0 disables class auto-scaling.",
-     0, 10, 1, 2),
+     0, 10, 1, 5),
     (PGID_MANUAL_SKILL, "Manual skill points per level",
      "Skill points a follower on MANUAL allocation earns each level (you spend "
      "them by hand for mage / multiclass builds). 0 disables the manual pool.",
-     0, 10, 1, 2),
+     0, 10, 1, 5),
     (PGID_SHARED_DIVISOR, "Benched growth divisor",
      "A benched (not-following) follower grows at 1/N the rate. 1 = full rate, "
      "2 = half.",
@@ -1358,6 +1358,21 @@ PROG_MCM_KEYS = {
 }
 
 
+# ModSettingBool toggles, rendered after the sliders. Not GLOB-bound: the DLL
+# reads them from the addon INI by key tail (ProgAllocator KeyEndsWith
+# "CancelEngineAwards"), the same ApplyEconomyOverride path as the sliders.
+# (marth 2026-08-20: revert engine awards so MFO's full 5/level award is not
+# inflated by the engine's own per-level skill growth.)
+#   (iniKey, label, help, default)
+PROG_MCM_TOGGLES = [
+    ("bCancelEngineAwards", "Cancel engine skill leveling",
+     "ON (default): MFO reverts the engine's per-level skill gains and applies "
+     "only its own class/manual award (pure MFO, no inflation). OFF: engine "
+     "leveling stacks on top of MFO's award (compat).",
+     1),
+]
+
+
 def prog_mcm_config():
     """The MFO_Progression config.json dict — one Economy page of ModSettingInt
     sliders (persist to the addon's own INI, which the DLL reads live). minMcmVersion 9."""
@@ -1371,6 +1386,17 @@ def prog_mcm_config():
             "valueOptions": {
                 "min": mn, "max": mx, "step": step,
                 "sourceType": "ModSettingInt",
+                "defaultValue": dflt,
+            },
+        })
+    for key, label, help_, dflt in PROG_MCM_TOGGLES:
+        content.append({
+            "id": f"{key}:Economy",
+            "text": label,
+            "type": "toggle",
+            "help": help_,
+            "valueOptions": {
+                "sourceType": "ModSettingBool",
                 "defaultValue": dflt,
             },
         })
@@ -1402,6 +1428,8 @@ def write_prog_mcm_files(out_dir):
         f.write("[Economy]\n")
         for fid, label, help_, mn, mx, step, dflt in PROG_MCM_SLIDERS:
             f.write(f"{PROG_MCM_KEYS[fid]}={int(dflt)}\n")
+        for key, label, help_, dflt in PROG_MCM_TOGGLES:
+            f.write(f"{key}={int(dflt)}\n")
     return cdir
 
 
