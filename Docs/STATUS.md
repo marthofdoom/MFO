@@ -8,10 +8,15 @@
 >
 > **Last updated:** 2026-08-18 (v1.0.65 IN PROGRESS — self-cast + AUTO + full 6-wave review-fix batch merged to main, not yet cut) · **Latest public:** v1.0.63 (casters cast only the spell you chose; #59 continuous cast-takeover exact+partial) · prior public: v1.0.61 (creature weapons), v1.0.60 (#73), v1.0.59 (controller). v1.0.62 (weapon-thrash, was HELD) folds in — users jump v1.0.61→v1.0.63. The PROGRESSION ADDON (#74) is NOT in this release — it ships separately, gated on the §18 ESL/Addon-API rework; components 1–3 + manual skills + authored-constellation trees are BUILT and field-verified but DORMANT without MFO_Progression.esl. Next: §18 Addon-API/ESL work (FIRST tweak: perk points floor(level/2), was /3), then Roster addon (Mon 2026-08-18), then town update (#31).
 
-> **▶▶ RESUME HERE (2026-08-19 late) — v1.0.65 STAGED (`f1110f2`, NO TAG); cast delivery being REBUILT minimal after a scope-creep audit. Cut HELD.**
-> - **⚠️ main (`7d6eb87`) SHIPS BROKEN CAST DELIVERY.** The deployed DLL `2ad0c414` (the wave-3 `MagicTarget::AddTarget`
->   model) FIELD-FAILED: AddTarget does NOT channel a concentration effect → Lucien heals nobody (deck-confirmed).
->   Do NOT cut from main as-is. The rebuild (below) REPLACES main's cast delivery.
+> **▶▶ RESUME HERE (2026-08-19 late) — v1.0.65 STAGED (`f1110f2`, NO TAG); minimal cast rebuild MERGED + DEPLOYED for field test. Cut HELD.**
+> - **✅ CAST REBUILD MERGED TO main (`814d796`, merge of `665be2c`) + DEPLOYED.** DLL **`27cc3649`** (green CI run
+>   `32318675820`; merged native tree == 665be2c so no rebuild needed) staged into local `custom-modlist/mods/MFO`,
+>   supersedes the broken `2ad0c414`. Deck AWAKE but not yet synced at deploy — **RE-VERIFY deck sha == `27cc3649`
+>   before trusting any field result** (syncthing). FIELD TEST NOW: does the flipped concentration copy CHANNEL
+>   the heal on the recipient (player HP climbs at the follower's rate; Candlelight/flesh unchanged; no light CTD)?
+>   Power-attack fix (`0d487e8`) NOT bundled (avoid Actuation.cpp conflict) — deploy next round.
+> - **(history) main previously shipped BROKEN cast delivery** (`2ad0c414`, wave-3 AddTarget — doesn't channel
+>   concentration, Lucien healed nobody). REPLACED by the rebuild above.
 > - **THE SAGA, RESOLVED TO A MINIMAL FIX (2026-08-19).** A ~1-day cast rework (AddTarget → target-self-cast →
 >   force-sustain → 2-slot SPEL proxy) OVERREACHED: to fix ONE bug it rewrote the delivery of already-working
 >   spells and chased its own regressions (player-mana drain, no-stop-at-full, FF-fan-lands-on-caster, SEV-1
