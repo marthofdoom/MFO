@@ -89,10 +89,20 @@ off-self is the ONLY broken case, and the proxy is the ONLY fix.**
   heal's cap ends the burst and the gambit re-serves a FRESH stream (new slot, new channel) next
   tick — so the channel always stops (no runaway) and an owned slot is never orphaned. The
   self path (`SelfCastEndActor`) likewise interrupts the self channel.
-- **AUTO does NOT proxy conc-Self.** The AUTO fan (`ApplyEffectFromTo`) has no per-target
-  stream/reconcile to own and later free a slot, so it **skips** a conc-Self spell fanned to a
-  non-self target (single-target `CastTargetDirect` delivers conc-Self heals; FF and natively-
-  aimed conc heals fan normally). This avoids leaking the 2-slot cap.
+- **AUTO ally-heal, CONCENTRATION = SEQUENTIAL MOST-HURT (one channel per caster).** A
+  concentration heal starts an engine channel and a caster sustains only ONE at a time, so AUTO
+  cannot fan a concentration heal to N allies. `CastAuto` intercepts a concentration heal
+  (`kind==Heal || SpellHealsHealth`) BEFORE the fan / the `g_autoCast` cooldown gate and picks
+  the SINGLE most-hurt member below the threshold (player OR teammate OR self, `HealthPct` under
+  `min(threshold, kHealFull)`), serving it via the safe single-target path — `CastTargetDirect`
+  (owner-keyed proxy slot, InterruptCast on release) for another actor, `CastSelfDirect` for
+  self. It runs EVERY tick (no cooldown gate — the stream self-paces at ~1 s), so while a
+  recipient is hurt it stays selected; when it tops off (heal-full RELEASE, slot frees) the
+  next-most-hurt is served next tick — over a few seconds every hurt ally is topped. This uses
+  ONE slot at a time (respects the 2-slot cap, never a live-slot collision). FF/instant heals
+  and non-heal buffs still FAN below (`ApplyEffectFromTo`) — an instant apply has no channel, so
+  N-at-once is fine; a conc-Self **non-heal** buff fanned via AUTO is skipped (no stream to own a
+  slot; rare).
 - **Main-thread only.** `ConcProxy::Acquire` returns nullptr when `!MainThread::IsInstalled()`,
   so `IFormFactory::Create` never runs off the main thread (VR); the caller skips.
 - **Save-safety.** Dynamic forms are never serialized; they do not survive a save-load, but the
