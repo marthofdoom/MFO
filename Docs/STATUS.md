@@ -23,18 +23,24 @@
 >     concentration heals silently fail. NOT a package-lock issue (fixed pre-baseline by `36231d7`); hits normal
 >     AND locked followers equally. Everything else (Candlelight/flesh fanning, self-casts, normal heals) WORKED
 >     at baseline — marth confirms Candlelight worked in all modes (individual/player/self/AUTO-all-in-dark).
-> - **✅ DEFINITIVE FIX BUILT — branch `worktree-agent-a622d046b08b6aefc` HEAD `dff4ec1`, GREEN CI `32308308485`.**
->   Minimal diff vs baseline: `Actuation.cpp` +112/−13 (a `ConcProxy` module + `DeliverySpell` + 3 wire-ins);
->   **`Actuation.h` + `Logistics.cpp` byte-identical to baseline** (whole rewrite reverted). Not merged, VERSION
->   untouched. KEY FINDING (Task C): baseline delivers FF Self via plain `CastSpellImmediate(sp,target,follower)`
->   and for FIRE-AND-FORGET the effect lands on the TARGET regardless of Self delivery (recipients do NOT
->   self-cast) — only CONCENTRATION Self collapses onto the caster (the channeled AE binds to the magic-caster's
->   owner). So the "Self always lands on caster" premise that drove the whole rewrite was FALSE for FF — the FF
->   scope creep was fixing a non-bug. NEXT: Fable-review the worktree diff, then deck field-test whether the
->   flipped concentration copy CHANNELS the heal (the real unknown). DECISION PENDING: the explicit
->   `kHealFullPct` stop-at-full terminator was rewrite-added and got reverted; heals now stop via baseline
->   (gambit "HP below X" + 6s cap). Re-add explicit stop-at-full? (~6-line follow-up; marth to decide — he
->   earlier wanted stop-at-full, but that was on the broken build where the heal hit the wrong actor).
+> - **✅ DEFINITIVE FIX BUILT + REVIEW-CLEAN — branch `worktree-agent-a622d046b08b6aefc` HEAD `665be2c`, GREEN CI `32318675820`.**
+>   Diff vs baseline is ONE FILE: `native/Actuation.cpp` +120/−12 (the `ConcProxy`/`DeliverySpell` proxy + 2
+>   concentration-branch wire-ins + `TargetCastEndActor` proxy dispel + `ConcProxy::Reset()`). **`Actuation.h` +
+>   `Logistics.cpp` byte-identical to baseline.** Not merged, VERSION untouched. Independent Fable review (read
+>   the WORKTREE) found ONE merge-blocker — a cross-load dangling-pointer/double-free (ConcProxy's 0xFF form
+>   ptrs survived a save-load reset while the dynamic forms didn't) — **FIXED** via `ConcProxy::Reset()` in
+>   `ClearSelfCasts()` at kPreLoadGame (nulls g_form/g_src/g_next + clears borrowed effects before teardown).
+>   KEY FINDING: baseline delivers FF Self via plain `CastSpellImmediate(sp,target,follower)` and for
+>   FIRE-AND-FORGET the effect lands on the TARGET regardless of Self delivery — only CONCENTRATION Self
+>   collapses onto the caster. So the "Self always lands on caster" premise that drove the whole rewrite was
+>   FALSE for FF; the FF scope creep fixed a non-bug.
+>   - **REMAINING GATES:** (1) DECK FIELD TEST — does the flipped concentration copy actually CHANNEL the heal
+>     on the recipient? (the one real unknown; never deployed). (2) marth's GO to merge+deploy. Bundle with the
+>     clean power-attack fix (`0d487e8`) in ONE deploy; it REPLACES main's broken `2ad0c414`.
+>   - **DECISION PENDING (marth):** re-add the explicit `kHealFullPct` stop-at-full terminator (~6 lines), or
+>     rely on baseline stop (gambit "HP below X" + 6s cap)? Review did NOT flag baseline stop as broken →
+>     genuine preference. (marth earlier wanted stop-at-full, but that was on the broken build where the heal
+>     hit the wrong actor.)
 > - **(design, now BUILT) DEFINITIVE FIX spec:**
 >   rebuild cast delivery = **baseline `00c6fce` + ONE mechanism**: a delivery-flipped copy (copy data+effects,
 >   set `data.delivery=kTargetActor`, KEEP castingType — targeting-only, NOT an FF conversion) gated strictly to
