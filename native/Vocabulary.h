@@ -225,4 +225,14 @@ namespace MFO::Vocab {
     inline float MagickaPct(RE::Actor* a) { return Pct(a, RE::ActorValue::kMagicka); }
     inline float StaminaPct(RE::Actor* a) { return Pct(a, RE::ActorValue::kStamina); }
 
+    // The effective "full HP" mark for a HEAL threshold. A heal condition of
+    // "HP below 100%" (param 1.0) is otherwise ALWAYS satisfiable -- HealthPct
+    // asymptotes to but rarely equals exactly 1.0, so a topped-off target keeps
+    // re-triggering forever ("won't stop casting"). Clamp a heal threshold's TOP
+    // to this so a target at >= 99.95% counts as full and stops the heal; the
+    // SAME value gates the stream heal-full early-stop, so re-dispatch and stream
+    // stop agree. Only the top boundary needs it (min(param, kHealFull)); a
+    // threshold under 100% is unchanged.
+    constexpr float kHealFull = 0.9995f;
+
 }

@@ -218,9 +218,11 @@ releases **by eviction** with a non-actor XMarker.
   (`SelfCastReconcile`, CONCENTRATION-ONLY):** a self-cast concentration channel is
   bounded by a per-stream RANDOM cap drawn at start (`DrawConcCap`, stored in
   `SelfCastState::cap`): **heal/utility/buff → uniform `[8,15]` s**, offense → `[2,6]` s
-  (loose human timing, never serialized). A **self-HEAL also ends early at ~full own HP**
-  (`kHealFullPct` 0.995). **DISPEL-on-release** for a sticky Buff (any release), a heal on
-  heal-full/stale (true end-of-stream); a plain cap on a still-wanted stream re-streams
+  (loose human timing, never serialized). ALSO ends on **MAGICKA-OUT** (`have <
+  CalculateMagickaCost` → stop, dispel — a held cast stops when magicka runs, which makes
+  the long caps safe) and a **self-HEAL at ~full own HP** (`kHealFullPct` = `Vocab::kHealFull`
+  0.9995). **DISPEL-on-release** for a sticky Buff (any release), a heal on
+  heal-full/magicka-out/stale (true end-of-stream); a plain cap on a still-wanted stream re-streams
   next tick with a fresh random cap. An **FF self buff keeps its authored duration** (not
   concentration → no cap). NOTE `kConcHealCap`/`kConcSelfUtilityCap` are now the per-beat
   SUSTAIN WINDOW (AE duration bridge), NOT the stream cap.
@@ -273,9 +275,11 @@ releases **by eviction** with a non-actor XMarker.
   released by `TargetCastReconcile` (registry `g_targetCast`, one stream per follower)
   on a RANDOMIZED per-stream cap (`DrawConcCap`, stored `TargetCastState::cap`, drawn at
   start, never serialized): **heal/utility 8-15 s, offense 2-6 s** (LoS + line-of-fire
-  re-checked on EVERY apply in `CastTargetDirect`). A **HEAL also ends early at ~full
-  recipient HP** (`kHealFullPct` 0.995). Dispel-on-release for a sticky Buff (any
-  release) and for a heal on heal-full/stale (true end-of-stream); a plain cap on a
+  re-checked on EVERY apply in `CastTargetDirect`). ALSO ends on **MAGICKA-OUT** (`have <
+  CalculateMagickaCost(follower)` → stop, dispel — makes the long caps safe, no over-drain)
+  and a **HEAL at ~full recipient HP** (`kHealFullPct` = `Vocab::kHealFull` 0.9995).
+  Dispel-on-release for a sticky Buff (any release) and a heal on
+  heal-full/magicka-out/stale (true end-of-stream); a plain cap on a
   still-wounded heal is release-only and **re-streams with a FRESH random cap** so a
   wounded target tops up across bursts. `TargetCastReconcile` runs each tick in
   `Diagnostics.cpp` beside `SelfCastReconcile`; both cleared in `ClearSelfCasts`. SELF
@@ -301,8 +305,14 @@ releases **by eviction** with a non-actor XMarker.
   stream time-cap** is drawn per-stream by ONE helper `DrawConcCap(kind)` (Actuation.cpp
   anon, `std::mt19937` + `uniform_real_distribution`): heal/utility uniform `[8,15]`s,
   offense `[2,6]`s, stored in `TargetCastState::cap`/`SelfCastState::cap` at stream start,
-  never serialized; consumed by `TargetCastReconcile` and `SelfCastReconcile` (+ heal-full
-  `kHealFullPct`). (Replaced the old fixed `ConcentrationHold` numbers.) The FOE package
+  never serialized; consumed by `TargetCastReconcile` and `SelfCastReconcile` (+ magicka-out
+  stop + heal-full `kHealFullPct` = `Vocab::kHealFull` 0.9995). (Replaced the old fixed
+  `ConcentrationHold` numbers.) **HEAL-BOUNDARY fix (Vocab::kHealFull, Vocabulary.h):** an
+  HP-below heal threshold of 100% never stops (HealthPct asymptotes to 1.0), so every heal
+  re-dispatch/target-select clamps the TOP to 99.95% via `min(param, kHealFull)` —
+  `Evaluator::ConditionTrue` (`kCondSelfHpBelow`/`kCondPlayerHpBelow`), `Evaluator::PickAlly`
+  (`lowest`), `CastAuto` heal fan (`>= min(threshold, kHealFull)`); the stream heal-full uses
+  the SAME mark so re-dispatch and stream stop agree. The FOE package
   `§4.6`-DECLINES for package-locked custom
   followers — every concentration path avoids it entirely (`CastTargetDirect`), and
   the FF paths fall back to a direct silent cast.

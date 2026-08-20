@@ -84,28 +84,48 @@ off-self is the ONLY broken case, and the proxy is the ONLY fix.**
 
 ---
 
-## STREAM BOUNDING — randomized caps + heal-to-full
+## STREAM BOUNDING — long randomized caps, MAGICKA-GATED, heal-to-full at 99.95%
 
 A concentration **stream** (one per follower, in `g_targetCast` / `g_selfCast`, re-armed each
-~1 s beat while its gambit keeps winning) is bounded so it always ends — even if the gambit
-condition check is unreliable ("won't stop when the condition is met").
+~1 s beat while its gambit keeps winning) is bounded three ways so it always ends.
 
 - **Randomized per-stream time cap** (`DrawConcCap`, a `std::mt19937` + `uniform_real_distribution`,
   worker-serial, **never serialized**), drawn ONCE when the stream starts and stored in the
   stream state (`tc.cap` / `sc.cap`) for loose, human timing:
   - **healing / utility / buff → uniform `[8, 15]` s**
   - **offense / hostile → uniform `[2, 6]` s**
-- **Healing also stops early at ~full HP:** the reconciles end a heal stream when the recipient
-  (or, for a self-heal, the follower) is at `Vocab::HealthPct >= kHealFullPct` (0.995) — the
-  random cap is the backstop. This is the resolved answer to "stop at full": **yes for
-  healing, time-capped.**
-- **How a cap ends a stream** (`TargetCastReconcile` / `SelfCastReconcile`): a **heal-full**,
-  **stale** (gambit stopped winning), or **gone** release is a true END-of-stream and dispels
-  the sustained effect. A plain **cap** release on a still-wounded heal is release-only (no
-  dispel) and the next winning tick re-streams it with a **fresh** random cap — varied human
-  bursts, healing flows while wounded. A sticky **Buff** (ward) dispels on any release and is
-  re-served if still wanted. The gambit re-evaluates between bursts, so a satisfied target is
-  not re-served.
+- **Magicka-out stop** (`TargetCastReconcile` / `SelfCastReconcile`): the moment the CASTER can't
+  afford the next beat's cost (`have < CalculateMagickaCost(follower)`), the stream ENDS (dispel)
+  instead of re-applying at 0. This is what makes the LONG caps safe — a channel stops on
+  magicka-out first, so a long cap never over-drains the follower (which had starved the
+  Candlelight AUTO fan mid-party). A dried follower ends the channel; magicka regens; the gambit
+  re-serves a fresh burst.
+- **Heal-to-full at 99.95%** (`kHealFullPct` = `Vocab::kHealFull` = 0.9995): a heal stream ends
+  early when the recipient (or the follower, self-heal) is at `HealthPct >= 0.9995`; the random
+  cap is the backstop. This is the resolved answer to "stop at full": **yes for healing.**
+
+**THE "AT-OR-BELOW-100 NEVER STOPS" BOUNDARY BUG (marth's root-cause).** A heal gambit condition
+is "target HP below X%". At **X = 100** the effective test never fails — `HealthPct` asymptotes
+to but rarely equals exactly 1.0, so a topped-off target keeps satisfying "HP below 100%" and the
+heal **re-dispatches forever** (independent of the stream cap; the stream cap alone just chunks
+the endless cast into bursts). FIX: a heal threshold's TOP is clamped to `Vocab::kHealFull`
+(99.95%) at EVERY heal re-dispatch / target-selection site, so a target at `>= 99.95%` no longer
+satisfies a 100% threshold and stops triggering — and the stream heal-full stop uses the SAME
+value so re-dispatch and stream stop agree. Sites: `Evaluator::ConditionTrue`
+(`kCondSelfHpBelow` / `kCondPlayerHpBelow`, `< min(p, kHealFull)`), `Evaluator::PickAlly`
+(`lowest = min(param, kHealFull)`), `CastAuto` heal fan (`>= min(threshold, kHealFull)`). Only the
+top boundary is clamped (`min`); thresholds under 100% are unchanged.
+
+- **How a cap/stop ends a stream:** a **heal-full**, **magicka-out**, **stale** (gambit stopped
+  winning), or **gone** release is a true END-of-stream and dispels the sustained effect. A plain
+  **cap** release on a still-wounded heal is release-only (no dispel) and the next winning tick
+  re-streams it with a **fresh** random cap — varied human bursts, healing flows while wounded. A
+  sticky **Buff** (ward) dispels on any release and is re-served if still wanted.
+
+**FF affordability** is unchanged: `CastAuto`'s `affordable()` gate `break`s the fan the moment
+the running budget can't afford the next cast (all fan casts share one cost, so once one is
+unaffordable the rest are too — a clean end, never an attempt-and-fail loop). The mid-party fan
+break was the HELD heal draining the caster; the magicka-out stop above prevents that.
 
 Note the three window constants (`kConcHealCap` 6 s, `kConcUtilityHold` 4 s,
 `kConcSelfUtilityCap` 15 s) are the **per-beat SUSTAIN WINDOW** — the duration

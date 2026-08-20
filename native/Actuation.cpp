@@ -187,7 +187,10 @@ namespace MFO::Actuation {
         constexpr float kConcSelfUtilityCap = 15.0f;   // self utility/ward sustain window
         // HEAL stop-at-full: a heal stream ends the moment the recipient is at/near
         // full Health (marth: "heal always to 100%"), with the random cap as backstop.
-        constexpr float kHealFullPct = 0.995f;
+        // Uses the SAME mark as the re-dispatch condition (Vocab::kHealFull, 99.95%)
+        // so the stream stop and the heal re-dispatch agree -- a topped-off target
+        // both stops re-triggering AND has its live stream cut.
+        constexpr float kHealFullPct = Vocab::kHealFull;
 
         // THE CADENCE CONTRACT (critical -- "heals feel broken" regression).
         // A concentration spell's cost is authored PER SECOND, and the ENGINE
@@ -1726,6 +1729,7 @@ namespace MFO::Actuation {
             CasterConsent::SpellKind kind = CasterConsent::SpellKind::Buff;   // default sticky
             bool concCapped = false;
             bool healedFull = false;
+            bool magickaDry = false;
             if (!gone) {
                 if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell)) {
                     kind = CasterConsent::ClassifySpell(sp);
@@ -1739,19 +1743,25 @@ namespace MFO::Actuation {
                         if (kind == CasterConsent::SpellKind::Heal && a &&
                             Vocab::HealthPct(a) >= kHealFullPct)
                             healedFull = true;
+                        // MAGICKA-OUT STOP: end the channel the moment the caster can't
+                        // afford the next beat, instead of re-applying for free at 0.
+                        if (auto* avo = a->AsActorValueOwner();
+                            avo && avo->GetActorValue(RE::ActorValue::kMagicka) <
+                                       sp->CalculateMagickaCost(a))
+                            magickaDry = true;
                     }
                 }
             }
-            if (gone || stale || concCapped || healedFull) {
+            if (gone || stale || concCapped || healedFull || magickaDry) {
                 // RELEASE. DISPEL a lingering STICKY buff (Buff = ward/fortify, any
                 // release) so it cannot persist as a stuck gameplay effect -- AND a
                 // momentary stream's SUSTAINED real effect when the stream truly
-                // ENDED (stale / rule-false / heal-full): it genuinely channels, so
-                // its end must cut it. A plain CAP-only release re-streams next tick
-                // (fresh random cap), keeping a wanted buff/heal continuous across
-                // bursts. There is NO equip to undo (the self-cast never holds the
-                // spell -- the AI-spam CTD).
-                if (a && (kind == CasterConsent::SpellKind::Buff || stale || healedFull))
+                // ENDED (stale / rule-false / heal-full / magicka-out): it genuinely
+                // channels, so its end must cut it. A plain CAP-only release re-streams
+                // next tick (fresh random cap), keeping a wanted buff/heal continuous
+                // across bursts. There is NO equip to undo (the self-cast never holds
+                // the spell -- the AI-spam CTD).
+                if (a && (kind == CasterConsent::SpellKind::Buff || stale || healedFull || magickaDry))
                     SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
             }
@@ -1893,13 +1903,28 @@ namespace MFO::Actuation {
             // 100%") -- a true END-of-stream, dispel + stop.
             const bool healedFull = tc.kind == CasterConsent::SpellKind::Heal && t &&
                                     Vocab::HealthPct(t) >= kHealFullPct;
-            if (gone || stale || capped || healedFull) {
+            // MAGICKA-OUT STOP (marth: "a held cast should stop when magicka runs").
+            // The moment the CASTER can't afford the next beat's cost, END the stream
+            // (a true end-of-stream, dispel) instead of re-applying for free at 0 --
+            // this is what makes the long caps safe (no over-drain), and it stops the
+            // never-ending re-apply that would otherwise churn every beat.
+            bool magickaDry = false;
+            if (!gone) {
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(tc.spell)) {
+                    if (auto* avo = f->AsActorValueOwner();
+                        avo && avo->GetActorValue(RE::ActorValue::kMagicka) <
+                                   sp->CalculateMagickaCost(f))
+                        magickaDry = true;
+                }
+            }
+            if (gone || stale || capped || healedFull || magickaDry) {
                 // DISPEL a sticky ward on ANY release, and a momentary stream's
                 // SUSTAINED real effect when the stream truly ENDED (gone / stale /
-                // heal-full) -- it genuinely channels, so its end must cut it. A
-                // plain CAP-only release keeps the effect (no dispel) and re-streams
-                // next tick, so a wounded target's heal is continuous across bursts.
-                const bool endOfStream = gone || stale || healedFull;
+                // heal-full / magicka-out) -- it genuinely channels, so its end must
+                // cut it. A plain CAP-only release keeps the effect (no dispel) and
+                // re-streams next tick, so a wounded target's heal is continuous
+                // across bursts.
+                const bool endOfStream = gone || stale || healedFull || magickaDry;
                 if (t && (tc.kind == CasterConsent::SpellKind::Buff || endOfStream))
                     TargetCastEndActor(tc.target, tc.spell);
                 done.push_back(id);
@@ -2072,7 +2097,10 @@ namespace MFO::Actuation {
                     // "Self: Health < 30% -> Heal (Auto)" rule thus heals only allies
                     // under 30%. Non-heal buffs skip this entirely (heal==false), so
                     // Candlelight still fans to the whole party.
-                    if (heal && Vocab::HealthPct(ally) >= a_healThreshold) return;
+                    // HEAL boundary fix: clamp the TOP so a 100% heal threshold means
+                    // STRICTLY below full -- a topped-off ally (>= 99.95%) is skipped,
+                    // else the fan re-heals a full party forever (see Vocab::kHealFull).
+                    if (heal && Vocab::HealthPct(ally) >= std::min(a_healThreshold, Vocab::kHealFull)) return;
                     // F2/F3: skip anyone already carrying a duration buff from
                     // this spell (an instant heal leaves no effect and re-fires),
                     // so an all-covered party fans to nobody -> transparent NoOp.
