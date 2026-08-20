@@ -49,6 +49,29 @@ copy back.
 - DO (marth): "Heals channel the way they should now. They top a target off and stop, they quit
   the moment the caster is out of magicka, and they don't spam or drain him dry."
 
+## How marth actually builds sentences (collated from the full conversation)
+
+- **Cause and effect with "so".** State the fact, then the consequence. "He's a 1h and he's 2h
+  so that's obvious." "A follower cannot heal and attack in the same cycle, so the cost of a heal
+  is the attack not made." This is the single most characteristic move. Use it.
+- **Starts sentences with And / But / So** when it flows. That's fine and natural here.
+- **Blunt and decisive.** Flat statements and short imperatives. "Drop the handing entirely."
+  "It's done." "No, we solved it too." No hedging, no throat-clearing.
+- **Reasons out loud, plainly.** Lay out the situation, then the conclusion. "Logically we know
+  the freeze was caused by the newer updates, so it's either the timing caps or the live spell
+  alterations." Give the reader the reasoning, not just the claim.
+- **Concrete and specific over abstract.** Name the thing (a mace, plate, Breezehome, a 1h vs a
+  2h). Examples do the persuading.
+- **Emphasis comes from word choice and structure, not adjectives.** Avoid the booster words that
+  read as marketing or AI: "reliably", "seamlessly", "powerful", "robust", "smart", "actually",
+  "simply", "truly". If a claim needs an adjective to land, it's usually the wrong claim.
+- **Talks to the reader.** Direct "you", occasional "we". "Your pick." "You never see a number.
+  You read it through behaviour."
+- **Confident about what works, honest about what doesn't, in the same plain register.** No
+  overselling. State a limit as flatly as a feature.
+- Rhetorical questions are fine, especially as FAQ headers ("Why won't my follower cast the spell
+  I set?").
+
 ## Process
 
 1. Draft the content.
