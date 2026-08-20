@@ -2306,10 +2306,20 @@ namespace MFO::Actuation {
             return { Result::FailedOther, "retreat alias unavailable", true };
         }
         if (op == Vocab::kActPowerAttack) {
-            // EXPERIMENTAL (#35): there is no engine verb for "power-attack X".
-            // Aim at the foe via the latch (like Attack), then fire the standing
-            // power-attack animation event directly. May no-op if the follower is
-            // not in a melee-attack state -- FIELD-VERIFY before trusting it.
+            // "Foe blocking -> Power attack" (marth): get in MELEE range of the
+            // chosen foe, THEN power-attack that foe. There is no engine verb for
+            // "power-attack X" -- MFO owns WHO (the target latch, like Attack) and
+            // the range GATE (fire the swing only when actually adjacent); the
+            // engine's own combat AI owns the MOVEMENT that closes the distance.
+            //
+            // The chosen foe is a_choice.target -- for a foe selector (incl.
+            // kCondFoeBlocking) PickFoe already picked the specific blocking,
+            // hostile, in-chase-cap foe (Evaluator.cpp PickFoe; #22b: that
+            // selection is EVALUATOR state, we only ACT on it here). This gate is
+            // GENERAL: any gambit whose action is Power attack swings only when in
+            // reach of ITS intended target, not "any foe blocked -> swing in air"
+            // (marth, field: the follower power-attacked at whatever range the
+            // instant any foe blocked).
             auto ptr = a_choice.target.get();
             auto* foe = ptr.get();
             if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
@@ -2324,20 +2334,43 @@ namespace MFO::Actuation {
                                     wt != RE::WEAPON_TYPE::kStaff;
             // TRANSPARENT: "foe blocking -> power attack" while holding a bow
             // must not starve the attack rule below for as long as the foe
-            // blocks (GAMBIT_FLOWS §3.6).
+            // blocks (GAMBIT_FLOWS §3.6). Checked BEFORE any latch so a rejected
+            // (bow-held) power attack mutates NOTHING and falls through cleanly.
             if (!melee) return { Result::FailedSkill, "no melee weapon drawn for a power attack", true };
-            // Try the anim FIRST and commit the target latch ONLY if it accepted.
-            // Latch-then-reject (Opus review) was a two-mutation tick: Command wrote
-            // the latch, then the transparent reject fell through and let a LOWER rule
-            // also fire -- and a FAILED power attack still committed a target. Ordering
-            // the graph check ahead means a rejected power attack mutates NOTHING and
-            // falls through cleanly (§4.3, GAMBIT_FLOWS §3.6). `sent` still isn't proof
-            // the swing landed; field-verify. Report Fired only on accept so a reject
-            // buys no suppression window (Fable: Fired-on-reject went visibly passive).
+
+            // RANGE GATE. GetDistance is a pure read of already-loaded actor data
+            // (the kCondFoeWithinRange path reads distance the same way on this
+            // same worker tick), so no MainThread::Post is needed here.
+            const float dist = a_follower->GetPosition().GetDistance(foe->GetPosition());
+            const char* foeName = foe->GetName() ? foe->GetName() : "?";
+
+            // OUT of melee reach -> CLOSE first. Latch the chosen foe as the combat
+            // target: the combat-thread hook re-asserts it every update and the
+            // engine's own combat AI walks the follower in (the same "approach"
+            // plain Attack relies on -- MFO invents no movement). OPAQUE like Attack
+            // (GAMBIT_FLOWS D3): while closing on the blocking foe the tick belongs
+            // to this rule; a lower rule must not pull him off it. Latching then
+            // reporting Fired is a single consistent outcome (no fall-through), so
+            // it does NOT reintroduce the "latch + transparent-reject" two-mutation
+            // tick the anim path below still guards against.
+            if (dist > Config::g_meleeReach.load()) {
+                Targeting::Command(a_follower->GetFormID(), a_choice.target);
+                return { Result::Fired, std::format("closing to melee on {}", foeName) };
+            }
+
+            // IN melee reach -- SWING. Try the anim FIRST and commit the target
+            // latch ONLY if it accepted. Latch-then-reject (Opus review) was a
+            // two-mutation tick: Command wrote the latch, then the transparent
+            // reject fell through and let a LOWER rule also fire -- and a FAILED
+            // power attack still committed a target. Ordering the graph check ahead
+            // means a rejected power attack mutates NOTHING and falls through
+            // cleanly (§4.3, GAMBIT_FLOWS §3.6). `sent` still isn't proof the swing
+            // landed; field-verify. Report Fired only on accept so a reject buys no
+            // suppression window (Fable: Fired-on-reject went visibly passive).
             if (!a_follower->NotifyAnimationGraph("attackPowerStartInPlace"))
                 return { Result::FailedOther, "power-attack anim rejected", true };
             Targeting::Command(a_follower->GetFormID(), a_choice.target);
-            return { Result::Fired, "power attack (experimental)" };
+            return { Result::Fired, std::format("power attack -> {}", foeName) };
         }
 
         // IN-COMBAT DRINKING. The same drink action logistics runs OUT of combat,
