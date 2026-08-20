@@ -387,12 +387,12 @@ namespace MFO::Config {
     // bLootInPlayerHomes.
     inline std::atomic<bool>  g_lootInPlayerHomes{ false };
 
-    // #21 FOLLOWER ECONOMY. Default OFF. When on, a follower standing at a merchant
+    // #21 FOLLOWER ECONOMY. Default ON. When on, a follower standing at a merchant
     // sells its junk (Phase 2) and buys supplies it's short on (Phase 3), via the
     // MFO_Trade Papyrus bridge. OFF makes the econ scan a DRY RUN -- it logs the
     // plan ([econ] WOULD sell...) but mutates nothing, so it's safe to leave the
     // scan enabled while tuning. bEconomy.
-    inline std::atomic<bool>  g_economy{ false };
+    inline std::atomic<bool>  g_economy{ true };
 
     // AUTO-RETREAT (combat-sense 3, the outnumbered DEFAULT rule). ON by default
     // (marth): a follower who is badly outnumbered/hurt (confidence below the 0.25

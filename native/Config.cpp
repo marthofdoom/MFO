@@ -264,7 +264,7 @@ namespace MFO::Config {
             g_lootRadius         = 3000.0f;
             g_lootTravel         = true;
             g_lootInPlayerHomes  = false;
-            g_economy            = false;
+            g_economy            = true;
             g_autoRetreat        = true;
             g_magicLoadout       = true;
             g_mageDaggersOnly    = true;
@@ -302,7 +302,7 @@ namespace MFO::Config {
             { "fRapportRate", "1.000000" },   { "fRapportKill", "1.000000" },
             { "fRapportBossMult", "5.000000" }, { "fRapportDragonMult", "10.000000" },
             { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
-            { "bAllowSummons", "0" },          { "bEquipToCast", "1" },
+            { "bEquipToCast", "1" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
             { "bForceCastOnMiss", "1" },       { "iCastControl", "2" },
             { "iOverlayX", "12" },             { "iOverlayY", "12" },
@@ -317,7 +317,7 @@ namespace MFO::Config {
             { "fAbandonDelay", "45.000000" },  { "fDepartRadius", "700.000000" },
             { "fPlayerBubble", "256.000000" }, { "fLootRadius", "3000.000000" },
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
-            { "bEconomy", "0" },               { "bAutoRetreat", "1" },
+            { "bEconomy", "1" },               { "bAutoRetreat", "1" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
             { "bBeastHeadFix", "1" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },
