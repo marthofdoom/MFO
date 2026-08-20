@@ -1105,17 +1105,22 @@ namespace MFO::Actuation {
         // player never casts / pays. Used ONLY for concentration+Self+off-self -- FF /
         // self-cast / non-Self are untouched baseline.
         //
-        // TWO transient dynamic (0xFF__) slots, FILL-CAST-REUSE-FREELY (marth): once
-        // the AE is applied it captures its own effect/magnitude/caster and no longer
-        // needs the SPEL form, so the slots carry NO lifetime bookkeeping -- reuse a
-        // slot for the same source (so a stream's ~1 s beats re-arm the SAME AE via
-        // SustainConcentrationEffect, no stacking), and evict round-robin when a THIRD
-        // source needs one. Never serialized (dynamic forms are not). MAIN THREAD only
-        // (form table); returns nullptr off-main (VR) so no form is created there.
+        // TWO transient dynamic (0xFF__) slots, SLOT-FOR-DURATION (marth's hard rule):
+        // a CONCENTRATION proxy cast starts a REAL engine channel on the caster (it
+        // drains the caster per-second and sustains the effect), so the proxy FORM is
+        // load-bearing for the WHOLE life of that channel -- reconfiguring or handing
+        // its form to another cast while the channel is live corrupts the in-flight
+        // cast (the freeze) and entangles two streams (heal-full stops the 1st but not
+        // the 2nd). So each live stream OWNS a slot for its duration: a slot is
+        // Configure'd ONLY when FREE, never while its channel lives; released (its
+        // channel INTERRUPTED, see TargetCastEndActor) only when the stream ends. Owner
+        // = the caster (follower) FormID; one live concentration channel per follower.
+        // 2-slot cap: if both slots are owned by OTHER live streams, Acquire returns
+        // nullptr and the caller SKIPS (overflow). Never serialized (dynamic forms are
+        // not). MAIN THREAD only (form table); returns nullptr off-main (VR).
         namespace ConcProxy {
-            RE::SpellItem* g_form[2] = { nullptr, nullptr };
-            RE::FormID     g_src[2]  = { 0, 0 };
-            int            g_next    = 0;   // round-robin victim when both slots are taken
+            struct Slot { RE::SpellItem* form = nullptr; RE::FormID source = 0; RE::FormID owner = 0; };
+            Slot g_slot[2];
 
             void Configure(RE::SpellItem* a_p, RE::SpellItem* a_src) {
                 a_p->data          = a_src->data;                                 // castingType/cost/etc.
@@ -1123,59 +1128,76 @@ namespace MFO::Actuation {
                 a_p->effects.clear();
                 for (auto* e : a_src->effects) a_p->effects.push_back(e);         // shared effect ptrs
             }
-            RE::SpellItem* Get(RE::SpellItem* a_src) {
-                if (!a_src || !MainThread::IsInstalled()) return nullptr;         // no off-main create (VR)
+            // Acquire the owner's slot (its channel keeps its form for its whole life).
+            // Reuse the owner's existing slot; else claim a FREE slot and Configure it;
+            // else (both owned by other live streams) nullptr -> caller skips.
+            RE::SpellItem* Acquire(RE::FormID a_owner, RE::SpellItem* a_src) {
+                if (!a_src || !a_owner || !MainThread::IsInstalled()) return nullptr;   // no off-main create (VR)
                 const auto sid = a_src->GetFormID();
-                for (int i = 0; i < 2; ++i)
-                    if (g_form[i] && g_src[i] == sid) return g_form[i];           // reuse same-source
-                int slot = -1;
-                for (int i = 0; i < 2; ++i) if (!g_form[i]) { slot = i; break; } // prefer an empty slot
-                if (slot < 0) { slot = g_next; g_next ^= 1; }                    // else evict round-robin
-                if (!g_form[slot]) {
-                    auto* f = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
-                    g_form[slot] = f ? static_cast<RE::SpellItem*>(f->Create()) : nullptr;
-                    if (!g_form[slot]) return nullptr;
+                for (auto& s : g_slot) if (s.owner == a_owner && s.form) {   // the owner's own slot
+                    if (s.source != sid) {   // owner switched channel spell (its old channel already released)
+                        Configure(s.form, a_src); s.source = sid;
+                        spdlog::info("[cast] proxy slot RECONFIG owner {:08X} src {:08X}", a_owner, sid);
+                    }
+                    return s.form;
                 }
-                Configure(g_form[slot], a_src);
-                g_src[slot] = sid;
-                return g_form[slot];
+                for (auto& s : g_slot) if (s.owner == 0) {                   // a FREE slot
+                    if (!s.form) {
+                        auto* f = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
+                        s.form = f ? static_cast<RE::SpellItem*>(f->Create()) : nullptr;
+                        if (!s.form) return nullptr;
+                    }
+                    Configure(s.form, a_src); s.source = sid; s.owner = a_owner;
+                    spdlog::info("[cast] proxy slot ACQUIRE owner {:08X} src {:08X} form {:08X}",
+                                 a_owner, sid, s.form->GetFormID());
+                    return s.form;
+                }
+                spdlog::info("[cast] proxy slot OVERFLOW owner {:08X} src {:08X} -- skipped", a_owner, sid);
+                return nullptr;   // both slots owned by other live streams -> skip
             }
-            // The proxy FormID currently backing a_srcID (or 0) -- so a stream's dispel
-            // can also clear the proxy-keyed AE off the target.
-            RE::FormID FormFor(RE::FormID a_srcID) {
-                for (int i = 0; i < 2; ++i)
-                    if (g_form[i] && g_src[i] == a_srcID) return g_form[i]->GetFormID();
+            // The proxy FormID the owner currently holds (or 0) -- so a stream's release
+            // can dispel the proxy-keyed AE off the target.
+            RE::FormID FormForOwner(RE::FormID a_owner) {
+                for (auto& s : g_slot) if (s.owner == a_owner && s.form) return s.form->GetFormID();
                 return 0;
             }
-            // Revert/load reset (ClearSelfCasts, kPreLoadGame BEFORE any post-load
-            // cast + BEFORE the old game's forms are torn down). The dynamic 0xFF
-            // proxy forms do NOT survive a load, but the SOURCE spell FormIDs in
-            // g_src[] are static -- so without this, ConcProxy::Get would match a
-            // stale g_src and return a FREED g_form pointer next session (UAF). Null
-            // the slots so the next cast re-mints. AND drop the borrowed source
-            // Effect* the proxy holds (Configure copied a_src->effects BY POINTER):
-            // clearing effects here, while the form is still alive, means the engine
-            // frees an EMPTY array at teardown -- it can never double-free an Effect*
-            // still owned by the live source spell. Main thread (StopPump drained).
-            void Reset() {
-                for (int i = 0; i < 2; ++i) {
-                    if (g_form[i]) g_form[i]->effects.clear();   // drop borrowed source Effect*
-                    g_form[i] = nullptr;
-                    g_src[i]  = 0;
+            // Release the owner's slot (channel ended). The form is KEPT for reuse; only
+            // the owner/source markers clear, so a future Acquire may Configure it fresh.
+            void Free(RE::FormID a_owner) {
+                for (auto& s : g_slot) if (s.owner == a_owner) {
+                    spdlog::info("[cast] proxy slot FREE owner {:08X}", a_owner);
+                    s.owner = 0; s.source = 0;
                 }
-                g_next = 0;
+            }
+            // Revert/load reset (ClearSelfCasts, kPreLoadGame BEFORE any post-load cast
+            // + BEFORE the old game's forms are torn down). The dynamic 0xFF forms do
+            // NOT survive a load; null the slots so the next cast re-mints, and clear
+            // each form's BORROWED source Effect* first (Configure copied them by
+            // pointer) so the load-time purge frees an EMPTY array -- never double-free
+            // a live source spell's effects. Main thread (StopPump drained).
+            void Reset() {
+                for (auto& s : g_slot) {
+                    if (s.form) s.form->effects.clear();   // drop borrowed source Effect*
+                    s = {};
+                }
             }
         }
 
-        // The spell to CAST for a follower delivering a_src at a_tgt: a concentration+
-        // Self spell aimed off-self returns its delivery-flipped proxy (or a_src if the
-        // proxy is unavailable -- VR / factory fail, a safe no-crash fallback); every
-        // other spell (FF, self-cast, non-Self) returns a_src unchanged. MAIN THREAD.
-        RE::SpellItem* DeliverySpell(RE::SpellItem* a_src, RE::Actor* a_follower, RE::Actor* a_tgt) {
-            if (a_src && a_follower && a_tgt && a_tgt != a_follower &&
-                a_src->GetDelivery()    == RE::MagicSystem::Delivery::kSelf &&
-                a_src->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
-                if (auto* p = ConcProxy::Get(a_src)) return p;
+        // The spell to CAST for a_follower delivering a_src at a_tgt. A CONCENTRATION +
+        // Self spell aimed off-self returns its delivery-flipped PROXY, acquired for the
+        // follower's OWNED slot (slot-for-duration) -- or nullptr if both slots are held
+        // by other live streams / off-main (VR), in which case the caller MUST SKIP (it
+        // must NOT cast the Self source, which would collapse the channel onto the
+        // follower). Every other spell (FF, self-cast, non-Self) returns a_src unchanged.
+        // `out_isProxy` distinguishes "skip (nullptr proxy needed)" from a normal cast.
+        // MAIN THREAD.
+        RE::SpellItem* DeliverySpell(RE::SpellItem* a_src, RE::Actor* a_follower, RE::Actor* a_tgt,
+                                     bool& out_needsProxy) {
+            out_needsProxy = a_src && a_follower && a_tgt && a_tgt != a_follower &&
+                             a_src->GetDelivery()    == RE::MagicSystem::Delivery::kSelf &&
+                             a_src->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+            if (out_needsProxy)
+                return ConcProxy::Acquire(a_follower->GetFormID(), a_src);   // proxy or nullptr(skip)
             return a_src;
         }
 
@@ -1263,8 +1285,14 @@ namespace MFO::Actuation {
         // follower's OWN combat draw/equip state, which is not ours to change.
         void SelfCastEndActor(RE::FormID a_id, RE::FormID a_spellID) {
             MainThread::Post([a_id, a_spellID] {
-                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id))
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id)) {
                     DispelSpellEffectsOn(a, a_spellID);
+                    // A SELF concentration channel also drains the caster per-second
+                    // via the engine -- interrupt it so a self-heal/ward channel truly
+                    // ends (no runaway self-drain), same as the target path.
+                    if (auto* mc = a->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant))
+                        mc->InterruptCast(false);
+                }
             });
         }
 
@@ -1315,7 +1343,9 @@ namespace MFO::Actuation {
                     // cast the delivery-flipped PROXY (kTargetActor) instead -- the
                     // channel then resolves to tgt. Sustain keys on the SAME spell we
                     // cast, so a proxy stream re-arms its own AE cleanly.
-                    RE::SpellItem* castSp = DeliverySpell(sp, caster, tgt);
+                    bool needsProxy = false;
+                    RE::SpellItem* castSp = DeliverySpell(sp, caster, tgt, needsProxy);
+                    if (needsProxy && !castSp) return;   // proxy slots full / VR -> SKIP
                     const float window =
                         CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
                             ? kConcHealCap : kConcUtilityHold;
@@ -1357,16 +1387,28 @@ namespace MFO::Actuation {
         // than let it run unpaid. Callers gate WHEN (Buff: any release; momentary:
         // end-of-stream / switch only, never a cap-only re-stream -- the re-stream
         // re-arms the same effect seamlessly). Mirrors SelfCastEndActor.
-        void TargetCastEndActor(RE::FormID a_targetID, RE::FormID a_spellID) {
-            MainThread::Post([a_targetID, a_spellID] {
+        void TargetCastEndActor(RE::FormID a_targetID, RE::FormID a_spellID, RE::FormID a_ownerID) {
+            MainThread::Post([a_targetID, a_spellID, a_ownerID] {
                 if (auto* t = RE::TESForm::LookupByID<RE::Actor>(a_targetID)) {
                     DispelSpellEffectsOn(t, a_spellID);
                     // A concentration+Self stream channels through a delivery-flipped
-                    // PROXY, so the live AE carries the PROXY's spellID -- dispel it
-                    // too so a heal/ward cannot linger past the stream.
-                    if (auto proxyID = ConcProxy::FormFor(a_spellID))
+                    // PROXY the OWNER holds, so the live AE carries the PROXY's spellID
+                    // -- dispel it too so a heal/ward cannot linger past the stream.
+                    if (auto proxyID = ConcProxy::FormForOwner(a_ownerID))
                         DispelSpellEffectsOn(t, proxyID);
                 }
+                // STOP THE ENGINE CHANNEL. A concentration proxy cast starts a real
+                // channel on the follower's kInstant caster that drains him per-second
+                // INDEPENDENT of MFO's per-beat apply (the runaway drain with no
+                // FORCE-CAST log). Dispelling the TARGET's AE does not stop the
+                // CASTER-side channel; interrupt it so the drain ends and the next
+                // stream starts clean (fixes "1st heal stops, 2nd doesn't").
+                if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_ownerID))
+                    if (auto* mc = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant))
+                        mc->InterruptCast(false);
+                // Free the owner's proxy slot (form kept for reuse) AFTER the channel is
+                // interrupted -- the slot is never reconfigured while its channel lives.
+                ConcProxy::Free(a_ownerID);
             });
         }
 
@@ -1448,25 +1490,25 @@ namespace MFO::Actuation {
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
-                    // FORCED CONCENTRATION under AUTO: same real-effect contract as
-                    // the manual streams -- ONE sustained REAL effect per fanned
-                    // target (the 6s/4s window bridges the fCastCooldown re-fan, so
-                    // the HUD shows a continuous entry, not a pulse stack); the
-                    // ENGINE channels the authored magnitude itself.
-                    // A CONCENTRATION + SELF spell fanned to an ally collapses onto
-                    // the FOLLOWER -- cast the delivery-flipped PROXY so it lands on
-                    // the ally (same one-mechanism fix as the manual streams).
-                    RE::SpellItem* castSp = DeliverySpell(sp, caster, target);
+                    // FORCED CONCENTRATION under AUTO: ONE sustained REAL effect per
+                    // fanned target (the 6s/4s window bridges the fCastCooldown re-fan).
+                    // AUTO does NOT proxy a conc-Self spell: the proxy channel needs a
+                    // slot for its DURATION but AUTO has no per-target stream/reconcile
+                    // to OWN and later FREE a slot, so proxying here would leak the
+                    // 2-slot cap. A conc-Self spell fanned to a NON-self target is
+                    // skipped for that target (single-target CastTargetDirect delivers
+                    // conc-Self heals; FF and natively-aimed conc heals fan normally).
+                    if (sp->GetDelivery() == RE::MagicSystem::Delivery::kSelf && target != caster)
+                        return;   // AUTO-fanned conc-Self on an ally -> skip (no proxy leak)
                     const float window =
                         CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
                             ? kConcHealCap : kConcUtilityHold;
-                    if (!SustainConcentrationEffect(target, castSp, window)) {
-                        inst->CastSpellImmediate(castSp, false, target, 1.0f, false, 0.0f, caster);
-                        SustainConcentrationEffect(target, castSp, window);
+                    if (!SustainConcentrationEffect(target, sp, window)) {
+                        inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
+                        SustainConcentrationEffect(target, sp, window);
                         spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
-                                     "(AUTO, spell {:08X}{}, window {:.0f}s)",
-                                     a_casterID, a_targetID, a_spellID,
-                                     castSp != sp ? " self->target proxy" : "", window);
+                                     "(AUTO, spell {:08X}, window {:.0f}s)",
+                                     a_casterID, a_targetID, a_spellID, window);
                     }
                 } else {
                     inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
@@ -1753,14 +1795,16 @@ namespace MFO::Actuation {
                 }
             }
             if (gone || stale || concCapped || healedFull || magickaDry) {
-                // RELEASE. DISPEL a lingering STICKY buff (Buff = ward/fortify, any
-                // release) so it cannot persist as a stuck gameplay effect -- AND a
-                // momentary stream's SUSTAINED real effect when the stream truly
-                // ENDED (stale / rule-false / heal-full / magicka-out): it genuinely
-                // channels, so its end must cut it. A plain CAP-only release re-streams
-                // next tick (fresh random cap), keeping a wanted buff/heal continuous
-                // across bursts. There is NO equip to undo (the self-cast never holds
-                // the spell -- the AI-spam CTD).
+                // RELEASE. DISPEL (+ interrupt the channel, in SelfCastEndActor) a
+                // lingering STICKY buff on any release, AND a momentary stream's
+                // SUSTAINED effect when it truly ENDED (stale / heal-full / magicka-out).
+                // A plain CAP-only release re-streams next tick (fresh random cap),
+                // keeping a wanted self buff/heal continuous across bursts (self has no
+                // proxy slot to orphan). There is NO equip to undo.
+                const char* reason = healedFull ? "heal-full" : magickaDry ? "magicka-out"
+                                   : (a && !stale && !concCapped) ? "gone"
+                                   : concCapped ? "cap" : "stale";
+                spdlog::info("[cast] {:08X} self-stream RELEASE ({}) spell {:08X}", id, reason, sc.spell);
                 if (a && (kind == CasterConsent::SpellKind::Buff || stale || healedFull || magickaDry))
                     SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
@@ -1838,7 +1882,8 @@ namespace MFO::Actuation {
         // buffs never stack or stray.
         if (it != g_targetCast.end() &&
             (it->second.spell != spellID || it->second.target != targetID)) {
-            TargetCastEndActor(it->second.target, it->second.spell);
+            spdlog::info("[cast] {:08X} stream RELEASE (switch)", id);
+            TargetCastEndActor(it->second.target, it->second.spell, id);
             g_targetCast.erase(it);
             it = g_targetCast.end();
         }
@@ -1918,15 +1963,21 @@ namespace MFO::Actuation {
                 }
             }
             if (gone || stale || capped || healedFull || magickaDry) {
-                // DISPEL a sticky ward on ANY release, and a momentary stream's
-                // SUSTAINED real effect when the stream truly ENDED (gone / stale /
-                // heal-full / magicka-out) -- it genuinely channels, so its end must
-                // cut it. A plain CAP-only release keeps the effect (no dispel) and
-                // re-streams next tick, so a wounded target's heal is continuous
-                // across bursts.
-                const bool endOfStream = gone || stale || healedFull || magickaDry;
-                if (t && (tc.kind == CasterConsent::SpellKind::Buff || endOfStream))
-                    TargetCastEndActor(tc.target, tc.spell);
+                // EVERY release is a TRUE END (marth's burst model): dispel the
+                // sustained effect, INTERRUPT the engine channel, and FREE the proxy
+                // slot (all in TargetCastEndActor). A plain cap thus ends the burst
+                // cleanly and the gambit re-serves a still-wounded target as a FRESH
+                // stream next tick (new slot, new channel) -- this both guarantees the
+                // channel always stops (no runaway) and avoids orphaning an owned
+                // proxy slot whose stream was erased. Breadcrumb names the reason.
+                const char* reason = healedFull  ? "heal-full"
+                                   : magickaDry  ? "magicka-out"
+                                   : gone        ? "gone"
+                                   : stale       ? "stale"
+                                                 : "cap";
+                spdlog::info("[cast] {:08X} stream RELEASE ({}) tgt {:08X} spell {:08X}",
+                             id, reason, tc.target, tc.spell);
+                TargetCastEndActor(tc.target, tc.spell, id);   // dispel + interrupt + free slot
                 done.push_back(id);
             }
         }

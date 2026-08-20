@@ -64,23 +64,43 @@ off-self is the ONLY broken case, and the proxy is the ONLY fix.**
   concentration path, so the channel resolves to the recipient; the follower is the caster
   (his rate + magicka), the player never casts / pays. `SustainConcentrationEffect` keys on
   the copy (what was cast), so a stream re-arms its own AE.
-- **Two transient `0xFF__` dynamic slots, FILL-CAST-REUSE-FREELY.** The SPEL form is only
-  needed *momentarily* to fire the cast — once the ActiveEffect is applied it is
-  self-sufficient (it captured its own effect / magnitude / caster), so the slots carry **NO
-  lifetime bookkeeping** (no idle timers, no live-AE guards): reuse a slot for the same source
-  (so a stream's ~1 s beats re-arm the SAME AE — no stacking), evict round-robin when a third
-  source needs one. Forms are minted once via `IFormFactory` and reconfigured in place.
-- **Main-thread only.** `ConcProxy::Get` returns the source (not a proxy) when
-  `!MainThread::IsInstalled()`, so `IFormFactory::Create` never runs off the main thread (VR).
-- **Save-safety.** Dynamic forms are never serialized to the `.ess` or any MFO co-save. They
-  do **not** survive a save-load, but their source keys (`g_src`) are stable ESP FormIDs — so
-  `ClearSelfCasts()` (called by `ResetAllState` at kPreLoadGame / post-load / revert) calls
-  **`ConcProxy::Reset()`**, which nulls `g_form[]` / `g_src[]` / `g_next` (drops the dangling
-  pointers so the next cast re-mints fresh forms) and **clears each proxy's borrowed effects
-  first** (so the load-time dynamic-form purge cannot double-free the source spell's shared
-  `Effect*`). This is the cross-load UAF + double-free guard; it is NOT lifetime bookkeeping.
-- **Dispel:** `TargetCastEndActor` dispels both the source and, via `ConcProxy::FormFor`, the
-  proxy-keyed AE, so a proxied ward/heal cannot linger past its stream.
+- **A proxy cast starts a REAL ENGINE CHANNEL.** Casting the kTargetActor concentration proxy
+  via `CastSpellImmediate` does not just apply a one-shot effect — the engine sustains a real
+  concentration channel on the FOLLOWER that drains his magicka **per-second, independent of
+  MFO's per-beat `ApplyTargetEffect`** (which is the only thing that logs `FORCE-CAST` and
+  hand-deducts). So a runaway shows as **magicka draining with no `FORCE-CAST` log line** — that
+  is the engine channel, not MFO. Two consequences drive the design below: the channel must be
+  **explicitly interrupted** to stop (dispelling the target AE does not stop the caster-side
+  channel), and the proxy FORM is **load-bearing for the channel's whole duration**.
+- **Two transient `0xFF__` dynamic slots, SLOT-FOR-DURATION (marth's hard rule).** Reconfiguring
+  or handing a slot's form to another cast while its channel is live corrupts the in-flight cast
+  (**the freeze**) and entangles two streams (**heal-full stops the 1st heal but not the 2nd**,
+  because re-casting the same form re-enters the 1st's residual channel). So each live stream
+  **OWNS** a slot for its duration (owner = follower FormID): `ConcProxy::Acquire(owner, src)`
+  reuses the owner's slot, else `Configure`s a **FREE** slot, else (both owned by other live
+  streams) returns nullptr and the caller **SKIPS** (2-slot overflow). A slot is `Configure`d
+  ONLY when free — never while its channel lives. `ConcProxy::Free(owner)` clears the owner
+  markers (form kept for reuse) after the channel is interrupted.
+- **Release = dispel + INTERRUPT + free, on EVERY release** (`TargetCastEndActor(target, spell,
+  owner)`): dispels the source and the owner's proxy AE off the target, **interrupts the
+  follower's `kInstant` magic caster** (`InterruptCast(false)` — stops the engine channel so the
+  drain ends and the next stream starts clean), then `ConcProxy::Free(owner)`. The reconcile
+  makes every release a true END (heal-full / magicka-out / cap / stale / gone); a still-wounded
+  heal's cap ends the burst and the gambit re-serves a FRESH stream (new slot, new channel) next
+  tick — so the channel always stops (no runaway) and an owned slot is never orphaned. The
+  self path (`SelfCastEndActor`) likewise interrupts the self channel.
+- **AUTO does NOT proxy conc-Self.** The AUTO fan (`ApplyEffectFromTo`) has no per-target
+  stream/reconcile to own and later free a slot, so it **skips** a conc-Self spell fanned to a
+  non-self target (single-target `CastTargetDirect` delivers conc-Self heals; FF and natively-
+  aimed conc heals fan normally). This avoids leaking the 2-slot cap.
+- **Main-thread only.** `ConcProxy::Acquire` returns nullptr when `!MainThread::IsInstalled()`,
+  so `IFormFactory::Create` never runs off the main thread (VR); the caller skips.
+- **Save-safety.** Dynamic forms are never serialized; they do not survive a save-load, but the
+  slots key on stable ESP source FormIDs, so `ClearSelfCasts()` (kPreLoadGame / post-load /
+  revert) calls **`ConcProxy::Reset()`** — nulls each slot and clears each form's borrowed
+  effects first (cross-load UAF + double-free guard).
+- **Breadcrumbs** (terse `[cast]` log): `proxy slot ACQUIRE/RECONFIG/FREE/OVERFLOW owner …` and
+  `stream RELEASE (heal-full | magicka-out | cap | stale | gone) …` — so a field test is legible.
 
 ---
 
@@ -180,8 +200,11 @@ reintroduce AddTarget.
 
 ## KEY SYMBOLS (Actuation.cpp)
 
-`ConcProxy` (namespace: `g_form`/`g_src`/`g_next`, `Configure`, `Get`, `FormFor`, `Reset`) ·
-`DeliverySpell` (the gate) · `ApplyTargetEffect` / `ApplyEffectFromTo` (the two proxy wire-ins) ·
+`ConcProxy` (owner-keyed `Slot g_slot[2]{form,source,owner}`, `Configure`, `Acquire`,
+`FormForOwner`, `Free`, `Reset`) · `DeliverySpell` (gate; nullptr → caller skips) ·
+`ApplyTargetEffect` (the proxy wire-in; AUTO `ApplyEffectFromTo` skips conc-Self) ·
 `SustainConcentrationEffect` (per-beat AE window) · `DrawConcCap` (randomized stream cap) ·
-`TargetCastReconcile` / `SelfCastReconcile` (cap + heal-full release) · `ClearSelfCasts`
-(→ `ConcProxy::Reset` on revert/load) · `TargetCastEndActor` (dispels source + proxy AE).
+`TargetCastReconcile` / `SelfCastReconcile` (cap + heal-full + magicka-out release) ·
+`ClearSelfCasts` (→ `ConcProxy::Reset` on revert/load) · `TargetCastEndActor(target,spell,owner)`
+(dispel source + owner proxy AE, `InterruptCast` the channel, `ConcProxy::Free`) ·
+`SelfCastEndActor` (dispel + `InterruptCast` the self channel).

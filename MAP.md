@@ -259,13 +259,21 @@ releases **by eviction** with a non-actor XMarker.
   the caster's OWNER, so a player/ally conc heal collapses onto the follower. Gated on
   `kSelf && kConcentration && target!=follower`, MFO casts a transient COPY with casting style
   PRESERVED and ONLY `data.delivery` flipped `kSelf→kTargetActor` (via the unchanged
-  `ApplyTargetEffect`/AUTO conc branch + `SustainConcentrationEffect` keyed on the copy) — lands
-  on the recipient, follower is caster (rate+cost), player uninvolved. TWO transient dynamic
-  (`0xFF__`) slots, FILL-CAST-REUSE-FREELY (no idle/lifetime guards — the applied AE is
-  self-sufficient), round-robin evict on a 3rd source; never serialized; main-thread-only (source
-  returned off-main/VR). Stream-end dispel clears the proxy AE (`TargetCastEndActor`→`FormFor`).
-  FF/self-cast/non-Self UNTOUCHED. (Reverted the 2026-08-19 rewrite that changed FF Self delivery
-  + caused the light-respam CTD.) Momentary
+  `ApplyTargetEffect` conc branch + `SustainConcentrationEffect` keyed on the copy) — lands
+  on the recipient, follower is caster (rate+cost), player uninvolved. **A proxy cast starts a
+  REAL ENGINE CHANNEL that drains the follower per-second independent of MFO's apply** (runaway
+  = magicka drain with NO `FORCE-CAST` log). **SLOT-FOR-DURATION (owner-keyed `Slot g_slot[2]
+  {form,source,owner}`):** each live stream OWNS a slot (`ConcProxy::Acquire(follower, src)` —
+  reuse owner's slot / `Configure` a FREE slot / else nullptr → caller SKIPS); a slot is
+  Configure'd ONLY when free, never while its channel lives (else freeze + heal-full-stops-1st-
+  not-2nd). RELEASE (`TargetCastEndActor(target,spell,owner)`, EVERY release) = dispel source +
+  owner proxy AE + **`InterruptCast` the follower's kInstant caster** (stops the engine channel)
+  + `ConcProxy::Free`. Reconcile makes every release a true END (heal-full/magicka-out/cap/stale/
+  gone); a wounded heal's cap re-serves a FRESH stream (new slot/channel). AUTO `ApplyEffectFromTo`
+  does NOT proxy conc-Self (no stream to own/free a slot → skips it). `SelfCastEndActor` likewise
+  `InterruptCast`s the self channel. Breadcrumbs: `proxy slot ACQUIRE/RECONFIG/FREE/OVERFLOW`,
+  `stream RELEASE (reason)`. Never serialized; main-thread-only; `ConcProxy::Reset` on revert/load.
+  FF/self-cast/non-Self UNTOUCHED. Momentary
   sustained effect dispels at END-of-stream (stale/gone/switch) only — it genuinely
   channels, so the stream's end must cut it; a cap-only release keeps the one entry
   alive across re-streams. Evidence line "conc effect ATTACHED": once per stream =
