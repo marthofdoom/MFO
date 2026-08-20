@@ -255,7 +255,7 @@ namespace MFO::Board {
         { Vocab::kActDrinkMagickaPotion,"Drink magicka potion" },
         { Vocab::kActEquipRanged,       "Equip ranged weapon" },
         { Vocab::kActEquipMelee,        "Equip melee weapon" },
-        { Vocab::kActPowerAttack,       "Power attack (experimental)" },
+        { Vocab::kActPowerAttack,       "Power attack" },
         { Vocab::kActFlee,              "Flee to player" },
     };
     inline constexpr VocabEntry kCondsLogi[] = {
