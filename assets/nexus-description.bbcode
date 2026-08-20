@@ -10,18 +10,9 @@ A rule is just [b][Condition] -> [Action][/b]. An enemy drops below 30% health, 
 
 [size=5][b]How to use it[/b][/size]
 
-You get a power called [b]Field Orders[/b]. Use it to open the board, pick a follower, and build their list. Each follower keeps two separate lists, one for combat and one for logistics like looting and trading, and you write both in game with a controller or a mouse. The board shows a plain-language summary of every rule, and when a rule doesn't fire it tells you why, so a list that isn't working is easy to read instead of a mystery.
+You get a power called [b]Field Orders[/b]. Use it to open the board, pick a follower, and build their list. Each follower keeps two separate lists, one for combat and one for logistics like looting and trading, and you write both in game with a controller or a mouse. The board shows a plain-language summary of every rule, and when a rule doesn't fire it tells you why, so a list that isn't working is easy to read instead of a mystery. What a follower can be told to do depends on their own skills and spells, so a mage opens up cast rules a plain warrior won't have.
 
 The bigger behaviours are toggles and sliders in the MCM ([b]Mod Configuration -> marth's Follower Overhaul[/b]). Everything ships off or conservative, so nothing happens until you turn it on. Start small, add a rule at a time, and watch how the follower reacts.
-
-[size=5][b]A few things worth knowing[/b][/size]
-
-[list]
-[*]It works on [b]any[/b] follower your setup treats as a teammate, vanilla or modded. Nothing is scripted to specific followers.[/*]
-[*]It sits on top of the normal follower AI instead of replacing it. A follower with no matching rule behaves exactly like one without MFO, so it doesn't fight your follower framework, AI overhaul, or combat mods.[/*]
-[*]What a follower can be told to do depends on their own skills and spells. A mage opens up cast rules a plain warrior won't have.[/*]
-[*]It's safe to add or remove mid-playthrough. Everything lives in the SKSE co-save and reverts cleanly.[/*]
-[/list]
 
 [size=5][b]Requirements[/b][/size]
 
@@ -43,6 +34,32 @@ Anniversary Edition (1.6.x) is recommended. A few of the walk-to-it behaviours (
 [b]2.[/b] (Recommended) Run the included [b]Synthesis[/b] patcher once, so the gambit item categories (potions, ammo, gear) cover your modded items. Grab the [b]MFO.synth[/b] file from Optional Files and double-click it in Synthesis, or add a Git patcher for [url=https://github.com/marthofdoom/MFO]github.com/marthofdoom/MFO[/url]. Without it MFO still works off a shipped catalog.
 
 [b]3.[/b] Launch through SKSE, open the MCM to set it up, and use the Field Orders power to start writing rules.
+
+[size=5][b]FAQ[/b][/size]
+
+[b]Will it conflict with my follower framework, AI overhaul, or combat mod?[/b]
+No. MFO sits on top of whatever manages your followers and acts on anyone flagged as your teammate, through runtime AI. It edits no follower records and no AI packages, and a follower with no matching rule behaves exactly like one without MFO.
+
+[b]Does it work with modded followers and modded items?[/b]
+Yes. Followers are found by teammate status, not a list, and item categories (potions, ammo, gear) come from the Synthesis catalog of your load order, so modded gear is judged by the same rules with no per-mod patch.
+
+[b]Do I have to run Synthesis?[/b]
+It's recommended but not required. Without it MFO uses a shipped catalog. With it the catalog is rebuilt from the mods you actually run.
+
+[b]Why won't my follower cast the spell I set?[/b]
+Competence is not permission. If he doesn't have the magicka or the skill, the rule fails and the next one is tried. The board tells you why, so a list that doesn't work is legible instead of a mystery.
+
+[b]Can I turn things off or tune it?[/b]
+Yes. Everything ships off or conservative. Looting, the economy, auto-retreat, the confidence leash, dibs timing, and the rest are MCM toggles and sliders.
+
+[b]Is it safe to add mid-playthrough?[/b]
+Yes. All the state lives in the SKSE co-save and reverts cleanly, so you can add or remove MFO whenever.
+
+[size=5][b]Roadmap[/b][/size]
+
+[b]Town errands are next.[/b] Followers heading into town on their own business, walking to merchants and doors and buying the gear and supplies they want while they're there. It extends the walk-to-loot movement to full town navigation.
+
+[b]Deeper interop.[/b] Compatibility contracts with follower levelling and equipment-visibility mods as their APIs allow.
 
 [size=5][b]Credits[/b][/size]
 
