@@ -33,8 +33,12 @@ copy back.
 
 ## Mechanics
 
-- **Published text is CLEAN** even though marth's chat messages are lowercase and typo'd:
-  correct spelling, capitalization, grammar. marth: "No typos though."
+- **Published text is CLEAN and uses PROPER punctuation and contraction etiquette** even though
+  marth's chat messages are lowercase, apostrophe-dropped, and typo'd. Correct spelling,
+  capitalization, and grammar; apostrophes in contractions (don't, they're, it's, won't, that's).
+  marth: "No typos though" and "I would normally use proper punctuation and contraction
+  etiquette, at least including single quotes in things like don't. But I don't always do that in
+  our conversations." Do NOT mirror the casual chat style into published copy.
 - BBCode: `[b]` for feature names / key toggles / MCM keys, `[i]` for in-game terms and emphasis
   words, `[list]`/`[*]` for enumerations.
 
