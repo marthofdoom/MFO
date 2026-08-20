@@ -1145,6 +1145,24 @@ namespace MFO::Actuation {
                     if (g_form[i] && g_src[i] == a_srcID) return g_form[i]->GetFormID();
                 return 0;
             }
+            // Revert/load reset (ClearSelfCasts, kPreLoadGame BEFORE any post-load
+            // cast + BEFORE the old game's forms are torn down). The dynamic 0xFF
+            // proxy forms do NOT survive a load, but the SOURCE spell FormIDs in
+            // g_src[] are static -- so without this, ConcProxy::Get would match a
+            // stale g_src and return a FREED g_form pointer next session (UAF). Null
+            // the slots so the next cast re-mints. AND drop the borrowed source
+            // Effect* the proxy holds (Configure copied a_src->effects BY POINTER):
+            // clearing effects here, while the form is still alive, means the engine
+            // frees an EMPTY array at teardown -- it can never double-free an Effect*
+            // still owned by the live source spell. Main thread (StopPump drained).
+            void Reset() {
+                for (int i = 0; i < 2; ++i) {
+                    if (g_form[i]) g_form[i]->effects.clear();   // drop borrowed source Effect*
+                    g_form[i] = nullptr;
+                    g_src[i]  = 0;
+                }
+                g_next = 0;
+            }
         }
 
         // The spell to CAST for a follower delivering a_src at a_tgt: a concentration+
@@ -1744,6 +1762,8 @@ namespace MFO::Actuation {
         g_targetCast.clear();         // on-target direct-force streams, likewise
         g_autoCast.clear();           // AUTO fan-out pacing is session-scoped too
         g_beneficialRecast.clear();   // fix #3/#6: per-buff recast windows likewise
+        ConcProxy::Reset();           // null dangling 0xFF proxy forms + drop borrowed
+                                      // source Effect* (cross-load UAF / double-free)
     }
 
     // ON-TARGET DIRECT FORCE = CastSelfDirect generalized to a NON-self target.
