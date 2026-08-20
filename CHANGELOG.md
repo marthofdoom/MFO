@@ -1,15 +1,49 @@
-## v1.0.65 -- followers cast on themselves and the whole party, plus a deep stability pass
+## v1.0.65 -- followers reliably heal the party, cast on themselves, and power-attack the foe blocking them
 
-- NEW (on by default): followers can now cast on themselves and the party automatically.
-  Set a "Cast at foe/ally" gambit's target to **Auto** and MFO reads the spell -- a heal or
-  buff goes to whichever party members (followers + you) actually need it, a self-only buff
-  like Candlelight lights the caster, and an offensive spell is spread across nearby enemies,
-  each paying its own magicka. Self-heal, self-ward, and "When Dark -> Candlelight" gambits
-  work too. Off switch: bCastSelf. (No cast animation yet -- a later polish pass; the effect,
-  magicka cost, and timing are real.)
+- Concentration heals now WORK, and they stop when they should. A caster follower on a
+  "heal" gambit reliably channels its heal onto you and onto hurt teammates -- not just
+  onto itself. The heal stops the moment the target hits full health, stops when the caster
+  runs out of magicka, and never gets stuck streaming forever or quietly draining the caster
+  dry. (This is the fix for Fast Healing / Healing Hands casters like Lucien and Serana who
+  used to heal nobody.)
+- One caster, one heal channel at a time -- so an AUTO heal now works down the WHOLE hurt
+  party: it heals the most-wounded member first (followers, you, and the caster itself), then
+  moves to the next as each one tops off, instead of only ever healing you. A brief stickiness
+  keeps it from flip-flopping between two similarly-hurt allies every second, but a teammate
+  who suddenly drops critically still gets picked up right away.
+- AUTO casting reads the spell and picks targets for you. Set a "Cast at foe/ally" gambit's
+  target to **Auto**: a heal or buff goes to whichever party members actually need it, a
+  self-only buff like Candlelight lights the whole party, and an offensive spell is spread
+  across nearby enemies, each cast paying its own magicka. Candlelight, flesh spells, and
+  other self-buffs fan across everyone correctly.
+- An AUTO heal now respects YOUR rule. If the gambit says "heal an ally below 40%", only
+  allies actually below 40% are healed -- a party member sitting at full health is no longer
+  swept into the heal just because someone else is hurt.
+- NEW (on by default): followers can cast on THEMSELVES -- self-heals, self-wards, and
+  self-buffs, including a "When Dark -> Candlelight" gambit. Off switch: bCastSelf. (No cast
+  animation yet -- a later polish pass; the effect, magicka cost, and timing are all real.)
+- Self-buffs no longer spam and no longer crash. A follower won't re-cast Candlelight,
+  Magelight, or any duration buff that's still active until it's near expiry (with a little
+  human jitter so the party doesn't refresh in robotic unison), and a held self-cast light
+  spell can no longer overload into a crash.
+- The "foe blocking -> power attack" gambit now actually reaches the foe. Instead of throwing
+  a power attack into empty air whenever any enemy raised a block, the follower now closes to
+  melee range on the specific blocking foe and swings only once it's in reach. Tunable reach:
+  fMeleeReach.
 - Smarter damage-over-time: a follower won't waste magicka re-casting a DoT that's still
   ticking unless the spell's up-front hit outweighs the tail still to be delivered. Tunable
   with fDotRecastBurstRatio.
+- Followers no longer hand you a looted weapon in the middle of a fight. Dropping a low-value
+  off-role weapon now waits until the battle is genuinely over (a short out-of-combat dwell,
+  so a lull mid-fight doesn't trigger it) -- and the surplus weapon is dropped on the floor
+  rather than shoved into your inventory.
+- Looting is more efficient and less prone to getting stuck: a follower walking to fetch an
+  item no longer gets its errand hijacked and abandoned, the search now reaches loose items
+  and potions sitting just across a cell border (a table in the next room), and two followers
+  no longer thrash trying to grab the same pile.
+- Progression fix: a perk prerequisite on a multi-rank skill is now satisfied when the
+  follower owns that rank OR any higher rank of the same chain, so later perks stop reading
+  their prerequisites as unmet.
 - Fixed a board condition that displayed as "When When dark" -- now "When Dark".
 - Large stability & correctness pass (a full internal code review): closed a class of rare
   threading crashes around the follower roster, an "Ally HP -> Attack" gambit that could turn
