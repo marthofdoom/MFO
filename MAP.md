@@ -660,6 +660,17 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
   primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
   Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
   Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
+- **#21 College tome-gate unlock.** `UnlockCollegeTomes` (`Logistics.cpp`, worker,
+  `ServiceFollower` idle branch, gated `g_economy && g_economyBuyTomes`, GLOBAL ~30s
+  rate-limit) generalizes vanilla's player-skill tome gate to the party: for each of
+  15 `PC{School}{tier}` globals (Skyrim.esm `0x000F2584..0x000F2592`, dumped via
+  `tools/esp_inspect.py`), if the party MAX **base** skill (player + `g_active`,
+  `GetBaseActorValue`) ≥ the tier threshold (Adept 50 / Expert 75 / Master 100) and
+  the gate is ≠ 0, flip it to 0. **ONE-WAY** (never back to 100 — mirrors WISkill-
+  Increase02, never fights the player's tracking), **natural restock only** (no chest
+  regen, no merchant mutation), idempotent. GLOB writes batched through
+  `MainThread::Post` (re-resolve on-frame; GLOB values are save-persisted, so this is
+  the same field vanilla writes — no co-save risk). `[college]` log on first flip.
 - **#21 equip + unified apparel judge (loot ⇄ buy).** The loot equip step is factored
   into `AcquireEquip` (`Logistics.cpp`, v1.0.38 SAFE path: `MainThread::Post` +
   `ActorEquipManager::EquipObject`, **never DoReset3D** #62; MEO gem capture +

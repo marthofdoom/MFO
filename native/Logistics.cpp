@@ -3184,6 +3184,89 @@ namespace MFO::Logistics {
         std::unordered_map<RE::FormID,   Clock::time_point> g_econTrade;   // per-follower 20 s
         std::unordered_map<std::uint64_t, Clock::time_point> g_econPair;   // per-(follower,vendor) 60 s
 
+        // ── #21 College-of-Winterhold TOME-GATE UNLOCK ──────────────────────────
+        // MECHANISM (measured from the load order): each College spell-tome tier is a
+        // leveled list whose chance-none (LVLD=100 => yields nothing) is overridden by
+        // a GLOBAL (LVLG). Default 100 => the tome is absent from the chest. Vanilla
+        // quest WISkillIncrease02 (QUST 000F2593, subject=PLAYER) sets the tier global
+        // to 0 when the player crosses the tier skill, and the tome appears at the next
+        // NATURAL chest restock. MFO GENERALIZES that player gate to the whole party:
+        // flip the SAME global to 0 once the player OR any active follower reaches the
+        // tier skill, so a follower's own skill unlocks College tomes for the party to
+        // buy (EconomyProbe -> PlanBuy). Deliberately conservative:
+        //   * ONE-WAY -- only ever set 0 (mirrors vanilla; never back to 100, so it
+        //     never fights the player's own WISkillIncrease progression tracking);
+        //   * NATURAL restock only -- NO forced chest regen, NO merchant mutation;
+        //   * idempotent -- once a gate is 0 it is a no-op.
+        // The 15 PC{School}{tier} globals are Skyrim.esm (load index 00) stable
+        // FormIDs, enumerated with tools/esp_inspect.py (EDID -> FormID below).
+        // Thresholds are the vanilla skill-tier boundaries Adept 50 / Expert 75 /
+        // Master 100 (WISkillIncrease02 sets Adept@50 and Expert@75 -- confirmed;
+        // Master@100 is the tier boundary. In vanilla few/no PURCHASABLE lists read the
+        // Master global -- Master tomes are ritual-quest rewards -- but flipping it is
+        // harmless: one-way and a no-op if nothing reads it). Any global that fails to
+        // resolve (a modlist without it) is skipped safely.
+        void UnlockCollegeTomes() {
+            // GLOBAL rate-limit (~30s), NOT per follower-tick: a party-wide roster
+            // sweep is cheap but pointless to run every 133ms.
+            static Clock::time_point s_next{};
+            const auto now = Clock::now();
+            if (s_next.time_since_epoch().count() != 0 && now < s_next) return;
+            s_next = now + std::chrono::seconds(30);
+
+            using AV = RE::ActorValue;
+            static constexpr AV kSchoolAV[5] = {
+                AV::kAlteration, AV::kConjuration, AV::kDestruction, AV::kIllusion, AV::kRestoration,
+            };
+            // Party-wide MAX BASE skill per school. BASE (GetBaseActorValue), never
+            // GetActorValue, so a temporary Fortify-<school> buff cannot exploit the
+            // unlock. Player + every active follower (worker/serial domain -- the same
+            // unlocked g_active read Scheduler uses; never off the worker, #4).
+            float mx[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };
+            auto accumulate = [&](RE::Actor* a) {
+                auto* o = a ? a->AsActorValueOwner() : nullptr;
+                if (!o) return;
+                for (int i = 0; i < 5; ++i) mx[i] = std::max(mx[i], o->GetBaseActorValue(kSchoolAV[i]));
+            };
+            accumulate(RE::PlayerCharacter::GetSingleton());
+            for (auto& h : Followers::g_active) {
+                auto ptr = h.get();
+                accumulate(ptr.get());
+            }
+
+            // The gate table (esp_inspect.py, Skyrim.esm). schoolIdx indexes mx[].
+            struct Gate { RE::FormID id; int schoolIdx; float threshold; const char* edid; };
+            static constexpr Gate kGates[] = {
+                { 0x000F2584, 0,  50.f, "PCAlterationAdept"   }, { 0x000F2585, 0,  75.f, "PCAlterationExpert"  }, { 0x000F2586, 0, 100.f, "PCAlterationMaster"  },
+                { 0x000F2587, 1,  50.f, "PCConjurationAdept"  }, { 0x000F2588, 1,  75.f, "PCConjurationExpert" }, { 0x000F2589, 1, 100.f, "PCConjurationMaster" },
+                { 0x000F258A, 2,  50.f, "PCDestructionAdept"  }, { 0x000F258B, 2,  75.f, "PCDestructionExpert" }, { 0x000F258C, 2, 100.f, "PCDestructionMaster" },
+                { 0x000F258D, 3,  50.f, "PCIllusionAdept"     }, { 0x000F258E, 3,  75.f, "PCIllusionExpert"    }, { 0x000F258F, 3, 100.f, "PCIllusionMaster"    },
+                { 0x000F2590, 4,  50.f, "PCRestorationAdept"  }, { 0x000F2591, 4,  75.f, "PCRestorationExpert" }, { 0x000F2592, 4, 100.f, "PCRestorationMaster" },
+            };
+
+            std::vector<RE::FormID> flips;
+            for (const auto& g : kGates) {
+                auto* glob = RE::TESForm::LookupByID<RE::TESGlobal>(g.id);
+                if (!glob) continue;                       // modlist without it -> safe no-op
+                if (glob->value != 0.0f && mx[g.schoolIdx] >= g.threshold) {   // one-way: only unlock
+                    flips.push_back(g.id);
+                    spdlog::info("[college] unlock {} -- party {} base skill {:.0f} >= {:.0f}",
+                                 g.edid, SchoolName(kSchoolAV[g.schoolIdx]), mx[g.schoolIdx], g.threshold);
+                }
+            }
+            if (flips.empty()) return;
+
+            // Game-state mutation goes to MAIN (MFO rule). Capture FormIDs + the
+            // target value only; re-resolve on-frame; re-check so it stays ONE-WAY.
+            auto doFlip = [flips = std::move(flips)]() {
+                for (const RE::FormID id : flips)
+                    if (auto* glob = RE::TESForm::LookupByID<RE::TESGlobal>(id); glob && glob->value != 0.0f)
+                        glob->value = 0.0f;
+            };
+            if (MainThread::IsInstalled()) MainThread::Post(doFlip);
+            else                           doFlip();   // VR: pump is a no-op, keep the direct path
+        }
+
         // ── #21 PART 2A: wear the best OWNED gear (makes a purchase functional) ──
         // A buy (RunTrade) only TRANSFERS goods into the follower's pack; nothing
         // wears them. This worker-tick pass equips the single best owned upgrade the
@@ -5032,6 +5115,12 @@ namespace MFO::Logistics {
             // eat tomes. One tome per tick (see LearnCarriedTomes).
             if (HasCastGambit(a_state))
                 LearnCarriedTomes(a_follower);
+            // #21 College tome-gate unlock: generalize the vanilla player-skill gate to
+            // the party (flip the tier global to 0 once the player OR any follower
+            // reaches the skill). Rate-limited GLOBALLY inside; part of the follower
+            // tome-access feature, so gated on the tome-buy toggle (no new setting).
+            if (Config::g_economy.load() && Config::g_economyBuyTomes.load())
+                UnlockCollegeTomes();
             // #21 PART 2A: wear the best owned upgrade the follower isn't wearing yet
             // (bought / looted-as-valuable jewelry / player-handed), via the shared
             // safe equip path. Idempotent + one-per-tick, so it converges and never
