@@ -660,6 +660,17 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
   primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
   Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
   Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
+- **#21 equip + unified apparel judge (loot ⇄ buy).** The loot equip step is factored
+  into `AcquireEquip` (`Logistics.cpp`, v1.0.38 SAFE path: `MainThread::Post` +
+  `ActorEquipManager::EquipObject`, **never DoReset3D** #62; MEO gem capture +
+  `QueueGemMove`). `a_src==nullptr` ⇒ the follower already owns the item (buy / owned
+  upgrade). `LootEquipment` routes through it; the **mage apparel selection is now the
+  unified `MageApparelBuyKey`** (MEO-aware value/school ranking) across clothing slots
+  (jewelry stays on the Valuables/`LootJewelry` path — dibs preserved). `EquipBestOwnedGear`
+  (worker, `ServiceFollower` idle branch, dolls-gated) wears the single best OWNED
+  upgrade per tick — bought, looted-as-valuable jewelry, or player-handed — via
+  `AcquireEquip(src=null)`, which is what fires the **buy-path gem transfer**. Idempotent
+  + one-per-tick ⇒ converges, no thrash. Old `MageApparelIsBetter` is now `[[maybe_unused]]`.
 
 ### Loadout.cpp / Loadout.h — the equip/spell-in-hand ledger (NOT serialized)
 Puts a gambit spell in a follower's hand, records displaced gear as **transient

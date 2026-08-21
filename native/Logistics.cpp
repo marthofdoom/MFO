@@ -931,7 +931,9 @@ namespace MFO::Logistics {
         //   - a tie does NOT swap (stable -- no loot thrash).
         // (No ArmorClassSuits call anymore: everything past the rating gate
         // is clothing, which that check passes unconditionally.)
-        bool MageApparelIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo,
+        // #21: superseded by the unified MageApparelBuyKey (loot now uses the same
+        // MEO-aware value/school ranking as buy). Kept for reference/possible reuse.
+        [[maybe_unused]] bool MageApparelIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo,
                                  RE::ActorValue a_school, const MageKey& a_key) {
             if (a_armo->GetArmorRating() > 0.0f)
                 return false;   // PURE CASTER: rated armor is never mage loot
@@ -1145,6 +1147,121 @@ namespace MFO::Logistics {
             return a_armo && (a_armo->GetFormFlags() & (1u << 2)) != 0;
         }
 
+        // The ARMO currently WORN in a logical mage-apparel slot (MageClothingSlot
+        // order: 0 head[head/hair/circlet], 1 body, 2 hands, 3 feet, 4 ring, 5
+        // amulet), or nullptr if that slot is bare. Worker-safe read of a loaded
+        // follower's worn gear (same GetWornArmor the loot judge already uses).
+        RE::TESObjectARMO* WornInLogicalSlot(RE::Actor* a_follower, int a_logicalSlot) {
+            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            switch (a_logicalSlot) {
+            case 0:
+                if (auto* w = a_follower->GetWornArmor(Slot::kHead))    return w;
+                if (auto* w = a_follower->GetWornArmor(Slot::kHair))    return w;
+                if (auto* w = a_follower->GetWornArmor(Slot::kCirclet)) return w;
+                return nullptr;
+            case 1: return a_follower->GetWornArmor(Slot::kBody);
+            case 2: return a_follower->GetWornArmor(Slot::kHands);
+            case 3: return a_follower->GetWornArmor(Slot::kFeet);
+            case 4: return a_follower->GetWornArmor(Slot::kRing);
+            case 5: return a_follower->GetWornArmor(Slot::kAmulet);
+            default: return nullptr;
+            }
+        }
+
+        // ── v1.0.38 SAFE acquire+equip step (shared by loot AND the buy / owned-
+        // upgrade pass) ─────────────────────────────────────────────────────────
+        // Carries the same-role/slot worn item's MEO gems, optionally transfers the
+        // item from a_src (loot), and equips IN PLACE via MainThread::Post +
+        // ActorEquipManager::EquipObject -- NEVER DoReset3D (#62 beast-head fix); the
+        // BeastHeadSink on the resulting TESEquipEvent handles any reattach. Then
+        // queues the gem carry (fires when the piece becomes worn). Rules preserved
+        // verbatim from the loot path:
+        //   a_src == nullptr  -> the follower ALREADY OWNS the item (buy / owned
+        //                        upgrade); no transfer.
+        //   a_myWeap          -> currently-equipped weapon (the equip-IN-PLACE rule +
+        //                        gem role match); weapons only go into a hand that
+        //                        already holds the same role, else STOCK.
+        //   a_forceStock      -> keep it in the pack, never into a hand (mage backup).
+        // Returns true if it was actually equipped (vs stocked). Worker domain only.
+        bool AcquireEquip(RE::Actor* a_follower, RE::TESBoundObject* a_item,
+                          RE::TESObjectREFR* a_src, RE::TESObjectWEAP* a_myWeap,
+                          bool a_forceStock) {
+            if (!a_follower || !a_item) return false;
+
+            // MEO gem transfer (#17): capture the OLD worn item this upgrade REPLACES
+            // (base + instance uid) BEFORE the swap. CROSS-ROLE IS THE BUG (marth): a
+            // new bow must never pull gems off the melee weapon. Same-role/slot only.
+            RE::FormID    fromBase = 0;
+            std::uint16_t fromUid  = 0;
+            if (MEOBridge::Available()) {
+                RE::TESBoundObject* oldItem = nullptr;
+                if (auto* newWeap = a_item->As<RE::TESObjectWEAP>()) {
+                    const auto     newWt   = newWeap->GetWeaponType();
+                    const WepClass newRole = WeaponClassOf(newWt);
+                    if (auto* eqW = a_myWeap) {
+                        const auto eqWt = eqW->GetWeaponType();
+                        const bool sameRole = (WeaponClassOf(eqWt) == newRole) &&
+                            (newRole != WepClass::Ranged || eqWt == newWt);
+                        if (sameRole) oldItem = eqW;
+                    }
+                } else if (auto* newArmo = a_item->As<RE::TESObjectARMO>()) {
+                    using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+                    static constexpr Slot kSlots[] = {
+                        Slot::kHead, Slot::kHair, Slot::kCirclet,
+                        Slot::kBody, Slot::kHands, Slot::kForearms,
+                        Slot::kFeet, Slot::kCalves, Slot::kShield,
+                        Slot::kRing, Slot::kAmulet,
+                    };
+                    const auto mask = static_cast<std::uint32_t>(newArmo->GetSlotMask());
+                    for (const auto s : kSlots) {
+                        if (!(mask & static_cast<std::uint32_t>(s))) continue;
+                        auto* worn = a_follower->GetWornArmor(s);
+                        if (auto uid = worn ? MEOBridge::WornUid(a_follower, worn) : 0; uid != 0) {
+                            oldItem = worn; fromUid = uid; break;
+                        }
+                    }
+                }
+                if (oldItem && fromUid == 0) fromUid = MEOBridge::WornUid(a_follower, oldItem);
+                if (oldItem) fromBase = oldItem->GetFormID();
+            }
+
+            if (a_src)
+                a_src->RemoveItem(a_item, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                  nullptr, a_follower);
+
+            // Equip-IN-PLACE: a weapon only enters a hand already holding the same
+            // role (else stock for the combat gambit); armor always equips its slot.
+            bool equipIt = !a_forceStock;
+            if (!a_forceStock) {
+                if (auto* nw = a_item->As<RE::TESObjectWEAP>(); nw && a_myWeap) {
+                    const auto     newWt   = nw->GetWeaponType();
+                    const WepClass newRole = WeaponClassOf(newWt);
+                    equipIt = WeaponClassOf(a_myWeap->GetWeaponType()) == newRole &&
+                              (newRole != WepClass::Ranged || a_myWeap->GetWeaponType() == newWt);
+                }
+            }
+            if (equipIt) {
+                // #62 EQUIP ON THE MAIN THREAD. Capture FormIDs (never the worker's
+                // Actor*/item) and re-resolve on the frame that runs.
+                const RE::FormID folID  = a_follower->GetFormID();
+                const RE::FormID itemID = a_item->GetFormID();
+                auto doEquip = [folID, itemID]() {
+                    auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
+                    auto* form = RE::TESForm::LookupByID(itemID);
+                    auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
+                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
+                        eq->EquipObject(fol, item);
+                };
+                if (MainThread::IsInstalled()) MainThread::Post(doEquip);
+                else                           doEquip();   // VR: pump is a no-op, keep the direct path
+            }
+
+            // Move the old piece's gems onto the new one when it becomes worn.
+            // No-op if the old item had no gems (fromUid == 0) or MEO is absent.
+            MEOBridge::QueueGemMove(a_follower, fromBase, fromUid, a_item->GetFormID());
+            return equipIt;
+        }
+
         bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
             // Generalized by CATEGORY, never by item (§4.8.2). One better piece
             // per CALL (one action per tick, §4.3; StripCorpse drains by calling
@@ -1192,6 +1309,13 @@ namespace MFO::Logistics {
             // ONLY apparel selection -- the mage still keeps the backup-weapon /
             // no-melee-role contract (mageMode) and still buys/learns tomes.
             const bool useMageApparel = mageMode && Config::g_mageWearRobes.load();
+            // #21 UNIFIED mage-apparel ranking (loot side; shared with the buy side).
+            // Same MEO-aware model: value-primary when MEO carries gems, else school-
+            // enchant primary; villain blacklist with a necromancer exception; all
+            // clothing + jewelry slots (MageClothingSlot). See MageApparelBuyKey.
+            const std::uint8_t mageTop2      = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
+            const bool mageSchoolPrimary     = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+            const bool mageAllowVillain      = useMageApparel && g_svc && IsNecromancerFollower(*g_svc);
 
             // The MELEE class we loot/upgrade, or Other = "no melee role at all".
             // #69: ComputeWeaponRoles hands a role to ANY carried melee/ranged
@@ -1264,8 +1388,9 @@ namespace MFO::Logistics {
             std::uint16_t       bestWeapDmg   = baseDmg;
             RE::TESBoundObject* bestRanged    = nullptr;
             std::uint16_t       bestRangedDmg = myRangedDmg;
-            RE::TESBoundObject* bestMage      = nullptr;   // school/fanciness apparel (magic user)
-            MageKey             bestMageKey{};             // {0, -1} so any real key beats it
+            RE::TESBoundObject* bestMage      = nullptr;   // clothing/jewelry apparel (magic user) -- unified MEO-aware judge
+            int                 bestMageTier  = 0;         // 2 top-2 school, 1 plain, 0 off-school (see MageApparelBuyKey)
+            std::int32_t        bestMageMetric= 0;         // value (+fortify mag for a school piece); higher = fancier
             RE::TESBoundObject* bestBackup    = nullptr;   // the mage's melee sidearm (upgrade past best owned)
             std::uint16_t       bestBackupDmg = myBackupDmg;   // beat his best-OWNED sidearm, not the wielded hand
 
@@ -1294,18 +1419,36 @@ namespace MFO::Logistics {
                     const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                         & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
                     const bool shieldUseless = isShield && meleeTargetClass != WepClass::OneHand;
-                    // MAGE APPAREL (v1.0.29; EXCLUSIVE since v1.0.31): a magic
-                    // user's apparel is judged by school match then fanciness
-                    // (MageApparelIsBetter), never by armor rating. Shields
-                    // are skipped outright for him -- a shield is rated armor,
-                    // and school gear never lives there.
+                    // MAGE APPAREL + JEWELRY (#21 unified with the buy side): a magic
+                    // user's dress-up is judged by the shared MEO-aware ranking
+                    // (MageApparelBuyKey: value-primary with MEO, else school-enchant
+                    // primary), across ALL clothing slots AND jewelry (ring/amulet),
+                    // never by armor rating. A candidate must BEAT what he currently
+                    // WEARS in that logical slot, then beat the running best pick.
+                    // Shields are skipped -- rated armor, never dress-up.
                     if (useMageApparel && !isShield) {
                         LogMageApparelDiag(armo, school);   // one dump per form+school (deduped inside)
-                        const MageKey mk = MageApparelKey(armo, school);
-                        if (MageApparelIsBetter(a_follower, armo, school, mk) &&
-                            MageKeyBeats(mk, bestMageKey)) {
-                            bestMageKey = mk;
-                            bestMage    = obj;
+                        int cTier = 0; std::int32_t cMetric = 0;
+                        const int slot = MageClothingSlot(armo);
+                        // CLOTHING slots only here (0 head .. 3 feet). JEWELRY (ring/
+                        // amulet, slots 4/5) is NOT acquired via the Equipment loot
+                        // category -- it stays on the Valuables tier (LootJewelry, its
+                        // stricter dibs preserved). EquipBestOwnedGear still WEARS the
+                        // best owned ring/amulet (looted-as-valuable, bought, handed).
+                        if (slot >= 0 && slot <= 3 &&
+                            MageApparelBuyKey(armo, mageTop2, mageSchoolPrimary, mageAllowVillain, cTier, cMetric)) {
+                            // Beats what he wears in this slot?
+                            int wTier = 0; std::int32_t wMetric = 0;
+                            if (auto* worn = WornInLogicalSlot(a_follower, slot))
+                                MageApparelBuyKey(worn, mageTop2, mageSchoolPrimary, /*allowVillain*/true, wTier, wMetric);
+                            const bool beatsWorn = cTier > wTier || (cTier == wTier && cMetric > wMetric);
+                            const bool beatsBest = cTier > bestMageTier ||
+                                                   (cTier == bestMageTier && cMetric > bestMageMetric);
+                            if (beatsWorn && beatsBest) {
+                                bestMageTier   = cTier;
+                                bestMageMetric = cMetric;
+                                bestMage       = obj;
+                            }
                         }
                     }
                     // The PLAIN rating path is for NON-magic users ONLY
@@ -1389,126 +1532,19 @@ namespace MFO::Logistics {
             if (!best) return false;
             if (!FitsCarryWeight(a_follower, best->GetWeight())) return false;
 
-            // MEO gem transfer (#17): capture the OLD worn item this upgrade
-            // REPLACES (base + instance uid) BEFORE the swap, so MEO carries its
-            // socketed gems onto the new piece once it's worn (fired from the
-            // equip event). CROSS-ROLE IS THE BUG (marth): a new BOW must never
-            // pull the gems off the follower's MELEE weapon -- it doesn't replace
-            // it. So the old item must share the new one's ROLE: melee<->melee,
-            // bow<->bow, crossbow<->crossbow, and for armor the same biped slot.
-            // Only a WORN old item with gems (uid != 0) qualifies; no match -> no
-            // transfer. All no-ops when MEO is absent or nothing has gems.
-            RE::FormID    fromBase = 0;
-            std::uint16_t fromUid  = 0;
-            if (MEOBridge::Available()) {
-                RE::TESBoundObject* oldItem = nullptr;
-                if (auto* newWeap = best->As<RE::TESObjectWEAP>()) {
-                    const auto     newWt   = newWeap->GetWeaponType();
-                    const WepClass newRole = WeaponClassOf(newWt);
-                    // The follower's currently-WORN weapon in the same role (bow vs
-                    // crossbow distinguished within Ranged). Never a melee->ranged
-                    // or ranged->melee steal.
-                    if (auto* eqW = myWeap) {
-                        const auto eqWt = eqW->GetWeaponType();
-                        const bool sameRole = (WeaponClassOf(eqWt) == newRole) &&
-                            (newRole != WepClass::Ranged || eqWt == newWt);
-                        if (sameRole) oldItem = eqW;
-                    }
-                } else if (auto* newArmo = best->As<RE::TESObjectARMO>()) {
-                    using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-                    // kHair/kCirclet joined in v1.0.29: mage hoods occupy the
-                    // hair bit and circlets their own, and a school upgrade on
-                    // those slots must carry its gems like any other.
-                    static constexpr Slot kSlots[] = {
-                        Slot::kHead, Slot::kHair, Slot::kCirclet,
-                        Slot::kBody, Slot::kHands, Slot::kForearms,
-                        Slot::kFeet, Slot::kCalves, Slot::kShield,
-                    };
-                    const auto mask = static_cast<std::uint32_t>(newArmo->GetSlotMask());
-                    for (const auto s : kSlots) {
-                        if (!(mask & static_cast<std::uint32_t>(s))) continue;
-                        auto* worn = a_follower->GetWornArmor(s);
-                        if (auto uid = worn ? MEOBridge::WornUid(a_follower, worn) : 0; uid != 0) {
-                            oldItem = worn; fromUid = uid; break;
-                        }
-                    }
-                }
-                if (oldItem && fromUid == 0) fromUid = MEOBridge::WornUid(a_follower, oldItem);
-                if (oldItem) fromBase = oldItem->GetFormID();
-            }
+            // ACQUIRE + EQUIP through the shared v1.0.38 safe step: transfers from
+            // a_src, captures + carries MEO gems, equips IN PLACE on the main thread
+            // (MainThread::Post EquipObject, never DoReset3D -- #62), queues the gem
+            // move. The mage BACKUP stays STOCK-ONLY (a caster's hand belongs to his
+            // spells; his own AI draws the sidearm at zero magicka). The buy / owned-
+            // upgrade pass calls the SAME AcquireEquip with a_src=nullptr.
+            const bool equipped = AcquireEquip(a_follower, best, a_src, myWeap, best == bestBackup);
 
-            a_src->RemoveItem(best, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                              nullptr, a_follower);
-
-            // PUT IT ON -- BUT HANDS ARE GAMBIT TERRITORY (marth: the equipped
-            // weapon must be STABLE; roles switch only on a gambit or a cast).
-            // Loot re-equips only IN PLACE: the new weapon must replace the same
-            // role currently in the hand (melee over melee, bow over bow,
-            // crossbow over crossbow), or the hand must be weaponless. Acquiring
-            // the OTHER role -- equip-melee while wielding a bow, equip-ranged
-            // while wielding a sword, anything while holding a staff -- STOCKS
-            // the pack only; the combat equip gambit (or their own AI) decides
-            // when it goes in the hand. The unconditional EquipObject here was
-            // the out-of-combat half of the weapon thrash: every corpse
-            // re-decided the hand. Armor always equips (slots, not hands); a
-            // slot-conflicting piece auto-unequips the worse one. queue=true so
-            // the engine applies it on its own next update rather than
-            // synchronously re-entering here.
-            bool equipIt = true;
-            if (auto* nw = best->As<RE::TESObjectWEAP>(); nw && myWeap) {
-                const auto     newWt   = nw->GetWeaponType();
-                const WepClass newRole = WeaponClassOf(newWt);
-                equipIt = WeaponClassOf(myWeap->GetWeaponType()) == newRole &&
-                          (newRole != WepClass::Ranged || myWeap->GetWeaponType() == newWt);
-            }
-            // The mage BACKUP is STOCK-ONLY, even into an empty hand (the
-            // myWeap==nullptr case above would otherwise equip it): a caster's
-            // hands belong to his spells/staff, and vanilla AI draws the
-            // sidearm ITSELF at zero magicka -- equipping here would shove a
-            // dagger over his casting hand out of combat, the very thrash the
-            // equip-in-place rule exists to stop.
-            if (best == bestBackup) equipIt = false;
-            if (equipIt) {
-                // #62 EQUIP ON THE MAIN THREAD -- the invisible-head fix. This whole
-                // loot path runs on the AddTask JOB WORKER (Scheduler::Tick <- the
-                // Diagnostics sleeper's AddTask, which drains on BSJobs::JobThread --
-                // MainThread.h/§0.37). EquipObject rebuilds the actor's biped 3D, and
-                // that rebuild touches the HEAD/NECK partition even for a plain CHEST
-                // piece; doing it off the main thread races the render thread and the
-                // head node is torn down but not rebuilt -> the "head disappears on
-                // armor equip" bug. It reproduces with a perfectly good item like
-                // chainmail (marth), which proves it is the EQUIP mechanism, not the
-                // item's meshes. 3D mutation is exactly what MainThread::Post exists
-                // to marshal. Capture FormIDs (never the worker's Actor*/item, which
-                // may be stale next frame) and re-resolve on the frame that runs.
-                const RE::FormID folID  = a_follower->GetFormID();
-                const RE::FormID itemID = best->GetFormID();
-                auto doEquip = [folID, itemID]() {
-                    auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
-                    auto* form = RE::TESForm::LookupByID(itemID);
-                    auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                    // #62 broken-gear eviction is handled by BeastHeadSink on the
-                    // TESEquipEvent this equip fires -- there, not here, so the same
-                    // check also covers the player TRADING gear over and the AI
-                    // re-dressing, not just MFO's own equip. Keep this to the equip.
-                    // (MFO's own loot never reaches here with creature gear: the
-                    // IsCreatureArmor filter skips it at selection.)
-                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
-                        eq->EquipObject(fol, item);
-                };
-                if (MainThread::IsInstalled()) MainThread::Post(doEquip);
-                else                           doEquip();   // VR: pump is a no-op, keep the direct path
-            }
-
-            // [equip] DIAGNOSTIC: the weapon swap was INVISIBLE in the log --
-            // marth's "Erik switches melee weapons for no reason" could not be
-            // seen. Log WHAT we put on, over WHAT, and the class reasoning that
-            // chose it, so a soak shows a real upgrade vs a thrash (e.g. a bow-
-            // user whose skill-class is melee getting a melee weapon forced on).
+            // [equip] DIAGNOSTIC: log WHAT we put on, over WHAT, and the reasoning.
             if (auto* nw = best->As<RE::TESObjectWEAP>()) {
                 spdlog::info("[equip] {:08X}: LOOT-{} weapon '{}' dmg={} class={} <- held '{}' "
                              "dmg={} class={} | meleeTgt={} wantsMelee={} wantsRanged={} baseDmg={}",
-                             a_follower->GetFormID(), equipIt ? "EQUIP" : "STOCK",
+                             a_follower->GetFormID(), equipped ? "EQUIP" : "STOCK",
                              nw->GetFullName() ? nw->GetFullName() : "?", nw->GetAttackDamage(),
                              static_cast<int>(WeaponClassOf(nw->GetWeaponType())),
                              myWeap && myWeap->GetFullName() ? myWeap->GetFullName() : "(none)",
@@ -1516,17 +1552,13 @@ namespace MFO::Logistics {
                              myWeap ? static_cast<int>(WeaponClassOf(myWeap->GetWeaponType())) : -1,
                              static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseDmg);
             } else {
-                // #62: armor now equips on the MAIN thread (queued via the pump when
-                // live), so the biped/head rebuild never races the render thread.
-                spdlog::info("[equip] {:08X}: LOOT armor '{}' -> equip {}", a_follower->GetFormID(),
+                spdlog::info("[equip] {:08X}: LOOT armor/apparel '{}' -> equip {}", a_follower->GetFormID(),
                              best->As<RE::TESFullName>() && best->As<RE::TESFullName>()->GetFullName()
                                  ? best->As<RE::TESFullName>()->GetFullName() : "?",
                              MainThread::IsInstalled() ? "queued to main thread" : "direct (VR/no-pump)");
             }
 
-            // MAGIC-LOADOUT diagnostics (v1.0.29): say WHY the mage item won,
-            // so a field soak shows the school reasoning, not just a transfer.
-            // Logged only on a TAKE (never during peeks), so it cannot spam.
+            // MAGIC-LOADOUT diagnostics: WHY the mage item won (logged on a TAKE only).
             if (best == bestMage || best == bestBackup) {
                 spdlog::info("[loot] {:08X} '{}' magic-user: target school {} (from {} cast gambit(s))",
                              a_follower->GetFormID(),
@@ -1534,12 +1566,9 @@ namespace MFO::Logistics {
                              SchoolName(school), castGambits);
             }
             if (best == bestMage) {
-                auto* ma  = best->As<RE::TESObjectARMO>();
-                float mag = 0.0f;
-                const int sc = SchoolMatchScore(ma, school, &mag);
-                spdlog::info("[loot] robe {:08X} '{}' school {} score={} value={} mag={:.0f} -> best",
+                spdlog::info("[loot] apparel {:08X} '{}' tier={} metric={} (schoolPrimary={}) -> best",
                              best->GetFormID(), best->GetName() ? best->GetName() : "?",
-                             SchoolName(school), sc, ma->GetGoldValue(), mag);
+                             bestMageTier, bestMageMetric, mageSchoolPrimary);
             }
             if (best == bestBackup) {
                 auto* mw = best->As<RE::TESObjectWEAP>();
@@ -1548,12 +1577,6 @@ namespace MFO::Logistics {
                              best->GetName() ? best->GetName() : "?",
                              mw ? mw->GetAttackDamage() : 0);
             }
-            if (best == bestMage && fromUid != 0)
-                spdlog::info("[loot] MEO gems carried to new robe (from {:08X} uid {})", fromBase, fromUid);
-
-            // Move the old piece's gems onto the new one when it becomes worn.
-            // No-op if the old item had no gems (fromUid == 0) or MEO is absent.
-            MEOBridge::QueueGemMove(a_follower, fromBase, fromUid, best->GetFormID());
             return true;
         }
 
@@ -3160,6 +3183,69 @@ namespace MFO::Logistics {
         std::unordered_map<RE::FormID,   Clock::time_point> g_econScan;    // per-follower 15 s
         std::unordered_map<RE::FormID,   Clock::time_point> g_econTrade;   // per-follower 20 s
         std::unordered_map<std::uint64_t, Clock::time_point> g_econPair;   // per-(follower,vendor) 60 s
+
+        // ── #21 PART 2A: wear the best OWNED gear (makes a purchase functional) ──
+        // A buy (RunTrade) only TRANSFERS goods into the follower's pack; nothing
+        // wears them. This worker-tick pass equips the single best owned upgrade the
+        // follower isn't wearing yet -- bought, looted-as-valuable (jewelry), or
+        // player-handed -- through the SAME safe AcquireEquip step the loot judge
+        // uses (MainThread::Post EquipObject, MEO gem carry, never DoReset3D). ONE
+        // item per tick and idempotent (equips only when it beats what's worn), so
+        // once worn it no-ops -> no thrash. Apparel/armor only here; WEAPONS are left
+        // to the combat equip gambit (Loadout::Prepare picks the best in-class at
+        // combat), matching the loot judge's stock-not-equip rule for weapons.
+        void EquipBestOwnedGear(RE::Actor* a_follower, const FollowerState& a_state) {
+            if (!a_follower || Config::g_dollsMode.load()) return;
+            const bool caster         = IsCasterFollower(a_state);
+            const bool useMageApparel = caster && Config::g_mageWearRobes.load();
+            auto* eqObj  = a_follower->GetEquippedObject(false);
+            auto* myWeap = eqObj ? eqObj->As<RE::TESObjectWEAP>() : nullptr;
+
+            RE::TESBoundObject* pick = nullptr;
+            if (useMageApparel) {
+                // CLOTHING/JEWELRY: best owned per logical slot that beats what's worn,
+                // ranked by the SAME MEO-aware judge as loot/buy.
+                const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
+                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                const bool allowVillain  = IsNecromancerFollower(a_state);
+                int   wornTier[6];  std::int32_t wornMetric[6];
+                for (int s = 0; s < 6; ++s) {
+                    wornTier[s] = 0; wornMetric[s] = 0;
+                    if (auto* w = WornInLogicalSlot(a_follower, s))
+                        MageApparelBuyKey(w, top2, schoolPrimary, true, wornTier[s], wornMetric[s]);
+                }
+                int bestTier = -1; std::int32_t bestMetric = -1;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* ar = obj->As<RE::TESObjectARMO>();
+                    if (!ar) continue;
+                    const int slot = MageClothingSlot(ar);
+                    if (slot < 0) continue;
+                    if (WornInLogicalSlot(a_follower, slot) == ar) continue;   // already worn
+                    int t = 0; std::int32_t m = 0;
+                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) continue;
+                    if (!(t > wornTier[slot] || (t == wornTier[slot] && m > wornMetric[slot]))) continue;  // beats worn
+                    if (t > bestTier || (t == bestTier && m > bestMetric)) { bestTier = t; bestMetric = m; pick = obj; }
+                }
+            } else {
+                // RATED ARMOR: best owned piece that upgrades a worn/bare slot.
+                float bestRat = 0.0f;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* ar = obj->As<RE::TESObjectARMO>();
+                    if (!ar || IsCreatureArmor(ar)) continue;
+                    if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                    using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+                    if ((static_cast<std::uint32_t>(ar->GetSlotMask()) &
+                         static_cast<std::uint32_t>(Slot::kShield)) != 0) continue;   // shields: leave to the loot role logic
+                    if (!ArmorIsBetter(a_follower, ar)) continue;   // strictly better than worn on its slot
+                    if (ar->GetArmorRating() > bestRat) { bestRat = ar->GetArmorRating(); pick = obj; }
+                }
+            }
+
+            if (!pick || !FitsCarryWeight(a_follower, pick->GetWeight())) return;
+            AcquireEquip(a_follower, pick, nullptr, myWeap, /*forceStock*/false);   // already owned -> no transfer
+        }
 
         // ── #21 buy thresholds (Features A + B) ─────────────────────────────────
         // Computed ONCE per follower per scan on the WORKER, reusing the loot judge
@@ -4946,6 +5032,11 @@ namespace MFO::Logistics {
             // eat tomes. One tome per tick (see LearnCarriedTomes).
             if (HasCastGambit(a_state))
                 LearnCarriedTomes(a_follower);
+            // #21 PART 2A: wear the best owned upgrade the follower isn't wearing yet
+            // (bought / looted-as-valuable jewelry / player-handed), via the shared
+            // safe equip path. Idempotent + one-per-tick, so it converges and never
+            // thrashes; dolls mode (handled inside) is the manual-dress escape hatch.
+            EquipBestOwnedGear(a_follower, a_state);
             if (Config::g_economy.load() && Po3Present())
                 EconomyProbe(a_follower, a_state, now);
         }
