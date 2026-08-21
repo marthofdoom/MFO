@@ -579,6 +579,101 @@ namespace MFO::Logistics {
             return best >= 0 ? kSchools[best] : RE::ActorValue::kNone;
         }
 
+        // ── #21 economy: caster signals (gambit-driven, MFO's existing "is a magic
+        //    user" definition -- the same signal TargetMagicSchool/mageMode use). ──
+        // Does this follower author ANY enabled cast gambit? The tome-buy + auto-
+        // learn mage gate (criteria #2/#3 collapse to this one signal by reuse).
+        bool HasCastGambit(const FollowerState& a_state) {
+            for (const auto& g : a_state.combat()) {
+                if (!g.enabled) continue;
+                if (g.actionOpcode == Vocab::kActCastSelf ||
+                    g.actionOpcode == Vocab::kActCastTarget ||
+                    g.actionOpcode == Vocab::kActCastPlayer) return true;
+            }
+            return false;
+        }
+
+        // Is this a NECROMANCER, detected PRINCIPLED (never by name)? True when an
+        // enabled cast gambit's spell carries a Reanimate effect (raise-dead /
+        // summon-undead). Used only to let a necromancer follower buy the villain-
+        // coded robes the general mage-apparel buy refuses.
+        bool IsNecromancerFollower(const FollowerState& a_state) {
+            for (const auto& g : a_state.combat()) {
+                if (!g.enabled) continue;
+                if (g.actionOpcode != Vocab::kActCastSelf &&
+                    g.actionOpcode != Vocab::kActCastTarget &&
+                    g.actionOpcode != Vocab::kActCastPlayer) continue;
+                auto* spell = g.actionParamForm
+                    ? RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm) : nullptr;
+                if (!spell) continue;
+                for (const auto* e : spell->effects) {
+                    const auto* mgef = e ? e->baseEffect : nullptr;
+                    if (mgef && mgef->data.archetype ==
+                                RE::EffectArchetypes::ArchetypeID::kReanimate) return true;
+                }
+            }
+            return false;
+        }
+
+        // Is this follower a MAGE-BUILD caster for gear/tome purposes? The gambit
+        // signal, matching the loot judge's mageMode (magic loadout ON and >=1 cast
+        // gambit). combatClassOverride is NOT consulted here (marth: it governs
+        // WEAPON selection only; apparel is governed by bMageWearRobes). Shared by
+        // the BUY apparel gate so loot and buy agree on "is a caster".
+        bool IsCasterFollower(const FollowerState& a_state) {
+            return Config::g_magicLoadout.load() && HasCastGambit(a_state);
+        }
+
+        // Bitmask of the follower's TOP 2 magic-school skills (criterion #4), in the
+        // fixed 0=Alt 1=Conj 2=Dest 3=Illu 4=Rest bit order SpellSchoolBit returns.
+        // A pure skill read -- worker-safe on a loaded follower.
+        std::uint8_t TopTwoSchoolMask(RE::Actor* a_follower) {
+            auto* avo = a_follower ? a_follower->AsActorValueOwner() : nullptr;
+            if (!avo) return 0;
+            static constexpr RE::ActorValue kBySchoolBit[5] = {
+                RE::ActorValue::kAlteration, RE::ActorValue::kConjuration,
+                RE::ActorValue::kDestruction, RE::ActorValue::kIllusion,
+                RE::ActorValue::kRestoration,
+            };
+            float lv[5];
+            for (int i = 0; i < 5; ++i) lv[i] = avo->GetActorValue(kBySchoolBit[i]);
+            int hi = 0;
+            for (int i = 1; i < 5; ++i) if (lv[i] > lv[hi]) hi = i;
+            int lo = -1;
+            for (int i = 0; i < 5; ++i) {
+                if (i == hi) continue;
+                if (lo < 0 || lv[i] > lv[lo]) lo = i;
+            }
+            std::uint8_t mask = static_cast<std::uint8_t>(1u << hi);
+            if (lo >= 0) mask |= static_cast<std::uint8_t>(1u << lo);
+            return mask;
+        }
+
+        // Learn (and consume) any spell tome the follower CARRIES whose spell it can
+        // cast and does not yet know -- the copy of Board.cpp's teach primitive on
+        // the worker (AddSpell/RemoveItem are edit-drain-safe, §0.32; NEVER
+        // MainThread::Post). Also learns a tome the PLAYER hands the follower. One
+        // tome per tick: the first AddSpell/RemoveItem mutates the live inventory,
+        // so we return after it and catch the rest next tick. Caller gates on the
+        // follower being a mage (HasCastGambit) -- only mages auto-consume tomes.
+        void LearnCarriedTomes(RE::Actor* a_follower) {
+            if (!a_follower) return;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* book = obj->As<RE::TESObjectBOOK>();
+                if (!book || !book->TeachesSpell()) continue;
+                auto* sp = book->data.teaches.spell;
+                if (!sp || !Vocab::IsCastableSpell(sp)) continue;
+                if (Catalog::IsExcluded(book->GetFormID())) continue;
+                if (a_follower->HasSpell(sp)) continue;
+                a_follower->AddSpell(sp);
+                a_follower->RemoveItem(book, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                spdlog::info("[econ] {:08X} learned spell {:08X} from carried tome {:08X}",
+                             a_follower->GetFormID(), sp->GetFormID(), book->GetFormID());
+                return;   // one per tick -- the mutation ends this inventory walk
+            }
+        }
+
         const char* SchoolName(RE::ActorValue a_school) {
             using AV = RE::ActorValue;
             switch (a_school) {
@@ -1091,6 +1186,12 @@ namespace MFO::Logistics {
                 school = TargetMagicSchool(*g_svc, castGambits);
             const bool mageMode    = castGambits > 0;   // magic user AND master toggle on
             const bool daggersOnly = Config::g_mageDaggersOnly.load();
+            // #21 bMageWearRobes (default ON): the mage school-clothing dress-up gate.
+            // When OFF, a magic user is treated like any other class for APPAREL and
+            // falls through to the plain rating armor judge below (marth). It gates
+            // ONLY apparel selection -- the mage still keeps the backup-weapon /
+            // no-melee-role contract (mageMode) and still buys/learns tomes.
+            const bool useMageApparel = mageMode && Config::g_mageWearRobes.load();
 
             // The MELEE class we loot/upgrade, or Other = "no melee role at all".
             // #69: ComputeWeaponRoles hands a role to ANY carried melee/ranged
@@ -1198,7 +1299,7 @@ namespace MFO::Logistics {
                     // (MageApparelIsBetter), never by armor rating. Shields
                     // are skipped outright for him -- a shield is rated armor,
                     // and school gear never lives there.
-                    if (mageMode && !isShield) {
+                    if (useMageApparel && !isShield) {
                         LogMageApparelDiag(armo, school);   // one dump per form+school (deduped inside)
                         const MageKey mk = MageApparelKey(armo, school);
                         if (MageApparelIsBetter(a_follower, armo, school, mk) &&
@@ -1222,7 +1323,7 @@ namespace MFO::Logistics {
                     // Best-first: among the armour upgrades this body offers, keep the
                     // HIGHEST-rated (not the first enumerated), so a carry-weight cutoff
                     // can't strand the actually-best piece.
-                    if (!mageMode &&
+                    if (!useMageApparel &&
                         !shieldUseless && ArmorIsBetter(a_follower, armo) &&
                         armo->GetArmorRating() > bestArmorRat &&
                         !CarriesSlotArmorAtLeast(a_follower, armo)) {   // #3: don't re-take/equip a worse same-slot piece already in the pack (strip double-take)
@@ -3060,8 +3161,107 @@ namespace MFO::Logistics {
         std::unordered_map<RE::FormID,   Clock::time_point> g_econTrade;   // per-follower 20 s
         std::unordered_map<std::uint64_t, Clock::time_point> g_econPair;   // per-(follower,vendor) 60 s
 
-        void EconomyProbe(RE::Actor* a_follower, const std::vector<Gambit>& a_logistics,
+        // ── #21 buy thresholds (Features A + B) ─────────────────────────────────
+        // Computed ONCE per follower per scan on the WORKER, reusing the loot judge
+        // (ComputeWeaponRoles / owned-inventory baseline / MageClothingSlot), then
+        // handed to the VM-side PlanBuy as pure numbers. Keeps every follower actor-
+        // value / gambit read off the VM thread (task: prefer precompute on worker).
+        TradeBridge::BuyThresholds BuildBuyThresholds(RE::Actor* a_follower,
+                                                      const FollowerState& a_state) {
+            TradeBridge::BuyThresholds buy;
+            const bool dolls = Config::g_dollsMode.load();
+            // "Is a caster" for apparel/weapon-role (gambit signal == loot mageMode);
+            // gate mage apparel additionally on bMageWearRobes (marth).
+            const bool caster         = IsCasterFollower(a_state);
+            const bool useMageApparel = caster && Config::g_mageWearRobes.load();
+            const std::uint8_t top2   = TopTwoSchoolMask(a_follower);
+
+            // ── Feature A: weapon/armor/apparel thresholds (reuse the loot judge) ──
+            if (Config::g_economyBuyGear.load()) {
+                buy.buyGear = true;
+                const bool wantsRanged = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
+                const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
+                const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+                const std::uint8_t baseClass = a_state.combatClassOverride;
+                const bool baseCaster     = baseClass == 3;
+                const bool baseWeaponUser = baseClass == 1 || baseClass == 2;
+                // meleeTargetClass / doRanged mirror the loot judge (weapon role uses
+                // 'caster' == mageMode, NOT the apparel toggle).
+                const WepClass meleeTargetClass =
+                    (caster && !baseWeaponUser && (baseCaster || !wantsMelee))
+                        ? WepClass::Other : roles.melee;
+                const bool doRanged     = (caster && !wantsRanged) ? false : roles.doRanged;
+                const bool wantCrossbow = roles.wantCrossbow;
+                using WT = RE::WEAPON_TYPE;
+
+                std::uint16_t baseDmg = 0, myRangedDmg = 0;
+                float bestArmorRat = 0.0f;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                        if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
+                        if (meleeTargetClass != WepClass::Other &&
+                            WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
+                            baseDmg = std::max(baseDmg, w->GetAttackDamage());
+                        if (doRanged && w->GetWeaponType() == (wantCrossbow ? WT::kCrossbow : WT::kBow))
+                            myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
+                    } else if (auto* ar = obj->As<RE::TESObjectARMO>()) {
+                        if (IsCreatureArmor(ar)) continue;
+                        if (ar->GetArmorRating() > bestArmorRat) bestArmorRat = ar->GetArmorRating();
+                    }
+                }
+                buy.meleeClass    = static_cast<std::int32_t>(meleeTargetClass);
+                buy.meleeBaseDmg  = baseDmg;
+                buy.doRanged      = doRanged;
+                buy.wantCrossbow  = wantCrossbow;
+                buy.rangedBaseDmg = myRangedDmg;
+                buy.buyArmor       = !useMageApparel && !dolls;   // non-caster OR caster-in-armor: rated armor
+                buy.armorBaseRat   = static_cast<std::int32_t>(bestArmorRat);
+                buy.buyMageApparel = useMageApparel && !dolls;
+                // MEO-aware ranking (marth): value-driven ONLY with MEO present (gems
+                // transfer + supply school relevance). Without MEO -- or with the
+                // strict toggle -- rank school-enchant first so a mage never trades a
+                // helpful enchant for a pricier off-school one. MEOBridge::Available()
+                // is a worker-safe bool (no main-thread MEO query on the tick).
+                buy.mageSchoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                buy.isNecromancer  = IsNecromancerFollower(a_state);
+                buy.eligibleSchools= top2;
+
+                // Per-slot owned baseline (best owned (tier,metric) per dress-up slot,
+                // same ranking as the buy). Best-OWNED (not just worn) so a bought
+                // piece raises the bar and is not re-bought next visit; keepArmor
+                // protects it from re-sell.
+                if (buy.buyMageApparel) {
+                    for (auto& [obj, data] : a_follower->GetInventory()) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* ar = obj->As<RE::TESObjectARMO>();
+                        if (!ar || ar->GetArmorRating() > 0.0f) continue;
+                        const int slot = MageClothingSlot(ar);
+                        if (slot < 0) continue;
+                        int tier = 0; std::int32_t metric = 0;
+                        // allowVillain=true: an owned piece counts as baseline regardless.
+                        if (!MageApparelBuyKey(ar, top2, buy.mageSchoolPrimary, true, tier, metric)) continue;
+                        if (tier > buy.mageBaseTier[slot] ||
+                            (tier == buy.mageBaseTier[slot] && metric > buy.mageBaseMetric[slot])) {
+                            buy.mageBaseTier[slot]   = tier;
+                            buy.mageBaseMetric[slot] = metric;
+                        }
+                    }
+                }
+            }
+
+            // ── Feature B: tome buy (caster w/ a cast gambit; independent of
+            //    bMageWearRobes and g_magicLoadout -- gated on HasCastGambit). ──
+            if (Config::g_economyBuyTomes.load() && HasCastGambit(a_state)) {
+                buy.buyTomes = true;
+                buy.eligibleSchools = top2;
+            }
+            return buy;
+        }
+
+        void EconomyProbe(RE::Actor* a_follower, const FollowerState& a_state,
                           Clock::time_point a_now) {
+            const auto& a_logistics = a_state.logistics();
             const auto fid = a_follower->GetFormID();
 
             // Per-follower SCAN cooldown (15 s) -- the cell walk itself is the
@@ -3112,6 +3312,11 @@ namespace MFO::Logistics {
             //     vendors traded with BOTH in the same scan and over-bought (field:
             //     Erik +17 @ Ysolda AND +22 @ Adrianne, same second).
             if (auto& tn = g_econTrade[fid]; tn.time_since_epoch().count() != 0 && a_now < tn) return;
+
+            // #21 buy thresholds (weapon/armor/apparel/tome) -- built ONCE on the
+            // worker from the follower's own inventory/skills/gambits, reused for
+            // every candidate vendor this scan and passed opaque to PlanBuy.
+            const TradeBridge::BuyThresholds buy = BuildBuyThresholds(a_follower, a_state);
 
             for (auto& h : living) {
                 auto  ptr    = h.get();
@@ -3186,6 +3391,33 @@ namespace MFO::Logistics {
                     for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
                 }
 
+                // #21 KEEP-ARMOR: protect the BEST owned piece per slot mask from
+                // being sold, so a just-BOUGHT armor / clothing / jewelry upgrade is
+                // not re-sold as junk next scan (keepWeapons already does this for
+                // weapons). Best = highest armor rating, then gold value -- so rating-0
+                // clothing/jewelry is kept by VALUE (the pricey robe/amulet a mage
+                // bought). Gated on gear-buy so a non-buyer's sell behaviour is byte-
+                // identical to before. (A caster's bought clothing is NOT auto-equipped
+                // -- see the report on equipping bought apparel -- this keeps it owned.)
+                std::unordered_set<RE::TESBoundObject*> keepArmor;
+                if (Config::g_economyBuyGear.load()) {
+                    std::unordered_map<std::uint32_t, std::tuple<RE::TESBoundObject*, float, int>> bestA;
+                    for (auto& [obj, data] : a_follower->GetInventory()) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* ar = obj->As<RE::TESObjectARMO>();
+                        if (!ar) continue;
+                        const auto mask = static_cast<std::uint32_t>(ar->GetSlotMask());
+                        if (mask == 0) continue;
+                        const float rat = ar->GetArmorRating();
+                        const int   val = std::max<std::int32_t>(ar->GetGoldValue(), 0);
+                        auto it = bestA.find(mask);
+                        if (it == bestA.end() || rat > std::get<1>(it->second) ||
+                            (rat == std::get<1>(it->second) && val > std::get<2>(it->second)))
+                            bestA[mask] = { obj, rat, val };
+                    }
+                    for (auto& [m, t] : bestA) if (std::get<0>(t)) keepArmor.insert(std::get<0>(t));
+                }
+
                 std::vector<TradeBridge::SellRow> sell;
                 int purse = 0;
                 // A MEO-socketed instance carries an ExtraUniqueID -- NEVER sell one:
@@ -3210,6 +3442,7 @@ namespace MFO::Logistics {
                     if (!weap && !armo) continue;
                     if (IsStockGear(fid, obj->GetFormID())) continue;   // #69: never sell the follower's OWN stock/signature gear (a spare weapon / unworn own armor)
                     if (weap && keepWeapons.count(obj)) continue;   // loadout weapon, not junk
+                    if (armo && keepArmor.count(obj))   continue;   // #21 best-in-slot armor/clothing/jewelry -- keep (don't re-sell a bought upgrade)
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
@@ -3256,7 +3489,7 @@ namespace MFO::Logistics {
                 // follower's order, or the bridge being down, must not cost this
                 // follower its 20 s window -- try the next vendor / next scan.
                 if (TradeBridge::VendorTrade(a_follower, vendor, chest,
-                                             std::move(sell), std::move(needs), purse)) {
+                                             std::move(sell), std::move(needs), purse, buy)) {
                     g_econTrade[fid] = a_now + std::chrono::seconds(20);
                     break;
                 }
@@ -3438,6 +3671,129 @@ namespace MFO::Logistics {
         case Catalog::Ammo::kBolt:  return true;
         default:                    return a_ammo->IsBolt();
         }
+    }
+
+    // ── #21 economy GEAR/TOME buy helpers (see Logistics.h) ─────────────────────
+    // Thin wrappers over the anon-namespace loot judge, callable from the VM-side
+    // buy planner (TradeBridge::PlanBuy) so buy and loot classify gear identically.
+    int WeaponBuyClass(RE::WEAPON_TYPE a_type) {
+        return static_cast<int>(WeaponClassOf(a_type));   // WepClass: 0=1H 1=2H 2=Ranged 3=Other
+    }
+
+    int SpellSchoolBit(RE::SpellItem* a_spell) {
+        if (!a_spell) return -1;
+        const auto* eff  = a_spell->GetCostliestEffectItem();
+        const auto* mgef = eff ? eff->baseEffect : nullptr;
+        if (!mgef) return -1;
+        // SAME 5-school order TargetMagicSchool tallies in (its kSchools array):
+        // 0 Alteration, 1 Conjuration, 2 Destruction, 3 Illusion, 4 Restoration.
+        // Read from the MGEF "Magic Skill" (associatedSkill), the school field the
+        // spell side already trusts (TargetMagicSchool).
+        switch (mgef->data.associatedSkill) {
+        case RE::ActorValue::kAlteration:  return 0;
+        case RE::ActorValue::kConjuration: return 1;
+        case RE::ActorValue::kDestruction: return 2;
+        case RE::ActorValue::kIllusion:    return 3;
+        case RE::ActorValue::kRestoration: return 4;
+        default:                            return -1;
+        }
+    }
+
+    // ── VILLAIN-CODED APPAREL (mage buy path only) ──────────────────────────────
+    // The modded list's priciest clothing is necromancer / black-mage regalia, so a
+    // value-driven buy would make every mage follower converge on evil robes (marth).
+    // A mage NEVER buys a villain-coded robe unless the follower is itself a
+    // necromancer (detected PRINCIPLED, by a Reanimate cast gambit -- see
+    // EconomyProbe/isNecromancer, never by name). Match is case-insensitive over the
+    // EditorID OR the full (display) name. EDIT THIS ONE LIST to extend the coding.
+    static bool IsVillainCodedApparel(RE::TESObjectARMO* a_armo) {
+        static constexpr const char* kVillainWords[] = {
+            "necromancer", "black mage", "blackmage", "black robe",
+        };
+        if (!a_armo) return false;
+        const char* ed   = a_armo->GetFormEditorID();
+        const char* name = a_armo->GetFullName();
+        for (const char* w : kVillainWords)
+            if (ContainsNoCase(ed, w) || ContainsNoCase(name, w)) return true;
+        return false;
+    }
+
+    // Which SCHOOL, if any, this apparel/jewelry piece's enchantment fortifies
+    // (first beneficial school-boost effect, else a school-tagged keyword), or
+    // kNone for plain / non-school pieces. Reuses EffectBoostSchool/SchoolFromKeywords
+    // -- the same enchant reader the loot judge trusts. For the strict-school filter.
+    static RE::ActorValue ApparelFortifiedSchool(RE::TESObjectARMO* a_armo) {
+        if (!a_armo) return RE::ActorValue::kNone;
+        if (const auto* ench = a_armo->formEnchanting) {
+            for (const auto* e : ench->effects) {
+                const auto* mgef = e ? e->baseEffect : nullptr;
+                if (!mgef) continue;
+                using Flag = RE::EffectSetting::EffectSettingData::Flag;
+                if (mgef->data.flags.any(Flag::kDetrimental) ||
+                    mgef->data.flags.any(Flag::kHostile)) continue;   // a curse is not a fortify
+                if (auto s = EffectBoostSchool(mgef); s != RE::ActorValue::kNone) return s;
+            }
+        }
+        return SchoolFromKeywords(a_armo);
+    }
+
+    // The LOGICAL mage-apparel slot a candidate occupies, or -1 if it is not a
+    // dress-up slot: 0 head (hat/hood/circlet), 1 body (robe), 2 hands (gloves),
+    // 3 feet (shoes/boots), 4 ring, 5 amulet. A mage treats jewelry as apparel
+    // (marth), and a circlet counts as head whether the catalog flags it clothing
+    // or jewelry. Body/hands/feet win over the head bits an item may also carry.
+    int MageClothingSlot(RE::TESObjectARMO* a_armo) {
+        if (!a_armo) return -1;
+        using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+        const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
+        auto has = [&](Slot s) { return (mask & static_cast<std::uint32_t>(s)) != 0; };
+        if (has(Slot::kBody))  return 1;
+        if (has(Slot::kHands)) return 2;
+        if (has(Slot::kFeet))  return 3;
+        if (has(Slot::kRing))  return 4;
+        if (has(Slot::kAmulet)) return 5;
+        if (has(Slot::kHead) || has(Slot::kHair) || has(Slot::kCirclet)) return 0;
+        return -1;
+    }
+
+    bool MageApparelBuyKey(RE::TESObjectARMO* a_armo, std::uint8_t a_top2Mask,
+                           bool a_schoolPrimary, bool a_allowVillain,
+                           int& out_tier, std::int32_t& out_metric) {
+        out_tier = 0; out_metric = 0;
+        if (!a_armo) return false;
+        if (a_armo->GetArmorRating() > 0.0f) return false;   // rated armor is kArmor -- clothing/jewelry are rating 0
+        if (!a_allowVillain && IsVillainCodedApparel(a_armo)) return false;   // no evil regalia unless the follower is a necromancer
+        const std::int32_t value = std::max<std::int32_t>(a_armo->GetGoldValue(), 0);
+
+        // VALUE-PRIMARY (MEO present + not strict): pure gold value, one flat tier.
+        if (!a_schoolPrimary) { out_tier = 0; out_metric = value; return true; }
+
+        // SCHOOL-PRIMARY (MEO absent OR strict): tier 2 = fortifies a top-2 school
+        // (ranked by score then fanciness within), tier 1 = plain (no school fortify),
+        // tier 0 = off-school enchant. So a cheap school robe beats a pricey wrong-
+        // school one, and a bare slot still fills with plain clothing.
+        static constexpr RE::ActorValue kBySchoolBit[5] = {
+            RE::ActorValue::kAlteration, RE::ActorValue::kConjuration,
+            RE::ActorValue::kDestruction, RE::ActorValue::kIllusion,
+            RE::ActorValue::kRestoration,
+        };
+        bool matched = false; int bestScore = 0; float bestMag = 0.0f;
+        for (int bit = 0; bit < 5; ++bit) {
+            if (!((a_top2Mask >> bit) & 1)) continue;
+            float mag = 0.0f;
+            const int sc = SchoolMatchScore(a_armo, kBySchoolBit[bit], &mag);
+            if (sc > 0 && (!matched || sc > bestScore || (sc == bestScore && mag > bestMag))) {
+                matched = true; bestScore = sc; bestMag = mag;
+            }
+        }
+        if (matched) {
+            out_tier = 2;
+            out_metric = value + static_cast<std::int32_t>(bestMag);
+            return true;
+        }
+        out_tier   = (ApparelFortifiedSchool(a_armo) == RE::ActorValue::kNone) ? 1 : 0;  // plain > off-school
+        out_metric = value;
+        return true;
     }
 
     float PotionLootFloor() {
@@ -4583,8 +4939,15 @@ namespace MFO::Logistics {
             // this same task or they race InventoryChanges (the Actor.cpp:445 CTD
             // class). The merchant read + transaction run in Papyrus (VM), so nothing
             // here needs main; dispatch is worker->VM, like DispatchActivate.
+            // #21 AUTO-LEARN carried spell tomes -- a mage-build follower studies any
+            // castable tome it carries (bought OR handed over by the player), on the
+            // WORKER. Independent of the economy master + the buy toggle (learning a
+            // tome you own is always desirable); gated to CASTERS so warriors don't
+            // eat tomes. One tome per tick (see LearnCarriedTomes).
+            if (HasCastGambit(a_state))
+                LearnCarriedTomes(a_follower);
             if (Config::g_economy.load() && Po3Present())
-                EconomyProbe(a_follower, a_state.logistics(), now);
+                EconomyProbe(a_follower, a_state, now);
         }
     }
 

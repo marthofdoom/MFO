@@ -146,6 +146,10 @@ namespace MFO::Config {
             else if (a_key == "bLootTravel")        setB(g_lootTravel);
             else if (a_key == "bLootInPlayerHomes") setB(g_lootInPlayerHomes);
             else if (a_key == "bEconomy")           setB(g_economy);
+            else if (a_key == "bEconomyBuyGear")    setB(g_economyBuyGear);
+            else if (a_key == "bEconomyBuyTomes")   setB(g_economyBuyTomes);
+            else if (a_key == "bMageWearRobes")     setB(g_mageWearRobes);
+            else if (a_key == "bMageApparelStrictSchool") setB(g_mageApparelStrictSchool);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
             else if (a_key == "bMagicLoadout")      setB(g_magicLoadout);
             else if (a_key == "bMageDaggersOnly")   setB(g_mageDaggersOnly);
@@ -265,6 +269,10 @@ namespace MFO::Config {
             g_lootTravel         = true;
             g_lootInPlayerHomes  = false;
             g_economy            = true;
+            g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
+            g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
+            g_mageWearRobes      = true;    // #21 mage clothing/jewelry dress-up -- ON (loot + buy)
+            g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
             g_autoRetreat        = true;
             g_magicLoadout       = true;
             g_mageDaggersOnly    = true;
@@ -318,6 +326,8 @@ namespace MFO::Config {
             { "fPlayerBubble", "256.000000" }, { "fLootRadius", "3000.000000" },
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
             { "bEconomy", "1" },               { "bAutoRetreat", "1" },
+            { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
+            { "bMageWearRobes", "1" },         { "bMageApparelStrictSchool", "0" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
             { "bBeastHeadFix", "1" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },

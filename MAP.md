@@ -650,9 +650,16 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
 - `OnFollowerRemoved` (`:4454`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
-- Economy probe (`EconomyProbe` `:3037`, worker, `Config::g_economy && Po3Present`)
-  pushes the actual merchant read to Papyrus via TradeBridge — native `GetInventory`/
-  `GetGoldAmount` CTD on merchant chests. **Do not** move the read back to native.
+- Economy probe (`EconomyProbe`, worker, `Config::g_economy && Po3Present`, now takes
+  the whole `FollowerState`) pushes the actual merchant read to Papyrus via TradeBridge
+  — native `GetInventory`/`GetGoldAmount` CTD on merchant chests. **Do not** move the
+  read back to native. `BuildBuyThresholds` (just above it) reuses the loot judge to
+  fill `TradeBridge::BuyThresholds` (weapon/armor/apparel/tome buy). `LearnCarriedTomes`
+  (worker, gated on `HasCastGambit`, called from `ServiceFollower` beside the econ
+  probe) auto-learns castable tomes a mage carries (copy of `Board.cpp`'s teach
+  primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
+  Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
+  Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
 
 ### Loadout.cpp / Loadout.h — the equip/spell-in-hand ledger (NOT serialized)
 Puts a gambit spell in a follower's hand, records displaced gear as **transient
@@ -820,6 +827,18 @@ Kind` (`TradeBridge.h:25,35`) are the wire vocabulary with Logistics. Cross-save
 safety: per-chest in-flight guard (`:250`) + `ClearTransientState`'s `g_nextToken +=
 1'000'000` jump (`:282` ← `Serialization.cpp:612`) so a resumed stale token can't name
 a fresh order.
+- **#21 BUY expansion (weapon/armor/mage-apparel + spell tomes).** `NeedCat::Kind`
+  appended `kWeaponMelee..kSpellTome` (append-only — never renumber). `ClassifyBuy`
+  and `PlanBuy` now take a `BuyThresholds` (`TradeBridge.h`) the worker fills from the
+  loot judge (`Logistics::BuildBuyThresholds`) — native stays a pure comparator (no
+  new merchant/actor reads; `follower->HasSpell` is the one tome read, on a loaded
+  actor). Gear = one best-in-category upgrade per window at ≤50 % of the remaining
+  purse; mage apparel is per-slot (head/body/hands/feet/ring/amulet, `MageClothingSlot`)
+  ranked MEO-aware (`MageApparelBuyKey`: value-primary when `MEOBridge::Available()`,
+  else school-enchant-primary) with a villain-coded blacklist + necromancer exception.
+  Bought gear is protected from re-sell by the new `keepArmor` set + the existing
+  socketed exclusion in `EconomyProbe`. Toggles: `bEconomyBuyGear`, `bEconomyBuyTomes`,
+  `bMageWearRobes`, `bMageApparelStrictSchool`.
 
 ### Diagnostics.cpp / Diagnostics.h — event sinks + THE WORKER PUMP ⚠️ RACE LINCHPIN
 Owns the one persistent sleeper thread driving the per-follower tick, four event

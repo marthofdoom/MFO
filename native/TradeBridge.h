@@ -32,9 +32,52 @@ namespace MFO::TradeBridge {
     // One buy need -- a supply category the follower is below threshold on. quota
     // is how many MORE to acquire. PlanBuy matches enumerated stock to these.
     struct NeedCat {
-        enum Kind : std::int32_t { kPotHealth = 0, kPotStamina, kPotMagicka, kArrows, kBolts };
+        // APPEND-ONLY (parallel classifier value, not serialized -- but keep the
+        // order stable so PlanBuy's switch never re-maps). kPotHealth..kBolts are
+        // the SUPPLY kinds filled by quota; kWeaponMelee..kSpellTome are the GEAR/
+        // TOME kinds ClassifyBuy tags for the single-best-upgrade passes (they do
+        // NOT ride the quota mechanism -- see PlanBuy).
+        enum Kind : std::int32_t {
+            kPotHealth = 0, kPotStamina, kPotMagicka, kArrows, kBolts,
+            kWeaponMelee, kWeaponRanged, kArmor, kMageApparel, kSpellTome
+        };
         std::int32_t kind  = 0;
         std::int32_t quota = 0;
+    };
+
+    // GEAR + TOME buy thresholds -- all computed on the WORKER (Logistics reuses
+    // its own loot judge), passed opaque to native so PlanBuy stays a pure
+    // comparator. Every field is derived from the follower's OWN inventory/skills/
+    // gambits before dispatch; native never re-derives them. Zero-value default =
+    // "feature off" (no upgrade can be worse than an empty baseline that also
+    // has its enable flag false).
+    struct BuyThresholds {
+        // -- weapon/armor (Feature A), gated by buyGear --
+        bool          buyGear      = false;
+        std::int32_t  meleeClass   = 3;      // Logistics WepClass int: 0=1H 1=2H 2=Ranged 3=Other(no melee buy)
+        std::int32_t  meleeBaseDmg = 0;      // best in-class melee weapon dmg the follower already owns
+        bool          doRanged     = false;
+        bool          wantCrossbow = false;  // meaningful only when doRanged
+        std::int32_t  rangedBaseDmg= 0;      // best owned bow/crossbow dmg
+        bool          buyArmor     = false;  // plain rated armor (NON-mage, not dolls mode)
+        std::int32_t  armorBaseRat = 0;      // best owned armor rating (floored to int)
+        bool          buyMageApparel = false;// clothing/jewelry dress-up (caster + bMageWearRobes, not dolls mode)
+        // MEO-aware ranking (marth): value-driven ONLY when MEO is present (gems
+        // transfer and supply school relevance). schoolPrimary == true (MEO absent
+        // OR bMageApparelStrictSchool) ranks by school-enchant tier first; false
+        // ranks purely by gold value. Computed on the worker (MEOBridge::Available
+        // is worker-safe).
+        bool          mageSchoolPrimary = false;
+        // Owned baseline the buy must beat, per logical slot (0=head 1=body 2=hands
+        // 3=feet 4=ring 5=amulet -- MageClothingSlot order), ranked by (tier,metric):
+        // tier 2=top-2-school enchant, 1=plain, 0=off-school enchant; metric = value
+        // (+ matching fortify magnitude for tier 2).
+        std::int32_t  mageBaseTier[6]   = {};
+        std::int32_t  mageBaseMetric[6] = {};
+        bool          isNecromancer= false;  // follower has a Reanimate cast gambit -> may buy villain-coded regalia
+        // -- spell tomes (Feature B), gated by buyTomes; also the strict-apparel top-2 set --
+        bool          buyTomes     = false;  // g_economyBuyTomes && follower is a mage w/ a cast gambit
+        std::uint8_t  eligibleSchools = 0;   // bitmask over Logistics school-bit order (top-2 skill schools)
     };
 
     // Register MFO_Trade's Papyrus natives on the VM. Wired once at plugin load
@@ -51,7 +94,7 @@ namespace MFO::TradeBridge {
     bool VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
-                     std::int32_t a_budget);
+                     std::int32_t a_budget, const BuyThresholds& a_buy = {});
 
     // Drop any pending orders (revert/quit). Token map is transient state.
     void ClearTransientState();
