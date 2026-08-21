@@ -225,6 +225,20 @@ namespace MFO::Vocab {
     inline float MagickaPct(RE::Actor* a) { return Pct(a, RE::ActorValue::kMagicka); }
     inline float StaminaPct(RE::Actor* a) { return Pct(a, RE::ActorValue::kStamina); }
 
+    // Raw current / max of a vital, for the roster H/M/S readout. Max is the SAME
+    // permanent+temporary sum Pct divides by (so the number matches the bar), never
+    // GetPermanentActorValue alone. Main-thread reads (like Pct).
+    inline float VitalCur(RE::Actor* a_actor, RE::ActorValue a_av) {
+        auto* avo = a_actor ? a_actor->AsActorValueOwner() : nullptr;
+        return avo ? avo->GetActorValue(a_av) : 0.0f;
+    }
+    inline float VitalMax(RE::Actor* a_actor, RE::ActorValue a_av) {
+        auto* avo = a_actor ? a_actor->AsActorValueOwner() : nullptr;
+        if (!avo) return 0.0f;
+        return avo->GetPermanentActorValue(a_av) +
+               a_actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, a_av);
+    }
+
     // The effective "full HP" mark for a HEAL threshold. A heal condition of
     // "HP below 100%" (param 1.0) is otherwise ALWAYS satisfiable -- HealthPct
     // asymptotes to but rarely equals exactly 1.0, so a topped-off target keeps

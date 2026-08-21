@@ -79,6 +79,16 @@ namespace MFO::Config {
                 }
                 dst.store(i != 0);
             };
+            // Unsigned/hex parse (base 0 so a 0x.. FormID string works). For the
+            // merchant-perk FormID key; keeps the default on a bad value.
+            auto setU = [&](std::atomic<std::uint32_t>& dst) {
+                try {
+                    dst.store(static_cast<std::uint32_t>(std::stoul(a_val, nullptr, 0)));
+                } catch (...) {
+                    spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
+                                 a_src, a_key, a_val);
+                }
+            };
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
             else if (a_key == "fRapportRate")       setF(g_rapportRate,       0.0f, 100.0f);
@@ -148,6 +158,9 @@ namespace MFO::Config {
             else if (a_key == "bEconomy")           setB(g_economy);
             else if (a_key == "bEconomyBuyGear")    setB(g_economyBuyGear);
             else if (a_key == "bEconomyBuyTomes")   setB(g_economyBuyTomes);
+            else if (a_key == "bSpeechPricing")     setB(g_speechPricing);
+            else if (a_key == "bMerchantPerkBypass") setB(g_merchantPerkBypass);
+            else if (a_key == "xMerchantPerkID")    setU(g_merchantPerkID);
             else if (a_key == "bMageWearRobes")     setB(g_mageWearRobes);
             else if (a_key == "bMageApparelStrictSchool") setB(g_mageApparelStrictSchool);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
@@ -271,6 +284,9 @@ namespace MFO::Config {
             g_economy            = true;
             g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
+            g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve
+            g_merchantPerkBypass = true;    // #21 merchant-perk holder sells outside the vendor filter
+            g_merchantPerkID     = 0x00058F7A;  // vanilla Merchant / Ordinator Salesman (Skyrim.esm)
             g_mageWearRobes      = true;    // #21 mage clothing/jewelry dress-up -- ON (loot + buy)
             g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
             g_autoRetreat        = true;

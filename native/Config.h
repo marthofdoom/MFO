@@ -409,6 +409,21 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_economyBuyGear{ true };
     inline std::atomic<bool>  g_economyBuyTomes{ true };
 
+    // #21 SELL-side pricing/bypass (INI-only advanced settings, NO MCM control --
+    // deliberately, to avoid toggle-linkage churn). All gated under bEconomy.
+    //   bSpeechPricing (default ON): the follower's SELL value follows the vanilla
+    //     barter curve scaled by their Speech skill (sellFraction 0.30 @ speech 0 ->
+    //     0.50 @ speech 100). OFF: sell at full instance value (the old behavior).
+    //   bMerchantPerkBypass (default ON): a follower who holds the merchant perk
+    //     (xMerchantPerkID) may sell items OUTSIDE the vendor's normal buy filter
+    //     (the vanilla Merchant/Salesman "sell anything" perk), mirroring the
+    //     player. OFF: only the vendor's VEND-filtered categories sell.
+    //   xMerchantPerkID: the "sell anything" perk FormID. Default 0x00058F7A =
+    //     vanilla Merchant (this modlist's Ordinator "Salesman"), Skyrim.esm index 00.
+    inline std::atomic<bool>          g_speechPricing{ true };
+    inline std::atomic<bool>          g_merchantPerkBypass{ true };
+    inline std::atomic<std::uint32_t> g_merchantPerkID{ 0x00058F7A };
+
     // #21 MAGE DRESS-UP toggles (govern the mage clothing/jewelry APPAREL path, in
     // BOTH loot and economy-buy). These are independent of the economy master --
     // bMageWearRobes gates looting robes too.

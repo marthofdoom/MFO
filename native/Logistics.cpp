@@ -11,6 +11,7 @@
 #include <array>          // P7: fixed-size per-slot travel-intent table
 #include <cctype>         // std::tolower: keyword-name school match (v1.0.31)
 #include <utility>        // std::pair: the school-name keyword table (v1.0.31)
+#include <string_view>    // #coinfix: editorID string match on an item's own keywords
 #include "Confidence.h"   // the confidence leash (core tenet)
 #include "Packages.h"     // Option A: LootTravelFill / LootTravelClear
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
@@ -1584,36 +1585,48 @@ namespace MFO::Logistics {
         // gold). LOAD-ORDER-AGNOSTIC via OCF (Object Categorization Framework,
         // this list's curated item classifier): OCF_MiscTreasure_Coinpurse marks
         // bags that yield gold (vanilla TGCoinpurse*, modded purses),
-        // OCF_MiscTreasure_Coin marks loose septims/coins. KID mints these
-        // keywords at runtime with no stable FormID, so they are resolved by
-        // EditorID ONCE and cached. A coin purse is a MISC object whose gold is
-        // granted by a PICKUP SCRIPT (e.g. TGCoinpurseScript) only once the
-        // PHYSICAL object reaches the player -- so MFO loots the object itself
-        // (held for the player like any valuable, delivered on trade) and NEVER
-        // value-credits it. Requiem's REQ_GoldWeightDisplayPurse carries the
-        // coinpurse keyword but is a weightless gold-weight DISPLAY proxy, not
-        // loot -- excluded by EditorID. FAIL-CLOSED: with no OCF/KID the keywords
-        // resolve null and only Gold001 is taken, exactly as before. The one-time
-        // log records which signal was available.
+        // OCF_MiscTreasure_Coin marks loose septims/coins. KID mints these keywords
+        // at runtime with no stable FormID AND no editorID->form reverse entry, so
+        // the item is matched by scanning ITS OWN keywords' editorID strings (the
+        // forward read), never a reverse LookupByEditorID<BGSKeyword> (that returned
+        // null here and missed every coin purse -- deck "coinpurse-kw=null"). A coin
+        // purse is a MISC object whose gold is granted by a PICKUP SCRIPT (e.g.
+        // TGCoinpurseScript) only once the PHYSICAL object reaches the player -- so
+        // MFO loots the object itself (held for the player like any valuable,
+        // delivered on trade) and NEVER value-credits it. Requiem's
+        // REQ_GoldWeightDisplayPurse carries the coinpurse keyword but is a
+        // weightless gold-weight DISPLAY proxy, not loot -- excluded by FormID
+        // (resolved once by editorID). FAIL-CLOSED: an item with no OCF coin keyword
+        // is not coin loot, so only hardcoded Gold001 is taken, exactly as before.
         bool IsCoinLoot(RE::TESBoundObject* a_obj) {
-            struct Kw { RE::BGSKeyword* purse; RE::BGSKeyword* coin; RE::FormID proxy; };
-            static const Kw s = [] {
-                Kw k{};
-                k.purse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("OCF_MiscTreasure_Coinpurse");
-                k.coin  = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("OCF_MiscTreasure_Coin");
+            // #coinfix: match the ITEM'S OWN keyword EDITORIDS, never a reverse
+            // LookupByEditorID<BGSKeyword> on the OCF keyword. KID mints
+            // OCF_MiscTreasure_Coinpurse/_Coin at runtime with no stable FormID and
+            // NO editorID→form reverse entry in this modlist, so the old lookup
+            // returned null and HasKeyword(null) never matched -- coin purses were
+            // missed (deck: "coinpurse-kw=null"). The FORWARD read works: it is the
+            // SAME kw->GetFormEditorID() the loot logging (KeywordCsv) already prints.
+            static const RE::FormID s_proxy = [] {
                 auto* px = RE::TESForm::LookupByEditorID("REQ_GoldWeightDisplayPurse");
-                k.proxy = px ? px->GetFormID() : 0;
-                spdlog::info("[loot] coin detection: OCF coinpurse-kw={}, coin-kw={} (both null => "
-                             "OCF/KID absent, only Gold001 is looted)",
-                             k.purse ? "found" : "null", k.coin ? "found" : "null");
-                return k;
+                const RE::FormID id = px ? px->GetFormID() : 0;
+                spdlog::info("[loot] coin detection: editorID-scan active (item keywords "
+                             "matched against OCF_MiscTreasure_Coinpurse / _Coin); "
+                             "Requiem display proxy {}", id ? "excluded" : "absent");
+                return id;
             }();
             if (!a_obj) return false;
-            if (s.proxy && a_obj->GetFormID() == s.proxy) return false;   // Requiem display proxy, not loot
+            if (s_proxy && a_obj->GetFormID() == s_proxy) return false;   // Requiem display proxy, not loot
             auto* kwf = a_obj->As<RE::BGSKeywordForm>();
-            if (!kwf) return false;
-            return (s.purse && kwf->HasKeyword(s.purse)) ||
-                   (s.coin  && kwf->HasKeyword(s.coin));
+            if (!kwf || !kwf->keywords) return false;
+            for (std::uint32_t i = 0; i < kwf->numKeywords; ++i) {
+                const auto* kw = kwf->keywords[i];
+                const char* ed = kw ? kw->GetFormEditorID() : nullptr;   // same forward reader as KeywordCsv
+                if (!ed) continue;
+                if (std::string_view(ed) == "OCF_MiscTreasure_Coinpurse" ||   // gold bag
+                    std::string_view(ed) == "OCF_MiscTreasure_Coin")          // loose coins
+                    return true;
+            }
+            return false;
         }
 
         // Take all the gold on a corpse/container. Gold001 is the one hardcoded
@@ -3487,6 +3500,37 @@ namespace MFO::Logistics {
             // every candidate vendor this scan and passed opaque to PlanBuy.
             const TradeBridge::BuyThresholds buy = BuildBuyThresholds(a_follower, a_state);
 
+            // #21 SELL-side per-follower params (same for every candidate vendor):
+            //  (a) MERCHANT-PERK BYPASS -- a follower holding the "sell anything" perk
+            //      (vanilla Merchant / Ordinator Salesman) sells outside the vendor's
+            //      buy filter, like the player. Followers hold perks on the base TESNPC,
+            //      so HasPerk under-reports -- dual-check GetActorBase()->GetPerkIndex
+            //      too (the OwnsExactPerk idiom, ProgAllocator.cpp:506).
+            bool sellAnything = false;
+            if (Config::g_merchantPerkBypass.load()) {
+                if (auto* perk = RE::TESForm::LookupByID<RE::BGSPerk>(Config::g_merchantPerkID.load())) {
+                    auto* base = a_follower->GetActorBase();
+                    sellAnything = (base && base->GetPerkIndex(perk).has_value()) ||
+                                   a_follower->HasPerk(perk);
+                }
+            }
+            //  (b) SPEECH-SCALED SELL PRICE -- the vanilla barter curve keyed on the
+            //      follower's Speech skill. fBarterMax/fBarterMin are the GMSTs
+            //      (hardcoded to their vanilla defaults 3.3 / 2.0; changing the GMST is
+            //      out of scope). sellFraction: 0.30 @ speech 0 -> 0.50 @ speech 100.
+            //      NOTE: the follower's own kModSellPrices PERK boosts (Haggling/
+            //      Salesman ranks) are NOT applied -- see the report; that needs a
+            //      CI-verified EPFD read this offline build can't confirm.
+            double sellFraction = 1.0;
+            if (Config::g_speechPricing.load()) {
+                constexpr float kBarterMax = 3.3f, kBarterMin = 2.0f;   // GMST fBarterMax / fBarterMin
+                auto* avo = a_follower->AsActorValueOwner();
+                const float speech = avo
+                    ? std::clamp(avo->GetActorValue(RE::ActorValue::kSpeech), 0.0f, 100.0f) : 0.0f;
+                const float priceFactor = kBarterMax - (kBarterMax - kBarterMin) * speech / 100.0f;
+                if (priceFactor > 0.0f) sellFraction = 1.0 / static_cast<double>(priceFactor);
+            }
+
             for (auto& h : living) {
                 auto  ptr    = h.get();
                 auto* vendor = ptr.get();
@@ -3560,31 +3604,73 @@ namespace MFO::Logistics {
                     for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
                 }
 
-                // #21 KEEP-ARMOR: protect the BEST owned piece per slot mask from
-                // being sold, so a just-BOUGHT armor / clothing / jewelry upgrade is
-                // not re-sold as junk next scan (keepWeapons already does this for
-                // weapons). Best = highest armor rating, then gold value -- so rating-0
-                // clothing/jewelry is kept by VALUE (the pricey robe/amulet a mage
-                // bought). Gated on gear-buy so a non-buyer's sell behaviour is byte-
-                // identical to before. (A caster's bought clothing is NOT auto-equipped
-                // -- see the report on equipping bought apparel -- this keeps it owned.)
+                // #21 KEEP-ARMOR: protect what the follower WEARS + its single best
+                // next-upgrade PER LOGICAL SLOT from being sold, so a just-BOUGHT
+                // upgrade is not re-sold as junk (keepWeapons does this for weapons) --
+                // but EVERYTHING ELSE (extra/old clothing, spare armor) stays sellable.
+                // BUG FIXED: the old version bucketed by the RAW GetSlotMask() bitmask,
+                // so two same-logical-slot robes with different modded slot-bit combos
+                // (plain robe = body; "Blue Mage Robes" = head+body) each survived as
+                // "best in its own bucket" -> a mage kept ALL his clothing and sold
+                // none. Now: bucket by LOGICAL slot (MageClothingSlot for clothing/
+                // jewelry, primary biped slot for rated armor), keep ONE best per slot,
+                // ranked to MATCH what EquipBestOwnedGear would actually wear.
                 std::unordered_set<RE::TESBoundObject*> keepArmor;
                 if (Config::g_economyBuyGear.load()) {
-                    std::unordered_map<std::uint32_t, std::tuple<RE::TESBoundObject*, float, int>> bestA;
+                    using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+                    const bool caster         = IsCasterFollower(a_state);
+                    const bool useMageApparel = caster && Config::g_mageWearRobes.load() &&
+                                                !Config::g_dollsMode.load();
+                    const std::uint8_t top2   = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
+                    const bool schoolPrimary  = !MEOBridge::Available() ||
+                                                Config::g_mageApparelStrictSchool.load();
+                    const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
+
+                    // (a) Always keep what is WORN, regardless of the bucket math (the
+                    //     sell loop's IsWorn gate already bars worn gear; this is belt-
+                    //     and-suspenders and also pins the jewelry logical slots).
+                    for (int ls = 0; ls < 6; ++ls)
+                        if (auto* w = WornInLogicalSlot(a_follower, ls)) keepArmor.insert(w);
+                    for (auto sl : { Slot::kShield, Slot::kForearms, Slot::kCalves })
+                        if (auto* w = a_follower->GetWornArmor(sl)) keepArmor.insert(w);
+
+                    // (b) The single best NEXT-UPGRADE per LOGICAL slot.
+                    auto armorLogicalSlot = [](std::uint32_t mask) -> int {
+                        if (mask & static_cast<std::uint32_t>(Slot::kBody))   return 1;
+                        if (mask & static_cast<std::uint32_t>(Slot::kHead))   return 0;
+                        if (mask & static_cast<std::uint32_t>(Slot::kHands))  return 2;
+                        if (mask & static_cast<std::uint32_t>(Slot::kFeet))   return 3;
+                        if (mask & static_cast<std::uint32_t>(Slot::kShield)) return 4;
+                        return -1;
+                    };
+                    struct Best { RE::TESBoundObject* obj = nullptr; float primary = -1e9f; float secondary = -1e9f; };
+                    std::unordered_map<int, Best> best;   // key: clothing 0..5, rated armor 10..14
                     for (auto& [obj, data] : a_follower->GetInventory()) {
                         if (!obj || data.first <= 0) continue;
                         auto* ar = obj->As<RE::TESObjectARMO>();
                         if (!ar) continue;
-                        const auto mask = static_cast<std::uint32_t>(ar->GetSlotMask());
-                        if (mask == 0) continue;
-                        const float rat = ar->GetArmorRating();
-                        const int   val = std::max<std::int32_t>(ar->GetGoldValue(), 0);
-                        auto it = bestA.find(mask);
-                        if (it == bestA.end() || rat > std::get<1>(it->second) ||
-                            (rat == std::get<1>(it->second) && val > std::get<2>(it->second)))
-                            bestA[mask] = { obj, rat, val };
+                        int key = -1; float primary = 0.0f, secondary = 0.0f;
+                        if (ar->GetArmorRating() > 0.0f) {                       // rated armor: rating then value
+                            const int ls = armorLogicalSlot(static_cast<std::uint32_t>(ar->GetSlotMask()));
+                            if (ls < 0) continue;
+                            key = 10 + ls;
+                            primary   = ar->GetArmorRating();
+                            secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
+                        } else if (useMageApparel) {                            // clothing/jewelry: same judge as loot/buy
+                            const int cs = MageClothingSlot(ar);
+                            if (cs < 0) continue;
+                            int t = 0; std::int32_t m = 0;
+                            if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) continue;
+                            key = cs; primary = static_cast<float>(t); secondary = static_cast<float>(m);
+                        } else {
+                            continue;   // a non-mage's clothing/jewelry is sellable junk (nothing wears it)
+                        }
+                        auto& b = best[key];
+                        if (!b.obj || primary > b.primary ||
+                            (primary == b.primary && secondary > b.secondary))
+                            b = { obj, primary, secondary };
                     }
-                    for (auto& [m, t] : bestA) if (std::get<0>(t)) keepArmor.insert(std::get<0>(t));
+                    for (auto& [k, b] : best) if (b.obj) keepArmor.insert(b.obj);
                 }
 
                 std::vector<TradeBridge::SellRow> sell;
@@ -3619,10 +3705,14 @@ namespace MFO::Logistics {
                     if (entry && entry->IsWorn())                continue;   // never sell worn gear
                     if (socketed(entry))                         continue;   // MEO-gemmed -> never sell (gems ride the item)
                     if (Catalog::IsExcluded(obj->GetFormID()))   continue;
-                    if (!VendorTrades(vend, vv.notBuySell, kwf)) continue;
+                    // #21 merchant-perk bypass: a "sell anything" follower ignores the
+                    // vendor's VEND filter (like the player); otherwise the filter holds.
+                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) continue;
+                    // #21 speech-scaled sell price (base instance value * sellFraction).
+                    const std::int32_t baseVal = entry ? entry->GetValue() : 0;
                     sell.push_back(TradeBridge::SellRow{
                         obj, static_cast<std::int32_t>(data.first),
-                        entry ? entry->GetValue() : 0,
+                        static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
                         armo && IsJewelryPiece(armo) });
                 }
                 // Highest-value first: the vendor's barter gold is limited (field log:

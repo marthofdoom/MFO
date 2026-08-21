@@ -788,6 +788,14 @@ main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not re
   misses init → `g_ready` never set → overlay silently disabled. Writes a 256-byte
   trampoline with 3 game-version-keyed `RelocationID`/offset pairs (`Board.cpp:3271`)
   — a bad offset corrupts the call site.
+- **Snapshot carries all actor-derived display data** (render thread reads plain
+  cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
+  pct **and** raw `health/magicka/staminaCur/Max` (Followers tab, `Vocab::VitalCur/
+  VitalMax`), and `knownSpells`/`teachableSpells` are `SpellPick`/`Teachable` structs
+  carrying precomputed `magickaCost` (`spell->CalculateMagickaCost(follower)`, actor
+  overload) + a synthesized `tooltip` (`SpellTooltip`, effect name+mag/dur/area) —
+  all filled in `PublishSnapshot` (main). The gambit spell-picker renders the hover
+  tooltip via `DrawSpellHoverTooltip` from those cached values.
 - **Thread discipline:** `DXGIPresentHook` (render thread) copies `g_snapshot` under
   `g_snapMx` **before** taking `g_ioMx` (`:2596`); reversing = render-thread deadlock.
   The two mutexes are never nested (#6). Draw functions **never touch `g_followers`**
@@ -858,9 +866,18 @@ a fresh order.
   purse; mage apparel is per-slot (head/body/hands/feet/ring/amulet, `MageClothingSlot`)
   ranked MEO-aware (`MageApparelBuyKey`: value-primary when `MEOBridge::Available()`,
   else school-enchant-primary) with a villain-coded blacklist + necromancer exception.
-  Bought gear is protected from re-sell by the new `keepArmor` set + the existing
-  socketed exclusion in `EconomyProbe`. Toggles: `bEconomyBuyGear`, `bEconomyBuyTomes`,
-  `bMageWearRobes`, `bMageApparelStrictSchool`.
+  Bought gear is protected from re-sell by the `keepArmor` set (buckets by LOGICAL
+  slot — `MageClothingSlot` for clothing/jewelry, primary biped slot for rated armor
+  — keeping worn + one best-per-slot upgrade; NOT the raw bitmask, which let varied
+  modded robes each survive) + the existing socketed exclusion in `EconomyProbe`.
+  Toggles: `bEconomyBuyGear`, `bEconomyBuyTomes`, `bMageWearRobes`, `bMageApparelStrictSchool`.
+- **#21 SELL bypass + pricing** (`EconomyProbe`, INI-only, no MCM). `bMerchantPerkBypass`
+  + `xMerchantPerkID` (0x00058F7A): a follower holding the merchant perk (dual-check
+  `GetActorBase()->GetPerkIndex` + `HasPerk`, the `OwnsExactPerk` idiom) sells past the
+  vendor's VEND filter. `bSpeechPricing`: `SellRow.value = lround(baseValue *
+  sellFraction)`, `sellFraction = 1/(fBarterMax-(fBarterMax-fBarterMin)*speech/100)`
+  (0.30→0.50 over Speech 0→100). BUY stays base value. (Per-perk `kModSellPrices`
+  boosts are NOT applied — needs a CI-verified EPFD read; flagged.)
 
 ### Diagnostics.cpp / Diagnostics.h — event sinks + THE WORKER PUMP ⚠️ RACE LINCHPIN
 Owns the one persistent sleeper thread driving the per-follower tick, four event
