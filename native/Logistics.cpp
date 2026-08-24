@@ -3680,19 +3680,19 @@ namespace MFO::Logistics {
                 std::vector<TradeBridge::SellRow> sell;
                 int purse = 0;
                 // A MEO-socketed instance carries an ExtraUniqueID -- NEVER sell one:
-                // the sale discards the follower's socketed gems with the weapon
-                // (marth). Worn gear is already barred below; this catches an UNWORN
-                // gemmed weapon the loadout keep-set didn't protect. Conservative --
-                // a bare uid (socket later emptied) also stays, which is the safe
-                // direction (keep a weapon vs lose gems). Same extraList/ExtraUniqueID
-                // read MEOBridge::WornUid uses, worker-safe against a loaded follower.
-                auto socketed = [](RE::InventoryEntryData* e) {
-                    if (!e || !e->extraLists) return false;
-                    for (auto* xl : *e->extraLists)
-                        if (auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
-                            uid && uid->uniqueID != 0) return true;
-                    return false;
-                };
+                // NOTE: no bare-ExtraUniqueID "socketed" block here (removed). It
+                // over-fired: in a modded list (Tuxborn) nearly every instance carries
+                // a uid -- MEO tags socketable items even when EMPTY, the game tags
+                // instances, and an item KEEPS its uid after MEO moves gems out on
+                // upgrade -- so plain spares ('Iron Dagger', 'Novice Robes', spare
+                // rings) read as "socketed" and a follower sold nothing (deck [sell]
+                // diag). The follower's real gem investment is in WORN / best-per-slot
+                // gear, already protected by the worn (entry->IsWorn) + keepWeapons/
+                // keepArmor checks. Gems on an UNWORN spare can't be cheaply detected
+                // on the worker (MEO's GetActorGems reports WORN gems only, already
+                // excluded), so a bare-uid block is both incorrect and redundant.
+                // Proper gem-aware selling (extract gem -> sell ungemmed item) is a
+                // separate queued feature.
                 // ── [sell] EXCLUSION DIAGNOSTIC (TEMPORARY; rate-limited per follower
                 // ~45s) -- pins WHY a follower's unworn junk isn't selling (marth:
                 // Lucien sell n=0). Records the FIRST matching drop reason in the
@@ -3739,8 +3739,7 @@ namespace MFO::Logistics {
                     if (IsStockGear(fid, obj->GetFormID())) { note("stock", true); continue; }   // #69 own signature gear
                     if (weap && keepWeapons.count(obj))     { note("keepWeap", true); continue; }
                     if (armo && keepArmor.count(obj))       { note("keepArmor", true); continue; }
-                    if (entry && entry->IsWorn())           { note("worn", true); continue; }
-                    if (socketed(entry))                    { note("socketed", true); continue; }   // MEO-gemmed
+                    if (entry && entry->IsWorn())           { note("worn", true); continue; }   // worn gem investment stays protected
                     if (Catalog::IsExcluded(obj->GetFormID())) { note("excluded", true); continue; }  // #3 artifacts/quest -- never sell
                     // #21 merchant-perk bypass: a "sell anything" follower ignores the
                     // vendor's VEND filter (like the player); otherwise the filter holds.

@@ -222,7 +222,7 @@ namespace MFO::Config {
 
         void ResetToDefaults() {
             g_allowSummons      = false;
-            g_rapportRate       = 1.0f;
+            g_rapportRate       = 2.0f;   // default doubled (marth)
             g_rapportKill       = 1.0f;
             g_rapportBossMult   = 5.0f;
             g_rapportDragonMult = 10.0f;
@@ -323,7 +323,7 @@ namespace MFO::Config {
     // place a new toggle is wired (atomic, parse+reset, both inis, config.json).
     void EnsureMcmDefaults() {
         static constexpr std::pair<const char*, const char*> kMcmDefaults[] = {
-            { "fRapportRate", "1.000000" },   { "fRapportKill", "1.000000" },
+            { "fRapportRate", "2.000000" },   { "fRapportKill", "1.000000" },
             { "fRapportBossMult", "5.000000" }, { "fRapportDragonMult", "10.000000" },
             { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
             { "bEquipToCast", "1" },

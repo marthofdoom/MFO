@@ -26,7 +26,7 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_allowSummons{ false };
 
     // -- rapport (BALANCE.md §5) --------------------------------------------
-    inline std::atomic<float> g_rapportRate{ 1.0f };
+    inline std::atomic<float> g_rapportRate{ 2.0f };   // master rapport multiplier -- default doubled (marth)
     inline std::atomic<float> g_rapportKill{ 1.0f };
     inline std::atomic<float> g_rapportBossMult{ 5.0f };
     inline std::atomic<float> g_rapportDragonMult{ 10.0f };
