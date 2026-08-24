@@ -511,6 +511,7 @@ namespace MFO::Logistics {
                 if (!armo) continue;
                 if (rendersOn(armo, race)) continue;                        // draws on his race -> keep
                 if (pluginKey(armo->GetFormID()) == actorKey) continue;     // his OWN plugin -> intentional (#64)
+                if (Catalog::IsExcluded(armo->GetFormID())) continue;       // #3 artifact/quest -- NEVER hand off (a follower may wear it; keep it on him even if it doesn't render)
                 if (isNonPlayable(armo))
                     hits.push_back({ armo, data.first, true,  "NON-PLAYABLE creature armor" });   // DELETE, any slot
                 else if (!isJewelrySlot(armo))
@@ -3330,7 +3331,10 @@ namespace MFO::Logistics {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || IsCreatureArmor(ar)) continue;
-                    if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                    // #3 NO IsExcluded skip here: a follower MAY wear an artifact it
+                    // already owns (a legit upgrade) -- equip stays permissive, matching
+                    // the mage-clothing branch above. Looting/selling/shedding an
+                    // artifact is still barred by IsExcluded on those paths.
                     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
                     if ((static_cast<std::uint32_t>(ar->GetSlotMask()) &
                          static_cast<std::uint32_t>(Slot::kShield)) != 0) continue;   // shields: leave to the loot role logic
@@ -3689,31 +3693,81 @@ namespace MFO::Logistics {
                             uid && uid->uniqueID != 0) return true;
                     return false;
                 };
+                // ── [sell] EXCLUSION DIAGNOSTIC (TEMPORARY; rate-limited per follower
+                // ~45s) -- pins WHY a follower's unworn junk isn't selling (marth:
+                // Lucien sell n=0). Records the FIRST matching drop reason in the
+                // loop's own order + the vendor's clothing-buy capability. All reads
+                // already happen on this worker tick.
+                static std::unordered_map<RE::FormID, Clock::time_point> s_sellDiag;
+                bool logDue = false;
+                if (auto& nx = s_sellDiag[fid]; nx.time_since_epoch().count() == 0 || a_now >= nx) {
+                    nx = a_now + std::chrono::seconds(45);
+                    logDue = true;
+                }
+                int dN = 0, dKept = 0, dSold = 0, dDropped = 0;
+                struct Drop { RE::FormID id; const char* name; const char* why; bool cloKw; bool wpnKw; };
+                std::vector<Drop> drops;
+                // Item carries a keyword whose editorID == ed (forward read, the coin-
+                // fix idiom -- KID-minted VendorItem* have no reverse lookup).
+                auto itemHasKwEd = [](RE::BGSKeywordForm* k, std::string_view ed) {
+                    if (!k || !k->keywords) return false;
+                    for (std::uint32_t i = 0; i < k->numKeywords; ++i)
+                        if (const char* e = k->keywords[i] ? k->keywords[i]->GetFormEditorID() : nullptr;
+                            e && ed == e) return true;
+                    return false;
+                };
+
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
-                    if (IsStockGear(fid, obj->GetFormID())) continue;   // #69: never sell the follower's OWN stock/signature gear (a spare weapon / unworn own armor)
-                    if (weap && keepWeapons.count(obj)) continue;   // loadout weapon, not junk
-                    if (armo && keepArmor.count(obj))   continue;   // #21 best-in-slot armor/clothing/jewelry -- keep (don't re-sell a bought upgrade)
+                    ++dN;
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
-                    if (entry && entry->IsWorn())                continue;   // never sell worn gear
-                    if (socketed(entry))                         continue;   // MEO-gemmed -> never sell (gems ride the item)
-                    if (Catalog::IsExcluded(obj->GetFormID()))   continue;
+                    // Record the FIRST matching exclusion (kept=protection, else dropped).
+                    auto note = [&](const char* why, bool kept) {
+                        if (kept) ++dKept; else ++dDropped;
+                        if (logDue && drops.size() < 15)
+                            drops.push_back({ obj->GetFormID(), obj->GetName() ? obj->GetName() : "?",
+                                              why, itemHasKwEd(kwf, "VendorItemClothing"),
+                                              itemHasKwEd(kwf, "VendorItemWeapon") });
+                    };
+                    if (IsStockGear(fid, obj->GetFormID())) { note("stock", true); continue; }   // #69 own signature gear
+                    if (weap && keepWeapons.count(obj))     { note("keepWeap", true); continue; }
+                    if (armo && keepArmor.count(obj))       { note("keepArmor", true); continue; }
+                    if (entry && entry->IsWorn())           { note("worn", true); continue; }
+                    if (socketed(entry))                    { note("socketed", true); continue; }   // MEO-gemmed
+                    if (Catalog::IsExcluded(obj->GetFormID())) { note("excluded", true); continue; }  // #3 artifacts/quest -- never sell
                     // #21 merchant-perk bypass: a "sell anything" follower ignores the
                     // vendor's VEND filter (like the player); otherwise the filter holds.
-                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) continue;
+                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) { note("vendor-filter", false); continue; }
                     // #21 speech-scaled sell price (base instance value * sellFraction).
+                    ++dSold;
                     const std::int32_t baseVal = entry ? entry->GetValue() : 0;
                     sell.push_back(TradeBridge::SellRow{
                         obj, static_cast<std::int32_t>(data.first),
                         static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
                         armo && IsJewelryPiece(armo) });
+                }
+
+                if (logDue) {
+                    bool vendBuysClothing = false;
+                    if (vend)
+                        for (auto* f : vend->forms)
+                            if (const char* e = f ? f->GetFormEditorID() : nullptr;
+                                e && std::string_view(e) == "VendorItemClothing") { vendBuysClothing = true; break; }
+                    spdlog::info("[sell] {:08X} '{}' @ '{}': {} weap/armo in pack -> kept {} / sold {} / dropped {}",
+                                 fid, a_follower->GetName() ? a_follower->GetName() : "?",
+                                 vendor->GetName() ? vendor->GetName() : "?", dN, dKept, dSold, dDropped);
+                    spdlog::info("[sell]   vendor VEND: notBuySell={}, list size={}, buysClothing={}",
+                                 vv.notBuySell, vend ? static_cast<int>(vend->forms.size()) : -1, vendBuysClothing);
+                    for (const auto& d : drops)
+                        spdlog::info("[sell]   {:08X} '{}' -> {} (itemClothingKw={} itemWeaponKw={})",
+                                     d.id, d.name, d.why, d.cloKw, d.wpnKw);
                 }
                 // Highest-value first: the vendor's barter gold is limited (field log:
                 // sale total often > vendor gold), so sell the most valuable junk first
