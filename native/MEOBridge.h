@@ -1,5 +1,6 @@
 #pragma once
 #include <RE/Skyrim.h>
+#include "MEO_API.h"   // MEO_API::GemInfo for the CarriedGems wrapper (Build A)
 
 // MEO integration (task #17). MEO's SKSE C++ API (MEO_API.h / IMEO) lets MFO
 // carry a follower's socketed enchant gems onto looted gear when they upgrade,
@@ -41,6 +42,30 @@ namespace MFO::MEOBridge {
     // extras are stable across the tick; it only reads, mirroring MEO's own
     // FindInstanceXList walk. Returns 0 on any miss.
     std::uint16_t WornUid(RE::Actor* a_actor, RE::TESBoundObject* a_base);
+
+    // ── Build A: ACCURATE carried-gem sell-skip (MEO ABI v2) ─────────────────
+    // The economy sell path must skip only items that ACTUALLY carry a socketed
+    // gem (not any bare-uid instance -- that over-block sold nothing in Tuxborn).
+    // GetActorGemsCarried scans the WHOLE inventory (worn OR carried) for socketed
+    // gems. It is MAIN-THREAD only, so the worker reads a per-follower cache that
+    // the main thread refreshes.
+
+    // Raw wrapper over IMEO::GetActorGemsCarried. MAIN-THREAD ONLY. Returns 0 (no
+    // gems written) when MEO is absent or its Version() < 2.
+    std::uint32_t CarriedGems(RE::Actor* a_actor, MEO_API::GemInfo* a_out, std::uint32_t a_max);
+
+    // Rebuild a_actor's carried-gemmed (base,uid) cache from CarriedGems.
+    // MAIN-THREAD ONLY (calls the query). Stores an empty set when MEO < v2.
+    void RefreshCarriedGems(RE::Actor* a_actor);
+
+    // Worker-callable: schedule a MAIN-THREAD RefreshCarriedGems for a_follower so
+    // the cache is warm for the NEXT scan (one-scan-stale is fine -- gem state
+    // changes rarely). No-op when MEO < v2 (cache stays empty -> no skip).
+    void RequestCarriedGemRefresh(RE::Actor* a_follower);
+
+    // Worker-callable READ: is the item instance (a_base, a_uid) a gem-carrying
+    // item in a_follower's cache? False for uid 0 / empty cache / MEO < v2.
+    bool IsCarriedGemmed(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);
 
     // ── gem-simulated comparison (MAIN THREAD ONLY) ─────────────────────────
     // "See the compared stats WITH the follower's current gems socketed into a

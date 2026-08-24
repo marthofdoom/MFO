@@ -3504,6 +3504,11 @@ namespace MFO::Logistics {
             // every candidate vendor this scan and passed opaque to PlanBuy.
             const TradeBridge::BuyThresholds buy = BuildBuyThresholds(a_follower, a_state);
 
+            // Build A: warm the follower's carried-gem cache on the MAIN thread for
+            // the NEXT scan (GetActorGemsCarried is main-thread only; the sell loop
+            // below READS the cache, one-scan-stale). No-op when MEO < ABI v2.
+            MEOBridge::RequestCarriedGemRefresh(a_follower);
+
             // #21 SELL-side per-follower params (same for every candidate vendor):
             //  (a) MERCHANT-PERK BYPASS -- a follower holding the "sell anything" perk
             //      (vanilla Merchant / Ordinator Salesman) sells outside the vendor's
@@ -3679,20 +3684,24 @@ namespace MFO::Logistics {
 
                 std::vector<TradeBridge::SellRow> sell;
                 int purse = 0;
-                // A MEO-socketed instance carries an ExtraUniqueID -- NEVER sell one:
-                // NOTE: no bare-ExtraUniqueID "socketed" block here (removed). It
-                // over-fired: in a modded list (Tuxborn) nearly every instance carries
-                // a uid -- MEO tags socketable items even when EMPTY, the game tags
-                // instances, and an item KEEPS its uid after MEO moves gems out on
-                // upgrade -- so plain spares ('Iron Dagger', 'Novice Robes', spare
-                // rings) read as "socketed" and a follower sold nothing (deck [sell]
-                // diag). The follower's real gem investment is in WORN / best-per-slot
-                // gear, already protected by the worn (entry->IsWorn) + keepWeapons/
-                // keepArmor checks. Gems on an UNWORN spare can't be cheaply detected
-                // on the worker (MEO's GetActorGems reports WORN gems only, already
-                // excluded), so a bare-uid block is both incorrect and redundant.
-                // Proper gem-aware selling (extract gem -> sell ungemmed item) is a
-                // separate queued feature.
+                // Build A -- ACCURATE gem-skip: never sell an item that ACTUALLY
+                // carries a socketed gem. The old bare-ExtraUniqueID block over-fired
+                // (Tuxborn tags nearly every instance with a uid even when EMPTY -> a
+                // follower sold nothing). MEO ABI v2's GetActorGemsCarried scans the
+                // WHOLE inventory for real socketed gems; the (base,uid) set is cached
+                // per follower (main-thread refresh above), and the loop skips an item
+                // only when its instance uid is in that set. Read the item's own uid
+                // here (the same ExtraUniqueID read the old block used). MEO < v2 or
+                // absent -> cache empty -> nothing skipped here (worn gems stay safe
+                // via the worn + keepWeapons/keepArmor checks; unworn spares are the
+                // only gap, an accepted edge for old-MEO users).
+                auto itemUid = [](RE::InventoryEntryData* e) -> std::uint16_t {
+                    if (!e || !e->extraLists) return 0;
+                    for (auto* xl : *e->extraLists)
+                        if (auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
+                            uid && uid->uniqueID != 0) return uid->uniqueID;
+                    return 0;
+                };
                 // ── [sell] EXCLUSION DIAGNOSTIC (TEMPORARY; rate-limited per follower
                 // ~45s) -- pins WHY a follower's unworn junk isn't selling (marth:
                 // Lucien sell n=0). Records the FIRST matching drop reason in the
@@ -3740,6 +3749,9 @@ namespace MFO::Logistics {
                     if (weap && keepWeapons.count(obj))     { note("keepWeap", true); continue; }
                     if (armo && keepArmor.count(obj))       { note("keepArmor", true); continue; }
                     if (entry && entry->IsWorn())           { note("worn", true); continue; }   // worn gem investment stays protected
+                    if (const std::uint16_t uid = itemUid(entry);                                   // Build A accurate gem-skip (MEO v2)
+                        uid != 0 && MEOBridge::IsCarriedGemmed(fid, obj->GetFormID(), uid))
+                                                            { note("gemmed", true); continue; }
                     if (Catalog::IsExcluded(obj->GetFormID())) { note("excluded", true); continue; }  // #3 artifacts/quest -- never sell
                     // #21 merchant-perk bypass: a "sell anything" follower ignores the
                     // vendor's VEND filter (like the player); otherwise the filter holds.

@@ -1,8 +1,10 @@
 #include "MEOBridge.h"
 #include "MEO_API.h"
+#include "MainThread.h"   // Build A: main-thread refresh of the carried-gem cache
 
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <spdlog/spdlog.h>
 
@@ -17,6 +19,15 @@ namespace MFO::MEOBridge {
 
         std::uint64_t Key(RE::FormID a_follower, RE::FormID a_toBase) {
             return (static_cast<std::uint64_t>(a_follower) << 32) | a_toBase;
+        }
+
+        // Build A: per-follower carried-gemmed item cache. followerID -> set of
+        // (base<<16 | uid). Written by RefreshCarriedGems (MAIN thread), read by
+        // IsCarriedGemmed (worker); both under g_mx. Cleared in ClearTransientState.
+        std::unordered_map<RE::FormID, std::unordered_set<std::uint64_t>> g_carriedGems;
+
+        std::uint64_t GemKey(RE::FormID a_base, std::uint16_t a_uid) {
+            return (static_cast<std::uint64_t>(a_base) << 16) | a_uid;
         }
 
         bool IsWornXList(RE::ExtraDataList* a_xl) {
@@ -89,6 +100,42 @@ namespace MFO::MEOBridge {
         return 0;
     }
 
+    // ── Build A: accurate carried-gem sell-skip (ABI v2) ─────────────────────
+    std::uint32_t CarriedGems(RE::Actor* a_actor, MEO_API::GemInfo* a_out, std::uint32_t a_max) {
+        if (!g_meo || g_meo->Version() < 2 || !a_actor || !a_out || a_max == 0) return 0;
+        return g_meo->GetActorGemsCarried(a_actor, a_out, a_max);   // MAIN-THREAD ONLY
+    }
+
+    void RefreshCarriedGems(RE::Actor* a_actor) {
+        if (!a_actor) return;
+        const RE::FormID fid = a_actor->GetFormID();
+        std::unordered_set<std::uint64_t> set;
+        constexpr std::uint32_t kMax = 64;
+        MEO_API::GemInfo gems[kMax];
+        const std::uint32_t n = std::min(CarriedGems(a_actor, gems, kMax), kMax);   // 0 if MEO < v2
+        for (std::uint32_t i = 0; i < n; ++i)
+            if (gems[i].itemBase != 0 && gems[i].itemUid != 0)
+                set.insert(GemKey(gems[i].itemBase, gems[i].itemUid));
+        std::scoped_lock lk(g_mx);
+        g_carriedGems[fid] = std::move(set);   // replace (empty set -> nothing skipped)
+    }
+
+    void RequestCarriedGemRefresh(RE::Actor* a_follower) {
+        if (!a_follower || !g_meo || g_meo->Version() < 2) return;   // no v2 -> leave cache empty (correct degrade)
+        if (!MainThread::IsInstalled()) { RefreshCarriedGems(a_follower); return; }   // VR: no pump, run direct
+        const RE::FormID fid = a_follower->GetFormID();
+        MainThread::Post([fid]() {
+            if (auto* a = RE::TESForm::LookupByID<RE::Actor>(fid)) RefreshCarriedGems(a);
+        });
+    }
+
+    bool IsCarriedGemmed(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
+        if (a_uid == 0 || a_base == 0) return false;
+        std::scoped_lock lk(g_mx);
+        auto it = g_carriedGems.find(a_followerID);
+        return it != g_carriedGems.end() && it->second.contains(GemKey(a_base, a_uid));
+    }
+
     void QueueGemMove(RE::Actor* a_follower, RE::FormID a_fromBase, std::uint16_t a_fromUid,
                       RE::FormID a_toBase) {
         // No source gems (uid 0), no MEO, or malformed -> nothing to carry over.
@@ -100,6 +147,7 @@ namespace MFO::MEOBridge {
     void ClearTransientState() {
         std::scoped_lock lk(g_mx);
         g_pending.clear();
+        g_carriedGems.clear();   // Build A: per-follower carried-gem cache is session-scoped
     }
 
     GemPreview PreviewWithGems(RE::Actor* a_actor, RE::TESBoundObject* a_candidateBase) {
