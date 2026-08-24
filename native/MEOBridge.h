@@ -80,6 +80,20 @@ namespace MFO::MEOBridge {
     // gem-skip at all (worn + keepWeapons/keepArmor still protect worn gems).
     bool CarriedGemsSupported();
 
+    // Worker-callable: does MEO support UNSOCKETING (ABI >= 3)? When true the sell
+    // path UNGEMS-THEN-SELLS: it extracts a gemmed junk item's gems to the follower's
+    // own inventory (UnsocketItemGems), so the item sells ungemmed on a later scan
+    // while the loose gem is kept. When false (v2 only) it falls back to protect-and-
+    // skip (detection without extraction).
+    bool CarriedGemUnsocketSupported();
+
+    // Worker-callable: queue UnsocketGem for EVERY filled gem slot of the follower's
+    // carried item (a_base,a_uid) -> returns the gems to the follower's OWN inventory
+    // (banked XP intact). No-op if MEO < v3, the item isn't in the gem cache, or an
+    // extract for it is already pending (de-duped so an async unsocket isn't
+    // re-queued each scan). Any-thread (UnsocketGem queues to the main thread).
+    void UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid);
+
     // ── gem-simulated comparison (MAIN THREAD ONLY) ─────────────────────────
     // "See the compared stats WITH the follower's current gems socketed into a
     // candidate." For a board/preview on the render thread -- NOT the worker

@@ -3688,35 +3688,44 @@ namespace MFO::Logistics {
 
                 std::vector<TradeBridge::SellRow> sell;
                 int purse = 0;
-                // Build A -- ACCURATE gem-skip: never sell an item that ACTUALLY
-                // carries a socketed gem. The old bare-ExtraUniqueID block over-fired
-                // (Tuxborn tags nearly every instance with a uid even when EMPTY -> a
-                // follower sold nothing). MEO ABI v2's GetActorGemsCarried scans the
-                // WHOLE inventory for real socketed gems; the (base,uid) set is cached
-                // per follower (main-thread refresh above), read here.
-                //   * gemSupported (MEO >= v2): the feature is active.
-                //   * COLD cache (not warmed): the first refresh hasn't landed, so be
-                //     conservative -- skip ANY instance with a nonzero uid (potentially
-                //     gemmed) so a first-scan gemmed spare can't sell. Brief over-
-                //     caution, gone once the refresh completes; NEVER permanent.
-                //   * WARM cache: skip ONLY instances whose uid is actually gemmed.
-                //   * MEO < v2 / absent: NO gem-skip at all (worn + keepWeapons/
-                //     keepArmor still protect worn gems); the bare-uid block never
-                //     returns for old-MEO users.
-                // MULTI-INSTANCE (#2): GetInventory aggregates all instances of a base
-                // into one entry with multiple extraLists -- check EVERY uid, skip if
-                // ANY qualifies.
+                // GEM HANDLING (marth: UNGEM-THEN-SELL, not skip). A gemmed junk item
+                // must still sell -- but its gems are extracted to the follower's OWN
+                // inventory FIRST (kept as loose gems for a later update's re-socket),
+                // then the now-ungemmed item sells. GetActorGemsCarried (MEO v2) scans
+                // the WHOLE inventory for real socketed gems; the (base,uid)->slots set
+                // is cached per follower (main-thread refresh above), read here.
+                //   * MEO v3 (unsocket): a WARM-cache gemmed item -> queue UnsocketGem
+                //     for each slot (UnsocketItemGems, de-duped) and DON'T sell it this
+                //     scan; it sells once the async unsocket lands + the cache refreshes
+                //     (it drops out of the gemmed set). Gems accumulate as loose gems.
+                //   * MEO v2 only (detect, no unsocket): fall back to PROTECT -- keep
+                //     the gemmed item, don't sell (lose nothing rather than lose gems).
+                //   * COLD cache (not yet warmed, v2/v3): conservative -- don't sell
+                //     ANY nonzero-uid instance (can't know slots yet); brief, never
+                //     permanent. Once warm, v3 extracts / v2 protects.
+                //   * MEO < v2 / absent: NO gem handling (worn + keepWeapons/keepArmor
+                //     still protect worn gems); the bare-uid over-block never returns.
+                // MULTI-INSTANCE: GetInventory aggregates a base's instances into one
+                // entry with multiple extraLists -- check EVERY uid.
                 const bool gemSupported = MEOBridge::CarriedGemsSupported();
                 const bool gemWarmed    = gemSupported && MEOBridge::CacheWarmed(fid);
-                auto gemSkip = [&](RE::InventoryEntryData* e, RE::FormID base) -> bool {
+                const bool gemUnsocket  = MEOBridge::CarriedGemUnsocketSupported();   // v3
+                // Returns true = DON'T sell this scan; side-effect (v3 warm) = queue
+                // the ungem so it can sell later.
+                auto gemHold = [&](RE::InventoryEntryData* e, RE::FormID base) -> bool {
                     if (!gemSupported || !e || !e->extraLists) return false;
+                    bool hold = false;
                     for (auto* xl : *e->extraLists) {
                         auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
                         if (!uid || uid->uniqueID == 0) continue;
-                        if (!gemWarmed || MEOBridge::IsCarriedGemmed(fid, base, uid->uniqueID))
-                            return true;   // cold -> any uid; warm -> only gemmed uids
+                        if (!gemWarmed) { hold = true; continue; }   // cold: protect, can't extract yet
+                        if (MEOBridge::IsCarriedGemmed(fid, base, uid->uniqueID)) {
+                            hold = true;
+                            if (gemUnsocket)   // v3: extract this instance's gems -> sells ungemmed later
+                                MEOBridge::UnsocketItemGems(a_follower, base, uid->uniqueID);
+                        }
                     }
-                    return false;
+                    return hold;
                 };
 
                 for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -3733,7 +3742,7 @@ namespace MFO::Logistics {
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
                     if (entry && entry->IsWorn())               continue;   // never sell worn gear (worn gem investment protected)
-                    if (gemSkip(entry, obj->GetFormID()))       continue;   // Build A accurate gem-skip (MEO v2)
+                    if (gemHold(entry, obj->GetFormID()))       continue;   // ungem-then-sell (v3) / protect (v2); sells ungemmed later
                     if (Catalog::IsExcluded(obj->GetFormID()))  continue;   // #3 artifacts/quest -- never sell
                     // #21 merchant-perk bypass: a "sell anything" follower ignores the
                     // vendor's VEND filter (like the player); otherwise the filter holds.
