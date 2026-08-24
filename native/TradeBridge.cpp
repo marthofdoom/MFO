@@ -249,17 +249,26 @@ namespace MFO::TradeBridge {
                   }
                   if (best != SIZE_MAX) buyOne(best, bestVal);
                 }
-                // ARMOR (plain rated, non-mage) -- best rating above the baseline.
-                { std::size_t best = SIZE_MAX; int bestRat = b.armorBaseRat, bestVal = 0;
-                  for (auto& c : cands) {
-                      if (c.kind != NeedCat::kArmor || !affordReserve(c.value)) continue;
-                      auto* a = c.f->As<RE::TESObjectARMO>();
-                      const int rat = a ? static_cast<int>(a->GetArmorRating()) : 0;
-                      if (rat > bestRat ||
-                          (best != SIZE_MAX && rat == bestRat && c.value < bestVal)) {
-                          best = c.idx; bestRat = rat; bestVal = c.value; }
-                  }
-                  if (best != SIZE_MAX) buyOne(best, bestVal);
+                // ARMOR (plain rated, non-mage) -- PER LOGICAL SLOT (0 head 1 body
+                // 2 hands 3 feet 4 shield), best rating above THAT slot's owned
+                // baseline. Per-slot so a warrior with a good chestpiece still buys a
+                // helmet/boots for bare slots (mirrors the loot judge + the mage-
+                // apparel pass below). One best-pick per slot.
+                if (b.buyArmor) {
+                    for (int slot = 0; slot < 5; ++slot) {
+                        std::size_t best = SIZE_MAX;
+                        int bestRat = b.armorBaseRat[slot], bestVal = 0;
+                        for (auto& c : cands) {
+                            if (c.kind != NeedCat::kArmor || !affordReserve(c.value)) continue;
+                            auto* a = c.f->As<RE::TESObjectARMO>();
+                            if (!a || Logistics::ArmorBuySlot(a) != slot) continue;
+                            const int rat = static_cast<int>(a->GetArmorRating());
+                            if (rat > bestRat ||
+                                (best != SIZE_MAX && rat == bestRat && c.value < bestVal)) {
+                                best = c.idx; bestRat = rat; bestVal = c.value; }
+                        }
+                        if (best != SIZE_MAX) buyOne(best, bestVal);
+                    }
                 }
                 // MAGE APPAREL + JEWELRY -- PER SLOT (head/body/hands/feet/ring/
                 // amulet), buy the MOST VALUABLE affordable clothing/jewelry piece

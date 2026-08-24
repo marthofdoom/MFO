@@ -79,6 +79,12 @@ namespace MFO::Logistics {
     // (marth). Shared by the buy planner and the worker-side owned baseline.
     int MageClothingSlot(RE::TESObjectARMO* a_armo);
 
+    // The LOGICAL rated-armor slot for the per-slot armor buy baseline (and the
+    // sell keepArmor set): 0 head, 1 body, 2 hands, 3 feet, 4 shield, or -1 if it
+    // covers none of those. Shared by BuildBuyThresholds + PlanBuy so a warrior can
+    // buy a helmet/boots for bare slots even with a good chestpiece.
+    int ArmorBuySlot(RE::TESObjectARMO* a_armo);
+
     // Rank a candidate vendor ARMO as mage apparel/jewelry. Returns false unless it
     // is buyable (rating-0 clothing/jewelry, not villain-coded unless a_allowVillain,
     // i.e. a necromancer follower). On true, fills a comparable (out_tier, out_metric)

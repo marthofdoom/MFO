@@ -136,6 +136,13 @@ namespace MFO::MEOBridge {
         return it != g_carriedGems.end() && it->second.contains(GemKey(a_base, a_uid));
     }
 
+    bool CacheWarmed(RE::FormID a_followerID) {
+        std::scoped_lock lk(g_mx);
+        return g_carriedGems.contains(a_followerID);
+    }
+
+    bool CarriedGemsSupported() { return g_meo && g_meo->Version() >= 2; }
+
     void QueueGemMove(RE::Actor* a_follower, RE::FormID a_fromBase, std::uint16_t a_fromUid,
                       RE::FormID a_toBase) {
         // No source gems (uid 0), no MEO, or malformed -> nothing to carry over.

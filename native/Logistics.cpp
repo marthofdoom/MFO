@@ -3381,7 +3381,7 @@ namespace MFO::Logistics {
                 using WT = RE::WEAPON_TYPE;
 
                 std::uint16_t baseDmg = 0, myRangedDmg = 0;
-                float bestArmorRat = 0.0f;
+                float slotRat[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot (0 head..4 shield)
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (auto* w = obj->As<RE::TESObjectWEAP>()) {
@@ -3393,7 +3393,11 @@ namespace MFO::Logistics {
                             myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
                     } else if (auto* ar = obj->As<RE::TESObjectARMO>()) {
                         if (IsCreatureArmor(ar)) continue;
-                        if (ar->GetArmorRating() > bestArmorRat) bestArmorRat = ar->GetArmorRating();
+                        // PER-SLOT owned baseline so a bare head/hands/feet still buys
+                        // even when a good chestpiece owns a high overall rating.
+                        if (const int as = ArmorBuySlot(ar);
+                            as >= 0 && ar->GetArmorRating() > slotRat[as])
+                            slotRat[as] = ar->GetArmorRating();
                     }
                 }
                 buy.meleeClass    = static_cast<std::int32_t>(meleeTargetClass);
@@ -3402,7 +3406,7 @@ namespace MFO::Logistics {
                 buy.wantCrossbow  = wantCrossbow;
                 buy.rangedBaseDmg = myRangedDmg;
                 buy.buyArmor       = !useMageApparel && !dolls;   // non-caster OR caster-in-armor: rated armor
-                buy.armorBaseRat   = static_cast<std::int32_t>(bestArmorRat);
+                for (int s = 0; s < 5; ++s) buy.armorBaseRat[s] = static_cast<std::int32_t>(slotRat[s]);
                 buy.buyMageApparel = useMageApparel && !dolls;
                 // MEO-aware ranking (marth): value-driven ONLY with MEO present (gems
                 // transfer + supply school relevance). Without MEO -- or with the
@@ -3689,40 +3693,29 @@ namespace MFO::Logistics {
                 // (Tuxborn tags nearly every instance with a uid even when EMPTY -> a
                 // follower sold nothing). MEO ABI v2's GetActorGemsCarried scans the
                 // WHOLE inventory for real socketed gems; the (base,uid) set is cached
-                // per follower (main-thread refresh above), and the loop skips an item
-                // only when its instance uid is in that set. Read the item's own uid
-                // here (the same ExtraUniqueID read the old block used). MEO < v2 or
-                // absent -> cache empty -> nothing skipped here (worn gems stay safe
-                // via the worn + keepWeapons/keepArmor checks; unworn spares are the
-                // only gap, an accepted edge for old-MEO users).
-                auto itemUid = [](RE::InventoryEntryData* e) -> std::uint16_t {
-                    if (!e || !e->extraLists) return 0;
-                    for (auto* xl : *e->extraLists)
-                        if (auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
-                            uid && uid->uniqueID != 0) return uid->uniqueID;
-                    return 0;
-                };
-                // ── [sell] EXCLUSION DIAGNOSTIC (TEMPORARY; rate-limited per follower
-                // ~45s) -- pins WHY a follower's unworn junk isn't selling (marth:
-                // Lucien sell n=0). Records the FIRST matching drop reason in the
-                // loop's own order + the vendor's clothing-buy capability. All reads
-                // already happen on this worker tick.
-                static std::unordered_map<RE::FormID, Clock::time_point> s_sellDiag;
-                bool logDue = false;
-                if (auto& nx = s_sellDiag[fid]; nx.time_since_epoch().count() == 0 || a_now >= nx) {
-                    nx = a_now + std::chrono::seconds(45);
-                    logDue = true;
-                }
-                int dN = 0, dKept = 0, dSold = 0, dDropped = 0;
-                struct Drop { RE::FormID id; const char* name; const char* why; bool cloKw; bool wpnKw; };
-                std::vector<Drop> drops;
-                // Item carries a keyword whose editorID == ed (forward read, the coin-
-                // fix idiom -- KID-minted VendorItem* have no reverse lookup).
-                auto itemHasKwEd = [](RE::BGSKeywordForm* k, std::string_view ed) {
-                    if (!k || !k->keywords) return false;
-                    for (std::uint32_t i = 0; i < k->numKeywords; ++i)
-                        if (const char* e = k->keywords[i] ? k->keywords[i]->GetFormEditorID() : nullptr;
-                            e && ed == e) return true;
+                // per follower (main-thread refresh above), read here.
+                //   * gemSupported (MEO >= v2): the feature is active.
+                //   * COLD cache (not warmed): the first refresh hasn't landed, so be
+                //     conservative -- skip ANY instance with a nonzero uid (potentially
+                //     gemmed) so a first-scan gemmed spare can't sell. Brief over-
+                //     caution, gone once the refresh completes; NEVER permanent.
+                //   * WARM cache: skip ONLY instances whose uid is actually gemmed.
+                //   * MEO < v2 / absent: NO gem-skip at all (worn + keepWeapons/
+                //     keepArmor still protect worn gems); the bare-uid block never
+                //     returns for old-MEO users.
+                // MULTI-INSTANCE (#2): GetInventory aggregates all instances of a base
+                // into one entry with multiple extraLists -- check EVERY uid, skip if
+                // ANY qualifies.
+                const bool gemSupported = MEOBridge::CarriedGemsSupported();
+                const bool gemWarmed    = gemSupported && MEOBridge::CacheWarmed(fid);
+                auto gemSkip = [&](RE::InventoryEntryData* e, RE::FormID base) -> bool {
+                    if (!gemSupported || !e || !e->extraLists) return false;
+                    for (auto* xl : *e->extraLists) {
+                        auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
+                        if (!uid || uid->uniqueID == 0) continue;
+                        if (!gemWarmed || MEOBridge::IsCarriedGemmed(fid, base, uid->uniqueID))
+                            return true;   // cold -> any uid; warm -> only gemmed uids
+                    }
                     return false;
                 };
 
@@ -3732,53 +3725,25 @@ namespace MFO::Logistics {
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
-                    ++dN;
+                    if (IsStockGear(fid, obj->GetFormID())) continue;   // #69 own signature gear
+                    if (weap && keepWeapons.count(obj))     continue;   // loadout weapon, not junk
+                    if (armo && keepArmor.count(obj))       continue;   // #21 best-in-slot -- don't re-sell a bought upgrade
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
-                    // Record the FIRST matching exclusion (kept=protection, else dropped).
-                    auto note = [&](const char* why, bool kept) {
-                        if (kept) ++dKept; else ++dDropped;
-                        if (logDue && drops.size() < 15)
-                            drops.push_back({ obj->GetFormID(), obj->GetName() ? obj->GetName() : "?",
-                                              why, itemHasKwEd(kwf, "VendorItemClothing"),
-                                              itemHasKwEd(kwf, "VendorItemWeapon") });
-                    };
-                    if (IsStockGear(fid, obj->GetFormID())) { note("stock", true); continue; }   // #69 own signature gear
-                    if (weap && keepWeapons.count(obj))     { note("keepWeap", true); continue; }
-                    if (armo && keepArmor.count(obj))       { note("keepArmor", true); continue; }
-                    if (entry && entry->IsWorn())           { note("worn", true); continue; }   // worn gem investment stays protected
-                    if (const std::uint16_t uid = itemUid(entry);                                   // Build A accurate gem-skip (MEO v2)
-                        uid != 0 && MEOBridge::IsCarriedGemmed(fid, obj->GetFormID(), uid))
-                                                            { note("gemmed", true); continue; }
-                    if (Catalog::IsExcluded(obj->GetFormID())) { note("excluded", true); continue; }  // #3 artifacts/quest -- never sell
+                    if (entry && entry->IsWorn())               continue;   // never sell worn gear (worn gem investment protected)
+                    if (gemSkip(entry, obj->GetFormID()))       continue;   // Build A accurate gem-skip (MEO v2)
+                    if (Catalog::IsExcluded(obj->GetFormID()))  continue;   // #3 artifacts/quest -- never sell
                     // #21 merchant-perk bypass: a "sell anything" follower ignores the
                     // vendor's VEND filter (like the player); otherwise the filter holds.
-                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) { note("vendor-filter", false); continue; }
+                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) continue;
                     // #21 speech-scaled sell price (base instance value * sellFraction).
-                    ++dSold;
                     const std::int32_t baseVal = entry ? entry->GetValue() : 0;
                     sell.push_back(TradeBridge::SellRow{
                         obj, static_cast<std::int32_t>(data.first),
                         static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
                         armo && IsJewelryPiece(armo) });
-                }
-
-                if (logDue) {
-                    bool vendBuysClothing = false;
-                    if (vend)
-                        for (auto* f : vend->forms)
-                            if (const char* e = f ? f->GetFormEditorID() : nullptr;
-                                e && std::string_view(e) == "VendorItemClothing") { vendBuysClothing = true; break; }
-                    spdlog::info("[sell] {:08X} '{}' @ '{}': {} weap/armo in pack -> kept {} / sold {} / dropped {}",
-                                 fid, a_follower->GetName() ? a_follower->GetName() : "?",
-                                 vendor->GetName() ? vendor->GetName() : "?", dN, dKept, dSold, dDropped);
-                    spdlog::info("[sell]   vendor VEND: notBuySell={}, list size={}, buysClothing={}",
-                                 vv.notBuySell, vend ? static_cast<int>(vend->forms.size()) : -1, vendBuysClothing);
-                    for (const auto& d : drops)
-                        spdlog::info("[sell]   {:08X} '{}' -> {} (itemClothingKw={} itemWeaponKw={})",
-                                     d.id, d.name, d.why, d.cloKw, d.wpnKw);
                 }
                 // Highest-value first: the vendor's barter gold is limited (field log:
                 // sale total often > vendor gold), so sell the most valuable junk first
@@ -4077,6 +4042,19 @@ namespace MFO::Logistics {
         if (has(Slot::kRing))  return 4;
         if (has(Slot::kAmulet)) return 5;
         if (has(Slot::kHead) || has(Slot::kHair) || has(Slot::kCirclet)) return 0;
+        return -1;
+    }
+
+    int ArmorBuySlot(RE::TESObjectARMO* a_armo) {
+        if (!a_armo) return -1;
+        using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+        const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
+        auto has = [&](Slot s) { return (mask & static_cast<std::uint32_t>(s)) != 0; };
+        if (has(Slot::kBody))   return 1;
+        if (has(Slot::kHead))   return 0;
+        if (has(Slot::kHands))  return 2;
+        if (has(Slot::kFeet))   return 3;
+        if (has(Slot::kShield)) return 4;
         return -1;
     }
 

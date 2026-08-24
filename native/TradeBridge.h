@@ -60,7 +60,11 @@ namespace MFO::TradeBridge {
         bool          wantCrossbow = false;  // meaningful only when doRanged
         std::int32_t  rangedBaseDmg= 0;      // best owned bow/crossbow dmg
         bool          buyArmor     = false;  // plain rated armor (NON-mage, not dolls mode)
-        std::int32_t  armorBaseRat = 0;      // best owned armor rating (floored to int)
+        // Best owned armor rating PER LOGICAL SLOT (0 head 1 body 2 hands 3 feet
+        // 4 shield -- Logistics::ArmorBuySlot order). Per-slot so a warrior with a
+        // good chestpiece can still buy a helmet/boots for bare slots (the loot
+        // judge is per-slot; buy must match). PlanBuy best-picks per slot.
+        std::int32_t  armorBaseRat[5] = {};
         bool          buyMageApparel = false;// clothing/jewelry dress-up (caster + bMageWearRobes, not dolls mode)
         // MEO-aware ranking (marth): value-driven ONLY when MEO is present (gems
         // transfer and supply school relevance). schoolPrimary == true (MEO absent

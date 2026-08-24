@@ -67,6 +67,19 @@ namespace MFO::MEOBridge {
     // item in a_follower's cache? False for uid 0 / empty cache / MEO < v2.
     bool IsCarriedGemmed(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);
 
+    // Worker-callable READ: has a_follower's carried-gem cache been populated at
+    // least once (a RefreshCarriedGems completed for it)? The key EXISTS iff so,
+    // even with an empty gem set. Until warmed, the sell path stays conservative
+    // (skip any nonzero-uid instance) so a first-scan gemmed spare can't sell.
+    bool CacheWarmed(RE::FormID a_followerID);
+
+    // Worker-callable: is the carried-gem feature usable (MEO present, ABI >= 2)?
+    // The cold-cache conservative skip must be gated on this -- WITHOUT MEO v2 the
+    // cache never warms, so "not warmed -> skip any uid" would become the permanent
+    // bare-uid over-block bug for old-MEO users. False -> the sell path does NO
+    // gem-skip at all (worn + keepWeapons/keepArmor still protect worn gems).
+    bool CarriedGemsSupported();
+
     // ── gem-simulated comparison (MAIN THREAD ONLY) ─────────────────────────
     // "See the compared stats WITH the follower's current gems socketed into a
     // candidate." For a board/preview on the render thread -- NOT the worker
