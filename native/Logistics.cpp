@@ -3807,17 +3807,6 @@ namespace MFO::Logistics {
                 if (diag)
                     spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
 
-                // CONVERGENCE (marth): a WORN piece that is NOT the best in its logical slot
-                // (a better owned piece exists) is a redundant inferior -- unequip it so it
-                // stops being worn-protected and sells. Rate-limited per follower (~8s) so we
-                // don't re-post while the sale lands. Needs bestBySlot (built above).
-                static std::unordered_map<RE::FormID, Clock::time_point> s_nextUnequip;
-                bool canUnequip = false;
-                {
-                    const auto now = Clock::now();
-                    auto& nx = s_nextUnequip[fid];
-                    if (now >= nx) { canUnequip = true; nx = now + std::chrono::seconds(8); }
-                }
                 const bool umaSell = IsCasterFollower(a_state) && Config::g_mageWearRobes.load() &&
                                      !Config::g_dollsMode.load();
 
@@ -3828,34 +3817,26 @@ namespace MFO::Logistics {
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
                     if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // #69 own signature gear
-                    // CONVERGENCE: a WORN armor piece that isn't its slot's best (a strictly
-                    // kept-better exists) -> unequip it (main-thread, #62-safe: EquipManager,
-                    // never DoReset3D) so the redundant inferior sells next scan instead of
-                    // staying worn-protected forever (Auri's spare boots / Jesper's spare outfit).
+                    // CONVERGENCE (marth): a WORN piece that is NOT its slot's best (a strictly
+                    // kept-better exists) is a redundant inferior. The engine keeps re-applying
+                    // it from the follower's DEFAULT OUTFIT, so unequip-and-wait never wins the
+                    // race. Instead flag it and SELL it even while worn -- it bypasses the
+                    // keepArmor/IsWorn gates below, the gem (if any) is extracted first, and the
+                    // trade's RemoveItem unequips it on sale. Once it's gone the engine has
+                    // nothing to put back (Jesper's Nord Tribal outfit, Auri's spare boots).
+                    bool redundantInferior = false;
                     if (armo && data.second && data.second->IsWorn() && !bestBySlot.empty()) {
                         int sk = -1;
                         if (umaSell)                            { sk = MageClothingSlot(armo); }   // mage: robes + rated armor share one body bucket
                         else if (armo->GetArmorRating() > 0.0f) { const int ls = ArmorBuySlot(armo); if (ls >= 0) sk = 10 + ls; }
                         if (sk >= 0) {
                             auto bit = bestBySlot.find(sk);
-                            if (bit != bestBySlot.end() && bit->second && bit->second != obj) {
-                                sdiag(obj, "unequip-inferior");
-                                if (canUnequip && MainThread::IsInstalled()) {
-                                    const RE::FormID folID = fid, itemID = obj->GetFormID();
-                                    MainThread::Post([folID, itemID] {
-                                        auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
-                                        auto* form = RE::TESForm::LookupByID(itemID);
-                                        auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                                        auto* eq   = RE::ActorEquipManager::GetSingleton();
-                                        if (fol && item && eq) eq->UnequipObject(fol, item);
-                                    });
-                                }
-                                continue;   // still worn this scan; sells once the unequip lands
-                            }
+                            if (bit != bestBySlot.end() && bit->second && bit->second != obj)
+                                redundantInferior = true;
                         }
                     }
                     if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
-                    if (armo && keepArmor.count(obj)) {   // #21 best-in-slot
+                    if (armo && keepArmor.count(obj) && !redundantInferior) {   // #21 best-in-slot (a worn redundant inferior bypasses -> sells)
                         if (diag) {
                             const int dsk = umaSell ? MageClothingSlot(armo)
                                           : (armo->GetArmorRating() > 0.0f ? 10 + ArmorBuySlot(armo) : -1);
@@ -3873,7 +3854,8 @@ namespace MFO::Logistics {
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
-                    if (entry && entry->IsWorn())               { sdiag(obj, "worn"); continue; }     // never sell worn gear
+                    if (redundantInferior)                          sdiag(obj, "sell-inferior");        // worn redundant -> sell (RemoveItem unequips it)
+                    else if (entry && entry->IsWorn())          { sdiag(obj, "worn"); continue; }     // never sell worn gear
                     if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
                     if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
                     // #21 merchant-perk bypass: a "sell anything" follower ignores the
