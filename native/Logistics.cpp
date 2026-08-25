@@ -1251,11 +1251,8 @@ namespace MFO::Logistics {
                     auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
                     auto* form = RE::TESForm::LookupByID(itemID);
                     auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq) {
-                        spdlog::info("[wtrack] {:08X} MFO EquipObject '{}' (AcquireEquip)",
-                                     folID, item->GetName() ? item->GetName() : "?");
+                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
                         eq->EquipObject(fol, item);
-                    }
                 };
                 if (MainThread::IsInstalled()) MainThread::Post(doEquip);
                 else                           doEquip();   // VR: pump is a no-op, keep the direct path
@@ -2267,10 +2264,43 @@ namespace MFO::Logistics {
 
         // Is a_baseID part of a_followerID's snapshotted stock? ShedOffRoleWeapon's
         // one guard against ever giving away a follower's own gear.
+        // Case-insensitive substring (no <cctype> dependency).
+        bool NameContainsCI(const char* a_hay, const char* a_needle) {
+            if (!a_hay || !a_needle || !*a_needle) return false;
+            auto lc = [](char c) -> char { return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c; };
+            const std::string hay = a_hay, ndl = a_needle;
+            if (ndl.size() > hay.size()) return false;
+            for (std::size_t i = 0; i + ndl.size() <= hay.size(); ++i) {
+                bool m = true;
+                for (std::size_t j = 0; j < ndl.size(); ++j)
+                    if (lc(hay[i + j]) != lc(ndl[j])) { m = false; break; }
+                if (m) return true;
+            }
+            return false;
+        }
+
         bool IsStockGear(RE::FormID a_followerID, RE::FormID a_baseID) {
-            std::scoped_lock lk(g_stockMx);
-            const auto it = g_stockGear.find(a_followerID);
-            return it != g_stockGear.end() && it->second.count(a_baseID) != 0;
+            {
+                std::scoped_lock lk(g_stockMx);
+                const auto it = g_stockGear.find(a_followerID);
+                if (it == g_stockGear.end() || it->second.count(a_baseID) == 0) return false;
+            }
+            // In the snapshot -- but PROTECT it only if it is a SIGNATURE/unique piece,
+            // not a standard common item (marth: Auri's plain Iron Daggers should sell;
+            // Jesper's Armor / a named or enchanted unique stays). Signature =
+            // artifact/quest, OR enchanted, OR the item's name carries the follower's name.
+            auto* form = RE::TESForm::LookupByID(a_baseID);
+            if (!form) return true;                          // unresolved -> conservative keep
+            if (Catalog::IsExcluded(a_baseID)) return true;  // artifact / quest
+            if (auto* w = form->As<RE::TESObjectWEAP>(); w && w->formEnchanting) return true;
+            if (auto* a = form->As<RE::TESObjectARMO>(); a && a->formEnchanting) return true;
+            if (auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_followerID)) {
+                const std::string folName = fol->GetName() ? fol->GetName() : "";
+                const std::size_t sp = folName.find(' ');
+                const std::string tok = (sp == std::string::npos) ? folName : folName.substr(0, sp);
+                if (tok.size() >= 3 && NameContainsCI(form->GetName(), tok.c_str())) return true;
+            }
+            return false;   // standard common starting item -> sellable / sheddable
         }
 
         // EvictOldest for the Claim map -- oldest by first-seen. The FormID/time
@@ -3839,20 +3869,7 @@ namespace MFO::Logistics {
                         }
                     }
                     if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
-                    if (armo && keepArmor.count(obj) && !redundantInferior) {   // #21 best-in-slot (a worn redundant inferior bypasses -> sells)
-                        if (diag) {
-                            const int dsk = umaSell ? MageClothingSlot(armo)
-                                          : (armo->GetArmorRating() > 0.0f ? 10 + ArmorBuySlot(armo) : -1);
-                            const auto dbit = (dsk >= 0) ? bestBySlot.find(dsk) : bestBySlot.end();
-                            spdlog::info("[sell] {:08X} '{}' -> keepArmor (cs={} rated={} worn={} gold={} rat={:.0f} best={})",
-                                         fid, obj->GetName() ? obj->GetName() : "?",
-                                         MageClothingSlot(armo), ArmorBuySlot(armo),
-                                         (data.second && data.second->IsWorn()) ? 1 : 0,
-                                         armo->GetGoldValue(), armo->GetArmorRating(),
-                                         (dbit != bestBySlot.end() && dbit->second == obj) ? 1 : 0);
-                        }
-                        continue;
-                    }
+                    if (armo && keepArmor.count(obj) && !redundantInferior) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant inferior bypasses -> sells)
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
@@ -4369,8 +4386,8 @@ namespace MFO::Logistics {
                 RE::TESBoundObject* bestObj = nullptr;
                 if (bestID)
                     if (auto* f = RE::TESForm::LookupByID(bestID)) bestObj = f->As<RE::TESBoundObject>();
-                if (bestObj) { spdlog::info("[wtrack] {:08X} MFO EquipObject '{}' (excluded-swap)", fol->GetFormID(), bestObj->GetName() ? bestObj->GetName() : "?"); eq->EquipObject(fol, bestObj); }   // auto-unequips the excluded one
-                else         { spdlog::info("[wtrack] {:08X} MFO UnequipObject '{}' (excluded-swap)", fol->GetFormID(), badObj->GetName() ? badObj->GetName() : "?"); eq->UnequipObject(fol, badObj); }  // nothing real carried -- just take it off
+                if (bestObj) eq->EquipObject(fol, bestObj);   // auto-unequips the excluded one
+                else         eq->UnequipObject(fol, badObj);  // nothing real carried -- just take it off
                 std::int32_t haveBad = 0;
                 for (auto& [obj, data] : fol->GetInventory())
                     if (obj == badObj) { haveBad = data.first; break; }
@@ -4546,27 +4563,6 @@ namespace MFO::Logistics {
         // looted yet); a no-op for anyone already snapshotted this session or
         // loaded from the co-save.
         EnsureStockSnapshot(a_follower);
-
-        // [wtrack] DIAGNOSTIC (temp): log body/hands worn-item transitions each tick to
-        // catch what re-equips a redundant piece (engine vs MFO). If the worn body flips
-        // to Nord with NO preceding "[wtrack] MFO EquipObject" line, MFO did not do it.
-        // Worker-sequential static, no lock (same tick discipline as the other diagnostics).
-        {
-            using WSlot = RE::BGSBipedObjectForm::BipedObjectSlot;
-            static std::unordered_map<RE::FormID, std::pair<RE::FormID, RE::FormID>> s_wtrack;
-            auto* bW = a_follower->GetWornArmor(WSlot::kBody);
-            auto* hW = a_follower->GetWornArmor(WSlot::kHands);
-            const RE::FormID bId = bW ? bW->GetFormID() : 0;
-            const RE::FormID hId = hW ? hW->GetFormID() : 0;
-            auto& pv = s_wtrack[a_follower->GetFormID()];
-            if (pv.first != bId || pv.second != hId) {
-                spdlog::info("[wtrack] {:08X} worn CHANGED -> body='{}' hands='{}'",
-                             a_follower->GetFormID(),
-                             bW && bW->GetName() ? bW->GetName() : "(none)",
-                             hW && hW->GetName() ? hW->GetName() : "(none)");
-                pv = { bId, hId };
-            }
-        }
 
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
