@@ -682,6 +682,13 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
   upgrade per tick — bought, looted-as-valuable jewelry, or player-handed — via
   `AcquireEquip(src=null)`, which is what fires the **buy-path gem transfer**. Idempotent
   + one-per-tick ⇒ converges, no thrash. Old `MageApparelIsBetter` is now `[[maybe_unused]]`.
+For a `useMageApparel` follower the branch is now **AUTHORITATIVE** (clothing-oscillation
+fix): it computes the single best OWNED piece per logical slot (deterministic, FormID
+tiebreak) and force-equips it whenever the worn piece isn't exactly it — so an
+engine-re-equipped LESSER clothing piece is replaced and falls through to the sell loop
+as an extra instead of being worn-protected forever. Thrash-guarded: **out of combat +
+rate-limited 5 s/follower**, no-op once the best is worn (equip auto-unequips the lesser,
+never strips naked). The rated-armor branch is unchanged (strictly-better-only).
 
 ### Loadout.cpp / Loadout.h — the equip/spell-in-hand ledger (NOT serialized)
 Puts a gambit spell in a follower's hand, records displaced gear as **transient
@@ -846,6 +853,19 @@ live caller (**UNVERIFIED** — check Board before removing). `g_pending` keys o
 `(followerFormID<<32|toBase)`; if `ClearTransientState` (`:100` ← `Serialization.cpp:
 616`) stops being called on revert, a reused FormID next session moves gems onto the
 wrong actor.
+**GEM RECONCILE (ABI v3)** — `GemReconcileSupported`/`RequestGemReconcile` (MEOBridge.h)
+← `Logistics::ServiceFollower` idle branch (`Logistics.cpp` ~`:5271`, each management
+scan). Decoupled re-socket of a follower's OWN loose gems (left loose by the
+ungem-then-sell `UnsocketItemGems`) back into his WORN gear's empty sockets, so a gem
+extracted for a sale never stays loose. `RequestGemReconcile` posts the whole pass to
+the main thread (`ReconcileLooseGems`, anon) — GetLooseGems/GetEmptySocketCount/
+GetGemDetails are main-thread-only; SocketGem/UnsocketGem queue to main. **No dedup
+state** — GetEmptySocketCount reflects only LANDED sockets and async ops land within a
+frame or two (<< the ~1 s cadence), so the next pass never re-issues; domain is matched
+here so MEO never rejects into a retry loop. Tier 1 conservation always runs (fill any
+domain-matching gem); tier 2 effect-aware (MCM `bMeoAwareGems`, default OFF) ranks by a
+class-preference heuristic on gid/name + magnitude and swaps up a socketed gem a better
+loose gem beats. Whole feature no-ops below MEO v3.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

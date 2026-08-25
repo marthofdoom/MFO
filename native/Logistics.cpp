@@ -3300,29 +3300,49 @@ namespace MFO::Logistics {
 
             RE::TESBoundObject* pick = nullptr;
             if (useMageApparel) {
-                // CLOTHING/JEWELRY: best owned per logical slot that beats what's worn,
-                // ranked by the SAME MEO-aware judge as loot/buy.
+                // AUTHORITATIVE mage dress-up (oscillation fix). Compute the single
+                // best OWNED piece per logical slot (deterministic, FormID tiebreak so
+                // two equal-value pieces never flip which one is enforced) and FORCE it
+                // worn whenever the follower isn't already wearing exactly it -- so an
+                // engine-re-equipped LESSER clothing piece is corrected (replaced) and
+                // then falls through to the sell loop as an extra, instead of being
+                // worn-protected forever (the Nord-Tribal-vs-Khajiit oscillation).
+                // Ranked by the SAME MEO-aware judge as loot/buy. The worn piece is
+                // itself a candidate, so a worn BEST never downgrades (no-op), and
+                // equipping a replacement auto-unequips the lesser -> never strips naked.
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
                 const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain  = IsNecromancerFollower(a_state);
-                int   wornTier[6];  std::int32_t wornMetric[6];
-                for (int s = 0; s < 6; ++s) {
-                    wornTier[s] = 0; wornMetric[s] = 0;
-                    if (auto* w = WornInLogicalSlot(a_follower, s))
-                        MageApparelBuyKey(w, top2, schoolPrimary, true, wornTier[s], wornMetric[s]);
-                }
-                int bestTier = -1; std::int32_t bestMetric = -1;
+
+                struct BestPer { RE::TESBoundObject* obj = nullptr; int tier = -1; std::int32_t metric = -1; };
+                BestPer bestSlot[6];
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar) continue;
                     const int slot = MageClothingSlot(ar);
                     if (slot < 0) continue;
-                    if (WornInLogicalSlot(a_follower, slot) == ar) continue;   // already worn
                     int t = 0; std::int32_t m = 0;
-                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) continue;
-                    if (!(t > wornTier[slot] || (t == wornTier[slot] && m > wornMetric[slot]))) continue;  // beats worn
-                    if (t > bestTier || (t == bestTier && m > bestMetric)) { bestTier = t; bestMetric = m; pick = obj; }
+                    // The currently-WORN piece is always its slot's incumbent candidate,
+                    // ranked with allowVillain=true (restores the pre-authoritative
+                    // asymmetry): a player-equipped villain/necromancer robe on a
+                    // non-necromancer stays eligible instead of being excluded from
+                    // candidacy, force-replaced by a lesser common piece, and then sold.
+                    const bool worn = (WornInLogicalSlot(a_follower, slot) == obj);
+                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain || worn, t, m)) continue;
+                    auto& b = bestSlot[slot];
+                    if (!b.obj || t > b.tier || (t == b.tier && m > b.metric) ||
+                        (t == b.tier && m == b.metric && obj->GetFormID() > b.obj->GetFormID()))
+                        b = { obj, t, m };
+                }
+                // First slot whose worn piece isn't the computed best -> one
+                // authoritative correction per tick (converges over ticks, no thrash).
+                for (int slot = 0; slot < 6; ++slot) {
+                    auto* best = bestSlot[slot].obj;
+                    if (!best) continue;                                    // nothing owned for this slot
+                    if (WornInLogicalSlot(a_follower, slot) == best) continue;   // already correct
+                    if (!FitsCarryWeight(a_follower, best->GetWeight())) continue;
+                    pick = best; break;
                 }
             } else {
                 // RATED ARMOR: best owned piece that upgrades a worn/bare slot.
@@ -3344,6 +3364,19 @@ namespace MFO::Logistics {
             }
 
             if (!pick || !FitsCarryWeight(a_follower, pick->GetWeight())) return;
+            if (useMageApparel) {
+                // THRASH GUARD for the authoritative mage correction: only OUT OF
+                // COMBAT and rate-limited per follower, so an engine tug-of-war over a
+                // clothing slot can't drive an equip every frame. (The rated-armor
+                // branch is already strictly-better-only, so it needs no rate limit.)
+                if (a_follower->IsInCombat()) return;
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextMageFix;
+                const auto id  = a_follower->GetFormID();
+                const auto now = Clock::now();
+                auto& nxt = s_nextMageFix[id];
+                if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
+                nxt = now + std::chrono::seconds(5);
+            }
             AcquireEquip(a_follower, pick, nullptr, myWeap, /*forceStock*/false);   // already owned -> no transfer
         }
 
@@ -5268,6 +5301,21 @@ namespace MFO::Logistics {
             // safe equip path. Idempotent + one-per-tick, so it converges and never
             // thrashes; dolls mode (handled inside) is the manual-dress escape hatch.
             EquipBestOwnedGear(a_follower, a_state);
+            // GEM RECONCILE (MEO v3). Decoupled from the ungem-then-sell event: each
+            // idle management scan, re-socket a follower's OWN loose gems into his worn
+            // gear's empty sockets so a gem extracted for a sale never stays loose.
+            // CONSERVATION always runs; the effect-aware tier is gated on bMeoAwareGems.
+            // Posts to the main thread inside; a full no-op when MEO < v3 (the loose
+            // gem simply stays as it does today -- no regression).
+            if (MEOBridge::GemReconcileSupported()) {
+                MEOBridge::GemReconcilePrefs prefs;
+                prefs.caster = IsCasterFollower(a_state);
+                if (prefs.caster) {
+                    int castGambits = 0;
+                    prefs.school = static_cast<std::uint32_t>(TargetMagicSchool(a_state, castGambits));
+                }
+                MEOBridge::RequestGemReconcile(a_follower, Config::g_meoAwareGems.load(), prefs);
+            }
             if (Config::g_economy.load() && Po3Present())
                 EconomyProbe(a_follower, a_state, now);
         }
