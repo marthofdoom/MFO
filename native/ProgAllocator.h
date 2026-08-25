@@ -170,6 +170,47 @@ namespace MFO::ProgAllocator {
         std::vector<SkillAlloc> skills;
         std::vector<BaselineAV> baseline;
 
+        // ── HMS class-redistribution (§HMS, PRGN v5) ─────────────────────────
+        // A SIBLING of the skill reconcile: capture the engine's per-level
+        // Health/Magicka/Stamina award, then re-grant it reshaped to the class
+        // profile (Mage 15/80/5, Ranged 40/5/55, Melee 60/5/35). Pool index is
+        // FIXED {0=Health, 1=Magicka, 2=Stamina} everywhere (co-save order too).
+        //
+        // MEASURE-not-clobber (the key difference from ReconcileSkill): each
+        // recompute reads cur = GetBaseActorValue(pool), measures the POSITIVE
+        // drift (cur - hmsTarget) as this level's fresh engine award BEFORE
+        // re-asserting, sums the three pool deltas into the budget, redistributes
+        // that budget by class%+skew into hmsCumulative, then holds
+        // hmsTarget = hmsBaseline + hmsCumulative (single SetBaseActorValue).
+        // Between level-ups base==target so the drift reads 0 (pure reads).
+        float hmsBaseline[3]{ 0.0f, 0.0f, 0.0f };   // §HMS: base H/M/S at enroll (the floor)
+        float hmsTarget[3]{ 0.0f, 0.0f, 0.0f };     // §HMS: last value MFO wrote (== lastWritten)
+        float hmsSkew[3]{ 0.0f, 0.0f, 0.0f };        // §HMS: cumulative skew shifted into/out of pool
+        float hmsCumulative[3]{ 0.0f, 0.0f, 0.0f };  // §HMS: running redistributed award per pool
+        // §HMS skew usage: battles since the last HMS award (redistribution) and,
+        // of those, how many exercised an OFF-CLASS pool. Ratio drives the skew.
+        // SERIALIZED (a level-up may be many battles / sessions apart).
+        std::uint32_t battlesSinceLevelUp{ 0 };
+        std::uint32_t battlesOffClass{ 0 };
+        // §HMS: the off-class pool exercised since the last award (0=none, else
+        // 1+pool index i.e. 1=Health 2=Magicka 3=Stamina). First-off-class-wins
+        // per award window; the skew shifts primary → (this pool - 1). Serialized.
+        std::uint8_t  offClassPool{ 0 };
+        // §HMS: has the enrollment baseline been captured? A pre-v5 save has no
+        // HMS block (stays false) → the first RecomputeHMS ADOPTS the follower's
+        // current base H/M/S as the baseline (mirror the skill ADOPT fallback),
+        // so existing followers are not retro-slammed. Serialized (a v5 save
+        // reloads with the real baseline, never re-adopting an MFO-inflated one).
+        bool hmsCaptured{ false };
+
+        // §HMS runtime-only, never serialized: combat-edge tracking for the
+        // battle counters. hmsInBattle = currently inside a (dwell-smoothed)
+        // battle; hmsBattleOffCounted = this battle already counted as off-class;
+        // hmsLastCombat = last main-thread instant IsInCombat() read true.
+        bool hmsInBattle{ false };
+        bool hmsBattleOffCounted{ false };
+        std::chrono::steady_clock::time_point hmsLastCombat{};
+
         // runtime-only, never serialized: has this session's guarded reapply
         // (P3) run for this follower yet? Reset by ClearAll; the poll retries
         // until the actor resolves.
@@ -298,6 +339,13 @@ namespace MFO::ProgAllocator {
     void PublishBoardViews();
     // Any thread: the latest published views (null before the first publish).
     std::shared_ptr<const BoardProgSnap> CopyBoardViews();
+
+    // §HMS off-class usage (F3): the combat scheduler (WORKER thread) calls this
+    // when a combat gambit FIRES, publishing the action's exercised pool into a
+    // race-free per-follower mirror. HmsTrackBattle (main poll) consumes it to
+    // credit an off-class battle for the level-up skew. Cheap + self-gating (a
+    // no-op when the feature is off or the action is neutral); never serialized.
+    void NoteCombatFire(RE::Actor* a_actor, const std::string& a_actionOpcode);
 
     // ── co-save ('PRGN' — independent record beside FLWR/MSTK) ──────────────
     void CoSaveSave(SKSE::SerializationInterface* a_intfc);

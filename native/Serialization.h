@@ -42,8 +42,20 @@ namespace MFO {
     //        re-resolves when the ESL comes back. v==3 readers still consume
     //        exactly the 4 bytes; the v3 reader is KEPT (INVARIANT #12) — a v3
     //        record that resolves self-heals to v4 on its next save.
+    //   v5 - §HMS class-redistribution: an HMS block is APPENDED at the very END
+    //        of each per-follower record (after the baseline[] block), read ONLY
+    //        when version>=5. Fixed order, no count prefix — per pool in fixed
+    //        {Health, Magicka, Stamina} order: hmsBaseline(f32), hmsTarget(f32),
+    //        hmsSkew(f32), hmsCumulative(f32); then battlesSinceLevelUp(u32),
+    //        battlesOffClass(u32), offClassPool(u8), hmsCaptured(u8). NOTHING
+    //        before this block moved or resized, so a v1–v4 save read by this v5
+    //        DLL is byte-identical to before, and a v4 DLL reading a v5 save
+    //        skips the whole record via the version>kProgVersion dispatch. All
+    //        v1–v4 readers are KEPT untouched (INVARIANT #12). A v4 record read
+    //        by this v5 DLL has no HMS block → hmsCaptured stays false → the
+    //        first RecomputeHMS adopts the live base H/M/S as the baseline.
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
-    inline constexpr std::uint32_t kProgVersion    = 4;   // v4: plugin-qualified class identity
+    inline constexpr std::uint32_t kProgVersion    = 5;   // v5: §HMS class-redistribution block
 
     // #76 force-hold: a FOURTH independent record — the weapons MFO force-equipped
     // (prevent-removal) for an active equip gambit. The engine's forceEquip lock

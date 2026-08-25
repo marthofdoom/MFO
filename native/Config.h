@@ -409,6 +409,21 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_economyBuyGear{ true };
     inline std::atomic<bool>  g_economyBuyTomes{ true };
 
+    // §HMS class-redistribution (v1.0.68). On level-up MFO measures the engine's
+    // per-level Health/Magicka/Stamina award and re-grants it reshaped to the
+    // follower's class profile (mage -> Magicka, archer -> Stamina, warrior ->
+    // Health), with an off-class SKEW toward a pool the follower actually
+    // exercises in battle. This is the MAIN-MFO source of truth for the feature
+    // (ProgAllocator::RecomputeHMS reads these, NOT the addon g_econ path).
+    //   bHmsRedistribute (default ON): the whole feature's master switch. OFF =
+    //     no measure, no write -- vanilla per-level HMS stands untouched.
+    //   fHmsSkewMax: the skew ceiling as a FRACTION of each level's HMS budget
+    //     (0.20 = at most 20% pulled from the class-primary pool toward the
+    //     exercised off-class pool). The MCM slider stores it as a PERCENT
+    //     (0-100); Config::ReadFile scales /100 into this fraction.
+    inline std::atomic<bool>  g_hmsRedistribute{ true };
+    inline std::atomic<float> g_hmsSkewMaxFrac{ 0.20f };
+
     // #21 SELL-side pricing/bypass (INI-only advanced settings, NO MCM control --
     // deliberately, to avoid toggle-linkage churn). All gated under bEconomy.
     //   bSpeechPricing (default ON): the follower's SELL value follows the vanilla
