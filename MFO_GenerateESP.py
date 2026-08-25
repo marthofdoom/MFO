@@ -1197,7 +1197,7 @@ PROG_CLASSES = [
 ]
 
 
-def make_prog_tes4():
+def make_prog_tes4(esl=True):
     # ESL flag 0x200. TWO masters (§18.6): Skyrim.esm (index 0x00) for the AVIF
     # skill forms, MFO.esp (index 0x01) for the addon sentinel keyword the
     # manifest points at. Master ORDER fixes the index the OWN_PROG / ESLREF_*
@@ -1207,7 +1207,13 @@ def make_prog_tes4():
     body += subrec('SNAM', zstr("MFO follower-progression addon (optional; detected at runtime)"))
     body += subrec('MAST', zstr("Skyrim.esm")) + subrec('DATA', struct.pack('<Q', 0))
     body += subrec('MAST', zstr("MFO.esp"))    + subrec('DATA', struct.pack('<Q', 0))
-    return record('TES4', 0, 0x00000200, body)
+    # ESL flag (0x200) for the light MFO_Progression.esl; CLEARED for the regular
+    # MFO_Progression.esp "Vortex variant". An ESL is a light MASTER (loads before
+    # regular ESPs) yet this plugin masters MFO.esp (a regular ESP, loads after) --
+    # an unbreakable load-order cycle in Vortex. The .esp has identical records,
+    # masters, and 0x02-prefixed form ids, so the DLL + saves resolve either via
+    # LookupAddonForm's .esl<->.esp fallback. Temp until the v1.1 self-declarative rebuild.
+    return record('TES4', 0, 0x00000200 if esl else 0, body)
 
 
 def prog_glob(fid, edid, value, fnam):
@@ -1261,8 +1267,8 @@ def make_prog_mcm_quest():
     return record('QUST', PGID_MCM_QUEST, 0, body)
 
 
-def make_progression_esl():
-    data = make_prog_tes4()
+def make_progression_esl(esl=True):
+    data = make_prog_tes4(esl)
     # Top-group order mirrors Skyrim.esm's relative order: KYWD < GLOB < QUST
     # < FLST < MESG (QUST sorts before FLST in the shipped master).
     kywd_body = subrec('EDID', zstr("MFOP_Enrolled")) + subrec('CNAM', struct.pack('<I', 0))
@@ -1459,9 +1465,17 @@ def main():
     # runtime by the DLL; absent = feature off, never an error). It now carries
     # its OWN MCM quest, so it ALSO gets its own SEQ + MCM config (below).
     prog_path = os.path.join(out_dir, "MFO_Progression.esl")
-    prog_data = make_progression_esl()
+    prog_data = make_progression_esl(esl=True)
     with open(prog_path, 'wb') as f:
         f.write(prog_data)
+    # Vortex variant: the SAME records as a REGULAR .esp (ESL flag cleared), so a
+    # light plugin no longer masters a regular ESP (that cycle is unfixable in
+    # Vortex). Same 2 masters -> same 0x02 form-id prefix -> saves resolve via the
+    # DLL's LookupAddonForm .esl<->.esp fallback. Ship as the optional "Vortex
+    # version" until the v1.1 self-declarative rebuild.
+    prog_esp_path = os.path.join(out_dir, "MFO_Progression.esp")
+    with open(prog_esp_path, 'wb') as f:
+        f.write(make_progression_esl(esl=False))
 
     # The addon's own MCM config (ModSetting economy sliders) — everything the
     # tab needs ships with the ESL; MFO.esp / MFO.dll stay ignorant of it.
