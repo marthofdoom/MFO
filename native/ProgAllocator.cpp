@@ -701,37 +701,43 @@ namespace MFO::ProgAllocator {
             float award[3]  = { 0.0f, 0.0f, 0.0f };
             int   offPool   = (a_st.offClassPool >= 1 && a_st.offClassPool <= 3)
                                   ? (a_st.offClassPool - 1) : -1;
-            float sk = 0.0f, usagePct = 0.0f;
+            float sk = 0.0f, usagePct = 0.0f; int skPool = -1;
             if (budget > 0.0f) {
-                // (1) SEMI-PERMANENT skew fraction, persisted per off-pool in hmsSkew[].
+                // (1) SEMI-PERMANENT skew fraction. offPool from THIS window resets to 0
+                //     each award, so recover the currently-held skew DIRECTION from the
+                //     stored array — a no-usage window must DECAY it, not wipe it.
                 const float capFrac = Config::g_hmsSkewMaxFrac.load();   // MCM ceiling (F4: cap WINS)
-                if (offPool >= 0 && offPool != primary) {
-                    const float held = a_st.hmsSkew[offPool];            // last-held fraction
-                    if (a_st.battlesSinceLevelUp > 0 && a_st.battlesOffClass > 0) {
-                        float usageFrac = static_cast<float>(a_st.battlesOffClass) /
-                                          static_cast<float>(a_st.battlesSinceLevelUp);
-                        if (usageFrac > 1.0f) usageFrac = 1.0f;
-                        usagePct = usageFrac * 100.0f;
-                        sk = std::max(held, capFrac * usageFrac);        // ratchet up + hold
-                    } else {
-                        sk = held * 0.5f;                                // no usage → decay toward class%
-                    }
-                    if (sk > capFrac) sk = capFrac;
-                    if (sk < 0.01f)   sk = 0.0f;
+                int   heldPool = -1; float heldSk = 0.0f;
+                for (int p = 0; p < 3; ++p)
+                    if (a_st.hmsSkew[p] > heldSk) { heldSk = a_st.hmsSkew[p]; heldPool = p; }
+                if (offPool >= 0 && offPool != primary &&
+                    a_st.battlesSinceLevelUp > 0 && a_st.battlesOffClass > 0) {
+                    float usageFrac = static_cast<float>(a_st.battlesOffClass) /
+                                      static_cast<float>(a_st.battlesSinceLevelUp);
+                    if (usageFrac > 1.0f) usageFrac = 1.0f;
+                    usagePct = usageFrac * 100.0f;
+                    const float base = (heldPool == offPool) ? heldSk : 0.0f;   // same dir grows; new dir starts fresh
+                    sk = std::max(base, capFrac * usageFrac);            // ratchet up + hold (semi-permanent)
+                    skPool = offPool;
+                } else if (heldPool >= 0 && heldPool != primary) {
+                    sk = heldSk * 0.5f;                                  // no off-class usage → DECAY toward class%
+                    skPool = heldPool;
                 }
-                for (int p = 0; p < 3; ++p) a_st.hmsSkew[p] = 0.0f;      // re-derive the shape below
-                if (offPool >= 0 && offPool != primary && sk > 0.0f) {
-                    a_st.hmsSkew[offPool] =  sk;
+                if (sk > capFrac) sk = capFrac;
+                if (sk < 0.01f) { sk = 0.0f; skPool = -1; }
+                for (int p = 0; p < 3; ++p) a_st.hmsSkew[p] = 0.0f;      // re-derive the shape
+                if (skPool >= 0 && skPool != primary && sk > 0.0f) {
+                    a_st.hmsSkew[skPool]  =  sk;
                     a_st.hmsSkew[primary] = -sk;
                 }
 
                 // (2) effective target ratio = class profile shifted by the skew.
                 float eprof[3];
                 for (int p = 0; p < 3; ++p) eprof[p] = prof[p];
-                if (offPool >= 0 && offPool != primary && sk > 0.0f) {
-                    eprof[offPool] += sk;
+                if (skPool >= 0 && skPool != primary && sk > 0.0f) {
+                    eprof[skPool]  += sk;
                     eprof[primary] -= sk;
-                    if (eprof[primary] < 0.0f) { eprof[offPool] += eprof[primary]; eprof[primary] = 0.0f; }
+                    if (eprof[primary] < 0.0f) { eprof[skPool] += eprof[primary]; eprof[primary] = 0.0f; }
                 }
 
                 // (3) allocate the budget to CONVERGE current totals toward eprof.
@@ -778,7 +784,7 @@ namespace MFO::ProgAllocator {
                                  id, static_cast<int>(def->stance), prof[0]*100, prof[1]*100, prof[2]*100,
                                  delta[0], delta[1], delta[2], budget,
                                  sk*100, HmsPoolName(primary),
-                                 offPool >= 0 ? HmsPoolName(offPool) : "(none)",
+                                 skPool >= 0 ? HmsPoolName(skPool) : "(none)",
                                  usagePct, a_st.battlesSinceLevelUp,
                                  award[0], award[1], award[2],
                                  a_st.hmsTarget[0], a_st.hmsTarget[1], a_st.hmsTarget[2]);
