@@ -782,22 +782,32 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `PollWork`, and `ReapplyFollower`. **MEASURE-not-clobber** (the key difference
   from skills): it reads `cur=GetBaseActorValue(H/M/S)`, measures the POSITIVE
   drift off the held `hmsTarget` (= the engine's live per-modlist per-level award)
-  BEFORE re-asserting, sums the 3 pool deltas = the budget, redistributes by class
-  profile (`ClassDef::stance` 1=Melee 60/5/35, 2=Ranged 40/5/55, 3=Mage 15/80/5;
-  0/none → skip) + a usage-scaled **skew** (≤`g_econ.hmsSkewMaxFrac`=20% pulled
-  from the class-primary pool toward the exercised off-class pool, ≥1-pt floor),
-  accumulates into `hmsCumulative`, then holds `hmsTarget=hmsBaseline+hmsCumulative`
-  via one `SetBaseActorValue` per pool. Net follower total gain == the measured
-  budget, reshaped. Fixed-stat follower → measured budget 0 → 0 redistribution
-  (vanilla). Skew usage = `battlesOffClass/battlesSinceLevelUp`; battles counted
-  in `HmsTrackBattle` (main-thread combat rising-edge, 3s dwell) using
-  `HmsExercisedPool` (readied spell→Magicka, bow/xbow→Stamina, staff→Magicka,
-  melee→Health) — deliberately NOT reading worker-written `Gambit.lastFired`
-  (would be a #4 cross-thread read). Counters reset when an award is consumed.
-  `g_econ.hmsRedistribute` (default ON) is the compat off-switch. Baseline
-  captured at `Enroll` (`hmsCaptured=true`); a pre-v5 save (`hmsCaptured=false`)
-  ADOPTS the live base on first `RecomputeHMS`. REQUIRED `[hms]` probe logs the
-  measured award + budget + profile + skew + per-pool award + final targets.
+  BEFORE re-asserting, sums the 3 pool deltas SIGNED then clamps ≥0 (a starved pool
+  reads negative under the engine's absolute-autocalc slam; signed telescopes to the
+  fresh award), redistributes by class profile (`ClassDef::stance` 1=Melee 60/5/35,
+  2=Ranged 40/5/55, 3=Mage 15/80/5; 0/none → skip) + a usage-scaled **skew** (pulled
+  from the class-primary pool toward the exercised off-class pool; ≥1-pt floor, but
+  the **cap wins** — clamped to `Config::g_hmsSkewMaxFrac`×budget so a tiny budget
+  never exceeds it), accumulates into `hmsCumulative`, then holds
+  `hmsTarget=hmsBaseline+hmsCumulative` via one `SetBaseActorValue` per pool. Net
+  follower total gain == the measured budget, reshaped. Fixed-stat follower →
+  measured budget 0 → 0 redistribution (vanilla). Skew usage =
+  `battlesOffClass/battlesSinceLevelUp`; battles counted in `HmsTrackBattle`
+  (main-thread combat rising-edge, 3s dwell). **Off-class signal = the REAL fired
+  gambit (F3):** the combat scheduler (WORKER) calls `ProgAllocator::NoteCombatFire`
+  on every `Result::Fired` (`Scheduler.cpp` ~:886), mapping the action opcode →
+  pool (cast→Magicka, melee attack/power→Health, bow attack/equip_ranged→Stamina)
+  into a **mutex-guarded per-follower mirror** (`g_hmsFiredMask`, CombatStyle::g_owned
+  pattern); `HmsTrackBattle` consumes the mask (cleared each rising edge), credits a
+  battle off-class when an off-class pool fired. Deliberately NOT reading
+  worker-written `Gambit.lastFired` off-thread (#4). Counters reset when an award is
+  consumed (seed 1 if a battle is in progress). **Knobs live on the MAIN MFO MCM,
+  not `g_econ`:** `Config::g_hmsRedistribute` (bHmsRedistribute, default ON, master
+  switch — also gates `NoteCombatFire`) + `Config::g_hmsSkewMaxFrac` (fHmsSkewMax,
+  MCM stores a PERCENT 0-100, scaled /100 in `Config::ReadFile`). Baseline captured
+  at `Enroll` (`hmsCaptured=true`); a pre-v5 save (`hmsCaptured=false`) ADOPTS the
+  live base on first `RecomputeHMS`. REQUIRED `[hms]` probe logs the measured award
+  + budget + profile + skew + per-pool award + final targets.
 - **`Class` enum ordinals (`:84`) MUST stay == `combatClassOverride`** — `SetClass`
   mirrors into it via `Followers::TryEnsureRecord` (`:1204`). Board snapshot is the
   one cross-thread structure (guarded `g_viewMx`); `Rapport::Spend` (`:1346`) is a

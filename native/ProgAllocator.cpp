@@ -56,15 +56,9 @@ namespace MFO::ProgAllocator {
             // the old ADOPT-drift path runs: engine gains stack under MFO's
             // award. Live, non-save addon MCM/INI knob (no GLOB, no PRGN touch).
             bool  cancelEngineAwards    = true;
-            // §HMS class-redistribution: master switch + max skew fraction.
-            // hmsRedistribute OFF = the whole HMS feature is inert (no measure,
-            // no write) — vanilla engine HMS stands. hmsSkewMaxFrac is the
-            // ceiling on the usage-scaled skew pulled FROM the class-primary pool
-            // TOWARD the exercised off-class pool (marth: up to 20%). Live,
-            // non-save knobs (no GLOB, no PRGN touch) — same discipline as
-            // cancelEngineAwards; no MCM control, so audit_mcm stays green.
-            bool  hmsRedistribute       = true;
-            float hmsSkewMaxFrac        = 0.20f;
+            // §HMS class-redistribution knobs live on the MAIN MFO MCM, NOT here:
+            // Config::g_hmsRedistribute (master switch) + Config::g_hmsSkewMaxFrac
+            // (skew ceiling). RecomputeHMS reads those directly.
         };
         Economy g_econ;
         // The RECORD DEFAULTS latched at kDataLoaded (before any save loads, so
@@ -539,39 +533,54 @@ namespace MFO::ProgAllocator {
         //   nothing decisive                → -1
         // Gated by the caller on IsInCombat(); we additionally require the
         // weapon to be DRAWN so a sheathed idle loadout is not counted.
-        int HmsExercisedPool(RE::Actor* a_actor) {
-            // Actor publicly inherits ActorState — IsWeaponDrawn() is a direct
-            // call. A sheathed idle loadout says nothing about what pool is used.
-            if (!a_actor->IsWeaponDrawn()) return -1;
-            RE::TESForm* hands[2] = { a_actor->GetEquippedObject(false),   // right
-                                      a_actor->GetEquippedObject(true) };  // left
-            // WEAPON outranks a readied spell: a drawn melee/ranged weapon IS the combat
-            // action, and a spell merely held in the off-hand (a ward, a self-heal, a
-            // utility) must NOT read as Magicka exercise. Only a follower with no weapon
-            // (pure caster / dual-cast) counts as exercising Magicka.
-            for (auto* h : hands) {
-                if (auto* weap = h ? h->As<RE::TESObjectWEAP>() : nullptr) {
-                    switch (weap->GetWeaponType()) {
-                    case RE::WEAPON_TYPE::kBow:
-                    case RE::WEAPON_TYPE::kCrossbow:
-                        return 2;   // Stamina
-                    case RE::WEAPON_TYPE::kStaff:
-                        return 1;   // Magicka (magic role)
-                    case RE::WEAPON_TYPE::kOneHandSword:
-                    case RE::WEAPON_TYPE::kOneHandDagger:
-                    case RE::WEAPON_TYPE::kOneHandAxe:
-                    case RE::WEAPON_TYPE::kOneHandMace:
-                    case RE::WEAPON_TYPE::kTwoHandSword:
-                    case RE::WEAPON_TYPE::kTwoHandAxe:
-                        return 0;   // Health
-                    default:
-                        break;
-                    }
+        // §HMS off-class-usage mirror (F3). The REAL "off-class gambit fired"
+        // signal: the combat scheduler (WORKER thread) publishes the pool a
+        // FIRED combat gambit action exercised, into this per-follower mirror;
+        // HmsTrackBattle (MAIN poll) consumes it. Mutex-guarded map — the same
+        // cross-thread per-follower pattern as CombatStyle::g_owned — so it is
+        // race-free without reading g_followers off-thread. Runtime-only, never
+        // serialized. The stored byte is a BITMASK of pools fired since the last
+        // consume: bit0=Health, bit1=Magicka, bit2=Stamina.
+        std::mutex g_hmsFireMx;
+        std::unordered_map<RE::FormID, std::uint8_t> g_hmsFiredMask;
+
+        // Map a FIRED combat gambit action opcode to the HMS pool it exercises:
+        // 0=none/neutral, 1=Health, 2=Magicka, 3=Stamina. Opcode literals are the
+        // frozen Vocabulary contract (#10); a cast of ANY delivery -> Magicka.
+        std::uint8_t HmsPoolForFire(RE::Actor* a_actor, const std::string& a_op) {
+            if (a_op.rfind("act.cast", 0) == 0) return 2;   // cast_self/target/player/spell -> Magicka
+            if (a_op == "act.equip_ranged")     return 3;   // ranged role -> Stamina
+            if (a_op == "act.equip_melee")      return 1;   // melee role  -> Health
+            if (a_op == "act.attack" || a_op == "act.power_attack") {
+                // A generic attack is melee OR bow depending on the drawn weapon.
+                // Engine read; the Scheduler caller is on the worker (engine reads
+                // are fine there, like the rest of its tick).
+                if (a_actor) {
+                    RE::TESForm* hands[2] = { a_actor->GetEquippedObject(false),
+                                             a_actor->GetEquippedObject(true) };
+                    for (auto* h : hands)
+                        if (auto* w = h ? h->As<RE::TESObjectWEAP>() : nullptr) {
+                            const auto t = w->GetWeaponType();
+                            if (t == RE::WEAPON_TYPE::kBow || t == RE::WEAPON_TYPE::kCrossbow)
+                                return 3;   // ranged attack -> Stamina
+                        }
                 }
+                return 1;   // melee attack -> Health
             }
-            for (auto* h : hands)
-                if (h && h->Is(RE::FormType::Spell)) return 1;   // Magicka: no weapon, casting
-            return -1;
+            return 0;   // wait / flee / equip_torch / loot / drink -> neutral
+        }
+
+        void HmsClearFiredMask(RE::FormID a_id) {
+            std::scoped_lock lk(g_hmsFireMx);
+            g_hmsFiredMask.erase(a_id);
+        }
+        std::uint8_t HmsConsumeFiredMask(RE::FormID a_id) {
+            std::scoped_lock lk(g_hmsFireMx);
+            auto it = g_hmsFiredMask.find(a_id);
+            if (it == g_hmsFiredMask.end()) return 0;
+            const std::uint8_t m = it->second;
+            g_hmsFiredMask.erase(it);
+            return m;
         }
 
         // Combat-edge battle counting for the skew usage metric. Runs every poll
@@ -589,28 +598,37 @@ namespace MFO::ProgAllocator {
 
             constexpr auto kHmsCombatDwell = std::chrono::seconds(3);   // mirror Logistics shed dwell
             const auto now = std::chrono::steady_clock::now();
+            const RE::FormID fid = a_actor->GetFormID();
             const bool combatNow = a_actor->IsInCombat();
             if (combatNow) a_st.hmsLastCombat = now;
             const bool recentCombat =
                 combatNow || (a_st.hmsInBattle && (now - a_st.hmsLastCombat) < kHmsCombatDwell);
 
             if (recentCombat && !a_st.hmsInBattle) {
-                // rising edge — a new battle
+                // rising edge — a new battle. Drop any fires the worker published
+                // during the PREVIOUS battle so they never bleed into this one.
                 a_st.hmsInBattle = true;
                 a_st.hmsBattleOffCounted = false;
+                HmsClearFiredMask(fid);
                 if (a_st.battlesSinceLevelUp < 0xFFFFFFFFu) ++a_st.battlesSinceLevelUp;
             } else if (!recentCombat && a_st.hmsInBattle) {
                 a_st.hmsInBattle = false;
             }
 
             if (a_st.hmsInBattle && combatNow && !a_st.hmsBattleOffCounted) {
-                const int pool = HmsExercisedPool(a_actor);
-                if (pool >= 0 && pool != primary) {
+                // REAL off-class signal (F3): did the follower's combat gambit
+                // actually FIRE an off-class action this battle? Consume the
+                // worker-published fired-pool bitmask (bit p == pool index p).
+                const std::uint8_t mask = HmsConsumeFiredMask(fid);
+                int offPool = -1;
+                for (int p = 0; p < 3; ++p)
+                    if (p != primary && (mask & (1u << p))) { offPool = p; break; }
+                if (offPool >= 0) {
                     a_st.hmsBattleOffCounted = true;
                     if (a_st.battlesOffClass < 0xFFFFFFFFu) ++a_st.battlesOffClass;
                     // First off-class pool since the last award wins (stable).
                     if (a_st.offClassPool == 0)
-                        a_st.offClassPool = static_cast<std::uint8_t>(pool + 1);
+                        a_st.offClassPool = static_cast<std::uint8_t>(offPool + 1);
                 }
             }
         }
@@ -624,7 +642,7 @@ namespace MFO::ProgAllocator {
         // ADOPT the follower's current base H/M/S as the baseline once, exactly
         // like the skill ADOPT fallback — existing followers are not retro-slammed.
         void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
-            if (!g_econ.hmsRedistribute) return;
+            if (!Config::g_hmsRedistribute.load()) return;   // main-MFO MCM master switch
             const ClassDef* def = FindClassDef(a_st.clsId);
             if (!def) return;                 // no class picked, or the addon left
             float prof[3]; int primary = 0;
@@ -686,8 +704,14 @@ namespace MFO::ProgAllocator {
                     usageFrac = static_cast<float>(a_st.battlesOffClass) /
                                 static_cast<float>(a_st.battlesSinceLevelUp);
                     if (usageFrac > 1.0f) usageFrac = 1.0f;
-                    shift = g_econ.hmsSkewMaxFrac * usageFrac * budget;
-                    if (shift < 1.0f) shift = 1.0f;             // ≥1-point floor
+                    // Main-MFO MCM skew ceiling (a FRACTION of budget).
+                    const float capFrac  = Config::g_hmsSkewMaxFrac.load();
+                    const float capPts   = capFrac * budget;
+                    shift = capFrac * usageFrac * budget;
+                    if (shift < 1.0f) shift = 1.0f;             // ≥1-point floor (advisory)
+                    // F4: the CAP is authoritative and WINS over the floor — a tiny
+                    // budget (or a low/zero cap) can never let skew exceed capPts.
+                    if (shift > capPts) shift = capPts;
                     if (shift > award[primary]) shift = award[primary];   // never negative primary
                     award[primary]  -= shift;
                     award[offPool]  += shift;
@@ -2765,11 +2789,27 @@ namespace MFO::ProgAllocator {
         g_lastPlayerLevel = 0;
         ++g_pollGen;   // orphan any in-flight poll chain (MainThread::Clear
                        // drops the queued closure too — belt and braces)
+        // §HMS: drop the off-class fire mirror (runtime-only, save-scoped).
+        // Own lock, taken + released BEFORE g_viewMx — never nested.
+        { std::scoped_lock fl(g_hmsFireMx); g_hmsFiredMask.clear(); }
         // Drop the published board views: a view built from the old save must
         // never be drawn over a freshly loaded one (the ClearPendingEdits rule
         // applied to reads). OnPostLoad reseeds it.
         std::scoped_lock lk(g_viewMx);
         g_boardSnap.reset();
+    }
+
+    // §HMS off-class usage (F3): the combat scheduler (worker thread) publishes a
+    // FIRED combat gambit action's exercised pool here; HmsTrackBattle (main poll)
+    // consumes it. Self-gating — a no-op when the feature is off or the action is
+    // neutral. Mutex-guarded, race-free, never touches g_followers/g_prog.
+    void NoteCombatFire(RE::Actor* a_actor, const std::string& a_actionOpcode) {
+        if (!Config::g_hmsRedistribute.load()) return;   // feature off — don't accumulate
+        if (!a_actor) return;
+        const std::uint8_t pool = HmsPoolForFire(a_actor, a_actionOpcode);
+        if (pool == 0) return;                            // neutral action — nothing to record
+        std::scoped_lock lk(g_hmsFireMx);
+        g_hmsFiredMask[a_actor->GetFormID()] |= static_cast<std::uint8_t>(1u << (pool - 1));
     }
 
     int PollGeneration() { return g_pollGen; }

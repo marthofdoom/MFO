@@ -97,6 +97,33 @@
             "sourceType": "ModSettingBool",
             "defaultValue": 1
           }
+        },
+        {
+          "text": "Class Growth (HMS)",
+          "type": "header"
+        },
+        {
+          "id": "bHmsRedistribute:General",
+          "text": "Class HMS on level-up",
+          "type": "toggle",
+          "help": "ON (default): each level, a follower's Health/Magicka/Stamina gain is reshaped to its class profile (a mage banks the growth into Magicka, an archer into Stamina, a warrior into Health). The total gain matches vanilla; only the split changes. OFF: vanilla per-level HMS stands untouched.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
+          "id": "fHmsSkewMax:General",
+          "text": "HMS off-class skew cap",
+          "type": "slider",
+          "help": "Percent of each level's HMS budget that can be pulled from the class-primary pool toward an off-class pool the follower actually exercises in battle (a battle-mage earning some Magicka). 0 disables skew; 20 is the default.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 100.0,
+            "step": 5.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 20.0
+          }
         }
       ]
     },

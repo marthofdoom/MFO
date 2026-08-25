@@ -340,6 +340,13 @@ namespace MFO::ProgAllocator {
     // Any thread: the latest published views (null before the first publish).
     std::shared_ptr<const BoardProgSnap> CopyBoardViews();
 
+    // §HMS off-class usage (F3): the combat scheduler (WORKER thread) calls this
+    // when a combat gambit FIRES, publishing the action's exercised pool into a
+    // race-free per-follower mirror. HmsTrackBattle (main poll) consumes it to
+    // credit an off-class battle for the level-up skew. Cheap + self-gating (a
+    // no-op when the feature is off or the action is neutral); never serialized.
+    void NoteCombatFire(RE::Actor* a_actor, const std::string& a_actionOpcode);
+
     // ── co-save ('PRGN' — independent record beside FLWR/MSTK) ──────────────
     void CoSaveSave(SKSE::SerializationInterface* a_intfc);
     void CoSaveLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version);
