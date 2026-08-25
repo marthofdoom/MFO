@@ -1251,8 +1251,11 @@ namespace MFO::Logistics {
                     auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
                     auto* form = RE::TESForm::LookupByID(itemID);
                     auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
+                    if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq) {
+                        spdlog::info("[wtrack] {:08X} MFO EquipObject '{}' (AcquireEquip)",
+                                     folID, item->GetName() ? item->GetName() : "?");
                         eq->EquipObject(fol, item);
+                    }
                 };
                 if (MainThread::IsInstalled()) MainThread::Post(doEquip);
                 else                           doEquip();   // VR: pump is a no-op, keep the direct path
@@ -4366,8 +4369,8 @@ namespace MFO::Logistics {
                 RE::TESBoundObject* bestObj = nullptr;
                 if (bestID)
                     if (auto* f = RE::TESForm::LookupByID(bestID)) bestObj = f->As<RE::TESBoundObject>();
-                if (bestObj) eq->EquipObject(fol, bestObj);   // auto-unequips the excluded one
-                else         eq->UnequipObject(fol, badObj);  // nothing real carried -- just take it off
+                if (bestObj) { spdlog::info("[wtrack] {:08X} MFO EquipObject '{}' (excluded-swap)", fol->GetFormID(), bestObj->GetName() ? bestObj->GetName() : "?"); eq->EquipObject(fol, bestObj); }   // auto-unequips the excluded one
+                else         { spdlog::info("[wtrack] {:08X} MFO UnequipObject '{}' (excluded-swap)", fol->GetFormID(), badObj->GetName() ? badObj->GetName() : "?"); eq->UnequipObject(fol, badObj); }  // nothing real carried -- just take it off
                 std::int32_t haveBad = 0;
                 for (auto& [obj, data] : fol->GetInventory())
                     if (obj == badObj) { haveBad = data.first; break; }
@@ -4543,6 +4546,27 @@ namespace MFO::Logistics {
         // looted yet); a no-op for anyone already snapshotted this session or
         // loaded from the co-save.
         EnsureStockSnapshot(a_follower);
+
+        // [wtrack] DIAGNOSTIC (temp): log body/hands worn-item transitions each tick to
+        // catch what re-equips a redundant piece (engine vs MFO). If the worn body flips
+        // to Nord with NO preceding "[wtrack] MFO EquipObject" line, MFO did not do it.
+        // Worker-sequential static, no lock (same tick discipline as the other diagnostics).
+        {
+            using WSlot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            static std::unordered_map<RE::FormID, std::pair<RE::FormID, RE::FormID>> s_wtrack;
+            auto* bW = a_follower->GetWornArmor(WSlot::kBody);
+            auto* hW = a_follower->GetWornArmor(WSlot::kHands);
+            const RE::FormID bId = bW ? bW->GetFormID() : 0;
+            const RE::FormID hId = hW ? hW->GetFormID() : 0;
+            auto& pv = s_wtrack[a_follower->GetFormID()];
+            if (pv.first != bId || pv.second != hId) {
+                spdlog::info("[wtrack] {:08X} worn CHANGED -> body='{}' hands='{}'",
+                             a_follower->GetFormID(),
+                             bW && bW->GetName() ? bW->GetName() : "(none)",
+                             hW && hW->GetName() ? hW->GetName() : "(none)");
+                pv = { bId, hId };
+            }
+        }
 
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
