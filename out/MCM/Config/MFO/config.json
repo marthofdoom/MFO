@@ -302,6 +302,16 @@
           }
         },
         {
+          "id": "bMeoAwareGems:General",
+          "text": "MEO aware followers",
+          "type": "toggle",
+          "help": "Requires MEO (marth's Enchanting Overhaul). OFF (default): followers still CONSERVE gems -- a gem extracted when selling gemmed junk is re-socketed into their own worn gear rather than left loose (this always runs when MEO is present). ON: followers also OPTIMIZE their gems -- they know each gem's effect, pick the best gem for every empty socket (a mage favours magicka/school gems), and swap up to a stronger gem when they carry one. No effect without MEO installed.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
           "id": "bAutoRetreat:General",
           "text": "Auto-retreat when outmatched",
           "type": "toggle",

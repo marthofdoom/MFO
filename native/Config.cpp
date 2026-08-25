@@ -163,6 +163,7 @@ namespace MFO::Config {
             else if (a_key == "xMerchantPerkID")    setU(g_merchantPerkID);
             else if (a_key == "bMageWearRobes")     setB(g_mageWearRobes);
             else if (a_key == "bMageApparelStrictSchool") setB(g_mageApparelStrictSchool);
+            else if (a_key == "bMeoAwareGems")      setB(g_meoAwareGems);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
             else if (a_key == "bMagicLoadout")      setB(g_magicLoadout);
             else if (a_key == "bMageDaggersOnly")   setB(g_mageDaggersOnly);
@@ -289,6 +290,7 @@ namespace MFO::Config {
             g_merchantPerkID     = 0x00058F7A;  // vanilla Merchant / Ordinator Salesman (Skyrim.esm)
             g_mageWearRobes      = true;    // #21 mage clothing/jewelry dress-up -- ON (loot + buy)
             g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
+            g_meoAwareGems       = false;   // effect-aware gem optimization -- OFF (conservation still always runs)
             g_autoRetreat        = true;
             g_magicLoadout       = true;
             g_mageDaggersOnly    = true;
@@ -344,6 +346,7 @@ namespace MFO::Config {
             { "bEconomy", "1" },               { "bAutoRetreat", "1" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
             { "bMageWearRobes", "1" },         { "bMageApparelStrictSchool", "0" },
+            { "bMeoAwareGems", "0" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
             { "bBeastHeadFix", "1" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },

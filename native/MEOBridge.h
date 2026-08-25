@@ -94,6 +94,39 @@ namespace MFO::MEOBridge {
     // re-queued each scan). Any-thread (UnsocketGem queues to the main thread).
     void UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid);
 
+    // ── GEM RECONCILE (MEO ABI v3) — the follower re-sockets his OWN loose gems ──
+    // The ungem-then-sell path (UnsocketItemGems) leaves a gem LOOSE in the
+    // follower's inventory. This is the decoupled RECONCILE pass that later fills
+    // it back into gear the follower keeps: each management scan, match a loose gem
+    // against a WORN item with an empty socket and socket it. Two tiers:
+    //   * CONSERVATION (a_effectAware=false, ALWAYS on): fill an empty socket with
+    //     any DOMAIN-matching loose gem so no previously-socketed gem stays loose.
+    //   * EFFECT-AWARE (a_effectAware=true, MCM bMeoAwareGems): pick the BEST loose
+    //     gem per empty socket by class preference + magnitude, and swap up a
+    //     socketed gem that a strictly-better loose gem beats (unsocket the worse;
+    //     the freed slot re-fills next pass).
+    // The whole pass reads live inventory + socket state (GetLooseGems /
+    // GetEmptySocketCount / GetGemDetails, all MAIN-THREAD-only) and mutates via
+    // SocketGem/UnsocketGem (queue to main) -> it runs entirely on the MAIN THREAD.
+    // Convergence, not dedup state: GetEmptySocketCount reflects only LANDED
+    // sockets and the async op lands within a frame or two, far inside the ~1 s
+    // management cadence, so the next pass never re-issues a socket that already
+    // landed. Domain is matched here (armor<->armor, weapon<->weapon, support fits
+    // either) so MEO never rejects the queued socket into a retry loop.
+    struct GemReconcilePrefs {
+        bool          caster = false;   // IsCasterFollower
+        std::uint32_t school = 0;       // dominant TargetMagicSchool (RE::ActorValue ordinal); kNone = 0
+    };
+
+    // Is the reconcile usable (MEO present, ABI >= 3)? Tier 1 no-ops below this.
+    bool GemReconcileSupported();
+
+    // Worker-callable: schedule a MAIN-THREAD reconcile pass for a_follower. No-op
+    // when MEO < v3. a_effectAware gates ONLY the effect-aware tier; conservation
+    // always runs when supported.
+    void RequestGemReconcile(RE::Actor* a_follower, bool a_effectAware,
+                             GemReconcilePrefs a_prefs);
+
     // ── gem-simulated comparison (MAIN THREAD ONLY) ─────────────────────────
     // "See the compared stats WITH the follower's current gems socketed into a
     // candidate." For a board/preview on the render thread -- NOT the worker

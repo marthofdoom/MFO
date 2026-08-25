@@ -2,6 +2,9 @@
 #include "MEO_API.h"
 #include "MainThread.h"   // Build A: main-thread refresh of the carried-gem cache
 
+#include <algorithm>
+#include <cctype>   // reconcile: case-insensitive gem-name preference match
+#include <limits>   // reconcile: best/weakest gem sentinels
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -178,6 +181,197 @@ namespace MFO::MEOBridge {
         // UnsocketGem queues to the main thread -- safe from any thread. One per gem.
         for (const std::uint8_t s : slots)
             g_meo->UnsocketGem(a_actor, a_base, a_uid, s);
+    }
+
+    // ── GEM RECONCILE (ABI v3) — MAIN-THREAD re-socket of the follower's loose gems ──
+    namespace {
+        // Case-insensitive substring test over a small POD char buffer (gid/name <=64).
+        bool ContainsCI(const char* a_hay, const char* a_needle) {
+            if (!a_hay || !a_needle || !*a_needle) return false;
+            for (const char* h = a_hay; *h; ++h) {
+                const char* a = h; const char* b = a_needle;
+                while (*a && *b) {
+                    const char ca = static_cast<char>(std::tolower(static_cast<unsigned char>(*a)));
+                    const char cb = static_cast<char>(std::tolower(static_cast<unsigned char>(*b)));
+                    if (ca != cb) break;
+                    ++a; ++b;
+                }
+                if (!*b) return true;
+            }
+            return false;
+        }
+
+        const char* SchoolWord(std::uint32_t a_av) {
+            switch (static_cast<RE::ActorValue>(a_av)) {
+            case RE::ActorValue::kAlteration:  return "alteration";
+            case RE::ActorValue::kConjuration: return "conjuration";
+            case RE::ActorValue::kDestruction: return "destruction";
+            case RE::ActorValue::kIllusion:    return "illusion";
+            case RE::ActorValue::kRestoration: return "restoration";
+            default:                           return "";
+            }
+        }
+
+        // Class-preference bonus for a gem (effect-aware tier only). HEURISTIC on the
+        // gem's gid/name text: MEO's gem catalog is not shared with MFO, so this is a
+        // soft ranking and MAGNITUDE is the tie-break. Bigger = more wanted. (Flagged
+        // for tuning against MEO's real gid set -- see the build report.)
+        int GemBonus(const char* a_gid, const char* a_name, bool a_isArmor, bool a_isSupport,
+                     const GemReconcilePrefs& a_p) {
+            int b = 0;
+            if (a_isSupport) b += 1;   // Focus/Conduit/Echo glue is always useful
+            if (a_p.caster) {
+                const char* sw = SchoolWord(a_p.school);
+                if (*sw && (ContainsCI(a_gid, sw) || ContainsCI(a_name, sw)))            b += 4;
+                if (ContainsCI(a_gid, "magick") || ContainsCI(a_name, "magick") ||
+                    ContainsCI(a_gid, "spell")  || ContainsCI(a_name, "spell"))          b += 2;
+                if (a_isArmor && (ContainsCI(a_gid, "magic") || ContainsCI(a_name, "magic"))) b += 1;
+            } else {
+                if (ContainsCI(a_gid, "damage") || ContainsCI(a_gid, "health") ||
+                    ContainsCI(a_gid, "stamina"))                                        b += 2;
+            }
+            return b;
+        }
+
+        // Domain fit: armor gems -> armor items, weapon gems -> weapons, support -> either.
+        bool DomainFits(const MEO_API::LooseGemInfo& a_g, bool a_itemIsArmor) {
+            return a_g.isSupport || (a_g.isArmor == a_itemIsArmor);
+        }
+
+        void ReconcileLooseGems(RE::Actor* a_actor, bool a_effectAware, GemReconcilePrefs a_prefs) {
+            if (!g_meo || g_meo->Version() < 3 || !a_actor) return;
+
+            // 1) LOOSE gems in the actor's OWN inventory.
+            constexpr std::uint32_t kMaxLoose = 64;
+            MEO_API::LooseGemInfo loose[kMaxLoose];
+            const std::uint32_t nLoose = std::min(g_meo->GetLooseGems(a_actor, loose, kMaxLoose), kMaxLoose);
+            if (nLoose == 0) return;   // nothing to place -> nothing to reconcile
+
+            // Remaining stock per loose entry: the async SocketGem won't decrement the
+            // real stack until it lands, so track availability locally within the pass.
+            std::uint32_t avail[kMaxLoose];
+            for (std::uint32_t i = 0; i < nLoose; ++i)
+                avail[i] = loose[i].count ? loose[i].count : 1u;
+
+            // 2) The follower's WORN socketable gear (weapons + armor). Worn is the
+            //    unambiguous "keeps/wears" set -- never re-socket into to-be-sold junk.
+            struct WornItem { RE::FormID base; std::uint16_t uid; bool isArmor; };
+            std::vector<WornItem> items;
+            auto addItem = [&](RE::TESBoundObject* a_obj, bool a_isArmor) {
+                if (!a_obj) return;
+                const RE::FormID base = a_obj->GetFormID();
+                for (const auto& it : items) if (it.base == base) return;   // dedupe (armor covers many biped slots)
+                items.push_back({ base, WornUid(a_actor, a_obj), a_isArmor });
+            };
+            for (int hand = 0; hand < 2; ++hand)
+                if (auto* eq = a_actor->GetEquippedObject(hand == 1))
+                    if (auto* w = eq->As<RE::TESObjectWEAP>()) addItem(w, false);
+            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            static constexpr Slot kArmorSlots[] = {
+                Slot::kHead, Slot::kHair, Slot::kCirclet, Slot::kBody, Slot::kHands,
+                Slot::kForearms, Slot::kFeet, Slot::kCalves, Slot::kShield,
+                Slot::kRing, Slot::kAmulet,
+            };
+            for (const auto s : kArmorSlots)
+                if (auto* w = a_actor->GetWornArmor(s)) addItem(w, true);
+
+            for (auto& item : items) {
+                const int emptyCount = g_meo->GetEmptySocketCount(a_actor, item.base, item.uid);
+                if (emptyCount <= 0) continue;
+
+                // Filled slots (+ their gems, for the effect-aware swap). GetGemDetails
+                // returns the TRUE count; capacity = filled + empty.
+                constexpr std::uint32_t kMaxDet = 8;
+                MEO_API::GemDetail det[kMaxDet];
+                const std::uint32_t trueDet = g_meo->GetGemDetails(a_actor, item.base, item.uid, det, kMaxDet);
+                const std::uint32_t nDet    = std::min(trueDet, kMaxDet);
+                const int capacity          = static_cast<int>(trueDet) + emptyCount;
+
+                std::unordered_set<std::uint8_t> filled;
+                for (std::uint32_t i = 0; i < nDet; ++i) filled.insert(det[i].slot);
+
+                // A WORN item never gemmed (uid 0): MEO mints the uid on the FIRST
+                // socket, so fill only ONE slot this pass; the rest fill next pass once
+                // WornUid returns the minted uid (avoids ambiguous uid-0 targeting).
+                const bool mintGuard = (item.uid == 0);
+
+                for (int slot = 0; slot < capacity; ++slot) {
+                    if (filled.contains(static_cast<std::uint8_t>(slot))) continue;
+
+                    int pick = -1;
+                    if (!a_effectAware) {
+                        // tier 1 conservation: first domain-matching loose gem in stock.
+                        for (std::uint32_t i = 0; i < nLoose; ++i)
+                            if (avail[i] > 0 && DomainFits(loose[i], item.isArmor)) { pick = static_cast<int>(i); break; }
+                    } else {
+                        // tier 2 effect-aware: best by (class bonus, base magnitude).
+                        int bestB = std::numeric_limits<int>::min(); float bestM = -1.0f;
+                        for (std::uint32_t i = 0; i < nLoose; ++i) {
+                            if (avail[i] == 0 || !DomainFits(loose[i], item.isArmor)) continue;
+                            const int bo = GemBonus(loose[i].gid, loose[i].name,
+                                                    loose[i].isArmor, loose[i].isSupport, a_prefs);
+                            if (bo > bestB || (bo == bestB && loose[i].magnitude > bestM)) {
+                                bestB = bo; bestM = loose[i].magnitude; pick = static_cast<int>(i);
+                            }
+                        }
+                    }
+                    if (pick < 0) break;   // no gem fits this item's domain -> next item
+
+                    g_meo->SocketGem(a_actor, item.base, item.uid, static_cast<std::uint8_t>(slot),
+                                     loose[pick].gemBase, loose[pick].gemUid);
+                    --avail[pick];
+                    spdlog::info("[meo] reconcile socket '{}' -> {:08X}/{} slot {} on {:08X}",
+                                 loose[pick].name, item.base, item.uid, slot, a_actor->GetFormID());
+                    if (mintGuard) break;   // one socket per pass on a fresh (uid 0) item
+                }
+
+                // tier 2 SWAP-UP: if a still-available loose gem STRICTLY beats the
+                // weakest socketed gem (same domain), unsocket the socketed one. It
+                // returns to loose inventory and the freed slot re-fills next pass with
+                // the better gem. STRICT-only, so the demoted gem (now weaker than what
+                // replaces it) never re-triggers -> no ping-pong. Async latency << the
+                // ~1 s cadence, so no double-unsocket.
+                if (a_effectAware && !mintGuard && nDet > 0) {
+                    std::uint32_t weakIdx = 0;
+                    int   weakB = std::numeric_limits<int>::max();
+                    float weakM = std::numeric_limits<float>::max();
+                    for (std::uint32_t i = 0; i < nDet; ++i) {
+                        const int bo = GemBonus(det[i].gid, det[i].name, det[i].isArmor, det[i].isSupport, a_prefs);
+                        if (bo < weakB || (bo == weakB && det[i].effectiveMagnitude < weakM)) {
+                            weakB = bo; weakM = det[i].effectiveMagnitude; weakIdx = i;
+                        }
+                    }
+                    int   loot = -1;
+                    int   lootB = std::numeric_limits<int>::min();
+                    float lootM = -1.0f;
+                    for (std::uint32_t i = 0; i < nLoose; ++i) {
+                        if (avail[i] == 0 || !DomainFits(loose[i], item.isArmor)) continue;
+                        const int bo = GemBonus(loose[i].gid, loose[i].name,
+                                                loose[i].isArmor, loose[i].isSupport, a_prefs);
+                        if (bo > lootB || (bo == lootB && loose[i].magnitude > lootM)) {
+                            lootB = bo; lootM = loose[i].magnitude; loot = static_cast<int>(i);
+                        }
+                    }
+                    if (loot >= 0 && (lootB > weakB || (lootB == weakB && lootM > weakM))) {
+                        g_meo->UnsocketGem(a_actor, item.base, item.uid, det[weakIdx].slot);
+                        spdlog::info("[meo] reconcile swap-out '{}' (slot {}) on {:08X} -- '{}' will re-fill",
+                                     det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID(), loose[loot].name);
+                    }
+                }
+            }
+        }
+    }
+
+    bool GemReconcileSupported() { return g_meo && g_meo->Version() >= 3; }
+
+    void RequestGemReconcile(RE::Actor* a_follower, bool a_effectAware, GemReconcilePrefs a_prefs) {
+        if (!GemReconcileSupported() || !a_follower) return;
+        if (!MainThread::IsInstalled()) { ReconcileLooseGems(a_follower, a_effectAware, a_prefs); return; }  // VR: run direct
+        const RE::FormID fid = a_follower->GetFormID();
+        MainThread::Post([fid, a_effectAware, a_prefs]() {
+            if (auto* a = RE::TESForm::LookupByID<RE::Actor>(fid))
+                ReconcileLooseGems(a, a_effectAware, a_prefs);
+        });
     }
 
     void QueueGemMove(RE::Actor* a_follower, RE::FormID a_fromBase, std::uint16_t a_fromUid,

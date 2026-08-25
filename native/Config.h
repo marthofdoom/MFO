@@ -440,6 +440,15 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_mageWearRobes{ true };
     inline std::atomic<bool>  g_mageApparelStrictSchool{ false };
 
+    // bMeoAwareGems (DEFAULT OFF): "MEO aware followers." Layers effect-aware gem
+    // optimization on top of the always-on gem CONSERVATION reconcile (a follower
+    // re-sockets a loose gem back into his own worn gear). ON: the follower knows
+    // gem effects, picks the best gem per empty socket (class-appropriate) and swaps
+    // up a socketed gem a better loose gem beats. OFF: conservation still runs -- a
+    // loose gem is simply socketed into any empty socket. Both tiers need MEO ABI v3
+    // and no-op without it.
+    inline std::atomic<bool>  g_meoAwareGems{ false };
+
     // AUTO-RETREAT (combat-sense 3, the outnumbered DEFAULT rule). ON by default
     // (marth): a follower who is badly outnumbered/hurt (confidence below the 0.25
     // floor -- foe count feeds confidence) AND far from you in combat falls back to
