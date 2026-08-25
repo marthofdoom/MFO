@@ -545,8 +545,10 @@ namespace MFO::ProgAllocator {
             if (!a_actor->IsWeaponDrawn()) return -1;
             RE::TESForm* hands[2] = { a_actor->GetEquippedObject(false),   // right
                                       a_actor->GetEquippedObject(true) };  // left
-            for (auto* h : hands)
-                if (h && h->Is(RE::FormType::Spell)) return 1;   // Magicka
+            // WEAPON outranks a readied spell: a drawn melee/ranged weapon IS the combat
+            // action, and a spell merely held in the off-hand (a ward, a self-heal, a
+            // utility) must NOT read as Magicka exercise. Only a follower with no weapon
+            // (pure caster / dual-cast) counts as exercising Magicka.
             for (auto* h : hands) {
                 if (auto* weap = h ? h->As<RE::TESObjectWEAP>() : nullptr) {
                     switch (weap->GetWeaponType()) {
@@ -567,6 +569,8 @@ namespace MFO::ProgAllocator {
                     }
                 }
             }
+            for (auto* h : hands)
+                if (h && h->Is(RE::FormType::Spell)) return 1;   // Magicka: no weapon, casting
             return -1;
         }
 
@@ -649,13 +653,21 @@ namespace MFO::ProgAllocator {
                 return;
             }
 
-            // MEASURE: positive drift off the held target = this level's fresh
-            // engine award. Capture BEFORE any write (clobbering first erases it).
+            // MEASURE: drift off the held target = this level's fresh engine award.
+            // Capture BEFORE any write (clobbering first erases it). Sum the three
+            // pool deltas SIGNED, then clamp at >=0. The engine level-up recompute
+            // REPLACES base AVs with absolute autocalc formula values, so on a pool
+            // the class profile starves, cur - target includes points MFO previously
+            // shifted OUT of that pool -- a positive-only sum would re-count them and
+            // inflate the budget every level. The signed sum telescopes to exactly the
+            // fresh engine award (Σformula(new) - Σformula(old)); in the incremental-
+            // award world (engine only adds to one pool) it is identical to positive-only.
             float delta[3]; float budget = 0.0f;
             for (int p = 0; p < 3; ++p) {
                 delta[p] = cur[p] - a_st.hmsTarget[p];
-                if (delta[p] > 0.0f) budget += delta[p];
+                budget  += delta[p];
             }
+            if (budget < 0.0f) budget = 0.0f;
 
             float award[3] = { 0.0f, 0.0f, 0.0f };
             float usageFrac = 0.0f, shift = 0.0f;
@@ -718,7 +730,12 @@ namespace MFO::ProgAllocator {
                 // Consume the counters: this award closes the window (== level-up
                 // reset). Runtime battle-edge state is left as-is (an in-progress
                 // battle keeps counting toward the NEXT window).
-                a_st.battlesSinceLevelUp = 0;
+                // The ongoing battle (if any) belongs to the NEW window: its rising
+                // edge was consumed by the window just closed, so seed the counter to 1.
+                // Otherwise a re-count of this same battle as off-class gives bOff=1 /
+                // bSince=0, which both drops the >=1 floor here (guard needs bSince>0) and
+                // is zeroed by CoSaveLoad's min(bOff,bSince) clamp. hmsInBattle unchanged.
+                a_st.battlesSinceLevelUp = a_st.hmsInBattle ? 1u : 0u;
                 a_st.battlesOffClass     = 0;
                 a_st.offClassPool        = 0;
                 a_st.hmsBattleOffCounted = false;
