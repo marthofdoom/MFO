@@ -3712,19 +3712,30 @@ namespace MFO::Logistics {
                         auto* ar = obj->As<RE::TESObjectARMO>();
                         if (!ar) continue;
                         int key = -1; float primary = 0.0f, secondary = 0.0f;
-                        if (ar->GetArmorRating() > 0.0f) {                       // rated armor: rating then value
+                        if (useMageApparel) {
+                            // A mage's body/clothing slot holds ONE item -- a robe (rating 0)
+                            // OR a rated-armor outfit both compete for the SAME biped slot, so
+                            // bucket BOTH by MageClothingSlot (one bucket per slot) instead of
+                            // splitting rated-vs-clothing (which let two body pieces both survive).
+                            // Rated armor competes at plain tier by BASE value (no gem), so a
+                            // pricier outfit beats a cheaper robe and only one survives
+                            // (marth: Khajiit ~800 must beat Nord ~100, not bucket apart).
+                            const int cs = MageClothingSlot(ar);
+                            if (cs < 0) continue;   // shields/other -> a mage doesn't wear them, sells
+                            int t = 0; std::int32_t m = 0;
+                            if (ar->GetArmorRating() > 0.0f) {
+                                t = 0; m = std::max<std::int32_t>(ar->GetGoldValue(), 0);
+                            } else if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) {
+                                continue;
+                            }
+                            key = cs; primary = static_cast<float>(t); secondary = static_cast<float>(m);
+                        } else if (ar->GetArmorRating() > 0.0f) {                // non-mage: rated armor by biped slot
                             const int ls = armorLogicalSlot(static_cast<std::uint32_t>(ar->GetSlotMask()));
                             if (ls < 0) continue;
                             if (ls == 4 && !usesShield) continue;   // don't keep a shield for a non-shield-user -> it sells
                             key = 10 + ls;
                             primary   = ar->GetArmorRating();
                             secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
-                        } else if (useMageApparel) {                            // clothing/jewelry: same judge as loot/buy
-                            const int cs = MageClothingSlot(ar);
-                            if (cs < 0) continue;
-                            int t = 0; std::int32_t m = 0;
-                            if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) continue;
-                            key = cs; primary = static_cast<float>(t); secondary = static_cast<float>(m);
                         } else {
                             continue;   // a non-mage's clothing/jewelry is sellable junk (nothing wears it)
                         }
@@ -3823,8 +3834,8 @@ namespace MFO::Logistics {
                     // staying worn-protected forever (Auri's spare boots / Jesper's spare outfit).
                     if (armo && data.second && data.second->IsWorn() && !bestBySlot.empty()) {
                         int sk = -1;
-                        if (armo->GetArmorRating() > 0.0f) { const int ls = ArmorBuySlot(armo); if (ls >= 0) sk = 10 + ls; }
-                        else if (umaSell)                  { sk = MageClothingSlot(armo); }
+                        if (umaSell)                            { sk = MageClothingSlot(armo); }   // mage: robes + rated armor share one body bucket
+                        else if (armo->GetArmorRating() > 0.0f) { const int ls = ArmorBuySlot(armo); if (ls >= 0) sk = 10 + ls; }
                         if (sk >= 0) {
                             auto bit = bestBySlot.find(sk);
                             if (bit != bestBySlot.end() && bit->second && bit->second != obj) {
