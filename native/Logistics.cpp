@@ -3844,7 +3844,15 @@ namespace MFO::Logistics {
                         }
                     }
                     if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
-                    if (armo && keepArmor.count(obj))       { sdiag(obj, "keepArmor"); continue; }    // #21 best-in-slot
+                    if (armo && keepArmor.count(obj)) {   // #21 best-in-slot
+                        if (diag)
+                            spdlog::info("[sell] {:08X} '{}' -> keepArmor (mask=0x{:X} cs={} rated={} worn={})",
+                                         fid, obj->GetName() ? obj->GetName() : "?",
+                                         static_cast<std::uint32_t>(armo->GetSlotMask()),
+                                         MageClothingSlot(armo), ArmorBuySlot(armo),
+                                         (data.second && data.second->IsWorn()) ? 1 : 0);
+                        continue;
+                    }
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
