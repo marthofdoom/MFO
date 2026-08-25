@@ -79,6 +79,16 @@ namespace MFO::Config {
                 }
                 dst.store(i != 0);
             };
+            // Unsigned/hex parse (base 0 so a 0x.. FormID string works). For the
+            // merchant-perk FormID key; keeps the default on a bad value.
+            auto setU = [&](std::atomic<std::uint32_t>& dst) {
+                try {
+                    dst.store(static_cast<std::uint32_t>(std::stoul(a_val, nullptr, 0)));
+                } catch (...) {
+                    spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
+                                 a_src, a_key, a_val);
+                }
+            };
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
             else if (a_key == "fRapportRate")       setF(g_rapportRate,       0.0f, 100.0f);
@@ -146,6 +156,13 @@ namespace MFO::Config {
             else if (a_key == "bLootTravel")        setB(g_lootTravel);
             else if (a_key == "bLootInPlayerHomes") setB(g_lootInPlayerHomes);
             else if (a_key == "bEconomy")           setB(g_economy);
+            else if (a_key == "bEconomyBuyGear")    setB(g_economyBuyGear);
+            else if (a_key == "bEconomyBuyTomes")   setB(g_economyBuyTomes);
+            else if (a_key == "bSpeechPricing")     setB(g_speechPricing);
+            else if (a_key == "bMerchantPerkBypass") setB(g_merchantPerkBypass);
+            else if (a_key == "xMerchantPerkID")    setU(g_merchantPerkID);
+            else if (a_key == "bMageWearRobes")     setB(g_mageWearRobes);
+            else if (a_key == "bMageApparelStrictSchool") setB(g_mageApparelStrictSchool);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
             else if (a_key == "bMagicLoadout")      setB(g_magicLoadout);
             else if (a_key == "bMageDaggersOnly")   setB(g_mageDaggersOnly);
@@ -205,7 +222,7 @@ namespace MFO::Config {
 
         void ResetToDefaults() {
             g_allowSummons      = false;
-            g_rapportRate       = 1.0f;
+            g_rapportRate       = 2.0f;   // default doubled (marth)
             g_rapportKill       = 1.0f;
             g_rapportBossMult   = 5.0f;
             g_rapportDragonMult = 10.0f;
@@ -265,6 +282,13 @@ namespace MFO::Config {
             g_lootTravel         = true;
             g_lootInPlayerHomes  = false;
             g_economy            = true;
+            g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
+            g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
+            g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve
+            g_merchantPerkBypass = true;    // #21 merchant-perk holder sells outside the vendor filter
+            g_merchantPerkID     = 0x00058F7A;  // vanilla Merchant / Ordinator Salesman (Skyrim.esm)
+            g_mageWearRobes      = true;    // #21 mage clothing/jewelry dress-up -- ON (loot + buy)
+            g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
             g_autoRetreat        = true;
             g_magicLoadout       = true;
             g_mageDaggersOnly    = true;
@@ -299,7 +323,7 @@ namespace MFO::Config {
     // place a new toggle is wired (atomic, parse+reset, both inis, config.json).
     void EnsureMcmDefaults() {
         static constexpr std::pair<const char*, const char*> kMcmDefaults[] = {
-            { "fRapportRate", "1.000000" },   { "fRapportKill", "1.000000" },
+            { "fRapportRate", "2.000000" },   { "fRapportKill", "1.000000" },
             { "fRapportBossMult", "5.000000" }, { "fRapportDragonMult", "10.000000" },
             { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
             { "bEquipToCast", "1" },
@@ -318,6 +342,8 @@ namespace MFO::Config {
             { "fPlayerBubble", "256.000000" }, { "fLootRadius", "3000.000000" },
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
             { "bEconomy", "1" },               { "bAutoRetreat", "1" },
+            { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
+            { "bMageWearRobes", "1" },         { "bMageApparelStrictSchool", "0" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
             { "bBeastHeadFix", "1" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },

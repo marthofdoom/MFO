@@ -56,6 +56,52 @@ namespace MFO::Logistics {
     // is unreliable). Shared so the buy side classifies uncatalogued ammo too.
     bool AmmoIsBolt(RE::TESAmmo* a_ammo);
 
+    // ── #21 economy GEAR/TOME buy helpers (reuse the loot judge on the VM side) ──
+    // The economy buy plan (TradeBridge::PlanBuy) runs on the Papyrus/VM thread
+    // and must classify the vendor's ACTUAL stock. These wrap the loot judge's
+    // weapon-class / mage-apparel / spell-school logic so PlanBuy reuses it rather
+    // than re-deriving it (and so the buy and loot sides can never disagree). All
+    // are pure form-DATA reads -- no actor, no 3D -- safe on any thread.
+
+    // WepClass of a weapon type as an int, matching the buy thresholds passed in
+    // TradeBridge::BuyThresholds::meleeClass: 0=OneHand 1=TwoHand 2=Ranged 3=Other.
+    int WeaponBuyClass(RE::WEAPON_TYPE a_type);
+
+    // The magic-school BIT INDEX of a spell (its costliest effect's Magic Skill),
+    // 0..4 in the fixed order Alteration/Conjuration/Destruction/Illusion/
+    // Restoration, or -1 for a non-school (or unreadable) spell. The economy tome
+    // buy tests this bit against BuyThresholds::eligibleSchools.
+    int SpellSchoolBit(RE::SpellItem* a_spell);
+
+    // The LOGICAL mage dress-up slot a candidate occupies, or -1 if it is not a
+    // dress-up slot: 0 head (hat/hood/circlet), 1 body (robe), 2 hands (gloves),
+    // 3 feet (shoes/boots), 4 ring, 5 amulet. For mages, jewelry counts as apparel
+    // (marth). Shared by the buy planner and the worker-side owned baseline.
+    int MageClothingSlot(RE::TESObjectARMO* a_armo);
+
+    // The LOGICAL rated-armor slot for the per-slot armor buy baseline (and the
+    // sell keepArmor set): 0 head, 1 body, 2 hands, 3 feet, 4 shield, or -1 if it
+    // covers none of those. Shared by BuildBuyThresholds + PlanBuy so a warrior can
+    // buy a helmet/boots for bare slots even with a good chestpiece.
+    int ArmorBuySlot(RE::TESObjectARMO* a_armo);
+
+    // Rank a candidate vendor ARMO as mage apparel/jewelry. Returns false unless it
+    // is buyable (rating-0 clothing/jewelry, not villain-coded unless a_allowVillain,
+    // i.e. a necromancer follower). On true, fills a comparable (out_tier, out_metric)
+    // the caller sorts per slot (higher tier first, then higher metric):
+    //   a_schoolPrimary == false (MEO present + not strict): VALUE-driven -- tier is
+    //     always 0, metric = gold value. Gems transfer on swap, so the most expensive
+    //     piece is safe.
+    //   a_schoolPrimary == true  (MEO absent OR bMageApparelStrictSchool): SCHOOL-
+    //     enchant primary -- tier 2 fortifies one of the follower's top-2 schools
+    //     (a_top2Mask), tier 1 is plain (no school fortify -- still fills a slot),
+    //     tier 0 fortifies an off-school (ranked lowest). metric = value (+ matching
+    //     fortify magnitude for tier 2), so a cheap school robe beats a pricey
+    //     wrong-school one.
+    bool MageApparelBuyKey(RE::TESObjectARMO* a_armo, std::uint8_t a_top2Mask,
+                           bool a_schoolPrimary, bool a_allowVillain,
+                           int& out_tier, std::int32_t& out_metric);
+
     // Count of H/S/M restore potions of a_which resource in a_follower's OWN
     // inventory (#14 -- the named follower, never the player). Walks the
     // inventory, so it is a ~1 s logistics-tick read, not a combat one.

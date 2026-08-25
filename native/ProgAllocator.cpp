@@ -2091,6 +2091,28 @@ namespace MFO::ProgAllocator {
             a_local  = form->GetLocalFormID();
             return true;
         }
+
+        // #21 addon .esl <-> .esp sibling resolve (READ-SIDE ONLY -- no co-save
+        // format change). The progression addon ships BOTH an ESL and a Vortex-
+        // compatible ESP variant (an ESL that masters a regular ESP is an
+        // unbreakable Vortex load-order cycle). Both carry the SAME masters + local
+        // ids, so the ONLY difference the DLL sees is the plugin NAME. A save written
+        // under one name must still resolve its class under the other. Try the stored
+        // name; if that misses and it is one of the two known addon names, retry the
+        // sibling. Anything else resolves plainly (no sibling). The next save then
+        // self-heals to the actually-loaded plugin (CoSaveSave's DeriveClassIdentity).
+        RE::TESForm* LookupAddonForm(RE::FormID a_local, std::string_view a_plugin) {
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            if (!dh) return nullptr;
+            if (auto* f = dh->LookupForm(a_local, a_plugin)) return f;
+            constexpr std::string_view kEsl = "MFO_Progression.esl";
+            constexpr std::string_view kEsp = "MFO_Progression.esp";
+            std::string_view sib;
+            if      (a_plugin == kEsl) sib = kEsp;
+            else if (a_plugin == kEsp) sib = kEsl;
+            else return nullptr;   // not an addon name -> no sibling
+            return dh->LookupForm(a_local, sib);
+        }
     }
 
     void CoSaveSave(SKSE::SerializationInterface* a_intfc) {
@@ -2263,8 +2285,9 @@ namespace MFO::ProgAllocator {
                 if (ord >= 1 && ord <= 3) {
                     st.clsPlugin = kProgPlugin;
                     st.clsLocal  = kClassDefLocal[ord - 1];
-                    auto* dh = RE::TESDataHandler::GetSingleton();
-                    RE::TESForm* form = dh ? dh->LookupForm(st.clsLocal, st.clsPlugin) : nullptr;
+                    // #21 route through the .esl<->.esp sibling resolve so a .esp-only
+                    // load still resolves the legacy ordinals (kProgPlugin literal kept).
+                    RE::TESForm* form = LookupAddonForm(st.clsLocal, st.clsPlugin);
                     if (form && FindClassDef(form->GetFormID())) {
                         st.clsId = form->GetFormID();
                     } else {
@@ -2309,8 +2332,8 @@ namespace MFO::ProgAllocator {
                 st.clsPlugin = v4ClsPlugin;
                 st.clsLocal  = v4ClsLocal;
                 if (!v4ClsPlugin.empty()) {
-                    auto* dh = RE::TESDataHandler::GetSingleton();
-                    RE::TESForm* form = dh ? dh->LookupForm(v4ClsLocal, v4ClsPlugin) : nullptr;
+                    // #21 .esl<->.esp sibling resolve (cross-variant save loads either way).
+                    RE::TESForm* form = LookupAddonForm(v4ClsLocal, v4ClsPlugin);
                     if (form && FindClassDef(form->GetFormID())) {
                         st.clsId = form->GetFormID();
                     } else {

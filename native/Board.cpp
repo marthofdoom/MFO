@@ -435,6 +435,43 @@ namespace MFO::Board {
                                    .time_since_epoch().count());
         }
 
+        // A concise "what it does" line for a spell, synthesized from its costliest
+        // effect (effect name + magnitude/duration/area). Spells carry no authored
+        // DESC field -- the game composes the magic-menu tooltip from effects -- so
+        // this mirrors that. MAIN-THREAD only (pure form-data reads; called from
+        // PublishSnapshot), cached into the row so the render thread never re-reads.
+        inline std::string SpellTooltip(RE::SpellItem* a_spell) {
+            if (!a_spell) return {};
+            auto* eff  = a_spell->GetCostliestEffectItem();
+            auto* mgef = eff ? eff->baseEffect : nullptr;
+            if (!eff || !mgef) return {};
+            std::string s = (mgef->GetFullName() && *mgef->GetFullName()) ? mgef->GetFullName() : "";
+            const int mag  = static_cast<int>(eff->GetMagnitude() + 0.5f);
+            const int dur  = static_cast<int>(eff->effectItem.duration);
+            const int area = static_cast<int>(eff->effectItem.area);
+            if (mag  > 0) { if (!s.empty()) s += ' '; s += std::to_string(mag); }
+            if (dur  > 0) { s += " for " + std::to_string(dur) + "s"; }
+            if (area > 0) { s += " in " + std::to_string(area) + "ft"; }
+            return s;
+        }
+
+        // Render the spell-picker hover tooltip from PRECOMPUTED values (no actor
+        // read on the render thread, #4): the follower's magicka cost + the "what it
+        // does" line. Call right after the entry's Selectable.
+        inline void DrawSpellHoverTooltip(int a_magickaCost, const std::string& a_desc) {
+            if (!ImGui::IsItemHovered()) return;
+            ImGui::BeginTooltip();
+            ImGui::Text("Magicka cost: %d", a_magickaCost);
+            if (!a_desc.empty()) {
+                ImGui::Separator();
+                ImGui::TextDisabled("What it does:");
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 22.0f);
+                ImGui::TextUnformatted(a_desc.c_str());
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::EndTooltip();
+        }
+
         void DrawFieldKit(const Snapshot& snap) {
             // Shout-key close already fires on the key's RELEASE with both edges
             // swallowed -- no trailing edge to leak -- so it needs no grace.
@@ -598,19 +635,27 @@ namespace MFO::Board {
                             ImGui::TableNextColumn();
                             if (r.active) {
                                 // The three bars are the conditions the evaluator
-                                // will read. Seeing them move is the point.
+                                // will read. Seeing them move is the point. The CURRENT
+                                // value sits on each bar; hover for current / max
+                                // (all precomputed on main into the snapshot -- #4).
                                 const float w = 42.0f;
-                                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
-                                ImGui::ProgressBar(r.healthPct, ImVec2(w, 0.0f), "");
-                                ImGui::PopStyleColor();
+                                auto bar = [&](float pct, float cur, const ImVec4& col) {
+                                    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, col);
+                                    ImGui::ProgressBar(pct, ImVec2(w, 0.0f),
+                                                       std::to_string(static_cast<int>(cur + 0.5f)).c_str());
+                                    ImGui::PopStyleColor();
+                                };
+                                ImGui::BeginGroup();
+                                bar(r.healthPct,  r.healthCur,  ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
                                 ImGui::SameLine(0.0f, 3.0f);
-                                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.3f, 0.5f, 0.9f, 1.0f));
-                                ImGui::ProgressBar(r.magickaPct, ImVec2(w, 0.0f), "");
-                                ImGui::PopStyleColor();
+                                bar(r.magickaPct, r.magickaCur, ImVec4(0.3f, 0.5f, 0.9f, 1.0f));
                                 ImGui::SameLine(0.0f, 3.0f);
-                                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
-                                ImGui::ProgressBar(r.staminaPct, ImVec2(w, 0.0f), "");
-                                ImGui::PopStyleColor();
+                                bar(r.staminaPct, r.staminaCur, ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
+                                ImGui::EndGroup();
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip("H %.0f / %.0f\nM %.0f / %.0f\nS %.0f / %.0f",
+                                                      r.healthCur, r.healthMax, r.magickaCur, r.magickaMax,
+                                                      r.staminaCur, r.staminaMax);
                             } else {
                                 ImGui::TextDisabled("--");
                             }
@@ -983,13 +1028,15 @@ namespace MFO::Board {
                                             if (who->knownSpells.empty() && who->teachableSpells.empty())
                                                 ImGui::TextDisabled("no spells known, no spellbooks carried");
                                             for (int k = 0; k < (int)who->knownSpells.size(); ++k) {
-                                                const bool curSel = who->knownSpells[k].first == rv.spell;
-                                                ImGui::PushID((int)who->knownSpells[k].first);   // dup names -> unique IDs
-                                                if (ImGui::Selectable(who->knownSpells[k].second.c_str(), curSel)) {
+                                                const auto& sp = who->knownSpells[k];
+                                                const bool curSel = sp.id == rv.spell;
+                                                ImGui::PushID((int)sp.id);   // dup names -> unique IDs
+                                                if (ImGui::Selectable(sp.name.c_str(), curSel)) {
                                                     EditCmd e{ EditKind::SetSpell, sel, selTable, rv.uid, 0 };
-                                                    e.spell = who->knownSpells[k].first;
+                                                    e.spell = sp.id;
                                                     QueueEdit(e);
                                                 }
+                                                DrawSpellHoverTooltip(sp.magickaCost, sp.tooltip);   // precomputed (#4)
                                                 if (curSel) {
                                                     ImGui::SetItemDefaultFocus();
                                                     if (ImGui::IsWindowAppearing()) ImGui::SetScrollHereY(0.5f);
@@ -1018,6 +1065,7 @@ namespace MFO::Board {
                                                             s_teachArmed = t.book;   // arm: show the warning first
                                                         }
                                                     }
+                                                    DrawSpellHoverTooltip(t.magickaCost, t.tooltip);   // precomputed (#4)
                                                     ImGui::PopID();
                                                     if (armed) ImGui::PopStyleColor();
                                                 }
@@ -3263,6 +3311,14 @@ namespace MFO::Board {
             r.healthPct  = Vocab::HealthPct(a);
             r.magickaPct = Vocab::MagickaPct(a);
             r.staminaPct = Vocab::StaminaPct(a);
+            // Raw H/M/S current+max for the Followers-tab readout (SAME reads as the
+            // pct bars; precomputed here on main so the render thread reads floats).
+            r.healthCur  = Vocab::VitalCur(a, RE::ActorValue::kHealth);
+            r.healthMax  = Vocab::VitalMax(a, RE::ActorValue::kHealth);
+            r.magickaCur = Vocab::VitalCur(a, RE::ActorValue::kMagicka);
+            r.magickaMax = Vocab::VitalMax(a, RE::ActorValue::kMagicka);
+            r.staminaCur = Vocab::VitalCur(a, RE::ActorValue::kStamina);
+            r.staminaMax = Vocab::VitalMax(a, RE::ActorValue::kStamina);
             if (player) {
                 r.distance   = a->GetPosition().GetDistance(player->GetPosition());
                 r.playerName = player->GetName() ? player->GetName() : "Player";
@@ -3289,16 +3345,26 @@ namespace MFO::Board {
                 FillRuleViews(r.combat,    it->second.combat());
                 FillRuleViews(r.logistics, it->second.logistics());
                 // The follower's castable spells, for the board's picker. Same
-                // VisitSpells pattern the seed uses.
+                // VisitSpells pattern the seed uses. Precompute the tooltip metrics
+                // HERE (main thread): CalculateMagickaCost is the ACTOR overload
+                // (bakes in this follower's skill+perks -- the SAME number that gates
+                // casting in Actuation) and the description is synthesized from the
+                // spell's effects; both are cached so the render thread reads values.
                 struct SpellList : RE::Actor::ForEachSpellVisitor {
-                    std::vector<std::pair<RE::FormID, std::string>>* out;
+                    std::vector<FollowerRow::SpellPick>* out;
+                    RE::Actor*                           follower;
                     RE::BSContainer::ForEachResult Visit(RE::SpellItem* sp) override {
-                        if (MFO::Vocab::IsCastableSpell(sp))
-                            out->emplace_back(sp->GetFormID(),
-                                              sp->GetName() ? sp->GetName() : "?");
+                        if (sp && MFO::Vocab::IsCastableSpell(sp)) {
+                            FollowerRow::SpellPick p;
+                            p.id          = sp->GetFormID();
+                            p.name        = sp->GetName() ? sp->GetName() : "?";
+                            p.magickaCost = follower ? static_cast<int>(sp->CalculateMagickaCost(follower) + 0.5f) : 0;
+                            p.tooltip     = SpellTooltip(sp);
+                            out->push_back(std::move(p));
+                        }
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
-                } vis; vis.out = &r.knownSpells;
+                } vis; vis.out = &r.knownSpells; vis.follower = a;
                 a->VisitSpells(vis);
 
                 // #4: teachable spells -- books in the PLAYER's pack whose spell
@@ -3315,7 +3381,9 @@ namespace MFO::Board {
                         if (!sp || !MFO::Vocab::IsCastableSpell(sp)) continue;
                         if (a->HasSpell(sp)) continue;   // already known -> not teachable
                         r.teachableSpells.push_back({ sp->GetFormID(), book->GetFormID(),
-                                                      sp->GetName() ? sp->GetName() : "?" });
+                                                      sp->GetName() ? sp->GetName() : "?",
+                                                      static_cast<int>(sp->CalculateMagickaCost(a) + 0.5f),
+                                                      SpellTooltip(sp) });
                     }
                 }
             }

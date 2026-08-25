@@ -650,9 +650,38 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
 - `OnFollowerRemoved` (`:4454`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
-- Economy probe (`EconomyProbe` `:3037`, worker, `Config::g_economy && Po3Present`)
-  pushes the actual merchant read to Papyrus via TradeBridge — native `GetInventory`/
-  `GetGoldAmount` CTD on merchant chests. **Do not** move the read back to native.
+- Economy probe (`EconomyProbe`, worker, `Config::g_economy && Po3Present`, now takes
+  the whole `FollowerState`) pushes the actual merchant read to Papyrus via TradeBridge
+  — native `GetInventory`/`GetGoldAmount` CTD on merchant chests. **Do not** move the
+  read back to native. `BuildBuyThresholds` (just above it) reuses the loot judge to
+  fill `TradeBridge::BuyThresholds` (weapon/armor/apparel/tome buy). `LearnCarriedTomes`
+  (worker, gated on `HasCastGambit`, called from `ServiceFollower` beside the econ
+  probe) auto-learns castable tomes a mage carries (copy of `Board.cpp`'s teach
+  primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
+  Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
+  Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
+- **#21 College tome-gate unlock.** `UnlockCollegeTomes` (`Logistics.cpp`, worker,
+  `ServiceFollower` idle branch, gated `g_economy && g_economyBuyTomes`, GLOBAL ~30s
+  rate-limit) generalizes vanilla's player-skill tome gate to the party: for each of
+  15 `PC{School}{tier}` globals (Skyrim.esm `0x000F2584..0x000F2592`, dumped via
+  `tools/esp_inspect.py`), if the party MAX **base** skill (player + `g_active`,
+  `GetBaseActorValue`) ≥ the tier threshold (Adept 50 / Expert 75 / Master 100) and
+  the gate is ≠ 0, flip it to 0. **ONE-WAY** (never back to 100 — mirrors WISkill-
+  Increase02, never fights the player's tracking), **natural restock only** (no chest
+  regen, no merchant mutation), idempotent. GLOB writes batched through
+  `MainThread::Post` (re-resolve on-frame; GLOB values are save-persisted, so this is
+  the same field vanilla writes — no co-save risk). `[college]` log on first flip.
+- **#21 equip + unified apparel judge (loot ⇄ buy).** The loot equip step is factored
+  into `AcquireEquip` (`Logistics.cpp`, v1.0.38 SAFE path: `MainThread::Post` +
+  `ActorEquipManager::EquipObject`, **never DoReset3D** #62; MEO gem capture +
+  `QueueGemMove`). `a_src==nullptr` ⇒ the follower already owns the item (buy / owned
+  upgrade). `LootEquipment` routes through it; the **mage apparel selection is now the
+  unified `MageApparelBuyKey`** (MEO-aware value/school ranking) across clothing slots
+  (jewelry stays on the Valuables/`LootJewelry` path — dibs preserved). `EquipBestOwnedGear`
+  (worker, `ServiceFollower` idle branch, dolls-gated) wears the single best OWNED
+  upgrade per tick — bought, looted-as-valuable jewelry, or player-handed — via
+  `AcquireEquip(src=null)`, which is what fires the **buy-path gem transfer**. Idempotent
+  + one-per-tick ⇒ converges, no thrash. Old `MageApparelIsBetter` is now `[[maybe_unused]]`.
 
 ### Loadout.cpp / Loadout.h — the equip/spell-in-hand ledger (NOT serialized)
 Puts a gambit spell in a follower's hand, records displaced gear as **transient
@@ -759,6 +788,14 @@ main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not re
   misses init → `g_ready` never set → overlay silently disabled. Writes a 256-byte
   trampoline with 3 game-version-keyed `RelocationID`/offset pairs (`Board.cpp:3271`)
   — a bad offset corrupts the call site.
+- **Snapshot carries all actor-derived display data** (render thread reads plain
+  cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
+  pct **and** raw `health/magicka/staminaCur/Max` (Followers tab, `Vocab::VitalCur/
+  VitalMax`), and `knownSpells`/`teachableSpells` are `SpellPick`/`Teachable` structs
+  carrying precomputed `magickaCost` (`spell->CalculateMagickaCost(follower)`, actor
+  overload) + a synthesized `tooltip` (`SpellTooltip`, effect name+mag/dur/area) —
+  all filled in `PublishSnapshot` (main). The gambit spell-picker renders the hover
+  tooltip via `DrawSpellHoverTooltip` from those cached values.
 - **Thread discipline:** `DXGIPresentHook` (render thread) copies `g_snapshot` under
   `g_snapMx` **before** taking `g_ioMx` (`:2596`); reversing = render-thread deadlock.
   The two mutexes are never nested (#6). Draw functions **never touch `g_followers`**
@@ -820,6 +857,27 @@ Kind` (`TradeBridge.h:25,35`) are the wire vocabulary with Logistics. Cross-save
 safety: per-chest in-flight guard (`:250`) + `ClearTransientState`'s `g_nextToken +=
 1'000'000` jump (`:282` ← `Serialization.cpp:612`) so a resumed stale token can't name
 a fresh order.
+- **#21 BUY expansion (weapon/armor/mage-apparel + spell tomes).** `NeedCat::Kind`
+  appended `kWeaponMelee..kSpellTome` (append-only — never renumber). `ClassifyBuy`
+  and `PlanBuy` now take a `BuyThresholds` (`TradeBridge.h`) the worker fills from the
+  loot judge (`Logistics::BuildBuyThresholds`) — native stays a pure comparator (no
+  new merchant/actor reads; `follower->HasSpell` is the one tome read, on a loaded
+  actor). Gear = one best-in-category upgrade per window at ≤50 % of the remaining
+  purse; mage apparel is per-slot (head/body/hands/feet/ring/amulet, `MageClothingSlot`)
+  ranked MEO-aware (`MageApparelBuyKey`: value-primary when `MEOBridge::Available()`,
+  else school-enchant-primary) with a villain-coded blacklist + necromancer exception.
+  Bought gear is protected from re-sell by the `keepArmor` set (buckets by LOGICAL
+  slot — `MageClothingSlot` for clothing/jewelry, primary biped slot for rated armor
+  — keeping worn + one best-per-slot upgrade; NOT the raw bitmask, which let varied
+  modded robes each survive) + the existing socketed exclusion in `EconomyProbe`.
+  Toggles: `bEconomyBuyGear`, `bEconomyBuyTomes`, `bMageWearRobes`, `bMageApparelStrictSchool`.
+- **#21 SELL bypass + pricing** (`EconomyProbe`, INI-only, no MCM). `bMerchantPerkBypass`
+  + `xMerchantPerkID` (0x00058F7A): a follower holding the merchant perk (dual-check
+  `GetActorBase()->GetPerkIndex` + `HasPerk`, the `OwnsExactPerk` idiom) sells past the
+  vendor's VEND filter. `bSpeechPricing`: `SellRow.value = lround(baseValue *
+  sellFraction)`, `sellFraction = 1/(fBarterMax-(fBarterMax-fBarterMin)*speech/100)`
+  (0.30→0.50 over Speech 0→100). BUY stays base value. (Per-perk `kModSellPrices`
+  boosts are NOT applied — needs a CI-verified EPFD read; flagged.)
 
 ### Diagnostics.cpp / Diagnostics.h — event sinks + THE WORKER PUMP ⚠️ RACE LINCHPIN
 Owns the one persistent sleeper thread driving the per-follower tick, four event

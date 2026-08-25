@@ -26,7 +26,7 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_allowSummons{ false };
 
     // -- rapport (BALANCE.md §5) --------------------------------------------
-    inline std::atomic<float> g_rapportRate{ 1.0f };
+    inline std::atomic<float> g_rapportRate{ 2.0f };   // master rapport multiplier -- default doubled (marth)
     inline std::atomic<float> g_rapportKill{ 1.0f };
     inline std::atomic<float> g_rapportBossMult{ 5.0f };
     inline std::atomic<float> g_rapportDragonMult{ 10.0f };
@@ -393,6 +393,52 @@ namespace MFO::Config {
     // plan ([econ] WOULD sell...) but mutates nothing, so it's safe to leave the
     // scan enabled while tuning. bEconomy.
     inline std::atomic<bool>  g_economy{ true };
+
+    // #21 ECONOMY SUB-TOGGLES (weapon/armor buy + spell-tome buy/learn). Both
+    // default ON, both gated under bEconomy (the master): with the master off,
+    // nothing here runs. Split out so a player can keep supply restock (potions/
+    // ammo) while opting out of gear or tome purchasing.
+    //   bEconomyBuyGear: a follower buys ONE best-affordable weapon / armor /
+    //     mage-apparel upgrade per trade window (each only when its value is <=
+    //     50% of its remaining purse, so it never goes broke). OFF = supplies only.
+    //   bEconomyBuyTomes: a MAGE follower (has a cast gambit) buys spell tomes for
+    //     its top-2 magic schools it does not yet know. The AUTO-LEARN pass (a
+    //     mage consuming a carried tome to learn the spell) is independent of THIS
+    //     toggle -- a mage always learns a tome handed to it -- but tome PURCHASING
+    //     is gated here.
+    inline std::atomic<bool>  g_economyBuyGear{ true };
+    inline std::atomic<bool>  g_economyBuyTomes{ true };
+
+    // #21 SELL-side pricing/bypass (INI-only advanced settings, NO MCM control --
+    // deliberately, to avoid toggle-linkage churn). All gated under bEconomy.
+    //   bSpeechPricing (default ON): the follower's SELL value follows the vanilla
+    //     barter curve scaled by their Speech skill (sellFraction 0.30 @ speech 0 ->
+    //     0.50 @ speech 100). OFF: sell at full instance value (the old behavior).
+    //   bMerchantPerkBypass (default ON): a follower who holds the merchant perk
+    //     (xMerchantPerkID) may sell items OUTSIDE the vendor's normal buy filter
+    //     (the vanilla Merchant/Salesman "sell anything" perk), mirroring the
+    //     player. OFF: only the vendor's VEND-filtered categories sell.
+    //   xMerchantPerkID: the "sell anything" perk FormID. Default 0x00058F7A =
+    //     vanilla Merchant (this modlist's Ordinator "Salesman"), Skyrim.esm index 00.
+    inline std::atomic<bool>          g_speechPricing{ true };
+    inline std::atomic<bool>          g_merchantPerkBypass{ true };
+    inline std::atomic<std::uint32_t> g_merchantPerkID{ 0x00058F7A };
+
+    // #21 MAGE DRESS-UP toggles (govern the mage clothing/jewelry APPAREL path, in
+    // BOTH loot and economy-buy). These are independent of the economy master --
+    // bMageWearRobes gates looting robes too.
+    //   bMageWearRobes (DEFAULT ON): a caster/mage-build follower wears the school
+    //     clothing + jewelry dress-up (with the villain blacklist + strict sub-
+    //     toggle). OFF: a caster is treated like any other class for apparel and
+    //     picks/buys real ARMOR by rating instead (no clothing/jewelry dress-up).
+    //     It gates APPAREL only -- the mage still keeps its weapon contract and
+    //     still buys/learns tomes.
+    //   bMageApparelStrictSchool (DEFAULT OFF): when set, an ENCHANTED apparel piece
+    //     is only taken/bought if it fortifies one of the follower's top-2 magic
+    //     schools; plain clothing / non-school jewelry is unaffected (so a slot is
+    //     never left bare). OFF: pure value-driven (wear the most expensive piece).
+    inline std::atomic<bool>  g_mageWearRobes{ true };
+    inline std::atomic<bool>  g_mageApparelStrictSchool{ false };
 
     // AUTO-RETREAT (combat-sense 3, the outnumbered DEFAULT rule). ON by default
     // (marth): a follower who is badly outnumbered/hurt (confidence below the 0.25

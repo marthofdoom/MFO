@@ -22,7 +22,7 @@
             "max": 5.0,
             "step": 0.05,
             "sourceType": "ModSettingFloat",
-            "defaultValue": 1.0
+            "defaultValue": 2.0
           }
         },
         {
@@ -259,6 +259,46 @@
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 1
+          }
+        },
+        {
+          "id": "bEconomyBuyGear:General",
+          "text": "Economy: buy weapon/armor upgrades",
+          "type": "toggle",
+          "help": "ON (default): with the follower economy on, a follower at a merchant also buys ONE best-affordable weapon, armor, or (for mages) school-apparel upgrade per visit -- only when the item costs 50% or less of its purse, so it keeps a reserve. OFF: it still sells junk and restocks supplies, but buys no gear.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
+          "id": "bEconomyBuyTomes:General",
+          "text": "Economy: buy + learn spell tomes",
+          "type": "toggle",
+          "help": "ON (default): with the follower economy on, a MAGE follower (one with a cast gambit) buys spell tomes for its two best magic schools that it does not yet know, then studies them to learn the spell. A mage always learns a tome you hand it directly, regardless of this toggle -- this only gates PURCHASING. OFF: mages buy no tomes.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
+          "id": "bMageWearRobes:General",
+          "text": "Mages wear robes + jewelry",
+          "type": "toggle",
+          "help": "ON (default): a caster/mage-build follower dresses in clothing and jewelry (hat/circlet, robe, gloves, shoes, ring, amulet) -- looted or bought -- instead of rated armor. OFF: a caster is geared like any other class, picking up and buying real ARMOR by armor rating (no clothing/jewelry dress-up). This governs APPAREL only -- a mage keeps its weapon behavior and still buys/learns spell tomes either way.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
+          "id": "bMageApparelStrictSchool:General",
+          "text": "Mage apparel: strict school match",
+          "type": "toggle",
+          "help": "OFF (default): mage clothing/jewelry is chosen by value -- the follower wears the most expensive pieces it can find or afford. ON: an ENCHANTED apparel piece is only worn/bought if it fortifies one of the follower's two best magic schools (off-school enchanted pieces are skipped). Plain clothing and non-school jewelry are unaffected, so a slot is never left empty. Only matters while 'Mages wear robes + jewelry' is on.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
           }
         },
         {

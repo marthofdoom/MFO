@@ -62,13 +62,31 @@ namespace MFO::Board {
         float         healthPct = 1.0f;
         float         magickaPct = 1.0f;
         float         staminaPct = 1.0f;
+        // Current + max H/M/S for the Followers-tab readout. SAME reads as the pct
+        // bars (Vocab::VitalCur/VitalMax: GetActorValue vs GetPermanentActorValue +
+        // temporary modifier), precomputed on the main thread so the render thread
+        // reads only these plain floats -- never the live actor (#4).
+        float         healthCur = 0.0f,  healthMax = 0.0f;
+        float         magickaCur = 0.0f, magickaMax = 0.0f;
+        float         staminaCur = 0.0f, staminaMax = 0.0f;
         float         distance = 0.0f;
         std::vector<RuleView> combat, logistics;
-        std::vector<std::pair<RE::FormID, std::string>> knownSpells;
+        // A castable spell offered in the gambit picker. The tooltip metrics are
+        // precomputed on the MAIN thread -- CalculateMagickaCost(follower) is an
+        // ACTOR read (skill+perks) and the "what it does" line is synthesized from
+        // the spell's effects -- so the render thread reads only cached values (#4).
+        struct SpellPick {
+            RE::FormID  id = 0;
+            std::string name;
+            int         magickaCost = 0;   // spell->CalculateMagickaCost(follower)
+            std::string tooltip;           // effect name + magnitude/duration/area
+        };
+        std::vector<SpellPick> knownSpells;
         // #4: spells the PLAYER carries a spellbook for that this follower does
         // NOT yet know -- offered in the picker as "Name (spellbook)", teachable
-        // (consumes the book) on confirm.
-        struct Teachable { RE::FormID spell = 0; RE::FormID book = 0; std::string name; };
+        // (consumes the book) on confirm. Same precomputed tooltip metrics.
+        struct Teachable { RE::FormID spell = 0; RE::FormID book = 0; std::string name;
+                           int magickaCost = 0; std::string tooltip; };
         std::vector<Teachable> teachableSpells;
         // #68: the cast-target picker's option list -- the PLAYER's live
         // name and every OTHER active follower by name (never this row's

@@ -1,8 +1,11 @@
 #include "MEOBridge.h"
 #include "MEO_API.h"
+#include "MainThread.h"   // Build A: main-thread refresh of the carried-gem cache
 
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>   // Build B: per-item gem slots copied out of the lock for UnsocketGem
 
 #include <spdlog/spdlog.h>
 
@@ -17,6 +20,22 @@ namespace MFO::MEOBridge {
 
         std::uint64_t Key(RE::FormID a_follower, RE::FormID a_toBase) {
             return (static_cast<std::uint64_t>(a_follower) << 32) | a_toBase;
+        }
+
+        // Per-follower carried-gemmed item cache. followerID -> ((base<<16|uid) ->
+        // set of filled gem SLOTS). Slots are needed to queue UnsocketGem per slot
+        // (ungem-then-sell, MEO v3). Written by RefreshCarriedGems (MAIN thread),
+        // read by IsCarriedGemmed / UnsocketItemGems (worker); all under g_mx.
+        std::unordered_map<RE::FormID,
+            std::unordered_map<std::uint64_t, std::unordered_set<std::uint8_t>>> g_carriedGems;
+
+        // De-dup for the async unsocket: (fid -> set of (base<<16|uid)) we've already
+        // queued an extract for, so a pending unsocket isn't re-queued every scan.
+        // Pruned in RefreshCarriedGems once the item leaves the gemmed cache.
+        std::unordered_map<RE::FormID, std::unordered_set<std::uint64_t>> g_extractRequested;
+
+        std::uint64_t GemKey(RE::FormID a_base, std::uint16_t a_uid) {
+            return (static_cast<std::uint64_t>(a_base) << 16) | a_uid;
         }
 
         bool IsWornXList(RE::ExtraDataList* a_xl) {
@@ -89,6 +108,78 @@ namespace MFO::MEOBridge {
         return 0;
     }
 
+    // ── Build A: accurate carried-gem sell-skip (ABI v2) ─────────────────────
+    std::uint32_t CarriedGems(RE::Actor* a_actor, MEO_API::GemInfo* a_out, std::uint32_t a_max) {
+        if (!g_meo || g_meo->Version() < 2 || !a_actor || !a_out || a_max == 0) return 0;
+        return g_meo->GetActorGemsCarried(a_actor, a_out, a_max);   // MAIN-THREAD ONLY
+    }
+
+    void RefreshCarriedGems(RE::Actor* a_actor) {
+        if (!a_actor) return;
+        const RE::FormID fid = a_actor->GetFormID();
+        std::unordered_map<std::uint64_t, std::unordered_set<std::uint8_t>> gems;   // GemKey -> filled slots
+        constexpr std::uint32_t kMax = 64;
+        MEO_API::GemInfo buf[kMax];
+        const std::uint32_t n = std::min(CarriedGems(a_actor, buf, kMax), kMax);   // 0 if MEO < v2
+        for (std::uint32_t i = 0; i < n; ++i)
+            if (buf[i].itemBase != 0 && buf[i].itemUid != 0)
+                gems[GemKey(buf[i].itemBase, buf[i].itemUid)].insert(buf[i].slot);
+        std::scoped_lock lk(g_mx);
+        // Drop extract-requests for items that are no longer gemmed (extract landed
+        // -> a future re-gem may re-request); prune before replacing the cache.
+        if (auto rq = g_extractRequested.find(fid); rq != g_extractRequested.end()) {
+            std::erase_if(rq->second, [&](std::uint64_t k) { return !gems.contains(k); });
+            if (rq->second.empty()) g_extractRequested.erase(rq);
+        }
+        g_carriedGems[fid] = std::move(gems);   // replace (empty -> nothing gemmed)
+    }
+
+    void RequestCarriedGemRefresh(RE::Actor* a_follower) {
+        if (!a_follower || !g_meo || g_meo->Version() < 2) return;   // no v2 -> leave cache empty (correct degrade)
+        if (!MainThread::IsInstalled()) { RefreshCarriedGems(a_follower); return; }   // VR: no pump, run direct
+        const RE::FormID fid = a_follower->GetFormID();
+        MainThread::Post([fid]() {
+            if (auto* a = RE::TESForm::LookupByID<RE::Actor>(fid)) RefreshCarriedGems(a);
+        });
+    }
+
+    bool IsCarriedGemmed(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
+        if (a_uid == 0 || a_base == 0) return false;
+        std::scoped_lock lk(g_mx);
+        auto it = g_carriedGems.find(a_followerID);
+        return it != g_carriedGems.end() && it->second.contains(GemKey(a_base, a_uid));
+    }
+
+    bool CacheWarmed(RE::FormID a_followerID) {
+        std::scoped_lock lk(g_mx);
+        return g_carriedGems.contains(a_followerID);
+    }
+
+    bool CarriedGemsSupported() { return g_meo && g_meo->Version() >= 2; }
+
+    bool CarriedGemUnsocketSupported() { return g_meo && g_meo->Version() >= 3; }
+
+    void UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid) {
+        if (!g_meo || g_meo->Version() < 3 || !a_actor || a_base == 0 || a_uid == 0) return;
+        const RE::FormID     fid = a_actor->GetFormID();
+        const std::uint64_t  key = GemKey(a_base, a_uid);
+        std::vector<std::uint8_t> slots;
+        {
+            std::scoped_lock lk(g_mx);
+            auto& req = g_extractRequested[fid];
+            if (req.contains(key)) return;               // already queued this item's extract
+            auto it = g_carriedGems.find(fid);
+            if (it == g_carriedGems.end()) return;
+            auto gi = it->second.find(key);
+            if (gi == it->second.end() || gi->second.empty()) return;
+            slots.assign(gi->second.begin(), gi->second.end());   // copy out of the lock
+            req.insert(key);                             // mark requested (pruned when it leaves the cache)
+        }
+        // UnsocketGem queues to the main thread -- safe from any thread. One per gem.
+        for (const std::uint8_t s : slots)
+            g_meo->UnsocketGem(a_actor, a_base, a_uid, s);
+    }
+
     void QueueGemMove(RE::Actor* a_follower, RE::FormID a_fromBase, std::uint16_t a_fromUid,
                       RE::FormID a_toBase) {
         // No source gems (uid 0), no MEO, or malformed -> nothing to carry over.
@@ -100,6 +191,8 @@ namespace MFO::MEOBridge {
     void ClearTransientState() {
         std::scoped_lock lk(g_mx);
         g_pending.clear();
+        g_carriedGems.clear();      // per-follower carried-gem cache is session-scoped
+        g_extractRequested.clear();
     }
 
     GemPreview PreviewWithGems(RE::Actor* a_actor, RE::TESBoundObject* a_candidateBase) {
