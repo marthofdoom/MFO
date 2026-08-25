@@ -1420,7 +1420,7 @@ namespace MFO::Logistics {
                     // a shield).
                     const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                         & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
-                    const bool shieldUseless = isShield && meleeTargetClass != WepClass::OneHand;
+                    const bool shieldUseless = isShield && !(meleeTargetClass == WepClass::OneHand && !doRanged);
                     // MAGE APPAREL + JEWELRY (#21 unified with the buy side): a magic
                     // user's dress-up is judged by the shared MEO-aware ranking
                     // (MageApparelBuyKey: value-primary with MEO, else school-enchant
@@ -3439,6 +3439,12 @@ namespace MFO::Logistics {
                 buy.wantCrossbow  = wantCrossbow;
                 buy.rangedBaseDmg = myRangedDmg;
                 buy.buyArmor       = !useMageApparel && !dolls;   // non-caster OR caster-in-armor: rated armor
+                // A shield is in-role ONLY for a dedicated one-hand melee follower (not a
+                // ranged/caster, even one carrying a 1h backup). For everyone else, saturate
+                // the shield slot's baseline so PlanBuy never buys one (matches the sell/keep
+                // side's usesShield and the loot path's shieldUseless).
+                const bool usesShield = (roles.melee == WepClass::OneHand) && !doRanged && !caster;
+                if (!usesShield) slotRat[4] = 1.0e9f;
                 for (int s = 0; s < 5; ++s) buy.armorBaseRat[s] = static_cast<std::int32_t>(slotRat[s]);
                 buy.buyMageApparel = useMageApparel && !dolls;
                 // MEO-aware ranking (marth): value-driven ONLY with MEO present (gems
