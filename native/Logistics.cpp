@@ -3761,25 +3761,44 @@ namespace MFO::Logistics {
                     return hold;
                 };
 
+                // [sell] per-item EXCLUSION diagnostic. Rate-limited ~15s/follower via a
+                // worker-sequential static (one ServiceFollower at a time -- same pattern
+                // as s_nextMageFix/s_nextHeal, no lock). Names WHY each weap/armo is not
+                // offered, so a "sell n=0" is never a black box again. INFO-level, cheap.
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextSellDiag;
+                bool diag = false;
+                {
+                    const auto now = Clock::now();
+                    auto& nx = s_nextSellDiag[fid];
+                    if (now >= nx) { diag = true; nx = now + std::chrono::seconds(15); }
+                }
+                auto sdiag = [&](RE::TESBoundObject* o, const char* why) {
+                    if (diag) spdlog::info("[sell] {:08X} '{}' -> {}", fid,
+                                           o && o->GetName() ? o->GetName() : "?", why);
+                };
+                if (diag)
+                    spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
+
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
-                    if (IsStockGear(fid, obj->GetFormID())) continue;   // #69 own signature gear
-                    if (weap && keepWeapons.count(obj))     continue;   // loadout weapon, not junk
-                    if (armo && keepArmor.count(obj))       continue;   // #21 best-in-slot -- don't re-sell a bought upgrade
+                    if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // #69 own signature gear
+                    if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
+                    if (armo && keepArmor.count(obj))       { sdiag(obj, "keepArmor"); continue; }    // #21 best-in-slot
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
-                    if (entry && entry->IsWorn())               continue;   // never sell worn gear (worn gem investment protected)
-                    if (gemHold(entry, obj->GetFormID()))       continue;   // ungem-then-sell (v3) / protect (v2); sells ungemmed later
-                    if (Catalog::IsExcluded(obj->GetFormID()))  continue;   // #3 artifacts/quest -- never sell
+                    if (entry && entry->IsWorn())               { sdiag(obj, "worn"); continue; }     // never sell worn gear
+                    if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
+                    if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
                     // #21 merchant-perk bypass: a "sell anything" follower ignores the
                     // vendor's VEND filter (like the player); otherwise the filter holds.
-                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) continue;
+                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) { sdiag(obj, "vendor-filter"); continue; }
+                    if (diag) sdiag(obj, "SELL");
                     // #21 speech-scaled sell price (base instance value * sellFraction).
                     const std::int32_t baseVal = entry ? entry->GetValue() : 0;
                     sell.push_back(TradeBridge::SellRow{
