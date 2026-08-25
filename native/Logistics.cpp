@@ -3662,6 +3662,7 @@ namespace MFO::Logistics {
                 // jewelry, primary biped slot for rated armor), keep ONE best per slot,
                 // ranked to MATCH what EquipBestOwnedGear would actually wear.
                 std::unordered_set<RE::TESBoundObject*> keepArmor;
+                std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best obj (worn-inferior convergence)
                 if (Config::g_economyBuyGear.load()) {
                     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
                     const bool caster         = IsCasterFollower(a_state);
@@ -3671,14 +3672,23 @@ namespace MFO::Logistics {
                     const bool schoolPrimary  = !MEOBridge::Available() ||
                                                 Config::g_mageApparelStrictSchool.load();
                     const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
+                    // A shield is in-role ONLY for a dedicated one-hand MELEE follower. A
+                    // ranged (bow) or caster follower never equips one, so it must NOT be
+                    // kept -- it is dead weight that should sell. (The off-role WEAPON shed
+                    // drops wrong-role weapons; a shield is armor and slipped past it.)
+                    const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+                    const bool usesShield   = (roles.melee == WepClass::OneHand) &&
+                                              !roles.doRanged && !caster;
 
                     // (a) Always keep what is WORN, regardless of the bucket math (the
                     //     sell loop's IsWorn gate already bars worn gear; this is belt-
                     //     and-suspenders and also pins the jewelry logical slots).
                     for (int ls = 0; ls < 6; ++ls)
                         if (auto* w = WornInLogicalSlot(a_follower, ls)) keepArmor.insert(w);
-                    for (auto sl : { Slot::kShield, Slot::kForearms, Slot::kCalves })
+                    for (auto sl : { Slot::kForearms, Slot::kCalves })
                         if (auto* w = a_follower->GetWornArmor(sl)) keepArmor.insert(w);
+                    if (usesShield)
+                        if (auto* w = a_follower->GetWornArmor(Slot::kShield)) keepArmor.insert(w);
 
                     // (b) The single best NEXT-UPGRADE per LOGICAL slot.
                     auto armorLogicalSlot = [](std::uint32_t mask) -> int {
@@ -3699,6 +3709,7 @@ namespace MFO::Logistics {
                         if (ar->GetArmorRating() > 0.0f) {                       // rated armor: rating then value
                             const int ls = armorLogicalSlot(static_cast<std::uint32_t>(ar->GetSlotMask()));
                             if (ls < 0) continue;
+                            if (ls == 4 && !usesShield) continue;   // don't keep a shield for a non-shield-user -> it sells
                             key = 10 + ls;
                             primary   = ar->GetArmorRating();
                             secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
@@ -3716,7 +3727,7 @@ namespace MFO::Logistics {
                             (primary == b.primary && secondary > b.secondary))
                             b = { obj, primary, secondary };
                     }
-                    for (auto& [k, b] : best) if (b.obj) keepArmor.insert(b.obj);
+                    for (auto& [k, b] : best) if (b.obj) { keepArmor.insert(b.obj); bestBySlot[k] = b.obj; }
                 }
 
                 std::vector<TradeBridge::SellRow> sell;
@@ -3779,6 +3790,20 @@ namespace MFO::Logistics {
                 if (diag)
                     spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
 
+                // CONVERGENCE (marth): a WORN piece that is NOT the best in its logical slot
+                // (a better owned piece exists) is a redundant inferior -- unequip it so it
+                // stops being worn-protected and sells. Rate-limited per follower (~8s) so we
+                // don't re-post while the sale lands. Needs bestBySlot (built above).
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextUnequip;
+                bool canUnequip = false;
+                {
+                    const auto now = Clock::now();
+                    auto& nx = s_nextUnequip[fid];
+                    if (now >= nx) { canUnequip = true; nx = now + std::chrono::seconds(8); }
+                }
+                const bool umaSell = IsCasterFollower(a_state) && Config::g_mageWearRobes.load() &&
+                                     !Config::g_dollsMode.load();
+
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
@@ -3786,6 +3811,32 @@ namespace MFO::Logistics {
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
                     if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // #69 own signature gear
+                    // CONVERGENCE: a WORN armor piece that isn't its slot's best (a strictly
+                    // kept-better exists) -> unequip it (main-thread, #62-safe: EquipManager,
+                    // never DoReset3D) so the redundant inferior sells next scan instead of
+                    // staying worn-protected forever (Auri's spare boots / Jesper's spare outfit).
+                    if (armo && data.second && data.second->IsWorn() && !bestBySlot.empty()) {
+                        int sk = -1;
+                        if (armo->GetArmorRating() > 0.0f) { const int ls = ArmorBuySlot(armo); if (ls >= 0) sk = 10 + ls; }
+                        else if (umaSell)                  { sk = MageClothingSlot(armo); }
+                        if (sk >= 0) {
+                            auto bit = bestBySlot.find(sk);
+                            if (bit != bestBySlot.end() && bit->second && bit->second != obj) {
+                                sdiag(obj, "unequip-inferior");
+                                if (canUnequip && MainThread::IsInstalled()) {
+                                    const RE::FormID folID = fid, itemID = obj->GetFormID();
+                                    MainThread::Post([folID, itemID] {
+                                        auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
+                                        auto* form = RE::TESForm::LookupByID(itemID);
+                                        auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
+                                        auto* eq   = RE::ActorEquipManager::GetSingleton();
+                                        if (fol && item && eq) eq->UnequipObject(fol, item);
+                                    });
+                                }
+                                continue;   // still worn this scan; sells once the unequip lands
+                            }
+                        }
+                    }
                     if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
                     if (armo && keepArmor.count(obj))       { sdiag(obj, "keepArmor"); continue; }    // #21 best-in-slot
                     RE::BGSKeywordForm* kwf = weap
