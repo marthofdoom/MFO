@@ -3856,12 +3856,17 @@ namespace MFO::Logistics {
                     }
                     if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
                     if (armo && keepArmor.count(obj)) {   // #21 best-in-slot
-                        if (diag)
-                            spdlog::info("[sell] {:08X} '{}' -> keepArmor (mask=0x{:X} cs={} rated={} worn={})",
+                        if (diag) {
+                            const int dsk = umaSell ? MageClothingSlot(armo)
+                                          : (armo->GetArmorRating() > 0.0f ? 10 + ArmorBuySlot(armo) : -1);
+                            const auto dbit = (dsk >= 0) ? bestBySlot.find(dsk) : bestBySlot.end();
+                            spdlog::info("[sell] {:08X} '{}' -> keepArmor (cs={} rated={} worn={} gold={} rat={:.0f} best={})",
                                          fid, obj->GetName() ? obj->GetName() : "?",
-                                         static_cast<std::uint32_t>(armo->GetSlotMask()),
                                          MageClothingSlot(armo), ArmorBuySlot(armo),
-                                         (data.second && data.second->IsWorn()) ? 1 : 0);
+                                         (data.second && data.second->IsWorn()) ? 1 : 0,
+                                         armo->GetGoldValue(), armo->GetArmorRating(),
+                                         (dbit != bestBySlot.end() && dbit->second == obj) ? 1 : 0);
+                        }
                         continue;
                     }
                     RE::BGSKeywordForm* kwf = weap
