@@ -3323,7 +3323,13 @@ namespace MFO::Logistics {
                     const int slot = MageClothingSlot(ar);
                     if (slot < 0) continue;
                     int t = 0; std::int32_t m = 0;
-                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) continue;
+                    // The currently-WORN piece is always its slot's incumbent candidate,
+                    // ranked with allowVillain=true (restores the pre-authoritative
+                    // asymmetry): a player-equipped villain/necromancer robe on a
+                    // non-necromancer stays eligible instead of being excluded from
+                    // candidacy, force-replaced by a lesser common piece, and then sold.
+                    const bool worn = (WornInLogicalSlot(a_follower, slot) == obj);
+                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain || worn, t, m)) continue;
                     auto& b = bestSlot[slot];
                     if (!b.obj || t > b.tier || (t == b.tier && m > b.metric) ||
                         (t == b.tier && m == b.metric && obj->GetFormID() > b.obj->GetFormID()))

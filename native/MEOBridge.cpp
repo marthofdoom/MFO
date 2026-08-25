@@ -275,9 +275,20 @@ namespace MFO::MEOBridge {
             for (const auto s : kArmorSlots)
                 if (auto* w = a_actor->GetWornArmor(s)) addItem(w, true);
 
+            // Total inventory count of a base (worn copies included) -- used to defer
+            // ambiguous uid-0 SocketGem targeting when a duplicate copy is carried.
+            auto invBaseCount = [&](RE::FormID b) -> std::int32_t {
+                for (auto& [obj, data] : a_actor->GetInventory())
+                    if (obj && obj->GetFormID() == b) return data.first;
+                return 0;
+            };
+
             for (auto& item : items) {
                 const int emptyCount = g_meo->GetEmptySocketCount(a_actor, item.base, item.uid);
-                if (emptyCount <= 0) continue;
+                // Tier 1 (conservation) only FILLS empty sockets -- if none, skip. Tier 2
+                // (effect-aware) must still reach the swap-up below on a fully-socketed
+                // item, so don't skip it here when a_effectAware.
+                if (emptyCount <= 0 && !a_effectAware) continue;
 
                 // Filled slots (+ their gems, for the effect-aware swap). GetGemDetails
                 // returns the TRUE count; capacity = filled + empty.
@@ -286,6 +297,7 @@ namespace MFO::MEOBridge {
                 const std::uint32_t trueDet = g_meo->GetGemDetails(a_actor, item.base, item.uid, det, kMaxDet);
                 const std::uint32_t nDet    = std::min(trueDet, kMaxDet);
                 const int capacity          = static_cast<int>(trueDet) + emptyCount;
+                if (capacity <= 0) continue;   // socketless item -- nothing to fill or swap
 
                 std::unordered_set<std::uint8_t> filled;
                 for (std::uint32_t i = 0; i < nDet; ++i) filled.insert(det[i].slot);
@@ -294,6 +306,11 @@ namespace MFO::MEOBridge {
                 // socket, so fill only ONE slot this pass; the rest fill next pass once
                 // WornUid returns the minted uid (avoids ambiguous uid-0 targeting).
                 const bool mintGuard = (item.uid == 0);
+                // If a DUPLICATE copy of this base is carried (e.g. a junk copy awaiting
+                // sale), a uid-0 SocketGem could mint on the wrong instance and park the
+                // gem on to-be-sold junk (churn with economy on, permanent loss with it
+                // off). Defer until the copy is gone or the worn copy has a real uid.
+                if (mintGuard && invBaseCount(item.base) > 1) continue;
 
                 for (int slot = 0; slot < capacity; ++slot) {
                     if (filled.contains(static_cast<std::uint8_t>(slot))) continue;
