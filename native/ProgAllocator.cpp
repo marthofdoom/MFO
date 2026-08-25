@@ -56,6 +56,15 @@ namespace MFO::ProgAllocator {
             // the old ADOPT-drift path runs: engine gains stack under MFO's
             // award. Live, non-save addon MCM/INI knob (no GLOB, no PRGN touch).
             bool  cancelEngineAwards    = true;
+            // §HMS class-redistribution: master switch + max skew fraction.
+            // hmsRedistribute OFF = the whole HMS feature is inert (no measure,
+            // no write) — vanilla engine HMS stands. hmsSkewMaxFrac is the
+            // ceiling on the usage-scaled skew pulled FROM the class-primary pool
+            // TOWARD the exercised off-class pool (marth: up to 20%). Live,
+            // non-save knobs (no GLOB, no PRGN touch) — same discipline as
+            // cancelEngineAwards; no MCM control, so audit_mcm stays green.
+            bool  hmsRedistribute       = true;
+            float hmsSkewMaxFrac        = 0.20f;
         };
         Economy g_econ;
         // The RECORD DEFAULTS latched at kDataLoaded (before any save loads, so
@@ -489,6 +498,231 @@ namespace MFO::ProgAllocator {
             for (auto& e : a_st.skills)
                 ReconcileSkill(avo, e, autoFor(e.av) + e.manualPoints,
                                BaselineFloor(a_st, e.av), id, a_log);
+        }
+
+        // ── HMS class-redistribution (§HMS, PRGN v5) ────────────────────────
+        //
+        // Pool index is FIXED {0=Health, 1=Magicka, 2=Stamina} — this order is
+        // the co-save order and the profile-table column order. NEVER reorder.
+        static constexpr RE::ActorValue kHmsAV[3] = {
+            RE::ActorValue::kHealth, RE::ActorValue::kMagicka, RE::ActorValue::kStamina
+        };
+        static const char* HmsPoolName(int p) {
+            switch (p) { case 0: return "Health"; case 1: return "Magicka"; case 2: return "Stamina"; }
+            return "?";
+        }
+
+        // Class profile by CombatStyle::Stance ordinal (ClassDef::stance):
+        //   1=Melee  60/ 5/35   (primary Health)
+        //   2=Ranged 40/ 5/55   (primary Stamina)
+        //   3=Mage   15/80/ 5   (primary Magicka)
+        //   0/other  → no profile (HMS skipped entirely).
+        // Returns false for a stance with no profile.
+        bool HmsProfile(std::uint8_t a_stance, float a_out[3], int& a_primary) {
+            switch (a_stance) {
+            case 1: a_out[0] = 0.60f; a_out[1] = 0.05f; a_out[2] = 0.35f; a_primary = 0; return true;
+            case 2: a_out[0] = 0.40f; a_out[1] = 0.05f; a_out[2] = 0.55f; a_primary = 2; return true;
+            case 3: a_out[0] = 0.15f; a_out[1] = 0.80f; a_out[2] = 0.05f; a_primary = 1; return true;
+            default: return false;
+            }
+        }
+
+        // Which HMS pool is the follower PHYSICALLY exercising right now, read
+        // entirely from live engine state on the MAIN thread (race-free — we
+        // deliberately do NOT read the worker-written Gambit.lastFired display
+        // fields, which would be a #4 cross-thread read of g_followers contents;
+        // physical exercise is the same "usage" signal, observed safely):
+        //   a readied SPELL in either hand  → Magicka (1)
+        //   a bow/crossbow                  → Stamina (2)
+        //   a staff                         → Magicka (1)  (magic role)
+        //   a melee weapon (1H/2H)          → Health  (0)
+        //   nothing decisive                → -1
+        // Gated by the caller on IsInCombat(); we additionally require the
+        // weapon to be DRAWN so a sheathed idle loadout is not counted.
+        int HmsExercisedPool(RE::Actor* a_actor) {
+            // Actor publicly inherits ActorState — IsWeaponDrawn() is a direct
+            // call. A sheathed idle loadout says nothing about what pool is used.
+            if (!a_actor->IsWeaponDrawn()) return -1;
+            RE::TESForm* hands[2] = { a_actor->GetEquippedObject(false),   // right
+                                      a_actor->GetEquippedObject(true) };  // left
+            for (auto* h : hands)
+                if (h && h->Is(RE::FormType::Spell)) return 1;   // Magicka
+            for (auto* h : hands) {
+                if (auto* weap = h ? h->As<RE::TESObjectWEAP>() : nullptr) {
+                    switch (weap->GetWeaponType()) {
+                    case RE::WEAPON_TYPE::kBow:
+                    case RE::WEAPON_TYPE::kCrossbow:
+                        return 2;   // Stamina
+                    case RE::WEAPON_TYPE::kStaff:
+                        return 1;   // Magicka (magic role)
+                    case RE::WEAPON_TYPE::kOneHandSword:
+                    case RE::WEAPON_TYPE::kOneHandDagger:
+                    case RE::WEAPON_TYPE::kOneHandAxe:
+                    case RE::WEAPON_TYPE::kOneHandMace:
+                    case RE::WEAPON_TYPE::kTwoHandSword:
+                    case RE::WEAPON_TYPE::kTwoHandAxe:
+                        return 0;   // Health
+                    default:
+                        break;
+                    }
+                }
+            }
+            return -1;
+        }
+
+        // Combat-edge battle counting for the skew usage metric. Runs every poll
+        // on the MAIN thread for a resolved, active enrolled follower. Detects
+        // the rising edge of a (3s-dwell-smoothed) battle and, once per battle,
+        // flags whether the follower exercised an off-class pool. Both counters
+        // are reset by RecomputeHMS when it consumes them for a fresh award.
+        // Runtime state (hmsInBattle/hmsBattleOffCounted/hmsLastCombat) is never
+        // serialized; the two COUNTS are (v5 block).
+        void HmsTrackBattle(RE::Actor* a_actor, ProgState& a_st) {
+            const ClassDef* def = FindClassDef(a_st.clsId);
+            if (!def) return;
+            float prof[3]; int primary = 0;
+            if (!HmsProfile(def->stance, prof, primary)) return;
+
+            constexpr auto kHmsCombatDwell = std::chrono::seconds(3);   // mirror Logistics shed dwell
+            const auto now = std::chrono::steady_clock::now();
+            const bool combatNow = a_actor->IsInCombat();
+            if (combatNow) a_st.hmsLastCombat = now;
+            const bool recentCombat =
+                combatNow || (a_st.hmsInBattle && (now - a_st.hmsLastCombat) < kHmsCombatDwell);
+
+            if (recentCombat && !a_st.hmsInBattle) {
+                // rising edge — a new battle
+                a_st.hmsInBattle = true;
+                a_st.hmsBattleOffCounted = false;
+                if (a_st.battlesSinceLevelUp < 0xFFFFFFFFu) ++a_st.battlesSinceLevelUp;
+            } else if (!recentCombat && a_st.hmsInBattle) {
+                a_st.hmsInBattle = false;
+            }
+
+            if (a_st.hmsInBattle && combatNow && !a_st.hmsBattleOffCounted) {
+                const int pool = HmsExercisedPool(a_actor);
+                if (pool >= 0 && pool != primary) {
+                    a_st.hmsBattleOffCounted = true;
+                    if (a_st.battlesOffClass < 0xFFFFFFFFu) ++a_st.battlesOffClass;
+                    // First off-class pool since the last award wins (stable).
+                    if (a_st.offClassPool == 0)
+                        a_st.offClassPool = static_cast<std::uint8_t>(pool + 1);
+                }
+            }
+        }
+
+        // The §HMS sibling of ReconcileSkill. MEASURE the engine's per-level HMS
+        // award (positive drift off the held target, BEFORE re-asserting), sum
+        // the three pool deltas into a live per-modlist budget, redistribute that
+        // budget by class%+skew, then hold target = baseline + cumulative.
+        //
+        // Uncaptured baseline (pre-v5 save, or freshly enrolled without capture):
+        // ADOPT the follower's current base H/M/S as the baseline once, exactly
+        // like the skill ADOPT fallback — existing followers are not retro-slammed.
+        void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
+            if (!g_econ.hmsRedistribute) return;
+            const ClassDef* def = FindClassDef(a_st.clsId);
+            if (!def) return;                 // no class picked, or the addon left
+            float prof[3]; int primary = 0;
+            if (!HmsProfile(def->stance, prof, primary)) return;   // stance 0/none → skip
+            auto* avo = a_actor->AsActorValueOwner();
+            if (!avo) return;
+            const auto id = a_actor->GetFormID();
+
+            float cur[3];
+            for (int p = 0; p < 3; ++p) cur[p] = avo->GetBaseActorValue(kHmsAV[p]);
+
+            // First touch on an uncaptured record → adopt current base as the
+            // baseline/target, zero the cumulative, and STOP (nothing to measure
+            // yet; the next drift edge measures against this target).
+            if (!a_st.hmsCaptured) {
+                for (int p = 0; p < 3; ++p) {
+                    a_st.hmsBaseline[p]   = cur[p];
+                    a_st.hmsTarget[p]     = cur[p];
+                    a_st.hmsSkew[p]       = 0.0f;
+                    a_st.hmsCumulative[p] = 0.0f;
+                }
+                a_st.hmsCaptured = true;
+                spdlog::info("[hms] {:08X} baseline ADOPTED (uncaptured record): "
+                             "H {:.0f} / M {:.0f} / S {:.0f} — no retro award",
+                             id, cur[0], cur[1], cur[2]);
+                return;
+            }
+
+            // MEASURE: positive drift off the held target = this level's fresh
+            // engine award. Capture BEFORE any write (clobbering first erases it).
+            float delta[3]; float budget = 0.0f;
+            for (int p = 0; p < 3; ++p) {
+                delta[p] = cur[p] - a_st.hmsTarget[p];
+                if (delta[p] > 0.0f) budget += delta[p];
+            }
+
+            float award[3] = { 0.0f, 0.0f, 0.0f };
+            float usageFrac = 0.0f, shift = 0.0f;
+            int   offPool = -1;
+            if (budget > 0.0f) {
+                for (int p = 0; p < 3; ++p) award[p] = budget * prof[p];
+
+                // SKEW: one-directional pull FROM the class-primary pool TOWARD
+                // the off-class pool exercised since the last award, scaled by
+                // the participation ratio, capped at hmsSkewMaxFrac of budget.
+                // FLOOR: any real off-class usage grants ≥1 point to that pool.
+                offPool = (a_st.offClassPool >= 1 && a_st.offClassPool <= 3)
+                              ? (a_st.offClassPool - 1) : -1;
+                if (offPool >= 0 && offPool != primary && a_st.battlesOffClass > 0 &&
+                    a_st.battlesSinceLevelUp > 0) {
+                    usageFrac = static_cast<float>(a_st.battlesOffClass) /
+                                static_cast<float>(a_st.battlesSinceLevelUp);
+                    if (usageFrac > 1.0f) usageFrac = 1.0f;
+                    shift = g_econ.hmsSkewMaxFrac * usageFrac * budget;
+                    if (shift < 1.0f) shift = 1.0f;             // ≥1-point floor
+                    if (shift > award[primary]) shift = award[primary];   // never negative primary
+                    award[primary]  -= shift;
+                    award[offPool]  += shift;
+                    a_st.hmsSkew[primary] -= shift;
+                    a_st.hmsSkew[offPool] += shift;
+                }
+
+                for (int p = 0; p < 3; ++p) {
+                    if (award[p] < 0.0f) award[p] = 0.0f;       // belt + braces
+                    a_st.hmsCumulative[p] += award[p];
+                }
+            }
+
+            // HOLD: target = baseline + cumulative (this REVERTS the engine's raw
+            // distribution in cur and grants the reshaped total — net per-follower
+            // gain == the measured budget, reshaped to the class profile).
+            for (int p = 0; p < 3; ++p) {
+                float tgt = a_st.hmsBaseline[p] + a_st.hmsCumulative[p];
+                if (tgt < a_st.hmsBaseline[p]) tgt = a_st.hmsBaseline[p];   // floor
+                a_st.hmsTarget[p] = tgt;
+                if (tgt != cur[p]) avo->SetBaseActorValue(kHmsAV[p], tgt);
+            }
+
+            if (budget > 0.0f) {
+                // REQUIRED [hms] probe (INVARIANTS #13): the measured engine
+                // award, class profile, per-pool award, skew, participation, and
+                // the final targets. Naturally rate-limited to award events.
+                if (a_log)
+                    spdlog::info("[hms] {:08X} stance {} ({:.0f}/{:.0f}/{:.0f}%): engine award "
+                                 "dH {:.1f} dM {:.1f} dS {:.1f} = budget {:.1f} | skew {:.1f} pt "
+                                 "primary {}→{} @ {:.0f}% of {} battle(s) off-class | "
+                                 "award H {:.1f} M {:.1f} S {:.1f} → base H {:.0f} M {:.0f} S {:.0f}",
+                                 id, static_cast<int>(def->stance), prof[0]*100, prof[1]*100, prof[2]*100,
+                                 delta[0], delta[1], delta[2], budget,
+                                 shift, HmsPoolName(primary),
+                                 offPool >= 0 ? HmsPoolName(offPool) : "(none)",
+                                 usageFrac*100, a_st.battlesSinceLevelUp,
+                                 award[0], award[1], award[2],
+                                 a_st.hmsTarget[0], a_st.hmsTarget[1], a_st.hmsTarget[2]);
+                // Consume the counters: this award closes the window (== level-up
+                // reset). Runtime battle-edge state is left as-is (an in-progress
+                // battle keeps counting toward the NEXT window).
+                a_st.battlesSinceLevelUp = 0;
+                a_st.battlesOffClass     = 0;
+                a_st.offClassPool        = 0;
+                a_st.hmsBattleOffCounted = false;
+            }
         }
 
         // ── perk grant plumbing (P1/P3-proven paths only) ───────────────────
@@ -936,6 +1170,7 @@ namespace MFO::ProgAllocator {
             if (changed) a_actor->ApplyPerksFromBase();
 
             RecomputeSkills(a_actor, a_st, /*log*/ false);
+            RecomputeHMS(a_actor, a_st, /*log*/ false);   // §HMS: capture baseline / hold target
 
             spdlog::info("[prog] {:08X} {} reapply: {} perk(s) re-added, {} already on base, "
                          "{} unresolvable, {} deferred to native ownership — ApplyPerksFromBase {}",
@@ -1068,6 +1303,7 @@ namespace MFO::ProgAllocator {
                                      id, st.progressionLevel, gain, PerkPointsAvailable(st),
                                      g_econ.levelsPerPerkPoint, AllocatedRanks(st));
                         if (actor) RecomputeSkills(actor, st, /*log*/ true);
+                        if (actor) RecomputeHMS(actor, st, /*log*/ true);   // §HMS
                     }
                 }
 
@@ -1080,6 +1316,13 @@ namespace MFO::ProgAllocator {
                         // and re-topped by the reconcile. Writes only on
                         // divergence, so the steady state is pure reads.
                         RecomputeSkills(actor, st, /*log*/ true);
+                        // §HMS: the drift-watch is the PRIMARY measure site —
+                        // it MEASURES the engine's positive HMS drift (the award)
+                        // and redistributes it, then holds target. Between awards
+                        // base==target so this is pure reads. Battle counting
+                        // (for the skew) runs every poll on the active party.
+                        HmsTrackBattle(actor, st);
+                        RecomputeHMS(actor, st, /*log*/ true);
                     }
                 }
             }
@@ -1720,6 +1963,18 @@ namespace MFO::ProgAllocator {
         if (auto* avo = a_actor->AsActorValueOwner()) {
             for (const auto& s : kSkillNames)
                 st.baseline.push_back({ s.av, avo->GetBaseActorValue(s.av) });
+            // §HMS: capture the base H/M/S floor at enrollment alongside the
+            // skill baseline, so the redistribution never drives a pool below
+            // the follower's true natural. hmsCaptured=true suppresses the
+            // pre-v5 ADOPT fallback for a freshly enrolled follower.
+            for (int p = 0; p < 3; ++p) {
+                const float v = avo->GetBaseActorValue(kHmsAV[p]);
+                st.hmsBaseline[p]   = v;
+                st.hmsTarget[p]     = v;
+                st.hmsSkew[p]       = 0.0f;
+                st.hmsCumulative[p] = 0.0f;
+            }
+            st.hmsCaptured = true;
         }
 
         // §17: the perk-budget debit — tree ranks the follower brought along.
@@ -2190,6 +2445,23 @@ namespace MFO::ProgAllocator {
                 a_intfc->WriteRecordData(static_cast<std::uint32_t>(st.baseline[i].av));
                 a_intfc->WriteRecordData(st.baseline[i].value);
             }
+            // ── v5 §HMS block — APPENDED at the very END of the record ───────
+            // Fixed order, NO count prefix (always exactly 3 pools). Per pool in
+            // fixed {Health, Magicka, Stamina} order: baseline, target, skew,
+            // cumulative (f32 each); then the 2 battle counters (u32), the
+            // off-class pool (u8), and the captured flag (u8). Read GATED on
+            // a_version >= 5 in CoSaveLoad. Nothing above this moved (byte-
+            // identical for v1–v4 saves).
+            for (int p = 0; p < 3; ++p) {
+                a_intfc->WriteRecordData(st.hmsBaseline[p]);
+                a_intfc->WriteRecordData(st.hmsTarget[p]);
+                a_intfc->WriteRecordData(st.hmsSkew[p]);
+                a_intfc->WriteRecordData(st.hmsCumulative[p]);
+            }
+            a_intfc->WriteRecordData(st.battlesSinceLevelUp);
+            a_intfc->WriteRecordData(st.battlesOffClass);
+            a_intfc->WriteRecordData(st.offClassPool);
+            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.hmsCaptured ? 1u : 0u));
             ++written;
         }
         spdlog::info("[cosave] saved {} progression record(s), schema v{}{}", written, kProgVersion,
@@ -2423,6 +2695,42 @@ namespace MFO::ProgAllocator {
                 if (!IsKnownSkillAv(av)) { ++droppedAv; continue; }   // L2: value, not just count
                 st.baseline.push_back({ static_cast<RE::ActorValue>(av), value });
             }
+
+            // ── v5 §HMS block (read ONLY when a_version >= 5) ────────────────
+            // MUST be read UNCONDITIONALLY (even for a dropped/unresolved
+            // follower) or every byte after this record desyncs. Fixed order,
+            // no count prefix — mirror the write exactly. Finite/NaN-guard every
+            // float (a corrupt read must never poison SetBaseActorValue).
+            if (a_version >= 5) {
+                bool hmsOk = true;
+                for (int p = 0; p < 3; ++p) {
+                    float b = 0.0f, t = 0.0f, sk = 0.0f, c = 0.0f;
+                    if (!a_intfc->ReadRecordData(b))  return;
+                    if (!a_intfc->ReadRecordData(t))  return;
+                    if (!a_intfc->ReadRecordData(sk)) return;
+                    if (!a_intfc->ReadRecordData(c))  return;
+                    if (!std::isfinite(b) || !std::isfinite(t) ||
+                        !std::isfinite(sk) || !std::isfinite(c)) hmsOk = false;
+                    st.hmsBaseline[p]   = std::isfinite(b)  ? b  : 0.0f;
+                    st.hmsTarget[p]     = std::isfinite(t)  ? t  : 0.0f;
+                    st.hmsSkew[p]       = std::isfinite(sk) ? sk : 0.0f;
+                    st.hmsCumulative[p] = std::isfinite(c)  ? c  : 0.0f;
+                }
+                std::uint32_t bSince = 0, bOff = 0;
+                std::uint8_t  offPool = 0, captured = 0;
+                if (!a_intfc->ReadRecordData(bSince))   return;
+                if (!a_intfc->ReadRecordData(bOff))     return;
+                if (!a_intfc->ReadRecordData(offPool))  return;
+                if (!a_intfc->ReadRecordData(captured)) return;
+                st.battlesSinceLevelUp = bSince;
+                st.battlesOffClass     = std::min(bOff, bSince);   // ratio ≤ 1 by construction
+                st.offClassPool        = (offPool <= 3) ? offPool : 0;   // clamp [0,3]
+                // A corrupt (non-finite) HMS payload → force re-ADOPT on the next
+                // RecomputeHMS rather than trusting a poisoned baseline/target.
+                st.hmsCaptured = (captured != 0) && hmsOk;
+            }
+            // a_version < 5: no HMS block on disk → hmsCaptured stays false
+            // (struct default) → the first RecomputeHMS adopts the live base.
 
             if (!resolved) { ++droppedActor; continue; }
             g_prog[resolvedID] = std::move(st);
