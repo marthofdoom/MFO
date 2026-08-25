@@ -3491,7 +3491,7 @@ namespace MFO::Logistics {
             // cost being limited here, same pattern as the other diagnostics.
             auto& sn = g_econScan[fid];
             if (sn.time_since_epoch().count() != 0 && a_now < sn) return;
-            sn = a_now + std::chrono::seconds(15);
+            sn = a_now + std::chrono::seconds(6);   // vendor-scan cadence (was 15s -- snappier shopping)
 
             // Same crash4-safe walk as LootNearby: the follower's OWN attached
             // cell, never TES::ForEachReferenceInRange (§0.30).
@@ -3596,7 +3596,7 @@ namespace MFO::Logistics {
                 const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendor->GetFormID();
                 auto& pn = g_econPair[pairKey];
                 if (pn.time_since_epoch().count() != 0 && a_now < pn) continue;
-                pn = a_now + std::chrono::seconds(60);
+                pn = a_now + std::chrono::seconds(20);   // per-(follower,vendor) retry cadence (was 60s)
 
                 const auto& vv   = fac->vendorData.vendorValues;
                 auto*       vend = fac->vendorData.vendorSellBuyList;
