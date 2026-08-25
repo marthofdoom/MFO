@@ -1,3 +1,14 @@
+## v1.0.67 -- Followers shop for their own gear
+
+- **Followers buy their own gear now.** The economy runs both ways. A follower short a helmet, or one who could use better boots, buys them from a merchant out of his own gold on the same pass that sells his junk. On by default (Follower economy). Warriors buy armor, mages buy what a mage actually wears.
+- **Mages dress like mages.** A caster follower picks up and wears robes, hoods, circlets and rings that suit his school instead of standing around in whatever he started in. On by default (Mage robes in the MCM). Turn it off and he wears armor like anyone else.
+- **Followers buy and learn spell tomes.** A mage follower buys tomes he can actually use (matched to his skill) and reads them to learn the spell. College-locked tomes appear on the shelf as his skill grows, the same way they unlock for you.
+- **Gemmed items can be sold.** A follower who wants to sell an item with a gem socketed in it now pulls the gem out first and keeps it, then sells the plain item. You don't lose the gem anymore. This needs MEO. (Followers filling and managing their own sockets comes in a later update.)
+- **Coin purses count as gold.** The coin purse items followers pick up are counted as spending money now.
+- **Rapport grows twice as fast.** The default rate is doubled. If you liked the slower climb, turn it back down in the MCM.
+- **The board shows more.** The spell picker lists each spell's magicka cost with a short tooltip, and the Followers tab now shows Health, Magicka and Stamina.
+- A follower carrying a Merchant or Fence perk can sell to any merchant, the way you can with the perk. Without it the merchant's normal buy filter still applies.
+
 ## v1.0.66 -- Follower economy on by default
 - Follower economy is on out of the box now. Followers sell their unworn junk at merchants and buy the supplies they've run short on, out of their own gold. It was opt-in before, so if you don't want it, turn off Follower economy in the MCM.
 - Removed the "count summon kills" option from the menu. It stays off.
