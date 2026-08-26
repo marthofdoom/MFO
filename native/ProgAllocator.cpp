@@ -1493,18 +1493,33 @@ namespace MFO::ProgAllocator {
                                 if (st.hmsZeroAwardStreak >= 2) st.fixedStat = true;
                             }
                             if (st.fixedStat) {
-                                // GATE: freeze until the player's total HMS catches
-                                // up to this follower's baseline total, THEN grant
-                                // the player's per-level gain (reshaped by class).
-                                float npcTotal = 0.0f;
-                                for (int p = 0; p < 3; ++p) npcTotal += st.hmsBaseline[p];
+                                // GATE: freeze until the player's total HMS catches up
+                                // to this follower's baseline total, THEN converge the
+                                // follower's TOTAL toward the player's total.
+                                // v1.1 Phase-3 BACKFILL (marth 2026-08-26): the grant is
+                                // NOT the per-level delta — it is the SHORTFALL to the
+                                // target granted-HMS max(0, playerTotal - npcTotal). So
+                                // an EXISTING fixed-stat follower jumps its owed HMS in
+                                // ONE shot at activation (the backfill: playerTotal ->
+                                // follower total), then tracks the player per-level as
+                                // the target grows. hmsCumulative already holds the
+                                // granted running total (no new co-save field);
+                                // RecomputeHMS reshapes the budget by class ratio and
+                                // carries the fractional remainder to whole points.
+                                float npcTotal = 0.0f, grantedTotal = 0.0f;
+                                for (int p = 0; p < 3; ++p) {
+                                    npcTotal     += st.hmsBaseline[p];
+                                    grantedTotal += st.hmsCumulative[p];
+                                }
                                 const bool caughtUp = (playerTotalNow >= npcTotal);
-                                if (caughtUp) grantBudget = playerGain;
+                                if (caughtUp)
+                                    grantBudget = std::max(0.0f,
+                                        (playerTotalNow - npcTotal) - grantedTotal);
                                 spdlog::info("[hms] {:08X} fixed-stat grant: streak {} caughtUp {} "
                                              "npcTotal {:.0f} playerTotal {:.0f} playerGain {:.1f} "
-                                             "→ budget {:.1f}",
+                                             "granted {:.0f} -> backfill budget {:.1f}",
                                              id, st.hmsZeroAwardStreak, caughtUp, npcTotal,
-                                             playerTotalNow, playerGain, grantBudget);
+                                             playerTotalNow, playerGain, grantedTotal, grantBudget);
                             }
                         }
                         RecomputeHMS(actor, st, /*log*/ true, grantBudget);
