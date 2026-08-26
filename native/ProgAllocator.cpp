@@ -592,9 +592,11 @@ namespace MFO::ProgAllocator {
         // serialized; the two COUNTS are (v5 block).
         void HmsTrackBattle(RE::Actor* a_actor, ProgState& a_st) {
             const ClassDef* def = FindClassDef(a_st.clsId);
-            if (!def) return;
+            if (!def) return;   // enrollment/MFO-managed gate (stays on clsId)
             float prof[3]; int primary = 0;
-            if (!HmsProfile(def->stance, prof, primary)) return;
+            // v1.1 Phase 2: stance from the base Gambit class (GetBaseClass), not
+            // ClassDef::stance (GLOB editor-id suffix, discarded at runtime → 0).
+            if (!HmsProfile(Followers::GetBaseClass(a_actor), prof, primary)) return;
 
             constexpr auto kHmsCombatDwell = std::chrono::seconds(3);   // mirror Logistics shed dwell
             const auto now = std::chrono::steady_clock::now();
@@ -643,12 +645,31 @@ namespace MFO::ProgAllocator {
         // like the skill ADOPT fallback — existing followers are not retro-slammed.
         void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
             if (!Config::g_hmsRedistribute.load()) return;   // main-MFO MCM master switch
-            const ClassDef* def = FindClassDef(a_st.clsId);
-            if (!def) return;                 // no class picked, or the addon left
-            float prof[3]; int primary = 0;
-            if (!HmsProfile(def->stance, prof, primary)) return;   // stance 0/none → skip
-            if (!a_actor->AsActorValueOwner()) return;
+            const ClassDef* def = FindClassDef(a_st.clsId);  // enrollment/MFO gate + skew/weights
+            // v1.1 Phase 2: the stance AUTHORITY is the base Gambit class
+            // (FollowerState::combatClassOverride, read via GetBaseClass) — NOT
+            // ClassDef::stance, which is parsed from a GLOB editor-id suffix the
+            // engine DISCARDS at runtime (→ always 0 → HMS wrongly skipped). Only
+            // the stance VALUE moves here; def stays the gate + skew/weights source.
+            const std::uint8_t stance = Followers::GetBaseClass(a_actor);
             const auto id = a_actor->GetFormID();
+
+            // [hms-diag] once per call (low-frequency: level-up / ~2s drift). Deferred
+            // emit so earlyReturn + measured budget reflect the ACTUAL exit path.
+            const char* diagExit = "none";
+            float diagBudget = 0.0f;
+            auto emitDiag = [&] {
+                spdlog::info("[hms-diag] {:08X} clsId={:08X} def=\"{}\" defStance={} "
+                             "baseClass={} earlyReturn={} redistribute={:.1f}",
+                             id, a_st.clsId, def ? def->name : "none",
+                             def ? static_cast<int>(def->stance) : -1,
+                             static_cast<int>(stance), diagExit, diagBudget);
+            };
+
+            if (!def) { diagExit = "nodef"; emitDiag(); return; }   // no class picked, or the addon left
+            float prof[3]; int primary = 0;
+            if (!HmsProfile(stance, prof, primary)) { diagExit = "noprofile"; emitDiag(); return; }   // stance 0/none → skip
+            if (!a_actor->AsActorValueOwner()) { diagExit = "noavo"; emitDiag(); return; }
 
             // MEASURE the engine's fresh per-level award via the general follower
             // API (v1.1, byte-identical to the old inline read+diff): current base
@@ -662,6 +683,7 @@ namespace MFO::ProgAllocator {
             // MeasureEngineVitalAward's header.
             float cur[3]; float delta[3];
             const float budget = Followers::MeasureEngineVitalAward(a_actor, a_st.hmsTarget, cur, delta);
+            diagBudget = budget;   // [hms-diag]: measured budget reported at whichever exit follows
 
             // First touch on an uncaptured record → adopt current base as the
             // baseline/target, zero the cumulative, and STOP (nothing to measure
@@ -677,6 +699,7 @@ namespace MFO::ProgAllocator {
                 spdlog::info("[hms] {:08X} baseline ADOPTED (uncaptured record): "
                              "H {:.0f} / M {:.0f} / S {:.0f} — no retro award",
                              id, cur[0], cur[1], cur[2]);
+                emitDiag();
                 return;
             }
 
@@ -776,7 +799,7 @@ namespace MFO::ProgAllocator {
                                  "dH {:.1f} dM {:.1f} dS {:.1f} = budget {:.1f} | skew {:.0f}% "
                                  "{}→{} @ {:.0f}% of {} battle(s) off-class | converge award "
                                  "H {:.1f} M {:.1f} S {:.1f} → base H {:.0f} M {:.0f} S {:.0f}",
-                                 id, static_cast<int>(def->stance), prof[0]*100, prof[1]*100, prof[2]*100,
+                                 id, static_cast<int>(stance), prof[0]*100, prof[1]*100, prof[2]*100,
                                  delta[0], delta[1], delta[2], budget,
                                  sk*100, HmsPoolName(primary),
                                  skPool >= 0 ? HmsPoolName(skPool) : "(none)",
@@ -796,6 +819,7 @@ namespace MFO::ProgAllocator {
                 a_st.offClassPool        = 0;
                 a_st.hmsBattleOffCounted = false;
             }
+            emitDiag();   // [hms-diag]: full path, earlyReturn=none, redistribute=measured budget
         }
 
         // ── perk grant plumbing (P1/P3-proven paths only) ───────────────────
@@ -2101,19 +2125,13 @@ namespace MFO::ProgAllocator {
         const auto beforeName = std::string(ClsName(st.clsId));
         st.clsId = def->id;
 
-        // #65 alignment: the class's DECLARED stance mirrors into the
-        // FollowerState override (0 = no override) so the stance machinery
-        // follows the chosen class immediately (§18.6: the ordinal coupling
-        // is gone — the addon declares the stance explicitly).
-        // item 2b: this runs on the MAIN thread (Board prog edit -> MainThread::Post)
-        // and SetBaseClass -> TryEnsureRecord would INSERT (g_followers rehash vs the
-        // worker) if the record were absent. It is proven present — this follower is
-        // enrolled (g_prog.find succeeded above) and board-addressable, so Refresh
-        // already TryEnsureRecord'd it. The BoardEditScope tripwire (Board.cpp) logs a
-        // HAZARD if that ever stops holding.
-        // v1.1: routed through the general follower API (was an inline TryEnsureRecord
-        // + combatClassOverride assign — SetBaseClass is byte-identical).
-        Followers::SetBaseClass(id, def->stance);
+        // v1.1 Phase 2: the base class (FollowerState::combatClassOverride) is the
+        // stance AUTHORITY, set by the user via the Gambit tab (Board SetClassOverride)
+        // and read by HMS/stance machinery through Followers::GetBaseClass. The
+        // progression-tab SetClass sets the SKILL class (clsId) ONLY and must NOT
+        // overwrite the base class: the old mirror wrote def->stance, which is parsed
+        // from a GLOB editor-id suffix the engine discards at runtime (always 0), so it
+        // only ever clobbered the user's correct Gambit pick with Auto. Mirror removed.
 
         RecomputeSkills(a_actor, st, /*log*/ true);
         spdlog::info("[prog] {} class {} -> \"{}\" ({:08X}) — skills auto-scaled to level {} "

@@ -796,7 +796,12 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   (Followers.h/.cpp), and the base-AV get/set go through `Followers::Get/SetFollowerHMS`
   (canonical pool order {0=H,1=M,2=S} == ProgAllocator `kHmsAV`). RecomputeHMS is
   byte-identical — it just calls the seed API. Then it redistributes by class profile
-  (`ClassDef::stance` 1=Melee 60/5/35,
+  (**v1.1 Phase 2: the STANCE that selects the profile now comes from the base Gambit
+  class `Followers::GetBaseClass(actor)` = `FollowerState::combatClassOverride`, NOT
+  `ClassDef::stance` — the latter is a GLOB editor-id suffix the engine discards at
+  runtime, always 0, which wrongly skipped HMS. `FindClassDef(clsId)` stays as the
+  enrollment/MFO-managed gate + skew/weights source; only the stance value moved. Same
+  swap in `HmsTrackBattle`.**) — 1=Melee 60/5/35,
   2=Ranged 40/5/55, 3=Mage 15/80/5; 0/none → skip) + a usage-scaled **skew** (pulled
   from the class-primary pool toward the exercised off-class pool; ≥1-pt floor, but
   the **cap wins** — clamped to `Config::g_hmsSkewMaxFrac`×budget so a tiny budget
@@ -819,11 +824,19 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   MCM stores a PERCENT 0-100, scaled /100 in `Config::ReadFile`). Baseline captured
   at `Enroll` (`hmsCaptured=true`); a pre-v5 save (`hmsCaptured=false`) ADOPTS the
   live base on first `RecomputeHMS`. REQUIRED `[hms]` probe logs the measured award
-  + budget + profile + skew + per-pool award + final targets.
-- **`Class` enum ordinals (`:84`) MUST stay == `combatClassOverride`** — `SetClass`
-  mirrors into it via `Followers::SetBaseClass` (v1.1 seed API; internally
-  `TryEnsureRecord`). Reads of `combatClassOverride` on the serial-worker path
-  (Scheduler/Actuation stance) go through `Followers::GetBaseClass`. Board snapshot is the
+  + budget + profile + skew + per-pool award + final targets. **v1.1 Phase 2 adds a
+  once-per-call `[hms-diag]` line at RecomputeHMS entry** (`clsId`/`def`/`defStance`/
+  `baseClass`/`earlyReturn`{none|nodef|noprofile|noavo}/`redistribute` budget) —
+  confirms on-deck that a Gambit-Mage follower reads `baseClass=3` and reveals which
+  ClassDef the `clsId` resolved to.
+- **`Class` enum ordinals (`:84`) MUST stay == `combatClassOverride`** — the base
+  class (`combatClassOverride`) is the STANCE AUTHORITY, set by the user via the Gambit
+  tab (Board `SetClassOverride`). **v1.1 Phase 2: progression-tab `SetClass` NO LONGER
+  mirrors into it** — the old `Followers::SetBaseClass(id, def->stance)` write only ever
+  wrote 0 (the discarded GLOB suffix) and clobbered the user's Gambit pick with Auto;
+  removed. `SetClass` now sets the SKILL class (`clsId`) only. Reads of
+  `combatClassOverride` on the serial-worker path (Scheduler/Actuation stance) — and now
+  HMS (`RecomputeHMS`/`HmsTrackBattle`) — go through `Followers::GetBaseClass`. Board snapshot is the
   one cross-thread structure (guarded `g_viewMx`); `Rapport::Spend` (`:1346`) is a
   cross-module write on respec.
 
