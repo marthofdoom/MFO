@@ -40,7 +40,19 @@ namespace MFO::Logistics {
 
     namespace {
 
-        bool IsBlacklistedApparel(RE::TESObjectARMO* a_armo);   // fwd decl (defined near MageApparelBuyKey)
+        // Apparel MFO must NEVER wear or keep, even when it ranks well -- marth's annoyance
+        // list (e.g. a light-emitting circlet). Blacklisted pieces are force-sold like a
+        // redundant inferior. Case-sensitive name-contains; extend kApparelBlacklist as needed.
+        bool IsBlacklistedApparel(RE::TESObjectARMO* a_armo) {
+            if (!a_armo) return false;
+            const char* nm = a_armo->GetName();
+            if (!nm || !*nm) return false;
+            static constexpr const char* kApparelBlacklist[] = { "Circlet of Light" };
+            const std::string_view name = nm;
+            for (const char* b : kApparelBlacklist)
+                if (name.find(b) != std::string_view::npos) return true;
+            return false;
+        }
 
         // ── tuning that is NOT surfaced as config ───────────────────────────
         // The three MCM keys are fFirstDibsDelay / fQuickLootWaiver / bLogistics
@@ -4202,20 +4214,6 @@ namespace MFO::Logistics {
         if (has(Slot::kFeet))   return 3;
         if (has(Slot::kShield)) return 4;
         return -1;
-    }
-
-    // Apparel MFO must NEVER wear or keep, even when it ranks well -- marth's annoyance
-    // list (e.g. a light-emitting circlet). Blacklisted pieces are force-sold like a
-    // redundant inferior. Case-sensitive name-contains; extend kApparelBlacklist as needed.
-    bool IsBlacklistedApparel(RE::TESObjectARMO* a_armo) {
-        if (!a_armo) return false;
-        const char* nm = a_armo->GetName();
-        if (!nm || !*nm) return false;
-        static constexpr const char* kApparelBlacklist[] = { "Circlet of Light" };
-        const std::string_view name = nm;
-        for (const char* b : kApparelBlacklist)
-            if (name.find(b) != std::string_view::npos) return true;
-        return false;
     }
 
     bool MageApparelBuyKey(RE::TESObjectARMO* a_armo, std::uint8_t a_top2Mask,
