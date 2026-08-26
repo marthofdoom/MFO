@@ -1,3 +1,15 @@
+## v1.0.68 -- Town Update Alpha
+
+- **Followers run their own economy now (this is the town update alpha).** They buy the gear and supplies they've run short on, wear the best they own in each slot, and sell the rest, all out of their own gold. This is the groundwork for followers handling their own town errands.
+- **No more hoarding.** A follower keeps one item per slot (the best by value) and sells the spares, even one it happens to be wearing if a better piece is sitting in its pack. Standard starting junk sells too, like a spare iron dagger. Only signature gear stays: a follower's unique named pieces, enchanted uniques, and artifacts.
+- **Mage followers dress by value.** A caster keeps and wears the most valuable outfit per slot and sells the extras, instead of hanging onto two robes at once.
+- **Shields know their owner.** A ranged or caster follower won't buy, loot, or keep a shield it can never use. Sword-and-board followers still get theirs.
+- **Followers tidy their own gem sockets.** A loose gem gets moved into an empty socket on gear the follower wears, so gems never sit stranded. Turn on "MEO Aware Followers" (off by default) and they also pick the best gem for each slot. Needs MEO.
+- **Class shapes level-up growth.** Set a follower's class and their Health, Magicka and Stamina grow toward that class instead of their vanilla defaults. A mage gains Magicka, an archer gains Stamina. It reads how much your own setup awards each level and reshapes that, so it fits whatever leveling mod you run, and it settles toward the class over several levels. An off-class gambit nudges it a little. Turn it off with "Class HMS on level-up", and there's a skew-cap slider.
+- **Shopping is faster.** Followers notice a merchant and trade in a few seconds instead of a minute.
+- **You can blacklist annoying apparel.** The light-emitting Circlet of Light is no longer worn or kept. More can be added over time.
+- This is an alpha. It is a big change to how followers manage their own gear, so expect some rough edges, and if you'd rather they leave their inventory alone, turn off Follower economy in the MCM.
+
 ## v1.0.67 -- Followers shop for their own gear
 
 - **Followers buy their own gear now.** The economy runs both ways. A follower short a helmet, or one who could use better boots, buys them from a merchant out of his own gold on the same pass that sells his junk. On by default (Follower economy). Warriors buy armor, mages buy what a mage actually wears.
