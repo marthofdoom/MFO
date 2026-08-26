@@ -591,10 +591,12 @@ namespace MFO::ProgAllocator {
         // Runtime state (hmsInBattle/hmsBattleOffCounted/hmsLastCombat) is never
         // serialized; the two COUNTS are (v5 block).
         void HmsTrackBattle(RE::Actor* a_actor, ProgState& a_st) {
-            const ClassDef* def = FindClassDef(a_st.clsId);
-            if (!def) return;
+            // HMS is a BASE feature (marth): the class comes from the Gambit-tab class
+            // (combatClassOverride: 1=Melee 2=Ranged 3=Mage, 0=Auto/none), NOT the
+            // progression add-on's ClassDef. So HMS steers by whatever class you set in
+            // the base UI, with or without the progression add-on loaded.
             float prof[3]; int primary = 0;
-            if (!HmsProfile(def->stance, prof, primary)) return;
+            if (!HmsProfile(a_st.combatClassOverride, prof, primary)) return;
 
             constexpr auto kHmsCombatDwell = std::chrono::seconds(3);   // mirror Logistics shed dwell
             const auto now = std::chrono::steady_clock::now();
@@ -643,10 +645,10 @@ namespace MFO::ProgAllocator {
         // like the skill ADOPT fallback — existing followers are not retro-slammed.
         void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
             if (!Config::g_hmsRedistribute.load()) return;   // main-MFO MCM master switch
-            const ClassDef* def = FindClassDef(a_st.clsId);
-            if (!def) return;                 // no class picked, or the addon left
+            // BASE-feature class source (marth): the Gambit-tab class, not the progression
+            // add-on's ClassDef. 1=Melee 2=Ranged 3=Mage; 0=Auto/none skips HMS steering.
             float prof[3]; int primary = 0;
-            if (!HmsProfile(def->stance, prof, primary)) return;   // stance 0/none → skip
+            if (!HmsProfile(a_st.combatClassOverride, prof, primary)) return;
             auto* avo = a_actor->AsActorValueOwner();
             if (!avo) return;
             const auto id = a_actor->GetFormID();
@@ -781,7 +783,7 @@ namespace MFO::ProgAllocator {
                                  "dH {:.1f} dM {:.1f} dS {:.1f} = budget {:.1f} | skew {:.0f}% "
                                  "{}→{} @ {:.0f}% of {} battle(s) off-class | converge award "
                                  "H {:.1f} M {:.1f} S {:.1f} → base H {:.0f} M {:.0f} S {:.0f}",
-                                 id, static_cast<int>(def->stance), prof[0]*100, prof[1]*100, prof[2]*100,
+                                 id, static_cast<int>(a_st.combatClassOverride), prof[0]*100, prof[1]*100, prof[2]*100,
                                  delta[0], delta[1], delta[2], budget,
                                  sk*100, HmsPoolName(primary),
                                  skPool >= 0 ? HmsPoolName(skPool) : "(none)",
