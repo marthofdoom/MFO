@@ -24,12 +24,10 @@ namespace MFO::Forms {
     // OUT OF SCOPE (DESIGN.md 5.4) but FormIDs are forever: the id stays
     // reserved and is never recycled, per INVARIANTS #41.
     inline constexpr RE::FormID kGrantedKeyword   = 0x802;   // RESERVED, unused
-    // §18.6 ADDON API: the registration sentinel keyword shipped in MFO.esp.
-    // An MFO addon = ONE FLST manifest whose FIRST entry is this keyword;
-    // Progression::Init enumerates every such manifest across the merged load
-    // order (no by-name plugin lookup, no fixed addon FormIDs). Frozen public
-    // contract: Docs/ADDON-API.md.
-    inline constexpr RE::FormID kAddonSentinel    = 0x803;
+    // 0x803 RETIRED (v1.1): was the addon-manifest sentinel keyword (kAddonSentinel).
+    // Add-ons now self-declare with their OWN keyword (edid suffix "_MFOAddonManifest"),
+    // so no MFO.esp form is referenced and no MFO.esp master is needed (the Vortex
+    // fix). Id stays retired, never recycled (INVARIANTS #41). Contract: Docs/ADDON-API.md.
     inline constexpr RE::FormID kStartupQuest     = 0x804;
     inline constexpr RE::FormID kMCMQuest         = 0x808;
     // M9 (DESIGN §4.5c): the actuation records.
@@ -72,7 +70,6 @@ namespace MFO::Forms {
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
-    inline RE::BGSKeyword* g_addonSentinel = nullptr;   // §18.6 addon-manifest join key
 
     // M9. Resolved so the first questions about these records are answered at
     // LOAD, in the log, before any behaviour depends on them: do they exist,

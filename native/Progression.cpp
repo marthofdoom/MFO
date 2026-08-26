@@ -1,7 +1,7 @@
 #include "PCH.h"
 #include "Progression.h"
 #include "Config.h"
-#include "Forms.h"   // §18.6: the addon-manifest sentinel keyword
+#include "Forms.h"   // §18.6 (v1.1: addon manifests self-declare via their own keyword)
 
 // The production catalog reader. See Progression.h for the contract;
 // Docs/FOLLOWER-PROGRESSION-ESL-DESIGN.md §1/§2/§3 for the design.
@@ -637,29 +637,44 @@ namespace MFO::Progression {
 
     const Catalog& Get() { return g_catalog; }
 
+    // v1.1 self-declaration: an add-on's manifest is recognized by a KEYWORD it
+    // ships whose editor-id ends with this suffix. Keyword editor-ids PERSIST at
+    // runtime (unlike GLOB/FLST edids, which the engine discards — the Phase 2
+    // root cause), so this is the ONE edid-based match that provably resolves.
+    // The add-on references only its OWN keyword — no MFO.esp form, no MFO.esp
+    // master (the Vortex fix). Contract: Docs/ADDON-API.md.
+    constexpr std::string_view kManifestKeywordSuffix = "_MFOAddonManifest";
+    static bool EdidHasSuffix(RE::TESForm* a_form, std::string_view a_suffix) {
+        const char* e = a_form ? a_form->GetFormEditorID() : nullptr;
+        if (!e) return false;
+        const std::string_view id{ e };
+        return id.size() >= a_suffix.size() &&
+               id.substr(id.size() - a_suffix.size()) == a_suffix;
+    }
+
     void Init() {
         // ── §18.6 REGISTRATION: enumerate addon manifests ───────────────────
-        // An addon = ONE BGSListForm whose FIRST entry is MFO.esp's sentinel
-        // keyword (Forms::g_addonSentinel). Walking the data handler's FLST
-        // array sees the merged load order, so N addons register without a
-        // shared injection point (a common FormList would collide between
-        // addons — each owns its manifest outright). Runs AFTER Forms::Resolve
-        // (plugin.cpp order); sentinel unresolved = MFO.esp itself is broken.
+        // An addon = ONE BGSListForm whose FIRST entry is a KEYWORD self-declaring
+        // as a manifest (editor-id suffix "_MFOAddonManifest"). Walking the data
+        // handler's FLST array sees the merged load order, so N addons register
+        // without a shared injection point (each owns its manifest AND its own
+        // join keyword outright). Runs AFTER Forms::Resolve (plugin.cpp order).
         auto* dh = RE::TESDataHandler::GetSingleton();
         if (!dh) {
             spdlog::error("[prog] TESDataHandler unavailable — addon enumeration skipped");
-        } else if (!Forms::g_addonSentinel) {
-            spdlog::error("[prog] MFO_AddonManifest sentinel unresolved — addon enumeration skipped");
         } else {
             for (auto* list : dh->GetFormArray<RE::BGSListForm>()) {
                 if (!list || list->forms.empty()) continue;
-                if (list->forms.front() != Forms::g_addonSentinel) continue;
+                auto* kw = list->forms.front() ? list->forms.front()->As<RE::BGSKeyword>() : nullptr;
+                if (!EdidHasSuffix(kw, kManifestKeywordSuffix)) continue;
                 AddonRef ref;
                 ref.manifestID = list->GetFormID();
+                if (const char* e = kw->GetFormEditorID()) ref.keywordEdid = e;
                 if (auto* file = list->GetFile(0))
                     ref.plugin = std::string(file->GetFilename());
-                spdlog::info("[prog] addon manifest {:08X} registered (from \"{}\", {} entr(ies))",
-                             ref.manifestID, ref.plugin, list->forms.size());
+                spdlog::info("[prog] addon manifest {:08X} registered (from \"{}\", keyword \"{}\", "
+                             "{} entr(ies))", ref.manifestID, ref.plugin, ref.keywordEdid,
+                             list->forms.size());
                 g_addons.push_back(std::move(ref));
             }
             g_detected = !g_addons.empty();

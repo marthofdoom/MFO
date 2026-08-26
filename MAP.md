@@ -736,10 +736,22 @@ cure-poison gambit consumer doesn't exist yet).
 Optional ESL addon (`MFO_Progression.esl`); inert if absent. Owns the third co-save
 record 'PRGN'. Main-thread-only.
 
-### Progression.cpp / Progression.h — component 1: the catalog reader (read-only)
+### Progression.cpp / Progression.h — component 1: the catalog reader + addon discovery
 One pass at kDataLoaded over merged AVIF perk trees → a value-only frozen `Catalog`.
-Mutates nothing. `Init()` (`:588`) ← `plugin.cpp:286` (immediately before
-`ProgAllocator::Init` — order load-bearing). `Get()` read by ProgAllocator (`:143,
+Mutates nothing. `Init()` (`:655`) ← `plugin.cpp:286` (immediately before
+`ProgAllocator::Init` — order load-bearing).
+**v1.1 addon discovery (Vortex fix):** `Init` recognizes a manifest FLST by its
+FIRST entry being a KEYWORD whose editor-id ends `_MFOAddonManifest`
+(`EdidHasSuffix`, `kManifestKeywordSuffix`) — NOT the retired MFO.esp sentinel.
+Keyword editor-ids persist at runtime; GLOB/FLST edids do NOT (the Phase 2 root
+cause), so this is the one edid match that resolves. The addon references only its
+OWN keyword → no MFO.esp master. `AddonRef` gained `keywordEdid`.
+**v1.1 generic manifest model:** `AddonManifest`/`ManifestClass`/`ManifestEconomy`/
+`ManifestAllocation` (+ `ManifestVerdict`/`ManifestBoardTab` placeholders) is the
+add-on-agnostic host model, built by `ProgAllocator::BuildGenericManifests` and
+exposed via `Progression::Manifests()` (defined at the foot of `ProgAllocator.cpp`).
+**Parsed, unused** — the progression path still drives behavior; consumers route on
+in Phases 5-7. `Get()` read by ProgAllocator (`:143,
 150,437,666,935,1047,1264,1554`) + `Board.cpp:1333`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
