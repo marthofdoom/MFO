@@ -104,6 +104,17 @@ Everything else is already data. These four are the C++-baked design still to li
    `BoardProgSnap/BoardFollowerView/BoardSkillLine/BoardNodeView` (`ProgAllocator.h:291`). →
    add-on-declared UI *composition* over host widgets (§5, tension #4).
 
+**Board-tab creation is a HOST capability (marth's ask).** The DLL provides generic
+add-on-tab creation in the Field Orders board: an add-on **declares** a board tab in its
+manifest (a composition of general host widgets + actions), and `DrawFieldKit` **iterates the
+declared tabs** instead of the hardcoded progression switch (Board.cpp:475/567-584, the one
+coupling point today). There is no imperative `createTab()` for the add-on to call — the tab
+is data the host reads, consistent with self-declaration (no new Papyrus, no add-on C++). The
+host owns the widget vocabulary (perk-tree, skill-table, class-picker, action-button), each
+carrying zero progression content; labels/coords/layout come from the manifest/catalog. Delete
+the add-on → `DrawFieldKit` renders zero tabs from it, no progression line remains. This is
+Phase 6.
+
 ### Manifest self-declaration schema (derived)
 
 ```
