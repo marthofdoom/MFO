@@ -203,6 +203,35 @@ namespace MFO::ProgAllocator {
         // reloads with the real baseline, never re-adopting an MFO-inflated one).
         bool hmsCaptured{ false };
 
+        // ── §HMS fixed-stat grant (v1.1 Phase 3, PRGN v6) ────────────────────
+        // A fixed-stat NPC gets 0 engine HMS award per level (unique/no-autocalc
+        // followers), so the redistribution budget is always 0 and it never
+        // grows. Phase 3 gives it progression: once the PLAYER's total HMS
+        // catches up to this follower's baseline total, grant the follower the
+        // player's per-level HMS gain, reshaped to the class profile.
+        //   fixedStat            — detected fixed-stat (SERIALIZED as flags bit
+        //                          0x20). Set after TWO player level-ups of 0
+        //                          engine award; cleared the moment an award > 0
+        //                          is measured (it is a leveling follower).
+        //   hmsZeroAwardStreak   — consecutive player level-ups this follower saw
+        //                          0 engine award (SERIALIZED, clamped 0..2). At
+        //                          2 → fixedStat. A single quiet level is not proof.
+        //   hmsGrantRemainder    — fractional per-pool grant carried across levels
+        //                          so a 15/80/5 split lands as WHOLE base-AV points
+        //                          over time instead of truncating each level
+        //                          (SERIALIZED). Only ever touched on the grant path.
+        bool          fixedStat{ false };
+        std::uint8_t  hmsZeroAwardStreak{ 0 };
+        float         hmsGrantRemainder[3]{ 0.0f, 0.0f, 0.0f };
+        // §HMS fixed-stat detection tally (SERIALIZED, PRGN v6): the engine HMS
+        // award measured for this follower since the last player level-up.
+        // RecomputeHMS adds each measured (positive) budget; PollWork reads it at
+        // the next player level-up to decide 0-award, then zeroes it. MUST be
+        // serialized (was runtime-only) — the streak it feeds is serialized, so a
+        // save/load BETWEEN two player level-ups would otherwise wipe the award
+        // evidence and falsely flag a LEVELING follower fixedStat within 2 levels.
+        float         hmsAwardAccum{ 0.0f };
+
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)
         // battle; hmsBattleOffCounted = this battle already counted as off-class;

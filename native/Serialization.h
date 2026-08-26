@@ -54,8 +54,33 @@ namespace MFO {
     //        v1–v4 readers are KEPT untouched (INVARIANT #12). A v4 record read
     //        by this v5 DLL has no HMS block → hmsCaptured stays false → the
     //        first RecomputeHMS adopts the live base H/M/S as the baseline.
+    //   v6 - §HMS fixed-stat grant (v1.1 Phase 3). THREE changes, all append/
+    //        drop at the END of the record + one global-header field:
+    //        (a) GLOBAL HEADER gains g_playerHmsTotalLast(f32) right AFTER
+    //            lastPlayerLevel(u16) and BEFORE the follower count — the live
+    //            running total of the PLAYER's base H/M/S, so the per-level
+    //            catch-up grant rate survives a save/load. Read gated on
+    //            version>=6; a pre-v6 stream inits it from the live player total
+    //            on load (no spurious first grant).
+    //        (b) the flags byte gains bit 0x20 = fixedStat (the follower has been
+    //            detected as a fixed-stat NPC — 2 player level-ups of 0 engine
+    //            award). Bits 1/2/4/8/16 unchanged; 0x20 was free (0 in every
+    //            v1–v5 save, so the read is version-agnostic).
+    //        (c) the per-follower §HMS block DROPS hmsTarget(f32×3) — it is ALWAYS
+    //            max(hmsBaseline, hmsBaseline+hmsCumulative) (set that way at
+    //            RecomputeHMS :694/:789 and Enroll), so it is recomputed on load,
+    //            never stored. v6 per pool writes baseline,skew,cumulative (3 f32,
+    //            was 4). AFTER the captured(u8), v6 APPENDS hmsZeroAwardStreak(u8,
+    //            the 0-award detector, clamped 0..2), hmsGrantRemainder(f32×3,
+    //            fractional per-pool grant carried across levels, clamped 0<=f<1),
+    //            and hmsAwardAccum(f32, the detection tally — SERIALIZED so a
+    //            save/load between two player level-ups can't wipe the award
+    //            evidence and falsely flag a leveling follower). The v5 READER
+    //            is KEPT (INVARIANT #12): it reads the OLD 4-f32/pool layout,
+    //            DISCARDS the stored target, recomputes it, and defaults the new
+    //            fields (fixedStat=false, streak=0, remainder={0,0,0}, accum=0).
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
-    inline constexpr std::uint32_t kProgVersion    = 5;   // v5: §HMS class-redistribution block
+    inline constexpr std::uint32_t kProgVersion    = 6;   // v6: §HMS fixed-stat grant (drop target, add streak/remainder/playerHms)
 
     // #76 force-hold: a FOURTH independent record — the weapons MFO force-equipped
     // (prevent-removal) for an active equip gambit. The engine's forceEquip lock

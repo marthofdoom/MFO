@@ -34,7 +34,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v5`, FWPN `v1` (`Serialization.h:7-70`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDS the §HMS block (`if(a_version>=5)`), v1–v4 byte-identical. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:7-90`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:562-622` | `StopPump()` MUST run first (`:568`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:302-322`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -95,18 +95,22 @@ state (`g_followers`, `Gambit`, `FollowerState`).
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:187-217`, read `:239-313`. Owner: `Logistics.cpp`.
-- **`'PRGN'` / `kProgVersion=5`** (`Serialization.h:45`) — progression state;
-  layout + I/O live in `ProgAllocator.cpp` (`CoSaveSave` `:1472`, `CoSaveLoad`
-  `:1535`). Written **even when the addon ESL is absent**. v-history v1→v5 in
-  `Serialization.h:21-56` (v4 = plugin-qualified class identity, v3 reader KEPT;
-  **v5 = §HMS class-redistribution block APPENDED at the END of each record**,
-  read gated `if(a_version>=5)`). v5 block, fixed order / no count prefix: per
-  pool in fixed **{Health, Magicka, Stamina}** order `hmsBaseline`,`hmsTarget`,
-  `hmsSkew`,`hmsCumulative` (f32×4), then `battlesSinceLevelUp`,`battlesOffClass`
-  (u32), `offClassPool`,`hmsCaptured` (u8). Nothing above it moved → v1–v4 saves
-  byte-identical; a v4 record read by v5 has no block → `hmsCaptured=false` →
-  first `RecomputeHMS` adopts the live base H/M/S. All floats finite-guarded on
-  read (mirror the skill guard).
+- **`'PRGN'` / `kProgVersion=6`** (`Serialization.h:57`) — progression state;
+  layout + I/O live in `ProgAllocator.cpp` (`CoSaveSave`, `CoSaveLoad` — grep the
+  symbols, line numbers drift). Written **even when the addon ESL is absent**.
+  v-history v1→v6 in `Serialization.h:21-83` (v4 = plugin-qualified class identity,
+  v3 reader KEPT; v5 = §HMS class-redistribution block APPENDED at END). **v6 (§HMS
+  Phase 3 fixed-stat grant):** (a) global header gains `g_playerHmsTotalLast` f32
+  right after `lastPlayerLevel`, before the follower count (gated `if(version>=6)`;
+  pre-v6 seeds it from the live player total); (b) flags bit `0x20 = fixedStat` (free
+  in v1–v5, reads 0); (c) the per-follower §HMS block **DROPS `hmsTarget`** (always
+  `max(baseline, baseline+cumulative)` — recomputed on load) so v6 writes per pool
+  `hmsBaseline`,`hmsSkew`,`hmsCumulative` (f32×3, was 4), then the counters/captured
+  as before, then **APPENDS `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3**.
+  **v5 reader KEPT (#12):** reads the old 4-f32/pool layout, DISCARDS the stored
+  target + recomputes it, defaults the new fields (streak 0, remainder 0). A v4
+  record read has no block → `hmsCaptured=false` → first `RecomputeHMS` adopts the
+  live base. All floats finite-guarded; streak clamped 0..2.
 - **`'FWPN'` / `kForcedWeaponVersion=1`** (`Serialization.h:59`) — #76 force-hold:
   the weapons MFO force-equipped for an active equip gambit. Owner
   `Actuation.cpp` (`CoSaveForcedWeapons`/`CoLoadForcedWeapons`); **CoLoad
@@ -745,21 +749,25 @@ oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
 ### ProgAllocator.cpp / ProgAllocator.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
 The engine-mutating half: writes perks (`AddPerk/RemovePerk`+`ApplyPerksFromBase`)
 and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
-- **SAVE-COMPAT — `CoSaveSave` (`:1472`) / `CoSaveLoad` (`:1535`) exact order** (any
-  field-order/type/version change corrupts live saves): header `{lastPlayerLevel u16,
-  count u32}`; per follower `{formID u32, flags u8 (bit0 enrolled…bit4 manualSkills
-  v2), cls u8, progressionLevel u16, sharedGrowthRemainder u16, [v1-only unspentPerk
+- **SAVE-COMPAT — `CoSaveSave` / `CoSaveLoad` exact order** (grep the symbols; line
+  numbers drift. Any field-order/type/version change corrupts live saves): header
+  `{lastPlayerLevel u16, [v6: g_playerHmsTotalLast f32], count u32}`; per follower
+  `{formID u32, flags u8 (bit0 enrolled…bit4 manualSkills v2, bit5 0x20 fixedStat v6),
+  cls u8, progressionLevel u16, sharedGrowthRemainder u16, [v1-only unspentPerk
   f32 read+discarded], [v2: manualBaselineLevel u16, manualPointsApplied u16,
   manualExcludedLevels u16, nativeTreePerksAtEnroll u16], perkCount u16 +
   {nodePerkID u32, rank u8}×N, skillCount u16 + {av u32, points f32, lastWrittenBase
   f32, manualPoints f32(v2)}×N, baseCount u16 + {av u32, value f32}×N,
   [v5 §HMS block APPENDED at END: per pool {H,M,S} order {hmsBaseline f32,
-  hmsTarget f32, hmsSkew f32, hmsCumulative f32}, then battlesSinceLevelUp u32,
-  battlesOffClass u32, offClassPool u8, hmsCaptured u8]}`. Bounds:
-  4096 followers / 1024 perks / 64 skills. New fields MUST go behind `if(version>=N)`
-  (v2 at `:1584,1642`; **v5 read gated `if(a_version>=5)`, all floats finite-guarded**).
-  The HMS block is read UNCONDITIONALLY (even for a dropped follower) or the stream
-  desyncs. The docstring `:1447` is commentary — the code is authority.
+  **v5-ONLY hmsTarget f32 (dropped in v6 — recomputed)**, hmsSkew f32,
+  hmsCumulative f32}, then battlesSinceLevelUp u32, battlesOffClass u32,
+  offClassPool u8, hmsCaptured u8, **[v6: hmsZeroAwardStreak u8, hmsGrantRemainder
+  f32×3, hmsAwardAccum f32]**]}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
+  behind `if(version>=N)` (**v6 header + block additions gated `if(version>=6)`;
+  v5 keeps the old 4-f32/pool reader, reads+discards target, recomputes it; all
+  floats finite-guarded, streak clamped 0..2**). The HMS block is read
+  UNCONDITIONALLY (even for a dropped follower) or the stream desyncs. The
+  docstring above `CoSaveSave` is commentary — the code is authority.
 - Version guard `Serialization.cpp:320` (newer PRGN skips this record only).
   `CoSaveSave` has no `g_ready` gate — writes even when the addon is disabled so the
   data survives a session without the ESL.
@@ -808,7 +816,8 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   never exceeds it), accumulates into `hmsCumulative`, then holds
   `hmsTarget=hmsBaseline+hmsCumulative` via one `SetBaseActorValue` per pool. Net
   follower total gain == the measured budget, reshaped. Fixed-stat follower →
-  measured budget 0 → 0 redistribution (vanilla). Skew usage =
+  measured budget 0 → 0 redistribution (vanilla) — **BUT see the Phase-3 grant
+  below.** Skew usage =
   `battlesOffClass/battlesSinceLevelUp`; battles counted in `HmsTrackBattle`
   (main-thread combat rising-edge, 3s dwell). **Off-class signal = the REAL fired
   gambit (F3):** the combat scheduler (WORKER) calls `ProgAllocator::NoteCombatFire`
@@ -826,9 +835,30 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   live base on first `RecomputeHMS`. REQUIRED `[hms]` probe logs the measured award
   + budget + profile + skew + per-pool award + final targets. **v1.1 Phase 2 adds a
   once-per-call `[hms-diag]` line at RecomputeHMS entry** (`clsId`/`def`/`defStance`/
-  `baseClass`/`earlyReturn`{none|nodef|noprofile|noavo}/`redistribute` budget) —
-  confirms on-deck that a Gambit-Mage follower reads `baseClass=3` and reveals which
-  ClassDef the `clsId` resolved to.
+  `baseClass`/`earlyReturn`{none|nodef|noprofile|noavo}/`redistribute` budget
+  /`fixedStat`/`grantBudget`) — confirms on-deck that a Gambit-Mage follower reads
+  `baseClass=3` and reveals which ClassDef the `clsId` resolved to.
+- **§HMS FIXED-STAT GRANT (PRGN v6, v1.1 Phase 3).** A fixed-stat NPC gets 0 engine
+  award → 0 budget → never grows. Phase 3 gives it progression, gated by the SAME
+  `Config::g_hmsRedistribute` master switch (no new MCM/Config). Three parts, all in
+  `PollWork` + `RecomputeHMS`: **(1) DETECT** (active party only, on a player level-up):
+  `RecomputeHMS` tallies each MEASURED engine award into `ProgState::hmsAwardAccum` (SERIALIZED
+  in v6 — a save between two player level-ups must not wipe the award evidence);
+  `PollWork` reads it at the next player level-up — 0 award ⇒ `++hmsZeroAwardStreak`,
+  at **2** sets `fixedStat`; any award > 0 resets the streak AND clears `fixedStat`
+  (a leveling follower). A single quiet level never flags. **(2) PLAYER RATE:** on a
+  player level-up `PollWork` sums the player's base H/M/S → `playerTotalNow`,
+  `playerGain = max(0, playerTotalNow − g_playerHmsTotalLast)` (LIVE, modlist-agnostic;
+  first observation inits with gain 0). **(3) GATE + GRANT:** `fixedStat` follower with
+  `playerTotalNow >= Σ hmsBaseline` (player caught up) ⇒ `RecomputeHMS(actor,st,log,grantBudget=playerGain)`
+  — the injected budget feeds the SAME converging/skew allocation, distributed by
+  `HmsProfile(GetBaseClass)`; the grant path carries fractions in `hmsGrantRemainder[3]`
+  so a 15/80/5 split lands as WHOLE base-AV points over levels. While
+  `playerTotalNow < Σ hmsBaseline` the follower stays FROZEN (budget 0). **RETROACTIVE
+  = per-level going forward, NOT a lump backfill** (the gate compares CURRENT player
+  total vs baseline, so a high-level player opens the gate immediately). A non-fixed-stat
+  follower passes `grantBudget=0` → byte-identical to Phase 2. `[hms] … fixed-stat grant:
+  streak/caughtUp/npcTotal/playerTotal/playerGain/budget` logs the decision.
 - **`Class` enum ordinals (`:84`) MUST stay == `combatClassOverride`** — the base
   class (`combatClassOverride`) is the STANCE AUTHORITY, set by the user via the Gambit
   tab (Board `SetClassOverride`). **v1.1 Phase 2: progression-tab `SetClass` NO LONGER

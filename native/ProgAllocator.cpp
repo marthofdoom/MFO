@@ -94,6 +94,15 @@ namespace MFO::ProgAllocator {
         // a save/load without re-observing (and never double-grants).
         std::uint16_t g_lastPlayerLevel = 0;
 
+        // §HMS fixed-stat grant (v1.1 Phase 3): the running total of the PLAYER's
+        // base H/M/S the last poll saw. On a player level-up the positive delta is
+        // the LIVE catch-up rate granted to caught-up fixed-stat followers (never a
+        // hardcoded number — "whatever the player actually gains"). Serialized in
+        // the PRGN v6 header next to g_lastPlayerLevel; O(1), not per-follower.
+        // 0 == unobserved (player base HMS is never 0) → the first observation
+        // initializes it with a 0 grant, never a giant first-run catch-up.
+        float g_playerHmsTotalLast = 0.0f;
+
         // ── co-save ingestion bounds (INVARIANTS #11) ───────────────────────
         constexpr std::uint32_t kMaxProgFollowers = 4096;
         constexpr std::uint16_t kMaxPerkAllocs    = 1024;
@@ -643,7 +652,12 @@ namespace MFO::ProgAllocator {
         // Uncaptured baseline (pre-v5 save, or freshly enrolled without capture):
         // ADOPT the follower's current base H/M/S as the baseline once, exactly
         // like the skill ADOPT fallback — existing followers are not retro-slammed.
-        void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
+        // a_grantBudget > 0 → v1.1 Phase 3 fixed-stat CATCH-UP GRANT: skip the
+        // (always-0) engine measurement as the budget and instead reshape this
+        // INJECTED player-gain amount into the follower's pools, landing whole
+        // base-AV points via hmsGrantRemainder. a_grantBudget == 0 (the default)
+        // is the NORMAL engine-award path, byte-identical to Phase 2.
+        void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log, float a_grantBudget = 0.0f) {
             if (!Config::g_hmsRedistribute.load()) return;   // main-MFO MCM master switch
             const ClassDef* def = FindClassDef(a_st.clsId);  // enrollment/MFO gate + skew/weights
             // v1.1 Phase 2: the stance AUTHORITY is the base Gambit class
@@ -660,10 +674,12 @@ namespace MFO::ProgAllocator {
             float diagBudget = 0.0f;
             auto emitDiag = [&] {
                 spdlog::info("[hms-diag] {:08X} clsId={:08X} def=\"{}\" defStance={} "
-                             "baseClass={} earlyReturn={} redistribute={:.1f}",
+                             "baseClass={} earlyReturn={} redistribute={:.1f} "
+                             "fixedStat={} grantBudget={:.1f}",
                              id, a_st.clsId, def ? def->name : "none",
                              def ? static_cast<int>(def->stance) : -1,
-                             static_cast<int>(stance), diagExit, diagBudget);
+                             static_cast<int>(stance), diagExit, diagBudget,
+                             a_st.fixedStat, a_grantBudget);
             };
 
             if (!def) { diagExit = "nodef"; emitDiag(); return; }   // no class picked, or the addon left
@@ -682,8 +698,16 @@ namespace MFO::ProgAllocator {
             // positive-only sum would re-count and inflate) -- rationale lives in
             // MeasureEngineVitalAward's header.
             float cur[3]; float delta[3];
-            const float budget = Followers::MeasureEngineVitalAward(a_actor, a_st.hmsTarget, cur, delta);
-            diagBudget = budget;   // [hms-diag]: measured budget reported at whichever exit follows
+            const float measured = Followers::MeasureEngineVitalAward(a_actor, a_st.hmsTarget, cur, delta);
+            // §HMS Phase 3 fixed-stat DETECTION tally: accumulate the MEASURED
+            // engine award (never the injected grant) toward the next player
+            // level-up's 0-award check. A grant call (a_grantBudget>0) measures 0
+            // for a fixed-stat follower, so adding it is a harmless +0.
+            if (measured > 0.0f) a_st.hmsAwardAccum += measured;
+            // NORMAL path: budget = the measured engine award (byte-identical to
+            // Phase 2). GRANT path: reshape the injected player-gain instead.
+            float budget = (a_grantBudget > 0.0f) ? a_grantBudget : measured;
+            diagBudget = budget;   // [hms-diag]: budget reported at whichever exit follows
 
             // First touch on an uncaptured record → adopt current base as the
             // baseline/target, zero the cumulative, and STOP (nothing to measure
@@ -774,9 +798,20 @@ namespace MFO::ProgAllocator {
                 for (int p = 0; p < 3; ++p)
                     award[p] = (D > 1e-4f) ? budget * (deficit[p] / D) : budget * eprof[p];
 
+                const bool grantMode = (a_grantBudget > 0.0f);   // fixed-stat catch-up grant
                 for (int p = 0; p < 3; ++p) {
                     if (award[p] < 0.0f) award[p] = 0.0f;
-                    a_st.hmsCumulative[p] += award[p];
+                    if (grantMode) {
+                        // §HMS Phase 3: land WHOLE base-AV points — carry the
+                        // fraction so a 15/80/5 split accretes cleanly over levels
+                        // instead of truncating (and losing) it each level.
+                        const float raw   = award[p] + a_st.hmsGrantRemainder[p];
+                        const float whole = std::floor(raw);
+                        a_st.hmsGrantRemainder[p] = raw - whole;      // 0 <= frac < 1
+                        a_st.hmsCumulative[p]    += whole;
+                    } else {
+                        a_st.hmsCumulative[p] += award[p];            // byte-identical to Phase 2
+                    }
                 }
             }
 
@@ -1362,6 +1397,22 @@ namespace MFO::ProgAllocator {
                 g_lastPlayerLevel = pl;
             }
 
+            // §HMS Phase 3: the player's LIVE per-level HMS gain (modlist-agnostic,
+            // "whatever the player actually gains") — the catch-up rate granted to
+            // caught-up fixed-stat followers this level. Measured once on a player
+            // level-up, off the player's own base H/M/S total.
+            const bool playerLeveled = (d > 0);
+            float playerTotalNow = 0.0f, playerGain = 0.0f;
+            if (playerLeveled) {
+                for (int p = 0; p < 3; ++p) playerTotalNow += Followers::GetFollowerHMS(player, p);
+                if (g_playerHmsTotalLast <= 0.0f) {
+                    g_playerHmsTotalLast = playerTotalNow;   // first observation → no retro grant
+                } else {
+                    playerGain           = std::max(0.0f, playerTotalNow - g_playerHmsTotalLast);
+                    g_playerHmsTotalLast = playerTotalNow;
+                }
+            }
+
             for (auto& [id, st] : g_prog) {
                 if (!st.enrolled) continue;
 
@@ -1419,7 +1470,37 @@ namespace MFO::ProgAllocator {
                         // base==target so this is pure reads. Battle counting
                         // (for the skew) runs every poll on the active party.
                         HmsTrackBattle(actor, st);
-                        RecomputeHMS(actor, st, /*log*/ true);
+                        // §HMS Phase 3 fixed-stat DETECTION + GRANT (active party
+                        // only — a benched follower isn't measured, so it must not
+                        // be judged). Evaluated on a player level-up: the award
+                        // tallied over the window that just closed decides 0-award.
+                        float grantBudget = 0.0f;
+                        if (playerLeveled) {
+                            const bool gotAward = (st.hmsAwardAccum > 1e-4f);
+                            st.hmsAwardAccum = 0.0f;   // close the window
+                            if (gotAward) {
+                                st.hmsZeroAwardStreak = 0;
+                                st.fixedStat          = false;   // it's a leveling follower
+                            } else {
+                                if (st.hmsZeroAwardStreak < 2) ++st.hmsZeroAwardStreak;
+                                if (st.hmsZeroAwardStreak >= 2) st.fixedStat = true;
+                            }
+                            if (st.fixedStat) {
+                                // GATE: freeze until the player's total HMS catches
+                                // up to this follower's baseline total, THEN grant
+                                // the player's per-level gain (reshaped by class).
+                                float npcTotal = 0.0f;
+                                for (int p = 0; p < 3; ++p) npcTotal += st.hmsBaseline[p];
+                                const bool caughtUp = (playerTotalNow >= npcTotal);
+                                if (caughtUp) grantBudget = playerGain;
+                                spdlog::info("[hms] {:08X} fixed-stat grant: streak {} caughtUp {} "
+                                             "npcTotal {:.0f} playerTotal {:.0f} playerGain {:.1f} "
+                                             "→ budget {:.1f}",
+                                             id, st.hmsZeroAwardStreak, caughtUp, npcTotal,
+                                             playerTotalNow, playerGain, grantBudget);
+                            }
+                        }
+                        RecomputeHMS(actor, st, /*log*/ true, grantBudget);
                     }
                 }
             }
@@ -2374,12 +2455,20 @@ namespace MFO::ProgAllocator {
         return true;
     }
 
-    // ── co-save ('PRGN' v2, §8 + §16 + §17) ─────────────────────────────────
+    // ── co-save ('PRGN' v2, §8 + §16 + §17; v5/v6 §HMS) ─────────────────────
     //
     //   u16 lastPlayerLevel
+    //   v6: f32 g_playerHmsTotalLast        (§HMS Phase 3 catch-up rate anchor)
     //   u32 followerCount, then per follower:
     //     u32 formID | u8 flags | u8 class | u16 progressionLevel
     //     u16 sharedGrowthRemainder
+    //     … (v2/v3/v4/v5 fields) …
+    //     v5 §HMS block (END of record): per pool {H,M,S}: f32 baseline,
+    //         [v5 ONLY: f32 target — recomputed, not stored in v6], f32 skew,
+    //         f32 cumulative; then u32 battlesSinceLevelUp, u32 battlesOffClass,
+    //         u8 offClassPool, u8 hmsCaptured
+    //     v6 §HMS additions (after hmsCaptured): u8 hmsZeroAwardStreak,
+    //         f32 hmsGrantRemainder[3], f32 hmsAwardAccum; + flags bit 0x20 = fixedStat
     //     v1 ONLY: f32 unspentPerk        (legacy stored pool — read + DISCARDED;
     //                                      §17 derives the pool instead)
     //     v2: u16 manualBaselineLevel | u16 manualPointsApplied
@@ -2467,6 +2556,10 @@ namespace MFO::ProgAllocator {
             return;
         }
         a_intfc->WriteRecordData(g_lastPlayerLevel);
+        // v6 GLOBAL HEADER: the player's running base-HMS total (§HMS Phase 3),
+        // right after lastPlayerLevel and before the follower count. Read gated on
+        // version>=6; a pre-v6 stream inits it from the live player on load.
+        a_intfc->WriteRecordData(g_playerHmsTotalLast);
 
         std::uint32_t persistable = 0;
         for (const auto& [id, st] : g_prog)
@@ -2481,7 +2574,8 @@ namespace MFO::ProgAllocator {
             const std::uint8_t flags =
                 (st.enrolled ? 1u : 0u) | (st.autoSpend ? 2u : 0u) |
                 (st.veteranConsumed ? 4u : 0u) | (st.wasInPotentialFollowerFaction ? 8u : 0u) |
-                (st.manualSkills ? 16u : 0u);   // v2 (§16) — spare bit in the same byte
+                (st.manualSkills ? 16u : 0u) |   // v2 (§16) — spare bit in the same byte
+                (st.fixedStat ? 32u : 0u);       // v6 (§HMS Phase 3) — 0x20, free in v1–v5
             a_intfc->WriteRecordData(flags);
             // v4 (SEV-2 class-wipe fix): the class is written as its STABLE
             // plugin-qualified identity {u16 pluginLen, plugin bytes, u32
@@ -2536,16 +2630,19 @@ namespace MFO::ProgAllocator {
                 a_intfc->WriteRecordData(static_cast<std::uint32_t>(st.baseline[i].av));
                 a_intfc->WriteRecordData(st.baseline[i].value);
             }
-            // ── v5 §HMS block — APPENDED at the very END of the record ───────
+            // ── v6 §HMS block — APPENDED at the very END of the record ───────
             // Fixed order, NO count prefix (always exactly 3 pools). Per pool in
-            // fixed {Health, Magicka, Stamina} order: baseline, target, skew,
-            // cumulative (f32 each); then the 2 battle counters (u32), the
-            // off-class pool (u8), and the captured flag (u8). Read GATED on
-            // a_version >= 5 in CoSaveLoad. Nothing above this moved (byte-
-            // identical for v1–v4 saves).
+            // fixed {Health, Magicka, Stamina} order: baseline, skew, cumulative
+            // (f32 each — v6 DROPS hmsTarget, always max(baseline,baseline+cumul),
+            // recomputed on load); then the 2 battle counters (u32), the off-class
+            // pool (u8), the captured flag (u8), and the v6 Phase-3 additions:
+            // hmsZeroAwardStreak (u8), hmsGrantRemainder (f32×3), hmsAwardAccum
+            // (f32). fixedStat rides flags bit 0x20 above — NOT a byte here.
+            // Read GATED on version
+            // in CoSaveLoad (v6 layout / v5 keeps the old 4-f32/pool reader).
+            // Nothing above this moved (byte-identical for v1–v4 saves).
             for (int p = 0; p < 3; ++p) {
                 a_intfc->WriteRecordData(st.hmsBaseline[p]);
-                a_intfc->WriteRecordData(st.hmsTarget[p]);
                 a_intfc->WriteRecordData(st.hmsSkew[p]);
                 a_intfc->WriteRecordData(st.hmsCumulative[p]);
             }
@@ -2553,6 +2650,10 @@ namespace MFO::ProgAllocator {
             a_intfc->WriteRecordData(st.battlesOffClass);
             a_intfc->WriteRecordData(st.offClassPool);
             a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.hmsCaptured ? 1u : 0u));
+            a_intfc->WriteRecordData(st.hmsZeroAwardStreak);            // v6
+            for (int p = 0; p < 3; ++p)
+                a_intfc->WriteRecordData(st.hmsGrantRemainder[p]);      // v6
+            a_intfc->WriteRecordData(st.hmsAwardAccum);                 // v6 (detection tally, serialized)
             ++written;
         }
         spdlog::info("[cosave] saved {} progression record(s), schema v{}{}", written, kProgVersion,
@@ -2571,6 +2672,24 @@ namespace MFO::ProgAllocator {
             return;
         }
         g_lastPlayerLevel = lastPl;
+
+        // v6 GLOBAL HEADER: the player's running base-HMS total (§HMS Phase 3),
+        // read right after lastPlayerLevel. A pre-v6 stream has no such field →
+        // seed it from the LIVE player so the first post-load level-up grants no
+        // spurious catch-up (belt-and-braces with PollWork's 0-init guard).
+        if (a_version >= 6) {
+            float ph = 0.0f;
+            if (!a_intfc->ReadRecordData(ph)) {
+                spdlog::error("[cosave] short read on progression header (playerHms) -- ABORTING");
+                return;
+            }
+            g_playerHmsTotalLast = std::isfinite(ph) ? ph : 0.0f;
+        } else {
+            float t = 0.0f;
+            if (auto* player = RE::PlayerCharacter::GetSingleton())
+                for (int p = 0; p < 3; ++p) t += Followers::GetFollowerHMS(player, p);
+            g_playerHmsTotalLast = t;
+        }
 
         std::uint32_t count = 0;
         if (!a_intfc->ReadRecordData(count)) return;
@@ -2628,6 +2747,7 @@ namespace MFO::ProgAllocator {
             st.veteranConsumed                = (flags & 4u) != 0;
             st.wasInPotentialFollowerFaction  = (flags & 8u) != 0;
             st.manualSkills                   = (flags & 16u) != 0;   // v2 (§16)
+            st.fixedStat                      = (flags & 32u) != 0;   // v6 (§HMS Phase 3); 0 in v1–v5
             if (a_version < 3) {
                 // MIGRATION (§18.6 PRGN discipline). Pre-v3 saves were ONLY ever
                 // written by MFO_Progression.esl as the sole addon, at the FIXED
@@ -2787,25 +2907,40 @@ namespace MFO::ProgAllocator {
                 st.baseline.push_back({ static_cast<RE::ActorValue>(av), value });
             }
 
-            // ── v5 §HMS block (read ONLY when a_version >= 5) ────────────────
+            // ── §HMS block (read ONLY when a_version >= 5) ───────────────────
             // MUST be read UNCONDITIONALLY (even for a dropped/unresolved
             // follower) or every byte after this record desyncs. Fixed order,
             // no count prefix — mirror the write exactly. Finite/NaN-guard every
             // float (a corrupt read must never poison SetBaseActorValue).
+            //   v6: per pool baseline,skew,cumulative (3 f32; target DROPPED,
+            //       recomputed); then counters+captured; then hmsZeroAwardStreak
+            //       (u8) + hmsGrantRemainder (f32×3) + hmsAwardAccum (f32).
+            //   v5: per pool baseline,TARGET,skew,cumulative (4 f32) — the stored
+            //       target is READ to stay byte-aligned then DISCARDED + recomputed;
+            //       the v6 fields default (fixedStat already read false via flags,
+            //       streak=0, remainder={0,0,0}).
             if (a_version >= 5) {
+                const bool v6 = (a_version >= 6);
                 bool hmsOk = true;
                 for (int p = 0; p < 3; ++p) {
                     float b = 0.0f, t = 0.0f, sk = 0.0f, c = 0.0f;
                     if (!a_intfc->ReadRecordData(b))  return;
-                    if (!a_intfc->ReadRecordData(t))  return;
+                    if (!v6 && !a_intfc->ReadRecordData(t)) return;   // v5 ONLY: target, discarded below
                     if (!a_intfc->ReadRecordData(sk)) return;
                     if (!a_intfc->ReadRecordData(c))  return;
-                    if (!std::isfinite(b) || !std::isfinite(t) ||
-                        !std::isfinite(sk) || !std::isfinite(c)) hmsOk = false;
+                    // v5's stored target is NOT trusted (it is always derivable);
+                    // exclude it from the finite check — a poisoned target must not
+                    // force a re-adopt when baseline/cumulative are sound.
+                    if (!std::isfinite(b) || !std::isfinite(sk) || !std::isfinite(c)) hmsOk = false;
                     st.hmsBaseline[p]   = std::isfinite(b)  ? b  : 0.0f;
-                    st.hmsTarget[p]     = std::isfinite(t)  ? t  : 0.0f;
                     st.hmsSkew[p]       = std::isfinite(sk) ? sk : 0.0f;
                     st.hmsCumulative[p] = std::isfinite(c)  ? c  : 0.0f;
+                }
+                // RECOMPUTE the held target (never read) — the invariant every
+                // write site maintains: target == max(baseline, baseline+cumul).
+                for (int p = 0; p < 3; ++p) {
+                    const float tgt = st.hmsBaseline[p] + st.hmsCumulative[p];
+                    st.hmsTarget[p] = (tgt < st.hmsBaseline[p]) ? st.hmsBaseline[p] : tgt;
                 }
                 std::uint32_t bSince = 0, bOff = 0;
                 std::uint8_t  offPool = 0, captured = 0;
@@ -2817,8 +2952,36 @@ namespace MFO::ProgAllocator {
                 st.battlesOffClass     = std::min(bOff, bSince);   // ratio ≤ 1 by construction
                 st.offClassPool        = (offPool <= 3) ? offPool : 0;   // clamp [0,3]
                 // A corrupt (non-finite) HMS payload → force re-ADOPT on the next
-                // RecomputeHMS rather than trusting a poisoned baseline/target.
+                // RecomputeHMS rather than trusting a poisoned baseline.
                 st.hmsCaptured = (captured != 0) && hmsOk;
+                if (v6) {
+                    // v6 Phase-3 additions.
+                    std::uint8_t streak = 0;
+                    if (!a_intfc->ReadRecordData(streak)) return;
+                    st.hmsZeroAwardStreak = std::min<std::uint8_t>(streak, 2);   // clamp 0..2
+                    for (int p = 0; p < 3; ++p) {
+                        float r = 0.0f;
+                        if (!a_intfc->ReadRecordData(r)) return;
+                        // contract is 0 <= frac < 1 — reject finite-but-out-of-range
+                        // corruption (a huge value would slam SetBaseActorValue).
+                        st.hmsGrantRemainder[p] =
+                            (std::isfinite(r) && r >= 0.0f && r < 1.0f) ? r : 0.0f;
+                    }
+                    float acc = 0.0f;   // detection tally (serialized in v6)
+                    if (!a_intfc->ReadRecordData(acc)) return;
+                    st.hmsAwardAccum = (std::isfinite(acc) && acc >= 0.0f) ? acc : 0.0f;
+                }
+                // A poisoned HMS payload forces a re-ADOPT (hmsCaptured=false); it
+                // must ALSO restart detection so a stale flags-bit 0x20 (fixedStat)
+                // or serialized streak/tally can't linger against a freshly
+                // re-adopted baseline. Applied AFTER the v6 reads so it wins.
+                if (!hmsOk) {
+                    st.fixedStat          = false;
+                    st.hmsZeroAwardStreak = 0;
+                    st.hmsAwardAccum      = 0.0f;
+                }
+                // a_version == 5: fixedStat=false (flags), streak=0, remainder={0}
+                // (struct defaults) — a v5 follower begins fresh 0-award detection.
             }
             // a_version < 5: no HMS block on disk → hmsCaptured stays false
             // (struct default) → the first RecomputeHMS adopts the live base.
@@ -2837,6 +3000,7 @@ namespace MFO::ProgAllocator {
     void ClearAll() {
         g_prog.clear();
         g_lastPlayerLevel = 0;
+        g_playerHmsTotalLast = 0.0f;   // §HMS Phase 3: re-seeded on the next load/observe
         ++g_pollGen;   // orphan any in-flight poll chain (MainThread::Clear
                        // drops the queued closure too — belt and braces)
         // §HMS: drop the off-class fire mirror (runtime-only, save-scoped).
