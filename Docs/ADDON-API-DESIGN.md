@@ -78,16 +78,28 @@ appears in any signature above. Those are data (§3) or callbacks the add-on sup
 
 ## 3. What must move OUT of C++ into the manifest (the residual four + schema)
 
+**Governing rule (marth, 2026-08-26):** the DLL may hold *general primitives* and *general
+engine facts*. It may NOT hold progression's *judgments/opinions/content*. NO "host ships the
+current progression value as a default" — a default IS progression content in the DLL and
+would fail the acceptance test (delete the add-on → DLL loses ZERO progression lines). Test
+each residual against that rule: general engine fact stays; progression opinion goes to the
+ESL with **no DLL default** (absent add-on → that thing simply does not exist).
+
 Everything else is already data. These four are the C++-baked design still to lift:
 
 1. **HMS class ratios** — `HmsProfile` (`ProgAllocator.cpp:515`: Melee 60/5/35, Ranged
-   40/5/55, Mage 15/80/5), today a hardcoded switch on `stance`. → add `hmsWeights[3]` +
-   `primaryPool` to each manifest `ClassDef`. *Single biggest hardcoded design value.*
-2. **Perk-effectiveness verdict table** — `kEntryPoints[92]` (`Progression.cpp:65-158`),
-   opinionated content. → optional manifest `entryPointVerdicts[]`, with the host shipping
-   the current table as a default (the indices are engine-frozen, so a default is sane).
-3. **Skill-name/AV list** — `kSkillNames[18]` (`Progression.cpp:39`). → host default; it is
-   the 18 vanilla skills, content but stable.
+   40/5/55, Mage 15/80/5), today a hardcoded switch on `stance`. Progression OPINION. →
+   `hmsWeights[3]` + `primaryPool` on each manifest `ClassDef`, **no DLL default**. Absent
+   add-on = no ratios = HMS steers only by the general base class (§2), reshapes nothing.
+2. **Perk-effectiveness verdict table** — `kEntryPoints[92]` (`Progression.cpp:65-158`).
+   Progression OPINION (it encodes "what makes a follower build good" — progression's thesis).
+   → manifest `entryPointVerdicts[]`, **no DLL default**. The DLL keeps only the general perk
+   *walk* (enumerate a perk's entry points + their engine types, `QueryFollowerPerkCatalog`);
+   the *verdicts* are ESL data. Delete the add-on → the walk remains (general), the judgment
+   is gone.
+3. **Skill-name/AV list** — `kSkillNames[18]` (`Progression.cpp:39`). **General engine fact**,
+   not progression (the 18 vanilla skills; any add-on touching skills wants them). Stays in the
+   DLL as a general utility — keeping it leaves no *progression* line.
 4. **Board-tab layout + its view contract** — `Board.cpp:1251-2427` +
    `BoardProgSnap/BoardFollowerView/BoardSkillLine/BoardNodeView` (`ProgAllocator.h:291`). →
    add-on-declared UI *composition* over host widgets (§5, tension #4).
@@ -111,10 +123,11 @@ Addon manifest = one self-declared BGSListForm, recognized by editor-id SUFFIX (
     { skillWeightCurve (triangular default), engineAwardPolicy: Revert|Adopt,
       hmsSkewMaxFrac (off-class ceiling) }
 
-  perk-effectiveness policy (optional; host default = current kEntryPoints[]):
+  perk-effectiveness verdicts (add-on data, NO DLL default):
     entryPointVerdicts: [ {entryPointIndex 0..91, verdict} ]
+    # DLL keeps only the general perk WALK; these verdicts are progression's opinion.
 
-  board-tab layout (composition over host widgets):
+  board-tab layout (composition over GENERAL host widgets; zero progression content in a widget):
     { classPicker, perkTree(from catalog coords), skillRows[18],
       perkPointsHeadline, manualSkillToggle, respecButton }
     actions: { SetClass, AllocPerk, Respec, SetManual, ApplySkillPoint }
@@ -221,17 +234,23 @@ think that trade is worth it given the API HMS needs is a 3-call slice.
    independent of any add-on (HMS-as-base depends on it). New API, not data. *(Resolves the crux.)*
 2. **Measure-the-engine-award** — diffing base-AV against last-written is engine-coupled; a
    host primitive. Policy + ratios are data.
-3. **Perk-effectiveness classifier** — the `kEntryPoints[92]` walk resists CommonLib entry-type
-   churn; the algorithm is C++. Host ships the table as a default (optionally add-on-overridable)
-   + exposes `QueryFollowerPerkCatalog()`.
+3. **Perk-effectiveness classifier — split cleanly.** The *walk* (enumerate a perk's entry
+   points + read their engine types, resist CommonLib entry-type churn) is a general engine
+   capability → stays in the DLL as `QueryFollowerPerkCatalog()`. The *verdicts* (which
+   entry-point type is effective/dead for an NPC) are progression's opinion → ESL data, **no
+   DLL default**. The engine-coupled C++ is the walk, not the judgment — so the DLL never holds
+   a verdict.
 4. **Board-tab rendering** — the perk dome (Bezier edges, AABB cull, zoom, controller nav,
-   `Board.cpp:1928-2320`) is real ImGui. The manifest declares *composition* (node coords are
-   already catalog data); the host must own a generic widget vocabulary (perk-tree, skill-table,
-   action-button) rich enough that the add-on never ships C++. If a future add-on needs a widget
-   the host lacks, the **host** grows a general widget — never add-on-specific code.
+   `Board.cpp:1928-2320`) is real ImGui. It is a **general host widget** (a perk-tree widget any
+   add-on could drive), NOT progression — it carries zero progression content (no class names, no
+   fixed skill layout; node coords + labels come from the manifest/catalog). The host owns a
+   generic widget vocabulary (perk-tree, skill-table, action-button); the add-on declares
+   *composition* only. If a future add-on needs a widget the host lacks, the **host** grows a
+   general widget — a general widget is not a progression line.
 
 These four are exactly where "widen the API with a general primitive, never smuggle
-progression math back in" applies. Everything else is data/rules.
+progression math back in" applies. Per the §3 governing rule: general primitive or general
+engine fact = DLL; progression judgment = ESL data, no DLL default. Everything else is data/rules.
 
 ---
 
@@ -239,7 +258,12 @@ progression math back in" applies. Everything else is data/rules.
 
 Every PROGRESSION-SPECIFIC item is expressible as data or as rules over the general API,
 with the four §7 items handled by NEW GENERAL primitives (base-class, engine-award
-measurement, catalog query, host widget vocabulary) — none progression-specific. The ruling
-("delete the add-on, the DLL loses zero lines") is achievable. **Two open calls resolved:
-manifest = ESL records with suffix discovery (§4); order = thin-API-slice → HMS → bulk (§5).**
-Awaiting marth's approval to close Phase 0 and start Phase 1a.
+measurement, catalog query, host widget vocabulary) — none progression-specific, and with the
+§3 governing rule enforced: **no "host default" of any progression value.** The DLL keeps only
+general primitives + general engine facts; every progression judgment (class ratios, perk
+verdicts, board layout, allocation policy, co-save schema) lives in the ESL with no DLL
+fallback. Acceptance test holds: delete the add-on's manifest and the DLL keeps the machinery
+(walk, widgets, co-save framing, level poll) but ZERO progression content — nothing renders,
+nothing allocates, no ratio, no verdict, no layout, and not one progression-specific line
+remains. **Two open calls resolved: manifest = ESL records with suffix discovery (§4); order =
+thin-API-slice → HMS → bulk (§5).** Awaiting marth's approval to close Phase 0 and start Phase 1a.
