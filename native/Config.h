@@ -409,6 +409,21 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_economyBuyGear{ true };
     inline std::atomic<bool>  g_economyBuyTomes{ true };
 
+    // §HMS class-redistribution (v1.0.68). On level-up MFO measures the engine's
+    // per-level Health/Magicka/Stamina award and re-grants it reshaped to the
+    // follower's class profile (mage -> Magicka, archer -> Stamina, warrior ->
+    // Health), with an off-class SKEW toward a pool the follower actually
+    // exercises in battle. This is the MAIN-MFO source of truth for the feature
+    // (ProgAllocator::RecomputeHMS reads these, NOT the addon g_econ path).
+    //   bHmsRedistribute (default ON): the whole feature's master switch. OFF =
+    //     no measure, no write -- vanilla per-level HMS stands untouched.
+    //   fHmsSkewMax: the skew ceiling as a FRACTION of each level's HMS budget
+    //     (0.20 = at most 20% pulled from the class-primary pool toward the
+    //     exercised off-class pool). The MCM slider stores it as a PERCENT
+    //     (0-100); Config::ReadFile scales /100 into this fraction.
+    inline std::atomic<bool>  g_hmsRedistribute{ true };
+    inline std::atomic<float> g_hmsSkewMaxFrac{ 0.20f };
+
     // #21 SELL-side pricing/bypass (INI-only advanced settings, NO MCM control --
     // deliberately, to avoid toggle-linkage churn). All gated under bEconomy.
     //   bSpeechPricing (default ON): the follower's SELL value follows the vanilla
@@ -439,6 +454,15 @@ namespace MFO::Config {
     //     never left bare). OFF: pure value-driven (wear the most expensive piece).
     inline std::atomic<bool>  g_mageWearRobes{ true };
     inline std::atomic<bool>  g_mageApparelStrictSchool{ false };
+
+    // bMeoAwareGems (DEFAULT OFF): "MEO aware followers." Layers effect-aware gem
+    // optimization on top of the always-on gem CONSERVATION reconcile (a follower
+    // re-sockets a loose gem back into his own worn gear). ON: the follower knows
+    // gem effects, picks the best gem per empty socket (class-appropriate) and swaps
+    // up a socketed gem a better loose gem beats. OFF: conservation still runs -- a
+    // loose gem is simply socketed into any empty socket. Both tiers need MEO ABI v3
+    // and no-op without it.
+    inline std::atomic<bool>  g_meoAwareGems{ false };
 
     // AUTO-RETREAT (combat-sense 3, the outnumbered DEFAULT rule). ON by default
     // (marth): a follower who is badly outnumbered/hurt (confidence below the 0.25

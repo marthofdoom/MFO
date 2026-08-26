@@ -97,6 +97,33 @@
             "sourceType": "ModSettingBool",
             "defaultValue": 1
           }
+        },
+        {
+          "text": "Class Growth (HMS)",
+          "type": "header"
+        },
+        {
+          "id": "bHmsRedistribute:General",
+          "text": "Class HMS on level-up",
+          "type": "toggle",
+          "help": "ON (default): each level, a follower's Health/Magicka/Stamina gain is reshaped to its class profile (a mage banks the growth into Magicka, an archer into Stamina, a warrior into Health). The total gain matches vanilla; only the split changes. OFF: vanilla per-level HMS stands untouched.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
+          "id": "fHmsSkewMax:General",
+          "text": "HMS off-class skew cap",
+          "type": "slider",
+          "help": "Percent of each level's HMS budget that can be pulled from the class-primary pool toward an off-class pool the follower actually exercises in battle (a battle-mage earning some Magicka). 0 disables skew; 20 is the default.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 100.0,
+            "step": 5.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 20.0
+          }
         }
       ]
     },
@@ -296,6 +323,16 @@
           "text": "Mage apparel: strict school match",
           "type": "toggle",
           "help": "OFF (default): mage clothing/jewelry is chosen by value -- the follower wears the most expensive pieces it can find or afford. ON: an ENCHANTED apparel piece is only worn/bought if it fortifies one of the follower's two best magic schools (off-school enchanted pieces are skipped). Plain clothing and non-school jewelry are unaffected, so a slot is never left empty. Only matters while 'Mages wear robes + jewelry' is on.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
+          "id": "bMeoAwareGems:General",
+          "text": "MEO aware followers",
+          "type": "toggle",
+          "help": "Requires MEO (marth's Enchanting Overhaul). OFF (default): followers still CONSERVE gems -- a gem extracted when selling gemmed junk is re-socketed into their own worn gear rather than left loose (this always runs when MEO is present). ON: followers also OPTIMIZE their gems -- they know each gem's effect, pick the best gem for every empty socket (a mage favours magicka/school gems), and swap up to a stronger gem when they carry one. No effect without MEO installed.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 0

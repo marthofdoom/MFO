@@ -34,7 +34,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v4`, FWPN `v1` (`Serialization.h:7-70`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v5`, FWPN `v1` (`Serialization.h:7-70`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDS the §HMS block (`if(a_version>=5)`), v1–v4 byte-identical. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:562-622` | `StopPump()` MUST run first (`:568`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:302-322`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -95,10 +95,18 @@ state (`g_followers`, `Gambit`, `FollowerState`).
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:187-217`, read `:239-313`. Owner: `Logistics.cpp`.
-- **`'PRGN'` / `kProgVersion=4`** (`Serialization.h:35`) — progression state;
+- **`'PRGN'` / `kProgVersion=5`** (`Serialization.h:45`) — progression state;
   layout + I/O live in `ProgAllocator.cpp` (`CoSaveSave` `:1472`, `CoSaveLoad`
-  `:1535`). Written **even when the addon ESL is absent**. v-history v1→v4 in
-  `Serialization.h:21-49` (v4 = plugin-qualified class identity; v3 reader KEPT).
+  `:1535`). Written **even when the addon ESL is absent**. v-history v1→v5 in
+  `Serialization.h:21-56` (v4 = plugin-qualified class identity, v3 reader KEPT;
+  **v5 = §HMS class-redistribution block APPENDED at the END of each record**,
+  read gated `if(a_version>=5)`). v5 block, fixed order / no count prefix: per
+  pool in fixed **{Health, Magicka, Stamina}** order `hmsBaseline`,`hmsTarget`,
+  `hmsSkew`,`hmsCumulative` (f32×4), then `battlesSinceLevelUp`,`battlesOffClass`
+  (u32), `offClassPool`,`hmsCaptured` (u8). Nothing above it moved → v1–v4 saves
+  byte-identical; a v4 record read by v5 has no block → `hmsCaptured=false` →
+  first `RecomputeHMS` adopts the live base H/M/S. All floats finite-guarded on
+  read (mirror the skill guard).
 - **`'FWPN'` / `kForcedWeaponVersion=1`** (`Serialization.h:59`) — #76 force-hold:
   the weapons MFO force-equipped for an active equip gambit. Owner
   `Actuation.cpp` (`CoSaveForcedWeapons`/`CoLoadForcedWeapons`); **CoLoad
@@ -682,6 +690,13 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
   upgrade per tick — bought, looted-as-valuable jewelry, or player-handed — via
   `AcquireEquip(src=null)`, which is what fires the **buy-path gem transfer**. Idempotent
   + one-per-tick ⇒ converges, no thrash. Old `MageApparelIsBetter` is now `[[maybe_unused]]`.
+For a `useMageApparel` follower the branch is now **AUTHORITATIVE** (clothing-oscillation
+fix): it computes the single best OWNED piece per logical slot (deterministic, FormID
+tiebreak) and force-equips it whenever the worn piece isn't exactly it — so an
+engine-re-equipped LESSER clothing piece is replaced and falls through to the sell loop
+as an extra instead of being worn-protected forever. Thrash-guarded: **out of combat +
+rate-limited 5 s/follower**, no-op once the best is worn (equip auto-unequips the lesser,
+never strips naked). The rated-armor branch is unchanged (strictly-better-only).
 
 ### Loadout.cpp / Loadout.h — the equip/spell-in-hand ledger (NOT serialized)
 Puts a gambit spell in a follower's hand, records displaced gear as **transient
@@ -737,9 +752,14 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   f32 read+discarded], [v2: manualBaselineLevel u16, manualPointsApplied u16,
   manualExcludedLevels u16, nativeTreePerksAtEnroll u16], perkCount u16 +
   {nodePerkID u32, rank u8}×N, skillCount u16 + {av u32, points f32, lastWrittenBase
-  f32, manualPoints f32(v2)}×N, baseCount u16 + {av u32, value f32}×N}`. Bounds:
+  f32, manualPoints f32(v2)}×N, baseCount u16 + {av u32, value f32}×N,
+  [v5 §HMS block APPENDED at END: per pool {H,M,S} order {hmsBaseline f32,
+  hmsTarget f32, hmsSkew f32, hmsCumulative f32}, then battlesSinceLevelUp u32,
+  battlesOffClass u32, offClassPool u8, hmsCaptured u8]}`. Bounds:
   4096 followers / 1024 perks / 64 skills. New fields MUST go behind `if(version>=N)`
-  (v2 at `:1584,1642`). The docstring `:1447` is commentary — the code is authority.
+  (v2 at `:1584,1642`; **v5 read gated `if(a_version>=5)`, all floats finite-guarded**).
+  The HMS block is read UNCONDITIONALLY (even for a dropped follower) or the stream
+  desyncs. The docstring `:1447` is commentary — the code is authority.
 - Version guard `Serialization.cpp:320` (newer PRGN skips this record only).
   `CoSaveSave` has no `g_ready` gate — writes even when the addon is disabled so the
   data survives a session without the ESL.
@@ -763,6 +783,38 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   ? lastWritten-points : cur` ADOPT path (engine leveling + MFO stack). Baseline
   uncaptured (old save) → ADOPT fallback. Both idempotent/replay-safe; toggle
   changes NO co-save layout (baseline already serialized).
+- **§HMS class-redistribution (PRGN v5) — SIBLING of the skill reconcile.**
+  `RecomputeHMS` (near `ReconcileSkill`/`RecomputeSkills`) is called at the same
+  three sites as `RecomputeSkills`: the level-gain edge + the ~2s drift-watch in
+  `PollWork`, and `ReapplyFollower`. **MEASURE-not-clobber** (the key difference
+  from skills): it reads `cur=GetBaseActorValue(H/M/S)`, measures the POSITIVE
+  drift off the held `hmsTarget` (= the engine's live per-modlist per-level award)
+  BEFORE re-asserting, sums the 3 pool deltas SIGNED then clamps ≥0 (a starved pool
+  reads negative under the engine's absolute-autocalc slam; signed telescopes to the
+  fresh award), redistributes by class profile (`ClassDef::stance` 1=Melee 60/5/35,
+  2=Ranged 40/5/55, 3=Mage 15/80/5; 0/none → skip) + a usage-scaled **skew** (pulled
+  from the class-primary pool toward the exercised off-class pool; ≥1-pt floor, but
+  the **cap wins** — clamped to `Config::g_hmsSkewMaxFrac`×budget so a tiny budget
+  never exceeds it), accumulates into `hmsCumulative`, then holds
+  `hmsTarget=hmsBaseline+hmsCumulative` via one `SetBaseActorValue` per pool. Net
+  follower total gain == the measured budget, reshaped. Fixed-stat follower →
+  measured budget 0 → 0 redistribution (vanilla). Skew usage =
+  `battlesOffClass/battlesSinceLevelUp`; battles counted in `HmsTrackBattle`
+  (main-thread combat rising-edge, 3s dwell). **Off-class signal = the REAL fired
+  gambit (F3):** the combat scheduler (WORKER) calls `ProgAllocator::NoteCombatFire`
+  on every `Result::Fired` (`Scheduler.cpp` ~:886), mapping the action opcode →
+  pool (cast→Magicka, melee attack/power→Health, bow attack/equip_ranged→Stamina)
+  into a **mutex-guarded per-follower mirror** (`g_hmsFiredMask`, CombatStyle::g_owned
+  pattern); `HmsTrackBattle` consumes the mask (cleared each rising edge), credits a
+  battle off-class when an off-class pool fired. Deliberately NOT reading
+  worker-written `Gambit.lastFired` off-thread (#4). Counters reset when an award is
+  consumed (seed 1 if a battle is in progress). **Knobs live on the MAIN MFO MCM,
+  not `g_econ`:** `Config::g_hmsRedistribute` (bHmsRedistribute, default ON, master
+  switch — also gates `NoteCombatFire`) + `Config::g_hmsSkewMaxFrac` (fHmsSkewMax,
+  MCM stores a PERCENT 0-100, scaled /100 in `Config::ReadFile`). Baseline captured
+  at `Enroll` (`hmsCaptured=true`); a pre-v5 save (`hmsCaptured=false`) ADOPTS the
+  live base on first `RecomputeHMS`. REQUIRED `[hms]` probe logs the measured award
+  + budget + profile + skew + per-pool award + final targets.
 - **`Class` enum ordinals (`:84`) MUST stay == `combatClassOverride`** — `SetClass`
   mirrors into it via `Followers::TryEnsureRecord` (`:1204`). Board snapshot is the
   one cross-thread structure (guarded `g_viewMx`); `Rapport::Spend` (`:1346`) is a
@@ -846,6 +898,19 @@ live caller (**UNVERIFIED** — check Board before removing). `g_pending` keys o
 `(followerFormID<<32|toBase)`; if `ClearTransientState` (`:100` ← `Serialization.cpp:
 616`) stops being called on revert, a reused FormID next session moves gems onto the
 wrong actor.
+**GEM RECONCILE (ABI v3)** — `GemReconcileSupported`/`RequestGemReconcile` (MEOBridge.h)
+← `Logistics::ServiceFollower` idle branch (`Logistics.cpp` ~`:5271`, each management
+scan). Decoupled re-socket of a follower's OWN loose gems (left loose by the
+ungem-then-sell `UnsocketItemGems`) back into his WORN gear's empty sockets, so a gem
+extracted for a sale never stays loose. `RequestGemReconcile` posts the whole pass to
+the main thread (`ReconcileLooseGems`, anon) — GetLooseGems/GetEmptySocketCount/
+GetGemDetails are main-thread-only; SocketGem/UnsocketGem queue to main. **No dedup
+state** — GetEmptySocketCount reflects only LANDED sockets and async ops land within a
+frame or two (<< the ~1 s cadence), so the next pass never re-issues; domain is matched
+here so MEO never rejects into a retry loop. Tier 1 conservation always runs (fill any
+domain-matching gem); tier 2 effect-aware (MCM `bMeoAwareGems`, default OFF) ranks by a
+class-preference heuristic on gid/name + magnitude and swaps up a socketed gem a better
+loose gem beats. Whole feature no-ops below MEO v3.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

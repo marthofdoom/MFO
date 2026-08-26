@@ -40,6 +40,20 @@ namespace MFO::Logistics {
 
     namespace {
 
+        // Apparel MFO must NEVER wear or keep, even when it ranks well -- marth's annoyance
+        // list (e.g. a light-emitting circlet). Blacklisted pieces are force-sold like a
+        // redundant inferior. Case-sensitive name-contains; extend kApparelBlacklist as needed.
+        bool IsBlacklistedApparel(RE::TESObjectARMO* a_armo) {
+            if (!a_armo) return false;
+            const char* nm = a_armo->GetName();
+            if (!nm || !*nm) return false;
+            static constexpr const char* kApparelBlacklist[] = { "Circlet of Light" };
+            const std::string_view name = nm;
+            for (const char* b : kApparelBlacklist)
+                if (name.find(b) != std::string_view::npos) return true;
+            return false;
+        }
+
         // ── tuning that is NOT surfaced as config ───────────────────────────
         // The three MCM keys are fFirstDibsDelay / fQuickLootWaiver / bLogistics
         // (the M6 contract). These two are structural, not preferences, so they
@@ -1420,7 +1434,7 @@ namespace MFO::Logistics {
                     // a shield).
                     const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                         & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
-                    const bool shieldUseless = isShield && meleeTargetClass != WepClass::OneHand;
+                    const bool shieldUseless = isShield && !(meleeTargetClass == WepClass::OneHand && !doRanged);
                     // MAGE APPAREL + JEWELRY (#21 unified with the buy side): a magic
                     // user's dress-up is judged by the shared MEO-aware ranking
                     // (MageApparelBuyKey: value-primary with MEO, else school-enchant
@@ -2264,10 +2278,40 @@ namespace MFO::Logistics {
 
         // Is a_baseID part of a_followerID's snapshotted stock? ShedOffRoleWeapon's
         // one guard against ever giving away a follower's own gear.
+        // A shared vanilla master -- common items live here, a follower's unique gear does not.
+        bool IsVanillaMaster(RE::TESFile* a_file) {
+            if (!a_file) return true;
+            const std::string_view n = a_file->GetFilename();
+            return n == "Skyrim.esm" || n == "Update.esm" || n == "Dawnguard.esm" ||
+                   n == "HearthFires.esm" || n == "Dragonborn.esm";
+        }
+
         bool IsStockGear(RE::FormID a_followerID, RE::FormID a_baseID) {
-            std::scoped_lock lk(g_stockMx);
-            const auto it = g_stockGear.find(a_followerID);
-            return it != g_stockGear.end() && it->second.count(a_baseID) != 0;
+            {
+                std::scoped_lock lk(g_stockMx);
+                const auto it = g_stockGear.find(a_followerID);
+                if (it == g_stockGear.end() || it->second.count(a_baseID) == 0) return false;
+            }
+            // In the snapshot -- but PROTECT it only if it is a SIGNATURE/unique piece, not
+            // a standard common item (marth: Auri's plain Iron Daggers should sell; her Bow /
+            // Jesper's Armor stay). Signature = artifact/quest, OR enchanted, OR the item
+            // comes from the follower's OWN plugin (marth: a follower's unique gear lives in
+            // the follower's ESP; common items come from Skyrim.esm / the DLC masters).
+            auto* form = RE::TESForm::LookupByID(a_baseID);
+            if (!form) return true;                          // unresolved -> conservative keep
+            if (Catalog::IsExcluded(a_baseID)) return true;  // artifact / quest
+            if (auto* w = form->As<RE::TESObjectWEAP>(); w && w->formEnchanting) return true;
+            if (auto* a = form->As<RE::TESObjectARMO>(); a && a->formEnchanting) return true;
+            // SOURCE MATCH: item's originating plugin == the follower base-NPC's plugin, and
+            // that plugin is not a shared vanilla master (so a vanilla follower's common gear
+            // still sells, while a modded follower's dedicated-ESP gear is kept).
+            auto* fol      = RE::TESForm::LookupByID<RE::Actor>(a_followerID);
+            auto* npc      = fol ? fol->GetActorBase() : nullptr;
+            auto* itemFile = form->GetFile(0);
+            auto* npcFile  = npc ? npc->GetFile(0) : nullptr;
+            if (itemFile && npcFile && itemFile == npcFile && !IsVanillaMaster(itemFile))
+                return true;   // from the follower's OWN mod -> signature
+            return false;      // standard common item -> sellable / sheddable
         }
 
         // EvictOldest for the Claim map -- oldest by first-seen. The FormID/time
@@ -3300,29 +3344,49 @@ namespace MFO::Logistics {
 
             RE::TESBoundObject* pick = nullptr;
             if (useMageApparel) {
-                // CLOTHING/JEWELRY: best owned per logical slot that beats what's worn,
-                // ranked by the SAME MEO-aware judge as loot/buy.
+                // AUTHORITATIVE mage dress-up (oscillation fix). Compute the single
+                // best OWNED piece per logical slot (deterministic, FormID tiebreak so
+                // two equal-value pieces never flip which one is enforced) and FORCE it
+                // worn whenever the follower isn't already wearing exactly it -- so an
+                // engine-re-equipped LESSER clothing piece is corrected (replaced) and
+                // then falls through to the sell loop as an extra, instead of being
+                // worn-protected forever (the Nord-Tribal-vs-Khajiit oscillation).
+                // Ranked by the SAME MEO-aware judge as loot/buy. The worn piece is
+                // itself a candidate, so a worn BEST never downgrades (no-op), and
+                // equipping a replacement auto-unequips the lesser -> never strips naked.
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
                 const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain  = IsNecromancerFollower(a_state);
-                int   wornTier[6];  std::int32_t wornMetric[6];
-                for (int s = 0; s < 6; ++s) {
-                    wornTier[s] = 0; wornMetric[s] = 0;
-                    if (auto* w = WornInLogicalSlot(a_follower, s))
-                        MageApparelBuyKey(w, top2, schoolPrimary, true, wornTier[s], wornMetric[s]);
-                }
-                int bestTier = -1; std::int32_t bestMetric = -1;
+
+                struct BestPer { RE::TESBoundObject* obj = nullptr; int tier = -1; std::int32_t metric = -1; };
+                BestPer bestSlot[6];
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar) continue;
                     const int slot = MageClothingSlot(ar);
                     if (slot < 0) continue;
-                    if (WornInLogicalSlot(a_follower, slot) == ar) continue;   // already worn
                     int t = 0; std::int32_t m = 0;
-                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) continue;
-                    if (!(t > wornTier[slot] || (t == wornTier[slot] && m > wornMetric[slot]))) continue;  // beats worn
-                    if (t > bestTier || (t == bestTier && m > bestMetric)) { bestTier = t; bestMetric = m; pick = obj; }
+                    // The currently-WORN piece is always its slot's incumbent candidate,
+                    // ranked with allowVillain=true (restores the pre-authoritative
+                    // asymmetry): a player-equipped villain/necromancer robe on a
+                    // non-necromancer stays eligible instead of being excluded from
+                    // candidacy, force-replaced by a lesser common piece, and then sold.
+                    const bool worn = (WornInLogicalSlot(a_follower, slot) == obj);
+                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain || worn, t, m)) continue;
+                    auto& b = bestSlot[slot];
+                    if (!b.obj || t > b.tier || (t == b.tier && m > b.metric) ||
+                        (t == b.tier && m == b.metric && obj->GetFormID() > b.obj->GetFormID()))
+                        b = { obj, t, m };
+                }
+                // First slot whose worn piece isn't the computed best -> one
+                // authoritative correction per tick (converges over ticks, no thrash).
+                for (int slot = 0; slot < 6; ++slot) {
+                    auto* best = bestSlot[slot].obj;
+                    if (!best) continue;                                    // nothing owned for this slot
+                    if (WornInLogicalSlot(a_follower, slot) == best) continue;   // already correct
+                    if (!FitsCarryWeight(a_follower, best->GetWeight())) continue;
+                    pick = best; break;
                 }
             } else {
                 // RATED ARMOR: best owned piece that upgrades a worn/bare slot.
@@ -3344,6 +3408,19 @@ namespace MFO::Logistics {
             }
 
             if (!pick || !FitsCarryWeight(a_follower, pick->GetWeight())) return;
+            if (useMageApparel) {
+                // THRASH GUARD for the authoritative mage correction: only OUT OF
+                // COMBAT and rate-limited per follower, so an engine tug-of-war over a
+                // clothing slot can't drive an equip every frame. (The rated-armor
+                // branch is already strictly-better-only, so it needs no rate limit.)
+                if (a_follower->IsInCombat()) return;
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextMageFix;
+                const auto id  = a_follower->GetFormID();
+                const auto now = Clock::now();
+                auto& nxt = s_nextMageFix[id];
+                if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
+                nxt = now + std::chrono::seconds(5);
+            }
             AcquireEquip(a_follower, pick, nullptr, myWeap, /*forceStock*/false);   // already owned -> no transfer
         }
 
@@ -3406,6 +3483,12 @@ namespace MFO::Logistics {
                 buy.wantCrossbow  = wantCrossbow;
                 buy.rangedBaseDmg = myRangedDmg;
                 buy.buyArmor       = !useMageApparel && !dolls;   // non-caster OR caster-in-armor: rated armor
+                // A shield is in-role ONLY for a dedicated one-hand melee follower (not a
+                // ranged/caster, even one carrying a 1h backup). For everyone else, saturate
+                // the shield slot's baseline so PlanBuy never buys one (matches the sell/keep
+                // side's usesShield and the loot path's shieldUseless).
+                const bool usesShield = (roles.melee == WepClass::OneHand) && !doRanged && !caster;
+                if (!usesShield) slotRat[4] = 1.0e9f;
                 for (int s = 0; s < 5; ++s) buy.armorBaseRat[s] = static_cast<std::int32_t>(slotRat[s]);
                 buy.buyMageApparel = useMageApparel && !dolls;
                 // MEO-aware ranking (marth): value-driven ONLY with MEO present (gems
@@ -3458,7 +3541,7 @@ namespace MFO::Logistics {
             // cost being limited here, same pattern as the other diagnostics.
             auto& sn = g_econScan[fid];
             if (sn.time_since_epoch().count() != 0 && a_now < sn) return;
-            sn = a_now + std::chrono::seconds(15);
+            sn = a_now + std::chrono::seconds(6);   // vendor-scan cadence (was 15s -- snappier shopping)
 
             // Same crash4-safe walk as LootNearby: the follower's OWN attached
             // cell, never TES::ForEachReferenceInRange (§0.30).
@@ -3563,7 +3646,7 @@ namespace MFO::Logistics {
                 const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendor->GetFormID();
                 auto& pn = g_econPair[pairKey];
                 if (pn.time_since_epoch().count() != 0 && a_now < pn) continue;
-                pn = a_now + std::chrono::seconds(60);
+                pn = a_now + std::chrono::seconds(20);   // per-(follower,vendor) retry cadence (was 60s)
 
                 const auto& vv   = fac->vendorData.vendorValues;
                 auto*       vend = fac->vendorData.vendorSellBuyList;
@@ -3629,6 +3712,7 @@ namespace MFO::Logistics {
                 // jewelry, primary biped slot for rated armor), keep ONE best per slot,
                 // ranked to MATCH what EquipBestOwnedGear would actually wear.
                 std::unordered_set<RE::TESBoundObject*> keepArmor;
+                std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best obj (worn-inferior convergence)
                 if (Config::g_economyBuyGear.load()) {
                     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
                     const bool caster         = IsCasterFollower(a_state);
@@ -3638,14 +3722,23 @@ namespace MFO::Logistics {
                     const bool schoolPrimary  = !MEOBridge::Available() ||
                                                 Config::g_mageApparelStrictSchool.load();
                     const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
+                    // A shield is in-role ONLY for a dedicated one-hand MELEE follower. A
+                    // ranged (bow) or caster follower never equips one, so it must NOT be
+                    // kept -- it is dead weight that should sell. (The off-role WEAPON shed
+                    // drops wrong-role weapons; a shield is armor and slipped past it.)
+                    const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+                    const bool usesShield   = (roles.melee == WepClass::OneHand) &&
+                                              !roles.doRanged && !caster;
 
                     // (a) Always keep what is WORN, regardless of the bucket math (the
                     //     sell loop's IsWorn gate already bars worn gear; this is belt-
                     //     and-suspenders and also pins the jewelry logical slots).
                     for (int ls = 0; ls < 6; ++ls)
                         if (auto* w = WornInLogicalSlot(a_follower, ls)) keepArmor.insert(w);
-                    for (auto sl : { Slot::kShield, Slot::kForearms, Slot::kCalves })
+                    for (auto sl : { Slot::kForearms, Slot::kCalves })
                         if (auto* w = a_follower->GetWornArmor(sl)) keepArmor.insert(w);
+                    if (usesShield)
+                        if (auto* w = a_follower->GetWornArmor(Slot::kShield)) keepArmor.insert(w);
 
                     // (b) The single best NEXT-UPGRADE per LOGICAL slot.
                     auto armorLogicalSlot = [](std::uint32_t mask) -> int {
@@ -3663,18 +3756,30 @@ namespace MFO::Logistics {
                         auto* ar = obj->As<RE::TESObjectARMO>();
                         if (!ar) continue;
                         int key = -1; float primary = 0.0f, secondary = 0.0f;
-                        if (ar->GetArmorRating() > 0.0f) {                       // rated armor: rating then value
+                        if (useMageApparel) {
+                            // A mage's body/clothing slot holds ONE item -- a robe (rating 0)
+                            // OR a rated-armor outfit both compete for the SAME biped slot, so
+                            // bucket BOTH by MageClothingSlot (one bucket per slot) instead of
+                            // splitting rated-vs-clothing (which let two body pieces both survive).
+                            // Rated armor competes at plain tier by BASE value (no gem), so a
+                            // pricier outfit beats a cheaper robe and only one survives
+                            // (marth: Khajiit ~800 must beat Nord ~100, not bucket apart).
+                            const int cs = MageClothingSlot(ar);
+                            if (cs < 0) continue;   // shields/other -> a mage doesn't wear them, sells
+                            int t = 0; std::int32_t m = 0;
+                            if (ar->GetArmorRating() > 0.0f) {
+                                t = 0; m = std::max<std::int32_t>(ar->GetGoldValue(), 0);
+                            } else if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) {
+                                continue;
+                            }
+                            key = cs; primary = static_cast<float>(t); secondary = static_cast<float>(m);
+                        } else if (ar->GetArmorRating() > 0.0f) {                // non-mage: rated armor by biped slot
                             const int ls = armorLogicalSlot(static_cast<std::uint32_t>(ar->GetSlotMask()));
                             if (ls < 0) continue;
+                            if (ls == 4 && !usesShield) continue;   // don't keep a shield for a non-shield-user -> it sells
                             key = 10 + ls;
                             primary   = ar->GetArmorRating();
                             secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
-                        } else if (useMageApparel) {                            // clothing/jewelry: same judge as loot/buy
-                            const int cs = MageClothingSlot(ar);
-                            if (cs < 0) continue;
-                            int t = 0; std::int32_t m = 0;
-                            if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) continue;
-                            key = cs; primary = static_cast<float>(t); secondary = static_cast<float>(m);
                         } else {
                             continue;   // a non-mage's clothing/jewelry is sellable junk (nothing wears it)
                         }
@@ -3683,7 +3788,7 @@ namespace MFO::Logistics {
                             (primary == b.primary && secondary > b.secondary))
                             b = { obj, primary, secondary };
                     }
-                    for (auto& [k, b] : best) if (b.obj) keepArmor.insert(b.obj);
+                    for (auto& [k, b] : best) if (b.obj) { keepArmor.insert(b.obj); bestBySlot[k] = b.obj; }
                 }
 
                 std::vector<TradeBridge::SellRow> sell;
@@ -3728,25 +3833,69 @@ namespace MFO::Logistics {
                     return hold;
                 };
 
+                // [sell] per-item EXCLUSION diagnostic. Rate-limited ~15s/follower via a
+                // worker-sequential static (one ServiceFollower at a time -- same pattern
+                // as s_nextMageFix/s_nextHeal, no lock). Names WHY each weap/armo is not
+                // offered, so a "sell n=0" is never a black box again. INFO-level, cheap.
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextSellDiag;
+                bool diag = false;
+                {
+                    const auto now = Clock::now();
+                    auto& nx = s_nextSellDiag[fid];
+                    if (now >= nx) { diag = true; nx = now + std::chrono::seconds(15); }
+                }
+                auto sdiag = [&](RE::TESBoundObject* o, const char* why) {
+                    if (diag) spdlog::info("[sell] {:08X} '{}' -> {}", fid,
+                                           o && o->GetName() ? o->GetName() : "?", why);
+                };
+                if (diag)
+                    spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
+
+                const bool umaSell = IsCasterFollower(a_state) && Config::g_mageWearRobes.load() &&
+                                     !Config::g_dollsMode.load();
+
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
                     if (!weap && !armo) continue;
-                    if (IsStockGear(fid, obj->GetFormID())) continue;   // #69 own signature gear
-                    if (weap && keepWeapons.count(obj))     continue;   // loadout weapon, not junk
-                    if (armo && keepArmor.count(obj))       continue;   // #21 best-in-slot -- don't re-sell a bought upgrade
+                    if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // #69 own signature gear
+                    // CONVERGENCE (marth): a WORN piece that is NOT its slot's best (a strictly
+                    // kept-better exists) is a redundant inferior. The engine keeps re-applying
+                    // it from the follower's DEFAULT OUTFIT, so unequip-and-wait never wins the
+                    // race. Instead flag it and SELL it even while worn -- it bypasses the
+                    // keepArmor/IsWorn gates below, the gem (if any) is extracted first, and the
+                    // trade's RemoveItem unequips it on sale. Once it's gone the engine has
+                    // nothing to put back (Jesper's Nord Tribal outfit, Auri's spare boots).
+                    bool redundantInferior = false;
+                    if (armo && data.second && data.second->IsWorn() && !bestBySlot.empty()) {
+                        int sk = -1;
+                        if (umaSell)                            { sk = MageClothingSlot(armo); }   // mage: robes + rated armor share one body bucket
+                        else if (armo->GetArmorRating() > 0.0f) { const int ls = ArmorBuySlot(armo); if (ls >= 0) sk = 10 + ls; }
+                        if (sk >= 0) {
+                            auto bit = bestBySlot.find(sk);
+                            if (bit != bestBySlot.end() && bit->second && bit->second != obj)
+                                redundantInferior = true;
+                        }
+                    }
+                    // Force-sell also covers BLACKLISTED apparel (marth's annoyance list) --
+                    // never keep/wear it; sell it even while worn (RemoveItem unequips it).
+                    const bool forceSell = redundantInferior || (armo && IsBlacklistedApparel(armo));
+                    if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
+                    if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
-                    if (entry && entry->IsWorn())               continue;   // never sell worn gear (worn gem investment protected)
-                    if (gemHold(entry, obj->GetFormID()))       continue;   // ungem-then-sell (v3) / protect (v2); sells ungemmed later
-                    if (Catalog::IsExcluded(obj->GetFormID()))  continue;   // #3 artifacts/quest -- never sell
+                    if (forceSell)                              sdiag(obj, "force-sell");           // redundant/blacklisted worn -> sell (RemoveItem unequips it)
+                    else if (entry && entry->IsWorn())          { sdiag(obj, "worn"); continue; }     // never sell worn gear
+                    if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
+                    if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
                     // #21 merchant-perk bypass: a "sell anything" follower ignores the
                     // vendor's VEND filter (like the player); otherwise the filter holds.
-                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) continue;
+                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) { sdiag(obj, "vendor-filter"); continue; }
+                    if (diag) sdiag(obj, "SELL");
                     // #21 speech-scaled sell price (base instance value * sellFraction).
                     const std::int32_t baseVal = entry ? entry->GetValue() : 0;
                     sell.push_back(TradeBridge::SellRow{
@@ -4072,6 +4221,7 @@ namespace MFO::Logistics {
                            int& out_tier, std::int32_t& out_metric) {
         out_tier = 0; out_metric = 0;
         if (!a_armo) return false;
+        if (IsBlacklistedApparel(a_armo)) return false;   // never rank blacklisted apparel as wearable
         if (a_armo->GetArmorRating() > 0.0f) return false;   // rated armor is kArmor -- clothing/jewelry are rating 0
         if (!a_allowVillain && IsVillainCodedApparel(a_armo)) return false;   // no evil regalia unless the follower is a necromancer
         const std::int32_t value = std::max<std::int32_t>(a_armo->GetGoldValue(), 0);
@@ -5268,6 +5418,21 @@ namespace MFO::Logistics {
             // safe equip path. Idempotent + one-per-tick, so it converges and never
             // thrashes; dolls mode (handled inside) is the manual-dress escape hatch.
             EquipBestOwnedGear(a_follower, a_state);
+            // GEM RECONCILE (MEO v3). Decoupled from the ungem-then-sell event: each
+            // idle management scan, re-socket a follower's OWN loose gems into his worn
+            // gear's empty sockets so a gem extracted for a sale never stays loose.
+            // CONSERVATION always runs; the effect-aware tier is gated on bMeoAwareGems.
+            // Posts to the main thread inside; a full no-op when MEO < v3 (the loose
+            // gem simply stays as it does today -- no regression).
+            if (MEOBridge::GemReconcileSupported()) {
+                MEOBridge::GemReconcilePrefs prefs;
+                prefs.caster = IsCasterFollower(a_state);
+                if (prefs.caster) {
+                    int castGambits = 0;
+                    prefs.school = static_cast<std::uint32_t>(TargetMagicSchool(a_state, castGambits));
+                }
+                MEOBridge::RequestGemReconcile(a_follower, Config::g_meoAwareGems.load(), prefs);
+            }
             if (Config::g_economy.load() && Po3Present())
                 EconomyProbe(a_follower, a_state, now);
         }

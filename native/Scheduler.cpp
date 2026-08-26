@@ -16,6 +16,7 @@
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
+#include "ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
 
 namespace MFO::Scheduler {
 
@@ -881,6 +882,13 @@ namespace MFO::Scheduler {
                 if (rule.lastFired) rule.lastFiredAt = now;   // flair #9: board pulse
             }
         }
+
+        // §HMS (F3): a FIRED combat gambit is the REAL off-class-usage signal.
+        // Publish the action's exercised pool into ProgAllocator's race-free
+        // per-follower mirror (worker thread here; the main HMS poll consumes it).
+        // Self-gating: a no-op when HMS is off or the action is neutral.
+        if (outcome.result == Actuation::Result::Fired)
+            ProgAllocator::NoteCombatFire(f, choice.actionOpcode);
 
         switch (outcome.result) {
         case Actuation::Result::Fired:

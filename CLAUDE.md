@@ -25,7 +25,7 @@ regressions here; the ripple notes are why the map exists.
 ## The five things that corrupt saves or crash — verify before touching
 
 1. **Co-save layout** (`Serialization.cpp`, `ProgAllocator::CoSaveSave/Load`,
-   `State.h`, `Vocabulary.h`): 4 records FLWR v4 / MSTK v1 / PRGN v4 / FWPN v1
+   `State.h`, `Vocabulary.h`): 4 records FLWR v4 / MSTK v1 / PRGN v5 / FWPN v1
    (`Serialization.h`). Changing a
    field order/type/count, bumping a version without a matching `if(version>=N)`
    reader, renaming a serialized opcode string, or renumbering the `Subject` /

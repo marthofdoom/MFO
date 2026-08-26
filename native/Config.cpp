@@ -158,11 +158,26 @@ namespace MFO::Config {
             else if (a_key == "bEconomy")           setB(g_economy);
             else if (a_key == "bEconomyBuyGear")    setB(g_economyBuyGear);
             else if (a_key == "bEconomyBuyTomes")   setB(g_economyBuyTomes);
+            else if (a_key == "bHmsRedistribute")   setB(g_hmsRedistribute);
+            else if (a_key == "fHmsSkewMax") {
+                // §HMS: the MCM slider stores a PERCENT (0-100); the atomic holds
+                // the FRACTION. Parse + clamp + scale /100 here (not setF, which
+                // would store the raw percent). A bad value keeps the default.
+                try {
+                    float pct = std::stof(a_val);
+                    pct = std::clamp(pct, 0.0f, 100.0f);
+                    g_hmsSkewMaxFrac.store(pct / 100.0f);
+                } catch (...) {
+                    spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
+                                 a_src, a_key, a_val);
+                }
+            }
             else if (a_key == "bSpeechPricing")     setB(g_speechPricing);
             else if (a_key == "bMerchantPerkBypass") setB(g_merchantPerkBypass);
             else if (a_key == "xMerchantPerkID")    setU(g_merchantPerkID);
             else if (a_key == "bMageWearRobes")     setB(g_mageWearRobes);
             else if (a_key == "bMageApparelStrictSchool") setB(g_mageApparelStrictSchool);
+            else if (a_key == "bMeoAwareGems")      setB(g_meoAwareGems);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
             else if (a_key == "bMagicLoadout")      setB(g_magicLoadout);
             else if (a_key == "bMageDaggersOnly")   setB(g_mageDaggersOnly);
@@ -284,11 +299,14 @@ namespace MFO::Config {
             g_economy            = true;
             g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
+            g_hmsRedistribute    = true;    // §HMS class-redistribution master switch -- ON
+            g_hmsSkewMaxFrac     = 0.20f;   // §HMS off-class skew ceiling -- 20% (INI stores percent)
             g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve
             g_merchantPerkBypass = true;    // #21 merchant-perk holder sells outside the vendor filter
             g_merchantPerkID     = 0x00058F7A;  // vanilla Merchant / Ordinator Salesman (Skyrim.esm)
             g_mageWearRobes      = true;    // #21 mage clothing/jewelry dress-up -- ON (loot + buy)
             g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
+            g_meoAwareGems       = false;   // effect-aware gem optimization -- OFF (conservation still always runs)
             g_autoRetreat        = true;
             g_magicLoadout       = true;
             g_mageDaggersOnly    = true;
@@ -343,7 +361,9 @@ namespace MFO::Config {
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
             { "bEconomy", "1" },               { "bAutoRetreat", "1" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
+            { "bHmsRedistribute", "1" },       { "fHmsSkewMax", "20.000000" },
             { "bMageWearRobes", "1" },         { "bMageApparelStrictSchool", "0" },
+            { "bMeoAwareGems", "0" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
             { "bBeastHeadFix", "1" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },
