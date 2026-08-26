@@ -40,6 +40,8 @@ namespace MFO::Logistics {
 
     namespace {
 
+        bool IsBlacklistedApparel(RE::TESObjectARMO* a_armo);   // fwd decl (defined near MageApparelBuyKey)
+
         // ── tuning that is NOT surfaced as config ───────────────────────────
         // The three MCM keys are fFirstDibsDelay / fQuickLootWaiver / bLogistics
         // (the M6 contract). These two are structural, not preferences, so they
@@ -3865,13 +3867,16 @@ namespace MFO::Logistics {
                                 redundantInferior = true;
                         }
                     }
+                    // Force-sell also covers BLACKLISTED apparel (marth's annoyance list) --
+                    // never keep/wear it; sell it even while worn (RemoveItem unequips it).
+                    const bool forceSell = redundantInferior || (armo && IsBlacklistedApparel(armo));
                     if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
-                    if (armo && keepArmor.count(obj) && !redundantInferior) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant inferior bypasses -> sells)
+                    if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
                     RE::BGSKeywordForm* kwf = weap
                         ? static_cast<RE::BGSKeywordForm*>(weap)
                         : static_cast<RE::BGSKeywordForm*>(armo);
                     auto* entry = data.second.get();
-                    if (redundantInferior)                          sdiag(obj, "sell-inferior");        // worn redundant -> sell (RemoveItem unequips it)
+                    if (forceSell)                              sdiag(obj, "force-sell");           // redundant/blacklisted worn -> sell (RemoveItem unequips it)
                     else if (entry && entry->IsWorn())          { sdiag(obj, "worn"); continue; }     // never sell worn gear
                     if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
                     if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
@@ -4199,11 +4204,26 @@ namespace MFO::Logistics {
         return -1;
     }
 
+    // Apparel MFO must NEVER wear or keep, even when it ranks well -- marth's annoyance
+    // list (e.g. a light-emitting circlet). Blacklisted pieces are force-sold like a
+    // redundant inferior. Case-sensitive name-contains; extend kApparelBlacklist as needed.
+    bool IsBlacklistedApparel(RE::TESObjectARMO* a_armo) {
+        if (!a_armo) return false;
+        const char* nm = a_armo->GetName();
+        if (!nm || !*nm) return false;
+        static constexpr const char* kApparelBlacklist[] = { "Circlet of Light" };
+        const std::string_view name = nm;
+        for (const char* b : kApparelBlacklist)
+            if (name.find(b) != std::string_view::npos) return true;
+        return false;
+    }
+
     bool MageApparelBuyKey(RE::TESObjectARMO* a_armo, std::uint8_t a_top2Mask,
                            bool a_schoolPrimary, bool a_allowVillain,
                            int& out_tier, std::int32_t& out_metric) {
         out_tier = 0; out_metric = 0;
         if (!a_armo) return false;
+        if (IsBlacklistedApparel(a_armo)) return false;   // never rank blacklisted apparel as wearable
         if (a_armo->GetArmorRating() > 0.0f) return false;   // rated armor is kArmor -- clothing/jewelry are rating 0
         if (!a_allowVillain && IsVillainCodedApparel(a_armo)) return false;   // no evil regalia unless the follower is a necromancer
         const std::int32_t value = std::max<std::int32_t>(a_armo->GetGoldValue(), 0);
