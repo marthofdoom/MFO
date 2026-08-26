@@ -203,6 +203,27 @@ namespace MFO::ProgAllocator {
         // reloads with the real baseline, never re-adopting an MFO-inflated one).
         bool hmsCaptured{ false };
 
+        // ── §HMS fixed-stat grant (v1.1 Phase 3, PRGN v6) ────────────────────
+        // A fixed-stat NPC gets 0 engine HMS award per level (unique/no-autocalc
+        // followers), so the redistribution budget is always 0 and it never
+        // grows. Phase 3 gives it progression: once the PLAYER's total HMS
+        // catches up to this follower's baseline total, grant the follower the
+        // player's per-level HMS gain, reshaped to the class profile.
+        //   fixedStat            — detected fixed-stat (SERIALIZED as flags bit
+        //                          0x20). Set after TWO player level-ups of 0
+        //                          engine award; cleared the moment an award > 0
+        //                          is measured (it is a leveling follower).
+        //   hmsZeroAwardStreak   — consecutive player level-ups this follower saw
+        //                          0 engine award (SERIALIZED, clamped 0..2). At
+        //                          2 → fixedStat. A single quiet level is not proof.
+        //   hmsGrantRemainder    — fractional per-pool grant carried across levels
+        //                          so a 15/80/5 split lands as WHOLE base-AV points
+        //                          over time instead of truncating each level
+        //                          (SERIALIZED). Only ever touched on the grant path.
+        bool          fixedStat{ false };
+        std::uint8_t  hmsZeroAwardStreak{ 0 };
+        float         hmsGrantRemainder[3]{ 0.0f, 0.0f, 0.0f };
+
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)
         // battle; hmsBattleOffCounted = this battle already counted as off-class;
@@ -210,6 +231,12 @@ namespace MFO::ProgAllocator {
         bool hmsInBattle{ false };
         bool hmsBattleOffCounted{ false };
         std::chrono::steady_clock::time_point hmsLastCombat{};
+        // §HMS fixed-stat detection tally (RUNTIME-ONLY, never serialized): the
+        // engine HMS award measured for this follower since the last player
+        // level-up. RecomputeHMS adds each measured (positive) budget; PollWork
+        // reads it at the next player level-up to decide 0-award, then zeroes it.
+        // Resets to 0 on load (the streak byte carries detection across saves).
+        float hmsAwardAccum{ 0.0f };
 
         // runtime-only, never serialized: has this session's guarded reapply
         // (P3) run for this follower yet? Reset by ClearAll; the poll retries
