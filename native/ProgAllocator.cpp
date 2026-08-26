@@ -644,6 +644,22 @@ namespace MFO::ProgAllocator {
         // ADOPT the follower's current base H/M/S as the baseline once, exactly
         // like the skill ADOPT fallback — existing followers are not retro-slammed.
         void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
+            // [clsdiag] TEMP: dump what MFO actually reads for the class, so we can see
+            // why it resolves wrong (marth: Mage on both tabs, read as Melee). Logs on
+            // change per follower.
+            {
+                static std::unordered_map<RE::FormID, int> s_clsSeen;
+                const int cco = static_cast<int>(a_st.combatClassOverride);
+                auto& sv = s_clsSeen[a_actor->GetFormID()];
+                if (sv != cco) {
+                    const ClassDef* pd = FindClassDef(a_st.clsId);
+                    spdlog::info("[clsdiag] {:08X} combatClassOverride={} clsId={:08X} progClass='{}' progStance={}",
+                                 a_actor->GetFormID(), cco, a_st.clsId,
+                                 pd && pd->name ? pd->name : "(none)",
+                                 pd ? static_cast<int>(pd->stance) : -1);
+                    sv = cco;
+                }
+            }
             if (!Config::g_hmsRedistribute.load()) return;   // main-MFO MCM master switch
             // BASE-feature class source (marth): the Gambit-tab class, not the progression
             // add-on's ClassDef. 1=Melee 2=Ranged 3=Mage; 0=Auto/none skips HMS steering.
