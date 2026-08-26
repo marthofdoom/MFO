@@ -791,7 +791,12 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   drift off the held `hmsTarget` (= the engine's live per-modlist per-level award)
   BEFORE re-asserting, sums the 3 pool deltas SIGNED then clamps ≥0 (a starved pool
   reads negative under the engine's absolute-autocalc slam; signed telescopes to the
-  fresh award), redistributes by class profile (`ClassDef::stance` 1=Melee 60/5/35,
+  fresh award). **v1.1:** the cur-read + signed-diff + clamp is the general
+  `Followers::MeasureEngineVitalAward(actor, heldTarget, curOut, deltaOut)` primitive
+  (Followers.h/.cpp), and the base-AV get/set go through `Followers::Get/SetFollowerHMS`
+  (canonical pool order {0=H,1=M,2=S} == ProgAllocator `kHmsAV`). RecomputeHMS is
+  byte-identical — it just calls the seed API. Then it redistributes by class profile
+  (`ClassDef::stance` 1=Melee 60/5/35,
   2=Ranged 40/5/55, 3=Mage 15/80/5; 0/none → skip) + a usage-scaled **skew** (pulled
   from the class-primary pool toward the exercised off-class pool; ≥1-pt floor, but
   the **cap wins** — clamped to `Config::g_hmsSkewMaxFrac`×budget so a tiny budget
@@ -816,7 +821,9 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   live base on first `RecomputeHMS`. REQUIRED `[hms]` probe logs the measured award
   + budget + profile + skew + per-pool award + final targets.
 - **`Class` enum ordinals (`:84`) MUST stay == `combatClassOverride`** — `SetClass`
-  mirrors into it via `Followers::TryEnsureRecord` (`:1204`). Board snapshot is the
+  mirrors into it via `Followers::SetBaseClass` (v1.1 seed API; internally
+  `TryEnsureRecord`). Reads of `combatClassOverride` on the serial-worker path
+  (Scheduler/Actuation stance) go through `Followers::GetBaseClass`. Board snapshot is the
   one cross-thread structure (guarded `g_viewMx`); `Rapport::Spend` (`:1346`) is a
   cross-module write on respec.
 
@@ -1018,6 +1025,16 @@ concurrency question (distinct threads, mutual exclusion UNPROVEN).
 - `ApplyDefaultKit` (`:24`) — 3 combat + 4 logistics; called on record creation
   (`:198`) and as the empty-board load backfill (`Serialization.cpp:539`). **Verified
   to fit Rank I** (3/4); adding a rule overflows and the load clamp silently drops it.
+- **General follower-mutation API (v1.1 add-on-architecture SEED)** — `GetBaseClass`/
+  `SetBaseClass` (read/write `FollowerState::combatClassOverride`; SetBaseClass →
+  `TryEnsureRecord`), `GetFollowerHMS`/`SetFollowerHMS` (base H/M/S by canonical pool
+  {0=H,1=M,2=S} == ProgAllocator `kHmsAV`), and `MeasureEngineVitalAward` (pure
+  observe-not-clobber engine-award read). **General, add-on-agnostic — no progression
+  types in the signatures**; the host applies add-on DATA through them. **Domain: main-
+  thread / serial-worker only** (same as `TryEnsureRecord`). Callers today: `SetBaseClass`
+  ← `ProgAllocator::SetClass`; `GetBaseClass` ← `Scheduler.cpp` stance + `Actuation.cpp`
+  dagger-melee; `Get/SetFollowerHMS`+`MeasureEngineVitalAward` ← `ProgAllocator::RecomputeHMS`.
+  This is the surface Phases 2+ grow (SetSkill/GrantPerk/level-up events) — keep it general.
 - `Refresh` (`:254`, the eviction hub) — **runs on the JOB WORKER** (`Diagnostics.cpp`
   tick), not the main thread; it rebuilds `g_active`/`g_activeIds` and republishes the
   `IsTrackedFast`/`ActiveSnapshot` mirror under `g_mx` (`PublishActiveMirror`). On drop

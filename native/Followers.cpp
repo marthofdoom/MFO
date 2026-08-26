@@ -399,4 +399,53 @@ namespace MFO::Followers {
                       g_active.size(), g_followers.size());
     }
 
+    // ── General follower-mutation API (v1.1 add-on-architecture SEED) ────────
+    // See Followers.h for the contract + threading domain (main/serial-worker).
+
+    // CANONICAL vital pool order — MUST match ProgAllocator's kHmsAV and the
+    // PRGN v5 co-save column order {0=Health, 1=Magicka, 2=Stamina}.
+    static constexpr RE::ActorValue kVitalAV[3] = {
+        RE::ActorValue::kHealth, RE::ActorValue::kMagicka, RE::ActorValue::kStamina
+    };
+
+    std::uint8_t GetBaseClass(RE::FormID a_actorID) {
+        const auto it = g_followers.find(a_actorID);
+        return (it != g_followers.end()) ? it->second.combatClassOverride : std::uint8_t{ 0 };
+    }
+    std::uint8_t GetBaseClass(RE::Actor* a_actor) {
+        return a_actor ? GetBaseClass(a_actor->GetFormID()) : std::uint8_t{ 0 };
+    }
+
+    void SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance) {
+        if (auto* rec = TryEnsureRecord(a_actorID)) rec->combatClassOverride = a_stance;
+    }
+    void SetBaseClass(RE::Actor* a_actor, std::uint8_t a_stance) {
+        if (a_actor) SetBaseClass(a_actor->GetFormID(), a_stance);
+    }
+
+    float GetFollowerHMS(RE::Actor* a_actor, int a_pool) {
+        if (!a_actor || a_pool < 0 || a_pool > 2) return 0.0f;
+        auto* avo = a_actor->AsActorValueOwner();
+        return avo ? avo->GetBaseActorValue(kVitalAV[a_pool]) : 0.0f;
+    }
+    void SetFollowerHMS(RE::Actor* a_actor, int a_pool, float a_value) {
+        if (!a_actor || a_pool < 0 || a_pool > 2) return;
+        if (auto* avo = a_actor->AsActorValueOwner())
+            avo->SetBaseActorValue(kVitalAV[a_pool], a_value);
+    }
+
+    float MeasureEngineVitalAward(RE::Actor*        a_actor,
+                                  const float     (&a_heldTarget)[3],
+                                  float           (&a_curOut)[3],
+                                  float           (&a_deltaOut)[3]) {
+        for (int p = 0; p < 3; ++p) a_curOut[p] = GetFollowerHMS(a_actor, p);
+        float budget = 0.0f;
+        for (int p = 0; p < 3; ++p) {
+            a_deltaOut[p] = a_curOut[p] - a_heldTarget[p];
+            budget       += a_deltaOut[p];
+        }
+        if (budget < 0.0f) budget = 0.0f;
+        return budget;
+    }
+
 }

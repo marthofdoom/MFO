@@ -812,9 +812,9 @@ namespace MFO::Actuation {
             // as "already holding the category" (else the satisfied NoOp below keeps
             // him on it forever) and must NOT win the draw. baseClass read on the
             // worker's g_followers-serial path (same as Scheduler / Actuation:25).
-            std::uint8_t baseClass = 0;
-            if (auto it = g_followers.find(a_follower->GetFormID()); it != g_followers.end())
-                baseClass = it->second.combatClassOverride;
+            // v1.1: actor-keyed g_followers find + combatClassOverride read == the
+            // general GetBaseClass primitive (byte-identical; same serial-worker path).
+            const std::uint8_t baseClass = Followers::GetBaseClass(a_follower);
             const bool daggerMelee = !a_ranged && baseClass == 3 && Config::g_mageDaggersOnly.load();
             const auto holdsCategory = [a_ranged, daggerMelee](RE::TESForm* a_held) {
                 auto* w = a_held ? a_held->As<RE::TESObjectWEAP>() : nullptr;

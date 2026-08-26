@@ -647,12 +647,21 @@ namespace MFO::ProgAllocator {
             if (!def) return;                 // no class picked, or the addon left
             float prof[3]; int primary = 0;
             if (!HmsProfile(def->stance, prof, primary)) return;   // stance 0/none → skip
-            auto* avo = a_actor->AsActorValueOwner();
-            if (!avo) return;
+            if (!a_actor->AsActorValueOwner()) return;
             const auto id = a_actor->GetFormID();
 
-            float cur[3];
-            for (int p = 0; p < 3; ++p) cur[p] = avo->GetBaseActorValue(kHmsAV[p]);
+            // MEASURE the engine's fresh per-level award via the general follower
+            // API (v1.1, byte-identical to the old inline read+diff): current base
+            // H/M/S into cur, signed drift off the held target into delta, clamped
+            // sum into budget. Pure read (capture BEFORE any write erases it). The
+            // captured check below uses cur; delta/budget are ignored on the un-
+            // captured path. The signed-sum-then-floor telescopes to exactly the
+            // engine award even on a pool the class profile starves (points MFO
+            // previously shifted OUT re-enter as a negative delta and cancel, so a
+            // positive-only sum would re-count and inflate) -- rationale lives in
+            // MeasureEngineVitalAward's header.
+            float cur[3]; float delta[3];
+            const float budget = Followers::MeasureEngineVitalAward(a_actor, a_st.hmsTarget, cur, delta);
 
             // First touch on an uncaptured record → adopt current base as the
             // baseline/target, zero the cumulative, and STOP (nothing to measure
@@ -671,21 +680,7 @@ namespace MFO::ProgAllocator {
                 return;
             }
 
-            // MEASURE: drift off the held target = this level's fresh engine award.
-            // Capture BEFORE any write (clobbering first erases it). Sum the three
-            // pool deltas SIGNED, then clamp at >=0. The engine level-up recompute
-            // REPLACES base AVs with absolute autocalc formula values, so on a pool
-            // the class profile starves, cur - target includes points MFO previously
-            // shifted OUT of that pool -- a positive-only sum would re-count them and
-            // inflate the budget every level. The signed sum telescopes to exactly the
-            // fresh engine award (Σformula(new) - Σformula(old)); in the incremental-
-            // award world (engine only adds to one pool) it is identical to positive-only.
-            float delta[3]; float budget = 0.0f;
-            for (int p = 0; p < 3; ++p) {
-                delta[p] = cur[p] - a_st.hmsTarget[p];
-                budget  += delta[p];
-            }
-            if (budget < 0.0f) budget = 0.0f;
+            // (cur/delta/budget were measured above via MeasureEngineVitalAward.)
 
             // ── Long-term CONVERGING allocation (marth 2026-08-25) ──────────────
             // The class ratio is a LONG-TERM target for the follower's RUNNING-TOTAL
@@ -769,7 +764,7 @@ namespace MFO::ProgAllocator {
                 float tgt = a_st.hmsBaseline[p] + a_st.hmsCumulative[p];
                 if (tgt < a_st.hmsBaseline[p]) tgt = a_st.hmsBaseline[p];   // floor
                 a_st.hmsTarget[p] = tgt;
-                if (tgt != cur[p]) avo->SetBaseActorValue(kHmsAV[p], tgt);
+                if (tgt != cur[p]) Followers::SetFollowerHMS(a_actor, p, tgt);   // v1.1 API (byte-identical)
             }
 
             if (budget > 0.0f) {
@@ -2111,14 +2106,14 @@ namespace MFO::ProgAllocator {
         // follows the chosen class immediately (§18.6: the ordinal coupling
         // is gone — the addon declares the stance explicitly).
         // item 2b: this runs on the MAIN thread (Board prog edit -> MainThread::Post)
-        // and TryEnsureRecord would INSERT (g_followers rehash vs the worker) if the
-        // record were absent. It is proven present — this follower is enrolled
-        // (g_prog.find succeeded above) and board-addressable, so Refresh already
-        // TryEnsureRecord'd it. The BoardEditScope tripwire (Board.cpp) logs a HAZARD
-        // if that ever stops holding.
-        if (auto* rec = Followers::TryEnsureRecord(id)) {
-            rec->combatClassOverride = def->stance;
-        }
+        // and SetBaseClass -> TryEnsureRecord would INSERT (g_followers rehash vs the
+        // worker) if the record were absent. It is proven present — this follower is
+        // enrolled (g_prog.find succeeded above) and board-addressable, so Refresh
+        // already TryEnsureRecord'd it. The BoardEditScope tripwire (Board.cpp) logs a
+        // HAZARD if that ever stops holding.
+        // v1.1: routed through the general follower API (was an inline TryEnsureRecord
+        // + combatClassOverride assign — SetBaseClass is byte-identical).
+        Followers::SetBaseClass(id, def->stance);
 
         RecomputeSkills(a_actor, st, /*log*/ true);
         spdlog::info("[prog] {} class {} -> \"{}\" ({:08X}) — skills auto-scaled to level {} "
