@@ -2468,7 +2468,7 @@ namespace MFO::ProgAllocator {
     //         f32 cumulative; then u32 battlesSinceLevelUp, u32 battlesOffClass,
     //         u8 offClassPool, u8 hmsCaptured
     //     v6 §HMS additions (after hmsCaptured): u8 hmsZeroAwardStreak,
-    //         f32 hmsGrantRemainder[3]; + flags bit 0x20 = fixedStat
+    //         f32 hmsGrantRemainder[3], f32 hmsAwardAccum; + flags bit 0x20 = fixedStat
     //     v1 ONLY: f32 unspentPerk        (legacy stored pool — read + DISCARDED;
     //                                      §17 derives the pool instead)
     //     v2: u16 manualBaselineLevel | u16 manualPointsApplied
@@ -2636,8 +2636,9 @@ namespace MFO::ProgAllocator {
             // (f32 each — v6 DROPS hmsTarget, always max(baseline,baseline+cumul),
             // recomputed on load); then the 2 battle counters (u32), the off-class
             // pool (u8), the captured flag (u8), and the v6 Phase-3 additions:
-            // hmsZeroAwardStreak (u8) then hmsGrantRemainder (f32×3). fixedStat
-            // rides flags bit 0x20 above — NOT a byte here. Read GATED on version
+            // hmsZeroAwardStreak (u8), hmsGrantRemainder (f32×3), hmsAwardAccum
+            // (f32). fixedStat rides flags bit 0x20 above — NOT a byte here.
+            // Read GATED on version
             // in CoSaveLoad (v6 layout / v5 keeps the old 4-f32/pool reader).
             // Nothing above this moved (byte-identical for v1–v4 saves).
             for (int p = 0; p < 3; ++p) {
@@ -2652,6 +2653,7 @@ namespace MFO::ProgAllocator {
             a_intfc->WriteRecordData(st.hmsZeroAwardStreak);            // v6
             for (int p = 0; p < 3; ++p)
                 a_intfc->WriteRecordData(st.hmsGrantRemainder[p]);      // v6
+            a_intfc->WriteRecordData(st.hmsAwardAccum);                 // v6 (detection tally, serialized)
             ++written;
         }
         spdlog::info("[cosave] saved {} progression record(s), schema v{}{}", written, kProgVersion,
@@ -2912,7 +2914,7 @@ namespace MFO::ProgAllocator {
             // float (a corrupt read must never poison SetBaseActorValue).
             //   v6: per pool baseline,skew,cumulative (3 f32; target DROPPED,
             //       recomputed); then counters+captured; then hmsZeroAwardStreak
-            //       (u8) + hmsGrantRemainder (f32×3).
+            //       (u8) + hmsGrantRemainder (f32×3) + hmsAwardAccum (f32).
             //   v5: per pool baseline,TARGET,skew,cumulative (4 f32) — the stored
             //       target is READ to stay byte-aligned then DISCARDED + recomputed;
             //       the v6 fields default (fixedStat already read false via flags,
@@ -2960,8 +2962,23 @@ namespace MFO::ProgAllocator {
                     for (int p = 0; p < 3; ++p) {
                         float r = 0.0f;
                         if (!a_intfc->ReadRecordData(r)) return;
-                        st.hmsGrantRemainder[p] = std::isfinite(r) ? r : 0.0f;
+                        // contract is 0 <= frac < 1 — reject finite-but-out-of-range
+                        // corruption (a huge value would slam SetBaseActorValue).
+                        st.hmsGrantRemainder[p] =
+                            (std::isfinite(r) && r >= 0.0f && r < 1.0f) ? r : 0.0f;
                     }
+                    float acc = 0.0f;   // detection tally (serialized in v6)
+                    if (!a_intfc->ReadRecordData(acc)) return;
+                    st.hmsAwardAccum = (std::isfinite(acc) && acc >= 0.0f) ? acc : 0.0f;
+                }
+                // A poisoned HMS payload forces a re-ADOPT (hmsCaptured=false); it
+                // must ALSO restart detection so a stale flags-bit 0x20 (fixedStat)
+                // or serialized streak/tally can't linger against a freshly
+                // re-adopted baseline. Applied AFTER the v6 reads so it wins.
+                if (!hmsOk) {
+                    st.fixedStat          = false;
+                    st.hmsZeroAwardStreak = 0;
+                    st.hmsAwardAccum      = 0.0f;
                 }
                 // a_version == 5: fixedStat=false (flags), streak=0, remainder={0}
                 // (struct defaults) — a v5 follower begins fresh 0-award detection.

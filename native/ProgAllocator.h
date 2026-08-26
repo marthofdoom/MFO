@@ -223,6 +223,14 @@ namespace MFO::ProgAllocator {
         bool          fixedStat{ false };
         std::uint8_t  hmsZeroAwardStreak{ 0 };
         float         hmsGrantRemainder[3]{ 0.0f, 0.0f, 0.0f };
+        // §HMS fixed-stat detection tally (SERIALIZED, PRGN v6): the engine HMS
+        // award measured for this follower since the last player level-up.
+        // RecomputeHMS adds each measured (positive) budget; PollWork reads it at
+        // the next player level-up to decide 0-award, then zeroes it. MUST be
+        // serialized (was runtime-only) — the streak it feeds is serialized, so a
+        // save/load BETWEEN two player level-ups would otherwise wipe the award
+        // evidence and falsely flag a LEVELING follower fixedStat within 2 levels.
+        float         hmsAwardAccum{ 0.0f };
 
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)
@@ -231,12 +239,6 @@ namespace MFO::ProgAllocator {
         bool hmsInBattle{ false };
         bool hmsBattleOffCounted{ false };
         std::chrono::steady_clock::time_point hmsLastCombat{};
-        // §HMS fixed-stat detection tally (RUNTIME-ONLY, never serialized): the
-        // engine HMS award measured for this follower since the last player
-        // level-up. RecomputeHMS adds each measured (positive) budget; PollWork
-        // reads it at the next player level-up to decide 0-award, then zeroes it.
-        // Resets to 0 on load (the streak byte carries detection across saves).
-        float hmsAwardAccum{ 0.0f };
 
         // runtime-only, never serialized: has this session's guarded reapply
         // (P3) run for this follower yet? Reset by ClearAll; the poll retries

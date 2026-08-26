@@ -34,7 +34,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:7-90`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:7-90`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:562-622` | `StopPump()` MUST run first (`:568`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:302-322`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -762,7 +762,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   **v5-ONLY hmsTarget f32 (dropped in v6 — recomputed)**, hmsSkew f32,
   hmsCumulative f32}, then battlesSinceLevelUp u32, battlesOffClass u32,
   offClassPool u8, hmsCaptured u8, **[v6: hmsZeroAwardStreak u8, hmsGrantRemainder
-  f32×3]**]}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
+  f32×3, hmsAwardAccum f32]**]}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
   behind `if(version>=N)` (**v6 header + block additions gated `if(version>=6)`;
   v5 keeps the old 4-f32/pool reader, reads+discards target, recomputes it; all
   floats finite-guarded, streak clamped 0..2**). The HMS block is read
@@ -842,7 +842,8 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   award → 0 budget → never grows. Phase 3 gives it progression, gated by the SAME
   `Config::g_hmsRedistribute` master switch (no new MCM/Config). Three parts, all in
   `PollWork` + `RecomputeHMS`: **(1) DETECT** (active party only, on a player level-up):
-  `RecomputeHMS` tallies each MEASURED engine award into runtime `ProgState::hmsAwardAccum`;
+  `RecomputeHMS` tallies each MEASURED engine award into `ProgState::hmsAwardAccum` (SERIALIZED
+  in v6 — a save between two player level-ups must not wipe the award evidence);
   `PollWork` reads it at the next player level-up — 0 award ⇒ `++hmsZeroAwardStreak`,
   at **2** sets `fixedStat`; any award > 0 resets the streak AND clears `fixedStat`
   (a leveling follower). A single quiet level never flags. **(2) PLAYER RATE:** on a

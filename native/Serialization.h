@@ -71,11 +71,14 @@ namespace MFO {
     //            RecomputeHMS :694/:789 and Enroll), so it is recomputed on load,
     //            never stored. v6 per pool writes baseline,skew,cumulative (3 f32,
     //            was 4). AFTER the captured(u8), v6 APPENDS hmsZeroAwardStreak(u8,
-    //            the 0-award detector, clamped 0..2) then hmsGrantRemainder(f32×3,
-    //            fractional per-pool grant carried across levels). The v5 READER
+    //            the 0-award detector, clamped 0..2), hmsGrantRemainder(f32×3,
+    //            fractional per-pool grant carried across levels, clamped 0<=f<1),
+    //            and hmsAwardAccum(f32, the detection tally — SERIALIZED so a
+    //            save/load between two player level-ups can't wipe the award
+    //            evidence and falsely flag a leveling follower). The v5 READER
     //            is KEPT (INVARIANT #12): it reads the OLD 4-f32/pool layout,
     //            DISCARDS the stored target, recomputes it, and defaults the new
-    //            fields (fixedStat=false, streak=0, remainder={0,0,0}).
+    //            fields (fixedStat=false, streak=0, remainder={0,0,0}, accum=0).
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
     inline constexpr std::uint32_t kProgVersion    = 6;   // v6: §HMS fixed-stat grant (drop target, add streak/remainder/playerHms)
 
