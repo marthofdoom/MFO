@@ -2264,19 +2264,12 @@ namespace MFO::Logistics {
 
         // Is a_baseID part of a_followerID's snapshotted stock? ShedOffRoleWeapon's
         // one guard against ever giving away a follower's own gear.
-        // Case-insensitive substring (no <cctype> dependency).
-        bool NameContainsCI(const char* a_hay, const char* a_needle) {
-            if (!a_hay || !a_needle || !*a_needle) return false;
-            auto lc = [](char c) -> char { return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c; };
-            const std::string hay = a_hay, ndl = a_needle;
-            if (ndl.size() > hay.size()) return false;
-            for (std::size_t i = 0; i + ndl.size() <= hay.size(); ++i) {
-                bool m = true;
-                for (std::size_t j = 0; j < ndl.size(); ++j)
-                    if (lc(hay[i + j]) != lc(ndl[j])) { m = false; break; }
-                if (m) return true;
-            }
-            return false;
+        // A shared vanilla master -- common items live here, a follower's unique gear does not.
+        bool IsVanillaMaster(RE::TESFile* a_file) {
+            if (!a_file) return true;
+            const std::string_view n = a_file->GetFilename();
+            return n == "Skyrim.esm" || n == "Update.esm" || n == "Dawnguard.esm" ||
+                   n == "HearthFires.esm" || n == "Dragonborn.esm";
         }
 
         bool IsStockGear(RE::FormID a_followerID, RE::FormID a_baseID) {
@@ -2285,22 +2278,26 @@ namespace MFO::Logistics {
                 const auto it = g_stockGear.find(a_followerID);
                 if (it == g_stockGear.end() || it->second.count(a_baseID) == 0) return false;
             }
-            // In the snapshot -- but PROTECT it only if it is a SIGNATURE/unique piece,
-            // not a standard common item (marth: Auri's plain Iron Daggers should sell;
-            // Jesper's Armor / a named or enchanted unique stays). Signature =
-            // artifact/quest, OR enchanted, OR the item's name carries the follower's name.
+            // In the snapshot -- but PROTECT it only if it is a SIGNATURE/unique piece, not
+            // a standard common item (marth: Auri's plain Iron Daggers should sell; her Bow /
+            // Jesper's Armor stay). Signature = artifact/quest, OR enchanted, OR the item
+            // comes from the follower's OWN plugin (marth: a follower's unique gear lives in
+            // the follower's ESP; common items come from Skyrim.esm / the DLC masters).
             auto* form = RE::TESForm::LookupByID(a_baseID);
             if (!form) return true;                          // unresolved -> conservative keep
             if (Catalog::IsExcluded(a_baseID)) return true;  // artifact / quest
             if (auto* w = form->As<RE::TESObjectWEAP>(); w && w->formEnchanting) return true;
             if (auto* a = form->As<RE::TESObjectARMO>(); a && a->formEnchanting) return true;
-            if (auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_followerID)) {
-                const std::string folName = fol->GetName() ? fol->GetName() : "";
-                const std::size_t sp = folName.find(' ');
-                const std::string tok = (sp == std::string::npos) ? folName : folName.substr(0, sp);
-                if (tok.size() >= 3 && NameContainsCI(form->GetName(), tok.c_str())) return true;
-            }
-            return false;   // standard common starting item -> sellable / sheddable
+            // SOURCE MATCH: item's originating plugin == the follower base-NPC's plugin, and
+            // that plugin is not a shared vanilla master (so a vanilla follower's common gear
+            // still sells, while a modded follower's dedicated-ESP gear is kept).
+            auto* fol      = RE::TESForm::LookupByID<RE::Actor>(a_followerID);
+            auto* npc      = fol ? fol->GetActorBase() : nullptr;
+            auto* itemFile = form->GetFile(0);
+            auto* npcFile  = npc ? npc->GetFile(0) : nullptr;
+            if (itemFile && npcFile && itemFile == npcFile && !IsVanillaMaster(itemFile))
+                return true;   // from the follower's OWN mod -> signature
+            return false;      // standard common item -> sellable / sheddable
         }
 
         // EvictOldest for the Claim map -- oldest by first-seen. The FormID/time
