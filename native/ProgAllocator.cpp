@@ -81,6 +81,13 @@ namespace MFO::ProgAllocator {
         // discipline). Identity = the class-def FLST FormID.
         std::vector<ClassDef> g_classes;
 
+        // v1.1 GENERIC add-on manifest model (host-side, add-on-agnostic). Built
+        // once at Init ALONGSIDE the progression parse above, then frozen. Parses
+        // but is NOT yet consumed — the progression path still drives behavior;
+        // later phases route consumers onto this general model. Exposed via
+        // Progression::Manifests() (defined at the foot of this TU).
+        std::vector<Progression::AddonManifest> g_manifests;
+
         // ── the poll (level-with-player, §6/§15) ────────────────────────────
         // A MainThread::Post self-chain (the ProgProbe DelayedTick shape).
         // Generation-guarded: revert/reload bumps g_pollGen so a stale chain
@@ -1618,7 +1625,8 @@ namespace MFO::ProgAllocator {
                 auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
                 if (!manifest) continue;
                 for (auto* form : manifest->forms) {
-                    if (!form || form == Forms::g_addonSentinel) continue;
+                    // Skip the self-declaration keyword (manifest entry[0]) generically.
+                    if (!form || form->Is(RE::FormType::Keyword)) continue;
                     auto* glob = form->As<RE::TESGlobal>();
                     if (!glob) continue;   // FLSTs (classes) are Init's job, not economy
                     const int idx = AssignEconomyGlob(glob);
@@ -1730,29 +1738,21 @@ namespace MFO::ProgAllocator {
         // a crash. Returns false when the list declares no usable skills.
         bool ParseClassDef(RE::BGSListForm* a_list, ClassDef& a_out) {
             a_out.id = a_list->GetFormID();
-            bool stanceSet = false;   // author diagnostic: warn on a duplicate _Stance
+            // GLOBs are collected in FLST ORDER and interpreted POSITIONALLY — the
+            // engine DISCARDS editor-ids for TESGlobal at runtime (GetFormEditorID()
+            // returns "", the Phase 2 root cause), so the old "_Stance" suffix match
+            // never fired and stance always parsed 0. Order is the reliable carrier:
+            //   glob[0] = combat stance (0-3)
+            //   glob[1..3] = HMS weights H,M,S   (v1.1 class ratios as data)
+            //   glob[4] = primary pool 0=H/1=M/2=S
+            std::vector<RE::TESGlobal*> globs;
             for (auto* form : a_list->forms) {
                 if (!form) continue;
                 if (auto* msg = form->As<RE::BGSMessage>()) {
                     const char* full = msg->GetFullName();
                     if (full && *full && a_out.name.empty()) a_out.name = full;
                 } else if (auto* glob = form->As<RE::TESGlobal>()) {
-                    if (EdidEndsWith(glob, "_Stance")) {
-                        if (stanceSet)
-                            spdlog::warn("[prog] class-def {:08X}: duplicate _Stance GLOB "
-                                         "{:08X} — overriding the earlier stance value",
-                                         a_list->GetFormID(), form->GetFormID());
-                        a_out.stance = static_cast<std::uint8_t>(
-                            std::clamp(static_cast<int>(glob->value), 0, 3));
-                        stanceSet = true;
-                    } else {
-                        // A GLOB whose edid isn't the _Stance declaration was
-                        // consumed silently before — surface it (an author's
-                        // mis-named stance global would just vanish).
-                        spdlog::warn("[prog] class-def {:08X}: GLOB {:08X} edid does not end "
-                                     "\"_Stance\" — ignored (not a stance declaration)",
-                                     a_list->GetFormID(), form->GetFormID());
-                    }
+                    globs.push_back(glob);
                 } else if (form->Is(RE::FormType::Perk)) {
                     a_out.perkPriority.push_back(form->GetFormID());
                 } else if (const auto av = MapSkillAvif(form); av != RE::ActorValue::kNone) {
@@ -1763,6 +1763,18 @@ namespace MFO::ProgAllocator {
                                  a_list->GetFormID(), form->GetFormID());
                 }
             }
+            if (!globs.empty())
+                a_out.stance = static_cast<std::uint8_t>(
+                    std::clamp(static_cast<int>(globs[0]->value), 0, 3));
+            if (globs.size() >= 4) {
+                a_out.hmsWeights[0] = globs[1]->value;
+                a_out.hmsWeights[1] = globs[2]->value;
+                a_out.hmsWeights[2] = globs[3]->value;
+                a_out.hmsWeightsSet  = true;
+            }
+            if (globs.size() >= 5)
+                a_out.primaryPool = static_cast<std::uint8_t>(
+                    std::clamp(static_cast<int>(globs[4]->value), 0, 2));
             if (a_out.name.empty())
                 a_out.name = std::format("Class {:08X}", a_out.id);
             return !a_out.skills.empty();
@@ -1875,6 +1887,10 @@ namespace MFO::ProgAllocator {
 
     const std::vector<ClassDef>& Classes() { return g_classes; }
 
+    // Forwarder so Progression::Manifests() (defined at the foot of this TU, in a
+    // different namespace) can reach the anon-namespace store.
+    const std::vector<Progression::AddonManifest>& ManifestsRef() { return g_manifests; }
+
     const ClassDef* FindClassDef(RE::FormID a_id) {
         if (a_id == 0) return nullptr;
         for (const auto& def : g_classes)
@@ -1883,6 +1899,61 @@ namespace MFO::ProgAllocator {
     }
 
     bool Active() { return g_ready; }
+
+    // v1.1: populate the GENERIC add-on manifest model (Progression::AddonManifest)
+    // from the just-parsed progression data (g_classes + g_econ) — one manifest per
+    // registered add-on. Add-on-agnostic: it copies DATA, no progression concept
+    // leaks into a signature. PARSES only; nothing consumes g_manifests yet. Called
+    // at the foot of Init, after classes + economy are parsed. Main-thread (§5).
+    void BuildGenericManifests() {
+        g_manifests.clear();
+        for (const auto& addon : Progression::Addons()) {
+            Progression::AddonManifest man;
+            man.manifestID  = addon.manifestID;
+            man.plugin      = addon.plugin;
+            man.addonType   = addon.keywordEdid;   // self-declared type (join keyword)
+            man.displayName = addon.plugin;        // TODO(Phase 5): richer header carrier
+            // Economy + allocation mirror the live g_econ (whatever it resolved to).
+            man.economy.levelsPerPerkPoint        = g_econ.levelsPerPerkPoint;
+            man.economy.skillPointsPerLevel       = g_econ.skillPointsPerLevel;
+            man.economy.manualSkillPointsPerLevel = g_econ.manualSkillPtsPerLevel;
+            man.economy.sharedGrowthDivisor       = g_econ.sharedGrowthDivisor;
+            man.economy.respecRapportCost         = g_econ.respecRapportCost;
+            man.economy.skillCap                  = g_econ.skillCap;
+            man.economy.cancelEngineAwards        = g_econ.cancelEngineAwards;
+            // Classes: re-walk this add-on's classes list, pulling the ALREADY-parsed
+            // ClassDef (with hmsWeights) via FindClassDef — no re-parse, no duplication.
+            auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
+            if (manifest) {
+                for (auto* form : manifest->forms) {
+                    auto* classesList = form ? form->As<RE::BGSListForm>() : nullptr;
+                    if (!classesList) continue;   // keyword / economy GLOBs
+                    for (auto* cf : classesList->forms) {
+                        auto* defList = cf ? cf->As<RE::BGSListForm>() : nullptr;
+                        const ClassDef* def = defList ? FindClassDef(defList->GetFormID()) : nullptr;
+                        if (!def) continue;
+                        Progression::ManifestClass mc;
+                        mc.id            = def->id;
+                        mc.name          = def->name;
+                        mc.stance        = def->stance;
+                        mc.skills        = def->skills;
+                        mc.perkPriority  = def->perkPriority;
+                        mc.hmsWeights[0] = def->hmsWeights[0];
+                        mc.hmsWeights[1] = def->hmsWeights[1];
+                        mc.hmsWeights[2] = def->hmsWeights[2];
+                        mc.primaryPool   = def->primaryPool;
+                        mc.hmsWeightsSet = def->hmsWeightsSet;
+                        man.classes.push_back(std::move(mc));
+                    }
+                    break;   // one classes list per manifest (Init warns on extras)
+                }
+            }
+            spdlog::info("[prog] generic manifest {:08X} (\"{}\", type \"{}\"): {} class(es) "
+                         "modeled [parsed, unused]", man.manifestID, man.plugin,
+                         man.addonType, man.classes.size());
+            g_manifests.push_back(std::move(man));
+        }
+    }
 
     void Init() {
         if (!Progression::Detected()) {
@@ -1919,7 +1990,8 @@ namespace MFO::ProgAllocator {
             if (!manifest) continue;   // enumerated moments ago; belt and braces
             RE::BGSListForm* classesList = nullptr;
             for (auto* form : manifest->forms) {
-                if (!form || form == Forms::g_addonSentinel) continue;
+                // Skip the self-declaration keyword (manifest entry[0]) generically.
+                if (!form || form->Is(RE::FormType::Keyword)) continue;
                 if (auto* flst = form->As<RE::BGSListForm>()) {
                     if (!classesList) classesList = flst;
                     else spdlog::warn("[prog] manifest {:08X}: extra FLST {:08X} ignored "
@@ -1969,6 +2041,10 @@ namespace MFO::ProgAllocator {
                      g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
                      g_econ.respecRapportCost, g_econ.skillCap, g_classes.size(),
                      g_devCmd ? "resolved" : "MISSING (harness cmds default to 0)");
+
+        // v1.1: mirror everything just parsed into the GENERIC manifest model
+        // (parsed, unused this phase — see BuildGenericManifests).
+        BuildGenericManifests();
     }
 
     void OnPostLoad() {
@@ -3085,4 +3161,11 @@ namespace MFO::ProgAllocator {
         }
     }
 
+}
+
+// v1.1: the GENERIC add-on manifest model is host-side (Progression namespace),
+// but is populated in this TU where the progression data is parsed. Defined here
+// (not in Progression.cpp) so it reads the store directly. Parsed, unused yet.
+namespace MFO::Progression {
+    const std::vector<AddonManifest>& Manifests() { return MFO::ProgAllocator::ManifestsRef(); }
 }

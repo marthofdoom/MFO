@@ -15,25 +15,30 @@ That split is the whole point: the engine is shared; the addon is data.
 
 ---
 
-## 1. How registration works
+## 1. How registration works (v1.1 — self-declaration, no MFO.esp master)
 
-`MFO.esp` ships one sentinel keyword:
-
-| Record | Editor ID | Type |
-|---|---|---|
-| Registration sentinel | `MFO_AddonManifest` | `KYWD` |
-
-An addon announces itself by shipping **exactly one `FLST` (FormList)** — its
-**manifest** — whose **first entry is that sentinel keyword**. At game load
-(`kDataLoaded`), MFO walks every `FLST` in the merged load order and treats each
-one whose `[0]` element is `MFO_AddonManifest` as an addon manifest. Multiple
-addons can register — each owns its own manifest `FLST`; there is **no shared
+An addon announces itself by shipping **its OWN keyword** (`KYWD`) whose
+**editor-id ends with `_MFOAddonManifest`** (e.g. `MyAddon_MFOAddonManifest`),
+and **exactly one `FLST` (FormList)** — its **manifest** — whose **first entry
+is that keyword**. At game load (`kDataLoaded`), MFO walks every `FLST` in the
+merged load order and treats each one whose `[0]` element is a keyword with that
+editor-id suffix as an addon manifest. Multiple addons can register — each owns
+its own manifest `FLST` **and its own manifest keyword**; there is **no shared
 list to inject into** (that would collide), and **no plugin-name lookup** (your
 plugin can be named anything).
 
-Because the manifest references a form defined in `MFO.esp`, **your plugin must
-master `MFO.esp`** (add it as a master). It will also master `Skyrim.esm` for
-the vanilla skill (`AVIF`) forms.
+Because the manifest references **only your own forms**, **your plugin needs NO
+master on `MFO.esp`** — it masters just `Skyrim.esm` (for the vanilla skill
+`AVIF` forms). This is the v1.1 **Vortex fix**: the old design led the manifest
+with a keyword shipped *inside `MFO.esp`*, forcing an ESL→ESP master cycle Vortex
+choked on. That sentinel is **retired**; ship your own `_MFOAddonManifest`
+keyword instead.
+
+> **Why a keyword (not the FLST's own editor-id)?** The engine keeps editor-ids
+> at runtime only for a few form types — **keywords do; `GLOB` and `FLST` do
+> not** (their `GetFormEditorID()` returns `""`). So the self-declaration must
+> ride a keyword, and any editor-id-suffix match the DLL relies on (this join
+> key) is only reliable on keywords.
 
 ---
 
@@ -44,22 +49,22 @@ After the sentinel, the manifest lists your declaration records **in any order**
 
 ```
 Manifest FLST (e.g. "MyAddon_Manifest"):
-  [0] MFO_AddonManifest      (KYWD)  ← REQUIRED, must be first
-  [ ] <your classes-list FLST>       ← exactly one FLST → your classes
-  [ ] <economy GLOB>                 ← zero or more GLOBs → economy knobs
+  [0] MyAddon_MFOAddonManifest (KYWD)  ← REQUIRED, must be first (your OWN keyword)
+  [ ] <your classes-list FLST>         ← exactly one FLST → your classes
+  [ ] <economy GLOB>                   ← zero or more GLOBs → economy knobs
   [ ] <economy GLOB>
   ...
 ```
 
-- **Entry `[0]` MUST be the `MFO_AddonManifest` keyword.** If it isn't, MFO
-  ignores the FormList.
+- **Entry `[0]` MUST be a keyword whose editor-id ends `_MFOAddonManifest`.** If
+  it isn't, MFO ignores the FormList.
 - **Exactly one `FLST` entry** (besides `[0]`) is read as your **classes list**
   (§3). If you declare no classes the addon is inert.
 - **Every `GLOB` entry** is read as an **economy knob** (§4), matched by its
   editor-id suffix. Unrecognized suffixes are ignored (logged).
 
-The reference manifest `MFOP_AddonManifest` has 9 entries: sentinel + one
-classes-list FLST + 7 economy GLOBs.
+The reference manifest `MFOP_AddonManifest` has 9 entries: the
+`MFOP_MFOAddonManifest` keyword + one classes-list FLST + 7 economy GLOBs.
 
 ---
 
@@ -88,7 +93,7 @@ Each class is **one `FLST`** whose entries declare the class, **in any order**
 | `MESG` | The class **display name** = the MESG's `FULL` (title) field | Yes (1) |
 | `AVIF` | A **skill** the class scales. **Order = weight** (see below) | ≥1 |
 | `PERK` | Auto-pick **priority** perks, tried first by the auto-picker | Optional |
-| `GLOB` | The **combat stance**: editor-id must end `_Stance`, value 0–3 | Optional (1) |
+| `GLOB` | Combat **stance** + **HMS ratios** — **POSITIONAL** (see below) | Optional |
 
 - **Skill weight is positional.** List the `AVIF` skill forms most-important
   first. MFO applies a triangular weight over the (sibling-pruned) list — with
@@ -98,26 +103,39 @@ Each class is **one `FLST`** whose entries declare the class, **in any order**
   `0x0000044C`, etc.); MFO maps them through the running `ActorValueList`, so an
   overhaul that moves a skill still resolves, and an unmappable entry is skipped
   with a warning.
-- **Stance** (`_Stance` GLOB) mirrors MFO's combat-class override:
-  `0` = none/auto, `1` = Melee, `2` = Ranged, `3` = Cast/Mage. Omit for `0`.
+- **The `GLOB` entries are POSITIONAL, in this order** (v1.1 — the engine
+  discards `GLOB` editor-ids at runtime, so order, not the `_Stance` suffix,
+  identifies them):
+  - `[0]` **combat stance** `0`=none/auto, `1`=Melee, `2`=Ranged, `3`=Cast/Mage.
+  - `[1] [2] [3]` **HMS weights** Health, Magicka, Stamina (raw weights — MFO
+    normalizes; the reference ships whole percentages, e.g. Mage `15 / 80 / 5`).
+  - `[4]` **primary pool** `0`=Health, `1`=Magicka, `2`=Stamina.
+  - Supply either just the stance GLOB, or all five. HMS weights are add-on
+    DATA — MFO holds **no default**; omit them and the class contributes no HMS
+    ratio of its own.
 - **Perk priority** is optional and typically shipped **empty** — a plugin that
   only masters `Skyrim.esm` can't name an overhaul's perks. MFO's auto-picker
   falls back to a name-agnostic, weight-driven pick that works under any
   overhaul. An overhaul-specific patch can fill these in xEdit later.
 
 The reference example ships three class-def FLSTs (`MFOP_ClassDef_Melee/Ranged/
-Mage`), each = 1 MESG name + its AVIF skills + an empty PERK list + a `_Stance`
-GLOB (1/2/3).
+Mage`), each = 1 MESG name + its AVIF skills + an empty PERK list + 5 positional
+GLOBs (stance + 3 HMS weights + primary pool).
 
 ---
 
 ## 4. Declaring economy
 
 Every economy value is a **`GLOB`** listed directly in the manifest, matched by
-its **editor-id SUFFIX** (case-sensitive). Editor IDs persist at runtime for
-globals, so this is stable and console-addressable. MFO reads each global's
-**record default** at load (not any save-persisted value). **A knob you omit
-falls back to MFO's default** — declare only what you want to change.
+its **editor-id SUFFIX** (case-sensitive). MFO reads each global's **record
+default** at load (not any save-persisted value). **A knob you omit falls back to
+MFO's default** — declare only what you want to change.
+
+> **Runtime note (v1.1):** the engine discards `GLOB` editor-ids at runtime, so
+> the suffix match here is not yet reliable in all modlists — the shipped MCM
+> also seeds these values by INI. A future phase moves economy onto an
+> edid-independent carrier (as the class-def GLOBs already are, §3.2). Author
+> the suffixes as documented; MFO's defaults hold meanwhile.
 
 | Editor-id suffix | Meaning | Default |
 |---|---|---|
@@ -139,12 +157,13 @@ each defaulted knob — check `MFO.log` to confirm your values took.
 
 ## 5. Plugin requirements & gotchas
 
-- **Masters:** `Skyrim.esm` (skill AVIFs) **and** `MFO.esp` (the sentinel). If
-  you reference nothing else, those two suffice. An ESL-flagged plugin is fine
-  (the reference is one) — keep own records in the ESL-legal local range and
-  remember own records sit at master-index = your master count.
-- **Load order:** your addon must load **after `MFO.esp`** (it masters it, so
-  this is enforced).
+- **Masters:** `Skyrim.esm` only (skill AVIFs). v1.1: you ship your OWN manifest
+  keyword, so **no `MFO.esp` master is needed** (that's the Vortex fix). An
+  ESL-flagged plugin is fine (the reference is one) — keep own records in the
+  ESL-legal local range and remember own records sit at master-index = your
+  master count (with a single master, that is `0x01`).
+- **Load order:** MFO detects your addon wherever it sits in the merged load
+  order — there is no master edge to `MFO.esp` to enforce an order.
 - **Record defaults, not values:** MFO reads `GLOB` record defaults at
   `kDataLoaded`. Setting a global's value from a script/console at runtime does
   **not** change the economy for that session — edit the record default.
@@ -174,11 +193,13 @@ The shipped reference addon, generated by `MFO_GenerateESP.py`. Its records
 
 | Editor ID | Type | Role |
 |---|---|---|
-| `MFOP_AddonManifest` | `FLST` | manifest — `[0]`=`MFO_AddonManifest`, `[1]`=`MFOP_Classes`, `[2..]`=economy GLOBs |
+| `MFOP_MFOAddonManifest` | `KYWD` | the self-declaration join key (manifest `[0]`); edid ends `_MFOAddonManifest` |
+| `MFOP_AddonManifest` | `FLST` | manifest — `[0]`=`MFOP_MFOAddonManifest` keyword, `[1]`=`MFOP_Classes`, `[2..]`=economy GLOBs |
 | `MFOP_Classes` | `FLST` | classes list → the 3 class-def FLSTs |
-| `MFOP_ClassDef_Melee/Ranged/Mage` | `FLST` | class defs (MESG + AVIF skills + PERK + `_Stance`) |
+| `MFOP_ClassDef_Melee/Ranged/Mage` | `FLST` | class defs (MESG + AVIF skills + PERK + 5 positional GLOBs: stance + 3 HMS weights + primary) |
 | `MFOP_ClassName_Melee/Ranged/Mage` | `MESG` | class display names (via `FULL`) |
-| `MFOP_ClassMelee/Ranged/Mage_Stance` | `GLOB` | `_Stance` = 1 / 2 / 3 |
+| `MFOP_ClassMelee/Ranged/Mage_Stance` | `GLOB` | stance = 1 / 2 / 3 (class-def GLOB `[0]`) |
+| `MFOP_ClassDef_*_HmsWeightH/M/S`, `_HmsPrimary` | `GLOB` | HMS ratios as data (class-def GLOBs `[1..4]`) |
 | `MFOP_ClassSkills_*` | `FLST` | (per-class AVIF skill lists, referenced by the class-defs) |
 | `MFOP_ClassPerks_*` | `FLST` | (per-class PERK priority — shipped empty) |
 | `MFOP_LevelsPerPerkPoint` | `GLOB` | economy `_LevelsPerPerkPoint` = 2 |
@@ -189,10 +210,11 @@ The shipped reference addon, generated by `MFO_GenerateESP.py`. Its records
 | `MFOP_SkillCap` | `GLOB` | economy `_SkillCap` = 100 |
 | `MFOP_DevCmd` | `GLOB` | economy `_DevCmd` (dev-only) |
 
-To build your own: master `MFO.esp` + `Skyrim.esm`, create the MESG names, the
-`_Stance` globals, the class-def FLSTs, the classes-list FLST, and your economy
-globals; then a manifest FLST leading with `MFO_AddonManifest`, followed by the
-classes-list and your economy globals. Load in, and confirm the
+To build your own: master `Skyrim.esm`, create your `_MFOAddonManifest` keyword,
+the MESG names, the class-def GLOBs (stance + HMS), the class-def FLSTs, the
+classes-list FLST, and your economy globals; then a manifest FLST leading with
+your keyword, followed by the classes-list and your economy globals. Load in, and
+confirm the
 `[prog] addon manifest … registered`, `[prog] class "…" registered`, and
 `[prog] economy: … (from …)` lines in `MFO.log`.
 

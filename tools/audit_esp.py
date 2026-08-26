@@ -35,12 +35,13 @@ OWN_PREFIX = 0x01
 ESL_LO, ESL_HI = 0x800, 0xFFF
 
 # Expected master list per plugin (ORDER = the master index each own/cross ref
-# assumes). §18.6: MFO_Progression.esl masters MFO.esp so its manifest FLST can
-# point at MFO.esp's addon sentinel keyword — so its own records move to master
-# index 0x02. The own-file prefix each plugin must use = len(its masters).
+# assumes). v1.1: MFO_Progression.esl masters ONLY Skyrim.esm — its manifest now
+# self-declares via its OWN keyword (edid suffix "_MFOAddonManifest"), so there
+# is NO MFO.esp reference (the Vortex fix) and own records use master index 0x01.
+# The own-file prefix each plugin must use = len(its masters).
 EXPECTED_MASTERS = {
     "MFO.esp":              ["Skyrim.esm"],
-    "MFO_Progression.esl":  ["Skyrim.esm", "MFO.esp"],
+    "MFO_Progression.esl":  ["Skyrim.esm"],
 }
 
 # What native/ hardcodes. Keep in lockstep with MFO_GenerateESP.py AND with the
@@ -105,9 +106,12 @@ PROG_REQUIRED = {
     0x819: ('FLST', "MFOP_ClassPerks_Ranged",   ['EDID']),
     0x81A: ('FLST', "MFOP_ClassPerks_Mage",     ['EDID']),
     0x820: ('KYWD', "MFOP_Enrolled",            ['EDID']),
-    # §18.6 the addon MANIFEST the DLL enumerates (entry[0]=MFO.esp sentinel,
-    # entry[1]=the classes-list FLST, entries[2..]=the economy GLOBs — Stage 3).
+    # §18.6 the addon MANIFEST the DLL enumerates (entry[0]=self-declaration
+    # keyword, entry[1]=the classes-list FLST, entries[2..]=the economy GLOBs).
     0x821: ('FLST', "MFOP_AddonManifest",       ['EDID', 'LNAM']),
+    # v1.1 self-declaration keyword — the manifest's own join key (edid suffix
+    # "_MFOAddonManifest"); the DLL matches it by that suffix at runtime.
+    0x822: ('KYWD', "MFOP_MFOAddonManifest",    ['EDID']),
     # §18.6 Stage 2 — N-declared classes: MESG display names, _Stance mirrors,
     # class-def FLSTs, and the classes-list FLST the manifest points at.
     0x830: ('MESG', "MFOP_ClassName_Melee",     ['EDID', 'FULL']),
@@ -116,6 +120,21 @@ PROG_REQUIRED = {
     0x840: ('GLOB', "MFOP_ClassMelee_Stance",   ['EDID', 'FNAM', 'FLTV']),
     0x841: ('GLOB', "MFOP_ClassRanged_Stance",  ['EDID', 'FNAM', 'FLTV']),
     0x842: ('GLOB', "MFOP_ClassMage_Stance",    ['EDID', 'FNAM', 'FLTV']),
+    # v1.1 §HMS class ratios as DATA — 4 POSITIONAL GLOBs per class-def (H,M,S,
+    # primary), appended after _Stance in the class-def FLST. Melee 0x843-0x846,
+    # Ranged 0x847-0x84A, Mage 0x84B-0x84E.
+    0x843: ('GLOB', "MFOP_ClassDef_Melee_HmsWeightH",  ['EDID', 'FNAM', 'FLTV']),
+    0x844: ('GLOB', "MFOP_ClassDef_Melee_HmsWeightM",  ['EDID', 'FNAM', 'FLTV']),
+    0x845: ('GLOB', "MFOP_ClassDef_Melee_HmsWeightS",  ['EDID', 'FNAM', 'FLTV']),
+    0x846: ('GLOB', "MFOP_ClassDef_Melee_HmsPrimary",  ['EDID', 'FNAM', 'FLTV']),
+    0x847: ('GLOB', "MFOP_ClassDef_Ranged_HmsWeightH", ['EDID', 'FNAM', 'FLTV']),
+    0x848: ('GLOB', "MFOP_ClassDef_Ranged_HmsWeightM", ['EDID', 'FNAM', 'FLTV']),
+    0x849: ('GLOB', "MFOP_ClassDef_Ranged_HmsWeightS", ['EDID', 'FNAM', 'FLTV']),
+    0x84A: ('GLOB', "MFOP_ClassDef_Ranged_HmsPrimary", ['EDID', 'FNAM', 'FLTV']),
+    0x84B: ('GLOB', "MFOP_ClassDef_Mage_HmsWeightH",   ['EDID', 'FNAM', 'FLTV']),
+    0x84C: ('GLOB', "MFOP_ClassDef_Mage_HmsWeightM",   ['EDID', 'FNAM', 'FLTV']),
+    0x84D: ('GLOB', "MFOP_ClassDef_Mage_HmsWeightS",   ['EDID', 'FNAM', 'FLTV']),
+    0x84E: ('GLOB', "MFOP_ClassDef_Mage_HmsPrimary",   ['EDID', 'FNAM', 'FLTV']),
     0x850: ('FLST', "MFOP_ClassDef_Melee",      ['EDID', 'LNAM']),
     0x851: ('FLST', "MFOP_ClassDef_Ranged",     ['EDID', 'LNAM']),
     0x852: ('FLST', "MFOP_ClassDef_Mage",       ['EDID', 'LNAM']),

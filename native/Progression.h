@@ -24,18 +24,73 @@
 namespace MFO::Progression {
 
     // ── the ADDON API front door (§18.6 — the FROZEN public contract) ───────
-    // MFO.esp ships a sentinel keyword (Forms::g_addonSentinel,
-    // "MFO_AddonManifest"). An addon announces itself with ONE BGSListForm
-    // MANIFEST whose FIRST entry is that sentinel; Init enumerates every such
-    // manifest across the merged load order at kDataLoaded (N addons, each
-    // its own record — no shared injection point, no by-name plugin lookup,
-    // no fixed FormIDs). The manifest's remaining entries declare the addon's
-    // classes list + economy GLOBs (parsed in ProgAllocator). Full contract:
-    // Docs/ADDON-API.md.
+    // v1.1 SELF-DECLARATION: an addon announces itself with ONE BGSListForm
+    // MANIFEST whose FIRST entry is a KEYWORD the addon OWNS, its editor-id
+    // ending "_MFOAddonManifest". Init enumerates every such manifest across
+    // the merged load order at kDataLoaded (N addons, each its own record — no
+    // shared injection point, no by-name plugin lookup, no fixed FormIDs, and
+    // crucially NO MFO.esp form referenced, so the addon needs no MFO.esp
+    // master: the Vortex fix). Keyword editor-ids PERSIST at runtime (GLOB/FLST
+    // edids do not), so this suffix match provably resolves. The manifest's
+    // remaining entries declare the addon's classes list + economy GLOBs
+    // (parsed in ProgAllocator). Full contract: Docs/ADDON-API.md.
     struct AddonRef {
         RE::FormID  manifestID{ 0 };   // the manifest FLST (runtime FormID)
         std::string plugin;            // source file — logs/migration only
+        std::string keywordEdid;       // v1.1 self-declaration keyword edid (the
+                                       // "_MFOAddonManifest"-suffixed join key)
     };
+
+    // ── v1.1 GENERIC add-on manifest model (host-side, add-on-AGNOSTIC) ──────
+    // The DLL reads an add-on's self-declaration into THIS general in-memory
+    // model — deliberately NOT named for progression. Populated ALONGSIDE the
+    // existing progression parse (which still drives behavior); consumers are
+    // routed onto it in later phases. Every progression JUDGMENT here is DATA
+    // the add-on declares, with NO DLL default (the governing rule): delete the
+    // add-on and this vector is simply empty.
+    struct ManifestClass {
+        RE::FormID   id{ 0 };                 // class-def FLST FormID (identity)
+        std::string  name;                    // MESG FULL
+        std::uint8_t stance{ 0 };             // combat stance 0-3
+        std::vector<RE::ActorValue> skills;   // order = weight
+        std::vector<RE::FormID>     perkPriority;
+        float        hmsWeights[3]{ 0.f, 0.f, 0.f };  // H,M,S — add-on DATA, no DLL default
+        std::uint8_t primaryPool{ 0 };        // 0=H 1=M 2=S
+        bool         hmsWeightsSet{ false };  // false = the add-on declared none
+    };
+    struct ManifestEconomy {
+        int   levelsPerPerkPoint{ 0 };
+        float skillPointsPerLevel{ 0.f };
+        int   manualSkillPointsPerLevel{ 0 };
+        int   sharedGrowthDivisor{ 0 };
+        float respecRapportCost{ 0.f };
+        float skillCap{ 0.f };
+        bool  cancelEngineAwards{ true };
+    };
+    struct ManifestAllocation {           // allocation-rule scalars (Phase 7)
+        std::uint8_t engineAwardPolicy{ 0 };  // 0=Revert 1=Adopt
+        float        hmsSkewMaxFrac{ 0.f };
+    };
+    // PLACEHOLDERS — fields declared now, populated/consumed in Phases 6-7.
+    struct ManifestVerdict { std::uint8_t entryPointIndex{ 0 }; std::uint8_t verdict{ 0 }; };
+    struct ManifestBoardTab { bool declared{ false }; };   // composition — Phase 6
+    struct AddonManifest {
+        // header
+        std::string addonType;        // self-declared type (from the manifest keyword)
+        float       version{ 0.f };   // TODO(Phase 5): carry from the manifest
+        std::string displayName;
+        RE::FormID  manifestID{ 0 };
+        std::string plugin;
+        // parsed content (mirrors the live progression parse for now)
+        std::vector<ManifestClass> classes;
+        ManifestEconomy            economy;
+        ManifestAllocation         allocation;
+        // Phase 6-7 placeholders — declared, not yet populated/consumed.
+        std::vector<ManifestVerdict> entryPointVerdicts;
+        ManifestBoardTab             boardTab;
+    };
+    // Frozen after Init (built once, alongside the progression parse).
+    const std::vector<AddonManifest>& Manifests();
 
     // ── the frozen catalog (§2.3) ───────────────────────────────────────────
 

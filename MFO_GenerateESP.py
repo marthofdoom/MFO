@@ -34,8 +34,10 @@ OWN = 0x01000000
 FID_ORDERS_MGEF    = OWN | 0x800   # Field Orders magic effect
 FID_ORDERS_SPELL   = OWN | 0x801   # Field Orders lesser power (the board opener)
 FID_GRANTED_KYWD   = OWN | 0x802   # tags spells MFO tutored, for the revoke backstop
-FID_ADDON_SENTINEL = OWN | 0x803   # §18.6 ADDON API registration sentinel (KYWD);
-                                   # an addon's manifest FLST leads with this form
+# 0x803 RETIRED (v1.1): was FID_ADDON_SENTINEL, the MFO.esp addon-manifest join
+# keyword. Add-ons now self-declare with their OWN keyword (editor-id suffix
+# "_MFOAddonManifest"), so a manifest references NO MFO.esp form and needs no
+# MFO.esp master (the Vortex fix). Id stays retired, never recycled (INVARIANTS #41).
 FID_STARTUP_QUEST  = OWN | 0x804   # reserved; the DLL does the granting
 FID_MCM_QUEST      = OWN | 0x808   # carries the MCM Helper config script
 FID_COMMAND_QUEST  = OWN | 0x80A   # M9: carries the alias MFO fills with a target
@@ -327,13 +329,11 @@ def make_kywd():
     # (DESIGN.md 5.4 -- the backstop, not the primary path).
     body = subrec('EDID', zstr("MFO_GrantedSpell")) + subrec('CNAM', struct.pack('<I', 0))
     granted = record('KYWD', FID_GRANTED_KYWD, 0, body)
-    # §18.6 ADDON API sentinel. Any MFO addon ships ONE FLST manifest whose
-    # FIRST entry is this keyword; the DLL enumerates such manifests across the
-    # merged load order (Progression::Init). The frozen public contract lives
-    # in Docs/ADDON-API.md.
-    sbody = subrec('EDID', zstr("MFO_AddonManifest")) + subrec('CNAM', struct.pack('<I', 0))
-    sentinel = record('KYWD', FID_ADDON_SENTINEL, 0, sbody)
-    return group('KYWD', granted + sentinel)
+    # §18.6 ADDON API (v1.1): the registration sentinel is RETIRED from MFO.esp.
+    # An add-on now self-declares with its OWN keyword (editor-id suffix
+    # "_MFOAddonManifest") as its manifest FLST's first entry — no MFO.esp
+    # reference, no MFO.esp master (the Vortex fix). Contract: Docs/ADDON-API.md.
+    return group('KYWD', granted)
 
 
 # ── QUST ────────────────────────────────────────────────────────────────────
@@ -1030,9 +1030,13 @@ def make_qust():
 # the prefix shift is invisible to it; the co-save stores runtime FormIDs.
 # ═══════════════════════════════════════════════════════════════════════════
 
-OWN_PROG = 0x02000000                  # ESL own-form prefix: 2 masters => index 0x02
-# Cross-master ref: MFO.esp (ESL master index 0x01) addon sentinel keyword.
-ESLREF_ADDON_SENTINEL = 0x01000000 | 0x803
+OWN_PROG = 0x01000000                  # ESL own-form prefix: 1 master (Skyrim.esm) => index 0x01
+# v1.1 Vortex fix: the addon no longer masters MFO.esp. Its manifest self-
+# declares via its OWN keyword (PGID_MANIFEST_KYWD, editor-id "_MFOAddonManifest"
+# suffix), so there is NO cross-master reference and Skyrim.esm is the sole
+# master. Own-form prefix shifts 0x02 -> 0x01. Runtime FormIDs are FE-prefixed
+# (light plugin) regardless, so co-saves resolve unchanged (LookupAddonForm by
+# {plugin, localID}); only the file-internal master index moved.
 
 PROG_VERSION_STAMP = 1.0               # MFOP_Version FLTV — the addon version
 
@@ -1069,6 +1073,12 @@ PGID_ENROLLED_KYWD      = OWN_PROG | 0x820  # KYWD enrollment tag — RESERVED f
 # editor-id suffix). The DLL type-dispatches manifest entries: the sentinel is
 # skipped, the ONE FLST is the classes list, each GLOB is an economy knob.
 PGID_MANIFEST           = OWN_PROG | 0x821
+# v1.1 SELF-DECLARATION KEYWORD — the add-on's OWN join key (editor-id ends
+# "_MFOAddonManifest"). Manifest FLST entry[0]; the DLL enumerates every FLST
+# whose front form is a keyword with this edid suffix (keyword editor-ids
+# PERSIST at runtime, unlike GLOB/FLST edids). Replaces the retired MFO.esp
+# sentinel — no cross-master reference (the Vortex fix).
+PGID_MANIFEST_KYWD      = OWN_PROG | 0x822
 
 # §18.6 Stage 2 — N-DECLARED CLASSES. The manifest points at ONE classes-list
 # FLST; its entries are class-def FLSTs. Each class-def FLST declares: ONE MESG
@@ -1082,7 +1092,13 @@ PGID_CLASSNAME_MAGE     = OWN_PROG | 0x832
 PGID_STANCE_MELEE       = OWN_PROG | 0x840  # GLOB _Stance mirror (1 = Melee)
 PGID_STANCE_RANGED      = OWN_PROG | 0x841  #                     (2 = Ranged)
 PGID_STANCE_MAGE        = OWN_PROG | 0x842  #                     (3 = Mage/Cast)
-# 0x843-0x84F reserved: more class stance mirrors
+# v1.1 §HMS class ratios lifted OUT of the DLL (HmsProfile) into manifest DATA.
+# Per class-def FLST, 4 GLOBs appended after its _Stance (POSITIONAL — GLOB
+# editor-ids are discarded at runtime, so the DLL identifies them by ORDER):
+# [+0]=weight Health, [+1]=weight Magicka, [+2]=weight Stamina, [+3]=primary
+# pool (0=H 1=M 2=S). Band 0x843-0x84E (4 per class × 3 classes).
+PGID_HMS_BASE           = OWN_PROG | 0x843  # Melee H,M,S,primary = 0x843-0x846
+                                            # Ranged = 0x847-0x84A, Mage = 0x84B-0x84E
 PGID_CLASSDEF_MELEE     = OWN_PROG | 0x850  # FLST class-def (MESG + AVIF + PERK + _Stance)
 PGID_CLASSDEF_RANGED    = OWN_PROG | 0x851
 PGID_CLASSDEF_MAGE      = OWN_PROG | 0x852
@@ -1183,36 +1199,44 @@ PROG_PERK_LISTS = [
 # to the k-th declared class, so Melee/Ranged/Mage MUST stay rows 0/1/2. The
 # AVIF skill orders mirror PROG_CLASS_SKILLS exactly (order = weight); the
 # stance value mirrors the old combatClassOverride ordinal.
-#   (defFid, defEdid, nameFid, nameEdid, display, stanceFid, stanceEdid, stanceVal, [AVIF skills])
+# v1.1: each row also declares its HMS profile as DATA (weights H/M/S + primary
+# pool 0=H/1=M/2=S), lifted verbatim from the DLL's old hardcoded HmsProfile
+# switch (Melee 60/5/35 primary Health; Ranged 40/5/55 primary Stamina; Mage
+# 15/80/5 primary Magicka). Weights are whole percentages (the DLL model holds
+# them raw; normalization is the consumer's job). Emitted as the 4 POSITIONAL
+# GLOBs appended to the class-def FLST after _Stance (PGID_HMS_BASE band).
+#   (defFid, defEdid, nameFid, nameEdid, display, stanceFid, stanceEdid, stanceVal,
+#    [AVIF skills], [hmsH, hmsM, hmsS], primaryPool)
 PROG_CLASSES = [
     (PGID_CLASSDEF_MELEE,  "MFOP_ClassDef_Melee",  PGID_CLASSNAME_MELEE,  "MFOP_ClassName_Melee",
      "Melee",  PGID_STANCE_MELEE,  "MFOP_ClassMelee_Stance",  1,
-     [AVIF_ONEHANDED, AVIF_TWOHANDED, AVIF_HEAVYARMOR, AVIF_LIGHTARMOR, AVIF_BLOCK, AVIF_MARKSMAN]),
+     [AVIF_ONEHANDED, AVIF_TWOHANDED, AVIF_HEAVYARMOR, AVIF_LIGHTARMOR, AVIF_BLOCK, AVIF_MARKSMAN],
+     [60, 5, 35], 0),
     (PGID_CLASSDEF_RANGED, "MFOP_ClassDef_Ranged", PGID_CLASSNAME_RANGED, "MFOP_ClassName_Ranged",
      "Ranged", PGID_STANCE_RANGED, "MFOP_ClassRanged_Stance", 2,
-     [AVIF_MARKSMAN, AVIF_LIGHTARMOR, AVIF_HEAVYARMOR, AVIF_SNEAK, AVIF_ONEHANDED]),
+     [AVIF_MARKSMAN, AVIF_LIGHTARMOR, AVIF_HEAVYARMOR, AVIF_SNEAK, AVIF_ONEHANDED],
+     [40, 5, 55], 2),
     (PGID_CLASSDEF_MAGE,   "MFOP_ClassDef_Mage",   PGID_CLASSNAME_MAGE,   "MFOP_ClassName_Mage",
      "Mage",   PGID_STANCE_MAGE,   "MFOP_ClassMage_Stance",   3,
-     [AVIF_DESTRUCTION, AVIF_ALTERATION, AVIF_RESTORATION, AVIF_CONJURATION, AVIF_ILLUSION]),
+     [AVIF_DESTRUCTION, AVIF_ALTERATION, AVIF_RESTORATION, AVIF_CONJURATION, AVIF_ILLUSION],
+     [15, 80, 5], 1),
 ]
 
 
 def make_prog_tes4(esl=True):
-    # ESL flag 0x200. TWO masters (§18.6): Skyrim.esm (index 0x00) for the AVIF
-    # skill forms, MFO.esp (index 0x01) for the addon sentinel keyword the
-    # manifest points at. Master ORDER fixes the index the OWN_PROG / ESLREF_*
-    # prefixes assume — do not reorder. Each MAST is followed by its DATA.
+    # v1.1: ONE master — Skyrim.esm (index 0x00) for the AVIF skill forms. The
+    # add-on no longer masters MFO.esp: its manifest self-declares via its OWN
+    # keyword (PGID_MANIFEST_KYWD), so there is NO cross-master reference. That
+    # kills the ESL-masters-ESP load-order cycle Vortex choked on (the whole
+    # reason the .esp "Vortex variant" existed). Own-form prefix = 0x01.
     hedr = struct.pack('<f', 1.70) + struct.pack('<I', 100) + struct.pack('<I', PROG_NEXT_OBJECT_ID)
     body = subrec('HEDR', hedr) + subrec('CNAM', zstr("marth"))
     body += subrec('SNAM', zstr("MFO follower-progression addon (optional; detected at runtime)"))
     body += subrec('MAST', zstr("Skyrim.esm")) + subrec('DATA', struct.pack('<Q', 0))
-    body += subrec('MAST', zstr("MFO.esp"))    + subrec('DATA', struct.pack('<Q', 0))
     # ESL flag (0x200) for the light MFO_Progression.esl; CLEARED for the regular
-    # MFO_Progression.esp "Vortex variant". An ESL is a light MASTER (loads before
-    # regular ESPs) yet this plugin masters MFO.esp (a regular ESP, loads after) --
-    # an unbreakable load-order cycle in Vortex. The .esp has identical records,
-    # masters, and 0x02-prefixed form ids, so the DLL + saves resolve either via
-    # LookupAddonForm's .esl<->.esp fallback. Temp until the v1.1 self-declarative rebuild.
+    # MFO_Progression.esp. With no MFO.esp master the ESL is now Vortex-clean, so
+    # the .esp variant is redundant (kept emitted for continuity; a later phase
+    # may drop it). Both carry identical records + 0x01-prefixed own form ids.
     return record('TES4', 0, 0x00000200 if esl else 0, body)
 
 
@@ -1256,8 +1280,8 @@ def make_prog_mcm_quest():
     # (SkyUI cannot re-register a run-once quest); zero VMAD properties, MCM
     # Helper renders from Data/MCM/Config/MFO_Progression/config.json and derives
     # modName from this plugin's stem. The VMAD script attach is just a name
-    # string, so it needs no new master (the ESL already masters Skyrim.esm +
-    # MFO.esp). MUST be listed in SEQ/MFO_Progression.seq or it never starts on
+    # string, so it needs no new master (the ESL masters only Skyrim.esm). MUST
+    # be listed in SEQ/MFO_Progression.seq or it never starts on
     # an existing save.
     vmad = VMADBuilder()
     vmad.add_script("MFOP_MCM", [])
@@ -1271,24 +1295,40 @@ def make_progression_esl(esl=True):
     data = make_prog_tes4(esl)
     # Top-group order mirrors Skyrim.esm's relative order: KYWD < GLOB < QUST
     # < FLST < MESG (QUST sorts before FLST in the shipped master).
-    kywd_body = subrec('EDID', zstr("MFOP_Enrolled")) + subrec('CNAM', struct.pack('<I', 0))
-    data += group('KYWD', record('KYWD', PGID_ENROLLED_KYWD, 0, kywd_body))
+    kywd_enrolled = record('KYWD', PGID_ENROLLED_KYWD, 0,
+                           subrec('EDID', zstr("MFOP_Enrolled")) + subrec('CNAM', struct.pack('<I', 0)))
+    # v1.1 self-declaration keyword — the add-on's OWN join key (edid suffix
+    # "_MFOAddonManifest"). The DLL enumerates every FLST whose front form is a
+    # keyword with this suffix; keyword editor-ids persist at runtime. No MFO.esp
+    # reference — this is what retires the sentinel and unblocks Vortex.
+    kywd_manifest = record('KYWD', PGID_MANIFEST_KYWD, 0,
+                           subrec('EDID', zstr("MFOP_MFOAddonManifest")) + subrec('CNAM', struct.pack('<I', 0)))
+    data += group('KYWD', kywd_enrolled + kywd_manifest)
     glob_body = b''
     for fid, edid, value, fnam in PROG_GLOBS:
         glob_body += prog_glob(fid, edid, value, fnam)
-    # §18.6 Stage 2: each class's #65 combat-stance mirror — a whole-number
-    # GLOB whose editor id ends "_Stance" (the DLL matches by suffix).
-    for _df, _de, _nf, _ne, _disp, stanceFid, stanceEdid, stanceVal, _sk in PROG_CLASSES:
+    # §18.6 Stage 2: each class's #65 combat-stance mirror (whole-number GLOB).
+    for _df, _de, _nf, _ne, _disp, stanceFid, stanceEdid, stanceVal, _sk, _hw, _pp in PROG_CLASSES:
         glob_body += prog_glob(stanceFid, stanceEdid, float(stanceVal), 's')
+    # v1.1 §HMS class ratios as DATA — 4 POSITIONAL GLOBs per class (H,M,S,primary)
+    # appended after its _Stance in the class-def FLST (below). Editor-ids are
+    # informational only (the DLL reads them by order, not by suffix).
+    for ci, (_df, _de, _nf, _ne, _disp, _sf, _se, _sv, _sk, hw, pp) in enumerate(PROG_CLASSES):
+        base = PGID_HMS_BASE + ci * 4
+        glob_body += prog_glob(base + 0, f"{_de}_HmsWeightH", float(hw[0]), 's')
+        glob_body += prog_glob(base + 1, f"{_de}_HmsWeightM", float(hw[1]), 's')
+        glob_body += prog_glob(base + 2, f"{_de}_HmsWeightS", float(hw[2]), 's')
+        glob_body += prog_glob(base + 3, f"{_de}_HmsPrimary", float(pp),    's')
     data += group('GLOB', glob_body)
     # The addon's own MCM quest (its economy tab).
     data += group('QUST', make_prog_mcm_quest())
     flst_body = b''
-    # §18.6 the addon MANIFEST — enumerated by the DLL; entry[0] MUST be the
-    # MFO.esp sentinel keyword, entry[1] the classes-list FLST (Stage 2), then
-    # every economy GLOB the DLL reads (Stage 3 — matched by editor-id suffix).
+    # §18.6 the addon MANIFEST — enumerated by the DLL; entry[0] is the add-on's
+    # OWN self-declaration keyword (PGID_MANIFEST_KYWD, edid suffix
+    # "_MFOAddonManifest" — NO MFO.esp reference), entry[1] the classes-list FLST
+    # (Stage 2), then every economy GLOB the DLL reads (Stage 3).
     flst_body += prog_flst(PGID_MANIFEST, "MFOP_AddonManifest",
-                           [ESLREF_ADDON_SENTINEL, PGID_CLASSES] + PROG_MANIFEST_ECONOMY)
+                           [PGID_MANIFEST_KYWD, PGID_CLASSES] + PROG_MANIFEST_ECONOMY)
     for fid, edid, forms in PROG_CLASS_SKILLS:
         flst_body += prog_flst(fid, edid, forms)
     for fid, edid in PROG_PERK_LISTS:
@@ -1296,17 +1336,19 @@ def make_progression_esl(esl=True):
     # §18.6 Stage 2: the classes-list FLST (manifest entry[1]) → the three
     # class-def FLSTs in Melee/Ranged/Mage order (the PRGN v<3 migration
     # ordinal depends on this order). Each class-def references its MESG name,
-    # its AVIF skills (order = weight), and its _Stance GLOB; the PERK
-    # priority is shipped empty (an overhaul patch fills it in xEdit).
+    # its AVIF skills (order = weight), its _Stance GLOB, then the 4 POSITIONAL
+    # HMS GLOBs (H,M,S,primary — v1.1 class ratios as data); the PERK priority is
+    # shipped empty (an overhaul patch fills it in xEdit).
     flst_body += prog_flst(PGID_CLASSES, "MFOP_Classes",
                            [defFid for defFid, *_ in PROG_CLASSES])
-    for defFid, defEdid, nameFid, _ne, _disp, stanceFid, _se, _sv, skills in PROG_CLASSES:
-        flst_body += prog_flst(defFid, defEdid, [nameFid] + skills + [stanceFid])
+    for ci, (defFid, defEdid, nameFid, _ne, _disp, stanceFid, _se, _sv, skills, _hw, _pp) in enumerate(PROG_CLASSES):
+        hmsFids = [PGID_HMS_BASE + ci * 4 + k for k in range(4)]
+        flst_body += prog_flst(defFid, defEdid, [nameFid] + skills + [stanceFid] + hmsFids)
     data += group('FLST', flst_body)
     # MESG group last — mirrors Skyrim.esm's late top-group position (MESG
     # sorts after FLST/PERK/AVIF). One display-name message per class.
     mesg_body = b''
-    for _df, _de, nameFid, nameEdid, disp, _sf, _se, _sv, _sk in PROG_CLASSES:
+    for _df, _de, nameFid, nameEdid, disp, _sf, _se, _sv, _sk, _hw, _pp in PROG_CLASSES:
         mesg_body += prog_mesg(nameFid, nameEdid, disp)
     data += group('MESG', mesg_body)
     return data
@@ -1536,6 +1578,7 @@ def main():
     print("MFO_Progression.esl records:")
     print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{PROG_NEXT_OBJECT_ID:03X}")
     print(f"  KYWD  0x{PGID_ENROLLED_KYWD & 0xFFF:03X}        MFOP_Enrolled (reserved tag; DLL does not stamp it in v1)")
+    print(f"  KYWD  0x{PGID_MANIFEST_KYWD & 0xFFF:03X}        MFOP_MFOAddonManifest (self-declaration join key; manifest entry[0])")
     for fid, edid, value, fnam in PROG_GLOBS:
         print(f"  GLOB  0x{fid & 0xFFF:03X}        {edid} = {value:g} ({'float' if fnam == 'f' else 'short'})")
     for fid, edid, forms in PROG_CLASS_SKILLS:
@@ -1543,16 +1586,19 @@ def main():
     for fid, edid in PROG_PERK_LISTS:
         print(f"  FLST  0x{fid & 0xFFF:03X}        {edid} (shipped EMPTY — xEdit extension point)")
     # §18.6 Stage 2 — the N-declared classes.
-    for _df, _de, nameFid, nameEdid, disp, _sf, _se, _sv, _sk in PROG_CLASSES:
+    for _df, _de, nameFid, nameEdid, disp, _sf, _se, _sv, _sk, _hw, _pp in PROG_CLASSES:
         print(f"  MESG  0x{nameFid & 0xFFF:03X}        {nameEdid} (FULL \"{disp}\" — class display name)")
-    for _df, _de, _nf, _ne, disp, stanceFid, stanceEdid, stanceVal, _sk in PROG_CLASSES:
+    for _df, _de, _nf, _ne, disp, stanceFid, stanceEdid, stanceVal, _sk, _hw, _pp in PROG_CLASSES:
         print(f"  GLOB  0x{stanceFid & 0xFFF:03X}        {stanceEdid} = {stanceVal} (#65 stance mirror)")
+    for ci, (_df, _de, _nf, _ne, disp, _sf, _se, _sv, _sk, hw, pp) in enumerate(PROG_CLASSES):
+        base = PGID_HMS_BASE + ci * 4
+        print(f"  GLOB  0x{base & 0xFFF:03X}-0x{(base + 3) & 0xFFF:03X}    {_de} HMS weights {hw[0]}/{hw[1]}/{hw[2]}, primary {pp} (v1.1 class ratios as data)")
     print(f"  QUST  0x{PGID_MCM_QUEST & 0xFFF:03X}        MFOP_MCMQuest (MFOP_MCM script; addon MCM tab, in SEQ)")
-    for defFid, defEdid, _nf, _ne, _disp, _sf, _se, _sv, skills in PROG_CLASSES:
-        print(f"  FLST  0x{defFid & 0xFFF:03X}        {defEdid} (class-def: MESG + {len(skills)} AVIF + _Stance)")
+    for defFid, defEdid, _nf, _ne, _disp, _sf, _se, _sv, skills, _hw, _pp in PROG_CLASSES:
+        print(f"  FLST  0x{defFid & 0xFFF:03X}        {defEdid} (class-def: MESG + {len(skills)} AVIF + _Stance + 4 HMS GLOB)")
     print(f"  FLST  0x{PGID_CLASSES & 0xFFF:03X}        MFOP_Classes ({len(PROG_CLASSES)} class-def(s); manifest entry[1])")
     print(f"  FLST  0x{PGID_MANIFEST & 0xFFF:03X}        MFOP_AddonManifest ({2 + len(PROG_MANIFEST_ECONOMY)} entries: "
-          f"MFO.esp sentinel + MFOP_Classes + {len(PROG_MANIFEST_ECONOMY)} economy GLOB(s))")
+          f"self-declaration keyword + MFOP_Classes + {len(PROG_MANIFEST_ECONOMY)} economy GLOB(s))")
 
 
 if __name__ == "__main__":
