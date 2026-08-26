@@ -139,4 +139,51 @@ namespace MFO::Followers {
     // at the only moment we get to ask (#51).
     float SecondsSinceCombat(RE::FormID a_actorID);
 
+    // ── General follower-mutation API (v1.1 add-on-architecture SEED) ────────
+    //
+    // These are the first GENERAL, add-on-AGNOSTIC follower primitives (v1.1
+    // Phase 1a). They take a plain actor/FormID + generic integer args — NO
+    // progression concepts (no ClassDef, no clsId) leak in. Add-ons are DATA;
+    // the host (MFO) uses this surface to apply an add-on's declarations. This
+    // is the seed the rest of the general follower API grows into.
+    //
+    // THREADING: every call here reads/writes `g_followers` or an actor's base
+    // AVs and is therefore MAIN-THREAD / serial-worker (job-worker pump) domain
+    // ONLY, exactly like `IsTracked`/`TryEnsureRecord` (#4). NEVER call from the
+    // combat thread or an event sink — use the off-worker mirror instead.
+
+    // Base combat CLASS (stance) of a follower == `FollowerState::combatClass-
+    // Override` (State.h:82). Ordinals: 0=Auto/None 1=Melee 2=Ranged 3=Mage/Cast
+    // (== `CombatStyle::Stance`, a serialized ABI — never renumber). GetBaseClass
+    // returns 0 (Auto) for an untracked/non-persistable actor. SetBaseClass
+    // writes through `TryEnsureRecord` (so it INSERTS if absent — respect the
+    // BoardEditScope tripwire, item 2b) and is a no-op for a non-persistable id.
+    std::uint8_t GetBaseClass(RE::FormID a_actorID);
+    std::uint8_t GetBaseClass(RE::Actor* a_actor);
+    void         SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance);
+    void         SetBaseClass(RE::Actor* a_actor,   std::uint8_t a_stance);
+
+    // A follower's BASE H/M/S vital, by pool index. Pool order is the CANONICAL
+    // {0=Health, 1=Magicka, 2=Stamina} — it MUST match ProgAllocator's `kHmsAV`
+    // and the PRGN v5 co-save column order (NEVER reorder). GetFollowerHMS
+    // returns 0 for a null/AV-less actor or an out-of-range pool; SetFollowerHMS
+    // no-ops in those cases. Thin wrappers over the actor's ActorValueOwner
+    // GetBaseActorValue/SetBaseActorValue — no clamping, no progression logic.
+    float GetFollowerHMS(RE::Actor* a_actor, int a_pool);
+    void  SetFollowerHMS(RE::Actor* a_actor, int a_pool, float a_value);
+
+    // Observe (do NOT clobber) the engine's fresh per-level VITAL award on an
+    // actor: read the three current BASE H/M/S into a_curOut, diff them SIGNED
+    // against a previously-asserted per-pool target (a_heldTarget) into
+    // a_deltaOut, and return the drift telescoped to a clamped(>=0) summed
+    // budget. Pure read — mutates no actor state. Pool order is the canonical
+    // {0=Health,1=Magicka,2=Stamina}. The signed-sum-then-floor telescopes to
+    // exactly the engine's fresh award even when a class profile starves a pool
+    // MFO previously shifted points out of (see ProgAllocator RecomputeHMS). A
+    // general redistribution engine measures its budget through this.
+    float MeasureEngineVitalAward(RE::Actor*        a_actor,
+                                  const float     (&a_heldTarget)[3],
+                                  float           (&a_curOut)[3],
+                                  float           (&a_deltaOut)[3]);
+
 }

@@ -660,9 +660,9 @@ namespace MFO::Scheduler {
         // the equip gate never armed (equipOrder stayed false).
         // Re-find the record (same INVARIANTS #2 discipline as `rec` above:
         // g_followers could have shifted under the scan).
-        std::uint8_t classOverride = 0;
-        if (const auto fit = g_followers.find(id); fit != g_followers.end())
-            classOverride = fit->second.combatClassOverride;
+        // v1.1: the actor-keyed g_followers find + combatClassOverride read is the
+        // general GetBaseClass primitive (byte-identical; still the same #2 re-find).
+        const std::uint8_t classOverride = Followers::GetBaseClass(id);
 
         // #76: is the equip gambit's condition KNOWN false this tick? Two ways:
         //  (a) the scan ran to COMPLETION without firing (nothing matched) --
