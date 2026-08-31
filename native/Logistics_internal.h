@@ -202,7 +202,7 @@ namespace MFO::Logistics {
 
         // Retained for reference / possible reuse; loot no longer skill-forces a
         // weapon role (#weapon-switch), so this is not currently called.
-        [[maybe_unused]] WepClass BestWeaponClass(RE::Actor* a_f) {
+        [[maybe_unused]] inline WepClass BestWeaponClass(RE::Actor* a_f) {
             auto* avo = a_f->AsActorValueOwner();
             if (!avo) return WepClass::OneHand;
             const float one = avo->GetActorValue(RE::ActorValue::kOneHanded);
@@ -323,7 +323,7 @@ namespace MFO::Logistics {
         inline std::array<TravelIntent, Packages::kMaxLootSlots> g_travelSlots{};
 
         // The active slot whose intent belongs to a_follower (nullptr if none).
-        TravelIntent* SlotOf(RE::FormID a_follower) {
+        inline TravelIntent* SlotOf(RE::FormID a_follower) {
             if (!a_follower) return nullptr;
             for (auto& t : g_travelSlots)
                 if (t.active && t.follower == a_follower) return &t;
@@ -453,7 +453,7 @@ namespace MFO::Logistics {
         // body fresh. Bounded to once per window so a truly-unreachable body can't
         // make him re-attempt it every few seconds.
         inline std::unordered_map<RE::FormID, int> g_idleCycles;
-        Clock::time_point                   g_lastBlocklistReassess{};
+        inline Clock::time_point            g_lastBlocklistReassess{};
         constexpr int  kIdleReassessCycles   = 4;                       // ~4 s idle
         constexpr auto kReassessCooldown      = std::chrono::seconds(15);
 
