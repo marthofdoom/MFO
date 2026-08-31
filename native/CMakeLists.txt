@@ -33,6 +33,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Rapport.cpp
     Diagnostics.cpp
     Board.cpp
+    Board_Progression.cpp
     Probe.cpp
     ProgProbe.cpp
     Progression.cpp
