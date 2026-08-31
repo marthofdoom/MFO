@@ -2134,6 +2134,24 @@ namespace MFO::ProgAllocator {
         return g_boardSnap;
     }
 
+    // v1.1 Phase 6b: wrap the published payload into the GENERIC hosted-tab list.
+    // One BoardTabView per add-on that declared a board tab (frozen Manifests()),
+    // carrying the add-on's own label + the shared payload; active iff the payload
+    // is published+ready. Delete the add-on → Manifests() empty → no hosted tab.
+    std::vector<BoardTabView> CopyBoardTabViews() {
+        std::vector<BoardTabView> tabs;
+        auto snap = CopyBoardViews();
+        for (const auto& m : Progression::Manifests()) {
+            if (!m.boardTab.declared) continue;
+            BoardTabView v;
+            v.label   = m.boardTab.label;
+            v.content = snap;
+            v.active  = (snap && snap->active);
+            tabs.push_back(std::move(v));
+        }
+        return tabs;
+    }
+
     void PublishBoardViews() {
         auto snap = std::make_shared<BoardProgSnap>();
         snap->active = g_ready && Progression::Get().built;

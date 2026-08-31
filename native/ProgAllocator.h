@@ -368,6 +368,18 @@ namespace MFO::ProgAllocator {
         RE::FormID treeFor{ 0 };              // whose nodes[] below describe
         std::vector<BoardNodeView> nodes;     // catalog order; empty until a focus published
     };
+
+    // v1.1 Phase 6b: the GENERIC board-tab view payload the host renders. The
+    // add-on POPULATES it; the host reads only the generic header (label, active)
+    // to build the tab and hands `content` to the tab body. One content type
+    // today (BoardProgSnap — 6c generalizes the widgets that read it). Add-on-
+    // agnostic envelope: the Board snapshot carries a vector of these, one per
+    // hosted add-on tab. Immutable once published (refcount-copied like the view).
+    struct BoardTabView {
+        std::string label;              // tab title (add-on-supplied, no DLL string)
+        bool        active{ false };    // payload published + ready → render the tab
+        std::shared_ptr<const BoardProgSnap> content;   // the per-add-on payload
+    };
     // Render thread: which follower's tree the tab wants published (atomic).
     void SetBoardFocus(RE::FormID a_id);
     // MAIN THREAD only: rebuild + publish the views. PollTick calls this on a
@@ -376,6 +388,10 @@ namespace MFO::ProgAllocator {
     void PublishBoardViews();
     // Any thread: the latest published views (null before the first publish).
     std::shared_ptr<const BoardProgSnap> CopyBoardViews();
+    // v1.1 Phase 6b: the GENERIC hosted board-tab list the board renders — one
+    // BoardTabView per add-on that DECLARES a board tab (Manifests()), carrying
+    // its label + the published payload. Empty when no add-on declares a tab.
+    std::vector<BoardTabView> CopyBoardTabViews();
 
     // §HMS off-class usage (F3): the combat scheduler (WORKER thread) calls this
     // when a combat gambit FIRES, publishing the action's exercised pool into a
