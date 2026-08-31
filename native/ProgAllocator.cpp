@@ -56,6 +56,16 @@ namespace MFO::ProgAllocator {
             // the old ADOPT-drift path runs: engine gains stack under MFO's
             // award. Live, non-save addon MCM/INI knob (no GLOB, no PRGN touch).
             bool  cancelEngineAwards    = true;
+            // §15 Shared Growth master toggle. ON (default): a benched follower
+            // banks player-levels and converts them at sharedGrowthDivisor (half
+            // rate); an active one earns at the player's rate. OFF: everyone
+            // matches the player's level outright. v1.1: this was a progression-
+            // specific DLL Config global (Config::g_sharedGrowth); it is now an
+            // add-on-owned economy knob (the add-on's own MCM/INI, read by
+            // ApplyEconomyOverride — same path as cancelEngineAwards, no GLOB, no
+            // PRGN touch). Delete the add-on → this default (true) stands; NO
+            // progression Config line remains in the DLL.
+            bool  sharedGrowthEnabled   = true;
             // §HMS class-redistribution knobs live on the MAIN MFO MCM, NOT here:
             // Config::g_hmsRedistribute (master switch) + Config::g_hmsSkewMaxFrac
             // (skew ceiling). RecomputeHMS reads those directly.
@@ -1429,7 +1439,7 @@ namespace MFO::ProgAllocator {
                     const bool active = IsActiveFollower(id);
                     const int  lag    = std::max(0, static_cast<int>(pl) - static_cast<int>(st.progressionLevel));
                     int gain = 0;
-                    if (!Config::g_sharedGrowth.load()) {
+                    if (!g_econ.sharedGrowthEnabled) {
                         // Shared Growth OFF (§15): everyone matches the
                         // player's level outright — close any lag now.
                         gain = lag;
@@ -1721,6 +1731,8 @@ namespace MFO::ProgAllocator {
                         g_econ.skillCap = std::max(1.0f, v);            // ≥1: ≤0 kills skill writes
                     else if (KeyEndsWith(key, "CancelEngineAwards"))
                         g_econ.cancelEngineAwards = (v != 0.0f);        // §4.2 revert vs adopt
+                    else if (KeyEndsWith(key, "SharedGrowth"))          // AFTER *Divisor above
+                        g_econ.sharedGrowthEnabled = (v != 0.0f);       // §15 master toggle
                     else
                         continue;
                     ++applied;
@@ -1936,6 +1948,7 @@ namespace MFO::ProgAllocator {
             man.economy.respecRapportCost         = g_econ.respecRapportCost;
             man.economy.skillCap                  = g_econ.skillCap;
             man.economy.cancelEngineAwards        = g_econ.cancelEngineAwards;
+            man.economy.sharedGrowthEnabled       = g_econ.sharedGrowthEnabled;
             // Classes: re-walk this add-on's classes list, pulling the ALREADY-parsed
             // ClassDef (with hmsWeights) via FindClassDef — no re-parse, no duplication.
             auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);

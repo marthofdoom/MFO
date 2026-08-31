@@ -248,11 +248,10 @@ namespace MFO::Config {
     // 0 disables the trigger.
     inline std::atomic<int>   g_progHarnessKey{ 0x28 };
 
-    // SHARED GROWTH (progression addon, §15 — a PLAYER setting, so it lives
-    // here and later in the MCM Addons section, never in the ESL). Default ON:
-    // benched/retained enrollees level at the ESL's divisor rate (half by
-    // default). OFF: they match the player's level at full rate.
-    inline std::atomic<bool>  g_sharedGrowth{ true };
+    // v1.1: SHARED GROWTH (§15) moved OUT of the DLL — it is now an add-on-owned
+    // economy toggle (ProgAllocator g_econ.sharedGrowthEnabled, read from the
+    // add-on's own MCM/INI by ApplyEconomyOverride). No progression Config global
+    // remains here (governing rule). Was inline std::atomic<bool> g_sharedGrowth.
 
     // #56 COMBAT-OVERLAY POSITION (mage update). The compact combat HUD
     // (Board::DrawHud) is pinned to the top-right with a top-right pivot; these
