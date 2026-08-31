@@ -753,8 +753,15 @@ exposed via `Progression::Manifests()` (defined at the foot of `ProgAllocator.cp
 **Consumers routing on:** Phase 5 (`sharedGrowthEnabled`); **Phase 6a** — `Board.cpp`
 `DrawFieldKit` iterates `Manifests()[].boardTab.declared` to decide the hosted board-tab
 count (was hardcoded `snap.prog->active`); `BuildGenericManifests` sets `boardTab.declared=true`
-+ `label`. The tab BODY (Board.cpp:1251-2425) + view payload + the "Progression" label are
-still add-on-typed (Slices 2-3). `Get()` read by ProgAllocator (`:143,
++ `label`. **Phase 6b** — `BoardProgSnap`/`BoardFollowerView` wrapped behind a generic
+`BoardTabView` (`ProgAllocator.h:378`, `CopyBoardTabViews`). **Phase 6c (Phase 6 COMPLETE)** —
+(1) the tab CAPTION is `boardTab.label`, sourced from the add-on's own `MFOP_BoardTabLabel`
+MESG (FULL "Progression", manifest entry[1] before the classes FLST; `BuildGenericManifests`
+captures its FULL, no DLL literal) — `Board.cpp:1268` `BeginTabItem(hostedTabLabel)`. (2) The
+board edit queue's progression verbs collapsed to ONE generic carrier `EditKind::AddonAction`
++ `EditCmd::verbId` (`AddonVerb` enum, `Board.cpp:153`); the `verbId`→backend dispatch
+(`ApplyEdits`, `Board.cpp:~3050`) stays progression-shaped (Phase 7/9). The tab BODY
+(Board.cpp:1251-2440) + view payload are still add-on-typed (Phase 7/9). `Get()` read by ProgAllocator (`:143,
 150,437,666,935,1047,1264,1554`) + `Board.cpp:1333`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`

@@ -1951,9 +1951,20 @@ namespace MFO::ProgAllocator {
             man.economy.sharedGrowthEnabled       = g_econ.sharedGrowthEnabled;
             // Classes: re-walk this add-on's classes list, pulling the ALREADY-parsed
             // ClassDef (with hmsWeights) via FindClassDef — no re-parse, no duplication.
+            std::string boardLabel;   // Phase 6c: self-declared board-tab title (MESG FULL)
             auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
             if (manifest) {
                 for (auto* form : manifest->forms) {
+                    // v1.1 Phase 6c: the add-on's board-tab label — a MESG whose
+                    // FULL titles the hosted tab (no "Progression" literal in the
+                    // DLL). Precedes the classes FLST in the manifest so it is
+                    // seen before the break below.
+                    if (auto* msg = form ? form->As<RE::BGSMessage>() : nullptr) {
+                        if (const char* full = msg->GetFullName();
+                            full && *full && boardLabel.empty())
+                            boardLabel = full;
+                        continue;
+                    }
                     auto* classesList = form ? form->As<RE::BGSListForm>() : nullptr;
                     if (!classesList) continue;   // keyword / economy GLOBs
                     for (auto* cf : classesList->forms) {
@@ -1981,7 +1992,9 @@ namespace MFO::ProgAllocator {
             // — delete the add-on and the board renders zero add-on tabs. label is
             // the add-on's own display name (no progression string in the DLL).
             man.boardTab.declared = true;
-            man.boardTab.label    = man.displayName;
+            // Phase 6c: title from the add-on's own MESG (self-declared); the
+            // display name is only the fallback for an add-on that ships none.
+            man.boardTab.label    = boardLabel.empty() ? man.displayName : boardLabel;
             spdlog::info("[prog] generic manifest {:08X} (\"{}\", type \"{}\"): {} class(es) "
                          "modeled, board tab declared [parsed, unused]", man.manifestID, man.plugin,
                          man.addonType, man.classes.size());
@@ -2033,6 +2046,10 @@ namespace MFO::ProgAllocator {
                                       addon.manifestID, flst->GetFormID());
                 } else if (form->As<RE::TESGlobal>()) {
                     // economy GLOB — read by ReloadEconomy() above; nothing here.
+                } else if (form->As<RE::BGSMessage>()) {
+                    // v1.1 Phase 6c: the board-tab label MESG — its FULL is the
+                    // hosted tab's title, captured by BuildGenericManifests into
+                    // boardTab.label. Recognized here so it never warns.
                 } else {
                     spdlog::warn("[prog] manifest {:08X}: entry {:08X} is neither an FLST "
                                  "(classes) nor a GLOB (economy) — ignored",
