@@ -994,3 +994,26 @@ cast hook walking the raw `g_active` list is a use-after-free (the old
 CasterConsent `IsTracked` bug), because `Refresh` reallocates the vector on the
 worker while the combat thread reads it. `IsTrackedFast` exists precisely to
 close that. See #4, #72; ENGINE_NOTES §0.37.
+
+### 75. Hand-assembled plugin records MUST emit subrecords in the real (xEdit-valid) order
+
+`MFO_GenerateESP.py` builds records by concatenating `subrec()` blobs, so the ORDER
+is whatever the maker writes. The GAME engine is lenient and reads subrecords by type
+regardless of order, so a wrong order LOADS FINE in-game and passes `audit_esp.py`
+(which counts records, not subrecord order). But **xEdit, Vortex, and Synthesis/Mutagen
+validate strictly against the record definition** and REJECT an out-of-order record —
+xEdit throws "unexpected (or out of order) subrecord" and can hit a fatal
+`EVariantTypeCastError` and disable editing / hide the plugin (field report, a user on
+v1.1.1). So a malformed record is invisible to us until a user runs a tool.
+
+RULE: every record maker must place subrecords in the exact order the real record
+definition uses. NEVER guess the order — DUMP a reference record of that type from an
+installed `Skyrim.esm` (parse the record/subrecord framing, print the type sequence)
+and mirror it. Known traps found on v1.1.1 (fixed in v1.1.2):
+- **QUST:** `VMAD` (script) comes immediately after `EDID`, BEFORE `FULL`
+  (`EDID, VMAD, FULL, DNAM, ...`). The generator had emitted `EDID, FULL, VMAD`.
+- **MESG:** subrecord order + `DNAM` flags size (UInt32) must match the reference;
+  a wrong-size/misplaced subrecord is what triggers the fatal variant-cast crash.
+Affects BOTH the main `MFO.esp` and `MFO_Progression.esl` (same QUST maker pattern).
+audit_esp.py cannot catch this — add a subrecord-ORDER check there or dump-verify
+against Skyrim.esm after any record-maker change. See Docs/TOOLING.md §(c).

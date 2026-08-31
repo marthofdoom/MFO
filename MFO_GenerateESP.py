@@ -380,7 +380,11 @@ def make_mcm_quest():
     # and derives modName from this plugin's stem.
     vmad = VMADBuilder()
     vmad.add_script("MFO_MCM", [])
-    body = subrec('EDID', zstr("MFO_MCMQuest")) + subrec('FULL', zstr("MFO MCM")) + subrec('VMAD', vmad.build())
+    # VMAD MUST precede FULL: the vanilla QUST subrecord order (dumped from
+    # Skyrim.esm) is EDID, VMAD, FULL, DNAM, ... The game loads any order, but
+    # xEdit validates strictly against the record definition and errors/crashes
+    # on EDID FULL VMAD.
+    body = subrec('EDID', zstr("MFO_MCMQuest")) + subrec('VMAD', vmad.build()) + subrec('FULL', zstr("MFO MCM"))
     # kEnabled | kStartsEnabled, deliberately NOT run-once: SkyUI cannot
     # re-register a run-once quest.
     body += subrec('DNAM', qust_dnam(0x0011)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
@@ -398,7 +402,8 @@ def make_trade_quest():
     # everything the script touches comes from the token'd TradeOrder in native.
     vmad = VMADBuilder()
     vmad.add_script("MFO_Trade", [])
-    body = subrec('EDID', zstr("MFO_TradeQuest")) + subrec('FULL', zstr("MFO Trade")) + subrec('VMAD', vmad.build())
+    # VMAD before FULL — vanilla QUST order EDID, VMAD, FULL, DNAM (xEdit strict).
+    body = subrec('EDID', zstr("MFO_TradeQuest")) + subrec('VMAD', vmad.build()) + subrec('FULL', zstr("MFO Trade"))
     body += subrec('DNAM', qust_dnam(0x0011)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
     return record('QUST', FID_TRADE_QUEST, 0, body)
 
@@ -1273,9 +1278,14 @@ def prog_mesg(fid, edid, full):
     # DESC mirrors it and DNAM=0 marks it a plain message (not a message box),
     # so it never pops on screen. Strings are inline (this plugin is not
     # localized), ASCII-only like every other zstr here.
+    # Vanilla MESG subrecord order (dumped from Skyrim.esm, all 40 records):
+    # EDID, DESC, FULL, INAM, DNAM. DESC comes BEFORE FULL, INAM is a 4-byte
+    # icon formid (0), DNAM is a 4-byte UInt32 flags. The old EDID FULL DESC DNAM
+    # order (FULL before DESC, no INAM) made xEdit error + evarianttypecasterror.
     body = subrec('EDID', zstr(edid))
-    body += subrec('FULL', zstr(full))
     body += subrec('DESC', zstr(full))
+    body += subrec('FULL', zstr(full))
+    body += subrec('INAM', struct.pack('<I', 0))   # icon formid, unused
     body += subrec('DNAM', struct.pack('<I', 0))   # flags: 0 = not a message box
     return record('MESG', fid, 0, body)
 
@@ -1291,8 +1301,9 @@ def make_prog_mcm_quest():
     # an existing save.
     vmad = VMADBuilder()
     vmad.add_script("MFOP_MCM", [])
-    body = subrec('EDID', zstr("MFOP_MCMQuest")) + subrec('FULL', zstr("MFO Progression"))
-    body += subrec('VMAD', vmad.build())
+    # VMAD before FULL — vanilla QUST order EDID, VMAD, FULL, DNAM (xEdit strict).
+    body = subrec('EDID', zstr("MFOP_MCMQuest")) + subrec('VMAD', vmad.build())
+    body += subrec('FULL', zstr("MFO Progression"))
     body += subrec('DNAM', qust_dnam(0x0011)) + subrec('NEXT', b'') + subrec('ANAM', struct.pack('<I', 0))
     return record('QUST', PGID_MCM_QUEST, 0, body)
 

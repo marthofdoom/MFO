@@ -157,6 +157,18 @@ type (`make_mcm_quest`, `prog_glob`, `prog_flst`, `prog_mesg`,
 `make_prog_mcm_quest`, …). Top-group order **mirrors Skyrim.esm's relative
 order** (e.g. the ESL emits KYWD < GLOB < QUST < FLST < MESG).
 
+> **INVARIANT #75 — subrecord ORDER within a record must match the real record
+> definition.** Concatenating `subrec()` blobs means the maker controls the order,
+> and the game engine reads by type regardless of order (so a wrong order LOADS FINE
+> and passes `audit_esp.py`). But xEdit / Vortex / Synthesis validate strictly and
+> REJECT out-of-order records (xEdit: "unexpected (or out of order) subrecord" +
+> a fatal `EVariantTypeCastError` that disables editing — a real v1.1.1 user report).
+> NEVER guess the order: dump a reference record of that type from an installed
+> `Skyrim.esm` and mirror it. Known traps (fixed v1.1.2): **QUST** puts `VMAD` right
+> after `EDID`, before `FULL` (`EDID, VMAD, FULL, DNAM, …`); **MESG** order + the
+> `DNAM` flags size (UInt32) must match. Affects both `MFO.esp` and the ESL. Dump-verify
+> the regenerated `out/*.esp`/`.esl` against Skyrim.esm after touching any record maker.
+
 ### The addon manifest seam (§18.6)
 
 The addon is discovered **generically**: an `FLST` (`MFOP_AddonManifest`) whose
