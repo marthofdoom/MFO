@@ -137,6 +137,18 @@ namespace MFO::Actuation {
     // condition (Candlelight) fan to the whole party regardless.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold = 1.0f);
 
+    // SUMMON LIVENESS (v1.1.1). A conjured familiar/atronach or a reanimated corpse
+    // is a separate COMMANDED ACTOR, not a caster-side magic effect, so the OOC
+    // cast routes' already-active guards (which read a magic effect on the cast
+    // TARGET) never see it: the recast suppression never arms and a "cast [summon]"
+    // gambit re-summons every cadence (marth, field). Returns true when a_caster
+    // already commands a LIVE summon created by a_spell -- scanned caster-side via
+    // the SummonCreatureEffect/ReanimateEffect commandedActor, PER-SPELL and keyed
+    // on the live actor (a killed/expired/despawned summon frees an immediate
+    // recast). False for every non-summon spell (no summon/reanimate archetype), so
+    // candlelight/buff/heal pacing is untouched. Worker/main context, list read only.
+    bool CasterHasLiveSummon(RE::Actor* a_caster, RE::SpellItem* a_spell);
+
     // (CONCENTRATION delivery is DIRECT FORCE everywhere -- Docs/CAST-DELIVERY.md.
     // COMBAT: CastOn's concentration fork -> ConcentrationCast -> CastTargetDirect
     // (self -> CastSelfDirect); the v1.0.58-65 package stream is REMOVED -- it

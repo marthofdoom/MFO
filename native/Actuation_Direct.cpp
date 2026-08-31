@@ -692,6 +692,40 @@ namespace MFO::Actuation {
         }
     }
 
+    // ── SUMMON LIVENESS (v1.1.1) ────────────────────────────────────────────
+    // A conjured familiar/atronach (SummonCreatureEffect) or a reanimated corpse
+    // (ReanimateEffect) is a COMMANDED ACTOR, not a lingering caster-side magic
+    // effect. The OOC cast routes' already-active guards read a magic effect on
+    // the cast TARGET (HasMagicEffect / effect-duration scan on `tgt`), which for a
+    // self-delivered summon is never the caster and never carries the summon
+    // effect -- so the guard misses it entirely and a "cast [summon]" gambit re-
+    // summons every cadence (marth, field-confirmed). The authoritative signal is
+    // the COMMANDED ACTOR: scan the caster's own active effects for a summon/
+    // reanimate effect THIS spell created and check its commandedActor still
+    // resolves to a live actor. PER-SPELL (ae->spell == a_spell) so distinct
+    // conjures track independently (a Twin Souls pair of different summons is
+    // naturally allowed); keyed on the LIVE actor so a killed/expired/despawned
+    // summon (handle gone or dead) frees an immediate recast. A non-summon spell
+    // (candlelight/flesh/heal) carries no such archetype -> always false, so those
+    // paths stay byte-identical. Reads the active-effect list only (no mutation).
+    bool CasterHasLiveSummon(RE::Actor* a_caster, RE::SpellItem* a_spell) {
+        if (!a_caster || !a_spell) return false;
+        auto* mt = a_caster->AsMagicTarget();
+        if (!mt) return false;
+        auto* list = mt->GetActiveEffectList();
+        if (!list) return false;
+        for (auto* ae : *list) {
+            if (!ae || ae->spell != a_spell) continue;
+            RE::ActorHandle h{};
+            if (auto* se = skyrim_cast<RE::SummonCreatureEffect*>(ae))      h = se->commandedActor;
+            else if (auto* re = skyrim_cast<RE::ReanimateEffect*>(ae))      h = re->commandedActor;
+            else continue;   // this spell's effect here is not a summon/reanimate
+            if (auto cmd = h.get(); cmd && !cmd->IsDead() && !cmd->IsDeleted())
+                return true;   // a live commanded summon from this spell is up
+        }
+        return false;
+    }
+
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         // AE-only, mirroring CastOn (the SE crash path #67). Off AE -> transparent.
         if (!REL::Module::IsAE())    return SelfCast::Declined;

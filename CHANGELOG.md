@@ -1,3 +1,7 @@
+## v1.1.1 -- Summoners stop spamming
+
+- **A follower with a summon gambit stops re-casting it.** A conjurer set to summon a familiar or an atronach used to re-summon it over and over instead of leaving the one it already had. It now knows its summon is still out and holds off until that creature is gone or dead, then summons again. Two different summons (or a Twin Souls pair) are tracked apart, so one never blocks the other. Buffs and candlelight are unchanged.
+
 ## v1.1.0 -- Class growth that works, and a clean add-on
 
 - **Class actually shapes level-up growth now.** Set a follower to Mage and they gain Magicka when they level, set them to Ranged and they gain Stamina, instead of following their vanilla class. It reads how much your own setup awards each level and reshapes that, so it fits whatever leveling mod you run, and it settles toward the class over several levels. The class was being read wrong before, so a mage grew like a fighter. That's fixed.
