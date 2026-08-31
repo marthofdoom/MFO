@@ -8,7 +8,8 @@ regressions here; the ripple notes are why the map exists.
 ## Working rules
 
 - **Navigate by `file:line` from MAP.md.** Grep to a symbol, read a narrow
-  window — do NOT read whole files. The big ones (Logistics.cpp 4355, Board.cpp
+  window — do NOT read whole files. The big ones (Logistics_Loot.cpp 2143,
+  Logistics.cpp 1612, Board.cpp
   3347, ProgAllocator.cpp 2427, Packages.cpp 1657, CasterConsent.cpp 1066) must
   never linger in context.
 - **Delegate bulk file-reads to a subagent** and keep only its conclusion, so
