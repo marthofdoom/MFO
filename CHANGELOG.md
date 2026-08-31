@@ -1,3 +1,8 @@
+## v1.1.1 -- Summon-happy mages, fixed
+
+- **A summoner stops respamming its summon.** A follower set to cast a conjuration (a familiar, an atronach, a raised thrall) kept recasting it every second instead of leaving the one it already had out. It recognizes its own live summon now and only recasts when that summon is gone or dead. A follower keeping several things up at once (a light, a flesh spell, a summon) still works, tracked per spell, and a follower with Twin Souls can hold two.
+- Your saves carry over.
+
 ## v1.1.0 -- Class growth that works, and a clean add-on
 
 - **Class actually shapes level-up growth now.** Set a follower to Mage and they gain Magicka when they level, set them to Ranged and they gain Stamina, instead of following their vanilla class. It reads how much your own setup awards each level and reshapes that, so it fits whatever leveling mod you run, and it settles toward the class over several levels. The class was being read wrong before, so a mage grew like a fighter. That's fixed.

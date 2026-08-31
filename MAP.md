@@ -225,7 +225,16 @@ releases **by eviction** with a non-actor XMarker.
   active guard is the foe cast's own predicate** — `AsMagicTarget()->HasMagicEffect(
   sp->GetCostliestEffectItem()->baseEffect)` — so a duration self-buff/light is NOT
   re-applied while active (exactly one light per effect-duration cycle); an instant
-  heal (no lingering effect) re-fires when the condition recurs. RELEASE
+  heal (no lingering effect) re-fires when the condition recurs. **SUMMON/REANIMATE
+  spells bypass this predicate** (`IsSummonSpell`): a summon is a COMMANDED ACTOR,
+  not a caster-side effect `HasMagicEffect` can see, so the guard never armed and MFO
+  respammed the summon every beat (v1.1.1). Instead `SummonLiveCount(caster,spell)`
+  counts live commanded summons FROM that spell — primary: the caster's active-effect
+  list still holds one `SummonCreatureEffect` per summon, matched on `ae->spell` with a
+  live `commandedActor`; fallback: `ProcessLists::highActorHandles` commanded-by-caster
+  filtered by the spell's summoned base — and suppresses recast while `count >= allowed`
+  (`allowed` = 2 with Twin Souls `0x000D5F1C`, else 1). Per `(caster,spell)`, so
+  several conjurations coexist. RELEASE
   (`SelfCastReconcile`, on rule-stale / follower gone — **FF self-buffs have NO time cap**,
   a long light lives its authored duration; only CONCENTRATION self-streams carry the
   `DrawConcCap` random cap + heal-full): `DispelSpellEffectsOn`

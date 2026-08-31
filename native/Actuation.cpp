@@ -1201,6 +1201,93 @@ namespace MFO::Actuation {
             return a_src;
         }
 
+        // A conjuration/reanimation spell places a COMMANDED ACTOR, not a
+        // lingering caster-side magic effect. HasMagicEffect(summonMgef) (the
+        // ApplySelfEffect already-active guard) never matches a live summon, so
+        // the guard did not arm and MFO re-summoned every self-cast beat -- the
+        // spam marth reported (candlelight/wards, which ARE caster-side effects,
+        // are held correctly). Detect a summon spell by effect archetype.
+        bool IsSummonSpell(RE::SpellItem* a_spell) {
+            if (!a_spell) return false;
+            for (auto* eff : a_spell->effects) {
+                auto* mgef = eff ? eff->baseEffect : nullptr;
+                if (!mgef) continue;
+                switch (mgef->GetArchetype()) {
+                case RE::EffectArchetypes::ArchetypeID::kSummonCreature:
+                case RE::EffectArchetypes::ArchetypeID::kCommandSummoned:
+                case RE::EffectArchetypes::ArchetypeID::kReanimate:
+                    return true;
+                default: break;
+                }
+            }
+            return false;
+        }
+
+        // How many LIVE commanded actors this caster currently holds FROM a_spell.
+        // Keyed per (caster, SPELL) -- a familiar gambit and an atronach gambit
+        // each track their OWN summon, exactly like the g_beneficialRecast per-
+        // (caster,spell) suppression, so keeping several conjurations up at once
+        // works.
+        //   PRIMARY (exact): the caster's active-effect list carries one summon
+        //   effect per live summon. HasMagicEffect filters summon effects out of
+        //   its query, but the ActiveEffect entry -- with its live commandedActor
+        //   handle -- is still in the list; match on ae->spell == a_spell and read
+        //   commandedActor, so we recast only when THAT summon is gone/dead.
+        //   FALLBACK (defensive): if no owning entry is found, enumerate the
+        //   caster's live commanded actors (proven ProcessLists shape, ENGINE_NOTES
+        //   §3) whose base this spell summons. Both reads are main-thread (this runs
+        //   inside ApplySelfEffect's MainThread::Post), matching highActorHandles'
+        //   resize thread (§0.30) -- no concurrent-resize hazard.
+        int SummonLiveCount(RE::Actor* a_caster, RE::SpellItem* a_spell) {
+            if (!a_caster || !a_spell) return 0;
+            int count = 0;
+            if (auto* mt = a_caster->AsMagicTarget()) {
+                if (auto* list = mt->GetActiveEffectList()) {
+                    for (auto* ae : *list) {
+                        if (!ae || ae->spell != a_spell) continue;
+                        auto* base = ae->GetBaseObject();
+                        if (!base) continue;
+                        const auto arch = base->GetArchetype();
+                        if (arch == RE::EffectArchetypes::ArchetypeID::kSummonCreature) {
+                            auto* sce = static_cast<RE::SummonCreatureEffect*>(ae);
+                            if (auto* cmd = sce->commandedActor.get().get();
+                                cmd && !cmd->IsDead())
+                                ++count;
+                        } else if (arch == RE::EffectArchetypes::ArchetypeID::kCommandSummoned ||
+                                   arch == RE::EffectArchetypes::ArchetypeID::kReanimate) {
+                            // No commandedActor handle on these -- the entry's
+                            // live presence (still has remaining duration) marks a
+                            // held thrall/command.
+                            if ((ae->duration - ae->elapsedSeconds) > 0.0f) ++count;
+                        }
+                    }
+                }
+            }
+            if (count > 0) return count;
+
+            // FALLBACK: no owning effect entry -- attribute live commanded actors
+            // by the base(s) this spell summons.
+            RE::TESForm* bases[8] = {};
+            int nBases = 0;
+            for (auto* eff : a_spell->effects) {
+                auto* mgef = eff ? eff->baseEffect : nullptr;
+                if (!mgef) continue;
+                if (auto* f = mgef->data.associatedForm; f && nBases < 8) bases[nBases++] = f;
+            }
+            auto* pl = RE::ProcessLists::GetSingleton();
+            if (!pl) return count;
+            for (auto& h : pl->highActorHandles) {
+                auto* a = h.get().get();
+                if (!a || a->IsDead() || !a->IsCommandedActor()) continue;
+                if (a->GetCommandingActor().get() != a_caster) continue;
+                if (nBases == 0) { ++count; continue; }   // spell base unknown -> any summon
+                auto* actorBase = static_cast<RE::TESForm*>(a->GetActorBase());
+                for (int i = 0; i < nBases; ++i)
+                    if (bases[i] == actorBase) { ++count; break; }
+            }
+            return count;
+        }
+
         // Apply the effect + spend magicka for ONE fire (main thread). §5.3:
         // CastSpellImmediate spends nothing (§0.22), so deduct the real cost.
         void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID) {
@@ -1232,7 +1319,23 @@ namespace MFO::Actuation {
                     mgef &&
                     (mgef->data.archetype == RE::EffectArchetypes::ArchetypeID::kValueModifier ||
                      mgef->data.archetype == RE::EffectArchetypes::ArchetypeID::kDualValueModifier);
-                if (auto* mt = a->AsMagicTarget();
+                // SUMMON/REANIMATE: the live thing is a COMMANDED ACTOR, invisible
+                // to HasMagicEffect below, so route these through the commanded-
+                // actor check instead (per (caster,spell), Twin Souls -> 2 of the
+                // same). Below the allowed count -> fall through and summon; at or
+                // over -> suppress the recast. The non-summon path stays byte-
+                // identical (the original guard, unchanged, is the else branch).
+                if (IsSummonSpell(sp)) {
+                    int allowed = 1;
+                    if (auto* twin = RE::TESForm::LookupByID<RE::BGSPerk>(0x000D5F1C);
+                        twin && a->HasPerk(twin))
+                        allowed = 2;   // Twin Souls -- two atronachs/thralls at once
+                    if (SummonLiveCount(a, sp) >= allowed) {
+                        spdlog::info("[cast] {:08X} cast_self skipped -- {} ({:08X}) summon still live",
+                                     a_id, sp->GetName() ? sp->GetName() : "?", a_spellID);
+                        return;
+                    }
+                } else if (auto* mt = a->AsMagicTarget();
                     !concMomentary && mgef && mt && mt->HasMagicEffect(mgef)) {
                     spdlog::info("[cast] {:08X} cast_self skipped -- {} ({:08X}) already active",
                                  a_id, sp->GetName() ? sp->GetName() : "?", a_spellID);
