@@ -1418,6 +1418,15 @@ PROG_MCM_TOGGLES = [
      "only its own class/manual award (pure MFO, no inflation). OFF: engine "
      "leveling stacks on top of MFO's award (compat).",
      1),
+    # v1.1: §15 Shared Growth toggle moved OFF MFO.esp's MCM (was a hidden DLL
+    # Config global) to here — the add-on owns its own progression policy. Read
+    # by ApplyEconomyOverride (key tail "SharedGrowth"), same path as above.
+    ("bSharedGrowth", "Shared growth (benched followers)",
+     "ON (default): a benched follower banks the levels you gain and converts "
+     "them at the benched-growth divisor (slow catch-up); an active follower "
+     "earns at your rate. OFF: every enrolled follower matches your level "
+     "outright, no catch-up cost.",
+     1),
 ]
 
 

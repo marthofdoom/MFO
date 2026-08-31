@@ -153,6 +153,17 @@ in load order wins. At load MFO logs each resolved knob
 (`[prog] economy: _SkillPointsPerLevel = 2 (from MyAddon_SkillPtsPerLevel)`) and
 each defaulted knob — check `MFO.log` to confirm your values took.
 
+**Bool policy toggles (read from your MCM INI, not a GLOB).** A few knobs are
+booleans MFO reads *live* from your addon's own MCM settings INI
+(`Data/MCM/Settings/<YourPlugin>.ini`), matched by the key TAIL — the same
+`ApplyEconomyOverride` path, no GLOB, never save-persisted. Ship them as
+`ModSettingBool` controls in your `config.json`:
+
+| Key tail | Meaning | Default |
+|---|---|---|
+| `CancelEngineAwards` | Revert the engine's per-level skill gain, apply only MFO's award | `on` |
+| `SharedGrowth` | Benched followers bank + slow-convert your levels; off = match outright | `on` |
+
 ---
 
 ## 5. Plugin requirements & gotchas

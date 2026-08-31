@@ -66,6 +66,7 @@ namespace MFO::Progression {
         float respecRapportCost{ 0.f };
         float skillCap{ 0.f };
         bool  cancelEngineAwards{ true };
+        bool  sharedGrowthEnabled{ true };   // §15 master toggle (add-on-owned)
     };
     struct ManifestAllocation {           // allocation-rule scalars (Phase 7)
         std::uint8_t engineAwardPolicy{ 0 };  // 0=Revert 1=Adopt

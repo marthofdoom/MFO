@@ -99,6 +99,16 @@
 						"sourceType": "ModSettingBool",
 						"defaultValue": 1
 					}
+				},
+				{
+					"id": "bSharedGrowth:Economy",
+					"text": "Shared growth (benched followers)",
+					"type": "toggle",
+					"help": "ON (default): a benched follower banks the levels you gain and converts them at the benched-growth divisor (slow catch-up); an active follower earns at your rate. OFF: every enrolled follower matches your level outright, no catch-up cost.",
+					"valueOptions": {
+						"sourceType": "ModSettingBool",
+						"defaultValue": 1
+					}
 				}
 			]
 		}
