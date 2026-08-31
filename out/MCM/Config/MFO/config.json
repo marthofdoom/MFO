@@ -684,7 +684,7 @@
           "type": "text",
           "help": "MFO version, stamped from the build. Matches the MFO.dll built from the same commit (release.sh stamps it from VERSION).",
           "valueOptions": {
-            "value": "v1.0.68"
+            "value": "v1.1.0"
           }
         },
         {
