@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Followers stop looping on loot another package keeps grabbing.** When a follower walked to pick something up and a scene or another mod's package kept yanking them off the walk, MFO used to fight for the item forever and never finish. Now it tries a few times, then gives up on that item for a bit and moves on to the rest. A follower who gets pulled into combat lets the fight take over instead of arguing with it. Loot that walks and picks up cleanly is unchanged.
+
 ## v1.1.2 -- Plugin cleanup for xEdit and Vortex
 
 - **MFO's plugins are clean in xEdit and Vortex now.** The records were written in an order the game reads fine but xEdit and Synthesis reject, so opening MFO in xEdit could throw errors and crash it. The records are now built in the correct order and validate cleanly. Nothing about how the mod plays changes, and your saves carry over.

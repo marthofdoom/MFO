@@ -712,6 +712,13 @@ anonymous-namespace copy — that silently forks the instance).
   via `EvaluatePackage(true,false)`; only a genuine on-package zero-move stall
   (`kNoProgress=5s`) reaches the sticky blocklist — routing theft through the stall
   path re-poisons reachable loot 5 min at a time (the 12:25 deck trace).
+  **Theft BACK-OFF:** a claim stolen repeatedly re-asserts forever (deck: "travel
+  pkg stolen … re-asserting claim" every few sec, leg never completing). `g_stealStrikes`
+  (`Logistics_internal.h`, keyed `StealKey`=follower<<32|target) counts displacements;
+  at `kStealStrikeMax=4`, or while `IsInCombat()`, the leg ABANDONS to the transient
+  blocklist (`MarkTravelFailed`, never sticky) instead of re-asserting. Reset on
+  arrival (`Logistics.cpp:~820`, provably reachable) or target change (fresh key);
+  erased on every give-up. Normal single-steal-then-reclaim path unchanged.
 - **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1477`; cell set built just below it):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs

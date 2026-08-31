@@ -364,6 +364,23 @@ namespace MFO::Logistics {
         // short enough that a standing external hold (a long scripted scene)
         // releases the batch instead of parking the excursion.
         constexpr auto  kStealGrace = std::chrono::seconds(10);
+        // PACKAGE-THEFT BACK-OFF. A single steal that reclaims within grace is
+        // normal, but a claim that keeps getting stolen is fighting a package
+        // that will not release (a persistent scene, or a combat gambit) -- so
+        // re-asserting forever just churns (deck: "travel pkg stolen ...
+        // re-asserting claim" logged every few seconds for both followers, the
+        // leg never completing). Count displacements of the SAME follower+target
+        // claim; after kStealStrikeMax, ABANDON the leg to the transient
+        // blocklist (MarkTravelFailed, never sticky -- the ref was reachable)
+        // and move on. Keyed (follower<<32 | target). Reset on arrival/loot
+        // (provably reachable) or a target change (a new key starts fresh).
+        // Worker-tick-only, erased on resolution like g_stallStrikes, never
+        // serialized.
+        inline std::unordered_map<std::uint64_t, int> g_stealStrikes;
+        constexpr int kStealStrikeMax = 4;
+        inline std::uint64_t StealKey(RE::FormID a_fol, RE::FormID a_tgt) {
+            return (static_cast<std::uint64_t>(a_fol) << 32) | a_tgt;
+        }
 
         // Set by an excursion-mode scan when it found loot it could NOT act on
         // because the player's dibs have not released yet (dNotYet > 0). The Hold
