@@ -831,8 +831,13 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `ClassDef::stance` — the latter is a GLOB editor-id suffix the engine discards at
   runtime, always 0, which wrongly skipped HMS. `FindClassDef(clsId)` stays as the
   enrollment/MFO-managed gate + skew/weights source; only the stance value moved. Same
-  swap in `HmsTrackBattle`.**) — 1=Melee 60/5/35,
-  2=Ranged 40/5/55, 3=Mage 15/80/5; 0/none → skip) + a usage-scaled **skew** (pulled
+  swap in `HmsTrackBattle`.**) — **v1.1 Phase 7: the ratio profile is now ADD-ON DATA,
+  not a hardcoded switch. `HmsProfile(stance)` walks `g_classes` for the ClassDef whose
+  `stance` matches and returns its normalized `hmsWeights[]`/`primaryPool` (no DLL default —
+  no declared class/weights for that stance → false → HMS reshapes nothing). Byte-identical
+  for the shipped add-on (Melee 60/5/35, Ranged 40/5/55, Mage 15/80/5 emitted raw, each
+  sums to 100 so `weight/sum` reproduces the old float literals exactly).** The class
+  ratios (0/none → skip) feed a usage-scaled **skew** (pulled
   from the class-primary pool toward the exercised off-class pool; ≥1-pt floor, but
   the **cap wins** — clamped to `Config::g_hmsSkewMaxFrac`×budget so a tiny budget
   never exceeds it), accumulates into `hmsCumulative`, then holds

@@ -90,8 +90,8 @@ namespace MFO::ProgAllocator {
         // v1.1 §HMS class ratios as manifest DATA (lifted out of the DLL's old
         // hardcoded HmsProfile switch). Parsed POSITIONALLY from the class-def
         // FLST's GLOBs (editor-ids are discarded at runtime, so order not suffix
-        // identifies them). PARSED but NOT yet consumed — HMS still reads the
-        // hardcoded HmsProfile; Phase 7 routes it here. No DLL default.
+        // identifies them). v1.1 Phase 7: CONSUMED — HmsProfile() now reads these
+        // (keyed by base-class stance), no hardcoded ratio remains. No DLL default.
         float        hmsWeights[3]{ 0.f, 0.f, 0.f };  // H,M,S (raw weights)
         std::uint8_t primaryPool{ 0 };                // 0=H 1=M 2=S
         bool         hmsWeightsSet{ false };
