@@ -8,9 +8,13 @@ regressions here; the ripple notes are why the map exists.
 ## Working rules
 
 - **Navigate by `file:line` from MAP.md.** Grep to a symbol, read a narrow
-  window — do NOT read whole files. The big ones (Logistics.cpp 4355, Board.cpp
-  3347, ProgAllocator.cpp 2427, Packages.cpp 1657, CasterConsent.cpp 1066) must
-  never linger in context.
+  window — do NOT read whole files. Large files must never linger in context.
+- **HARD RULE (marth 2026-08-31): NEVER let a source file exceed 2500 lines.**
+  Split it into focused modules before it crosses (an internal header for shared
+  file-local state + cohesive modules; a pure mechanical move, CI-identical).
+  A split pass is modularizing the top four giants (Logistics, Board,
+  ProgAllocator, Actuation) into ≤2500-line modules; Packages/CasterConsent
+  deferred. Keep MAP.md's file:line nav current with the module layout.
 - **Delegate bulk file-reads to a subagent** and keep only its conclusion, so
   large files never sit in the main context.
 - **Never read vendored code:** `native/imgui_impl_win32.*` (the only vendored
