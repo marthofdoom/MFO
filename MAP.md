@@ -750,8 +750,11 @@ OWN keyword → no MFO.esp master. `AddonRef` gained `keywordEdid`.
 `ManifestAllocation` (+ `ManifestVerdict`/`ManifestBoardTab` placeholders) is the
 add-on-agnostic host model, built by `ProgAllocator::BuildGenericManifests` and
 exposed via `Progression::Manifests()` (defined at the foot of `ProgAllocator.cpp`).
-**Parsed, unused** — the progression path still drives behavior; consumers route on
-in Phases 5-7. `Get()` read by ProgAllocator (`:143,
+**Consumers routing on:** Phase 5 (`sharedGrowthEnabled`); **Phase 6a** — `Board.cpp`
+`DrawFieldKit` iterates `Manifests()[].boardTab.declared` to decide the hosted board-tab
+count (was hardcoded `snap.prog->active`); `BuildGenericManifests` sets `boardTab.declared=true`
++ `label`. The tab BODY (Board.cpp:1251-2425) + view payload + the "Progression" label are
+still add-on-typed (Slices 2-3). `Get()` read by ProgAllocator (`:143,
 150,437,666,935,1047,1264,1554`) + `Board.cpp:1333`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
