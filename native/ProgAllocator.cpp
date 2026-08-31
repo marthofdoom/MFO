@@ -1976,8 +1976,14 @@ namespace MFO::ProgAllocator {
                     break;   // one classes list per manifest (Init warns on extras)
                 }
             }
+            // v1.1 Phase 6a: this add-on hosts a board (Field-Orders) tab. Board.cpp
+            // iterates declared board tabs instead of hardcoding the progression tab
+            // — delete the add-on and the board renders zero add-on tabs. label is
+            // the add-on's own display name (no progression string in the DLL).
+            man.boardTab.declared = true;
+            man.boardTab.label    = man.displayName;
             spdlog::info("[prog] generic manifest {:08X} (\"{}\", type \"{}\"): {} class(es) "
-                         "modeled [parsed, unused]", man.manifestID, man.plugin,
+                         "modeled, board tab declared [parsed, unused]", man.manifestID, man.plugin,
                          man.addonType, man.classes.size());
             g_manifests.push_back(std::move(man));
         }

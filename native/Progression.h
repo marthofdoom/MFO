@@ -74,7 +74,11 @@ namespace MFO::Progression {
     };
     // PLACEHOLDERS — fields declared now, populated/consumed in Phases 6-7.
     struct ManifestVerdict { std::uint8_t entryPointIndex{ 0 }; std::uint8_t verdict{ 0 }; };
-    struct ManifestBoardTab { bool declared{ false }; };   // composition — Phase 6
+    struct ManifestBoardTab {          // Phase 6: host renders a board tab per declaration
+        bool        declared{ false }; // the add-on hosts a Field-Orders board tab
+        std::string label;             // tab title (add-on-supplied — no DLL string)
+        // composition (widget list) comes in a later slice; body still add-on-typed.
+    };
     struct AddonManifest {
         // header
         std::string addonType;        // self-declared type (from the manifest keyword)
