@@ -155,17 +155,26 @@ namespace MFO::Board {
                                          SetCond, SetAct, TeachSpell,
                                          SetSubject, SetSubjectActor,   // #68
                                          SetClassOverride,   // #65
-                                         ProgSetClass, ProgAllocPerk, ProgRespec,   // #74 comp 3
-                                         ProgSetManual, ProgApplySkillPoint };   // #74 §16 (param:
-                                                            // 0/1 toggle | AV ordinal, same
-                                                            // param-carries-ordinal shape as
-                                                            // SetClassOverride)
+                                         AddonAction };   // v1.1 Phase 6c: ONE generic
+                                                            // add-on-verb carrier. The specific
+                                                            // verb rides EditCmd::verbId (an
+                                                            // add-on-agnostic int) — EditKind no
+                                                            // longer enumerates progression verbs.
+    // v1.1 Phase 6c: the verbs an EditKind::AddonAction can carry. The CARRIER
+    // (EditKind/EditCmd) is add-on-agnostic; these ids + the dispatch in
+    // ApplyEdits stay progression-shaped until Phase 7/9 routes verbs through
+    // the manifest. Args reuse the existing EditCmd fields: `fid` = the follower,
+    // `perk` = a form arg (class-def / catalog node), `param` = an int/bool arg
+    // (manual toggle 0/1 | AV ordinal) — the {verbId, follower, arg-union} shape.
+    enum class AddonVerb : int { SetClass = 0, AllocPerk, Respec,
+                                 SetManual, ApplySkillPoint };
     struct EditCmd {
         EditKind kind; RE::FormID fid; int table; std::uint32_t uid; float param;
         RE::FormID spell = 0;
         RE::FormID book  = 0;   // #4 TeachSpell: the spellbook to consume
         RE::FormID subjectActor = 0;   // #68 SetSubjectActor: the specific follower
-        RE::FormID perk  = 0;   // #74 ProgAllocPerk: the catalog node (rank-1 form)
+        RE::FormID perk  = 0;   // AddonAction form arg (class-def / catalog node)
+        int        verbId = 0;  // v1.1 Phase 6c: AddonVerb for EditKind::AddonAction
     };
     // #68: written into a Gambit's subjectSelector when SetSubjectActor picks
     // a SPECIFIC follower, so a stale subject value from an earlier Self/
@@ -1256,7 +1265,14 @@ namespace MFO::Board {
                 // every action queues an EditCmd that ApplyEdits re-posts to the
                 // MAIN thread, where the §5 backend gate re-validates before any
                 // engine write.
-                if (progActive && ImGui::BeginTabItem("Progression", nullptr, tabSel(2))) {
+                // v1.1 Phase 6c: the tab CAPTION is the add-on's self-declared
+                // label (boardTab MESG FULL), not a DLL "Progression" literal —
+                // the first published+active hosted tab's label. Fallback keeps
+                // the ID stable if an add-on ever ships an empty label.
+                const char* hostedTabLabel = "Field Orders";
+                for (const auto& t : snap.boardTabs)
+                    if (t.active) { if (!t.label.empty()) hostedTabLabel = t.label.c_str(); break; }
+                if (progActive && ImGui::BeginTabItem(hostedTabLabel, nullptr, tabSel(2))) {
                     s_tab = 2;
                     // 6b: read the concrete payload out of the generic hosted-tab
                     // envelope — the first published+active board tab (one today).
@@ -1391,7 +1407,8 @@ namespace MFO::Board {
                                 const bool cur = (who->clsId == classId);
                                 ImGui::PushID(k++);
                                 if (ImGui::Selectable(className.c_str(), cur)) {
-                                    EditCmd e{ EditKind::ProgSetClass, s_psel, 0, 0u, 0.0f };
+                                    EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u, 0.0f };
+                                    e.verbId = (int)AddonVerb::SetClass;
                                     e.perk = classId;
                                     QueueEdit(e);
                                     ImGui::CloseCurrentPopup();
@@ -1463,9 +1480,12 @@ namespace MFO::Board {
                             // A toggles it on the pad.
                             {
                                 bool man = who->manualSkills;
-                                if (ImGui::Checkbox("Manual skill points", &man))
-                                    QueueEdit({ EditKind::ProgSetManual, s_psel, 0, 0u,
-                                                man ? 1.0f : 0.0f });
+                                if (ImGui::Checkbox("Manual skill points", &man)) {
+                                    EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u,
+                                               man ? 1.0f : 0.0f };
+                                    e.verbId = (int)AddonVerb::SetManual;
+                                    QueueEdit(e);
+                                }
                                 if (ImGui::IsItemHovered())
                                     ImGui::SetTooltip(
                                         "Manual OVERRIDE: while ON, this follower earns %d skill\n"
@@ -1670,8 +1690,10 @@ namespace MFO::Board {
                                         "Apply 1 skill point  ({:.0f} -> {:.0f})", base, base + 1.0f);
                                     if (ImGui::Selectable(apply.c_str(), false,
                                                           ImGuiSelectableFlags_DontClosePopups)) {
-                                        QueueEdit({ EditKind::ProgApplySkillPoint, s_psel, 0, 0u,
-                                                    (float)(int)s_actAv });
+                                        EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u,
+                                                   (float)(int)s_actAv };
+                                        e.verbId = (int)AddonVerb::ApplySkillPoint;
+                                        QueueEdit(e);
                                     }
                                     ImGui::EndDisabled();
                                     if (!canApply)
@@ -2374,8 +2396,9 @@ namespace MFO::Board {
                                                 const std::string take = std::format(
                                                     "Take rank {}  (1 perk point)", ownedR + 1);
                                                 if (ImGui::Selectable(take.c_str())) {
-                                                    EditCmd e{ EditKind::ProgAllocPerk, s_psel,
+                                                    EditCmd e{ EditKind::AddonAction, s_psel,
                                                                0, 0u, 0.0f };
+                                                    e.verbId = (int)AddonVerb::AllocPerk;
                                                     e.perk = nd.perkFormID;
                                                     QueueEdit(e);
                                                     ImGui::CloseCurrentPopup();
@@ -2423,7 +2446,9 @@ namespace MFO::Board {
                                 ImGui::Separator();
                                 ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
                                 if (ImGui::Selectable("Confirm respec")) {
-                                    QueueEdit({ EditKind::ProgRespec, s_psel, 0, 0u, 0.0f });
+                                    EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u, 0.0f };
+                                    e.verbId = (int)AddonVerb::Respec;
+                                    QueueEdit(e);
                                     ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::PopStyleColor();
@@ -3048,12 +3073,14 @@ namespace MFO::Board {
             // gate): a stale board can only be REFUSED, never over-allocate.
             // Republish the views right after so the tab echoes on the next
             // snapshot instead of waiting out the poll cadence.
-            if (c.kind == EditKind::ProgSetClass || c.kind == EditKind::ProgAllocPerk ||
-                c.kind == EditKind::ProgRespec || c.kind == EditKind::ProgSetManual ||
-                c.kind == EditKind::ProgApplySkillPoint) {
-                const auto  kind  = c.kind;
+            // v1.1 Phase 6c: the generic add-on-action carrier. EditKind names
+            // only AddonAction; the specific verb rides c.verbId (AddonVerb).
+            // The verb→backend dispatch below stays progression-shaped (Phase
+            // 7/9 routes it through the manifest).
+            if (c.kind == EditKind::AddonAction) {
+                const int   verb  = c.verbId;
                 const auto  fid   = c.fid;
-                const auto  perk  = c.perk;   // §18.6: ProgSetClass carries the class-def id here
+                const auto  perk  = c.perk;   // §18.6: SetClass carries the class-def id here
                 const float param = c.param;
                 // Capture the revert/reload generation at POST time. If a revert
                 // (ClearAll) or reload (OnPostLoad) bumps it before this closure
@@ -3061,7 +3088,7 @@ namespace MFO::Board {
                 // raced the Clear, bail here so a stale edit can't land on the
                 // NEXT save's same-FormID actor.
                 const int gen = ProgAllocator::PollGeneration();
-                MainThread::Post([kind, fid, perk, param, gen]() {
+                MainThread::Post([verb, fid, perk, param, gen]() {
                     if (ProgAllocator::PollGeneration() != gen) {
                         spdlog::info("[prog] board edit dropped: superseded by revert/reload "
                                      "(actor {:08X})", fid);
@@ -3078,8 +3105,8 @@ namespace MFO::Board {
                     // TryEnsureRecord finds, never inserts). This scope arms the
                     // tripwire that logs a HAZARD if any of them ever inserts.
                     Followers::BoardEditScope boardEditGuard;
-                    switch (kind) {
-                    case EditKind::ProgSetClass:
+                    switch (static_cast<AddonVerb>(verb)) {
+                    case AddonVerb::SetClass:
                         // The §15 onboarding as ONE player action: enroll on
                         // first contact (refuses with a named line when
                         // already enrolled), then the class pick auto-scales.
@@ -3089,16 +3116,16 @@ namespace MFO::Board {
                             ProgAllocator::Enroll(actor);
                         ProgAllocator::SetClass(actor, perk);
                         break;
-                    case EditKind::ProgAllocPerk:
+                    case AddonVerb::AllocPerk:
                         ProgAllocator::AllocatePerk(actor, perk);
                         break;
-                    case EditKind::ProgRespec:
+                    case AddonVerb::Respec:
                         ProgAllocator::Respec(actor);
                         break;
-                    case EditKind::ProgSetManual:   // #74 §16
+                    case AddonVerb::SetManual:   // #74 §16
                         ProgAllocator::SetManualSkills(actor, param > 0.5f);
                         break;
-                    case EditKind::ProgApplySkillPoint:   // #74 §16 — param = AV ordinal
+                    case AddonVerb::ApplySkillPoint:   // #74 §16 — param = AV ordinal
                         ProgAllocator::ApplyManualSkillPoint(actor,
                             static_cast<RE::ActorValue>(static_cast<int>(param + 0.5f)));
                         break;

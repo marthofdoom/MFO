@@ -331,18 +331,18 @@ def audit_one(esp):
                     errors.append(f"GLOB 0x{local:03X} {edid}: FNAM {fnam!r}, expected b'f' "
                                   f"(float-typed so fractional values are authorable)")
         # §18.6 Stage 3: the addon MANIFEST FLST must carry the economy GLOBs
-        # the DLL reads off it — entry[0] MFO.esp sentinel, entry[1] the
-        # classes-list FLST, entries[2..] the 7 economy GLOBs (perk divisor,
-        # skill/lvl, manual/lvl, shared divisor, respec, cap, dev-cmd). A short
-        # manifest means the DLL falls back to DLL defaults for the missing
-        # knobs -- silent, so audit it.
-        MANIFEST_ENTRIES = 2 + 7
+        # the DLL reads off it — entry[0] self-declaration keyword, entry[1] the
+        # board-tab label MESG (v1.1 Phase 6c), entry[2] the classes-list FLST,
+        # entries[3..] the 7 economy GLOBs (perk divisor, skill/lvl, manual/lvl,
+        # shared divisor, respec, cap, dev-cmd). A short manifest means the DLL
+        # falls back to DLL defaults for the missing knobs -- silent, so audit it.
+        MANIFEST_ENTRIES = 3 + 7
         if 0x821 in by_local:
             n = by_local[0x821][1].get('#LNAM', 0)
             if n != MANIFEST_ENTRIES:
                 errors.append(f"FLST 0x821 MFOP_AddonManifest has {n} LNAM entr(ies), "
-                              f"expected {MANIFEST_ENTRIES} (MFO.esp sentinel + classes-list "
-                              f"+ 7 economy GLOBs)")
+                              f"expected {MANIFEST_ENTRIES} (self-declaration keyword + "
+                              f"board-tab label MESG + classes-list + 7 economy GLOBs)")
 
         # Class-skill lists: every LNAM entry must point into Skyrim.esm
         # (master index 0x00) -- the ESL cannot legally reference anything else.

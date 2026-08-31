@@ -1088,7 +1088,13 @@ PGID_MANIFEST_KYWD      = OWN_PROG | 0x822
 PGID_CLASSNAME_MELEE    = OWN_PROG | 0x830  # MESG display name
 PGID_CLASSNAME_RANGED   = OWN_PROG | 0x831
 PGID_CLASSNAME_MAGE     = OWN_PROG | 0x832
-# 0x833-0x83F reserved: more class display names
+# v1.1 Phase 6c: the hosted board-tab TITLE, self-declared as a MESG (FULL =
+# "Progression"). Referenced from the manifest FLST so the DLL captures its FULL
+# into the generic manifest (boardTab.label) and the Field-Orders board titles
+# the tab from it — no "Progression" string in the DLL. Same MESG shape as a
+# class display name (the reason it sits in this band).
+PGID_BOARDTAB_LABEL     = OWN_PROG | 0x833  # MESG board-tab title
+# 0x834-0x83F reserved: more class display names
 PGID_STANCE_MELEE       = OWN_PROG | 0x840  # GLOB _Stance mirror (1 = Melee)
 PGID_STANCE_RANGED      = OWN_PROG | 0x841  #                     (2 = Ranged)
 PGID_STANCE_MAGE        = OWN_PROG | 0x842  #                     (3 = Mage/Cast)
@@ -1327,8 +1333,12 @@ def make_progression_esl(esl=True):
     # OWN self-declaration keyword (PGID_MANIFEST_KYWD, edid suffix
     # "_MFOAddonManifest" — NO MFO.esp reference), entry[1] the classes-list FLST
     # (Stage 2), then every economy GLOB the DLL reads (Stage 3).
+    # v1.1 Phase 6c: PGID_BOARDTAB_LABEL (a MESG) precedes the classes list so
+    # the DLL's manifest walk captures its FULL for the hosted board tab's title
+    # before it stops on the classes FLST (BuildGenericManifests breaks there).
     flst_body += prog_flst(PGID_MANIFEST, "MFOP_AddonManifest",
-                           [PGID_MANIFEST_KYWD, PGID_CLASSES] + PROG_MANIFEST_ECONOMY)
+                           [PGID_MANIFEST_KYWD, PGID_BOARDTAB_LABEL, PGID_CLASSES]
+                           + PROG_MANIFEST_ECONOMY)
     for fid, edid, forms in PROG_CLASS_SKILLS:
         flst_body += prog_flst(fid, edid, forms)
     for fid, edid in PROG_PERK_LISTS:
@@ -1350,6 +1360,9 @@ def make_progression_esl(esl=True):
     mesg_body = b''
     for _df, _de, nameFid, nameEdid, disp, _sf, _se, _sv, _sk, _hw, _pp in PROG_CLASSES:
         mesg_body += prog_mesg(nameFid, nameEdid, disp)
+    # v1.1 Phase 6c: the hosted board tab's self-declared title (its FULL is the
+    # tab caption — no "Progression" literal in the DLL).
+    mesg_body += prog_mesg(PGID_BOARDTAB_LABEL, "MFOP_BoardTabLabel", "Progression")
     data += group('MESG', mesg_body)
     return data
 
@@ -1597,6 +1610,7 @@ def main():
     # §18.6 Stage 2 — the N-declared classes.
     for _df, _de, nameFid, nameEdid, disp, _sf, _se, _sv, _sk, _hw, _pp in PROG_CLASSES:
         print(f"  MESG  0x{nameFid & 0xFFF:03X}        {nameEdid} (FULL \"{disp}\" — class display name)")
+    print(f"  MESG  0x{PGID_BOARDTAB_LABEL & 0xFFF:03X}        MFOP_BoardTabLabel (FULL \"Progression\" — hosted board-tab title)")
     for _df, _de, _nf, _ne, disp, stanceFid, stanceEdid, stanceVal, _sk, _hw, _pp in PROG_CLASSES:
         print(f"  GLOB  0x{stanceFid & 0xFFF:03X}        {stanceEdid} = {stanceVal} (#65 stance mirror)")
     for ci, (_df, _de, _nf, _ne, disp, _sf, _se, _sv, _sk, hw, pp) in enumerate(PROG_CLASSES):
@@ -1606,8 +1620,8 @@ def main():
     for defFid, defEdid, _nf, _ne, _disp, _sf, _se, _sv, skills, _hw, _pp in PROG_CLASSES:
         print(f"  FLST  0x{defFid & 0xFFF:03X}        {defEdid} (class-def: MESG + {len(skills)} AVIF + _Stance + 4 HMS GLOB)")
     print(f"  FLST  0x{PGID_CLASSES & 0xFFF:03X}        MFOP_Classes ({len(PROG_CLASSES)} class-def(s); manifest entry[1])")
-    print(f"  FLST  0x{PGID_MANIFEST & 0xFFF:03X}        MFOP_AddonManifest ({2 + len(PROG_MANIFEST_ECONOMY)} entries: "
-          f"self-declaration keyword + MFOP_Classes + {len(PROG_MANIFEST_ECONOMY)} economy GLOB(s))")
+    print(f"  FLST  0x{PGID_MANIFEST & 0xFFF:03X}        MFOP_AddonManifest ({3 + len(PROG_MANIFEST_ECONOMY)} entries: "
+          f"self-declaration keyword + MFOP_BoardTabLabel + MFOP_Classes + {len(PROG_MANIFEST_ECONOMY)} economy GLOB(s))")
 
 
 if __name__ == "__main__":
