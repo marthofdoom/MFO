@@ -1,3 +1,12 @@
+## v1.1.0 -- Class growth that works, and a clean add-on
+
+- **Class actually shapes level-up growth now.** Set a follower to Mage and they gain Magicka when they level, set them to Ranged and they gain Stamina, instead of following their vanilla class. It reads how much your own setup awards each level and reshapes that, so it fits whatever leveling mod you run, and it settles toward the class over several levels. The class was being read wrong before, so a mage grew like a fighter. That's fixed.
+- **Fixed-stat followers grow too.** A lot of unique followers have hand-set stats that never move on level-up. Those followers scale now. Once your own Health, Magicka and Stamina total reaches theirs, they start gaining alongside you at your rate, shaped to their class. Recruit one when you're already high level and they catch up in a single step, then track you from there.
+- **The progression add-on installs cleanly in Vortex.** It had a load-order conflict Vortex couldn't resolve, because the add-on depended on the main plugin and the main plugin was referenced back. The add-on is fully self-contained now. One file, no juggling.
+- **Progression is a real add-on now.** The class system, leveling and the perk board run off the add-on's own data, not baked into the mod. Remove the add-on and everything else works exactly the same. For mod authors, this is the worked example: the mod exposes a general follower API and reads an add-on that declares what it is.
+- **The town-update alpha is folded in.** Followers run their own economy, buy, wear and sell their own gear, keep the best item per slot, dress casters by value, leave shields to sword-and-board followers, tidy loose gems into empty sockets, and shop faster. If you'd rather they leave their gear alone, turn off Follower economy in the MCM.
+- Your saves carry over. This is a big update under the hood, so there are likely still some rough edges I haven't found.
+
 ## v1.0.68 -- Town Update Alpha
 
 - **Followers run their own economy now (this is the town update alpha).** They buy the gear and supplies they've run short on, wear the best they own in each slot, and sell the rest, all out of their own gold. This is the groundwork for followers handling their own town errands.
