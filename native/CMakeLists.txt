@@ -38,6 +38,8 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     ProgProbe.cpp
     Progression.cpp
     ProgAllocator.cpp
+    ProgAllocator_Hms.cpp
+    ProgAllocator_Manifest.cpp
     Evaluator.cpp
     Actuation.cpp
     Actuation_Direct.cpp

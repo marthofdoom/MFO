@@ -12,10 +12,11 @@ regressions here; the ripple notes are why the map exists.
 - **HARD RULE (marth 2026-08-31): NEVER let a source file exceed 2500 lines.**
   Split it into focused modules before it crosses (an internal header for shared
   file-local state + cohesive modules; a pure mechanical move, CI-identical).
-  A split pass is modularizing the top four giants (Logistics [DONE: core +
-  Loot/Economy/Cast], Board [DONE: shell + Progression tab], Actuation [DONE:
-  dispatch + Direct], ProgAllocator [LAST — co-save, careful]) into ≤2500-line modules;
-  Packages/CasterConsent deferred. Keep MAP.md's file:line nav current.
+  The split pass is COMPLETE: the top four giants are modularized (Logistics
+  [core + Loot/Economy/Cast], Board [shell + Progression tab], Actuation
+  [dispatch + Direct], ProgAllocator [DONE: engine+co-save + Hms + Manifest —
+  the PRGN co-save block stays whole in ProgAllocator.cpp]) into ≤2500-line
+  modules; Packages/CasterConsent deferred. Keep MAP.md's file:line nav current.
 - **Delegate bulk file-reads to a subagent** and keep only its conclusion, so
   large files never sit in the main context.
 - **Never read vendored code:** `native/imgui_impl_win32.*` (the only vendored

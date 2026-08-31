@@ -14,7 +14,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (ProgAllocator 2427, Board 2190, Logistics_Loot 2143,
+   whole files. Big files (ProgAllocator 2333, Board 2190, Logistics_Loot 2143,
    Packages 1657, Logistics 1612, CasterConsent 1066) should never sit in context — grep to a
    symbol, read a narrow window.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
@@ -793,7 +793,7 @@ OWN keyword → no MFO.esp master. `AddonRef` gained `keywordEdid`.
 **v1.1 generic manifest model:** `AddonManifest`/`ManifestClass`/`ManifestEconomy`/
 `ManifestAllocation` (+ `ManifestVerdict`/`ManifestBoardTab` placeholders) is the
 add-on-agnostic host model, built by `ProgAllocator::BuildGenericManifests` and
-exposed via `Progression::Manifests()` (defined at the foot of `ProgAllocator.cpp`).
+exposed via `Progression::Manifests()` (defined at the foot of `ProgAllocator_Manifest.cpp`).
 **Consumers routing on:** Phase 5 (`sharedGrowthEnabled`); **Phase 6a** — `Board.cpp`
 `DrawFieldKit` iterates `Manifests()[].boardTab.declared` to decide the hosted board-tab
 count (was hardcoded `snap.prog->active`); `BuildGenericManifests` sets `boardTab.declared=true`
@@ -809,12 +809,29 @@ board edit queue's progression verbs collapsed to ONE generic carrier `EditKind:
 150,437,666,935,1047,1264,1554`) + `Board_Progression.cpp:202`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
-(`ProgAllocator.cpp:1617`), so re-tuning `kEntryPoints[]` (`:64`) or `ClassifyRank`
+(`ProgAllocator.cpp:2117`), so re-tuning `kEntryPoints[]` (`:64`) or `ClassifyRank`
 (`:300`) silently changes which saved perks survive a load (with an auto §17 refund).
 
-### ProgAllocator.cpp / ProgAllocator.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
+### ProgAllocator.cpp / ProgAllocator_Hms.cpp / ProgAllocator_Manifest.cpp / ProgAllocator_internal.h / ProgAllocator.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
 The engine-mutating half: writes perks (`AddPerk/RemovePerk`+`ApplyPerksFromBase`)
 and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
+- **Module layout (mechanical split, 2026-08-31):** `ProgAllocator.cpp` (2333) =
+  the allocation engine + 'PRGN' — skill reconcile (`ReconcileSkill:235`,
+  `RecomputeSkills:366`), perk plumbing + `ReapplyFollower` (`:826`), the level
+  poll (`PollWork:959`), the verbs, board views, dev harness, and the WHOLE
+  co-save block (`CoSaveSave:1806`, `CoSaveLoad:1922`, `ClearAll:2258` — the
+  serializers NEVER leave this TU, and the PRGN field order inside them is the
+  save format). `ProgAllocator_Hms.cpp` (384) = §HMS — `HmsProfile` (`:37`),
+  the F3 fired-pool mirror consumers, `HmsTrackBattle` (`:113`), `RecomputeHMS`
+  (`:171`), `NoteCombatFire` (`:375`). `ProgAllocator_Manifest.cpp` (485) =
+  the §18.6 manifest reader — economy GLOB discovery + `ApplyEconomyOverride`
+  (`:149`), `ParseClassDef` (`:222`), `BuildGenericManifests` (`:277`), `Init`
+  (`:347`), and the PRGN class-identity resolvers `DeriveClassIdentity` (`:446`)
+  / `LookupAddonForm` (`:465`) called by the co-save. `ProgAllocator_internal.h`
+  = the shared substrate (these 3 TUs only): `Economy`/`g_econ`/`g_econDefaults`,
+  `g_ready`/`g_devCmd`, `g_classes`, `g_manifests`, `kSkillNames`, `kHmsAV`,
+  `g_hmsFireMx`/`g_hmsFiredMask`, + the cross-module decls — every definition in
+  it is `inline` (ODR: one shared instance, the `Logistics_internal.h` pattern).
 - **SAVE-COMPAT — `CoSaveSave` / `CoSaveLoad` exact order** (grep the symbols; line
   numbers drift. Any field-order/type/version change corrupts live saves): header
   `{lastPlayerLevel u16, [v6: g_playerHmsTotalLast f32], count u32}`; per follower
@@ -837,18 +854,18 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 - Version guard `Serialization.cpp:320` (newer PRGN skips this record only).
   `CoSaveSave` has no `g_ready` gate — writes even when the addon is disabled so the
   data survives a session without the ESL.
-- Lifecycle: `Init` (`:967`) ← `plugin.cpp:287` (early-returns `g_ready=false` if
-  `!Progression::Detected()`); `OnPostLoad` (`:1013`) ← `plugin.cpp:363` (after the
-  co-save load); `ClearAll` (`:1676`) ← `Serialization.cpp:591` (clears `g_prog`,
+- Lifecycle: `Init` (`ProgAllocator_Manifest.cpp:347`) ← `plugin.cpp:287` (early-returns `g_ready=false` if
+  `!Progression::Detected()`); `OnPostLoad` (`ProgAllocator.cpp:1235`) ← `plugin.cpp:363` (after the
+  co-save load); `ClearAll` (`ProgAllocator.cpp:2258`) ← `Serialization.cpp:591` (clears `g_prog`,
   bumps `g_pollGen` to orphan in-flight polls).
 - Verbs (all ← Board.cpp, `g_ready`-gated): `Enroll`/`SetClass`/`AllocatePerk`/
-  `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`:1110-1396`).
+  `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`ProgAllocator.cpp:1382-1727`).
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
-  `GetPerkIndex` absent (`:586`) + native-ownership deferral (`:598`, if another mod
+  `GetPerkIndex` absent (`:841`) + native-ownership deferral (`:853`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single
-  `ReconcileSkill` (`:298`) with the enrollment baseline as a **hard floor** — a
+  `ReconcileSkill` (`:235`) with the enrollment baseline as a **hard floor** — a
   shrink can never write below the follower's captured natural. `IsKnownSkillAv`
-  (`:117`) validates the raw AV value before Get/SetBaseActorValue (OOB guard).
+  (`:68`) validates the raw AV value before Get/SetBaseActorValue (OOB guard).
   **Two skill models, one write site, live MCM toggle** `g_econ.cancelEngineAwards`
   (default ON, addon INI `bCancelEngineAwards` via `ApplyEconomyOverride` — no GLOB,
   no PRGN touch): ON = `natural = enrollmentBaseline` (REVERT — engine per-level/
@@ -858,7 +875,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   uncaptured (old save) → ADOPT fallback. Both idempotent/replay-safe; toggle
   changes NO co-save layout (baseline already serialized).
 - **§HMS class-redistribution (PRGN v5) — SIBLING of the skill reconcile.**
-  `RecomputeHMS` (near `ReconcileSkill`/`RecomputeSkills`) is called at the same
+  `RecomputeHMS` (`ProgAllocator_Hms.cpp:171`; the whole §HMS engine lives in that module) is called at the same
   three sites as `RecomputeSkills`: the level-gain edge + the ~2s drift-watch in
   `PollWork`, and `ReapplyFollower`. **MEASURE-not-clobber** (the key difference
   from skills): it reads `cur=GetBaseActorValue(H/M/S)`, measures the POSITIVE
