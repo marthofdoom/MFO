@@ -947,6 +947,26 @@ namespace MFO::Actuation {
                                  foe->GetName() ? foe->GetName() : "?",
                                  static_cast<int>(Vocab::HealthPct(foe) * 100.0f)) };
         }
+        // SUMMON SPAM GUARD (v1.1.1, COMBAT path). Mirrors the out-of-combat skip
+        // in Logistics::ServiceFollower. A conjured/reanimated creature is a
+        // COMMANDED ACTOR, not a caster-side magic effect, so the AI-first cast
+        // grace below re-fires a summon gambit every grace window even while the
+        // creature is still alive (marth, field). Suppress the cast while the
+        // follower already commands a LIVE summon from THIS spell -- caster-side,
+        // per-spell (Twin-Souls-aware via the helper), keyed on the live actor so
+        // a killed/expired summon recasts at once. TRANSPARENT, so the combat scan
+        // falls PAST it to the next rule exactly like the cast-grace hold. No-op
+        // for any non-summon spell (CasterHasLiveSummon returns false), so buffs/
+        // heals/candlelight and every non-summon combat cast are byte-identical and
+        // the grace/pacing below is untouched. Reads only the active-effect list --
+        // the same off-worker read as the existing combat guards, no new lock.
+        if (op == Vocab::kActCastSelf || op == Vocab::kActCastPlayer ||
+            op == Vocab::kActCastTarget) {
+            if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
+                sp && CasterHasLiveSummon(a_follower, sp)) {
+                return { Result::NoOp, "summon still live", true };
+            }
+        }
         if (op == Vocab::kActCastSelf) {
             return CastOn(a_follower, a_choice.actionParam, a_follower);
         }

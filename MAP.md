@@ -487,8 +487,14 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   recasts at once). Wired as a single guard at the TOP of the OOC cast block
   (`Logistics.cpp`, right after the `HasSpell` check, before target resolution) so
   it covers self/target/player/AUTO routes; returns false for every non-summon
-  spell, so candlelight/buff/heal pacing is byte-identical. Combat casting is paced
-  by AI-grace and is untouched.
+  spell, so candlelight/buff/heal pacing is byte-identical. The SAME guard is wired
+  into the COMBAT path (v1.1.1): `Actuation::Fire` (`Actuation.cpp:~950`, the sole
+  caller is the Scheduler combat scan `Scheduler.cpp:612`) checks it once before the
+  three cast opcodes (`kActCastSelf`/`kActCastPlayer`/`kActCastTarget`) and returns a
+  TRANSPARENT NoOp ("summon still live") so the scan falls through to the next combat
+  rule, exactly like the cast-grace hold. Non-summon combat casts are byte-identical
+  (helper returns false) and the AI-first-grace pacing is untouched; the helper only
+  READS the active-effect list, the same off-worker read as the other combat guards.
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:28`), pumps packages
