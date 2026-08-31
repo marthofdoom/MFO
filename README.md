@@ -5,14 +5,20 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v1.0.x, in active testing** (see [`VERSION`](VERSION) for the exact
-point release). Gambits execute — both tables. Follower detection, Rapport,
-the in-game board, and combat + logistics actuation are built and field-tested;
-followers cast (their own AI, animated, at chosen targets), attack, drink,
-restock, loot, *walk* to loot — up to **four followers sweeping a battlefield
-at once** — fall back to your side on their own when badly outmatched, and
-**trade at merchants**: selling their junk and buying the supplies they run
-short on. Build order and what's still deferred are in
+**Status: v1.1.1, released** (see [`VERSION`](VERSION) and the
+[GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
+release is in `VERSION`). Gambits execute in both tables and the mod is playable
+end to end. Follower detection, Rapport, the in-game board, and combat and
+logistics actuation are built and field-tested. Followers cast (their own AI,
+animated, at chosen targets), attack, drink, restock, loot, and *walk* to loot,
+up to **four followers sweeping a battlefield at once**, and fall back to your
+side on their own when badly outmatched. They run their own **economy**, selling
+their junk and buying, wearing, and managing their own gear out of their own
+gold. A follower's **class shapes its Health, Magicka and Stamina growth** on
+level up (a mage gains Magicka, an archer gains Stamina), fixed-stat unique
+followers included. The **progression system is a self-contained add-on** over a
+general follower API, so MFO is also the worked example for building your own
+follower add-on. Build order and what's deferred are in
 [`ROADMAP.md`](Docs/ROADMAP.md); the per-version history is in
 [`CHANGELOG.md`](CHANGELOG.md).
 
