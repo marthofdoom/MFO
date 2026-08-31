@@ -14,8 +14,8 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (Logistics 4355, Board 3347, ProgAllocator 2427,
-   Packages 1657, CasterConsent 1066) should never sit in context — grep to a
+   whole files. Big files (Board 3347, ProgAllocator 2427, Logistics_Loot 2143,
+   Packages 1657, Logistics 1612, CasterConsent 1066) should never sit in context — grep to a
    symbol, read a narrow window.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
    changing a subsystem, re-read its "What breaks" entry *against current code*
@@ -403,7 +403,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
-  (`Logistics.cpp:~4098`). On that OOC path a **non-AUTO** resolved `cast_target`
+  (`Logistics.cpp:~1090-1250`, inside `ServiceFollower`). On that OOC path a **non-AUTO** resolved `cast_target`
   now routes by nature: a **CONCENTRATION** spell (any non-self target) is
   intercepted FIRST → `CastTargetDirect` (direct force, package-lock-proof); the rest is
   FIRE-AND-FORGET, routed by `CasterConsent::ClassifySpell` + foe test — a **hostile
@@ -492,8 +492,8 @@ a job worker here, not main).
   `VTABLE_PlayerCharacter[0]` slot `0x0AD`; VR index differs → `g_dead=true`,
   `Post` becomes a no-op. Writing `0x0AD` on VR = instant CTD.
 - `Post(fn)` (`:73`) — callers: Sightline LoS (`Sightline.cpp:112`), Rapport quash
-  (`Rapport.cpp:394`), Logistics 3D/merchant/activate (`Logistics.cpp:1372,3286,
-  3489,3579,3921,4412`), Board/ProgProbe/ProgAllocator hotkeys+polls. Callers that must still
+  (`Rapport.cpp:394`), Logistics 3D/merchant/activate (family-wide: `AcquireEquip`/`doDrop`/route-2b in
+  `Logistics_Loot.cpp` + `Logistics.cpp`, merchant read in `Logistics_Economy.cpp`), Board/ProgProbe/ProgAllocator hotkeys+polls. Callers that must still
   run on VR check `IsInstalled()` and fall back to a direct call.
 - `Clear()` (`:79`) — caller `Serialization.cpp:572`; drops pending work whose
   captured handles would re-resolve against the next session's reused handle table.
@@ -610,25 +610,49 @@ Out-of-combat supply/upkeep. `Logistics::ServiceFollower` + its whole loot/heal/
 economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
 `MainThread::Post`. Owns the serialized `g_stockGear` ('MSTK') map.
 
-### Logistics.cpp / Logistics.h
-- **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics.cpp:2073`, guarded `g_stockMx`
-  `:2072`, the one cross-thread map here): the only serialized state the cluster
-  owns. `CopyStockGear` (`:4470`) → `Serialization.cpp:191`; `LoadStockRecord`
-  (`:4476`) → `:307`; `ClearStockGear` (`:4481`) → `:231,587`. Only
+### Logistics family: Logistics.cpp / _Cast / _Economy / _Loot / _internal.h / Logistics.h
+**MODULE SPLIT (mechanical, v1.1 split pass):** one TU became four + a shared
+internal header. Cross-module state/types/small helpers live as `inline` members
+of `namespace MFO::Logistics` in `Logistics_internal.h` (ONE instance across the
+TUs — it replaces the old single anonymous namespace; big cross-module helpers
+are declared there and defined in their home module). Layout:
+- `Logistics.cpp` (1612) — core tick: `ServiceFollower` (`:625`, INCLUDING the
+  OOC cast dispatch `:~1090-1250` — concentration direct-force `:1136`,
+  fire-and-forget `:1178`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
+  `ShedOffRoleWeapon`, sinks, lifecycle + MSTK API, evaluator pure reads.
+- `Logistics_Cast.cpp` (269) — mage-identity/school classifiers:
+  `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
+  `TopTwoSchoolMask`, `LearnCarriedTomes:137`, school name/keyword helpers.
+- `Logistics_Economy.cpp` (1035) — #21 economy: mage-apparel scoring,
+  `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
+  `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
+- `Logistics_Loot.cpp` (2143) — the loot judge + per-category looters,
+  claim-and-release, navmesh reach, `AcquireEquip:538`, `LootEquipment:617`,
+  `LootNearby:1477`, `StripCorpse:2023`, `RunExcursionScan:2085`.
+- `Logistics_internal.h` (652) — shared substrate: all `g_*` maps/state
+  (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:504`,
+  `g_stockGear:505`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/`Claim`,
+  inline small helpers, cross-module declarations. NOT public API.
+Adding shared state? Put it in `_internal.h` as `inline` (never a per-TU
+anonymous-namespace copy — that silently forks the instance).
+- **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics_internal.h:505`, guarded
+  `g_stockMx` `:504`, the one cross-thread map here): the only serialized state the cluster
+  owns. `CopyStockGear` (`Logistics.cpp:1596`) → `Serialization.cpp:191`; `LoadStockRecord`
+  (`:1601`) → `:307`; `ClearStockGear` (`:1606`) → `:231,587`. Only
   `IsPersistableID` FormIDs written, sets capped 512, unresolvable IDs dropped.
   Changing the map's key/value shape or record framing breaks the shed-protection
   ("Gauldurbow fix") — signature gear could get shed (dropped on the floor) after a load.
   **Not** cleared by `ClearTransientState` — cleared separately by `ClearStockGear`.
-- `ServiceFollower` (`:3748`) — sole caller `Scheduler.cpp:225` (worker). Sets
-  `g_svc` (`:885`) raw pointer valid only for that call — safe only because the
+- `ServiceFollower` (`Logistics.cpp:625`) — sole caller `Scheduler.cpp:225` (worker). Sets
+  `g_svc` (`Logistics_internal.h:222`) raw pointer valid only for that call — safe only because the
   worker services followers sequentially; parallelizing dangles it.
-- `ShedOffRoleWeapon` (`:3617`) — one off-role weapon per idle tick, **DROPPED on
+- `ShedOffRoleWeapon` (`Logistics.cpp:494`) — one off-role weapon per idle tick, **DROPPED on
   the floor** (no longer handed to the player; no value split, no knob — marth
   simplified). Disposal is `Actor::DropObject` (a world-ref/3D create) so it MUST
   go through `MainThread::Post` (`doDrop`, mirrors the #62 equip / ActivateRef
   hops in this file); on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
   drop off-worker. **POST-BATTLE GATE:** early-returns until `kShedPostBattleDwell`
-  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`:4523`) ←
+  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:1538`) ←
   `Scheduler.cpp:293` (the in-combat branch — the only place combat=true is seen,
   since this path is out-of-combat-only). Survives an `IsInCombat()` mid-fight
   flap: a real combat frame re-stamps `now`, so the dwell can't mature inside a
@@ -636,38 +660,38 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
   worker-only/no-lock (#4), cleared in `ClearTransientState`. Guards unchanged
   (never disarm/`inRoleWeapons>0`, `IsStockGear`, `IsCreatureWeapon`, socketed,
   `Catalog::IsExcluded`).
-- `ClearTransientState` (`:4418`) → `Serialization.cpp:582`, after StopPump. Wipes
+- `ClearTransientState` (`Logistics.cpp:1542`) → `Serialization.cpp:582`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
-- Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`:3353`),
-  `AmmoIsBolt` (`:3409`), `CountPotions`/`ArrowCount`/`BoltCount` (`:3451-3465`) →
+- Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`Logistics.cpp:249`),
+  `AmmoIsBolt`, `CountPotions`/`ArrowCount`/`BoltCount` (`:305-362`) →
   `Evaluator.cpp:397-409` + `TradeBridge.cpp:52-71` (buy side shares them so bought
-  supply matches looted). `ComputeWeakPotionFloor` (`:3423`) ← `plugin.cpp:288`
+  supply matches looted). `ComputeWeakPotionFloor` (`Logistics.cpp:320`) ← `plugin.cpp:288`
   (after `Catalog::Load`).
-- **Alias/travel:** `g_travelSlots` (`:1767`, `kMaxLootSlots=4`) maps follower→loot
+- **Alias/travel:** `g_travelSlots` (`Logistics_internal.h:323`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
-  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `:4441` ←
+  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `Logistics.cpp:1566` ←
   `Scheduler.cpp:236`; cap/leash/dismissal/revert). Leash hysteresis guards
-  (`followerBeyondLeash` `:2713`, ×1.15 `:3773`) prevent the ~1/sec claim/evict churn.
-  **Theft guard (RC#4):** the Walking driver (`:3949`) detects an EXTERNAL package
+  (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
+  **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `Logistics.cpp:~700`) detects an EXTERNAL package
   holding a claimed follower (scene/framework; onTravelPkg=false mid-walk), pauses
-  the stall/deadline clocks (`stolenSince`, `kStealGrace=10s` `:1810`) and re-asserts
+  the stall/deadline clocks (`stolenSince`, `kStealGrace=10s` `Logistics_internal.h`) and re-asserts
   via `EvaluatePackage(true,false)`; only a genuine on-package zero-move stall
   (`kNoProgress=5s`) reaches the sticky blocklist — routing theft through the stall
   path re-poisons reachable loot 5 min at a time (the 12:25 deck trace).
-- **Loot scan is MULTI-CELL** (`LootNearby` `:2353`; cell set built `:2440-2458`):
+- **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1477`; cell set built just below it):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
   (crash4). Dropping back to one cell re-blinds exterior scans across cell borders
-  ("second gold pile on the same table"). Idle blocklist reassess (`:4306`) is
+  ("second gold pile on the same table"). Idle blocklist reassess (`ServiceFollower`) is
   AGE-GATED (≥10s): a full wipe let follower B erase follower A's 200ms-old fail
   verdict → instant same-target redispatch churn.
-- **Sinks** (`RegisterSinks` `:4379` ← `plugin.cpp:297`): `ContainerSink`
+- **Sinks** (`RegisterSinks` `Logistics.cpp:1495` ← `plugin.cpp:297`): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
-  PlayerID()` `:3311`) or it re-fires on its own removal (MAO infinite-credit loop);
+  PlayerID()`, `ContainerSink` in `Logistics.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
   only QUEUES to the worker. `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
-  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`:4398`) ← `plugin.cpp:360`.
-- `OnFollowerRemoved` (`:4454`) ← `Followers.cpp:306` (dismissal alias eviction).
+  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`Logistics.cpp:1514`) ← `plugin.cpp:360`.
+- `OnFollowerRemoved` (`Logistics.cpp:1579`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
 - Economy probe (`EconomyProbe`, worker, `Config::g_economy && Po3Present`, now takes
@@ -680,7 +704,7 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
   primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
   Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
   Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
-- **#21 College tome-gate unlock.** `UnlockCollegeTomes` (`Logistics.cpp`, worker,
+- **#21 College tome-gate unlock.** `UnlockCollegeTomes` (`Logistics_Economy.cpp:220`, worker,
   `ServiceFollower` idle branch, gated `g_economy && g_economyBuyTomes`, GLOBAL ~30s
   rate-limit) generalizes vanilla's player-skill tome gate to the party: for each of
   15 `PC{School}{tier}` globals (Skyrim.esm `0x000F2584..0x000F2592`, dumped via
@@ -692,7 +716,7 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
   `MainThread::Post` (re-resolve on-frame; GLOB values are save-persisted, so this is
   the same field vanilla writes — no co-save risk). `[college]` log on first flip.
 - **#21 equip + unified apparel judge (loot ⇄ buy).** The loot equip step is factored
-  into `AcquireEquip` (`Logistics.cpp`, v1.0.38 SAFE path: `MainThread::Post` +
+  into `AcquireEquip` (`Logistics_Loot.cpp:538`, v1.0.38 SAFE path: `MainThread::Post` +
   `ActorEquipManager::EquipObject`, **never DoReset3D** #62; MEO gem capture +
   `QueueGemMove`). `a_src==nullptr` ⇒ the follower already owns the item (buy / owned
   upgrade). `LootEquipment` routes through it; the **mage apparel selection is now the
@@ -977,14 +1001,14 @@ insert/resize breaks both DLLs. Threading is part of the ABI (queries main-threa
 Rides a follower's socketed gems onto looted gear on upgrade. Fully optional.
 `Acquire()` (`:61`) ← `plugin.cpp:289` (nullptr on absence/ABI-mismatch).
 `RegisterSink()` (`:73`) ← `plugin.cpp:298` (equip sink — must stay with the other
-sinks or moves never flush). `QueueGemMove`/`WornUid`/`Available` ← `Logistics.cpp:
-1208,1236,1361` (worker tick). `PreviewWithGems` (`:105`, main-thread queries) has no
+sinks or moves never flush). `QueueGemMove`/`WornUid`/`Available` ← `Logistics_Loot.cpp`
+(`AcquireEquip:538` + `LootEquipment`, worker tick). `PreviewWithGems` (`:105`, main-thread queries) has no
 live caller (**UNVERIFIED** — check Board before removing). `g_pending` keys on
 `(followerFormID<<32|toBase)`; if `ClearTransientState` (`:100` ← `Serialization.cpp:
 616`) stops being called on revert, a reused FormID next session moves gems onto the
 wrong actor.
 **GEM RECONCILE (ABI v3)** — `GemReconcileSupported`/`RequestGemReconcile` (MEOBridge.h)
-← `Logistics::ServiceFollower` idle branch (`Logistics.cpp` ~`:5271`, each management
+← `Logistics::ServiceFollower` idle branch (`Logistics.cpp` ~`:1325`, each management
 scan). Decoupled re-socket of a follower's OWN loose gems (left loose by the
 ungem-then-sell `UnsocketItemGems`) back into his WORN gear's empty sockets, so a gem
 extracted for a sale never stays loose. `RequestGemReconcile` posts the whole pass to
@@ -1002,7 +1026,7 @@ Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`
 (native `GetInventory`/`GetGoldAmount` CTD on merchant chests). `RegisterFuncs()`
 (`:207`) ← `plugin.cpp:407`, registers **10 Papyrus natives** on class `MFO_Trade`
 (`:209-218`) called by the shipped `MFO_Trade.pex` — renaming/re-signing any breaks
-trading silently. `VendorTrade` (`:223`) ← `Logistics.cpp:2960`. `SellRow`/`NeedCat::
+trading silently. `VendorTrade` (`:223`) ← `Logistics_Economy.cpp` (`EconomyProbe:488`). `SellRow`/`NeedCat::
 Kind` (`TradeBridge.h:25,35`) are the wire vocabulary with Logistics. Cross-save
 safety: per-chest in-flight guard (`:250`) + `ClearTransientState`'s `g_nextToken +=
 1'000'000` jump (`:282` ← `Serialization.cpp:612`) so a resumed stale token can't name
@@ -1198,7 +1222,7 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 | `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:294` | 14 + 1 vtables |
 | `CombatStyle::InstallEquipGate` (CheckShouldEquip 0x0F) | `plugin.cpp:295` | 30 template vtables |
 | `Rapport::RegisterSinks` (TESDeath, TESCombat) | `plugin.cpp:296` → `Rapport.cpp:511` | sinks LAST |
-| `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:297` → `Logistics.cpp:3950` | direction filter mandatory |
+| `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:297` → `Logistics.cpp:1495` | direction filter mandatory |
 | `MEOBridge::RegisterSink` (TESEquip) | `plugin.cpp:298` → `MEOBridge.cpp:75` | optional |
 | `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:299` → `Diagnostics.cpp:397` | + the worker pump |
 | `TradeBridge::RegisterFuncs` (10 Papyrus natives) | `plugin.cpp:407` → `TradeBridge.cpp:209` | script ABI |
