@@ -559,19 +559,19 @@ namespace MFO::Board {
             // tab still resyncs s_tab inside the opened body.
             static int s_tab = 0;
             static bool s_tabForce = false;   // apply SetSelected for ONE frame after an edge
-            // #74 / v1.1 Phase 6a: the tab count is RUNTIME and HOST-DRIVEN — the
-            // Field-Orders board hosts one tab per add-on that DECLARES a board tab
-            // in its manifest (Progression::Manifests()[].boardTab.declared), NOT a
-            // hardcoded progression case. Absent add-on = zero hosted tabs = the tab
-            // is absent entirely (§1, the optional-addon pattern), and the View-cycle
-            // must not step onto a tab that was never emitted. A hosted tab renders
-            // only when its view payload is published (today one add-on, the
-            // progression tab, payload = snap.prog; the body below is still add-on-
-            // typed — a later slice generalizes the widgets + label).
+            // #74 / v1.1 Phase 6a+b: the tab count is RUNTIME and HOST-DRIVEN — the
+            // Field-Orders board hosts one tab per add-on that published a board-tab
+            // view (snap.boardTabs, the GENERIC payload built off the manifest's
+            // declared tabs), NOT a hardcoded progression case. Absent add-on = zero
+            // hosted tabs = the tab is absent entirely (§1, the optional-addon
+            // pattern), and the View-cycle must not step onto a tab that was never
+            // emitted. A hosted tab counts only when its payload is `active`. (Today
+            // one add-on, the progression tab; the body below still reads the concrete
+            // payload — a later slice generalizes the widgets + label.)
             int hostedBoardTabs = 0;
-            for (const auto& m : Progression::Manifests())
-                if (m.boardTab.declared) ++hostedBoardTabs;
-            const bool progActive = hostedBoardTabs > 0 && snap.prog && snap.prog->active;
+            for (const auto& t : snap.boardTabs)
+                if (t.active) ++hostedBoardTabs;
+            const bool progActive = hostedBoardTabs > 0;
             const int kTabCount = progActive ? 3 : 2;   // Followers, Gambits[, hosted tab]
             if (s_tab >= kTabCount) s_tab = 0;   // the addon vanished under a stale pick
             // Gated like everything else: never while an item is being tweaked or
@@ -1251,13 +1251,19 @@ namespace MFO::Board {
                 // means absent, the same optional-addon pattern as the MCM
                 // Detected line. The draw reads two immutable sources: the
                 // FROZEN catalog (lock-free on this thread by its contract)
-                // and the allocator's published value-only views (snap.prog).
-                // It mutates NOTHING — every action queues an EditCmd that
-                // ApplyEdits re-posts to the MAIN thread, where the §5
-                // backend gate re-validates before any engine write.
+                // and the allocator's published value-only views (the generic
+                // hosted board-tab payload, snap.boardTabs). It mutates NOTHING —
+                // every action queues an EditCmd that ApplyEdits re-posts to the
+                // MAIN thread, where the §5 backend gate re-validates before any
+                // engine write.
                 if (progActive && ImGui::BeginTabItem("Progression", nullptr, tabSel(2))) {
                     s_tab = 2;
-                    const auto& prog = *snap.prog;
+                    // 6b: read the concrete payload out of the generic hosted-tab
+                    // envelope — the first published+active board tab (one today).
+                    const ProgAllocator::BoardProgSnap* progPtr = nullptr;
+                    for (const auto& t : snap.boardTabs)
+                        if (t.active) { progPtr = t.content.get(); break; }
+                    const auto& prog = *progPtr;   // progActive ⇒ a non-null active payload
 
                     static RE::FormID s_psel = 0;          // selected follower
                     static RE::FormID s_promptedFor = 0;   // class prompt auto-opened for
@@ -3281,10 +3287,11 @@ namespace MFO::Board {
         s.bossLevelDelta = Config::g_bossLevelDelta.load();
         s.quirksActive   = Followers::QuirksActive();
         s.quirksInactive = Followers::QuirksInactive();
-        // #74 component 3: refcount copy of the allocator's published views
-        // (built on the MAIN thread; this drain runs on the task worker, so
-        // it must never read g_prog itself — only the immutable snap).
-        s.prog = ProgAllocator::CopyBoardViews();
+        // #74 / 6b component 3: the GENERIC hosted board-tab list (refcount copy
+        // of the allocator's published views, one envelope per declared add-on
+        // tab; built on the MAIN thread — this drain runs on the task worker, so
+        // it must never read g_prog itself, only the immutable snap).
+        s.boardTabs = ProgAllocator::CopyBoardTabViews();
 
         auto* player = RE::PlayerCharacter::GetSingleton();
 

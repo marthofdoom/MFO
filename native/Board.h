@@ -118,12 +118,12 @@ namespace MFO::Board {
         int   lastCredited = 0;
         bool  lastValid = false;
         int   bossLevelDelta = 5;
-        // #74 component 3: the Progression tab's value-only view — built and
-        // published by the allocator on the MAIN thread, immutable once
-        // published, so copying this snapshot (and the render thread's
-        // per-frame copy) only bumps a refcount. Null or !active = the addon
-        // is absent and the tab does not exist.
-        std::shared_ptr<const ProgAllocator::BoardProgSnap> prog;
+        // #74 / v1.1 Phase 6b component 3: the GENERIC hosted add-on board-tab
+        // payloads — one BoardTabView per add-on that declared a board tab, each
+        // an immutable value-only view built + published by the allocator on the
+        // MAIN thread (copying this snapshot only bumps refcounts). Empty = no
+        // add-on declares a tab. A tab renders only when its entry is `active`.
+        std::vector<ProgAllocator::BoardTabView> boardTabs;
     };
 
     // Install the three trampoline hooks. MUST be called from SKSEPluginLoad,
