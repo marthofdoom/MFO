@@ -14,7 +14,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (Board 3347, ProgAllocator 2427, Logistics_Loot 2143,
+   whole files. Big files (ProgAllocator 2427, Board 2190, Logistics_Loot 2143,
    Packages 1657, Logistics 1612, CasterConsent 1066) should never sit in context — grep to a
    symbol, read a narrow window.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
@@ -789,12 +789,12 @@ count (was hardcoded `snap.prog->active`); `BuildGenericManifests` sets `boardTa
 `BoardTabView` (`ProgAllocator.h:378`, `CopyBoardTabViews`). **Phase 6c (Phase 6 COMPLETE)** —
 (1) the tab CAPTION is `boardTab.label`, sourced from the add-on's own `MFOP_BoardTabLabel`
 MESG (FULL "Progression", manifest entry[1] before the classes FLST; `BuildGenericManifests`
-captures its FULL, no DLL literal) — `Board.cpp:1268` `BeginTabItem(hostedTabLabel)`. (2) The
+captures its FULL, no DLL literal) — `Board_Progression.cpp:43` `BeginTabItem(hostedTabLabel)`. (2) The
 board edit queue's progression verbs collapsed to ONE generic carrier `EditKind::AddonAction`
-+ `EditCmd::verbId` (`AddonVerb` enum, `Board.cpp:153`); the `verbId`→backend dispatch
-(`ApplyEdits`, `Board.cpp:~3050`) stays progression-shaped (Phase 7/9). The tab BODY
-(Board.cpp:1251-2440) + view payload are still add-on-typed (Phase 7/9). `Get()` read by ProgAllocator (`:143,
-150,437,666,935,1047,1264,1554`) + `Board.cpp:1333`. `kAddonPlugin=
++ `EditCmd::verbId` (`AddonVerb` enum, `Board_internal.h:45`); the `verbId`→backend dispatch
+(`ApplyEdits`, `Board.cpp:1775`) stays progression-shaped (Phase 7/9). The tab BODY
+(all of Board_Progression.cpp) + view payload are still add-on-typed (Phase 7/9). `Get()` read by ProgAllocator (`:143,
+150,437,666,935,1047,1264,1554`) + `Board_Progression.cpp:202`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
 (`ProgAllocator.cpp:1617`), so re-tuning `kEntryPoints[]` (`:64`) or `ClassifyRank`
@@ -931,23 +931,37 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 
 ### ProgProbe.cpp / ProgProbe.h — throwaway field probe (NOT serialized)
 Dev-only (`bProgProbe`, INI, default OFF) log probe. `OnPostLoad` (`:444`) ←
-`plugin.cpp:362`; `OnHotkey` (`:436`) ← `Board.cpp:2672`. Writes no save record;
+`plugin.cpp:362`; `OnHotkey` (`:436`) ← `Board.cpp:1512`. Writes no save record;
 its perk/AV mutations are runtime-only. Safe to delete without touching saves; only
-`plugin.cpp:362` + `Board.cpp:2672` reference it. Idempotent reapply guarded on
+`plugin.cpp:362` + `Board.cpp:1512` reference it. Idempotent reapply guarded on
 `GetPerkIndex` (`:468`).
 
 ---
 
 ## 6. Board / UI / Papyrus — `Board.*`, `Papyrus.*`
 
-### Board.cpp / Board.h — the Field Kit overlay
+### Board.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
 Installs three trampoline hooks at plugin load, draws live state via ImGui on the
 **render thread** from a mutex-guarded snapshot, funnels all rule edits through a
 main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not read.**
+- **Module layout (mechanical split, 2026-08-31):** `Board.cpp` (2190) = shell —
+  shared render state, input translation, `PushSkin` (`:290`), `DrawFieldKit`
+  (`:397`, Followers+Gambits tabs + tab bar + cascaded-B close), `DrawHud`
+  (`:1251`), the 3 hooks (`WndProcHook:1321`, `D3DInitHook:1345`,
+  `InputDispatchHook:1477`), public API + `ApplyEdits` (`:1775`) +
+  `PublishSnapshot` (`:1995`) + `Install` (`:2181`). `Board_Progression.cpp`
+  (1234) = the hosted progression tab body, ONE function `DrawProgressionTab`
+  (class prompt, skill table, perk-dome window, node/skill popups, respec) —
+  called from `DrawFieldKit` at `Board.cpp:1174`; future progression-tab work
+  lands here. `Board_internal.h` = the shared substrate (Board TUs only):
+  `EditKind`/`AddonVerb`/`EditCmd`, the edit queue `g_editMx`/`g_edits`/
+  `QueueEdit` (`:69`), `g_fontHead`, `MenuSkin`/`kSkins`,
+  `DrawProgressionTab` decl — every definition in it is `inline` (ODR: one
+  shared instance across TUs, same pattern as `Logistics_internal.h`).
 - `Install()` (`Board.h:113`) — caller `plugin.cpp:393` only. **MUST** install
   before renderer init (only place, `plugin.cpp:391`); moving it → `D3DInitHook`
   misses init → `g_ready` never set → overlay silently disabled. Writes a 256-byte
-  trampoline with 3 game-version-keyed `RelocationID`/offset pairs (`Board.cpp:3271`)
+  trampoline with 3 game-version-keyed `RelocationID`/offset pairs (`Board.cpp:2183`)
   — a bad offset corrupts the call site.
 - **Snapshot carries all actor-derived display data** (render thread reads plain
   cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
@@ -958,21 +972,22 @@ main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not re
   all filled in `PublishSnapshot` (main). The gambit spell-picker renders the hover
   tooltip via `DrawSpellHoverTooltip` from those cached values.
 - **Thread discipline:** `DXGIPresentHook` (render thread) copies `g_snapshot` under
-  `g_snapMx` **before** taking `g_ioMx` (`:2596`); reversing = render-thread deadlock.
+  `g_snapMx` **before** taking `g_ioMx` (`:1438`); reversing = render-thread deadlock.
   The two mutexes are never nested (#6). Draw functions **never touch `g_followers`**
-  — every mutation is a `QueueEdit` (`:175`, 21 sites) drained by `ApplyEdits`
-  (`:2934`). **Rule edits key on `Gambit.uid`, not row index** (`:3030` — resolve by
+  — every mutation is a `QueueEdit` (`Board_internal.h:69`, sites in both draw TUs)
+  drained by `ApplyEdits`
+  (`:1775`). **Rule edits key on `Gambit.uid`, not row index** (`:1889` — resolve by
   identity #31); applying by index misapplies a command to the wrong rule.
 - **Correction to the header:** `PublishSnapshot` (`Board.h:116` says "MAIN THREAD
-  ONLY") actually drains on the **task worker** (`:2662,3155`), the same context that
+  ONLY") actually drains on the **task worker**, the same context that
   owns `g_followers`/`Scheduler::Tick` — so its `g_followers` reads are safe *there*.
-  But `Prog*` edit verbs ride `MainThread::Post` (`:2956`) because `g_prog` lives on
+  But addon edit verbs ride `MainThread::Post` (`:1803`) because `g_prog` lives on
   the real main/poll thread. Callers: `Diagnostics.cpp:216,263`.
 - `ClearPendingEdits` (`Board.h:124`) ← `Serialization.cpp:603` (revert) — drops
   queued edits so a command from the old save can't hit a freshly loaded one.
   `SetHud` ← `plugin.cpp:365`, `Diagnostics.cpp:94`, `Serialization.cpp:621`.
   `IsOpen`/`IsAvailable`/`Toggle` ← Diagnostics (publish cadence + Field Orders
-  power). `ToggleHud` (`Board.cpp:2861`) is **dead** (no caller).
+  power). `ToggleHud` (`Board.cpp:1702`) is **dead** (no caller).
 
 ### Papyrus.cpp / Papyrus.h — outbound VM dispatch shim
 Reaches Papyrus-only natives by class-name+method-name string, async fire-and-forget.
