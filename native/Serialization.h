@@ -13,11 +13,25 @@ namespace MFO {
     inline constexpr std::uint32_t kRecStock    = 'MSTK';
     inline constexpr std::uint32_t kStockVersion = 1;
 
-    // Follower progression (component 2 of the ESL addon): per-follower
-    // enrollment/class/level/perk+skill allocations (ProgAllocator::g_prog).
+    // GENERAL per-follower FOLLOWER-ALLOCATION-STATE slot (host machinery, v1.1).
     // A THIRD independent record -- own type, own version, never touches
     // FLWR/MSTK. Layout + ingestion rules live in ProgAllocator.cpp
-    // (CoSaveSave/CoSaveLoad); design doc §8.
+    // (CoSaveSave/CoSaveLoad); design doc §6/§8.
+    //
+    // v1.1 REFRAME (Phase 8, ZERO on-disk change): every field is GENERAL
+    // allocation-engine state that ANY allocation add-on would carry -- an
+    // enrolled flag, an OPAQUE plugin-qualified class-def reference {clsPlugin,
+    // clsLocal} the host re-resolves but never INTERPRETS, allocated perks/skills
+    // (FormID+value), HMS pools, battle counters, and the engine-detected fixed-
+    // stat flag. It embeds NO add-on JUDGMENT: the ratios/verdicts/layout that
+    // MEAN anything live in the manifest FORM the class reference points to, not
+    // here. So deleting the add-on's manifest strands no judgment in this slot --
+    // no add-on enrolls, g_prog stays empty, and this record writes only the
+    // header + count=0 (Phase 9 acceptance test). The 'PRGN' fourCC VALUE +
+    // kProgVersion are FROZEN for compat (the deployed Tuxborn v6 save) -- the
+    // "Progression"/"Prog" naming is HISTORICAL (the sole add-on populating the
+    // slot today is MFO_Progression); it is the general host slot, not an
+    // add-on-specific schema.
     //
     //   v1 - header {lastPlayerLevel u16}, then per follower {formID, flags,
     //        class(u8 ordinal), progressionLevel, sharedGrowthRemainder,
