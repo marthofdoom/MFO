@@ -213,7 +213,7 @@ releases **by eviction** with a non-actor XMarker.
   TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
   EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
   followers (Lucien, prio-80 quest). So self routes through
-  **`Actuation::CastSelfDirect`** (`Actuation.cpp`, public) — effect + magicka only,
+  **`Actuation::CastSelfDirect`** (`Actuation_Direct.cpp:695`, public) — effect + magicka only,
   **NO equip, NO channel** (registry `g_selfCast`, worker-serial; `SelfCastReconcile`
   ticks it from `Diagnostics` before `Loadout::Tick`; `ClearSelfCasts` on revert).
   **NEVER equips the spell**: `CastSpellImmediate`(kInstant) applies the effect
@@ -249,7 +249,7 @@ releases **by eviction** with a non-actor XMarker.
 - **CONCENTRATION = DIRECT FORCE everywhere, no package (`CastTargetDirect`) — see
   `Docs/CAST-DELIVERY.md` (canonical).** BOTH the Logistics OOC dispatch AND combat's
   `ConcentrationCast` deliver EVERY non-self concentration cast (player/ally/foe)
-  through `Actuation::CastTargetDirect` — `CastSpellImmediate` straight onto the target
+  through `Actuation::CastTargetDirect` (`Actuation_Direct.cpp:893`) — `CastSpellImmediate` straight onto the target
   + magicka deduct, the SAME known-working force `CastSelfDirect` uses, touching NO
   package. Why: the package route `§4.6`-DECLINED every tick for a **package-locked
   custom follower** (Lucien 2F00591F, prio-80 quest owns the cast alias) — OOC his
@@ -274,7 +274,7 @@ releases **by eviction** with a non-actor XMarker.
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
   **CONCENTRATION + SELF-delivery off-self → DELIVERY-FLIPPED PROXY (`ConcProxy`/`DeliverySpell`,
-  Actuation.cpp):** baseline `CastSpellImmediate(sp,target,follower)` lands an FF Self effect on
+  `Actuation_Direct.cpp:174`/`:247`):** baseline `CastSpellImmediate(sp,target,follower)` lands an FF Self effect on
   `target` (Candlelight/flesh work — do NOT touch), but a `kSelf` CONCENTRATION channel binds to
   the caster's OWNER, so a player/ally conc heal collapses onto the follower. Gated on
   `kSelf && kConcentration && target!=follower`, MFO casts a transient COPY with casting style
@@ -335,8 +335,8 @@ releases **by eviction** with a non-actor XMarker.
   `MFO_CastPackage` on alias 0 → single holder forced by shared `TESPackage::refCount`
   (`:790`); multi-holder needs per-verb records at 0x821+. The `CastHold` overload of
   `CastAt` is DORMANT (concentration no longer dispatches a package). **Concentration
-  stream time-cap** is drawn per-stream by ONE helper `DrawConcCap(kind)` (Actuation.cpp
-  anon, `std::mt19937` + `uniform_real_distribution`): heal/utility uniform `[8,15]`s,
+  stream time-cap** is drawn per-stream by ONE helper `DrawConcCap(kind)` (`Actuation_internal.h`,
+  shared `inline`, `std::mt19937` + `uniform_real_distribution`): heal/utility uniform `[8,15]`s,
   offense `[2,6]`s, stored in `TargetCastState::cap`/`SelfCastState::cap` at stream start,
   never serialized; consumed by `TargetCastReconcile` and `SelfCastReconcile` (+ magicka-out
   stop + heal-full `kHealFullPct` = `Vocab::kHealFull` 0.9995). (Replaced the old fixed
@@ -359,12 +359,24 @@ releases **by eviction** with a non-actor XMarker.
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
-### Actuation.cpp / Actuation.h — "a package IS the action"
-Only module that mutates actor state; main-thread only. `Fire(follower, choice)`
-(`:774`) dispatches one action/tick: Wait / Attack (→`Targeting::Command`) /
+### Actuation.cpp / Actuation_Direct.cpp / Actuation_internal.h / Actuation.h — "a package IS the action"
+Only module that mutates actor state; main-thread only. **Split mechanically
+2026-08-31 (no logic change):** `Actuation.cpp` (1244) = the combat-rule
+dispatch — `Fire` + verbs, `CastOn`/`ConcentrationCast`/`ForceCast`,
+`EquipWeapon`, `NearestAlly`/`ResolveCastTarget` (`:856`), the #76 force-hold
+map + FWPN co-save; `Actuation_Direct.cpp` (1309) = the direct-delivery
+streams (`CastSelfDirect`/`CastTargetDirect` + reconciles/`ClearSelfCasts`,
+`CastAuto`) + their apply substrate (`ConcProxy`/`DeliverySpell`,
+dispel/sustain, `Apply{Self,Target}Effect`/`ApplyEffectFromTo`,
+beneficial-recast pacing) — the two direct-cast registries (`g_selfCast`/
+`g_targetCast`) are file-local there; `Actuation_internal.h` = the shared
+concentration numbers (`kConc*` sustain windows, `kConcApplyPeriod` cadence
+contract, `DrawConcCap` random stream cap) as **`inline`** — any definition
+added to that header MUST be `inline` or it's an LNK2005. `Fire(follower,
+choice)` (`Actuation.cpp:896`) dispatches one action/tick: Wait / Attack (→`Targeting::Command`) /
 Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::RetreatFill`
 / PowerAttack / drink / unknown→fail-closed. First-match-wins.
-- **PowerAttack (`kActPowerAttack`) is RANGE-GATED** (`Actuation.cpp` ~2262): it
+- **PowerAttack (`kActPowerAttack`) is RANGE-GATED** (`Actuation.cpp` ~:1008): it
   latches the chosen foe (`Targeting::Command`, so the engine's combat AI closes
   distance — MFO invents no approach) and fires `attackPowerStartInPlace` ONLY when
   `GetDistance(follower,foe) <= Config::g_meleeReach` (200u, `fMeleeReach`).
@@ -375,14 +387,14 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 - `Outcome.transparent` (`Actuation.h:38`) is the fall-through contract the
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
-- `CastOn` (`:300`) escalation: AE-only gate (`:314`) → range/competence/reserve →
+- `CastOn` (`Actuation.cpp:265`) escalation: AE-only gate (`:314`) → range/competence/reserve →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
-  follower's own AI casts first) → on miss `ForceCast` (`:110`) via `Packages::CastAt`.
+  follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:70`) via `Packages::CastAt`.
   Off-AE the whole path declines transparently (#67) so vanilla AI keeps casting.
   **The FF silent cast (and every other `CastSpellImmediate` on a live path) is now
   `MainThread::Post`ed** — CastOn runs on the job worker and the old inline engine call
   was the prime suspect for the queued 1.5.x `act.cast_target` AV reports (#14).
-- `ConcentrationCast` (anon, COMBAT) = self→`CastSelfDirect`; non-self→
+- `ConcentrationCast` (anon, `Actuation.cpp:168`, COMBAT) = self→`CastSelfDirect`; non-self→
   **`CastTargetDirect` (DIRECT FORCE, PRIMARY — the package delivery is REMOVED)**.
   Latches `CasterConsent::Want` on each Applied so the slider keeps denying competing
   AI spells and the AI's own unbounded concentration attempt; the direct apply itself
@@ -390,7 +402,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   cast pipeline they sit on), so deny-the-AI + deliver-directly is coherent, never a
   lockout. No bForceCastOnMiss/bUsePackages gate, no Loadout cooldown (the channel
   self-paces; a 4 s cooldown hole would let the ~2 s stale window tear it down).
-- `CastTargetDirect` (PUBLIC) = `CastSelfDirect` generalized to a NON-self target: the
+- `CastTargetDirect` (PUBLIC, `Actuation_Direct.cpp:893`) = `CastSelfDirect` generalized to a NON-self target: the
   known-working DIRECT FORCE (`CastSpellImmediate` onto the target + magicka deduct, NO
   package → beats the `§4.6` lock). Registry `g_targetCast`; concentration re-applies
   at `kConcApplyPeriod` (~1 s, the heal cadence contract — per-second authored
@@ -399,7 +411,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (marth's ruling: always the known-working force). LoS+LoF gate hostile offense on
   every apply. (The c539257 `CastConcentrationAt` package wrapper was REMOVED — it
   caused the Lucien OOC-heal regression.)
-- `CastAuto` (PUBLIC, before `Fire`) — AUTO target inference for `act.cast_target`,
+- `CastAuto` (PUBLIC, `Actuation_Direct.cpp:1072`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
@@ -414,7 +426,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   cast_target through the foe package and never land).
   A NON-auto MANUAL pick (Target=Nearest-ally/named/
   Player) on the OOC path resolves through the shared **public**
-  `Actuation::ResolveCastTarget` (`Actuation.cpp`, moved out of the anon namespace
+  `Actuation::ResolveCastTarget` (`Actuation.cpp:856`, moved out of the anon namespace
   — same ladder combat `Fire` uses) so it fires instead of being dropped (Wave 6
   #1); AUTO still routes to `CastAuto`. Classifies
   HOSTILE via `CasterConsent::ClassifySpell` — **delivery is NOT consulted** (MFO
@@ -432,7 +444,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   restore-health spell the classifier does NOT tag Heal is still gated per target
   (field fix: a full-HP player was being healed because a different ally was hurt).
   The player runs the SAME `consider` gate as followers — full-HP members are never
-  in the fan. **Per-target apply guard `ShouldApplyTo` (`:1140`):**
+  in the fan. **Per-target apply guard `ShouldApplyTo` (`Actuation_Direct.cpp:633`):**
   **#5:** a CONCENTRATION spell (Healing Hands, streams) returns true immediately —
   never blocked by the already-active/DoT gate; **#6a:** already-active detection is
   robust — HasMagicEffect(costliest) OR an active-effect-list scan for THIS spell

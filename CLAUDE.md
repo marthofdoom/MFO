@@ -13,8 +13,8 @@ regressions here; the ripple notes are why the map exists.
   Split it into focused modules before it crosses (an internal header for shared
   file-local state + cohesive modules; a pure mechanical move, CI-identical).
   A split pass is modularizing the top four giants (Logistics [DONE: core +
-  Loot/Economy/Cast], Board [DONE: shell + Progression tab + internal header],
-  ProgAllocator, Actuation) into ≤2500-line modules;
+  Loot/Economy/Cast], Board [DONE: shell + Progression tab], Actuation [DONE:
+  dispatch + Direct], ProgAllocator [LAST — co-save, careful]) into ≤2500-line modules;
   Packages/CasterConsent deferred. Keep MAP.md's file:line nav current.
 - **Delegate bulk file-reads to a subagent** and keep only its conclusion, so
   large files never sit in the main context.
