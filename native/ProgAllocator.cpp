@@ -2710,6 +2710,14 @@ namespace MFO::ProgAllocator {
         }
     }
 
+    // GENERAL follower-allocation-state serializer (host machinery — Serialization.h
+    // §PRGN). Writes the header + one blob per ENROLLED follower; with no add-on
+    // manifest nothing enrolls, g_prog is empty, and only the header + count=0 go
+    // out (Phase 9 acceptance test). Every field is general allocation-engine state;
+    // the class is an OPAQUE plugin-qualified reference re-resolved on load, never
+    // interpreted here (its meaning lives in the manifest form). Written even when
+    // the add-on is ABSENT this session so a temporarily-disabled ESL's state is
+    // echoed back verbatim, not destroyed (general "preserve the add-on's blob").
     void CoSaveSave(SKSE::SerializationInterface* a_intfc) {
         if (!a_intfc->OpenRecord(kRecProgression, kProgVersion)) {
             spdlog::error("[cosave] OpenRecord('{}') failed -- progression NOT saved", "PRGN");
@@ -2821,6 +2829,11 @@ namespace MFO::ProgAllocator {
                                     : std::string{});
     }
 
+    // GENERAL follower-allocation-state deserializer (host machinery). Keeps a
+    // reader for EVERY shipped version forever (v1–v6, INVARIANT #12); re-resolves
+    // follower + plugin-qualified class references without interpreting them. Runs
+    // even when the add-on is absent (state preserved, inert — OnPostLoad gates
+    // application on g_ready).
     void CoSaveLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version) {
         // v1 saves lack the §16 manual fields — every v2 read below gates on
         // a_version >= 2 and defaults to "manual off, nothing applied".

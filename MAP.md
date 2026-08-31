@@ -95,9 +95,17 @@ state (`g_followers`, `Gambit`, `FollowerState`).
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:187-217`, read `:239-313`. Owner: `Logistics.cpp`.
-- **`'PRGN'` / `kProgVersion=6`** (`Serialization.h:57`) — progression state;
-  layout + I/O live in `ProgAllocator.cpp` (`CoSaveSave`, `CoSaveLoad` — grep the
-  symbols, line numbers drift). Written **even when the addon ESL is absent**.
+- **`'PRGN'` / `kProgVersion=6`** (`Serialization.h:16`) — GENERAL per-follower
+  **follower-allocation-state slot** (host machinery, v1.1 Phase 8 reframe): all
+  fields are general allocation-engine state (enrolled flag, an OPAQUE plugin-
+  qualified class-def reference, allocated perks/skills, HMS pools, battle
+  counters, fixed-stat); it holds **no add-on judgment** — ratios/verdicts/layout
+  live in the manifest form the class reference points to. Delete the manifest →
+  nothing enrolls → `g_prog` empty → writes header + count=0 (Phase 9 test). The
+  `'PRGN'` fourCC + name are **historical/frozen** (deployed Tuxborn v6 save), not
+  an add-on-specific schema. Layout + I/O live in `ProgAllocator.cpp` (`CoSaveSave`,
+  `CoSaveLoad` — grep the symbols, line numbers drift). Written **even when the
+  addon ESL is absent** (state echoed back verbatim, not destroyed).
   v-history v1→v6 in `Serialization.h:21-83` (v4 = plugin-qualified class identity,
   v3 reader KEPT; v5 = §HMS class-redistribution block APPENDED at END). **v6 (§HMS
   Phase 3 fixed-stat grant):** (a) global header gains `g_playerHmsTotalLast` f32

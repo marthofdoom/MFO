@@ -227,12 +227,14 @@ namespace MFO {
                      stockSkippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) record(s)", stockSkippedRuntime)
                                          : std::string{});
 
-        // Progression (kRecProgression/'PRGN') -- a THIRD independent record,
-        // same isolation contract as MSTK above. Written even when the addon
-        // ESL is absent this session: the data must survive a session where
-        // the user temporarily disabled MFO_Progression.esl, not be silently
-        // destroyed by the next save. Layout + bounds live with the state
-        // owner (ProgAllocator.cpp).
+        // General follower-allocation-state slot (kRecProgression/'PRGN') -- a
+        // THIRD independent record, same isolation contract as MSTK above. General
+        // host machinery: it frames/versions/bounds a per-follower allocation-state
+        // blob and holds no add-on judgment (Serialization.h §PRGN). Written even
+        // when the add-on ESL is absent this session: the data must survive a
+        // session where the user temporarily disabled MFO_Progression.esl, not be
+        // silently destroyed by the next save. Layout + bounds live with the state
+        // owner (ProgAllocator.cpp). The 'PRGN' fourCC + name are historical/frozen.
         ProgAllocator::CoSaveSave(a_intfc);
 
         // #76 force-hold (kRecForcedWeapon/'FWPN') -- a FOURTH independent record,
