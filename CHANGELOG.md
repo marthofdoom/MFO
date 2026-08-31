@@ -1,6 +1,7 @@
 ## v1.1.1 -- Summoners stop spamming
 
 - **A follower with a summon gambit stops re-casting it.** A conjurer set to summon a familiar or an atronach used to re-summon it over and over instead of leaving the one it already had. It now knows its summon is still out and holds off until that creature is gone or dead, then summons again. Two different summons (or a Twin Souls pair) are tracked apart, so one never blocks the other. Buffs and candlelight are unchanged.
+- **The same hold now covers combat.** The check first shipped only for casts made out of combat. A follower summoning during a fight now holds off the same way (the creature stays out instead of being re-summoned every few seconds), and does something else useful in the meantime.
 
 ## v1.1.0 -- Class growth that works, and a clean add-on
 
