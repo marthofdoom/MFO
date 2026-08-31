@@ -1080,6 +1080,19 @@ namespace MFO::Logistics {
                 if (!sp || !a_follower->HasSpell(sp)) {
                     start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
                 }
+                // SUMMON SPAM GUARD (v1.1.1). A conjured/reanimated creature is a
+                // COMMANDED ACTOR, not a caster-side magic effect, so every already-
+                // active guard below (each reads a magic effect on the cast TARGET)
+                // misses it and this gambit re-summons every cadence (marth, field).
+                // Suppress while the follower already commands a LIVE summon from
+                // THIS spell -- caster-side, per-spell, keyed on the live actor so a
+                // killed/expired summon recasts at once. No-op for any non-summon
+                // spell (candlelight/buffs/heals carry no summon archetype), so the
+                // beneficial/light routing below is unchanged. Fall to the next rule
+                // exactly like the "buff still on the target" skip.
+                if (Actuation::CasterHasLiveSummon(a_follower, sp)) {
+                    start = choice.ruleIndex + 1; continue;
+                }
                 // Resolve the EFFECT target: self, the player, or the current foe.
                 RE::Actor* tgt = a_follower;
                 if (op == Vocab::kActCastPlayer) {

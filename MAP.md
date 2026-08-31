@@ -213,7 +213,7 @@ releases **by eviction** with a non-actor XMarker.
   TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
   EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
   followers (Lucien, prio-80 quest). So self routes through
-  **`Actuation::CastSelfDirect`** (`Actuation_Direct.cpp:695`, public) — effect + magicka only,
+  **`Actuation::CastSelfDirect`** (`Actuation_Direct.cpp:729`, public) — effect + magicka only,
   **NO equip, NO channel** (registry `g_selfCast`, worker-serial; `SelfCastReconcile`
   ticks it from `Diagnostics` before `Loadout::Tick`; `ClearSelfCasts` on revert).
   **NEVER equips the spell**: `CastSpellImmediate`(kInstant) applies the effect
@@ -402,7 +402,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   cast pipeline they sit on), so deny-the-AI + deliver-directly is coherent, never a
   lockout. No bForceCastOnMiss/bUsePackages gate, no Loadout cooldown (the channel
   self-paces; a 4 s cooldown hole would let the ~2 s stale window tear it down).
-- `CastTargetDirect` (PUBLIC, `Actuation_Direct.cpp:893`) = `CastSelfDirect` generalized to a NON-self target: the
+- `CastTargetDirect` (PUBLIC, `Actuation_Direct.cpp:927`) = `CastSelfDirect` generalized to a NON-self target: the
   known-working DIRECT FORCE (`CastSpellImmediate` onto the target + magicka deduct, NO
   package → beats the `§4.6` lock). Registry `g_targetCast`; concentration re-applies
   at `kConcApplyPeriod` (~1 s, the heal cadence contract — per-second authored
@@ -411,7 +411,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (marth's ruling: always the known-working force). LoS+LoF gate hostile offense on
   every apply. (The c539257 `CastConcentrationAt` package wrapper was REMOVED — it
   caused the Lucien OOC-heal regression.)
-- `CastAuto` (PUBLIC, `Actuation_Direct.cpp:1072`) — AUTO target inference for `act.cast_target`,
+- `CastAuto` (PUBLIC, `Actuation_Direct.cpp:1106`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
@@ -474,6 +474,21 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   or suppress the rules below), `Declined → transparent`. The combat suppression
   window (`releaseSec`) is tuned so a party's round-robin gap can't outlast the
   self-buff and re-open the dispel/re-cast beat.
+- **Summon spam guard (v1.1.1)** — `Actuation::CasterHasLiveSummon` (PUBLIC,
+  `Actuation_Direct.cpp:711`). A conjured familiar/atronach (`SummonCreatureEffect`)
+  or reanimated corpse (`ReanimateEffect`) is a COMMANDED ACTOR, not a caster-side
+  magic effect, so every OOC already-active guard (each reads a magic effect on the
+  cast TARGET) misses it and a `cast [summon]` gambit re-summons every cadence
+  (marth, field). The helper scans the CASTER's active-effect list for a summon/
+  reanimate effect THIS spell created (`ae->spell == spell`, `skyrim_cast` to
+  `SummonCreatureEffect`/`ReanimateEffect`) whose `commandedActor` still resolves to
+  a live (not dead/deleted) actor. PER-SPELL (distinct conjures + a Twin Souls pair
+  track independently), keyed on the LIVE actor (a killed/expired/despawned summon
+  recasts at once). Wired as a single guard at the TOP of the OOC cast block
+  (`Logistics.cpp`, right after the `HasSpell` check, before target resolution) so
+  it covers self/target/player/AUTO routes; returns false for every non-summon
+  spell, so candlelight/buff/heal pacing is byte-identical. Combat casting is paced
+  by AI-grace and is untouched.
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:28`), pumps packages
