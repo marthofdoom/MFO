@@ -17,6 +17,7 @@
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
 #include "ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
+#include <unordered_set>   // #78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
 
 namespace MFO::Scheduler {
 
@@ -112,6 +113,14 @@ namespace MFO::Scheduler {
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
 
+        // #78: followers we have already swept on their MFO-OFF transition. The
+        // gate below skips every disabled follower each tick, but the one-time
+        // release (Followers::ReleaseHeldState) must fire ONCE per OFF edge, not
+        // every tick -- membership here is that latch. Erased the moment a
+        // follower is MFO-enabled again, so a later OFF re-arms the release.
+        // Worker-only, no lock (#4), same as every map above.
+        std::unordered_set<RE::FormID> g_mfoDisabledSwept;
+
         // The dials. Fill: confidence below 0.25 (a follower who by the
         // leash tenet WANTS to be at the player's side) while >400u away from
         // the player -- far enough that arrival is an unambiguous pull, not
@@ -126,6 +135,7 @@ namespace MFO::Scheduler {
 
     void ClearTransientState() {
         g_retreatNotes.clear();
+        g_mfoDisabledSwept.clear();   // #78: revert/load re-arms the OFF-edge release
         g_outOfCombatTicks.clear();
         g_meleeClampTrueAt.clear();   // #76 hysteresis dwell
         g_recent.clear();
@@ -230,6 +240,23 @@ namespace MFO::Scheduler {
 
         const auto it = g_followers.find(id);
         if (it == g_followers.end()) return;          // no record -> nothing to run
+
+        // #78: THE PER-FOLLOWER MFO MASTER SWITCH. When OFF, MFO leaves this
+        // follower completely untouched -- no combat gambits, no logistics /
+        // economy, no cast / equip / loot -- so he behaves as a vanilla /
+        // engine-default follower. The check is a plain bool read on the worker
+        // (#4). On the ON->OFF edge (first disabled tick) release everything MFO
+        // was holding so he genuinely reverts -- forced equip, AI-package
+        // aliases, cast / retreat / target latches, stance, MFO-equipped gear --
+        // ONCE, latched in g_mfoDisabledSwept. This runs on the SAME worker as
+        // the dismissal sweep that shares ReleaseHeldState, so the context is
+        // identical. Re-enabling erases the latch, re-arming a future release.
+        if (!it->second.mfoEnabled) {
+            if (g_mfoDisabledSwept.insert(id).second)
+                Followers::ReleaseHeldState(id);
+            return;
+        }
+        g_mfoDisabledSwept.erase(id);
 
         // THE TWO TABLES NEVER INTERLEAVE (§4.8). Combat runs in combat;
         // logistics -- upkeep -- runs out of it. Without the split a seeded heal

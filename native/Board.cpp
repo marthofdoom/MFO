@@ -520,10 +520,13 @@ namespace MFO::Board {
                     // Reserve the footer, or ScrollY takes the remaining height
                     // and pushes the hint line below the fold.
                     const float footer = ImGui::GetFrameHeightWithSpacing() + 6.0f;
-                    if (ImGui::BeginTable("##followers", 7,
+                    if (ImGui::BeginTable("##followers", 8,
                                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                           ImGuiTableFlags_ScrollY,
                                           ImVec2(0.0f, -footer))) {
+                        // #78: the per-follower MFO master switch, FIRST column.
+                        // ON = MFO manages him; OFF = MFO leaves him vanilla.
+                        ImGui::TableSetupColumn("MFO",     ImGuiTableColumnFlags_WidthFixed, 34.0f);
                         ImGui::TableSetupColumn("Follower", ImGuiTableColumnFlags_WidthStretch);
                         ImGui::TableSetupColumn("State",   ImGuiTableColumnFlags_WidthFixed, 110.0f);
                         ImGui::TableSetupColumn("Rapport", ImGuiTableColumnFlags_WidthFixed, 90.0f);
@@ -535,6 +538,23 @@ namespace MFO::Board {
 
                         for (const auto& r : snap.rows) {
                             ImGui::TableNextRow();
+
+                            // #78: FIRST column -- the per-follower MFO toggle.
+                            // A local mirror + QueueEdit on change: the render
+                            // thread NEVER writes g_followers; the edit rides the
+                            // main-thread ApplyEdits path like every other board
+                            // edit (#4). Unique ImGui id per row via PushID(id).
+                            ImGui::TableNextColumn();
+                            ImGui::PushID(static_cast<int>(r.id));
+                            bool en = r.mfoEnabled;
+                            if (ImGui::Checkbox("##mfo", &en))
+                                QueueEdit({ EditKind::SetMfoEnabled, r.id, 0, 0u,
+                                            en ? 1.0f : 0.0f });
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip(en ? "MFO ON -- managing this follower"
+                                                     : "MFO OFF -- follower left vanilla "
+                                                       "(no gambits, logistics, or equip)");
+                            ImGui::PopID();
 
                             ImGui::TableNextColumn();
                             if (r.active) ImGui::TextUnformatted(r.name.c_str());
@@ -1883,6 +1903,21 @@ namespace MFO::Board {
                 continue;
             }
 
+            // #78: the per-follower MFO master switch. A per-FOLLOWER edit like
+            // SetClassOverride above (uid/table unused, keyed on c.fid). This
+            // ONLY flips the bool. ApplyEdits drains on the SAME task worker that
+            // owns g_followers and runs Scheduler::Tick (MAP: the Board.h
+            // "MAIN THREAD ONLY" header is corrected), so this write and the
+            // tick's read are same-thread, lock-free (#4) -- identical to how the
+            // combat stance is written here and read on the tick. The release-on-
+            // disable is deliberately NOT done here: it runs on the OFF edge in
+            // Scheduler's per-follower tick, sharing the exact helper + worker as
+            // the dismissal sweep (Followers::ReleaseHeldState).
+            if (c.kind == EditKind::SetMfoEnabled) {
+                it->second.mfoEnabled = (c.param > 0.5f);
+                continue;
+            }
+
             // Resolve by IDENTITY, not index (#31). A command whose rule is
             // gone -- deleted, reseeded -- is dropped, never misapplied.
             int i = -1;
@@ -2091,6 +2126,7 @@ namespace MFO::Board {
                 r.rapport        = it->second.rapport;
                 r.rank           = it->second.rank;
                 r.combatClassOverride = it->second.combatClassOverride;
+                r.mfoEnabled     = it->second.mfoEnabled;   // #78
                 r.combatRules    = static_cast<std::uint8_t>(it->second.combat().size());
                 r.logisticsRules = static_cast<std::uint8_t>(it->second.logistics().size());
                 r.combatSlots    = SlotsForRank(it->second.rank, Table::Combat);
@@ -2165,6 +2201,7 @@ namespace MFO::Board {
             r.rapport        = st.rapport;
             r.rank           = st.rank;
             r.combatClassOverride = st.combatClassOverride;
+            r.mfoEnabled     = st.mfoEnabled;   // #78
             r.combatRules    = static_cast<std::uint8_t>(st.combat().size());
             r.logisticsRules = static_cast<std::uint8_t>(st.logistics().size());
             r.combatSlots    = SlotsForRank(st.rank, Table::Combat);

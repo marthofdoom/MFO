@@ -1,3 +1,7 @@
+## Unreleased -- Turn the mod off for one follower
+
+- **You can now turn the mod off for a single follower.** The Followers tab has a new checkbox in its first column, on by default. Uncheck it and the mod leaves that follower completely alone (no gambits, no logistics, no buying or selling, no forced casting or equipping), and it hands back anything it was holding on them (a forced weapon, an AI package it parked them in, any leftover cast or retreat state) so they go back to a plain vanilla follower. Check it again to put them back under the mod. The choice is saved per follower and carries over between saves.
+
 ## v1.1.2 -- Plugin cleanup for xEdit and Vortex
 
 - **MFO's plugins are clean in xEdit and Vortex now.** The records were written in an order the game reads fine but xEdit and Synthesis reject, so opening MFO in xEdit could throw errors and crash it. The records are now built in the correct order and validate cleanly. Nothing about how the mod plays changes, and your saves carry over.

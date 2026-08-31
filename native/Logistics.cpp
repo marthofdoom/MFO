@@ -624,6 +624,11 @@ namespace MFO::Logistics {
 
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
+        // #78: per-follower MFO master switch. The Scheduler already gates the
+        // whole tick (combat + this OOC path) on mfoEnabled and releases held
+        // state on the OFF edge, so this is pure defence-in-depth: a disabled
+        // follower gets no logistics / economy / loot even if reached another way.
+        if (!a_state.mfoEnabled) return;
         g_svc = &a_state;   // loot code reads the gambit table through this (worker-sequential)
 
         // #69: snapshot the follower's OWN gear the very FIRST time MFO manages

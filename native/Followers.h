@@ -71,6 +71,13 @@ namespace MFO::Followers {
     // (INVARIANTS #46).
     void Refresh();
 
+    // #78: release every bit of engine/session state MFO holds on a follower
+    // (forced equip, AI-package aliases, cast/retreat/target latches, stance,
+    // MFO-equipped gear) so he reverts to a vanilla/engine-default follower.
+    // WORKER-thread only, idempotent. Shared by dismissal (Refresh) and the
+    // per-follower MFO-OFF toggle (Scheduler tick).
+    void ReleaseHeldState(RE::FormID a_actorID);
+
     // False for runtime (0xFF) FormIDs, which must NEVER be persisted
     // (INVARIANTS #9). IsCommandedActor() does not cover this: a spawned or
     // cloned teammate is not commanded but still carries a 0xFF id, and

@@ -39,6 +39,9 @@
 //     v4  #65: combatClassOverride (per-follower forced combat stance)
 //         added right after st.rank. Read gated on version >= 4; an older
 //         record simply has none (defaults to 0 -- Auto, no override).
+//     v5  #78: mfoEnabled (per-follower MFO master switch) added as one u8
+//         right after combatClassOverride. Read gated on version >= 5; an
+//         older record has none (defaults to true -- MFO enabled).
 //
 //   #12 Versioned schema; readers kept FOREVER; SKSE does NOT round-trip
 //       unread records, so a downgraded DLL DESTROYS newer ones -> warn loud.
@@ -114,6 +117,11 @@ namespace MFO {
             a_intfc->WriteRecordData(st.rank);
             // v4 (#65): the per-follower combat class override, right after rank.
             a_intfc->WriteRecordData(st.combatClassOverride);
+            // v5 (#78): the per-follower MFO master switch, one explicit u8 (0/1)
+            // right after combatClassOverride. Written unconditionally at the
+            // current schema (v5); the READ is version-gated so pre-v5 saves
+            // (which never wrote it) never try to consume the byte.
+            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.mfoEnabled ? 1 : 0));
 
             // Two tables, written in Table enum order (DESIGN.md 4.8).
             // The table COUNT is written explicitly so a future third table
@@ -419,6 +427,18 @@ namespace MFO {
                 if (version >= 4) {
                     if (!a_intfc->ReadRecordData(st.combatClassOverride)) return;
                     st.combatClassOverride = std::clamp<std::uint8_t>(st.combatClassOverride, 0, 3);
+                }
+
+                // v5 (#78): the per-follower MFO master switch, STRICTLY version-
+                // gated -- same discipline as v3/v4 above. A v1-v4 record never
+                // wrote this byte, so reading it unconditionally would consume the
+                // next field's bytes and desync the stream. st.mfoEnabled already
+                // defaults to true (FollowerState{}), exactly "MFO enabled" for
+                // every pre-v5 record.
+                if (version >= 5) {
+                    std::uint8_t mfoEnabledByte = 1;
+                    if (!a_intfc->ReadRecordData(mfoEnabledByte)) return;
+                    st.mfoEnabled = (mfoEnabledByte != 0);
                 }
 
                 std::uint8_t tableCount = 0;

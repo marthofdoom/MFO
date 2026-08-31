@@ -34,7 +34,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v4`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:7-90`). Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:7-90`). FLWR v5 (#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:562-622` | `StopPump()` MUST run first (`:568`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:302-322`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -87,11 +87,14 @@ independent co-save records. `State.h` defines the authoritative in-memory
 state (`g_followers`, `Gambit`, `FollowerState`).
 
 **Four records (`Serialization.h`), each with its own version + reader:**
-- **`'FLWR'` / `kSchemaVersion=4`** (`Serialization.h:8,50`) — per-follower
-  `{rapport, rank, combatClassOverride(v4), tables[Combat,Logistics][], overrides[]}`.
+- **`'FLWR'` / `kSchemaVersion=5`** (`Serialization.h:8,50`) — per-follower
+  `{rapport, rank, combatClassOverride(v4), mfoEnabled(v5), tables[Combat,Logistics][], overrides[]}`.
   Written `SaveCallback` `Serialization.cpp:82`; read `LoadCallback` `:229`.
-  Version history v1→v4 documented `Serialization.h:31-50`; v1 tutored-block
-  reader kept forever (`Serialization.cpp:479`).
+  Version history v1→v5 documented `Serialization.h:31-50`; v1 tutored-block
+  reader kept forever (`Serialization.cpp:479`). **v5 (#78) APPENDS `mfoEnabled`
+  as one u8 right after `combatClassOverride`, read gated `if(version>=5)`; a
+  pre-v5 record has none and defaults `true` — every existing follower stays
+  MFO-enabled, v1–v4 byte-identical.**
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:187-217`, read `:239-313`. Owner: `Logistics.cpp`.
@@ -163,8 +166,9 @@ re-reads the alias from the quest even when the module believes it holds nothing
   serialized** (`:23,29`) — the board keys edits on it, not row index.
   `lastFired*` display-only, never read back by the evaluator.
 - `FollowerState` (`State.h:72`): `rapport`, `rank` (clamped [1,5]),
-  `combatClassOverride` (v4; ordinals == `CombatStyle::Stance`), `tables[kCount]`,
-  `overrides`.
+  `combatClassOverride` (v4; ordinals == `CombatStyle::Stance`),
+  `mfoEnabled` (v5, #78; the per-follower MFO master switch, default true),
+  `tables[kCount]`, `overrides`.
 - `g_followers` (`State.h:116`) — **MAIN-THREAD-ONLY, takes no lock (#4).** Keyed
   on persistent FormID; dismissed followers stay. Off-thread access must snapshot.
 - Slot caps `kCombatSlotsByRank`/`kLogisticsSlotsByRank` (`:102-103`) — the
@@ -354,6 +358,10 @@ releases **by eviction** with a non-actor XMarker.
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and
   can't be lowered to release. `LootTravelRetarget` refills only the TARGET alias,
   leaving actor alias 0 filled (no hand-back between corpses).
+  The full per-follower teardown (Loadout/Targeting/CombatStyle/ForcedWeapon/
+  CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
+  `Followers::ReleaseHeldState(id)` (`Followers.cpp`, worker-only, idempotent) —
+  shared by the dismissal sweep (`Refresh`) and the #78 MFO-OFF toggle (Scheduler).
 - `ForceRefToNative` (`:266`) = `REL::ID(25052)` `TESQuest::ForceRefTo`, AE-only
   (VM path off AE). Two-class layout offsets (`kPointerOffFromIPackageData=0x10`,
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
@@ -509,6 +517,13 @@ teardown. Runs on the AddTask worker.
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`.
 - Casts `combatClassOverride` directly to `CombatStyle::Stance` (`:378,578`) — the
   ordinal-equality contract.
+- **#78 per-follower MFO master switch** — gate right after the `g_followers.find`
+  in the per-follower service (`ServiceFollower`-caller path, `Scheduler.cpp`): if
+  `!it->second.mfoEnabled`, SKIP the whole tick (combat + logistics) and `return`,
+  so the follower stays vanilla. On the ON→OFF edge (`g_mfoDisabledSwept` latch,
+  cleared in `ClearTransientState` + when re-enabled) run `Followers::ReleaseHeldState(id)`
+  ONCE — same worker + helper as the dismissal sweep. `Logistics::ServiceFollower`
+  carries a defence-in-depth `!a_state.mfoEnabled` early-out too.
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
 `Apply()` (`:8`) copies `Config::g_travelGait` onto the loot-travel packages'
@@ -1021,6 +1036,12 @@ main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not re
   overload) + a synthesized `tooltip` (`SpellTooltip`, effect name+mag/dur/area) —
   all filled in `PublishSnapshot` (main). The gambit spell-picker renders the hover
   tooltip via `DrawSpellHoverTooltip` from those cached values.
+- **#78 Followers-tab MFO toggle** — the tab's FIRST column is a per-row checkbox
+  bound to `FollowerRow.mfoEnabled` (mirrored from `FollowerState::mfoEnabled` in
+  `PublishSnapshot`, both the active + retained builders). The `##followers` table
+  is now 8 columns. On toggle it `QueueEdit`s `EditKind::SetMfoEnabled` (param 0/1);
+  `ApplyEdits` flips `it->second.mfoEnabled`. The release-on-disable runs on the
+  Scheduler tick's OFF edge, not in `ApplyEdits`.
 - **Thread discipline:** `DXGIPresentHook` (render thread) copies `g_snapshot` under
   `g_snapMx` **before** taking `g_ioMx` (`:1438`); reversing = render-thread deadlock.
   The two mutexes are never nested (#6). Draw functions **never touch `g_followers`**

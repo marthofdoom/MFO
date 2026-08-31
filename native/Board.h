@@ -51,6 +51,10 @@ namespace MFO::Board {
         // FollowerState::combatClassOverride for the header dropdown to show
         // the live pick. 0=Auto, 1=Melee, 2=Ranged, 3=Cast (mage).
         std::uint8_t  combatClassOverride = 0;
+        // #78: the per-follower MFO master switch, mirrored from
+        // FollowerState::mfoEnabled for the Followers-tab first-column toggle.
+        // ON by default; OFF means MFO leaves this follower entirely alone.
+        bool          mfoEnabled = true;
         std::uint8_t  combatSlots = 0;
         std::uint8_t  logisticsSlots = 0;
         std::uint8_t  combatRules = 0;

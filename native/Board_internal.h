@@ -31,6 +31,7 @@ namespace MFO::Board {
                                          SetCond, SetAct, TeachSpell,
                                          SetSubject, SetSubjectActor,   // #68
                                          SetClassOverride,   // #65
+                                         SetMfoEnabled,      // #78 per-follower MFO switch
                                          AddonAction };   // v1.1 Phase 6c: ONE generic
                                                             // add-on-verb carrier. The specific
                                                             // verb rides EditCmd::verbId (an
