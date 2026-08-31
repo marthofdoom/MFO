@@ -532,19 +532,34 @@ namespace MFO::ProgAllocator {
             return "?";
         }
 
-        // Class profile by CombatStyle::Stance ordinal (ClassDef::stance):
-        //   1=Melee  60/ 5/35   (primary Health)
-        //   2=Ranged 40/ 5/55   (primary Stamina)
-        //   3=Mage   15/80/ 5   (primary Magicka)
-        //   0/other  → no profile (HMS skipped entirely).
-        // Returns false for a stance with no profile.
+        // Class HMS ratio profile keyed by base-class stance ordinal (the general
+        // engine fact from GetBaseClass: 1/2/3, 0=none).
+        // v1.1 Phase 7: the ratios are ADD-ON DATA (`ClassDef::hmsWeights` +
+        // `primaryPool`, declared per class, parsed positionally in ParseClassDef),
+        // NOT a DLL-baked switch. This walks the declared classes for the one whose
+        // stance matches and returns its NORMALIZED H/M/S weights + primary pool.
+        // Per the governing rule there is NO DLL default: a stance with no declared
+        // class, or a class that declared no weights, yields false → HMS reshapes
+        // nothing (absent add-on = no ratios). The general skew/convergence math
+        // downstream is unchanged and consumes this profile exactly as before.
+        //
+        // Byte-identical to the retired switch for the shipped add-on: the generator
+        // emits the same raw weights (Melee 60/5/35 primary Health, Ranged 40/5/55
+        // primary Stamina, Mage 15/80/5 primary Magicka) and each sums to 100, so
+        // `weight/sum` reproduces the former float literals exactly.
         bool HmsProfile(std::uint8_t a_stance, float a_out[3], int& a_primary) {
-            switch (a_stance) {
-            case 1: a_out[0] = 0.60f; a_out[1] = 0.05f; a_out[2] = 0.35f; a_primary = 0; return true;
-            case 2: a_out[0] = 0.40f; a_out[1] = 0.05f; a_out[2] = 0.55f; a_primary = 2; return true;
-            case 3: a_out[0] = 0.15f; a_out[1] = 0.80f; a_out[2] = 0.05f; a_primary = 1; return true;
-            default: return false;
+            if (a_stance == 0) return false;
+            for (const auto& def : g_classes) {
+                if (def.stance != a_stance || !def.hmsWeightsSet) continue;
+                const float sum = def.hmsWeights[0] + def.hmsWeights[1] + def.hmsWeights[2];
+                if (sum <= 0.0f) return false;
+                a_out[0] = def.hmsWeights[0] / sum;
+                a_out[1] = def.hmsWeights[1] / sum;
+                a_out[2] = def.hmsWeights[2] / sum;
+                a_primary = static_cast<int>(def.primaryPool);
+                return true;
             }
+            return false;
         }
 
         // Which HMS pool is the follower PHYSICALLY exercising right now, read
