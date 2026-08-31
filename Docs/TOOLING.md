@@ -165,8 +165,9 @@ order** (e.g. the ESL emits KYWD < GLOB < QUST < FLST < MESG).
 > a fatal `EVariantTypeCastError` that disables editing — a real v1.1.1 user report).
 > NEVER guess the order: dump a reference record of that type from an installed
 > `Skyrim.esm` and mirror it. Known traps (fixed v1.1.2): **QUST** puts `VMAD` right
-> after `EDID`, before `FULL` (`EDID, VMAD, FULL, DNAM, …`); **MESG** order + the
-> `DNAM` flags size (UInt32) must match. Affects both `MFO.esp` and the ESL. Dump-verify
+> after `EDID`, before `FULL` (`EDID, VMAD, FULL, DNAM, …`); **MESG** is
+> `EDID, DESC, FULL, INAM, DNAM` (DESC before FULL, a 4-byte INAM icon FormID present).
+> Affects both `MFO.esp` and the ESL. Dump-verify
 > the regenerated `out/*.esp`/`.esl` against Skyrim.esm after touching any record maker.
 
 ### The addon manifest seam (§18.6)

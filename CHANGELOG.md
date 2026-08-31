@@ -1,3 +1,7 @@
+## v1.1.2 -- Plugin cleanup for xEdit and Vortex
+
+- **MFO's plugins are clean in xEdit and Vortex now.** The records were written in an order the game reads fine but xEdit and Synthesis reject, so opening MFO in xEdit could throw errors and crash it. The records are now built in the correct order and validate cleanly. Nothing about how the mod plays changes, and your saves carry over.
+
 ## v1.1.1 -- Summoners stop spamming
 
 - **A follower with a summon gambit stops re-casting it.** A conjurer set to summon a familiar or an atronach used to re-summon it over and over instead of leaving the one it already had. It now knows its summon is still out and holds off until that creature is gone or dead, then summons again. Two different summons (or a Twin Souls pair) are tracked apart, so one never blocks the other. Buffs and candlelight are unchanged.

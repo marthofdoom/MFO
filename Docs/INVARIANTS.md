@@ -1012,8 +1012,10 @@ installed `Skyrim.esm` (parse the record/subrecord framing, print the type seque
 and mirror it. Known traps found on v1.1.1 (fixed in v1.1.2):
 - **QUST:** `VMAD` (script) comes immediately after `EDID`, BEFORE `FULL`
   (`EDID, VMAD, FULL, DNAM, ...`). The generator had emitted `EDID, FULL, VMAD`.
-- **MESG:** subrecord order + `DNAM` flags size (UInt32) must match the reference;
-  a wrong-size/misplaced subrecord is what triggers the fatal variant-cast crash.
+- **MESG:** order is `EDID, DESC, FULL, INAM, DNAM` — **DESC BEFORE FULL**, and `INAM`
+  (a 4-byte icon FormID) must be PRESENT. The FULL/DESC swap plus the absent INAM (NOT a
+  wrong `DNAM` size — DNAM was already the correct 4-byte UInt32) is what triggered the
+  fatal `EVariantTypeCastError`. Confirmed by dumping all 40 MESGs from Skyrim.esm.
 Affects BOTH the main `MFO.esp` and `MFO_Progression.esl` (same QUST maker pattern).
 audit_esp.py cannot catch this — add a subrecord-ORDER check there or dump-verify
 against Skyrim.esm after any record-maker change. See Docs/TOOLING.md §(c).
