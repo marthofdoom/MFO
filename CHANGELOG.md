@@ -1,5 +1,6 @@
 ## Unreleased
 
+- **You can now turn the mod off for a single follower.** The Followers tab has a new checkbox in its first column, on by default. Uncheck it and the mod leaves that follower completely alone (no gambits, no logistics, no buying or selling, no forced casting or equipping), and it hands back anything it was holding on them (a forced weapon, an AI package it parked them in, any leftover cast or retreat state) so they go back to a plain vanilla follower. Check it again to put them back under the mod. The choice is saved per follower and carries over between saves.
 - **Followers stop looping on loot another package keeps grabbing.** When a follower walked to pick something up and a scene or another mod's package kept yanking them off the walk, MFO used to fight for the item forever and never finish. Now it tries a few times, then gives up on that item for a bit and moves on to the rest. A follower who gets pulled into combat lets the fight take over instead of arguing with it. Loot that walks and picks up cleanly is unchanged.
 
 ## v1.1.2 -- Plugin cleanup for xEdit and Vortex

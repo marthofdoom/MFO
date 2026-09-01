@@ -273,6 +273,48 @@ namespace MFO::Followers {
         return g_followers[a_actorID];
     }
 
+    void ReleaseHeldState(RE::FormID id) {
+        // Hand back every bit of engine/session state MFO was holding on this
+        // follower, so he reverts to a vanilla/engine-default follower. Called on
+        // the WORKER: from dismissal (Refresh, above) and from the #78 board
+        // MFO-OFF toggle (Scheduler's per-follower tick, same thread). Every call
+        // here is idempotent (erase-miss / no-record -> no-op), so re-running it
+        // is safe. ORDER is the dismissal order, unchanged.
+        //
+        // Give back anything MFO put in their hands -- the hit sink is gated on
+        // IsTracked, so after a dismissal nothing would ever restore it (#55).
+        Loadout::Restore(id);
+        // The commanded-target latch -- the hook does not check IsTracked, so a
+        // latch left behind keeps redirecting the follower AND keeps every
+        // Character in combat worldwide off the fast path.
+        Targeting::Clear(id);
+        // The weapon-stance ownership -- an entry left behind keeps every
+        // combatant paying the ApplyTick lookup and could re-swap a style we no
+        // longer own. Idempotent erase-miss when unowned.
+        CombatStyle::Clear(id);
+        // The #76 equip force-hold: its prevent-removal LOCK is on the
+        // ActorEquipManager, not the controller, so a follower left force-held
+        // stays stuck with the weapon, unable to cast. Resolve the actor (the
+        // handle may have merely flickered) and force-unequip; if it will not
+        // resolve, the record is session-scoped and revert-cleared.
+        if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
+            Actuation::ReleaseForcedWeapon(a);
+        // The cast-consent latch -- a latch left here would DENY the follower's
+        // own casting for the rest of the session and keep every combat caster
+        // off the hook's fast-out.
+        CasterConsent::Clear(id);
+        // The package (cast) alias -- a longer tail: the alias fill is
+        // SERIALIZED INTO THE .ess, so a latch left behind comes back on every
+        // future load of every save descended from this one. Evict to the marker.
+        Packages::Release(id);
+        // The loot-travel alias: nothing else reclaims a walk-to-loot follower
+        // and the fill is serialized, so it re-latches every load. Evict him.
+        Logistics::OnFollowerRemoved(id);
+        // The retreat-probe alias -- identical claim model, identical serialized
+        // tail.
+        Packages::RetreatEvictIf(id);
+    }
+
     void Refresh() {
         auto* pl = RE::ProcessLists::GetSingleton();
         if (!pl) {
@@ -334,52 +376,11 @@ namespace MFO::Followers {
                     continue;
                 }
                 g_missStreak.erase(id);
-                // Give back anything MFO put in their hands BEFORE we stop
-                // tracking them -- the hit sink is gated on IsTracked, so after
-                // this point nothing would ever restore it (#55).
-                Loadout::Restore(id);
-                // And the commanded-target latch -- same obligation, same
-                // moment (#55). The hook does not check IsTracked, so a latch
-                // left behind keeps redirecting an ex-follower AND keeps every
-                // Character in combat worldwide off the fast path.
-                Targeting::Clear(id);
-                // And the weapon-stance ownership -- same shape as the target
-                // latch: an entry left on an ex-follower keeps every combatant
-                // paying the ApplyTick lookup and could re-swap a style we no
-                // longer own. Idempotent erase-miss when unowned.
-                CombatStyle::Clear(id);
-                // And the #76 equip force-hold: its prevent-removal LOCK is on
-                // the ActorEquipManager, not the controller, so an ex-follower
-                // left force-held stays stuck with the weapon, unable to cast,
-                // for the rest of the session. Resolve the actor (the handle may
-                // have merely flickered) and force-unequip; if it will not
-                // resolve, the record is session-scoped and revert-cleared.
-                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
-                    Actuation::ReleaseForcedWeapon(a);
-                // And the cast-consent latch -- the SAME shape as the target
-                // latch, and (v1.0.30) a sharper obligation now that the
-                // [cast] sink no longer clears it on a cast: the H3 release
-                // only runs for tracked followers, so a latch left here would
-                // DENY an ex-follower's own casting for the rest of the
-                // session and keep every combat caster off the hook's
-                // fast-out.
-                CasterConsent::Clear(id);
-                // And the package alias -- the SAME obligation as the two
-                // above, but with a longer tail. #55 says restore before you
-                // stop tracking; here the thing to restore is an alias fill
-                // that the ENGINE SERIALIZES INTO THE .ess. A latch left on a
-                // dismissed follower does not merely linger for the session,
-                // it comes back on every future load of every save descended
-                // from this one, and nothing in MFO will ever look at them
-                // again to notice.
-                Packages::Release(id);
-                // And the loot-travel alias: a follower dismissed mid-walk-to-
-                // loot can't be freed by priority (nothing reclaims him) and the
-                // fill is serialized, so it re-latches every load. Evict him.
-                Logistics::OnFollowerRemoved(id);
-                // And the retreat-probe alias -- identical claim model,
-                // identical serialized tail.
-                Packages::RetreatEvictIf(id);
+                // Give back everything MFO was holding on this follower BEFORE we
+                // stop tracking him (#55). The exact same release is needed when a
+                // follower is toggled MFO-OFF on the board (#78) -- one helper, one
+                // source of truth (see ReleaseHeldState).
+                ReleaseHeldState(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport
                 // (DESIGN.md §3.1, the emotional core of the progression).
                 spdlog::info("[follower] - {:08X} (record and Rapport retained)", id);

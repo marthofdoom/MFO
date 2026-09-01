@@ -80,6 +80,16 @@ namespace MFO {
         // overridden follower is never touched by this feature. Clamped to
         // [0,3] on load (Serialization.cpp).
         std::uint8_t  combatClassOverride = 0;
+        // #78: the per-follower MFO master switch. ON by default. When false MFO
+        // leaves this follower completely untouched -- no combat gambits, no
+        // logistics/economy, no cast/equip/loot -- and the tick releases every
+        // bit of state MFO was holding (forced equip, AI-package aliases, cast /
+        // retreat latches) so he reverts to a vanilla/engine-default follower.
+        // Serialized in FLWR v5 (Serialization.cpp), appended after
+        // combatClassOverride and read gated on version >= 5; a pre-v5 record
+        // never wrote it, so it defaults true (this FollowerState{} default) --
+        // every existing follower stays enabled.
+        bool          mfoEnabled = true;
         std::vector<Gambit> tables[static_cast<size_t>(Table::kCount)];
         std::vector<PackageOverride> overrides;
 
