@@ -628,8 +628,13 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
 - `Measure` (`:52`, MAIN THREAD ONLY) calls `HasLineOfSight` (RELOCATION_ID
   53029/53829) inside `MainThread::Post` (§0.30 crash class off-worker). `Check`
   (`:93`, worker-safe cache read) → `Actuation.cpp:127,149,234`, `Evaluator.cpp:307`.
-  `Want` (`:101`) → `Evaluator.cpp:317`. `g_mx` is a strict LEAF (nothing called
-  while held). Fail-open by design (cold/stale/VR → Unknown).
+  `Want` (`:101`) → `Evaluator.cpp:317`, `Actuation_Direct.cpp:1268` (F7 auto-cast),
+  `Logistics.cpp:1350` (OOC hostile cast — seeds the `Check` at `:1353`; added to
+  close the 2026-08-18 review SEV-3 "Check without a Want → Unknown always passes"
+  inert wall-gate). `g_mx` is a strict LEAF (nothing called while held). Fail-open
+  by design (cold/stale/VR → Unknown). **Every `Check` must have a `Want` seeding
+  its pair** or the gate is inert; the seeders are Evaluator (combat foes),
+  Actuation_Direct F7 (auto-cast fan), and Logistics (OOC hostile).
 - `TeammateInFireLine` (`:149`) → `Actuation.cpp:247`, `Packages.cpp:990`. Reads
   `Followers::g_active` UNGUARDED (`:168`) — documented as joining an existing
   tolerated pattern. **UNVERIFIED — check before relying** if `g_active` is ever
