@@ -19,3 +19,9 @@ installer/MFO.Synthesis/obj/
 .claude/worktrees/
 # compiled fresh by tools/compile.sh at release (nondeterministic timestamp)
 out/Scripts/MFO_Trade.pex
+
+# Game binaries for offset/versionlib analysis — NEVER commit (copyrighted, large)
+binaries/
+
+# Partial binary-diff harness (Steamless + unpacked exes) — deferred 1.7.104 work, keep local
+tools/binary-diff/
