@@ -39,8 +39,19 @@ jobs:
           key: vcpkg-${{ hashFiles('native/vcpkg.json', 'native/vcpkg-configuration.json') }}
           restore-keys: vcpkg-
 
+      # WORKAROUND (2026-09-01): vcpkg's background binary-cache SUBMISSION
+      # deadlocks on the current windows-latest image -- after rebuilding the
+      # few ports the image update ABI-invalidated, Configure printed "Waiting
+      # for 3 remaining binary cache submissions..." and hung forever (3 run
+      # attempts, 2-4 h each, all stuck at that line). Read-only binary sources
+      # skip the submission phase entirely: restored archives are still USED,
+      # ports missing from them rebuild each run (~10-15 min penalty) but the
+      # job completes. Remove the VCPKG_BINARY_SOURCES line once the image /
+      # vcpkg submission bug is gone to restore archive banking.
       - name: Configure
-        run: cmake --preset release
+        run: |
+          $env:VCPKG_BINARY_SOURCES = "clear;files,$env:LOCALAPPDATA\vcpkg\archives,read"
+          cmake --preset release
         env:
           VCPKG_ROOT: C:\vcpkg
 
