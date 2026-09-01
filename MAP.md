@@ -625,7 +625,27 @@ the AI can't re-arm magic over a forced weapon.
 
 ### Sightline.cpp — line-of-sight split across threads (NOT a hook)
 Raycast runs only on the main thread, results cached, worker reads the cache.
-- `Measure` (`:52`, MAIN THREAD ONLY) calls `HasLineOfSight` (RELOCATION_ID
+- **Two-stage Measure (cast LoS).** `CustomRayConfirmsOcclusion` (`:52`, MAIN
+  THREAD ONLY) is MFO's own `bhkWorld::PickObject` point-raycast, fired by
+  `Measure` ONLY when the engine `HasLineOfSight` already said CLEAR — so the
+  extra pick runs on the ambiguous cases only. Layer = `COL_LAYER::kCharController`
+  ("could a walking body travel this line": catches camp-tent/cloth/anim-static
+  the engine LoS sees through, while a THIN point-ray passes over railings and
+  through open doorways/gates — no over-block). Caster self-excluded via its own
+  char-controller **system group** in `filterInfo`; target self-excluded by ending
+  each ray `kTargetMargin=48u` short of the body point (kCharController rays stop
+  on any actor capsule). Samples feet/torso/head (`h*0.55`/`h*0.90` off
+  `GetPosition`, `GetHeight` fallback 120) — ANY clear sample => VISIBLE (fixes
+  height/stairs). Can only flip VISIBLE→OCCLUDED; **fail-open** (no cell / no
+  bhkWorld / no controller / VR → clear, engine verdict stands). Held under
+  `world->worldLock` (`BSReadLockGuard`); `g_mx` taken only AFTER, so the leaf
+  discipline is intact. **Cost bound:** every caller reaches this only through
+  `Want`'s `kRepostSeconds=0.3` per-viewer repost throttle → ≤1 pick-batch per
+  ~0.3s per caster for BOTH discrete and concentration casts (Measure is
+  file-local; nobody calls it directly), so concentration re-check is NOT a
+  per-tick ray. **No hardcoded engine offsets added** (all via CommonLib types),
+  no co-save/ESP/version touch.
+- `Measure` (`:~135`, MAIN THREAD ONLY) calls `HasLineOfSight` (RELOCATION_ID
   53029/53829) inside `MainThread::Post` (§0.30 crash class off-worker). `Check`
   (`:93`, worker-safe cache read) → `Actuation.cpp:127,149,234`, `Evaluator.cpp:307`.
   `Want` (`:101`) → `Evaluator.cpp:317`, `Actuation_Direct.cpp:1268` (F7 auto-cast),
