@@ -97,6 +97,52 @@ namespace MFO::Progression {
     // Frozen after Init (built once, alongside the progression parse).
     const std::vector<AddonManifest>& Manifests();
 
+    // ── GENERAL host primitive: the perk-entry WALK (add-on-AGNOSTIC) ────────
+    // v1.1 residual #3: the engine-coupled half of the old classifier, exposed
+    // as a public host primitive ANY follower-buffing add-on can call. It
+    // enumerates a perk's entry points, their engine type + (for entry-point
+    // entries) the frozen BGSEntryPoint index and its engine enum NAME, and the
+    // mechanical "does this entry fire for a non-player NPC" fact — a quest
+    // entry, or an ability whose EVERY effect is pinned to the player, does
+    // nothing on a follower ("ModBuyPrices does nothing for a follower" is a
+    // general engine fact any buffing add-on wants). It carries NO
+    // effective/marginal/dead JUDGMENT: that verdict is add-on DATA
+    // (AddonManifest::entryPointVerdicts), with no DLL default. Delete the
+    // add-on and the DLL holds zero verdicts — only this general walk remains.
+    enum class PerkEntryKind : std::uint8_t {
+        kQuest      = 0,   // perk quest entry — never a follower combat/stat effect
+        kAbility    = 1,   // added-ability entry (see firesForNpc)
+        kEntryPoint = 2,   // a BGSEntryPoint modifier (entryPointIndex/name valid)
+        kOther      = 3,   // an entry type this build has never seen
+    };
+    struct PerkEntryFact {
+        PerkEntryKind kind{ PerkEntryKind::kOther };
+        std::uint32_t entryPointIndex{ 0 };   // meaningful iff kind==kEntryPoint
+        const char*   name{ "" };             // kEntryPoint: engine enum name;
+                                              // kAbility: the ability's name; else ""
+        bool          firesForNpc{ true };    // mechanical fact: false for a quest
+                                              // entry or a fully player-gated /
+                                              // empty ability; entry points fire
+                                              // (whether they MATTER is the verdict)
+        int           rawType{ -1 };          // GetType() int — unknown-type diagnostics
+    };
+    // Walk a perk's entry points. Add-on-agnostic; safe on any BGSPerk (empty
+    // for null / entry-less). CommonLib-churn-resistant (int GetType() compares).
+    std::vector<PerkEntryFact> WalkPerkEntries(RE::BGSPerk* a_perk);
+    // The engine enum name for a BGSEntryPoint index (a general fact — the
+    // canonical member names of the frozen 92-value engine enum); "" out of range.
+    const char* EntryPointName(std::uint32_t a_index);
+
+    // v1.1 residual #3: read an add-on's DECLARED entry-point verdicts off its
+    // manifest FLST (the sub-FLST whose front form is a keyword whose editor-id
+    // ends "_MFOEntryPointVerdicts", followed by POSITIONAL GLOBs: index = entry-
+    // point index, value = Verdict 0/1/2). Add-on-agnostic; NO DLL default — if
+    // the add-on ships no such sub-FLST this returns false and leaves a_out empty.
+    // Used by Progression::Init (→ the classifier's runtime table) and by
+    // BuildGenericManifests (→ AddonManifest::entryPointVerdicts). ONE reader.
+    bool ReadEntryPointVerdicts(RE::BGSListForm* a_manifest,
+                                std::vector<ManifestVerdict>& a_out);
+
     // ── the frozen catalog (§2.3) ───────────────────────────────────────────
 
     // §3 verdicts. kDead never appears inside a kept PerkNodeView — perks

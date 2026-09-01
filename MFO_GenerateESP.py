@@ -1084,6 +1084,15 @@ PGID_MANIFEST           = OWN_PROG | 0x821
 # PERSIST at runtime, unlike GLOB/FLST edids). Replaces the retired MFO.esp
 # sentinel — no cross-master reference (the Vortex fix).
 PGID_MANIFEST_KYWD      = OWN_PROG | 0x822
+# v1.1 residual #3 — the ENTRY-POINT VERDICTS self-declaration keyword. The
+# add-on's perk-effectiveness verdicts (effective/marginal/dead per BGSEntryPoint
+# index) are ADD-ON DATA now, not a DLL table. They ride a sub-FLST whose FIRST
+# entry is THIS keyword (editor-id ends "_MFOEntryPointVerdicts" — keyword edids
+# persist at runtime, the same reason the manifest keyword is matched by suffix),
+# followed by 92 POSITIONAL GLOBs (index = entry-point index, value = 0 effective
+# / 1 marginal / 2 dead). Referenced from the manifest FLST so the DLL ties the
+# verdicts to this add-on. Delete the ESL and the DLL holds ZERO verdicts.
+PGID_VERDICTS_KYWD      = OWN_PROG | 0x823  # KYWD MFOP_MFOEntryPointVerdicts
 
 # §18.6 Stage 2 — N-DECLARED CLASSES. The manifest points at ONE classes-list
 # FLST; its entries are class-def FLSTs. Each class-def FLST declares: ONE MESG
@@ -1115,6 +1124,16 @@ PGID_CLASSDEF_RANGED    = OWN_PROG | 0x851
 PGID_CLASSDEF_MAGE      = OWN_PROG | 0x852
 # 0x853-0x85E reserved: more class-def FLSTs
 PGID_CLASSES            = OWN_PROG | 0x85F  # FLST classes list — manifest entry[1]
+# v1.1 residual #3 — the entry-point VERDICTS sub-FLST (manifest entry[3]): its
+# entry[0] is PGID_VERDICTS_KYWD, then the 92 POSITIONAL verdict GLOBs in entry-
+# point-index order. The DLL identifies it by its keyword front (not the classes
+# list), reads it via Progression::ReadEntryPointVerdicts. No DLL default.
+PGID_VERDICTS_FLST      = OWN_PROG | 0x860
+# 92 verdict GLOBs — one per BGSEntryPoint index, POSITIONAL (GLOB edids are
+# discarded at runtime, so ORDER carries the index; the HMS-weights idiom). Band
+# 0x900-0x95B. Value = the perk-effectiveness VERDICT (0 effective/1 marginal/
+# 2 dead) — the judgment lifted OUT of the DLL (native/Progression.cpp) into data.
+PGID_VERDICTS_GLOB_BASE = OWN_PROG | 0x900
 
 # The addon's OWN MCM Helper quest — carries MFOP_MCM (extends MCM_ConfigBase),
 # rendered from Data/MCM/Config/MFO_Progression/config.json. Start-game-enabled,
@@ -1124,7 +1143,7 @@ PGID_CLASSES            = OWN_PROG | 0x85F  # FLST classes list — manifest ent
 # generically off the manifest, exactly as it would a third-party addon).
 PGID_MCM_QUEST          = OWN_PROG | 0x870  # QUST MFOP_MCMQuest (MFOP_MCM script)
 
-PROG_NEXT_OBJECT_ID     = 0x871
+PROG_NEXT_OBJECT_ID     = 0x95C   # past the 92 verdict GLOBs (0x900-0x95B)
 
 # Vanilla AVIF forms (Skyrim.esm) for the class-skill lists — DUMPED from the
 # shipped master (doctrine: mirror the disk, never a wiki). AVOneHanded ..
@@ -1233,6 +1252,57 @@ PROG_CLASSES = [
      [15, 80, 5], 1),
 ]
 
+# v1.1 residual #3 — the PERK-EFFECTIVENESS VERDICTS, now ADD-ON DATA. This is
+# the effective/marginal/dead judgment the DLL used to compile in (the old
+# native/Progression.cpp kEntryPoints[92] table); it lives HERE in the add-on
+# generator now, and the DLL carries no default. One row per BGSEntryPoint index
+# (0-91, engine-frozen order), verdict 'E' effective / 'M' marginal / 'D' dead.
+# Emitted as 92 POSITIONAL GLOBs (value 0/1/2) in PGID_VERDICTS_GLOB_BASE order,
+# referenced by the verdicts sub-FLST. Values reproduce the shipped table exactly
+# (the board's perk-effectiveness display is unchanged). Combat/defense = E;
+# lockpick/craft/commerce/player-UI = D; the named marginal set (+ unproven-on-
+# NPC calls) = M (flagged, never silently killed, so over-filtering stays
+# diagnosable). The engine enum NAMES stay a general fact in the DLL; only these
+# verdicts moved. Editor-ids are informational (the DLL reads them by ORDER).
+VERDICT_CODE = {'E': 0, 'M': 1, 'D': 2}
+PROG_ENTRYPOINT_VERDICTS = [
+    "CalculateWeaponDamage E", "CalculateMyCriticalHitChance E",
+    "CalculateMyCriticalHitDamage E", "CalculateMineExplodeChance D",
+    "AdjustLimbDamage E", "AdjustBookSkillPoints D", "ModRecoveredHealth E",
+    "GetShouldAttack M", "ModBuyPrices D", "AddLeveledListOnDeath D",
+    "GetMaxCarryWeight M", "ModAddictionChance D", "ModAddictionDuration D",
+    "ModPositiveChemDuration D", "Activate D", "IgnoreRunningDuringDetection E",
+    "IgnoreBrokenLock D", "ModEnemyCriticalHitChance E", "ModSneakAttackMult E",
+    "ModMaxPlaceableMines D", "ModBowZoom D", "ModRecoverArrowChance M",
+    "ModSkillUse D", "ModTelekinesisDistance M", "ModTelekinesisDamageMult M",
+    "ModTelekinesisDamage M", "ModBashingDamage E", "ModPowerAttackStamina E",
+    "ModPowerAttackDamage E", "ModSpellMagnitude E", "ModSpellDuration E",
+    "ModSecondaryValueWeight M", "ModArmorWeight M", "ModIncomingStagger E",
+    "ModTargetStagger E", "ModAttackDamage E", "ModIncomingDamage E",
+    "ModTargetDamageResistance E", "ModSpellCost E", "ModPercentBlocked E",
+    "ModShieldDeflectArrowChance E", "ModIncomingSpellMagnitude E",
+    "ModIncomingSpellDuration E", "ModPlayerIntimidation D", "ModPlayerReputation D",
+    "ModFavorPoints D", "ModBribeAmount D", "ModDetectionLight E",
+    "ModDetectionMovement E", "ModSoulGemRecharge D", "SetSweepAttack E",
+    "ApplyCombatHitSpell E", "ApplyBashingSpell E", "ApplyReanimateSpell E",
+    "SetBooleanGraphVariable M", "ModSpellCastingSoundEvent D",
+    "ModPickpocketChance D", "ModDetectionSneakSkill E", "ModFallingDamage E",
+    "ModLockpickSweetSpot D", "ModSellPrices D", "CanPickpocketEquippedItem D",
+    "ModLockpickLevelAllowed D", "SetLockpickStartingArc D", "SetProgressionPicking D",
+    "MakeLockpicksUnbreakable D", "ModAlchemyEffectiveness D", "ApplyWeaponSwingSpell E",
+    "ModCommandedActorLimit M", "ApplySneakingSpell E", "ModPlayerMagicSlowdown D",
+    "ModWardMagickaAbsorptionPct E", "ModInitialIngredientEffectsLearned D",
+    "PurifyAlchemyIngredients D", "FilterActivation D", "CanDualCastSpell M",
+    "ModTemperingHealth D", "ModEnchantmentPower D", "ModSoulPctCapturedToWeapon D",
+    "ModSoulGemEnchanting D", "ModNumberAppliedEnchantmentsAllowed D",
+    "SetActivateLabel D", "ModShoutOK D", "ModPoisonDoseCount D",
+    "ShouldApplyPlacedItem M", "ModArmorRating E", "ModLockpickingCrimeChance D",
+    "ModIngredientsHarvested D", "ModSpellRange_TargetLoc M", "ModPotionsCreated D",
+    "ModLockpickingKeyRewardChance D", "AllowMountActor M",
+]
+assert len(PROG_ENTRYPOINT_VERDICTS) == 92, \
+    f"entry-point verdict table must be 92 rows, is {len(PROG_ENTRYPOINT_VERDICTS)}"
+
 
 def make_prog_tes4(esl=True):
     # v1.1: ONE master — Skyrim.esm (index 0x00) for the AVIF skill forms. The
@@ -1320,7 +1390,11 @@ def make_progression_esl(esl=True):
     # reference — this is what retires the sentinel and unblocks Vortex.
     kywd_manifest = record('KYWD', PGID_MANIFEST_KYWD, 0,
                            subrec('EDID', zstr("MFOP_MFOAddonManifest")) + subrec('CNAM', struct.pack('<I', 0)))
-    data += group('KYWD', kywd_enrolled + kywd_manifest)
+    # v1.1 residual #3 — the verdicts sub-FLST's self-declaration keyword (edid
+    # suffix "_MFOEntryPointVerdicts"). Same KYWD shape as the manifest keyword.
+    kywd_verdicts = record('KYWD', PGID_VERDICTS_KYWD, 0,
+                           subrec('EDID', zstr("MFOP_MFOEntryPointVerdicts")) + subrec('CNAM', struct.pack('<I', 0)))
+    data += group('KYWD', kywd_enrolled + kywd_manifest + kywd_verdicts)
     glob_body = b''
     for fid, edid, value, fnam in PROG_GLOBS:
         glob_body += prog_glob(fid, edid, value, fnam)
@@ -1336,6 +1410,13 @@ def make_progression_esl(esl=True):
         glob_body += prog_glob(base + 1, f"{_de}_HmsWeightM", float(hw[1]), 's')
         glob_body += prog_glob(base + 2, f"{_de}_HmsWeightS", float(hw[2]), 's')
         glob_body += prog_glob(base + 3, f"{_de}_HmsPrimary", float(pp),    's')
+    # v1.1 residual #3 — the 92 POSITIONAL verdict GLOBs (index = entry-point
+    # index, value = 0/1/2). Editor-ids are informational only (the DLL reads by
+    # ORDER, like the HMS globs). Named for the engine entry point they verdict.
+    for i, row in enumerate(PROG_ENTRYPOINT_VERDICTS):
+        name, code = row.rsplit(' ', 1)
+        glob_body += prog_glob(PGID_VERDICTS_GLOB_BASE + i,
+                               f"MFOP_EPVerdict_{name}", float(VERDICT_CODE[code]), 's')
     data += group('GLOB', glob_body)
     # The addon's own MCM quest (its economy tab).
     data += group('QUST', make_prog_mcm_quest())
@@ -1347,8 +1428,13 @@ def make_progression_esl(esl=True):
     # v1.1 Phase 6c: PGID_BOARDTAB_LABEL (a MESG) precedes the classes list so
     # the DLL's manifest walk captures its FULL for the hosted board tab's title
     # before it stops on the classes FLST (BuildGenericManifests breaks there).
+    # v1.1 residual #3: PGID_VERDICTS_FLST (the entry-point verdicts sub-FLST)
+    # follows the classes list so the DLL's manifest walk breaks on the classes
+    # FLST first; the verdicts sub-FLST is found by its keyword front (order-
+    # independent) and read via Progression::ReadEntryPointVerdicts.
     flst_body += prog_flst(PGID_MANIFEST, "MFOP_AddonManifest",
-                           [PGID_MANIFEST_KYWD, PGID_BOARDTAB_LABEL, PGID_CLASSES]
+                           [PGID_MANIFEST_KYWD, PGID_BOARDTAB_LABEL, PGID_CLASSES,
+                            PGID_VERDICTS_FLST]
                            + PROG_MANIFEST_ECONOMY)
     for fid, edid, forms in PROG_CLASS_SKILLS:
         flst_body += prog_flst(fid, edid, forms)
@@ -1365,6 +1451,11 @@ def make_progression_esl(esl=True):
     for ci, (defFid, defEdid, nameFid, _ne, _disp, stanceFid, _se, _sv, skills, _hw, _pp) in enumerate(PROG_CLASSES):
         hmsFids = [PGID_HMS_BASE + ci * 4 + k for k in range(4)]
         flst_body += prog_flst(defFid, defEdid, [nameFid] + skills + [stanceFid] + hmsFids)
+    # v1.1 residual #3: the entry-point VERDICTS sub-FLST — entry[0] its
+    # self-declaration keyword, then the 92 POSITIONAL verdict GLOBs in order.
+    verdict_glob_fids = [PGID_VERDICTS_GLOB_BASE + i for i in range(len(PROG_ENTRYPOINT_VERDICTS))]
+    flst_body += prog_flst(PGID_VERDICTS_FLST, "MFOP_EntryPointVerdicts",
+                           [PGID_VERDICTS_KYWD] + verdict_glob_fids)
     data += group('FLST', flst_body)
     # MESG group last — mirrors Skyrim.esm's late top-group position (MESG
     # sorts after FLST/PERK/AVIF). One display-name message per class.
@@ -1631,8 +1722,11 @@ def main():
     for defFid, defEdid, _nf, _ne, _disp, _sf, _se, _sv, skills, _hw, _pp in PROG_CLASSES:
         print(f"  FLST  0x{defFid & 0xFFF:03X}        {defEdid} (class-def: MESG + {len(skills)} AVIF + _Stance + 4 HMS GLOB)")
     print(f"  FLST  0x{PGID_CLASSES & 0xFFF:03X}        MFOP_Classes ({len(PROG_CLASSES)} class-def(s); manifest entry[1])")
-    print(f"  FLST  0x{PGID_MANIFEST & 0xFFF:03X}        MFOP_AddonManifest ({3 + len(PROG_MANIFEST_ECONOMY)} entries: "
-          f"self-declaration keyword + MFOP_BoardTabLabel + MFOP_Classes + {len(PROG_MANIFEST_ECONOMY)} economy GLOB(s))")
+    print(f"  FLST  0x{PGID_MANIFEST & 0xFFF:03X}        MFOP_AddonManifest ({4 + len(PROG_MANIFEST_ECONOMY)} entries: "
+          f"self-declaration keyword + MFOP_BoardTabLabel + MFOP_Classes + MFOP_EntryPointVerdicts + "
+          f"{len(PROG_MANIFEST_ECONOMY)} economy GLOB(s))")
+    print(f"  FLST  0x{PGID_VERDICTS_FLST & 0xFFF:03X}        MFOP_EntryPointVerdicts "
+          f"(v1.1 residual #3: 92 positional verdict GLOBs; perk-effectiveness judgment as add-on DATA)")
 
 
 if __name__ == "__main__":
