@@ -1531,7 +1531,7 @@ namespace MFO::Board {
                     static_cast<std::uint32_t>(F::kActivate)  | static_cast<std::uint32_t>(F::kMenu)     |
                     static_cast<std::uint32_t>(F::kPOVSwitch) | static_cast<std::uint32_t>(F::kFighting) |
                     static_cast<std::uint32_t>(F::kSneaking)  | static_cast<std::uint32_t>(F::kMainFour) |
-                    static_cast<std::uint32_t>(F::kWheelZoom) | static_cast<std::uint32_t>(F::kJournalTabs));
+                    static_cast<std::uint32_t>(F::kWheelZoom));
                 cm->ToggleControls(flags, !want);   // want -> disable, else re-enable
             });
         }
