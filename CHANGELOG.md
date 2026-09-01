@@ -1,4 +1,4 @@
-## Unreleased
+## v1.1.3 -- Per-follower toggle and cleaner line of sight
 
 - **You can now turn the mod off for a single follower.** The Followers tab has a new checkbox in its first column, on by default. Uncheck it and the mod leaves that follower completely alone (no gambits, no logistics, no buying or selling, no forced casting or equipping), and it hands back anything it was holding on them (a forced weapon, an AI package it parked them in, any leftover cast or retreat state) so they go back to a plain vanilla follower. Check it again to put them back under the mod. The choice is saved per follower and carries over between saves.
 - **Perk usefulness ratings live in the add-on now, not the mod.** The perk board marks which perks actually do something for a follower and which are dead weight for one. That call used to be baked into the mod itself. It is add-on data now, so the progression add-on carries its own ratings and the mod keeps only a general perk reader any add-on can use. Nothing changes on screen (the shipped add-on declares the same ratings it always used). Remove the add-on and the mod holds no ratings at all, which is the point.
