@@ -23,6 +23,14 @@
 // therefore up to ~a tick stale, which is fine: walls do not move, and a foe
 // crossing a doorway flips the verdict on the next pump.
 //
+// TWO-STAGE MEASURE. The engine's HasLineOfSight is the cheap FIRST pass. Only
+// when it says CLEAR does Measure fire MFO's OWN bhkWorld point-raycast
+// (kCharController layer, feet/torso/head samples) to catch what the engine LoS
+// sees through -- camp-tent cloth, some anim-static -- and to forgive a foe one
+// stair up/down (any clear sample => visible). The custom ray only ever turns a
+// VISIBLE into OCCLUDED and fails open if it cannot run; the cheap-first order
+// bounds its cost to the ambiguous cases. See CustomRayConfirmsOcclusion.
+//
 // FAIL-OPEN BY DESIGN. Unknown (cold cache, unloaded 3D, VR where the
 // main-thread pump refuses to install) must degrade to TODAY'S behaviour --
 // LoS is a preference/hold, never a wall that silently disables targeting or

@@ -44,6 +44,86 @@ namespace MFO::Sightline {
             return std::chrono::duration<float>(Clock::now() - a_t).count();
         }
 
+        // MAIN THREAD ONLY. MFO's OWN physics raycast, fired ONLY when the
+        // engine LoS already says CLEAR -- it exists to catch what
+        // HasLineOfSight ignores (camp tents, cloth, some anim-static geometry)
+        // and to forgive a foe one step up or down.
+        //
+        // Layer: kCharController. We ask "could a walking body travel this
+        // line?" -- solid nav geometry (walls, tent walls, closed doors) stops
+        // it, while a THIN point-ray at head/torso height passes OVER a railing
+        // and THROUGH an open doorway/gate (there is no char-controller
+        // collision in the opening), so we do not over-block on the things a
+        // spell should sail past. The caster's own capsule is excluded by
+        // matching the ray's system group to the caster's; the target's own
+        // capsule is excluded by ending each ray a margin short of the sampled
+        // body point (kCharController rays otherwise stop on any actor capsule).
+        //
+        // Multi-sample: feet / torso / head. If ANY sample is clear the verdict
+        // is VISIBLE -- a foe one stair up, or behind a low sill, is not
+        // "occluded." Returns true ONLY when every sample is blocked.
+        //
+        // FAIL-OPEN: no parent cell, no bhkWorld, or an unresolved controller
+        // returns false (clear). We never manufacture an occlusion we cannot
+        // prove, so the engine's own VISIBLE verdict stands.
+        bool CustomRayConfirmsOcclusion(RE::Actor* a_vf, RE::Actor* a_tf) {
+            auto* cell = a_vf->GetParentCell();
+            if (!cell) return false;
+            auto* world = cell->GetbhkWorld();
+            if (!world) return false;
+
+            // System group of the caster, so the ray skips the caster's own
+            // char-controller capsule (same non-zero group => not collided).
+            std::uint32_t casterFilter = 0;
+            if (auto* cc = a_vf->GetCharController()) cc->GetCollisionFilterInfo(casterFilter);
+            const std::uint32_t systemGroup = casterFilter >> 16;
+            const std::uint32_t rayFilter =
+                (systemGroup << 16) |
+                static_cast<std::uint32_t>(RE::COL_LAYER::kCharController);
+
+            // Eye origin: the true head/eye node (no camera offset -- this is a
+            // world query, not a first-person aim).
+            RE::NiPoint3 eye{}, dir{};
+            a_vf->GetEyeVector(eye, dir, false);
+
+            // Feet / torso / head of the target. GetHeight() is the live capsule
+            // height; a nonsense value falls back to a nominal humanoid.
+            const RE::NiPoint3 feet = a_tf->GetPosition();
+            float h = a_tf->GetHeight();
+            if (h <= 1.0f) h = 120.0f;
+            const RE::NiPoint3 samples[3] = {
+                { feet.x, feet.y, feet.z + 16.0f },        // just off the floor (dodge terrain)
+                { feet.x, feet.y, feet.z + h * 0.55f },    // torso
+                { feet.x, feet.y, feet.z + h * 0.90f },    // head
+            };
+
+            const float scale = RE::bhkWorld::GetWorldScale();
+            constexpr float kTargetMargin = 48.0f;  // clears the target's own ~30u capsule
+
+            RE::BSReadLockGuard lock(world->worldLock);
+            for (const auto& pt : samples) {
+                // Pull the endpoint a margin short of the body along the ray so
+                // the target's OWN capsule is never the thing we call a wall.
+                RE::NiPoint3 to = pt;
+                const RE::NiPoint3 seg = to - eye;
+                const float len = seg.Length();
+                if (len > kTargetMargin) {
+                    const float f = (len - kTargetMargin) / len;
+                    to = { eye.x + seg.x * f, eye.y + seg.y * f, eye.z + seg.z * f };
+                }
+
+                RE::bhkPickData pick;
+                pick.rayInput.from = eye * scale;   // NiPoint3 -> hkVector4 (implicit)
+                pick.rayInput.to   = to  * scale;
+                pick.rayInput.enableShapeCollectionFilter = false;
+                pick.rayInput.filterInfo = rayFilter;
+
+                world->PickObject(pick);
+                if (!pick.rayOutput.HasHit()) return false;  // a clear sample -> visible, done
+            }
+            return true;  // every sample blocked -> an occluder the engine saw through
+        }
+
         // MAIN THREAD ONLY -- the actual raycast. Resolves ids fresh (a handle
         // captured on the worker could be a different actor by the time the
         // frame runs it) and refuses anything without loaded 3D: a raycast
@@ -64,7 +144,19 @@ namespace MFO::Sightline {
                 // is only ever reached through MainThread::Post, which is a
                 // documented no-op on VR (pump refused), so VR never gets here.
                 bool arg2 = false;
-                const bool los = vf->HasLineOfSight(tf, arg2);
+                bool los = vf->HasLineOfSight(tf, arg2);
+
+                // Cheap engine check FIRST. The custom ray runs ONLY when the
+                // engine says CLEAR, so the extra pick is spent on the
+                // ambiguous cases and an already-occluded foe costs nothing
+                // more. The ray can only ever turn a VISIBLE into OCCLUDED
+                // (catch a tent/cloth the engine saw through) -- it never
+                // overturns an OCCLUDED, and it fails OPEN (VISIBLE stands) when
+                // it cannot run. Both discrete and concentration casts reach
+                // this only through Want()'s per-viewer repost throttle
+                // (kRepostSeconds), so the pick is bounded to one batch per
+                // ~0.3 s per caster -- NOT the 133 ms pump tick.
+                if (los && CustomRayConfirmsOcclusion(vf, tf)) los = false;
 
                 std::lock_guard lk(g_mx);
                 auto& e = g_cache[Key(a_viewer, tid)];
