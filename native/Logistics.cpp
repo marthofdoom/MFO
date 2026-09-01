@@ -1347,6 +1347,24 @@ namespace MFO::Logistics {
                     // into a wall or through a teammate), affordability-gated, posted
                     // to the main thread with the deduct clamped -- the same delivery
                     // combat's silent force-half uses when ITS package declines.
+                    //
+                    // SEED THE LoS CACHE (2026-08-18 review SEV-3). This is the
+                    // ONLY Sightline::Check in the OOC path, and nothing here ever
+                    // Want()ed the pair -- so the cache stayed cold, Check read
+                    // Unknown forever, and "!= Occluded" passed every time: the
+                    // wall-gate was INERT (an OOC firebolt into masonry, or through
+                    // a tent that HAS LoS collision, was never held). The combat
+                    // paths all warm one tick ahead (Evaluator Want->Check, the F7
+                    // auto-cast Want->Check); the OOC path never joined that pattern
+                    // because PickFoe -- its only other seeder -- walks the COMBAT
+                    // target list and does not run for a follower who is casting at
+                    // a hostile while out of combat. Want() the pair EVERY service
+                    // (unconditional, before the package attempt) so the measurement
+                    // lands next frame and the fallback's Check gates on a real
+                    // verdict. Fail-open is preserved: the FIRST tick still reads
+                    // Unknown and passes, exactly like the combat gates on their
+                    // first sighting -- walls do not move, so the second tick holds.
+                    Sightline::Want(id, { tgt->GetFormID() });
                     acted = Packages::Available() &&
                             Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None;
                     if (!acted &&
