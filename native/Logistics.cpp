@@ -817,6 +817,7 @@ namespace MFO::Logistics {
                     // a door) never accumulates toward the sticky verdict. Only bodies
                     // he can NEVER close on keep striking -> those go sticky (above).
                     g_stallStrikes.erase(tref->GetFormID());
+                    g_stealStrikes.erase(StealKey(id, tref->GetFormID()));   // reachable -> reset steal back-off
                     // MUTATION BAR (#22g / #22g-QL) + sneak courtesy hold.
                     if (PlayerIsConsidering(tref->GetFormID()) || PlayerActivelyStealthing())
                         return;   // arrived, holding under the bar -- retry next tick
@@ -907,15 +908,39 @@ namespace MFO::Logistics {
                 bool stealAbandon = false;
                 if (!gone && tref) {
                     if (!Forms::IsTravelPackage(a_follower->GetCurrentPackage())) {
+                        const auto skey = StealKey(id, tref->GetFormID());
                         if (tr.stolenSince.time_since_epoch().count() == 0) {
                             tr.stolenSince = now;
+                            const int strikes = ++g_stealStrikes[skey];
                             auto* curp = a_follower->GetCurrentPackage();
                             spdlog::info("[loot] {:08X} travel pkg stolen mid-walk "
-                                         "(curPkg={:08X}) -- re-asserting claim, grace {}s",
+                                         "(curPkg={:08X}) -- re-asserting claim, grace {}s (strike {}/{})",
                                          id, curp ? curp->GetFormID() : 0u,
-                                         std::chrono::duration_cast<std::chrono::seconds>(kStealGrace).count());
+                                         std::chrono::duration_cast<std::chrono::seconds>(kStealGrace).count(),
+                                         strikes, kStealStrikeMax);
                         }
-                        if (now - tr.stolenSince <= kStealGrace) {
+                        // BACK-OFF (deck RC): a claim stolen kStealStrikeMax times is
+                        // fighting a package that will not release -- stop re-asserting,
+                        // abandon the leg to the transient blocklist and move on. Also
+                        // concede immediately IN COMBAT: a combat package legitimately
+                        // outranks loot-travel and must never be fought (the Scheduler
+                        // clears loot on combat anyway, but this tick may beat it).
+                        const bool tooManySteals = g_stealStrikes[skey] >= kStealStrikeMax;
+                        const bool folInCombat   = a_follower->IsInCombat();
+                        if (tooManySteals || folInCombat) {
+                            MarkTravelFailed(tref->GetFormID(), now);   // transient only -- ref was reachable
+                            g_stealStrikes.erase(skey);
+                            spdlog::info("[loot] {:08X} leg {:08X} abandoned -- {} -- transient skip",
+                                         id, tref->GetFormID(),
+                                         folInCombat ? "in combat, conceding to combat package"
+                                                     : "claim stolen too many times, backing off");
+                            tr.stolenSince = {};
+                            stealAbandon = true;
+                            tr.phase = TravelPhase::Holding;
+                            tr.lingerUntil = now + std::chrono::seconds(
+                                                      static_cast<int>(Config::g_batchLinger.load()));
+                            // no return -- fall into Holding
+                        } else if (now - tr.stolenSince <= kStealGrace) {
                             tr.progressAt = now;   // stolen time never counts against the ref
                             if (tr.deadline < now + std::chrono::seconds(4))
                                 tr.deadline = now + std::chrono::seconds(4);
@@ -925,6 +950,7 @@ namespace MFO::Logistics {
                         // External claim outlasted the grace: give the LEG up, keep
                         // the ref honest (25s transient only) and seek/release below.
                         MarkTravelFailed(tref->GetFormID(), now);
+                        g_stealStrikes.erase(skey);
                         spdlog::info("[loot] {:08X} leg {:08X} abandoned -- package held "
                                      "externally past grace -- transient skip",
                                      id, tref->GetFormID());
