@@ -757,8 +757,7 @@ namespace MFO::Logistics {
                 // no-op must not be re-picked every tick) and continue the batch.
                 MarkTravelFailed(tr.acquireRefID, now);
                 tr.phase = TravelPhase::Holding;
-                tr.lingerUntil = now + std::chrono::seconds(
-                                          static_cast<int>(Config::g_batchLinger.load()));
+                tr.lingerUntil = now + BatchLingerDur();
                 return;
             } else if (tr.phase == TravelPhase::Walking) {
                 auto tptr  = tr.target.get();
@@ -812,10 +811,26 @@ namespace MFO::Logistics {
                 // (g_looseAcquireDist, default 300) -- the engine picks it up
                 // regardless of physical distance, so a follower who walked as
                 // close as the navmesh allows still grabs a pile the corpse-tight
-                // 160u arm's reach would strand (marth: reachable gold, pickup
-                // distance too small). A corpse still needs true arm's reach.
-                const float arrivalDist = (tref && LooseRef(tref))
-                                        ? Config::g_looseAcquireDist.load() : kArrivalDist;
+                // 200u arm's reach would strand (marth: reachable gold, pickup
+                // distance too small). A corpse gets its GROWN grab radius
+                // (stall cure): each path-fail against it widened the from-range
+                // reach up to kGrabRadiusMax, so a leg that stalls short of a
+                // body on rubble converts to an arrival next tick instead of
+                // striking toward the blocklist. A grown (beyond plain arm's
+                // reach) arrival honours the player bubble -- never hoover a
+                // body the player is standing over.
+                float arrivalDist = kArrivalDist;
+                if (tref && LooseRef(tref)) {
+                    arrivalDist = Config::g_looseAcquireDist.load();
+                } else if (tref) {
+                    const float grown = GrabRadiusFor(tref->GetFormID());
+                    if (grown > arrivalDist) {
+                        auto* pcG = RE::PlayerCharacter::GetSingleton();
+                        if (!pcG || pcG->GetPosition().GetDistance(tref->GetPosition()) >
+                                        Config::g_playerBubble.load())
+                            arrivalDist = grown;
+                    }
+                }
                 if (!gone && dist <= arrivalDist) {
                     // REACHED it -> this body is provably reachable: clear any stall
                     // strike so a merely-transient earlier block (boxed in by an actor,
@@ -867,8 +882,7 @@ namespace MFO::Logistics {
                             spdlog::info("[acquire] {:08X}: loose ref {:08X} STICKY -- no main-thread pump for ActivateRef",
                                          id, tref->GetFormID());
                             tr.phase = TravelPhase::Holding;
-                            tr.lingerUntil = now + std::chrono::seconds(
-                                                      static_cast<int>(Config::g_batchLinger.load()));
+                            tr.lingerUntil = now + BatchLingerDur();
                             return;
                         }
                         MainThread::Post(doActivate);
@@ -888,11 +902,12 @@ namespace MFO::Logistics {
                     // DONE, so the linger revisits it once the claim releases.
                     bool leftWaiting = false;
                     const bool moved = StripCorpse(a_follower, a_state, tref, now, &leftWaiting);
+                    if (moved || !leftWaiting)
+                        g_grabGrow.erase(tref->GetFormID());   // handled -> stale grow verdict
                     if (!leftWaiting)
                         MarkTravelFailed(tref->GetFormID(), now);   // fully stripped -> DONE
                     tr.phase = TravelPhase::Holding;
-                    tr.lingerUntil = now + std::chrono::seconds(
-                                              static_cast<int>(Config::g_batchLinger.load()));
+                    tr.lingerUntil = now + BatchLingerDur();
                     spdlog::info("[loot] {:08X}: arrived -- {}{} (batch continues)", id,
                                  moved ? "looted" : "nothing to take",
                                  leftWaiting ? " (loot still under player's dibs -- corpse kept)" : "");
@@ -942,8 +957,7 @@ namespace MFO::Logistics {
                             tr.stolenSince = {};
                             stealAbandon = true;
                             tr.phase = TravelPhase::Holding;
-                            tr.lingerUntil = now + std::chrono::seconds(
-                                                      static_cast<int>(Config::g_batchLinger.load()));
+                            tr.lingerUntil = now + BatchLingerDur();
                             // no return -- fall into Holding
                         } else if (now - tr.stolenSince <= kStealGrace) {
                             tr.progressAt = now;   // stolen time never counts against the ref
@@ -962,8 +976,7 @@ namespace MFO::Logistics {
                         tr.stolenSince = {};
                         stealAbandon = true;
                         tr.phase = TravelPhase::Holding;
-                        tr.lingerUntil = now + std::chrono::seconds(
-                                                  static_cast<int>(Config::g_batchLinger.load()));
+                        tr.lingerUntil = now + BatchLingerDur();
                         // no return -- fall into Holding
                     } else if (tr.stolenSince.time_since_epoch().count() != 0) {
                         // Reclaimed: resume the leg with a fresh movement budget
@@ -990,7 +1003,14 @@ namespace MFO::Logistics {
                         // rather than strike-accrue across a cluster (the churn loop).
                         if (stalled) {
                             if (LooseRef(tref)) MarkTravelSticky(tref->GetFormID(), now);
-                            else                MarkTravelStalled(tref->GetFormID(), now);
+                            else {
+                                MarkTravelStalled(tref->GetFormID(), now);
+                                // A REAL walked-and-couldn't-close verdict: widen
+                                // this body's from-range grab radius so the next
+                                // scan (or this excursion's next leg) takes it
+                                // from where he can actually stand (stall cure).
+                                NotePathFail(tref->GetFormID());
+                            }
                         } else {
                             MarkTravelFailed(tref->GetFormID(), now);
                         }
@@ -999,8 +1019,7 @@ namespace MFO::Logistics {
                         spdlog::info("[loot] {:08X} unreachable {:08X} (no progress, dist={:.0f}) -- skipping",
                                      id, tref->GetFormID(), dist);
                     tr.phase = TravelPhase::Holding;
-                    tr.lingerUntil = now + std::chrono::seconds(
-                                              static_cast<int>(Config::g_batchLinger.load()));
+                    tr.lingerUntil = now + BatchLingerDur();
                     // no return -- fall into Holding
                 } else {
                     return;   // still walking to the current target
@@ -1026,8 +1045,7 @@ namespace MFO::Logistics {
                     // Retargeted (phase now Walking) or grabbed a cluster corpse
                     // (still Holding) -- productive, so extend the linger.
                     if (tr.phase == TravelPhase::Holding)
-                        tr.lingerUntil = now + std::chrono::seconds(
-                                                  static_cast<int>(Config::g_batchLinger.load()));
+                        tr.lingerUntil = now + BatchLingerDur();
                     return;
                 }
                 if (g_scanSawWaiting && now <= tr.lingerUntil)
@@ -1629,6 +1647,7 @@ namespace MFO::Logistics {
         g_travelFailed.clear();
         g_travelUnreach.clear();
         g_stallStrikes.clear();
+        g_grabGrow.clear();   // grown-grab radii are per-session verdicts
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
     }

@@ -553,7 +553,7 @@
             "max": 15.0,
             "step": 0.5,
             "sourceType": "ModSettingFloat",
-            "defaultValue": 4.0
+            "defaultValue": 1.5
           }
         },
         {

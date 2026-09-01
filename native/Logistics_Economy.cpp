@@ -490,11 +490,11 @@ namespace MFO::Logistics {
             const auto& a_logistics = a_state.logistics();
             const auto fid = a_follower->GetFormID();
 
-            // Per-follower SCAN cooldown (15 s) -- the cell walk itself is the
+            // Per-follower SCAN cooldown -- the cell walk itself is the
             // cost being limited here, same pattern as the other diagnostics.
             auto& sn = g_econScan[fid];
             if (sn.time_since_epoch().count() != 0 && a_now < sn) return;
-            sn = a_now + std::chrono::seconds(6);   // vendor-scan cadence (was 15s -- snappier shopping)
+            sn = a_now + std::chrono::seconds(2);   // vendor-scan cadence (was 15s, then 6 -- snappier shopping)
 
             // Same crash4-safe walk as LootNearby: the follower's OWN attached
             // cell, never TES::ForEachReferenceInRange (§0.30).
@@ -599,7 +599,7 @@ namespace MFO::Logistics {
                 const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendor->GetFormID();
                 auto& pn = g_econPair[pairKey];
                 if (pn.time_since_epoch().count() != 0 && a_now < pn) continue;
-                pn = a_now + std::chrono::seconds(20);   // per-(follower,vendor) retry cadence (was 60s)
+                pn = a_now + std::chrono::seconds(12);   // per-(follower,vendor) retry cadence (was 60s, then 20)
 
                 const auto& vv   = fac->vendorData.vendorValues;
                 auto*       vend = fac->vendorData.vendorSellBuyList;
@@ -887,10 +887,10 @@ namespace MFO::Logistics {
                 // Only burn the cooldown + stop scanning if a trade ACTUALLY
                 // dispatched (Fable audit #8): a chest already busy with another
                 // follower's order, or the bridge being down, must not cost this
-                // follower its 20 s window -- try the next vendor / next scan.
+                // follower its 8 s window -- try the next vendor / next scan.
                 if (TradeBridge::VendorTrade(a_follower, vendor, chest,
                                              std::move(sell), std::move(needs), purse, buy)) {
-                    g_econTrade[fid] = a_now + std::chrono::seconds(20);
+                    g_econTrade[fid] = a_now + std::chrono::seconds(8);
                     break;
                 }
             }   // for (living vendors)

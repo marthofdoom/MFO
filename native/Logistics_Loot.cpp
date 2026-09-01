@@ -1812,14 +1812,20 @@ namespace MFO::Logistics {
                 }
             }
 
-            // CLOSEST FIRST (marth): loot the nearest eligible source before the
-            // farther ones, so a follower grabs what it is standing next to
-            // rather than an arbitrary cell-walk order. Sort the collected
-            // handles by distance to the follower; an unresolvable handle sorts
-            // last. (Bounded at kMaxCandidates=48, so this is a small sort.)
+            // REACHABLE FIRST, THEN CLOSEST (unified loot-failure model, marth):
+            // a target that recently FAILED to path is DEPRIORITIZED, not
+            // removed -- it sorts to the BACK (body or loose item alike), and
+            // within each group closest-first, so the follower clears every
+            // easy target before circling back to a path-troubled one (by which
+            // time its grown grab radius usually lets it be taken from range).
+            // An unresolvable handle sorts last. (Bounded at kMaxCandidates=48,
+            // so this is a small sort.)
             std::sort(candidates.begin(), candidates.end(),
-                [&origin](const RE::ObjectRefHandle& a, const RE::ObjectRefHandle& b) {
+                [&origin, a_now](const RE::ObjectRefHandle& a, const RE::ObjectRefHandle& b) {
                     auto pa = a.get(); auto pb = b.get();
+                    const bool fa = pa ? TravelFailedRecently(pa->GetFormID(), a_now) : true;
+                    const bool fb = pb ? TravelFailedRecently(pb->GetFormID(), a_now) : true;
+                    if (fa != fb) return !fa;   // un-failed targets first
                     const float da = pa ? origin.GetDistance(pa->GetPosition()) : 1e30f;
                     const float db = pb ? origin.GetDistance(pb->GetPosition()) : 1e30f;
                     return da < db;
@@ -1837,8 +1843,14 @@ namespace MFO::Logistics {
             const bool followerBeyondLeash =
                 origin.GetDistance(playerPos) > leash * 1.15f;
 
-            // Act after the walk. Re-resolve each handle at act time (#2); stop at
-            // the first successful action -- one loot action per tick (§4.8.3).
+            // Act after the walk. Re-resolve each handle at act time (#2). Perf
+            // pass: an IN-REACH source is drained in place (StripCorpse -- every
+            // wanted category, dibs-gated) and the loop KEEPS GOING, so all loot
+            // already within arm's reach clears in this one tick (bounded by
+            // kMaxCandidates=48 + physical reach). Movement-class actions (arming
+            // or retargeting a walk) still end the tick -- one DISPATCH per tick
+            // (§4.8.3); only the in-place mutations batch.
+            int drained = 0;   // in-reach sources drained this tick (normal mode)
             for (auto& h : candidates) {
                 auto ptr = h.get();
                 auto* ref = ptr.get();
@@ -1853,6 +1865,17 @@ namespace MFO::Logistics {
 
                 const float df = origin.GetDistance(ref->GetPosition());
 
+                // GROWN GRAB radius for this ref (stall cure): widens past
+                // kArrivalDist with each path-fail so a body he can stand near
+                // but never path the last gap to is taken from range. Loose
+                // refs keep flat arm's reach (their acquire is a physical
+                // Activate). A grab BEYOND plain arm's reach also honours the
+                // player bubble -- never hoover a body you are standing over.
+                const float grabR = LooseRef(ref) ? kArrivalDist : GrabRadiusFor(rid);
+                const bool  grabOk = df <= kArrivalDist ||
+                    (df <= grabR &&
+                     playerPos.GetDistance(ref->GetPosition()) > Config::g_playerBubble.load());
+
                 // ── EXCURSION MODE: the follower is already claimed (priority 60)
                 // and driving a batch. The closest eligible candidate decides the
                 // tick: within arm's reach -> grab it (a mutation); farther but
@@ -1864,9 +1887,23 @@ namespace MFO::Logistics {
                     const int s = SlotIndexOf(a_follower->GetFormID());
                     if (s < 0) continue;   // no live slot: nothing to drive
                     TravelIntent& tr = g_travelSlots[s];
-                    if (df <= kArrivalDist && !LooseRef(ref)) {
-                        if (LootHere(a_follower, ref, a_cat, a_potionWant)) return true;
-                        continue;   // arm's-reach corpse was empty -- try the next
+                    if (grabOk && !LooseRef(ref)) {
+                        // DRAIN IN PLACE (perf pass): he is on it (or within its
+                        // grown grab radius), so take EVERYTHING his gambits want
+                        // in this visit -- the same full strip the arrival path
+                        // runs (every tier dibs-gated through TierReleased inside
+                        // StripCorpse), not one category per tick.
+                        bool leftWaiting = false;
+                        const bool moved = g_svc
+                            ? StripCorpse(a_follower, *g_svc, ref, a_now, &leftWaiting)
+                            : LootHere(a_follower, ref, a_cat, a_potionWant);
+                        if (leftWaiting) g_scanSawWaiting = true;
+                        if (moved) {
+                            g_grabGrow.erase(rid);      // grabbed -> stale grow verdict
+                            g_travelFailed.erase(rid);  // back to normal sort priority
+                            return true;
+                        }
+                        continue;   // nothing takeable here yet -- try the next
                     }
                     // COMMIT TO THE CURRENT LEG. RETARGET (below) resets the
                     // no-progress tracker (progressAt), so re-picking the closest
@@ -1891,14 +1928,31 @@ namespace MFO::Logistics {
                     // (Activate dispatch), never as an in-place transfer here.
                     if (!Config::g_lootTravel.load())                              continue;
                     if (df > walkLimit)                                           continue;
+                    // WALK-only anti-churn commit: never re-WALK a target inside
+                    // its fail cooldown -- Retarget/Fill reset the no-progress
+                    // clock, so an instant re-walk would defeat the stall verdict
+                    // (the frozen-Erik loop). The unified failure model still
+                    // keeps the ref IN THE RUNNING: it sorts to the back, and the
+                    // in-range grown-grab path above never consults this list.
                     if (TravelFailedRecently(rid, a_now))                          continue;
                     if (playerPos.GetDistance(ref->GetPosition())
                             <= Config::g_playerBubble.load())                      continue;
                     // OFF-NAVMESH GATE: if no navmesh is near the ref, the Travel
                     // package can't build a path and he'd freeze -- skip + blocklist
                     // (25s LRU, so the scan isn't re-run) BEFORE dispatch.
+                    // TRANSIENT ONLY (stall-bug fix): this is a pre-dispatch
+                    // HEURISTIC -- nearest-VERTEX misjudges stairs/rubble/body-
+                    // piles -- and it used to accrue a stall strike, so two ticks
+                    // of false verdict 5-min-stickied reachable loot (the
+                    // "follower stands idle among corpses" stall). Never sticky
+                    // a ref no walk was ever attempted at; the idle reassess
+                    // wipes this transient block, so it re-tries once he moves.
+                    // Each verdict also GROWS the ref's from-range grab radius
+                    // (NotePathFail), so the usual cure is a later-tick hoover,
+                    // not a retry of the walk.
                     if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
-                        MarkTravelStalled(rid, a_now);   // off-navmesh -> stall strike
+                        MarkTravelFailed(rid, a_now);   // off-navmesh -> transient only
+                        NotePathFail(rid);              // -> widen its grab radius
                         spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
                                      a_follower->GetFormID(), rid);
                         continue;
@@ -1922,7 +1976,13 @@ namespace MFO::Logistics {
                 // takes the excursion path REGARDLESS of distance -- there is no
                 // in-place transfer for it, the acquire is the driver's arrival
                 // Activate -- so it must claim/walk even from arm's reach.
-                if ((df > kArrivalDist || LooseRef(ref)) && Config::g_lootTravel.load()) {
+                if ((!grabOk || LooseRef(ref)) && Config::g_lootTravel.load()) {
+                    // Already drained in-reach loot this tick: that WAS the
+                    // action. Candidates are closest-first, so everything in
+                    // reach came before this far/loose one; arming a walk on
+                    // top would stack a movement dispatch onto the mutations.
+                    // The next tick's scan arms the excursion.
+                    if (drained > 0) return true;
                     // CHURN GUARD (#48, computed above): he's already past the
                     // release margin -- an arm now dies "left leash" next tick.
                     // Skip the candidate entirely: it is far (or loose), so
@@ -1931,7 +1991,9 @@ namespace MFO::Logistics {
                     // Too far to WALK without abandoning the player -- leave it
                     // (following brings them closer later; also fairer to you).
                     if (df > walkLimit) continue;
-                    // Skip a target a walk already failed to reach (no churn).
+                    // WALK-only anti-churn commit (see the excursion path note):
+                    // no re-walk inside the fail cooldown; the ref still sorts
+                    // last (not skipped) and the grown grab never checks this.
                     if (TravelFailedRecently(rid, a_now)) continue;
                     // CONVERGENCE YIELD: never walk to loot the player is right
                     // next to -- you win the race for the corpse you're heading to.
@@ -1942,8 +2004,12 @@ namespace MFO::Logistics {
                     if (s < 0) continue;
                     // OFF-NAVMESH GATE (see the excursion path): no mesh near the
                     // ref -> no path -> freeze. Skip + blocklist before dispatch.
+                    // TRANSIENT ONLY -- a pre-dispatch heuristic never earns a
+                    // sticky strike (see the excursion-path note); it GROWS the
+                    // ref's from-range grab radius instead.
                     if (NavmeshReach(a_follower, ref) > Config::g_navmeshGate.load()) {
-                        MarkTravelStalled(rid, a_now);   // off-navmesh -> stall strike
+                        MarkTravelFailed(rid, a_now);   // off-navmesh -> transient only
+                        NotePathFail(rid);              // -> widen its grab radius
                         spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
                                      a_follower->GetFormID(), rid);
                         continue;
@@ -1967,8 +2033,27 @@ namespace MFO::Logistics {
                     // rather than never looting this candidate (the SE fallback).
                 }
 
-                // Corpse/container within reach (or travel unavailable): transfer.
+                // Corpse/container within (grown) reach: DRAIN it -- every
+                // category his gambits want (StripCorpse; each tier still
+                // dibs-gated through TierReleased), then keep going to the next
+                // in-reach source. A far/loose ref that fell through here
+                // (travel unavailable -- the SE fallback) keeps the old
+                // one-transfer-per-tick shape.
+                if (grabOk && !LooseRef(ref) && g_svc) {
+                    if (StripCorpse(a_follower, *g_svc, ref, a_now, nullptr)) {
+                        ++drained;
+                        g_grabGrow.erase(rid);      // grabbed -> stale grow verdict
+                        g_travelFailed.erase(rid);  // back to normal sort priority
+                    }
+                    continue;
+                }
                 if (LootHere(a_follower, ref, a_cat, a_potionWant)) return true;
+            }
+            if (drained > 0) {
+                if (drained > 1)
+                    spdlog::info("[loot] {:08X}: drained {} in-reach sources in one tick",
+                                 a_follower->GetFormID(), drained);
+                return true;
             }
             // SKIP-REASON DIAGNOSTIC (v0.8.36). Nothing acted this tick even though
             // the scan collected candidates -- recompute WHY the CLOSEST eligible

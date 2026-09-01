@@ -275,7 +275,7 @@ namespace MFO::Logistics {
         // serialized: this just remembers the intent; the engine-side alias fill is
         // cleared by Packages on load (#55). kArrivalDist ~= arm's reach: once the
         // engine walks the follower this close, the existing inventory transfer runs.
-        constexpr float kArrivalDist = 160.0f;
+        constexpr float kArrivalDist = 200.0f;   // was 160 -- perf pass: fewer "stalled a hair short" strandings
         // A BATCH EXCURSION, not a single trip. The follower stays claimed
         // (priority 60) across corpses: Walking = en route to `target`; Holding =
         // arrived/leg-failed, seeking the next leg or waiting out a dibs timer.
@@ -403,6 +403,35 @@ namespace MFO::Logistics {
         inline std::unordered_map<RE::FormID, Clock::time_point> g_travelFailed;
         constexpr auto kTravelFailCooldown = std::chrono::seconds(25);
 
+        // GROWN GRAB (stall cure, marth): the best cure for a path-failed BODY
+        // is to take its contents FROM RANGE, not to retry the walk -- the
+        // transfer is RemoveItem, which never needed physical reach; arm's
+        // reach is a courtesy, not an engine limit. Every path-fail against a
+        // specific ref (the off-navmesh pre-gate, or a walked no-progress
+        // stall) widens that ref's in-place grab radius by kGrabGrowStep, up
+        // to kGrabRadiusMax -- so a body on rubble/stairs the follower stands
+        // near but can never path the last gap to gets hoovered a tick later
+        // instead of blocklisted (the "stands idle among lootable corpses"
+        // stall). NON-LOOSE only: a loose pile is a physical Activate at the
+        // item and cannot act from range. The player-bubble and leash gates
+        // still apply to a grown grab, and dibs (TierReleased) always applies.
+        // Counter clears on a successful grab and on revert; crude size bound
+        // (these are transient per-cell verdicts, not worth a real LRU).
+        inline std::unordered_map<RE::FormID, int> g_grabGrow;
+        constexpr float kGrabGrowStep  = 100.0f;
+        constexpr float kGrabRadiusMax = 600.0f;
+        inline float GrabRadiusFor(RE::FormID a_id) {
+            auto it = g_grabGrow.find(a_id);
+            if (it == g_grabGrow.end()) return kArrivalDist;
+            return std::min(kArrivalDist + kGrabGrowStep * static_cast<float>(it->second),
+                            kGrabRadiusMax);
+        }
+        inline void NotePathFail(RE::FormID a_id) {
+            if (!a_id) return;
+            if (g_grabGrow.size() >= 256 && !g_grabGrow.contains(a_id)) g_grabGrow.clear();
+            ++g_grabGrow[a_id];
+        }
+
         // STICKY unreachable set. The transient block above is WIPED by the idle
         // reassess (so a body that becomes reachable once the follower moves gets
         // re-tried) -- but a GEOMETRICALLY unreachable target never will: an
@@ -410,12 +439,22 @@ namespace MFO::Logistics {
         // so the follower walks "there", can't close the last gap, and the wipe
         // makes him re-pick it forever (marth's frozen-Erik loop, v0.8.29: arrow
         // 00020169 navdist=18 vs dist=630, ping-ponged with 0002016A). So the
-        // SECOND stall on a ref promotes it here: a long cooldown the reassess does
+        // SECOND stall on a ref promotes it here: a cooldown the reassess does
         // NOT clear. One stall is still just transient (could be a momentary block);
-        // two is a verdict.
+        // two is a verdict. ONLY a ref the follower ACTUALLY WALKED to and could
+        // not close on may strike (the Walking-phase no-progress verdict, plus the
+        // loose/unacquirable direct-sticky below) -- the off-navmesh PRE-gate is a
+        // heuristic that never attempted a walk, so it stays transient-only
+        // (stairs/rubble false-positives were 5-min-poisoning reachable loot: the
+        // "follower stands idle among lootable corpses" stall). 60 s (was 5 min):
+        // still far above the ~2-4 s churn cycle this set exists to break, but a
+        // stale geometric verdict now recovers within a minute. The PRIMARY stall
+        // cure is the GROWN GRAB above -- a path-failed body is usually taken
+        // from range before it can ever reach this set; the sticky window is only
+        // the fallback for bodies beyond even kGrabRadiusMax and loose piles.
         inline std::unordered_map<RE::FormID, Clock::time_point> g_travelUnreach;
         inline std::unordered_map<RE::FormID, int>               g_stallStrikes;
-        constexpr auto kTravelStickyCooldown = std::chrono::minutes(5);
+        constexpr auto kTravelStickyCooldown = std::chrono::seconds(60);
 
         inline bool TravelFailedRecently(RE::FormID a_id, Clock::time_point a_now) {
             auto su = g_travelUnreach.find(a_id);
@@ -427,9 +466,10 @@ namespace MFO::Logistics {
         inline void MarkTravelFailed(RE::FormID a_id, Clock::time_point a_now) {
             if (a_id) { g_travelFailed[a_id] = a_now; EvictOldest(g_travelFailed); }
         }
-        // A STALL (no navmesh path at dispatch, or walked with ZERO progress) --
-        // transient-block it like any fail, but on the 2nd strike promote it to the
-        // sticky set so the idle reassess can't resurrect it into a re-attempt loop.
+        // A STALL (the follower WALKED at the ref and made ZERO progress -- a real
+        // attempted-and-failed leg, never a pre-dispatch heuristic) -- transient-
+        // block it like any fail, but on the 2nd strike promote it to the sticky
+        // set so the idle reassess can't resurrect it into a re-attempt loop.
         inline void MarkTravelStalled(RE::FormID a_id, Clock::time_point a_now) {
             if (!a_id) return;
             MarkTravelFailed(a_id, a_now);
@@ -438,8 +478,8 @@ namespace MFO::Logistics {
                 g_travelUnreach[a_id] = a_now;
                 EvictOldest(g_travelUnreach);
                 spdlog::info("[loot] {:08X} STICKY-unreachable (2nd stall) -- won't re-pick "
-                             "for {}m (survives idle reassess)", a_id,
-                             std::chrono::duration_cast<std::chrono::minutes>(kTravelStickyCooldown).count());
+                             "for {}s (survives idle reassess)", a_id,
+                             std::chrono::duration_cast<std::chrono::seconds>(kTravelStickyCooldown).count());
             }
         }
         // STRAIGHT to sticky, no strike accrual (loose-loot fix, marth field report:
@@ -456,8 +496,8 @@ namespace MFO::Logistics {
             g_travelFailed[a_id]  = a_now;  EvictOldest(g_travelFailed);
             g_travelUnreach[a_id] = a_now;  EvictOldest(g_travelUnreach);
             spdlog::info("[loot] {:08X} STICKY-unreachable (loose/unacquirable) -- won't re-pick "
-                         "for {}m", a_id,
-                         std::chrono::duration_cast<std::chrono::minutes>(kTravelStickyCooldown).count());
+                         "for {}s", a_id,
+                         std::chrono::duration_cast<std::chrono::seconds>(kTravelStickyCooldown).count());
         }
 
         // IDLE REASSESS (marth: "to be fair, reassess all nearby bodies if nothing
@@ -473,6 +513,13 @@ namespace MFO::Logistics {
         inline Clock::time_point            g_lastBlocklistReassess{};
         constexpr int  kIdleReassessCycles   = 4;                       // ~4 s idle
         constexpr auto kReassessCooldown      = std::chrono::seconds(15);
+
+        // fBatchLinger as a duration. The default is sub-second-grained (1.5 s),
+        // so it must NOT truncate through whole seconds -- convert via ms.
+        inline std::chrono::milliseconds BatchLingerDur() {
+            return std::chrono::milliseconds(
+                static_cast<int>(Config::g_batchLinger.load() * 1000.0f));
+        }
 
         // Travel deadline scaled to the distance: enough time to actually walk
         // there at a jog, never so long the follower is stuck if the path is
@@ -599,11 +646,11 @@ namespace MFO::Logistics {
 
         // Econ scan cadence clocks. Namespace scope (not function-local statics) so
         // ClearTransientState wipes them on revert (Fable audit #7): FF-dynamic
-        // follower IDs get reused, so a stale 15/20/60 s cooldown must not carry
+        // follower IDs get reused, so a stale 2/8/12 s cooldown must not carry
         // into the next save, and the pair map must not grow unbounded across one.
-        inline std::unordered_map<RE::FormID,   Clock::time_point> g_econScan;    // per-follower 15 s
-        inline std::unordered_map<RE::FormID,   Clock::time_point> g_econTrade;   // per-follower 20 s
-        inline std::unordered_map<std::uint64_t, Clock::time_point> g_econPair;   // per-(follower,vendor) 60 s
+        inline std::unordered_map<RE::FormID,   Clock::time_point> g_econScan;    // per-follower 2 s
+        inline std::unordered_map<RE::FormID,   Clock::time_point> g_econTrade;   // per-follower 8 s
+        inline std::unordered_map<std::uint64_t, Clock::time_point> g_econPair;   // per-(follower,vendor) 12 s
 
     // ── cross-module helper declarations ────────────────────────────────
     // Defined at namespace scope in the named module; every other module

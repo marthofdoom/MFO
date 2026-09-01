@@ -14,8 +14,8 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (ProgAllocator 2333, Board 2190, Logistics_Loot 2143,
-   Packages 1657, Logistics 1612, CasterConsent 1066) should never sit in context — grep to a
+   whole files. Big files (ProgAllocator 2333, Board 2190, Logistics_Loot 2227,
+   Packages 1657, Logistics 1700, CasterConsent 1066) should never sit in context — grep to a
    symbol, read a narrow window.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
    changing a subsystem, re-read its "What breaks" entry *against current code*
@@ -689,34 +689,34 @@ internal header. Cross-module state/types/small helpers live as `inline` members
 of `namespace MFO::Logistics` in `Logistics_internal.h` (ONE instance across the
 TUs — it replaces the old single anonymous namespace; big cross-module helpers
 are declared there and defined in their home module). Layout:
-- `Logistics.cpp` (1612) — core tick: `ServiceFollower` (`:625`, INCLUDING the
-  OOC cast dispatch `:~1090-1250` — concentration direct-force `:1136`,
-  fire-and-forget `:1178`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
+- `Logistics.cpp` (1700) — core tick: `ServiceFollower` (`:625`, INCLUDING the
+  OOC cast dispatch `:~1080-1320` — concentration direct-force `:~1210`,
+  fire-and-forget `:~1300`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
   `ShedOffRoleWeapon`, sinks, lifecycle + MSTK API, evaluator pure reads.
 - `Logistics_Cast.cpp` (269) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
   `TopTwoSchoolMask`, `LearnCarriedTomes:137`, school name/keyword helpers.
-- `Logistics_Economy.cpp` (1035) — #21 economy: mage-apparel scoring,
+- `Logistics_Economy.cpp` (1034) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
   `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
-- `Logistics_Loot.cpp` (2143) — the loot judge + per-category looters,
+- `Logistics_Loot.cpp` (2227) — the loot judge + per-category looters,
   claim-and-release, navmesh reach, `AcquireEquip:538`, `LootEquipment:617`,
-  `LootNearby:1477`, `StripCorpse:2023`, `RunExcursionScan:2085`.
-- `Logistics_internal.h` (652) — shared substrate: all `g_*` maps/state
-  (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:504`,
-  `g_stockGear:505`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/`Claim`,
+  `LootNearby:1477`, `StripCorpse:2108`, `RunExcursionScan:2170`.
+- `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state
+  (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
+  `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/`Claim`,
   inline small helpers, cross-module declarations. NOT public API.
 Adding shared state? Put it in `_internal.h` as `inline` (never a per-TU
 anonymous-namespace copy — that silently forks the instance).
-- **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics_internal.h:505`, guarded
-  `g_stockMx` `:504`, the one cross-thread map here): the only serialized state the cluster
-  owns. `CopyStockGear` (`Logistics.cpp:1596`) → `Serialization.cpp:191`; `LoadStockRecord`
-  (`:1601`) → `:307`; `ClearStockGear` (`:1606`) → `:231,587`. Only
+- **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics_internal.h:569`, guarded
+  `g_stockMx` `:568`, the one cross-thread map here): the only serialized state the cluster
+  owns. `CopyStockGear` (`Logistics.cpp:1685`) → `Serialization.cpp:209`; `LoadStockRecord`
+  (`:1690`) → `:332`; `ClearStockGear` (`:1695`) → `:256,646`. Only
   `IsPersistableID` FormIDs written, sets capped 512, unresolvable IDs dropped.
   Changing the map's key/value shape or record framing breaks the shed-protection
   ("Gauldurbow fix") — signature gear could get shed (dropped on the floor) after a load.
   **Not** cleared by `ClearTransientState` — cleared separately by `ClearStockGear`.
-- `ServiceFollower` (`Logistics.cpp:625`) — sole caller `Scheduler.cpp:225` (worker). Sets
+- `ServiceFollower` (`Logistics.cpp:625`) — sole caller `Scheduler.cpp:308` (worker). Sets
   `g_svc` (`Logistics_internal.h:222`) raw pointer valid only for that call — safe only because the
   worker services followers sequentially; parallelizing dangles it.
 - `ShedOffRoleWeapon` (`Logistics.cpp:494`) — one off-role weapon per idle tick, **DROPPED on
@@ -725,15 +725,15 @@ anonymous-namespace copy — that silently forks the instance).
   go through `MainThread::Post` (`doDrop`, mirrors the #62 equip / ActivateRef
   hops in this file); on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
   drop off-worker. **POST-BATTLE GATE:** early-returns until `kShedPostBattleDwell`
-  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:1538`) ←
-  `Scheduler.cpp:293` (the in-combat branch — the only place combat=true is seen,
+  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:1626`) ←
+  `Scheduler.cpp:321` (the in-combat branch — the only place combat=true is seen,
   since this path is out-of-combat-only). Survives an `IsInCombat()` mid-fight
   flap: a real combat frame re-stamps `now`, so the dwell can't mature inside a
   lull (the field 2h-follower-hands-a-looted-mace bug). `g_lastCombatSeen`
   worker-only/no-lock (#4), cleared in `ClearTransientState`. Guards unchanged
   (never disarm/`inRoleWeapons>0`, `IsStockGear`, `IsCreatureWeapon`, socketed,
   `Catalog::IsExcluded`).
-- `ClearTransientState` (`Logistics.cpp:1542`) → `Serialization.cpp:582`, after StopPump. Wipes
+- `ClearTransientState` (`Logistics.cpp:1630`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
 - Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`Logistics.cpp:249`),
@@ -743,8 +743,8 @@ anonymous-namespace copy — that silently forks the instance).
   (after `Catalog::Load`).
 - **Alias/travel:** `g_travelSlots` (`Logistics_internal.h:323`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
-  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `Logistics.cpp:1566` ←
-  `Scheduler.cpp:236`; cap/leash/dismissal/revert). Leash hysteresis guards
+  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `Logistics.cpp:1655` ←
+  `Scheduler.cpp:328`; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
   **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `Logistics.cpp:~700`) detects an EXTERNAL package
   holding a claimed follower (scene/framework; onTravelPkg=false mid-walk), pauses
@@ -766,12 +766,31 @@ anonymous-namespace copy — that silently forks the instance).
   ("second gold pile on the same table"). Idle blocklist reassess (`ServiceFollower`) is
   AGE-GATED (≥10s): a full wipe let follower B erase follower A's 200ms-old fail
   verdict → instant same-target redispatch churn.
-- **Sinks** (`RegisterSinks` `Logistics.cpp:1495` ← `plugin.cpp:297`): `ContainerSink`
+- **UNIFIED LOOT-FAILURE MODEL + in-reach drain (perf/stall pass, 2026-09):**
+  (a) candidate sort (`LootNearby`, `Logistics_Loot.cpp:~1830`) is failed-recently-
+  LAST then closest-first — a path-troubled target is DEPRIORITIZED, never removed;
+  (b) a NON-LOOSE in-reach source is DRAINED whole (`StripCorpse` from inside
+  `LootNearby`) and the normal-mode loop keeps draining further in-reach sources
+  the same tick (`drained` counter; movement dispatches still end the tick);
+  (c) GROWN GRAB (`g_grabGrow`/`GrabRadiusFor`/`NotePathFail`,
+  `Logistics_internal.h:~402-432`): each path-fail (off-navmesh pre-gate, walked
+  no-progress stall) widens that ref's from-range grab radius
+  `kArrivalDist+100/fail` capped 600u — the PRIMARY stall cure; player-bubble +
+  leash + `TierReleased` dibs still gate a grown grab, loose refs excluded;
+  (d) the off-navmesh PRE-gate (`Logistics_Loot.cpp:~1915/~2000`) is TRANSIENT-only
+  (`MarkTravelFailed`, never a sticky strike) — only a walked no-progress stall or
+  the loose/unacquirable case reaches the sticky set, whose cooldown is now
+  `kTravelStickyCooldown=60s` (was 5 min). Walk paths still hard-skip inside the
+  25s fail cooldown (re-walking resets the stall clock and would defeat the
+  verdict); grab paths never consult the blocklist. Weakening (d) or removing the
+  walk-skip re-opens the frozen-Erik churn loop; removing (a)'s sort key stalls
+  followers on unreachable-first ordering again.
+- **Sinks** (`RegisterSinks` `Logistics.cpp:1583` ← `plugin.cpp:297`): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
   PlayerID()`, `ContainerSink` in `Logistics.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
   only QUEUES to the worker. `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
-  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`Logistics.cpp:1514`) ← `plugin.cpp:360`.
-- `OnFollowerRemoved` (`Logistics.cpp:1579`) ← `Followers.cpp:306` (dismissal alias eviction).
+  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`Logistics.cpp:1602`) ← `plugin.cpp:360`.
+- `OnFollowerRemoved` (`Logistics.cpp:1668`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
 - Economy probe (`EconomyProbe`, worker, `Config::g_economy && Po3Present`, now takes

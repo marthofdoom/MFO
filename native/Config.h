@@ -516,7 +516,7 @@ namespace MFO::Config {
     // ammo pile) is acquired by dispatching ObjectReference.Activate, which the
     // ENGINE runs regardless of physical reach -- so a follower who walked as
     // close as the navmesh allows and STALLED short of a corpse's arm's-reach
-    // (kArrivalDist 160) still grabs it. Bigger than kArrivalDist because the
+    // (kArrivalDist 200) still grabs it. Bigger than kArrivalDist because the
     // navmesh often ends well off a pile sitting on a table/shelf (marth field
     // report: Xelzaz stalled ~221 from reachable gold and never triggered the
     // grab). Corpses still need real arm's reach (a transfer, not an Activate),
@@ -534,7 +534,7 @@ namespace MFO::Config {
     //    to the player after this no matter what, so a batch can't run away.
     // (No batch-size/leg count and no separate "zone" radius: the confidence
     // leash IS the zone, and a time cap subsumes a leg cap -- fewer knobs.)
-    inline std::atomic<float> g_batchLinger{ 4.0f };
+    inline std::atomic<float> g_batchLinger{ 1.5f };   // perf pass: was 4.0 -- snappier retarget between corpses
     inline std::atomic<float> g_excursionMax{ 60.0f };
 
     // WALK-TO-LOOT GAIT (task 16, ENGINE_NOTES §0.35). The travel package's

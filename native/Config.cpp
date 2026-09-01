@@ -312,7 +312,7 @@ namespace MFO::Config {
             g_minPotionMag       = 0;
             g_travelRadius       = 4096.0f;
             g_looseAcquireDist   = 300.0f;
-            g_batchLinger        = 4.0f;
+            g_batchLinger        = 1.5f;
             g_excursionMax       = 60.0f;
             g_navmeshGate        = 300.0f;
             g_travelGait         = 2;   // Run -- matches the shipped ESP byte
@@ -366,7 +366,7 @@ namespace MFO::Config {
             { "bBeastHeadFix", "1" },
             { "bRapportToasts", "1" },         { "iTravelGait", "2" },
             { "iMinPotionMag", "0" },
-            { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "4.000000" },
+            { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "1.500000" },
             { "fLooseAcquireDist", "300.000000" },
             { "fExcursionMax", "60.000000" },  { "fNavmeshGate", "300.000000" },
             { "fLeashMin", "512.000000" },     { "fLeashMax", "4000.000000" },
