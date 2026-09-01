@@ -1206,6 +1206,14 @@ namespace MFO::Logistics {
                                      "needs bCastSelf", id, sp->GetFormID());
                         start = choice.ruleIndex + 1; continue;
                     }
+                    // Same SEV-3 seed as the FF-at-foe branch below: CastTargetDirect's
+                    // offense gate reads Sightline::Check (Actuation_Direct), and OOC
+                    // nothing else Want()s this pair. Warm it a frame ahead so an OOC
+                    // damage STREAM (Flames at a foe) actually holds on a wall instead
+                    // of channelling through it. Only for a HOSTILE target -- a heal
+                    // stream at an ally is never LoS-gated, so skip the raycast there.
+                    if (tgt->IsHostileToActor(a_follower))
+                        Sightline::Want(id, { tgt->GetFormID() });
                     const auto r = Actuation::CastTargetDirect(a_follower, sp, tgt);
                     if (r == Actuation::SelfCast::Applied) {
                         spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
