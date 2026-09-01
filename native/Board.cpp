@@ -82,6 +82,15 @@ namespace MFO::Board {
         ID3D11Device*        g_device  = nullptr;
         ID3D11DeviceContext* g_context = nullptr;
 
+        // ── overlay health probe (marth validates the whole pipeline via one
+        // grep of MFO.log over SSH; see the [overlay-probe] lines) ────────────
+        std::atomic<std::uint64_t> g_probePresent{ 0 };   // rendered Present frames
+        std::atomic<std::uint64_t> g_probeResize { 0 };   // ResizeBuffers fired
+        std::atomic<std::uint64_t> g_probeKbd{ 0 }, g_probeMouse{ 0 }, g_probePad{ 0 };
+        std::atomic<bool> g_hooksInstalled{ false };  // Present/Resize vtable hooks in
+        std::atomic<bool> g_wndProcSwapped{ false };  // WndProc swap done (old proc captured)
+        std::atomic<bool> g_controlsBlocked{ false }; // ControlMap consume edge (board open)
+
         bool g_stickNav[4] = { false, false, false, false };   // up/down/left/right
         std::atomic<bool> g_shoutDownSeen{ false };
         // Set on OPEN. R1 (the RShoulder) is the Field Orders power on the deck,
@@ -355,6 +364,17 @@ namespace MFO::Board {
             g_open.store(false);
             g_closeGrace.store((std::chrono::steady_clock::now() + kCloseGraceMs)
                                    .time_since_epoch().count());
+            // ACCEPTANCE GATE: one line that names the state of every overlay
+            // component, emitted on each board close. If this reads present>0 +
+            // every hook "ok", the whole pipeline is proven from the deck log.
+            spdlog::info("[overlay-probe] SUMMARY present={} resize={} wndproc={} imgui={} "
+                         "hooks={} input kbd={} mouse={} pad={} consumed-while-open={}",
+                         g_probePresent.load(), g_probeResize.load(),
+                         g_wndProcSwapped.load() ? "ok" : "no",
+                         g_ready.load() ? "ok" : "no",
+                         g_hooksInstalled.load() ? "ok" : "no",
+                         g_probeKbd.load(), g_probeMouse.load(), g_probePad.load(),
+                         g_controlsBlocked.load() ? "yes" : "no");
         }
 
         // A concise "what it does" line for a spell, synthesized from its costliest
@@ -1362,108 +1382,181 @@ namespace MFO::Board {
             static inline WNDPROC func;
         };
 
-        struct D3DInitHook {
-            static void thunk() {
-                func();
+        // ── overlay hook: runtime swapchain-vtable + input sink ──────────────
+        // WHY THIS SHAPE (v1.1 version-fragility kill). The old overlay installed
+        // THREE call-site trampolines (write_call<5>) at HARDCODED in-function
+        // byte offsets: D3DInit (+0x9/0x275), DXGIPresent (+0x9), InputDispatch
+        // (+0x7B). Address Library resolves each function BASE on every runtime
+        // but NOT the byte offset of the instruction inside it, so on 1.5.x /
+        // 1.7.x write_call patched mid-instruction and crashed at load. This
+        // rewrite carries ZERO game offsets:
+        //   * Present (vtable slot 8) + ResizeBuffers (slot 13) are hooked on the
+        //     LIVE IDXGISwapChain vtable. Those slots are frozen by the COM/DXGI
+        //     ABI, identical on every Windows/D3D11 build regardless of the
+        //     Skyrim version, which is exactly why validating on 1.6.1170
+        //     generalizes to all runtimes. The swapchain is the SAME object the
+        //     old code reached (BSGraphics::Renderer data.renderWindows[0].
+        //     swapChain), so the pixels are byte-identical on 1.6.1170.
+        //   * Input rides a BSTEventSink<InputEvent*> on BSInputDeviceManager
+        //     (CommonLib API, no offset) for READING every device incl. gamepad,
+        //     plus the WndProc swap (LazyInit) for text/focus. Game input is
+        //     CONSUMED while the board is open by disabling controls (ControlMap),
+        //     because a sink cannot null the event array the way the old dispatch
+        //     hook did.
+        //
+        // PORTABLE UNIT (MAO/MEO copy verbatim): CreateRTV/ReleaseRTV, LazyInit,
+        // SyncControlBlock, PresentThunk, ResizeBuffersThunk, HookSwapchainVtable,
+        // TryInstallHooks, InputSink, Install(). Only the two Draw* calls in
+        // PresentThunk and the hotkeys in InputSink are mod-specific.
 
-                auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
-                if (!renderer) { spdlog::error("[board] no renderer -- Field Kit disabled"); return; }
+        using PresentFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
+        using ResizeFn  = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT,
+                                                      DXGI_FORMAT, UINT);
 
-                auto* swapChain = renderer->data.renderWindows[0].swapChain;
-                if (!swapChain) { spdlog::error("[board] no swapchain -- Field Kit disabled"); return; }
+        IDXGISwapChain*         g_swapChain   = nullptr;   // the hooked swapchain (probe)
+        ID3D11RenderTargetView* g_rtv         = nullptr;   // backbuffer RTV for the overlay draw
+        PresentFn               g_origPresent = nullptr;
+        ResizeFn                g_origResize  = nullptr;
+        std::once_flag          g_lazyOnce;
+        constexpr std::uint64_t kProbeEveryN = 600;        // ~10s @60fps
 
-                DXGI_SWAP_CHAIN_DESC sd{};
-                if (FAILED(swapChain->GetDesc(&sd))) {
-                    spdlog::error("[board] GetDesc failed -- Field Kit disabled");
-                    return;
-                }
-
-                // No casts: on the pinned NG these are already the real D3D
-                // types. Decorative reinterpret_casts hide a future type change.
-                g_device  = renderer->data.forwarder;
-                g_context = renderer->data.context;
-                if (!g_device || !g_context) {
-                    spdlog::error("[board] no device/context -- Field Kit disabled");
-                    return;
-                }
-
-                ImGui::CreateContext();
-                auto& io = ImGui::GetIO();
-                io.IniFilename = nullptr;    // never write imgui.ini into the game dir
-                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
-                // LOAD-BEARING: gamepad nav (nav_gamepad_active in imgui.cpp) needs
-                // NavEnableGamepad AND HasGamepad. Stock imgui_impl_win32 rewrites
-                // HasGamepad every frame from its XInput poll -- deaf poll (Steam
-                // Input kb<->pad flip) = flag cleared = ALL hook-fed gamepad nav
-                // dead. Our vendored backend compiles that poll out, so this
-                // init-time set persists and the hook-fed Gamepad* keys always
-                // drive nav (v1.0.59).
-                io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
-
-                // Bake real typefaces at backbuffer scale -- FontGlobalScale on
-                // ImGui's default bitmap font was blurry above 1080p and the
-                // biggest "less polished vs MEO" tell (§919 note). The faces are
-                // MEO's own (same author). MUST run before the DX11 backend
-                // builds the atlas. Files optional: a missing face falls back to
-                // the default bitmap font + the FontGlobalScale path below.
-                {
-                    const float uiScale = std::max(1.0f,
-                        static_cast<float>(sd.BufferDesc.Height) / 1080.0f);
-                    namespace fs = std::filesystem;
-                    constexpr const char* kBodyTTF = "Data/SKSE/Plugins/MFO/fonts/body.ttf";
-                    constexpr const char* kHeadTTF = "Data/SKSE/Plugins/MFO/fonts/head.ttf";
-                    if (fs::exists(kBodyTTF))
-                        g_fontBody = io.Fonts->AddFontFromFileTTF(kBodyTTF, std::floor(19.0f * uiScale));
-                    if (fs::exists(kHeadTTF))
-                        g_fontHead = io.Fonts->AddFontFromFileTTF(kHeadTTF, std::floor(27.0f * uiScale));
-                    if (!g_fontHead) g_fontHead = g_fontBody;   // head falls back to body, not default
-                    spdlog::info("[board] fonts: body={} head={} (scale {:.2f})",
-                                 g_fontBody ? "ok" : "default", g_fontHead ? "ok" : "default", uiScale);
-                }
-
-                if (!ImGui_ImplWin32_Init(sd.OutputWindow) ||
-                    !ImGui_ImplDX11_Init(g_device, g_context)) {
-                    spdlog::error("[board] ImGui backend init failed -- Field Kit disabled");
-                    return;
-                }
-
-                WndProcHook::func = reinterpret_cast<WNDPROC>(
-                    SetWindowLongPtrA(sd.OutputWindow, GWLP_WNDPROC,
-                                      reinterpret_cast<LONG_PTR>(WndProcHook::thunk)));
-
-                g_bbW = static_cast<float>(sd.BufferDesc.Width);
-                g_bbH = static_cast<float>(sd.BufferDesc.Height);
-
-                g_ready.store(true);
-                spdlog::info("[board] Field Kit ready ({}x{})", sd.BufferDesc.Width, sd.BufferDesc.Height);
+        // The overlay draws at IDXGISwapChain::Present time, so it must bind the
+        // backbuffer RTV itself (the old code piggybacked on Skyrim's own present
+        // wrapper, which left one bound). Created in LazyInit + after every
+        // ResizeBuffers, released before a resize.
+        void CreateRTV(IDXGISwapChain* a_swap) {
+            if (!g_device || g_rtv) return;
+            ID3D11Texture2D* backBuffer = nullptr;
+            if (SUCCEEDED(a_swap->GetBuffer(0, IID_PPV_ARGS(&backBuffer))) && backBuffer) {
+                g_device->CreateRenderTargetView(backBuffer, nullptr, &g_rtv);
+                backBuffer->Release();
             }
-            static inline REL::Relocation<decltype(thunk)> func;
-        };
+        }
+        void ReleaseRTV() { if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; } }
 
-        struct DXGIPresentHook {
-            static void thunk(std::uint32_t a_p1) {
-                func(a_p1);
+        // Build the ImGui context + DX11/Win32 backends the first time Present
+        // fires (device / context / swapchain are all live by then). This is the
+        // old D3DInitHook body, verbatim, minus the trampoline plumbing.
+        void LazyInit(IDXGISwapChain* a_swap) {
+            g_swapChain = a_swap;
+            auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
+            if (!renderer) { spdlog::error("[overlay-probe] no renderer -- Field Kit disabled"); return; }
 
-                const bool wantPanel = g_open.load();
-                const bool wantHud   = g_hud.load();
-                if (!g_ready.load() || (!wantPanel && !wantHud)) return;
+            DXGI_SWAP_CHAIN_DESC sd{};
+            if (FAILED(a_swap->GetDesc(&sd))) {
+                spdlog::error("[overlay-probe] GetDesc failed -- Field Kit disabled");
+                return;
+            }
 
-                // Copy the snapshot BEFORE taking the IO lock. INVARIANTS #6
-                // says these two are never nested; MEO's shipped code actually
-                // does nest them, but the rule as written is the stronger one
-                // and the first person to touch ImGui IO inside PublishSnapshot
-                // would deadlock the render thread. Make the code match the doc.
+            // No casts: on the pinned NG these are already the real D3D types.
+            g_device  = renderer->data.forwarder;
+            g_context = renderer->data.context;
+            if (!g_device || !g_context) {
+                spdlog::error("[overlay-probe] no device/context -- Field Kit disabled");
+                return;
+            }
+            spdlog::info("[overlay-probe] device={} context={} (non-null)",
+                         static_cast<void*>(g_device), static_cast<void*>(g_context));
+
+            ImGui::CreateContext();
+            auto& io = ImGui::GetIO();
+            io.IniFilename = nullptr;    // never write imgui.ini into the game dir
+            io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+            // LOAD-BEARING: gamepad nav needs NavEnableGamepad AND HasGamepad. Our
+            // vendored backend compiles its XInput poll out (v1.0.59), so this
+            // init-time set persists and the sink-fed Gamepad* keys drive nav.
+            io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+
+            // Bake real typefaces at backbuffer scale (MEO parity). MUST run
+            // before the DX11 backend builds the atlas. Files optional.
+            {
+                const float uiScale = std::max(1.0f,
+                    static_cast<float>(sd.BufferDesc.Height) / 1080.0f);
+                namespace fs = std::filesystem;
+                constexpr const char* kBodyTTF = "Data/SKSE/Plugins/MFO/fonts/body.ttf";
+                constexpr const char* kHeadTTF = "Data/SKSE/Plugins/MFO/fonts/head.ttf";
+                if (fs::exists(kBodyTTF))
+                    g_fontBody = io.Fonts->AddFontFromFileTTF(kBodyTTF, std::floor(19.0f * uiScale));
+                if (fs::exists(kHeadTTF))
+                    g_fontHead = io.Fonts->AddFontFromFileTTF(kHeadTTF, std::floor(27.0f * uiScale));
+                if (!g_fontHead) g_fontHead = g_fontBody;   // head falls back to body, not default
+                spdlog::info("[overlay-probe] fonts: body={} head={} (scale {:.2f})",
+                             g_fontBody ? "ok" : "default", g_fontHead ? "ok" : "default", uiScale);
+            }
+
+            if (!ImGui_ImplWin32_Init(sd.OutputWindow) ||
+                !ImGui_ImplDX11_Init(g_device, g_context)) {
+                spdlog::error("[overlay-probe] ImGui backend init FAILED -- Field Kit disabled");
+                return;
+            }
+
+            // WndProc swap: the sole window-message input path (text glyphs via
+            // WM_CHAR, focus loss via WM_KILLFOCUS). Unchanged from the old code.
+            WndProcHook::func = reinterpret_cast<WNDPROC>(
+                SetWindowLongPtrA(sd.OutputWindow, GWLP_WNDPROC,
+                                  reinterpret_cast<LONG_PTR>(WndProcHook::thunk)));
+            g_wndProcSwapped.store(WndProcHook::func != nullptr);
+            spdlog::info("[overlay-probe] wndproc swapped (old={} captured)",
+                         reinterpret_cast<void*>(WndProcHook::func));
+
+            g_bbW = static_cast<float>(sd.BufferDesc.Width);
+            g_bbH = static_cast<float>(sd.BufferDesc.Height);
+            CreateRTV(a_swap);
+
+            g_ready.store(true);
+            spdlog::info("[overlay-probe] imgui backend initialized -- Field Kit ready ({}x{})",
+                         sd.BufferDesc.Width, sd.BufferDesc.Height);
+        }
+
+        // Consume game input while the board is open. A BSTEventSink cannot null
+        // the shared event array (the old InputDispatch trampoline did), so we
+        // disable the gameplay/menu control categories instead. Edge-triggered off
+        // (board open || close-grace still running) and driven from Present every
+        // frame, so controls re-enable the instant the grace window ends even when
+        // no further input arrives (matching the old grace, which swallowed the
+        // closing button's release so it could not leak to the game -> Tween menu).
+        // ControlMap mutation is main-thread only, so it rides MainThread::Post.
+        void SyncControlBlock() {
+            const bool graceOn = g_closeGrace.load() != 0 &&
+                std::chrono::steady_clock::now().time_since_epoch().count() < g_closeGrace.load();
+            const bool want = g_open.load() || graceOn;
+            if (want == g_controlsBlocked.load()) return;
+            g_controlsBlocked.store(want);
+            MainThread::Post([want]() {
+                auto* cm = RE::ControlMap::GetSingleton();
+                if (!cm) return;
+                using F = RE::ControlMap::UEFlag;
+                const auto flags = static_cast<F>(
+                    static_cast<std::uint32_t>(F::kMovement)  | static_cast<std::uint32_t>(F::kLooking)  |
+                    static_cast<std::uint32_t>(F::kActivate)  | static_cast<std::uint32_t>(F::kMenu)     |
+                    static_cast<std::uint32_t>(F::kPOVSwitch) | static_cast<std::uint32_t>(F::kFighting) |
+                    static_cast<std::uint32_t>(F::kSneaking)  | static_cast<std::uint32_t>(F::kMainFour) |
+                    static_cast<std::uint32_t>(F::kWheelZoom) | static_cast<std::uint32_t>(F::kJournalTabs));
+                cm->ToggleControls(flags, !want);   // want -> disable, else re-enable
+            });
+        }
+
+        // The overlay's render frame + input consume-sync. Hooked into vtable slot
+        // 8. We draw ImGui onto the current backbuffer, THEN call the original
+        // Present (the standard swapchain-hook order; the old code hooked Skyrim's
+        // higher-level present wrapper so it drew after -- steady-state pixels are
+        // identical). Runs on the render thread, install-once.
+        HRESULT STDMETHODCALLTYPE PresentThunk(IDXGISwapChain* a_this, UINT a_sync, UINT a_flags) {
+            std::call_once(g_lazyOnce, [&] { LazyInit(a_this); });
+
+            SyncControlBlock();   // every frame -- drives the grace-expiry re-enable
+
+            const bool wantPanel = g_open.load();
+            const bool wantHud   = g_hud.load();
+            if (g_ready.load() && (wantPanel || wantHud)) {
+                // Copy the snapshot BEFORE the IO lock (#6: never nested).
                 Snapshot snap;
                 {
                     std::scoped_lock snapLk(g_snapMx);
                     snap = g_snapshot;
                 }
-
                 std::scoped_lock lk(g_ioMx);
 
-                // B1: drive the software cursor PER FRAME from panel state. Set
-                // once at init it renders an ImGui arrow over ordinary gameplay
-                // for the whole session, because the HUD draws every frame.
                 ImGui::GetIO().MouseDrawCursor = wantPanel;
 
                 ImGui_ImplDX11_NewFrame();
@@ -1471,11 +1564,6 @@ namespace MFO::Board {
 
                 // MUST sit between the two NewFrame calls (ENGINE_NOTES §9).
                 if (g_bbW > 0.0f) ImGui::GetIO().DisplaySize = ImVec2(g_bbW, g_bbH);
-
-                // With a baked face the pixel size is already correct, so scale
-                // is 1.0 (MEO's own rule). Only the default-bitmap FALLBACK --
-                // when the TTF was missing -- needs FontGlobalScale, the same
-                // io.DisplaySize.y/1080 path MEO uses when its fonts are absent.
                 if (g_bbH > 0.0f)
                     ImGui::GetIO().FontGlobalScale =
                         g_fontBody ? 1.0f : std::max(1.0f, g_bbH / 1080.0f);
@@ -1489,19 +1577,105 @@ namespace MFO::Board {
                 if (wantPanel) DrawFieldKit(snap);
                 ImGui::EndFrame();
                 ImGui::Render();
+                if (g_rtv) g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-            }
-            static inline REL::Relocation<decltype(thunk)> func;
-        };
 
-        struct InputDispatchHook {
-            static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_source, RE::InputEvent** a_events) {
-                // THE FOCUS HOTKEY IS HANDLED BEFORE THE PANEL CHECK, and that
-                // is the entire point: a menu button cannot be a target picker,
+                const auto n = g_probePresent.fetch_add(1) + 1;
+                if (n % kProbeEveryN == 0)
+                    spdlog::info("[overlay-probe] present frames={} (rendering)", n);
+            }
+
+            return g_origPresent(a_this, a_sync, a_flags);
+        }
+
+        // Backbuffer resize (vtable slot 13). Drop the RTV, let the engine resize,
+        // then rebuild the RTV and the cached backbuffer size. Same render thread
+        // as Present (not nested), so the io lock is uncontended here.
+        HRESULT STDMETHODCALLTYPE ResizeBuffersThunk(IDXGISwapChain* a_this, UINT a_count,
+                                                     UINT a_w, UINT a_h, DXGI_FORMAT a_fmt,
+                                                     UINT a_flags) {
+            {
+                std::scoped_lock lk(g_ioMx);
+                ReleaseRTV();
+            }
+            const HRESULT hr = g_origResize(a_this, a_count, a_w, a_h, a_fmt, a_flags);
+            {
+                std::scoped_lock lk(g_ioMx);
+                if (g_ready.load()) CreateRTV(a_this);
+                if (a_w != 0 && a_h != 0) {
+                    g_bbW = static_cast<float>(a_w);
+                    g_bbH = static_cast<float>(a_h);
+                }
+            }
+            const auto n = g_probeResize.fetch_add(1) + 1;
+            spdlog::info("[overlay-probe] ResizeBuffers fired #{} ({}x{})", n, a_w, a_h);
+            return hr;
+        }
+
+        // Swap vtable slots 8 (Present) and 13 (ResizeBuffers) on the live
+        // IDXGISwapChain. Both indices are frozen by the COM/DXGI ABI, so this is
+        // version-independent -- no Address Library id, no in-function offset.
+        bool HookSwapchainVtable(IDXGISwapChain* a_swap) {
+            void** vtbl = *reinterpret_cast<void***>(a_swap);
+            auto patch = [](void** slot, void* hook, void** orig) -> bool {
+                DWORD prot = 0;
+                if (!VirtualProtect(slot, sizeof(void*), PAGE_EXECUTE_READWRITE, &prot)) return false;
+                *orig = *slot;
+                *slot = hook;
+                VirtualProtect(slot, sizeof(void*), prot, &prot);
+                return true;
+            };
+            const bool okP = patch(&vtbl[8],  reinterpret_cast<void*>(&PresentThunk),
+                                   reinterpret_cast<void**>(&g_origPresent));
+            const bool okR = patch(&vtbl[13], reinterpret_cast<void*>(&ResizeBuffersThunk),
+                                   reinterpret_cast<void**>(&g_origResize));
+            spdlog::info("[overlay-probe] swapchain={} present-hook(slot8)={} resize-hook(slot13)={}",
+                         static_cast<void*>(a_swap), okP ? "ok" : "FAIL", okR ? "ok" : "FAIL");
+            return okP && okR;
+        }
+
+        // Poll for the live swapchain (it may not be up the instant Install runs
+        // at kDataLoaded), then install the vtable hooks once. Bounded retries so
+        // a genuinely absent swapchain can't spin the task queue forever.
+        void TryInstallHooks() {
+            if (g_hooksInstalled.load()) return;
+            static std::atomic<int> s_attempts{ 0 };
+            auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
+            IDXGISwapChain* swap = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+            if (!swap) {
+                if (s_attempts.fetch_add(1) < 600) {   // ~ generous startup grace
+                    SKSE::GetTaskInterface()->AddTask([] { TryInstallHooks(); });
+                } else {
+                    spdlog::error("[overlay-probe] swapchain never appeared -- Field Kit disabled");
+                }
+                return;
+            }
+            spdlog::info("[overlay-probe] swapchain acquired (non-null) after {} poll(s) -- hooking vtable",
+                         s_attempts.load());
+            if (HookSwapchainVtable(swap)) g_hooksInstalled.store(true);
+        }
+
+        // ── input: the sole engine-side input path (replaces InputDispatchHook) ─
+        // A BSTEventSink on BSInputDeviceManager receives the EXACT same InputEvent
+        // stream the old dispatch trampoline saw (keyboard / mouse / gamepad /
+        // thumbstick), version-independently. The per-event translation below is
+        // the old InputDispatchHook body verbatim; the one thing a sink cannot do
+        // is null the array to consume, so consumption is handled by
+        // SyncControlBlock (ControlMap) instead. Runs on the input thread.
+        class InputSink final : public RE::BSTEventSink<RE::InputEvent*> {
+        public:
+            static InputSink* GetSingleton() { static InputSink s; return &s; }
+
+            RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_events,
+                                                  RE::BSTEventSource<RE::InputEvent*>*) override {
+                using Ctrl = RE::BSEventNotifyControl;
+
+                // THE FOCUS HOTKEY IS HANDLED BEFORE THE PANEL CHECK, and that is
+                // the entire point: a menu button cannot be a target picker,
                 // because opening the menu takes the mouse and freezes the
                 // crosshair you were supposed to be aiming. This runs while the
-                // panel is CLOSED, and deliberately does not swallow the event --
-                // the default key is unbound in vanilla, so the game can have it.
+                // panel is CLOSED and never consumes -- the default key is unbound
+                // in vanilla, so the game can have it.
                 if (a_events && !g_open.load()) {
                     const int fk = Config::g_focusKey.load();
                     if (fk != 0) {
@@ -1515,11 +1689,10 @@ namespace MFO::Board {
                         }
                     }
 
-                    // PROGRESSION PROBE HOTKEY (dev-only, bProgProbe=0 for
-                    // everyone else). Same shape as the focus key above, but
-                    // the probe MUTATES engine state (AddPerk/SetBaseActorValue)
-                    // so it rides MainThread::Post, never AddTask — AddTask
-                    // drains on a job worker in this runtime (§0.37).
+                    // PROGRESSION PROBE HOTKEY (dev-only, bProgProbe=0 for everyone
+                    // else). The probe MUTATES engine state (AddPerk /
+                    // SetBaseActorValue) so it rides MainThread::Post, never AddTask
+                    // -- AddTask drains on a job worker in this runtime (§0.37).
                     if (Config::g_progProbe.load()) {
                         const int pk = Config::g_progProbeKey.load();
                         if (pk != 0) {
@@ -1535,11 +1708,9 @@ namespace MFO::Board {
                     }
 
                     // PROGRESSION ALLOCATOR HARNESS HOTKEY (dev-only,
-                    // bProgHarness=0 for everyone else). Same shape as the
-                    // probe key above; the harness mutates engine state
-                    // (AddPerk/SetBaseActorValue) so it rides MainThread::Post,
-                    // never AddTask (§0.37). The verb comes from the addon's
-                    // MFOP_DevCmd GLOB (console-set) — see ProgAllocator.h.
+                    // bProgHarness=0 for everyone else). Same shape; mutates engine
+                    // state so it rides MainThread::Post. The verb comes from the
+                    // addon's MFOP_DevCmd GLOB (console-set) -- see ProgAllocator.h.
                     if (Config::g_progHarness.load()) {
                         const int hk = Config::g_progHarnessKey.load();
                         if (hk != 0) {
@@ -1555,73 +1726,55 @@ namespace MFO::Board {
                     }
                 }
 
-                // CLOSE GRACE: the board just closed (g_open false) but we are still
-                // inside the swallow window. Eat every event so the button PRESS that
-                // closed the board can't leak its release/held edge to the game and
-                // pop the Tween menu. End the grace the instant we see a release, so
-                // the dead window is only as long as the closing button is held.
+                // CLOSE GRACE: the board just closed (g_open false) but we are
+                // still inside the swallow window. The consume is now done by
+                // ControlMap (controls stay disabled until the grace ends), so the
+                // sink only has to END the grace early the instant we see a release
+                // -- then SyncControlBlock re-enables controls on the next frame.
                 if (a_events && !g_open.load() && g_closeGrace.load() != 0 &&
                     std::chrono::steady_clock::now().time_since_epoch().count() < g_closeGrace.load()) {
                     for (auto* e = *a_events; e; e = e->next)
                         if (e->eventType == RE::INPUT_EVENT_TYPE::kButton &&
                             !static_cast<RE::ButtonEvent*>(e)->IsDown()) { g_closeGrace.store(0); break; }
-                    *a_events = nullptr;
-                    func(a_source, a_events);
-                    return;
+                    return Ctrl::kContinue;
                 }
 
                 if (!g_ready.load() || !g_open.load() || !a_events) {
-                    func(a_source, a_events);
-                    return;
+                    return Ctrl::kContinue;
                 }
 
-                std::unique_lock ioLk(g_ioMx);
+                std::scoped_lock ioLk(g_ioMx);
                 auto& io = ImGui::GetIO();
 
                 for (auto* e = *a_events; e; e = e->next) {
                     if (e->eventType == RE::INPUT_EVENT_TYPE::kButton) {
                         auto* b = static_cast<RE::ButtonEvent*>(e);
                         // Skyrim re-fires button events every input frame while a
-                        // key is HELD. Filter to real edges at the source rather
-                        // than relying on ImGui's dedupe (MEO's filter, verbatim).
+                        // key is HELD. Filter to real edges (MEO's filter, verbatim).
                         if (!b->IsDown() && !b->IsUp()) continue;
                         const auto code = b->GetIDCode();
                         const bool down = b->IsDown();
 
-                        // Is ImGui itself using the input right now -- a text box
-                        // is active, a combo/popup is open, OR a widget is in
-                        // tweak mode (a value drag the pad activated with A)?
-                        // Then the BACK key (Esc / gamepad B) must CANCEL that
-                        // widget, not close the whole panel. IsAnyItemActive is
-                        // the one that covers a DragFloat/DragInt being nudged --
-                        // without it, pressing B to back out of a value edit
-                        // closed the entire board (the §6.5 controller-parity
-                        // floor). Read under the io lock we already hold, so it
-                        // is race-free against the render thread.
-                        // The BACK keys never decide the close here -- this thread
-                        // can't read ImGui. Keyboard Esc/Tab forward Escape; gamepad
-                        // B forwards GamepadFaceRight (ImGui's nav-cancel) below. The
-                        // render thread resolves the board close off that keypress
-                        // and the on-screen picker state (see DrawFieldKit's end).
                         switch (b->device.get()) {
                         case RE::INPUT_DEVICE::kMouse:
+                            g_probeMouse.fetch_add(1);
                             if (code <= 4) io.AddMouseButtonEvent(static_cast<int>(code), down);
                             else if ((code == 8 || code == 9) && down)
                                 io.AddMouseWheelEvent(0.0f, code == 8 ? 1.0f : -1.0f);
                             break;
 
                         case RE::INPUT_DEVICE::kKeyboard:
+                            g_probeKbd.fetch_add(1);
                             if (code == 0x01 || code == 0x0F) {          // Esc / Tab
                                 // Forward Escape (both edges) so ImGui's keyboard
                                 // nav-cancel closes an open picker and the render
                                 // thread's resolver sees the press. The board-close
-                                // decision is made THERE (off IsKeyPressed), never
-                                // here -- this thread can't read ImGui state.
+                                // decision is made THERE (off IsKeyPressed).
                                 io.AddKeyEvent(ImGuiKey_Escape, down);
                             } else if (code == ShoutKey(RE::INPUT_DEVICE::kKeyboard)) {
-                                // Close on RELEASE, swallow both edges. Closing on
-                                // the press leaks the release to the game, which
-                                // re-casts the power and instantly reopens.
+                                // Close on RELEASE. Closing on the press leaks the
+                                // release to the game, which re-casts the power and
+                                // instantly reopens.
                                 if (down) g_shoutDownSeen = true;
                                 else if (g_shoutDownSeen.exchange(false)) g_wantClose = true;
                             } else if (auto k = DIKToImGuiKey(code); k != ImGuiKey_None) {
@@ -1630,36 +1783,23 @@ namespace MFO::Board {
                             break;
 
                         case RE::INPUT_DEVICE::kGamepad:
+                            g_probePad.fetch_add(1);
                             if (static_cast<RE::BSWin32GamepadDevice::Key>(code) ==
                                     RE::BSWin32GamepadDevice::Key::kB) {
-                                // CASCADED BACK. THIS HOOK is B's one and only
+                                // CASCADED BACK. THIS SINK is B's one and only
                                 // source (v1.0.59): forward it as GamepadFaceRight,
                                 // ImGui's nav-cancel, off Skyrim's ButtonEvent
                                 // stream -- the stream that survives Steam Input's
                                 // kb<->pad mode flips, unlike the Win32 backend's
-                                // XInput poll, which went deaf on a flip and took
-                                // B (and, via its HasGamepad rewrite, ALL gamepad
-                                // nav) down with it. That poll is now compiled out
-                                // (IMGUI_IMPL_WIN32_DISABLE_GAMEPAD on the vendored
-                                // backend TU), so there is no second B path to race
-                                // this one -- the race that a hook-side B caused
-                                // back when the backend ALSO fed B is structurally
-                                // gone. ImGui nav-cancel closes the innermost
-                                // picker at NewFrame; the render-thread resolver
-                                // (DrawFieldKit's end) decides the board close off
-                                // this same keypress. The game never sees B
-                                // (swallowed below).
+                                // XInput poll (compiled out on the vendored backend
+                                // TU). ImGui nav-cancel closes the innermost picker
+                                // at NewFrame; the render-thread resolver decides the
+                                // board close off this same keypress.
                                 io.AddKeyEvent(ImGuiKey_GamepadFaceRight, down);
                             } else if (auto k = GamepadToImGuiKey(code); k != ImGuiKey_None) {
-                                // NB: the gamepad shout-close branch was removed on
-                                // purpose. R1 is the Field Orders power on the deck;
-                                // while the board is OPEN it must NOT re-close it
-                                // (that is B's job now). Instead R1 -> GamepadR1 and
-                                // becomes the in-board party-switch. The opening R1
-                                // press was seen while the board was CLOSED (hook
-                                // passthrough), so it never reaches here -- only
-                                // presses made while open do. The game never sees
-                                // the swallowed R1, so the power is not re-cast.
+                                // R1 -> GamepadR1 becomes the in-board party-switch
+                                // while open (the opening R1 press was seen while
+                                // CLOSED, so it never reaches here).
                                 io.AddKeyEvent(k, down);
                             }
                             break;
@@ -1679,9 +1819,9 @@ namespace MFO::Board {
                     } else if (e->eventType == RE::INPUT_EVENT_TYPE::kThumbstick) {
                         auto* th = static_cast<RE::ThumbstickEvent*>(e);
                         if (th->IsLeft()) {
-                            // EDGE-TRIGGERED into d-pad keys. ImGui's own nav
-                            // repeat handles a held direction; passing the axis
-                            // through would scroll continuously.
+                            // EDGE-TRIGGERED into d-pad keys. ImGui's own nav repeat
+                            // handles a held direction; passing the axis through
+                            // would scroll continuously.
                             auto edge = [&](int i, bool on, ImGuiKey key) {
                                 if (g_stickNav[i] != on) { g_stickNav[i] = on; io.AddKeyEvent(key, on); }
                             };
@@ -1693,25 +1833,13 @@ namespace MFO::Board {
                     }
                 }
 
-                // Swallow everything: the game sees no input while we are open,
-                // so no vanilla menu bleed-through and no control-flag toggling.
-                // NULL THE CALLER'S OWN HEAD POINTER, exactly as MEO does --
-                // handing the engine a stack-local instead leaves the caller's
-                // list intact and changes what a chained hook at the same site
-                // observes.
-                *a_events = nullptr;
-                ioLk.unlock();          // never hold the IO lock across the passthrough
-                func(a_source, a_events);
+                // The game still RECEIVES these events (a sink cannot null the
+                // array), but SyncControlBlock has disabled the gameplay/menu
+                // control categories for the whole time the board is open, so they
+                // are inert -- no vanilla menu bleed-through, no control-flag churn.
+                return Ctrl::kContinue;
             }
-            static inline REL::Relocation<decltype(thunk)> func;
         };
-
-        template <class T>
-        void WriteThunkCall(REL::RelocationID a_id, REL::VariantOffset a_off) {
-            auto& trampoline = SKSE::GetTrampoline();
-            const REL::Relocation<std::uintptr_t> hook{ a_id, a_off };
-            T::func = trampoline.write_call<5>(hook.address(), T::thunk);
-        }
 
     }
 
@@ -2216,12 +2344,36 @@ namespace MFO::Board {
     }
 
     void Install() {
-        SKSE::AllocTrampoline(256);
-        WriteThunkCall<D3DInitHook>(REL::RelocationID(75595, 77226),
-                                    REL::VariantOffset(0x9, 0x275, 0x0));
-        WriteThunkCall<DXGIPresentHook>(REL::RelocationID(75461, 77246), REL::VariantOffset(0x9, 0x9, 0x9));
-        WriteThunkCall<InputDispatchHook>(REL::RelocationID(67315, 68617), REL::VariantOffset(0x7B, 0x7B, 0x7B));
-        spdlog::info("[board] hooks installed");
+        // REFUSE-AND-GATE before any install (item 4). The overlay was never
+        // VR-safe (same as the combat vtable hooks, plugin.cpp:293-295); refuse
+        // VR and name the runtime so the deck log says exactly what ran. The
+        // vtable + sink path below carries ZERO game offsets, so on flat-screen
+        // SE / AE / future runtimes it is version-independent -- the gate is
+        // belt-and-suspenders plus the right place to refuse VR, and it now runs
+        // BEFORE install (the old call-site trampolines installed unconditionally
+        // before the version was even read).
+        const auto& mod = REL::Module::get();
+        if (REL::Module::IsVR()) {
+            spdlog::warn("[overlay-probe] VR runtime ({}) -- Field Kit overlay REFUSED", mod.version().string());
+            return;
+        }
+        spdlog::info("[overlay-probe] install begin (runtime {}, flat-screen)", mod.version().string());
+
+        // Input: a version-independent BSTEventSink on BSInputDeviceManager reads
+        // every device incl. gamepad (replaces the InputDispatch call-site
+        // trampoline). No byte offset. The WndProc swap is done later, in LazyInit.
+        if (auto* idm = RE::BSInputDeviceManager::GetSingleton()) {
+            idm->AddEventSink(InputSink::GetSingleton());
+            spdlog::info("[overlay-probe] input sink registered on BSInputDeviceManager");
+        } else {
+            spdlog::error("[overlay-probe] no BSInputDeviceManager -- input sink NOT registered");
+        }
+
+        // Present / ResizeBuffers: poll for the live swapchain, then patch vtable
+        // slots 8 / 13. Deferred to a task because the swapchain may not be up the
+        // instant Install() runs at kDataLoaded.
+        TryInstallHooks();
+        spdlog::info("[overlay-probe] install kicked (swapchain poll running)");
     }
 
 }

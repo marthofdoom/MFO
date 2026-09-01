@@ -297,6 +297,11 @@ namespace {
             MFO::Logistics::RegisterSinks();   // the player-looted waiver sink (§4.8.3)
             MFO::MEOBridge::RegisterSink();  // equip sink: flush follower gem moves onto worn loot
             MFO::Diagnostics::Install();
+            MFO::Board::Install();           // Field Kit overlay: swapchain-vtable Present/Resize
+                                             // hooks + input sink (v1.1). Here, NOT at plugin load:
+                                             // the vtable path needs the swapchain LIVE (it polls
+                                             // for it), the opposite of the old call-site trampoline
+                                             // that had to patch before renderer init.
             break;
 
         case SKSE::MessagingInterface::kPreLoadGame:
@@ -388,9 +393,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
                  ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
 
-    // The Field Kit's three trampoline hooks MUST be installed here, before
-    // the renderer initializes. This is the only place they can go.
-    MFO::Board::Install();
+    // The Field Kit overlay now installs at kDataLoaded (swapchain-vtable +
+    // input sink, v1.1) -- the vtable path needs the swapchain LIVE, so it can no
+    // longer go here at plugin load. See OnMessage's kDataLoaded case.
 
     auto* serialization = SKSE::GetSerializationInterface();
     serialization->SetUniqueID(MFO::kSerID);

@@ -51,8 +51,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 The single source of truth for ordering. Everything below depends on it.
 
 - **`SKSEPluginLoad`** (`plugin.cpp:377`): logs version (stale-binary guard #44,
-  `:387`), installs the **Board's 3 render/input hooks** *before renderer init*
-  (`Board::Install`, `:393` — only place they can go), registers the 3
+  `:387`), registers the 3
   serialization callbacks (`:397-399`), the message listener (`:401`), and
   `TradeBridge::RegisterFuncs` via the Papyrus interface (`:406` — must be here,
   runs each VM init).
@@ -65,8 +64,9 @@ The single source of truth for ordering. Everything below depends on it.
   `Followers::ResolveQuirks` → `MainThread::Install` → `Targeting::InstallHook`
   → `CasterConsent::InstallHook` → `CombatStyle::InstallEquipGate` →
   **sinks LAST** (`Rapport::RegisterSinks`, `Logistics::RegisterSinks`,
-  `MEOBridge::RegisterSink`) → `Diagnostics::Install`. **Sinks must follow
-  form resolution or they fire against unresolved forms.**
+  `MEOBridge::RegisterSink`) → `Diagnostics::Install` → `Board::Install`
+  (overlay: swapchain-vtable hooks + input sink, VR-refused, `:299`). **Sinks
+  must follow form resolution or they fire against unresolved forms.**
 - **`kPreLoadGame`** (`:302`): `Diagnostics::StopPump()` then
   `Packages::ReleaseAll("kPreLoadGame")` — release the alias the engine would
   otherwise serialize into the outgoing `.ess`.
@@ -1032,28 +1032,39 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 ## 6. Board / UI / Papyrus — `Board.*`, `Papyrus.*`
 
 ### Board.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
-Installs three trampoline hooks at plugin load, draws live state via ImGui on the
-**render thread** from a mutex-guarded snapshot, funnels all rule edits through a
-main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not read.**
-- **Module layout (mechanical split, 2026-08-31):** `Board.cpp` (2190) = shell —
-  shared render state, input translation, `PushSkin` (`:290`), `DrawFieldKit`
-  (`:397`, Followers+Gambits tabs + tab bar + cascaded-B close), `DrawHud`
-  (`:1251`), the 3 hooks (`WndProcHook:1321`, `D3DInitHook:1345`,
-  `InputDispatchHook:1477`), public API + `ApplyEdits` (`:1775`) +
-  `PublishSnapshot` (`:1995`) + `Install` (`:2181`). `Board_Progression.cpp`
-  (1234) = the hosted progression tab body, ONE function `DrawProgressionTab`
-  (class prompt, skill table, perk-dome window, node/skill popups, respec) —
-  called from `DrawFieldKit` at `Board.cpp:1174`; future progression-tab work
-  lands here. `Board_internal.h` = the shared substrate (Board TUs only):
-  `EditKind`/`AddonVerb`/`EditCmd`, the edit queue `g_editMx`/`g_edits`/
-  `QueueEdit` (`:69`), `g_fontHead`, `MenuSkin`/`kSkins`,
-  `DrawProgressionTab` decl — every definition in it is `inline` (ODR: one
-  shared instance across TUs, same pattern as `Logistics_internal.h`).
-- `Install()` (`Board.h:113`) — caller `plugin.cpp:393` only. **MUST** install
-  before renderer init (only place, `plugin.cpp:391`); moving it → `D3DInitHook`
-  misses init → `g_ready` never set → overlay silently disabled. Writes a 256-byte
-  trampoline with 3 game-version-keyed `RelocationID`/offset pairs (`Board.cpp:2183`)
-  — a bad offset corrupts the call site.
+Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
+draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
+funnels all rule edits through a main-thread-drained edit queue. **ImGui/
+`imgui_impl_win32` = vendored, do not read.**
+- **Overlay mechanism (v1.1 version-fragility kill, `Board.cpp` end):** replaced
+  the three call-site trampolines (D3DInit/DXGIPresent/InputDispatch, each keyed
+  to a HARDCODED in-function byte offset that crashed on 1.5.x/1.7.x) with:
+  `PresentThunk`/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots
+  8/13** (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable`), a
+  `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` (`InputSink`, reads every
+  device incl. gamepad), the unchanged `WndProcHook` swap (WM_CHAR/WM_KILLFOCUS),
+  and `LazyInit` (ImGui context + DX11/Win32 backend on first Present). Input
+  CONSUMPTION while the board is open is done by `SyncControlBlock` (ControlMap
+  toggle, edge-driven from Present) because a sink cannot null the event array.
+  `TryInstallHooks` polls for the live swapchain then patches. **PORTABLE UNIT
+  for MAO/MEO:** those functions + `Install`; only the two `Draw*` calls in
+  `PresentThunk` and the hotkeys in `InputSink` are mod-specific. Greppable
+  `[overlay-probe]` log lines report every component + a SUMMARY on board close.
+- **Module layout (mechanical split, 2026-08-31):** `Board.cpp` (~2385) = shell —
+  shared render state + overlay probe atomics (`:82`), input translation,
+  `PushSkin`, `DrawFieldKit` (`:397`, Followers+Gambits tabs + cascaded-B close),
+  `DrawHud`, `WndProcHook` + the overlay hook section, public API + `ApplyEdits` +
+  `PublishSnapshot` + `Install` (end). `Board_Progression.cpp` = the hosted
+  progression tab body, ONE function `DrawProgressionTab` — called from
+  `DrawFieldKit`; future progression-tab work lands here. `Board_internal.h` = the
+  shared substrate (Board TUs only): `EditKind`/`AddonVerb`/`EditCmd`, the edit
+  queue `g_editMx`/`g_edits`/`QueueEdit`, `g_fontHead`, `MenuSkin`/`kSkins`,
+  `DrawProgressionTab` decl — every definition `inline` (ODR).
+- `Install()` (`Board.h`) — caller `plugin.cpp:299` (kDataLoaded) only, VR-refused.
+  Installs AFTER the renderer is up (the vtable path needs the swapchain LIVE and
+  polls for it) — the OPPOSITE of the old trampoline, which had to patch before
+  renderer init. No `AllocTrampoline`, no `RelocationID`/offset pairs, so there is
+  no call site to corrupt.
 - **Snapshot carries all actor-derived display data** (render thread reads plain
   cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
   pct **and** raw `health/magicka/staminaCur/Max` (Followers tab, `Vocab::VitalCur/
@@ -1328,7 +1339,7 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 |---|---|---|
 | Serialization Save/Load/Revert callbacks | `plugin.cpp:397-399` | `kSerID='MFO0'` |
 | Message listener | `plugin.cpp:401` | drives the whole lifecycle |
-| Board 3 trampoline hooks (D3DInit/DXGIPresent/InputDispatch) | `plugin.cpp:393` → `Board.cpp:3269` | before renderer init |
+| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + InputSink + WndProc | `plugin.cpp:299` → `Board::Install` (Board.cpp end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
 | `MainThread::Install` (player Update vfunc 0x0AD) | `plugin.cpp:291` | true main-thread pump |
 | `Targeting::InstallHook` (Character::UpdateCombat 0xE4) | `plugin.cpp:293` | also drives CombatStyle |
 | `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:294` | 14 + 1 vtables |
