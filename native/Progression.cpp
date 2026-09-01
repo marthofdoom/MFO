@@ -2,6 +2,7 @@
 #include "Progression.h"
 #include "Config.h"
 #include "Forms.h"   // §18.6 (v1.1: addon manifests self-declare via their own keyword)
+#include <array>     // v1.1 residual #3: the classifier's add-on-declared verdict table
 
 // The production catalog reader. See Progression.h for the contract;
 // Docs/FOLLOWER-PROGRESSION-ESL-DESIGN.md §1/§2/§3 for the design.
@@ -24,6 +25,19 @@ namespace MFO::Progression {
         bool                  g_detected     = false;
         std::vector<AddonRef> g_addons;              // §18.6 enumerated manifests
         Catalog               g_catalog;
+
+        // v1.1 residual #3: the classifier's runtime verdict table — ADD-ON DATA,
+        // NO DLL default. Index = BGSEntryPoint index; value = Verdict (0/1/2), or
+        // -1 = the add-on declared none for this entry point. Filled ONCE by Init
+        // from the enumerated manifests (ReadEntryPointVerdicts), read-only after.
+        // Delete the add-on and this stays all -1 (the DLL holds zero verdicts).
+        constexpr std::size_t kEntryPointCount =
+            static_cast<std::size_t>(RE::BGSEntryPoint::ENTRY_POINT::kTotal);
+        std::array<std::int8_t, kEntryPointCount> g_verdicts = [] {
+            std::array<std::int8_t, kEntryPointCount> a{};
+            a.fill(-1);
+            return a;
+        }();
 
         // ── the 18 skill AVIFs (§2.1) ───────────────────────────────────────
         // The probe walked the 12 combat trees; the catalog walks ALL 18 on
@@ -53,117 +67,111 @@ namespace MFO::Progression {
             { RE::ActorValue::kSpeech,      "Speech" },
         };
 
-        // ── the §3 entry-point classifier ───────────────────────────────────
-        // One row per BGSEntryPoint::ENTRY_POINT value (92 total, engine-
-        // frozen indices). The verdicts are the design's lists verbatim:
-        // combat/defense = effective; lockpick/craft/commerce/player-UI =
-        // dead; the named marginal set (+ judgment calls on values the design
-        // left unnamed, biased toward marginal — an unknown must be FLAGGED,
-        // never silently killed, so over-filtering stays diagnosable).
-        struct EntryPointRow { Verdict verdict; const char* name; };
-
-        constexpr EntryPointRow kEntryPoints[] = {
-            /*  0 */ { Verdict::kEffective, "CalculateWeaponDamage" },
-            /*  1 */ { Verdict::kEffective, "CalculateMyCriticalHitChance" },
-            /*  2 */ { Verdict::kEffective, "CalculateMyCriticalHitDamage" },
-            /*  3 */ { Verdict::kDead,      "CalculateMineExplodeChance" },   // FO leftover
-            /*  4 */ { Verdict::kEffective, "AdjustLimbDamage" },
-            /*  5 */ { Verdict::kDead,      "AdjustBookSkillPoints" },        // player UI
-            /*  6 */ { Verdict::kEffective, "ModRecoveredHealth" },
-            /*  7 */ { Verdict::kMarginal,  "GetShouldAttack" },              // AI decision — unproven on followers
-            /*  8 */ { Verdict::kDead,      "ModBuyPrices" },                 // commerce
-            /*  9 */ { Verdict::kDead,      "AddLeveledListOnDeath" },        // player loot economy
-            /* 10 */ { Verdict::kMarginal,  "GetMaxCarryWeight" },            // §3 marginal
-            /* 11 */ { Verdict::kDead,      "ModAddictionChance" },           // FO leftover
-            /* 12 */ { Verdict::kDead,      "ModAddictionDuration" },         // FO leftover
-            /* 13 */ { Verdict::kDead,      "ModPositiveChemDuration" },      // FO leftover
-            /* 14 */ { Verdict::kDead,      "Activate" },                     // player activation UI
-            /* 15 */ { Verdict::kEffective, "IgnoreRunningDuringDetection" }, // detection
-            /* 16 */ { Verdict::kDead,      "IgnoreBrokenLock" },             // lockpicking
-            /* 17 */ { Verdict::kEffective, "ModEnemyCriticalHitChance" },    // defense
-            /* 18 */ { Verdict::kEffective, "ModSneakAttackMult" },
-            /* 19 */ { Verdict::kDead,      "ModMaxPlaceableMines" },         // FO leftover
-            /* 20 */ { Verdict::kDead,      "ModBowZoom" },                   // player camera
-            /* 21 */ { Verdict::kMarginal,  "ModRecoverArrowChance" },        // §3 marginal
-            /* 22 */ { Verdict::kDead,      "ModSkillUse" },                  // skill XP — NPCs earn none
-            /* 23 */ { Verdict::kMarginal,  "ModTelekinesisDistance" },       // NPC use unproven
-            /* 24 */ { Verdict::kMarginal,  "ModTelekinesisDamageMult" },
-            /* 25 */ { Verdict::kMarginal,  "ModTelekinesisDamage" },
-            /* 26 */ { Verdict::kEffective, "ModBashingDamage" },
-            /* 27 */ { Verdict::kEffective, "ModPowerAttackStamina" },
-            /* 28 */ { Verdict::kEffective, "ModPowerAttackDamage" },
-            /* 29 */ { Verdict::kEffective, "ModSpellMagnitude" },
-            /* 30 */ { Verdict::kEffective, "ModSpellDuration" },
-            /* 31 */ { Verdict::kMarginal,  "ModSecondaryValueWeight" },      // unnamed in design — flag, don't kill
-            /* 32 */ { Verdict::kMarginal,  "ModArmorWeight" },               // carry-weight family
-            /* 33 */ { Verdict::kEffective, "ModIncomingStagger" },
-            /* 34 */ { Verdict::kEffective, "ModTargetStagger" },
-            /* 35 */ { Verdict::kEffective, "ModAttackDamage" },
-            /* 36 */ { Verdict::kEffective, "ModIncomingDamage" },
-            /* 37 */ { Verdict::kEffective, "ModTargetDamageResistance" },
-            /* 38 */ { Verdict::kEffective, "ModSpellCost" },
-            /* 39 */ { Verdict::kEffective, "ModPercentBlocked" },
-            /* 40 */ { Verdict::kEffective, "ModShieldDeflectArrowChance" },
-            /* 41 */ { Verdict::kEffective, "ModIncomingSpellMagnitude" },
-            /* 42 */ { Verdict::kEffective, "ModIncomingSpellDuration" },
-            /* 43 */ { Verdict::kDead,      "ModPlayerIntimidation" },        // social
-            /* 44 */ { Verdict::kDead,      "ModPlayerReputation" },          // social
-            /* 45 */ { Verdict::kDead,      "ModFavorPoints" },               // social
-            /* 46 */ { Verdict::kDead,      "ModBribeAmount" },               // social
-            /* 47 */ { Verdict::kEffective, "ModDetectionLight" },
-            /* 48 */ { Verdict::kEffective, "ModDetectionMovement" },
-            /* 49 */ { Verdict::kDead,      "ModSoulGemRecharge" },           // crafting
-            /* 50 */ { Verdict::kEffective, "SetSweepAttack" },
-            /* 51 */ { Verdict::kEffective, "ApplyCombatHitSpell" },
-            /* 52 */ { Verdict::kEffective, "ApplyBashingSpell" },
-            /* 53 */ { Verdict::kEffective, "ApplyReanimateSpell" },
-            /* 54 */ { Verdict::kMarginal,  "SetBooleanGraphVariable" },      // anim var — may drive combat anims
-            /* 55 */ { Verdict::kDead,      "ModSpellCastingSoundEvent" },    // cosmetic
-            /* 56 */ { Verdict::kDead,      "ModPickpocketChance" },          // pickpocketing
-            /* 57 */ { Verdict::kEffective, "ModDetectionSneakSkill" },
-            /* 58 */ { Verdict::kEffective, "ModFallingDamage" },
-            /* 59 */ { Verdict::kDead,      "ModLockpickSweetSpot" },         // lockpicking
-            /* 60 */ { Verdict::kDead,      "ModSellPrices" },                // commerce
-            /* 61 */ { Verdict::kDead,      "CanPickpocketEquippedItem" },    // pickpocketing
-            /* 62 */ { Verdict::kDead,      "ModLockpickLevelAllowed" },      // lockpicking
-            /* 63 */ { Verdict::kDead,      "SetLockpickStartingArc" },       // lockpicking
-            /* 64 */ { Verdict::kDead,      "SetProgressionPicking" },        // lockpicking
-            /* 65 */ { Verdict::kDead,      "MakeLockpicksUnbreakable" },     // lockpicking
-            /* 66 */ { Verdict::kDead,      "ModAlchemyEffectiveness" },      // crafting
-            /* 67 */ { Verdict::kEffective, "ApplyWeaponSwingSpell" },
-            /* 68 */ { Verdict::kMarginal,  "ModCommandedActorLimit" },       // §3 marginal
-            /* 69 */ { Verdict::kEffective, "ApplySneakingSpell" },
-            /* 70 */ { Verdict::kDead,      "ModPlayerMagicSlowdown" },       // player UI
-            /* 71 */ { Verdict::kEffective, "ModWardMagickaAbsorptionPct" },
-            /* 72 */ { Verdict::kDead,      "ModInitialIngredientEffectsLearned" },  // crafting
-            /* 73 */ { Verdict::kDead,      "PurifyAlchemyIngredients" },     // crafting
-            /* 74 */ { Verdict::kDead,      "FilterActivation" },             // player activation UI
-            /* 75 */ { Verdict::kMarginal,  "CanDualCastSpell" },             // §3 marginal
-            /* 76 */ { Verdict::kDead,      "ModTemperingHealth" },           // crafting
-            /* 77 */ { Verdict::kDead,      "ModEnchantmentPower" },          // crafting
-            /* 78 */ { Verdict::kDead,      "ModSoulPctCapturedToWeapon" },   // crafting
-            /* 79 */ { Verdict::kDead,      "ModSoulGemEnchanting" },         // crafting
-            /* 80 */ { Verdict::kDead,      "ModNumberAppliedEnchantmentsAllowed" }, // crafting
-            /* 81 */ { Verdict::kDead,      "SetActivateLabel" },             // player UI
-            /* 82 */ { Verdict::kDead,      "ModShoutOK" },                   // player shouts
-            /* 83 */ { Verdict::kDead,      "ModPoisonDoseCount" },           // player poison UI
-            /* 84 */ { Verdict::kMarginal,  "ShouldApplyPlacedItem" },        // runes/traps — unproven
-            /* 85 */ { Verdict::kEffective, "ModArmorRating" },
-            /* 86 */ { Verdict::kDead,      "ModLockpickingCrimeChance" },    // lockpicking
-            /* 87 */ { Verdict::kDead,      "ModIngredientsHarvested" },      // harvest
-            /* 88 */ { Verdict::kMarginal,  "ModSpellRange_TargetLoc" },      // NPC use unproven
-            /* 89 */ { Verdict::kDead,      "ModPotionsCreated" },            // crafting
-            /* 90 */ { Verdict::kDead,      "ModLockpickingKeyRewardChance" },// lockpicking
-            /* 91 */ { Verdict::kMarginal,  "AllowMountActor" },              // §3 marginal
+        // ── entry-point NAMES (a GENERAL engine fact) ───────────────────────
+        // One name per BGSEntryPoint::ENTRY_POINT value (92, engine-frozen
+        // indices) — the canonical member names of the engine enum, exactly
+        // like the kSkills static-name table. This is NOT a verdict table: the
+        // effective/marginal/dead JUDGMENT moved to add-on DATA in the manifest
+        // (v1.1 residual #3, ReadEntryPointVerdicts → g_verdicts), no DLL
+        // default. These names are just how the WALK primitive and the [prog]
+        // dump report an entry point ("ModBuyPrices"); a load order cannot
+        // rename an engine enum member, so a static table is correct here.
+        constexpr const char* kEntryPointNames[] = {
+            /*  0 */ "CalculateWeaponDamage",
+            /*  1 */ "CalculateMyCriticalHitChance",
+            /*  2 */ "CalculateMyCriticalHitDamage",
+            /*  3 */ "CalculateMineExplodeChance",
+            /*  4 */ "AdjustLimbDamage",
+            /*  5 */ "AdjustBookSkillPoints",
+            /*  6 */ "ModRecoveredHealth",
+            /*  7 */ "GetShouldAttack",
+            /*  8 */ "ModBuyPrices",
+            /*  9 */ "AddLeveledListOnDeath",
+            /* 10 */ "GetMaxCarryWeight",
+            /* 11 */ "ModAddictionChance",
+            /* 12 */ "ModAddictionDuration",
+            /* 13 */ "ModPositiveChemDuration",
+            /* 14 */ "Activate",
+            /* 15 */ "IgnoreRunningDuringDetection",
+            /* 16 */ "IgnoreBrokenLock",
+            /* 17 */ "ModEnemyCriticalHitChance",
+            /* 18 */ "ModSneakAttackMult",
+            /* 19 */ "ModMaxPlaceableMines",
+            /* 20 */ "ModBowZoom",
+            /* 21 */ "ModRecoverArrowChance",
+            /* 22 */ "ModSkillUse",
+            /* 23 */ "ModTelekinesisDistance",
+            /* 24 */ "ModTelekinesisDamageMult",
+            /* 25 */ "ModTelekinesisDamage",
+            /* 26 */ "ModBashingDamage",
+            /* 27 */ "ModPowerAttackStamina",
+            /* 28 */ "ModPowerAttackDamage",
+            /* 29 */ "ModSpellMagnitude",
+            /* 30 */ "ModSpellDuration",
+            /* 31 */ "ModSecondaryValueWeight",
+            /* 32 */ "ModArmorWeight",
+            /* 33 */ "ModIncomingStagger",
+            /* 34 */ "ModTargetStagger",
+            /* 35 */ "ModAttackDamage",
+            /* 36 */ "ModIncomingDamage",
+            /* 37 */ "ModTargetDamageResistance",
+            /* 38 */ "ModSpellCost",
+            /* 39 */ "ModPercentBlocked",
+            /* 40 */ "ModShieldDeflectArrowChance",
+            /* 41 */ "ModIncomingSpellMagnitude",
+            /* 42 */ "ModIncomingSpellDuration",
+            /* 43 */ "ModPlayerIntimidation",
+            /* 44 */ "ModPlayerReputation",
+            /* 45 */ "ModFavorPoints",
+            /* 46 */ "ModBribeAmount",
+            /* 47 */ "ModDetectionLight",
+            /* 48 */ "ModDetectionMovement",
+            /* 49 */ "ModSoulGemRecharge",
+            /* 50 */ "SetSweepAttack",
+            /* 51 */ "ApplyCombatHitSpell",
+            /* 52 */ "ApplyBashingSpell",
+            /* 53 */ "ApplyReanimateSpell",
+            /* 54 */ "SetBooleanGraphVariable",
+            /* 55 */ "ModSpellCastingSoundEvent",
+            /* 56 */ "ModPickpocketChance",
+            /* 57 */ "ModDetectionSneakSkill",
+            /* 58 */ "ModFallingDamage",
+            /* 59 */ "ModLockpickSweetSpot",
+            /* 60 */ "ModSellPrices",
+            /* 61 */ "CanPickpocketEquippedItem",
+            /* 62 */ "ModLockpickLevelAllowed",
+            /* 63 */ "SetLockpickStartingArc",
+            /* 64 */ "SetProgressionPicking",
+            /* 65 */ "MakeLockpicksUnbreakable",
+            /* 66 */ "ModAlchemyEffectiveness",
+            /* 67 */ "ApplyWeaponSwingSpell",
+            /* 68 */ "ModCommandedActorLimit",
+            /* 69 */ "ApplySneakingSpell",
+            /* 70 */ "ModPlayerMagicSlowdown",
+            /* 71 */ "ModWardMagickaAbsorptionPct",
+            /* 72 */ "ModInitialIngredientEffectsLearned",
+            /* 73 */ "PurifyAlchemyIngredients",
+            /* 74 */ "FilterActivation",
+            /* 75 */ "CanDualCastSpell",
+            /* 76 */ "ModTemperingHealth",
+            /* 77 */ "ModEnchantmentPower",
+            /* 78 */ "ModSoulPctCapturedToWeapon",
+            /* 79 */ "ModSoulGemEnchanting",
+            /* 80 */ "ModNumberAppliedEnchantmentsAllowed",
+            /* 81 */ "SetActivateLabel",
+            /* 82 */ "ModShoutOK",
+            /* 83 */ "ModPoisonDoseCount",
+            /* 84 */ "ShouldApplyPlacedItem",
+            /* 85 */ "ModArmorRating",
+            /* 86 */ "ModLockpickingCrimeChance",
+            /* 87 */ "ModIngredientsHarvested",
+            /* 88 */ "ModSpellRange_TargetLoc",
+            /* 89 */ "ModPotionsCreated",
+            /* 90 */ "ModLockpickingKeyRewardChance",
+            /* 91 */ "AllowMountActor",
         };
-        static_assert(std::size(kEntryPoints) ==
-                          static_cast<std::size_t>(RE::BGSEntryPoint::ENTRY_POINT::kTotal),
-                      "entry-point table must cover every engine value");
-
-        const EntryPointRow& RowFor(std::uint32_t a_ep) {
-            static constexpr EntryPointRow kUnknown{ Verdict::kMarginal, "UnknownEntryPoint" };
-            return a_ep < std::size(kEntryPoints) ? kEntryPoints[a_ep] : kUnknown;
-        }
+        static_assert(std::size(kEntryPointNames) == kEntryPointCount,
+                      "entry-point name table must cover every engine value");
 
         // ── small helpers ───────────────────────────────────────────────────
 
@@ -319,47 +327,55 @@ namespace MFO::Progression {
         // A rank is effective iff >=1 entry is effective. a_outWhy is only
         // meaningful when the verdict is NOT effective — it names every
         // non-effective entry so the dump can explain the filter.
+        //
+        // v1.1 residual #3: the SPLIT. The engine WALK is the general primitive
+        // WalkPerkEntries (add-on-agnostic, no judgment); the effective/marginal/
+        // dead verdict for an entry-point entry comes from the ADD-ON's declared
+        // g_verdicts (NO DLL default). A quest entry / player-gated ability is
+        // still filtered on the MECHANICAL fact the primitive reports (it does
+        // nothing on a follower), which is a general fact, not progression
+        // opinion. An entry point the add-on left undeclared has NO verdict — it
+        // is FLAGGED (marginal), never silently killed, so over-filtering stays
+        // diagnosable; with the shipped add-on present all 92 are declared.
         Verdict ClassifyRank(RE::BGSPerk* a_rank, std::string& a_outWhy) {
             bool anyMarginal = false;
             std::string why;
             int n = 0;
-            for (auto* entry : a_rank->perkEntries) {
-                if (!entry) continue;
+            for (const auto& f : WalkPerkEntries(a_rank)) {
                 ++n;
-                // int compares hedge GetType()'s exact return type across
-                // CommonLib revisions (the ProgProbe idiom, CI-proven).
-                const int t = static_cast<int>(entry->GetType());
-                if (t == static_cast<int>(RE::PERK_ENTRY_TYPE::kQuest)) {
-                    Append(why, "quest");   // §3: dead, always
-                } else if (t == static_cast<int>(RE::PERK_ENTRY_TYPE::kAbility)) {
-                    auto* ab = static_cast<RE::BGSAbilityPerkEntry*>(entry)->ability;
-                    if (!ab) {
-                        Append(why, "ability:<no spell>");
-                    } else if (AbilityPlayerGated(ab)) {
-                        Append(why, std::format("ability:{}(player-gated)", NameOf(ab)));
-                    } else {
+                switch (f.kind) {
+                case PerkEntryKind::kQuest:
+                    Append(why, "quest");   // fires nothing on a follower
+                    break;
+                case PerkEntryKind::kAbility:
+                    if (f.firesForNpc) return Verdict::kEffective;
+                    Append(why, std::format("ability:{}(player-gated)",
+                                            *f.name ? f.name : "<no spell>"));
+                    break;
+                case PerkEntryKind::kEntryPoint: {
+                    const std::int8_t v = (f.entryPointIndex < g_verdicts.size())
+                                              ? g_verdicts[f.entryPointIndex] : -1;
+                    if (v == static_cast<std::int8_t>(Verdict::kEffective))
                         return Verdict::kEffective;
-                    }
-                } else if (t == static_cast<int>(RE::PERK_ENTRY_TYPE::kEntryPoint)) {
-                    const auto ep = static_cast<std::uint32_t>(
-                        static_cast<RE::BGSEntryPointPerkEntry*>(entry)->entryData.entryPoint.get());
-                    const auto& row = RowFor(ep);
-                    switch (row.verdict) {
-                    case Verdict::kEffective:
-                        return Verdict::kEffective;
-                    case Verdict::kMarginal:
+                    if (v == static_cast<std::int8_t>(Verdict::kMarginal)) {
                         anyMarginal = true;
-                        Append(why, std::format("{}(marginal)", row.name));
-                        break;
-                    case Verdict::kDead:
-                        Append(why, row.name);
-                        break;
+                        Append(why, std::format("{}(marginal)", f.name));
+                    } else if (v == static_cast<std::int8_t>(Verdict::kDead)) {
+                        Append(why, f.name);
+                    } else {
+                        // No add-on verdict for this entry point — NO DLL
+                        // default. Flag it (marginal), never silently kill.
+                        anyMarginal = true;
+                        Append(why, std::format("{}(no-verdict)", f.name));
                     }
-                } else {
+                    break;
+                }
+                default:
                     // An entry type this build has never seen: FLAG it, never
                     // silently kill the perk carrying it.
                     anyMarginal = true;
-                    Append(why, std::format("unknownEntryType{}(marginal)", t));
+                    Append(why, std::format("unknownEntryType{}(marginal)", f.rawType));
+                    break;
                 }
             }
             if (n == 0) {
@@ -631,6 +647,110 @@ namespace MFO::Progression {
 
     }
 
+    // ── GENERAL host primitive: the perk-entry WALK (add-on-AGNOSTIC) ────────
+    // Public API surface (Progression.h). Engine-coupled, carries NO verdict.
+
+    const char* EntryPointName(std::uint32_t a_index) {
+        return a_index < std::size(kEntryPointNames) ? kEntryPointNames[a_index] : "";
+    }
+
+    std::vector<PerkEntryFact> WalkPerkEntries(RE::BGSPerk* a_perk) {
+        std::vector<PerkEntryFact> out;
+        if (!a_perk) return out;
+        for (auto* entry : a_perk->perkEntries) {
+            if (!entry) continue;
+            PerkEntryFact f;
+            // int compares hedge GetType()'s exact return type across CommonLib
+            // revisions (the ProgProbe idiom, CI-proven).
+            f.rawType = static_cast<int>(entry->GetType());
+            if (f.rawType == static_cast<int>(RE::PERK_ENTRY_TYPE::kQuest)) {
+                f.kind        = PerkEntryKind::kQuest;
+                f.firesForNpc = false;   // a perk quest entry advances a quest,
+                                         // never a follower combat/stat effect
+            } else if (f.rawType == static_cast<int>(RE::PERK_ENTRY_TYPE::kAbility)) {
+                f.kind    = PerkEntryKind::kAbility;
+                auto* ab  = static_cast<RE::BGSAbilityPerkEntry*>(entry)->ability;
+                f.name    = ab ? NameOf(ab) : "";
+                // Mechanical fact: an ability with no spell, or one whose EVERY
+                // effect is pinned to the player, does nothing on a follower.
+                f.firesForNpc = ab && !AbilityPlayerGated(ab);
+            } else if (f.rawType == static_cast<int>(RE::PERK_ENTRY_TYPE::kEntryPoint)) {
+                f.kind = PerkEntryKind::kEntryPoint;
+                f.entryPointIndex = static_cast<std::uint32_t>(
+                    static_cast<RE::BGSEntryPointPerkEntry*>(entry)->entryData.entryPoint.get());
+                f.name        = EntryPointName(f.entryPointIndex);
+                f.firesForNpc = true;    // an entry point fires; whether it MATTERS
+                                         // for a follower is the add-on's VERDICT
+            } else {
+                f.kind = PerkEntryKind::kOther;
+            }
+            out.push_back(std::move(f));
+        }
+        return out;
+    }
+
+    // ── add-on-declared entry-point verdicts (v1.1 residual #3) ──────────────
+    // The verdicts sub-FLST self-declares like the manifest itself: its FRONT
+    // form is a keyword whose editor-id ends this suffix (keyword edids persist
+    // at runtime, unlike GLOB/FLST edids — the same reason the manifest keyword
+    // is matched this way). General API convention, not a progression string.
+    namespace {
+        constexpr std::string_view kVerdictsKeywordSuffix = "_MFOEntryPointVerdicts";
+
+        bool EdidEndsWith(RE::TESForm* a_form, std::string_view a_suffix) {
+            const char* e = a_form ? a_form->GetFormEditorID() : nullptr;
+            if (!e) return false;
+            const std::string_view id{ e };
+            return id.size() >= a_suffix.size() &&
+                   id.substr(id.size() - a_suffix.size()) == a_suffix;
+        }
+
+        // True iff this FLST is a verdicts declaration (front form = the
+        // "_MFOEntryPointVerdicts" keyword). Lets the manifest walk tell the
+        // verdicts sub-FLST apart from the classes list generically.
+        bool IsVerdictsList(RE::BGSListForm* a_list) {
+            if (!a_list || a_list->forms.empty()) return false;
+            return EdidEndsWith(a_list->forms.front(), kVerdictsKeywordSuffix);
+        }
+    }
+
+    bool ReadEntryPointVerdicts(RE::BGSListForm* a_manifest,
+                                std::vector<ManifestVerdict>& a_out) {
+        a_out.clear();
+        if (!a_manifest) return false;
+        // Find the verdicts sub-FLST anywhere in the manifest's entries.
+        RE::BGSListForm* vlist = nullptr;
+        for (auto* form : a_manifest->forms) {
+            if (auto* flst = form ? form->As<RE::BGSListForm>() : nullptr)
+                if (IsVerdictsList(flst)) { vlist = flst; break; }
+        }
+        if (!vlist) return false;
+        // POSITIONAL GLOBs after the front keyword: index = entry-point index,
+        // value = Verdict (0/1/2). GLOB edids are discarded at runtime, so ORDER
+        // is the carrier (the HMS-weights idiom). Out-of-range verdict values or
+        // non-GLOB entries are skipped with a named warn (never guessed).
+        std::uint8_t idx = 0;
+        for (auto* form : vlist->forms) {
+            if (form && form->Is(RE::FormType::Keyword)) continue;   // the front self-decl
+            auto* glob = form ? form->As<RE::TESGlobal>() : nullptr;
+            if (!glob) {
+                spdlog::warn("[prog] verdicts list {:08X}: non-GLOB entry {:08X} — skipped",
+                             vlist->GetFormID(), form ? form->GetFormID() : 0);
+                continue;
+            }
+            const int v = static_cast<int>(glob->value);
+            if (v < 0 || v > 2) {
+                spdlog::warn("[prog] verdicts list {:08X}: entry {} value {} out of range 0-2 "
+                             "— skipped", vlist->GetFormID(), idx, v);
+                ++idx;
+                continue;
+            }
+            a_out.push_back({ idx, static_cast<std::uint8_t>(v) });
+            ++idx;
+        }
+        return !a_out.empty();
+    }
+
     bool Detected() { return g_detected; }
 
     const std::vector<AddonRef>& Addons() { return g_addons; }
@@ -683,6 +803,30 @@ namespace MFO::Progression {
                 // (§1, the Forms failure doctrine — addons are optional).
                 spdlog::info("[prog] no addon manifests found — progression off");
             }
+        }
+
+        // ── v1.1 residual #3: the classifier's verdict table is ADD-ON DATA ──
+        // Fill g_verdicts from each enumerated manifest's declared verdicts
+        // sub-FLST (ReadEntryPointVerdicts), last-writer-wins across manifests
+        // in load order. NO DLL default: with no add-on this loop runs zero
+        // times and every entry stays -1 (the DLL holds zero verdicts). Must
+        // run BEFORE BuildCatalog — ClassifyRank reads g_verdicts.
+        {
+            std::vector<ManifestVerdict> declared;
+            int filled = 0;
+            for (const auto& addon : g_addons) {
+                auto* manifest = RE::TESForm::LookupByID<RE::BGSListForm>(addon.manifestID);
+                if (!ReadEntryPointVerdicts(manifest, declared)) continue;
+                for (const auto& mv : declared)
+                    if (mv.entryPointIndex < g_verdicts.size()) {
+                        g_verdicts[mv.entryPointIndex] =
+                            static_cast<std::int8_t>(mv.verdict);
+                        ++filled;
+                    }
+            }
+            if (g_detected)
+                spdlog::info("[prog] entry-point verdicts: {} declared by add-on "
+                             "(no DLL default; undeclared entries flag as marginal)", filled);
         }
 
         // ── catalog build ───────────────────────────────────────────────────

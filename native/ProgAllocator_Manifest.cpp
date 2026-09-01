@@ -309,6 +309,12 @@ namespace MFO::ProgAllocator {
                     }
                     auto* classesList = form ? form->As<RE::BGSListForm>() : nullptr;
                     if (!classesList) continue;   // keyword / economy GLOBs
+                    // v1.1 residual #3: a self-declaring sub-FLST (front form is a
+                    // KEYWORD) is NOT the classes list — the verdicts sub-FLST is
+                    // shaped exactly this way. Read separately below.
+                    if (!classesList->forms.empty() &&
+                        classesList->forms.front()->Is(RE::FormType::Keyword))
+                        continue;
                     for (auto* cf : classesList->forms) {
                         auto* defList = cf ? cf->As<RE::BGSListForm>() : nullptr;
                         const ClassDef* def = defList ? FindClassDef(defList->GetFormID()) : nullptr;
@@ -337,9 +343,16 @@ namespace MFO::ProgAllocator {
             // Phase 6c: title from the add-on's own MESG (self-declared); the
             // display name is only the fallback for an add-on that ships none.
             man.boardTab.label    = boardLabel.empty() ? man.displayName : boardLabel;
+            // v1.1 residual #3: this add-on's DECLARED entry-point verdicts —
+            // ADD-ON DATA, no DLL default (Progression's ONE reader; empty when
+            // the add-on ships no verdicts sub-FLST). The runtime classifier
+            // reads its own copy filled at Progression::Init; this mirrors the
+            // same declaration into the generic model.
+            Progression::ReadEntryPointVerdicts(manifest, man.entryPointVerdicts);
             spdlog::info("[prog] generic manifest {:08X} (\"{}\", type \"{}\"): {} class(es) "
-                         "modeled, board tab declared [parsed, unused]", man.manifestID, man.plugin,
-                         man.addonType, man.classes.size());
+                         "modeled, board tab declared, {} entry-point verdict(s) [parsed, unused]",
+                         man.manifestID, man.plugin, man.addonType, man.classes.size(),
+                         man.entryPointVerdicts.size());
             g_manifests.push_back(std::move(man));
         }
     }
@@ -382,6 +395,11 @@ namespace MFO::ProgAllocator {
                 // Skip the self-declaration keyword (manifest entry[0]) generically.
                 if (!form || form->Is(RE::FormType::Keyword)) continue;
                 if (auto* flst = form->As<RE::BGSListForm>()) {
+                    // v1.1 residual #3: the verdicts sub-FLST (self-declaring
+                    // keyword front) is read by Progression, not the classes
+                    // list — skip it here without warning.
+                    if (!flst->forms.empty() && flst->forms.front()->Is(RE::FormType::Keyword))
+                        continue;
                     if (!classesList) classesList = flst;
                     else spdlog::warn("[prog] manifest {:08X}: extra FLST {:08X} ignored "
                                       "(one classes list per manifest)",

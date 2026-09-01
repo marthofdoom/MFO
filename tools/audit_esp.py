@@ -112,6 +112,11 @@ PROG_REQUIRED = {
     # v1.1 self-declaration keyword — the manifest's own join key (edid suffix
     # "_MFOAddonManifest"); the DLL matches it by that suffix at runtime.
     0x822: ('KYWD', "MFOP_MFOAddonManifest",    ['EDID']),
+    # v1.1 residual #3: the entry-point verdicts self-declaration keyword and its
+    # sub-FLST (the 92 POSITIONAL verdict GLOBs; perk-effectiveness judgment moved
+    # out of the DLL into add-on data). LNAM count checked below (1 kywd + 92).
+    0x823: ('KYWD', "MFOP_MFOEntryPointVerdicts", ['EDID']),
+    0x860: ('FLST', "MFOP_EntryPointVerdicts",  ['EDID', 'LNAM']),
     # §18.6 Stage 2 — N-declared classes: MESG display names, _Stance mirrors,
     # class-def FLSTs, and the classes-list FLST the manifest points at.
     0x830: ('MESG', "MFOP_ClassName_Melee",     ['EDID', 'FULL']),
@@ -336,13 +341,27 @@ def audit_one(esp):
         # entries[3..] the 7 economy GLOBs (perk divisor, skill/lvl, manual/lvl,
         # shared divisor, respec, cap, dev-cmd). A short manifest means the DLL
         # falls back to DLL defaults for the missing knobs -- silent, so audit it.
-        MANIFEST_ENTRIES = 3 + 7
+        # v1.1 residual #3: entry[3] is now the entry-point VERDICTS sub-FLST.
+        MANIFEST_ENTRIES = 4 + 7
         if 0x821 in by_local:
             n = by_local[0x821][1].get('#LNAM', 0)
             if n != MANIFEST_ENTRIES:
                 errors.append(f"FLST 0x821 MFOP_AddonManifest has {n} LNAM entr(ies), "
                               f"expected {MANIFEST_ENTRIES} (self-declaration keyword + "
-                              f"board-tab label MESG + classes-list + 7 economy GLOBs)")
+                              f"board-tab label MESG + classes-list + verdicts-list + "
+                              f"7 economy GLOBs)")
+
+        # v1.1 residual #3: the entry-point VERDICTS sub-FLST (0x860) carries its
+        # self-declaration keyword + 92 POSITIONAL verdict GLOBs. A short list
+        # means the DLL reads no verdict for the missing entry points (they flag
+        # marginal) -- silent, so audit the count. The DLL reads by ORDER off it.
+        VERDICT_FLST_ENTRIES = 1 + 92
+        if 0x860 in by_local:
+            n = by_local[0x860][1].get('#LNAM', 0)
+            if n != VERDICT_FLST_ENTRIES:
+                errors.append(f"FLST 0x860 MFOP_EntryPointVerdicts has {n} LNAM entr(ies), "
+                              f"expected {VERDICT_FLST_ENTRIES} (self-declaration keyword + "
+                              f"92 positional verdict GLOBs)")
 
         # Class-skill lists: every LNAM entry must point into Skyrim.esm
         # (master index 0x00) -- the ESL cannot legally reference anything else.

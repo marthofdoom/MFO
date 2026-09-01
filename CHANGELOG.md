@@ -1,5 +1,6 @@
 ## Unreleased
 
+- **Perk usefulness ratings live in the add-on now, not the mod.** The perk board marks which perks actually do something for a follower and which are dead weight for one. That call used to be baked into the mod itself. It is add-on data now, so the progression add-on carries its own ratings and the mod keeps only a general perk reader any add-on can use. Nothing changes on screen (the shipped add-on declares the same ratings it always used). Remove the add-on and the mod holds no ratings at all, which is the point.
 - **Followers stop looping on loot another package keeps grabbing.** When a follower walked to pick something up and a scene or another mod's package kept yanking them off the walk, MFO used to fight for the item forever and never finish. Now it tries a few times, then gives up on that item for a bit and moves on to the rest. A follower who gets pulled into combat lets the fight take over instead of arguing with it. Loot that walks and picks up cleanly is unchanged.
 
 ## v1.1.2 -- Plugin cleanup for xEdit and Vortex

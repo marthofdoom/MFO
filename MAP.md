@@ -819,9 +819,20 @@ Keyword editor-ids persist at runtime; GLOB/FLST edids do NOT (the Phase 2 root
 cause), so this is the one edid match that resolves. The addon references only its
 OWN keyword → no MFO.esp master. `AddonRef` gained `keywordEdid`.
 **v1.1 generic manifest model:** `AddonManifest`/`ManifestClass`/`ManifestEconomy`/
-`ManifestAllocation` (+ `ManifestVerdict`/`ManifestBoardTab` placeholders) is the
+`ManifestAllocation`/`ManifestVerdict` (+ `ManifestBoardTab`) is the
 add-on-agnostic host model, built by `ProgAllocator::BuildGenericManifests` and
 exposed via `Progression::Manifests()` (defined at the foot of `ProgAllocator_Manifest.cpp`).
+**v1.1 residual #3 — perk-effectiveness SPLIT (the last compiled-in judgment, removed):**
+the WALK is the general public primitive `WalkPerkEntries` (`:657`, Progression.h) +
+`EntryPointName` (`:653`) — add-on-agnostic, enumerates a perk's entries, their
+kind/entry-point index+name, and the mechanical `firesForNpc` fact (quest / player-gated
+ability); NO verdict. The effective/marginal/dead VERDICTS are now ADD-ON DATA: an add-on
+declares them in a verdicts sub-FLST (front keyword edid `_MFOEntryPointVerdicts`, then 92
+POSITIONAL verdict GLOBs). `ReadEntryPointVerdicts` (`:717`, the ONE reader) fills the
+classifier's runtime `g_verdicts[92]` at `Init` (before `BuildCatalog`) AND
+`AddonManifest::entryPointVerdicts` in `BuildGenericManifests` — NO DLL default (delete the
+add-on → all -1, `ClassifyRank` shows no effectiveness hint). The old `kEntryPoints[]` verdict
+table is gone; `kEntryPointNames[92]` (names only, a general engine fact) remains.
 **Consumers routing on:** Phase 5 (`sharedGrowthEnabled`); **Phase 6a** — `Board.cpp`
 `DrawFieldKit` iterates `Manifests()[].boardTab.declared` to decide the hosted board-tab
 count (was hardcoded `snap.prog->active`); `BuildGenericManifests` sets `boardTab.declared=true`
@@ -837,8 +848,11 @@ board edit queue's progression verbs collapsed to ONE generic carrier `EditKind:
 150,437,666,935,1047,1264,1554`) + `Board_Progression.cpp:202`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
-(`ProgAllocator.cpp:2117`), so re-tuning `kEntryPoints[]` (`:64`) or `ClassifyRank`
-(`:300`) silently changes which saved perks survive a load (with an auto §17 refund).
+(`ProgAllocator.cpp:2117`), so re-tuning the add-on's declared verdicts (the
+`MFOP_EntryPointVerdicts` GLOBs in `MFO_GenerateESP.py`, read via
+`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`:329`) silently changes which
+saved perks survive a load (with an auto §17 refund). The verdicts are ESL DATA now, not a
+DLL table — changing them is a generator+regen change, not a code edit.
 
 ### ProgAllocator.cpp / ProgAllocator_Hms.cpp / ProgAllocator_Manifest.cpp / ProgAllocator_internal.h / ProgAllocator.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
 The engine-mutating half: writes perks (`AddPerk/RemovePerk`+`ApplyPerksFromBase`)
