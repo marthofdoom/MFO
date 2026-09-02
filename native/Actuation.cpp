@@ -485,10 +485,15 @@ namespace MFO::Actuation {
                         CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
 
                     if (ownedCast) {
-                        // Own spell + target; refreshed every winning tick, auto-released
-                        // by APMFBridge::Tick when the gambit stops (worker-safe enqueue).
-                        APMFBridge::OwnHostileCast(a_follower->GetFormID(),
-                                                   spell->GetFormID(), a_target->GetFormID());
+                        // Own the two halves on DECOUPLED lifecycles: cast-SELECT is
+                        // per-cast (refreshed here, released crisply on !castSeen);
+                        // combat-TARGET is per-combat (created here, RE-POINTED on a
+                        // target change, kept alive by the combat service, released only
+                        // at combat end). A cast->melee transition thus re-points the
+                        // target, never releases it (worker-safe enqueue).
+                        APMFBridge::SelectCastSpell(a_follower->GetFormID(), spell->GetFormID());
+                        APMFBridge::HoldCombatTarget(a_follower->GetFormID(),
+                                                     a_target->GetFormID(), /*create=*/true);
 
                         const float heldO  = Loadout::SecondsSinceEquip(a_follower->GetFormID());
                         const float graceO = Config::g_aiCastGrace.load() *
@@ -994,6 +999,15 @@ namespace MFO::Actuation {
             auto ptr = a_choice.target.get();
             auto* foe = ptr.get();
             if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
+
+            // OWNED MODEL: if this follower is a caster with a LIVE APMF combat-target
+            // claim (created by a cast directive earlier this fight), RE-POINT it to the
+            // melee foe too, so the held target follows a cast->melee transition instead
+            // of going stale. create=false => it NEVER creates a claim for a pure-melee
+            // follower (they keep MFO's own Targeting hook, unchanged). No-op without APMF.
+            if (APMFBridge::Available() && Config::g_apmfCast.load() &&
+                !Config::g_legacyCastHybrid.load())
+                APMFBridge::HoldCombatTarget(a_follower->GetFormID(), foe->GetFormID(), /*create=*/false);
 
             // Ask the HOOK, not the config. They disagree whenever install was
             // refused with the flag on -- VR, today. Reporting Fired there would

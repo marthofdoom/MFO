@@ -44,6 +44,13 @@ casts animate because the AI fires them, not because MFO force-injects them.
   does CastOn fire **ONE** clean, exact-bounded `CastTargetDirect` at the held target (unanimated),
   logged `owned FALLBACK`, then re-arm the grace so the next tick offers the AI a fresh animated
   window. With target+spell owned the AI fires reliably, so the fallback is rare/never.
+- **Two decoupled ownership lifecycles (marth 2026-09-02).** cast-SELECT is PER-CAST (refreshed
+  each winning cast tick, released crisply when no cast rule holds). combat-TARGET is PER-COMBAT:
+  created by the cast directive, RE-POINTED in place (APMF `Repoint`, same claim) whenever the foe
+  changes — including on a cast→melee transition (the attack directive re-points it) — kept alive
+  every in-combat tick, and released ONLY when the fight ends (refreshing stops → expiry). So a
+  mid-battle rule change RE-POINTS the held target; it never releases it. APMF's `CombatTarget::
+  Release` relinquishes (never `StopCombat`), so even the combat-end release is graceful.
 - **Concentration is untouched.** A concentration spell never enters this branch — its bounded
   direct-force fork (`ConcentrationCast` → `CastTargetDirect`/`CastSelfDirect`) returns earlier,
   because an AI-channeled concentration cannot be exact-bounded (the freeze). Exact-bounding holds.

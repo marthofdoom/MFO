@@ -34,18 +34,20 @@
 // after SKSE load (e.g. your kPostLoad/kDataLoaded), then keep the pointer:
 //
 //     #include "APMF_API.h"
-//     const APMF_API::APMF_API_v2* g_apmf = nullptr;
+//     const APMF_API::APMF_API_v3* g_apmf = nullptr;   // pick the newest struct you use
 //     if (HMODULE h = GetModuleHandleA("APMF.dll")) {
 //         auto fn = reinterpret_cast<APMF_API::GetInterface_t>(
 //             GetProcAddress(h, APMF_API::kGetInterfaceExport));
 //         if (fn) {
 //             if (auto* base = fn(APMF_API::kABIVersion)) {          // nullptr on ABI mismatch
-//                 if (base->abiVersion >= 2)
-//                     g_apmf = reinterpret_cast<const APMF_API::APMF_API_v2*>(base);
+//                 if (base->abiVersion >= 3)
+//                     g_apmf = reinterpret_cast<const APMF_API::APMF_API_v3*>(base);
 //             }
 //         }
 //     }
-//     // If g_apmf is null, APMF is absent or too old — guard every call.
+//     // If g_apmf is null, APMF is absent or too old — guard every call. (A client
+//     // that only needs v2 checks `>= 2` and casts to APMF_API_v2*; a v3 field like
+//     // Repoint requires `>= 3`.)
 //
 // (An exported query fn was chosen over the SKSE-messaging handshake MEO uses: it
 // is synchronous, has no message-ordering or sender/receiver routing subtlety, and
@@ -53,15 +55,15 @@
 // ABI contract; the transport is just how you get the pointer.)
 //
 // ── Threading ──
-// Request/RequestEx/Release are SAFE FROM ANY THREAD. They capture POD (a FormID,
-// a copy of the APMF_Param) and enqueue the work; APMF applies it on the game
-// thread. A client's BSJobs worker may call them directly. The APMF_Param pointer
-// passed to RequestEx is READ AND COPIED synchronously inside the call — APMF never
-// retains the client's pointer, so a stack temporary is fine.
+// Request/RequestEx/Repoint/Release are SAFE FROM ANY THREAD. They capture POD (a
+// FormID, a copy of the APMF_Param) and enqueue the work; APMF applies it on the
+// game thread. A client's BSJobs worker may call them directly. The APMF_Param
+// pointer passed to RequestEx/Repoint is READ AND COPIED synchronously inside the
+// call — APMF never retains the client's pointer, so a stack temporary is fine.
 //
 // ── Exceptions ──
 // NO exception ever crosses this boundary. Every APMF-side body (Request,
-// RequestEx, Release, APMF_GetInterface) is wrapped in a catch-all; a throw
+// RequestEx, Repoint, Release, APMF_GetInterface) is wrapped in a catch-all; a throw
 // degrades to kInvalidHandle / no-op / nullptr, never an unwind into the client's
 // separately compiled DLL (UB).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +77,7 @@ namespace RE {
 
 namespace APMF_API {
 
-    inline constexpr std::uint32_t kABIVersion = 2;
+    inline constexpr std::uint32_t kABIVersion = 3;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -98,7 +100,7 @@ namespace APMF_API {
         kIntent_Gait          = 7,   // ch.1a gait scale (kSpeedMult)
         kIntent_Detection     = 8,   // ch.16 silent movement + reduced detect range (AVs)
         kIntent_Stance        = 9,   // ch.3  sneak/crouch
-        kIntent_CombatTarget  = 10,  // ch.6  combat-target STEER (StartCombat)
+        kIntent_CombatTarget  = 10,  // ch.6  combat-target HOLD (StartCombat + drift re-assert; Repoint to re-target)
         kIntent_Idle          = 11,  // ch.12 one-shot idle/animation
         kIntent_ShoutPower    = 12,  // ch.14 shout/power selection
         kIntent_Equipment     = 13,  // ch.15 unequip/equip a worn item (melee-vs-ranged lever)
@@ -164,9 +166,33 @@ namespace APMF_API {
                             const APMF_Param* param);
     };
 
+    // The v3 interface: APMF_API_v2's members verbatim (identical initial sequence),
+    // then the appended Repoint slot. A v1/v2 client reading this object through its
+    // own struct pointer sees exactly its prefix; a v3 client reads Repoint too.
+    struct APMF_API_v3 {
+        std::uint32_t abiVersion;
+        Handle (*Request)(RE::FormID actor, Intent intent, float basis);
+        void   (*Release)(Handle handle);
+        Handle (*RequestEx)(RE::FormID actor, Intent intent, float basis,
+                            const APMF_Param* param);
+
+        // RE-POINT an EXISTING claim in place: replace the claim's POD param without
+        // releasing/re-requesting, KEEPING THE SAME handle. If the claim currently
+        // OWNS its channel, the channel is re-pointed at the new param immediately
+        // (e.g. combat-target switches the held foe; cast-select switches the selected
+        // spell) with NO release/re-engage churn — so a held target/spell that merely
+        // CHANGES stays a single continuous claim for its whole lifetime, and a client
+        // reserves Release for when it is genuinely DONE (combat end / cast end), not
+        // for a mere retarget. `param` is read+copied synchronously; nullptr is a
+        // no-op. No-op on an unknown/stale handle. Thread-safe (enqueues; applied on
+        // the game thread). Its NON-owning-claim behavior: the stored param is updated
+        // so it takes effect if/when the claim later becomes the owner.
+        void (*Repoint)(Handle handle, const APMF_Param* param);
+    };
+
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
-    // base type; a client that asked for ABI >= 2 checks p->abiVersion and casts up
-    // to APMF_API_v2*.
+    // base type; a client that asked for ABI >= N checks p->abiVersion and casts up
+    // to APMF_API_vN* (all revisions share v1's identical initial sequence).
     using GetInterface_t = const APMF_API_v1* (*)(std::uint32_t abiVersion);
 
 }

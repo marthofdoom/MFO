@@ -1182,20 +1182,31 @@ byte-shared `APMF_API.h` (C-ABI POD; append-only, mirror APMF's copy). `Acquire(
 "APMF_GetInterface")` → `fn(kABIVersion)` → cast up to `APMF_API_v2*` (needs ABI ≥ 2 for
 `RequestEx`); **null-degrades** with one log line if APMF is absent/old — MFO then runs the
 legacy cast hybrid, byte-identical.
-- **OWNED CAST MODEL (default).** `OwnHostileCast(follower,spell,target)` ← `Actuation::CastOn`
-  FF-non-self **hostile** branch (`Actuation.cpp` ~`:461`, worker) engages BOTH APMF channels
-  for the follower: cast-select (`kIntent_SelectSpell`,`{form=spell}`) + combat-target HOLD
-  (`kIntent_CombatTarget`,`{form=target}`), basis 200. With spell selected + target held +
-  `CasterConsent::Want` granting the AI consent, the follower fires the RIGHT spell at the
-  RIGHT target through the engine's normal flow → **FULL cast ANIMATION** (resolves
-  [[cast-animations-deferred-to-post-town-polish]]). This is the ANIMATED-FIRST primary;
-  MFO's unanimated `CastSpellImmediate` force is a RARE last-resort (ONE bounded
-  `CastTargetDirect` only if the AI doesn't fire within the grace window — NOT the package
-  churn). Concentration never enters this branch (its bounded direct fork returns earlier —
-  exact-bounding intact). Per-follower two-claim map (`g_owned`, mutex-guarded — worker+main).
-- **Lifecycle = refresh + expiry:** every winning owned-cast tick refreshes both claims;
-  `Tick()` ← `Diagnostics.cpp` pump body (~`:333`) releases a follower's claims not refreshed
-  within 500 ms (gambit ended / target lost).
+- **OWNED CAST MODEL (default).** `Actuation::CastOn` FF-non-self **hostile** branch
+  (`Actuation.cpp` ~`:461`, worker) drives BOTH APMF channels for the follower, basis 200:
+  `SelectCastSpell(follower,spell)` (`kIntent_SelectSpell`) + `HoldCombatTarget(follower,target,
+  create=true)` (`kIntent_CombatTarget`). With spell selected + target held + `CasterConsent::Want`
+  granting the AI consent, the follower fires the RIGHT spell at the RIGHT target through the
+  engine's normal flow → **FULL cast ANIMATION** (resolves
+  [[cast-animations-deferred-to-post-town-polish]]). ANIMATED-FIRST primary; MFO's unanimated
+  `CastSpellImmediate` force is a RARE last-resort (ONE bounded `CastTargetDirect` only if the AI
+  doesn't fire in the grace window — NOT the package churn). Concentration never enters this branch
+  (its bounded direct fork returns earlier — exact-bounding intact). Per-follower map (`g_owned`,
+  mutex-guarded — worker+main).
+- **TWO DECOUPLED LIFECYCLES (marth's correction).**
+  - *cast-SELECT = PER-CAST:* refreshed each winning cast tick; released CRISPLY by
+    `ReleaseCastSpell(follower)` ← `Scheduler.cpp:~880` the instant no cast rule holds (`!castSeen`,
+    the spell-in-hand release signal). Releases ONLY the spell claim.
+  - *combat-TARGET = PER-COMBAT:* `HoldCombatTarget` CREATES it from the cast directive and
+    RE-POINTS it (same handle, via APMF `Repoint`) when the target changes; the ATTACK directive
+    (`Fire` kActAttack, create=false) re-points it too so cast→melee follows without a release;
+    `RefreshCombatTarget(follower)` ← `Scheduler.cpp:~323` (every in-combat tick) keeps it alive
+    across non-targeting rules. Released ONLY by the expiry sweep once refreshing STOPS = **combat
+    end** — so a mid-battle rule transition never releases it, it re-points. (create=false never
+    creates a claim → a pure-melee follower keeps MFO's own Targeting hook.)
+  - `Tick()` ← `Diagnostics.cpp` pump body (~`:333`) is the per-claim 500 ms expiry (cast-select
+    backstop; combat-target = the combat-end detector). Re-point uses APMF `Repoint` (ABI v3) in
+    place; falls back to release+request only against an older v2 APMF.
 - **Gating:** owned model active iff `Available() && Config::g_apmfCast (bApmfCast, INI, default
   ON) && !Config::g_legacyCastHybrid (bLegacyCastHybrid, MCM, default OFF)`. Toggle ON, or APMF
   absent → the ORIGINAL AI-first-wait + force-on-miss package hybrid (unchanged, `Actuation.cpp`

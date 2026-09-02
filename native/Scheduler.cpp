@@ -5,6 +5,7 @@
 #include "Followers.h"
 #include "Config.h"
 #include "Loadout.h"
+#include "APMFBridge.h"   // crisp release of owned-cast claims when no cast rule holds
 #include "CasterConsent.h"
 #include "CombatStyle.h"
 #include "Packages.h"
@@ -319,6 +320,14 @@ namespace MFO::Scheduler {
         // owns the shed, is skipped for in-combat followers). Same worker tick as
         // the shed's read, so the map needs no lock (#4).
         Logistics::NoteInCombat(id);
+
+        // OWNED MODEL: keep this follower's APMF combat-target claim (if any) alive for
+        // the WHOLE fight. Refreshes the expiry timestamp only (no create, no re-point)
+        // every in-combat tick, so a non-targeting rule (potion/flee/wait) does not let
+        // it lapse mid-battle -- it is released by the expiry sweep ONLY once combat
+        // ends (this stops being called). Steering/re-pointing stays with the cast/attack
+        // directives (HoldCombatTarget). No-op without APMF or if no claim is held.
+        APMFBridge::RefreshCombatTarget(id);
 
         // IN COMBAT: end any loot excursion for this follower FIRST, so he fights
         // instead of staying claimed by the loot quest at priority 60 (batches
@@ -873,7 +882,17 @@ namespace MFO::Scheduler {
         // dismissal (Followers::Refresh), and revert/load (ClearTransient-
         // State). The SPELL still releases on H3 -- hand occupancy is pacing,
         // and their AI cannot cast what they are not holding either way.
-        if (!castSeen) Loadout::ReleaseSpell(id);
+        if (!castSeen) {
+            Loadout::ReleaseSpell(id);
+            // Crisp release of the APMF cast-SELECT claim (per-cast) the moment no cast
+            // rule's condition holds -- the same "the cast gambit stopped wanting it"
+            // signal that releases the spell in hand. This releases ONLY the spell
+            // selection; the combat-TARGET claim is per-COMBAT and is deliberately NOT
+            // dropped here (it is kept alive by RefreshCombatTarget below and released
+            // only at combat end), so a cast->melee transition re-points the target
+            // rather than releasing it. No-op when APMF is absent / no cast-select claim.
+            APMFBridge::ReleaseCastSpell(id);
+        }
 
         const char* name = f->GetName() ? f->GetName() : "?";   // flair #11
 
