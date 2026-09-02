@@ -963,8 +963,8 @@ namespace MFO::Actuation {
         // the same off-worker read as the existing combat guards, no new lock.
         if (op == Vocab::kActCastSelf || op == Vocab::kActCastPlayer ||
             op == Vocab::kActCastTarget) {
-            if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
-                sp && CasterHasLiveSummon(a_follower, sp)) {
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
+            if (sp && CasterHasLiveSummon(a_follower, sp)) {
                 return { Result::NoOp, "summon still live", true };
             }
             // APMF CAST-SELECTION ASSIST (Phase 3). ADDITIVE + GUARDED: while a cast
@@ -976,7 +976,17 @@ namespace MFO::Actuation {
             // present (APMFBridge::Available()) and bApmfCast is on. The per-pump
             // sweep (APMFBridge::Tick) auto-releases the claim once this stops firing
             // (gambit ended / target lost). Worker-safe (APMF enqueues cross-thread).
-            APMFBridge::SelectSpell(a_follower->GetFormID(), a_choice.actionParam);
+            //
+            // HOSTILE/OFFENSIVE SPELLS ONLY (review fix): APMF sets the SELECTED
+            // spell but the follower's own combat AI picks the TARGET, so forcing a
+            // BENEFICIAL spell into the hand risks the AI casting a heal/buff AT AN
+            // ENEMY. MFO's own forced delivery (CastSpellImmediate, below) already
+            // lands beneficial + self casts on the right recipient, so APMF selection
+            // adds no value there and only risk. Gate on the canonical taxonomy
+            // (CasterConsent::ClassifySpell == Offense: any hostile/detrimental
+            // effect); Heal/Buff spells are skipped and keep working via MFO delivery.
+            if (sp && CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Offense)
+                APMFBridge::SelectSpell(a_follower->GetFormID(), a_choice.actionParam);
         }
         if (op == Vocab::kActCastSelf) {
             return CastOn(a_follower, a_choice.actionParam, a_follower);

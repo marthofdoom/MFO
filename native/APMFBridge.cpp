@@ -2,6 +2,7 @@
 #include "APMF_API.h"
 #include "Config.h"
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
@@ -19,10 +20,12 @@ extern "C" __declspec(dllimport) void* __stdcall GetProcAddress(void* a_module, 
 namespace MFO::APMFBridge {
 
     namespace {
-        // The APMF interface (v2, so RequestEx is present). Set ONCE at kDataLoaded
-        // before any worker tick runs (the pump installs later in the same handler),
-        // then read-only -- so worker reads need no lock for the pointer itself.
-        const APMF_API::APMF_API_v2* g_apmf = nullptr;
+        // The APMF interface (v2, so RequestEx is present). Written ONCE at
+        // kDataLoaded (main) before any worker tick runs; read on the worker
+        // (SelectSpell/Tick). Correct by ordering already, but atomic (relaxed is
+        // enough -- it is a single pointer with no dependent state) enforces the
+        // cross-thread publish/consume contract cheaply.
+        std::atomic<const APMF_API::APMF_API_v2*> g_apmf{ nullptr };
 
         // MFO's cast-select claims: one per follower. Guarded by g_mx (worker +
         // main). `spell` is the FormID currently selected; `handle` the APMF claim;
@@ -47,13 +50,14 @@ namespace MFO::APMFBridge {
         // Release one claim's handle (APMF Release is thread-safe + no-ops a stale
         // handle). Caller holds g_mx. Does not erase the map entry.
         void ReleaseLocked(Claim& c) {
-            if (g_apmf && c.handle != APMF_API::kInvalidHandle) g_apmf->Release(c.handle);
+            auto* api = g_apmf.load(std::memory_order_relaxed);
+            if (api && c.handle != APMF_API::kInvalidHandle) api->Release(c.handle);
             c.handle = APMF_API::kInvalidHandle;
         }
     }
 
     void Acquire() {
-        g_apmf = nullptr;
+        g_apmf.store(nullptr, std::memory_order_relaxed);
         void* h = GetModuleHandleA("APMF.dll");
         if (!h) {
             spdlog::info("[apmf] interface absent -- APMF.dll not in the load order; "
@@ -78,15 +82,17 @@ namespace MFO::APMFBridge {
                          base->abiVersion);
             return;
         }
-        g_apmf = reinterpret_cast<const APMF_API::APMF_API_v2*>(base);
+        auto* api = reinterpret_cast<const APMF_API::APMF_API_v2*>(base);
+        g_apmf.store(api, std::memory_order_relaxed);
         spdlog::info("[apmf] interface acquired (ABI v{}) -- cast-selection assist enabled.",
-                     g_apmf->abiVersion);
+                     api->abiVersion);
     }
 
-    bool Available() { return g_apmf != nullptr; }
+    bool Available() { return g_apmf.load(std::memory_order_relaxed) != nullptr; }
 
     void SelectSpell(RE::FormID a_follower, RE::FormID a_spell) {
-        if (!g_apmf || a_follower == 0 || a_spell == 0) return;
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || a_spell == 0) return;
         if (!Config::g_apmfCast.load()) return;
 
         const auto now = std::chrono::steady_clock::now();
@@ -103,8 +109,8 @@ namespace MFO::APMFBridge {
 
         APMF_API::APMF_Param param{};
         param.form = a_spell;
-        c.handle    = g_apmf->RequestEx(a_follower, APMF_API::kIntent_SelectSpell,
-                                        kCastSelectBasis, &param);
+        c.handle    = api->RequestEx(a_follower, APMF_API::kIntent_SelectSpell,
+                                     kCastSelectBasis, &param);
         c.spell     = a_spell;
         c.refreshed = now;
         if (c.handle == APMF_API::kInvalidHandle) {
@@ -121,7 +127,7 @@ namespace MFO::APMFBridge {
     }
 
     void Tick() {
-        if (!g_apmf) return;
+        if (!g_apmf.load(std::memory_order_relaxed)) return;
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_mx);
         for (auto it = g_claims.begin(); it != g_claims.end();) {
