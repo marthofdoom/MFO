@@ -47,7 +47,9 @@ regressions here; the ripple notes are why the map exists.
    at `plugin.cpp:293-295`, VR-refused, run on the combat thread. Any
    `CombatController` member touched there must be `< 0x68` (AE +8 layout bug).
 5. **Frozen external contracts:** `Forms.h` FormIDs (↔ `MFO_GenerateESP.py`);
-   `MEO_API.h` (byte-shared with a separate MEO.dll, append-only); TradeBridge's
+   `MEO_API.h` (byte-shared with a separate MEO.dll, append-only); `APMF_API.h`
+   (byte-shared with a separate APMF.dll, append-only — mirror APMF's copy exactly;
+   consumed via `APMFBridge`); TradeBridge's
    10 Papyrus natives + Papyrus.cpp's 3 method-name strings (called by shipped
    `.pex`); Config INI key names (MCM-Helper persistence identity).
 

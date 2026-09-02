@@ -21,6 +21,7 @@
 #include "Logistics.h"
 #include "Gait.h"
 #include "MEOBridge.h"
+#include "APMFBridge.h"
 #include "MainThread.h"
 #include "TradeBridge.h"
 
@@ -287,6 +288,7 @@ namespace {
             MFO::ProgAllocator::Init();     // allocator economy + class lists from the addon ESL; inert if absent
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
+            MFO::APMFBridge::Acquire();     // APMF cast-selection API (Phase 3); nullptr if APMF absent (degrades)
             MFO::Followers::ResolveQuirks();
             MFO::MainThread::Install();      // the main-thread pump (§0.37) -- the only real
                                              // road to main; AddTask drains on a worker here
@@ -319,6 +321,10 @@ namespace {
             // the save-scoped maps (audit). Restarted at kPostLoadGame/kNewGame.
             MFO::Diagnostics::StopPump();
             MFO::Packages::ReleaseAll("kPreLoadGame");
+            // Runtime-only APMF cast-select claims: drop them now the pump is drained
+            // (no worker races the map). APMF wipes its own control map at its
+            // kPreLoadGame too, so a stale handle Release is a harmless no-op.
+            MFO::APMFBridge::ClearTransientState();
             break;
 
         case SKSE::MessagingInterface::kPostLoadGame:

@@ -42,7 +42,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 | **Combat vfunc hooks** | `Targeting.cpp`, `CasterConsent.cpp`, `CombatStyle.cpp` | Three engine vtable hooks, install-once at `plugin.cpp:293-295`, VR-refused. Run on the **combat thread**. Any `CombatController` member touched there must be `< 0x68` (AE +8 layout bug; static_asserts). Signature mismatch corrupts every actor's combat/cast call. |
 | **Frozen FormID / ESP contract** | `Forms.h` | Local FormIDs (`0x800`+) are a frozen contract with `MFO_GenerateESP.py`, audited by `tools/audit_esp.py` (#41). Changing one orphans every save that saw it; `0x802` stays reserved. |
 | **Config INI keys** | `Config.cpp/.h` | Each key is wired in ~6 coupled places; the key **name** is the MCM-Helper persistence identity. Renaming unbinds the control; changing a key's *semantics* without renaming reinterprets the persisted value (the MEO ~100x-XP class of bug). |
-| **External ABIs** | `MEO_API.h`, `TradeBridge.cpp`, `Papyrus.cpp` | `MEO_API.h` is a wire ABI shared byte-for-byte with a *separate* shipped MEO.dll (append-only). `TradeBridge`'s 10 Papyrus natives + `Papyrus.cpp`'s 3 method-name strings are called by shipped `.pex` — renaming breaks scripts silently. |
+| **External ABIs** | `MEO_API.h`, `APMF_API.h`, `TradeBridge.cpp`, `Papyrus.cpp` | `MEO_API.h` is a wire ABI shared byte-for-byte with a *separate* shipped MEO.dll (append-only). `APMF_API.h` is likewise byte-shared with a *separate* APMF.dll (append-only, C-ABI POD; consumed by `APMFBridge`) — mirror APMF's copy exactly, never edit it locally. `TradeBridge`'s 10 Papyrus natives + `Papyrus.cpp`'s 3 method-name strings are called by shipped `.pex` — renaming breaks scripts silently. |
 
 ---
 
@@ -62,6 +62,7 @@ The single source of truth for ordering. Everything below depends on it.
   `:276`): `EnsureMcmDefaults` → `Config::Read` → `Forms::Resolve` →
   `Gait::Apply` → `Catalog::Load` → `Progression::Init` → `ProgAllocator::Init`
   → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
+  `APMFBridge::Acquire` (APMF cast-select client; null-degrades if APMF absent) →
   `Followers::ResolveQuirks` → `MainThread::Install` → `Targeting::InstallHook`
   → `CasterConsent::InstallHook` → `CombatStyle::InstallEquipGate` →
   **sinks LAST** (`Rapport::RegisterSinks`, `Logistics::RegisterSinks`,
@@ -69,7 +70,9 @@ The single source of truth for ordering. Everything below depends on it.
   form resolution or they fire against unresolved forms.**
 - **`kPreLoadGame`** (`:302`): `Diagnostics::StopPump()` then
   `Packages::ReleaseAll("kPreLoadGame")` — release the alias the engine would
-  otherwise serialize into the outgoing `.ess`.
+  otherwise serialize into the outgoing `.ess` — then
+  `APMFBridge::ClearTransientState()` (drop runtime-only cast-select claims once the
+  pump is drained).
 - **`kPostLoadGame`/`kNewGame`** (`:324`): warn if newer save (`:338`) →
   `Probe::ReleaseAll` → `Packages::EnsureEvictMarker` (**before** the reconcile)
   → `Packages::ReleaseAll("post-load reconcile")` → `Forms::EnsurePlayerSetup`
@@ -1171,6 +1174,24 @@ here so MEO never rejects into a retry loop. Tier 1 conservation always runs (fi
 domain-matching gem); tier 2 effect-aware (MCM `bMeoAwareGems`, default OFF) ranks by a
 class-preference heuristic on gid/name + magnitude and swaps up a socketed gem a better
 loose gem beats. Whole feature no-ops below MEO v3.
+
+### APMFBridge.cpp / APMFBridge.h — optional APMF cast-SELECTION client (Phase 3)
+Makes MFO a client of the SEPARATE APMF.dll (AI Package Management Framework) via the
+byte-shared `APMF_API.h` (C-ABI POD; append-only, mirror APMF's copy). `Acquire()` ←
+`plugin.cpp:289` (kDataLoaded): `GetModuleHandleA("APMF.dll")` + `GetProcAddress(
+"APMF_GetInterface")` → `fn(kABIVersion)` → cast up to `APMF_API_v2*` (needs ABI ≥ 2 for
+`RequestEx`); **null-degrades** with one log line if APMF is absent/old — MFO casting
+then byte-identical. `SelectSpell(follower,spell)` ← `Actuation::Fire` cast-op block
+(`Actuation.cpp` ~`:970`, worker): `RequestEx(follower, kIntent_SelectSpell, basis=200,
+{form=spell})` so the follower's OWN AI selects+casts the RIGHT spell — a SELECTION layer
+ON TOP of MFO's forced `CastSpellImmediate` delivery (Docs/CAST-DELIVERY.md), never a
+replacement. Per-follower claim map (`g_claims`, mutex-guarded — worker + main). Lifecycle
+is **refresh + expiry**: every winning cast tick refreshes; `Tick()` ← `Diagnostics.cpp`
+pump body (~`:333`) releases a claim not refreshed within 500 ms (gambit ended / target
+lost). Gated `Config::g_apmfCast` (`bApmfCast`, default ON, inert without APMF).
+**Runtime-only — NO save/co-save state**; `ClearTransientState()` ← `plugin.cpp` kPreLoadGame
+(after `StopPump`) drops all claims (APMF wipes its own map there too, so a stale-handle
+Release is a no-op). APMF holds ZERO MFO code; this bridge is the ONLY MFO code aware of APMF.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

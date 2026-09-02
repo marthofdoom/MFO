@@ -60,6 +60,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Sightline.cpp
     ItemCatalog.cpp
     MEOBridge.cpp
+    APMFBridge.cpp
     imgui_impl_win32.cpp
 )
 

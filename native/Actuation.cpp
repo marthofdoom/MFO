@@ -5,6 +5,7 @@
 // the #76 force-hold bookkeeping and its FWPN co-save, NearestAlly and
 // ResolveCastTarget. Shared concentration numbers: Actuation_internal.h.
 #include "Actuation_internal.h"
+#include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 
 namespace MFO::Actuation {
 
@@ -966,6 +967,16 @@ namespace MFO::Actuation {
                 sp && CasterHasLiveSummon(a_follower, sp)) {
                 return { Result::NoOp, "summon still live", true };
             }
+            // APMF CAST-SELECTION ASSIST (Phase 3). ADDITIVE + GUARDED: while a cast
+            // gambit picks spell S for this follower, ask APMF to set the follower's
+            // OWN right-hand spell selection to S, so an AI-first cast casts the RIGHT
+            // spell (the "cast X but the AI casts its own spell" gap). This is a
+            // SELECTION layer on TOP of MFO's own forced delivery below -- it changes
+            // nothing about MFO's cast path and is wholly inert unless APMF.dll is
+            // present (APMFBridge::Available()) and bApmfCast is on. The per-pump
+            // sweep (APMFBridge::Tick) auto-releases the claim once this stops firing
+            // (gambit ended / target lost). Worker-safe (APMF enqueues cross-thread).
+            APMFBridge::SelectSpell(a_follower->GetFormID(), a_choice.actionParam);
         }
         if (op == Vocab::kActCastSelf) {
             return CastOn(a_follower, a_choice.actionParam, a_follower);

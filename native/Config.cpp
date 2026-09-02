@@ -129,6 +129,7 @@ namespace MFO::Config {
             else if (a_key == "bWeaponStyleControl") setB(g_weaponStyleControl); // default ON, debug kill-switch
             else if (a_key == "bUsePackages")       setB(g_usePackages);
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
+            else if (a_key == "bApmfCast")          setB(g_apmfCast);          // APMF cast-select assist, inert without APMF
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "iCastControl")       setI(g_castControl, 0, 4);

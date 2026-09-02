@@ -26,6 +26,16 @@ through a **delivery-flipped proxy** (`ConcProxy`) so it lands on the recipient 
 collapsing onto the follower. Fire-and-forget, self-casts, and non-Self concentration are the
 untouched baseline.
 
+**APMF cast-SELECTION assist (additive, does NOT change delivery).** When the separate
+APMF.dll is present, `Actuation::Fire`'s cast-op block also calls
+`APMFBridge::SelectSpell(follower, spell)` (Phase 3) — APMF sets the follower's OWN
+right-hand spell SELECTION to the gambit's spell, so an AI-first cast casts the RIGHT
+spell (the "cast X but the AI casts its own spell" gap). This is a SELECTION layer
+layered ON TOP of the forced delivery above; it is wholly inert without APMF
+(`APMFBridge::Available()`) or with `bApmfCast` off, changes nothing in the delivery
+model below, and holds no save state (claim released by a per-pump expiry sweep,
+`APMFBridge::Tick`; all claims dropped at kPreLoadGame). See MAP.md `APMFBridge`.
+
 ---
 
 ## THE DELIVERY DECISION TABLE
