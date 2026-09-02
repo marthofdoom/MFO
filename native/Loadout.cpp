@@ -189,10 +189,30 @@ namespace MFO::Loadout {
         // animation, nothing to suppress). EquipSpell is a no-op once it sticks,
         // so this only re-fires while the AI keeps swapping back. (v1.0.36.)
         if (hands.grip == Grip::Caster) {
-            if (Config::g_castControl.load() > 0) {
+            const int castLvl = Config::g_castControl.load();
+            if (castLvl > 0) {
                 if (auto* m = RE::ActorEquipManager::GetSingleton()) {
                     m->EquipSpell(a_actor, a_spell, LeftHandSlot());
                     a_actor->DrawWeaponMagicHands(true);
+
+                    // EXACT MODE (level 4) ONLY: neutralize a competing spell left in
+                    // the OTHER (right) hand. EquipSpell above only ever targets the
+                    // LEFT slot, so a follower's own spell sitting in the RIGHT hand
+                    // survives the swap untouched -- their AI keeps re-selecting it
+                    // and getting denied by CasterConsent's exclusivity gate
+                    // (CasterConsent.cpp ~:560), charging and never releasing instead
+                    // of ever casting the gambit spell (the owned-cast regression,
+                    // fixed 2026-09-02). DeselectSpell, NOT UnequipObject -- a
+                    // hand-held spell is *selected*, not inventory-equipped
+                    // (Reconcile's note below has the same call). Gated to level 4
+                    // only: looser levels deliberately leave a category (heals,
+                    // buffs...) to the AI's own hand (CastExempt), and stripping the
+                    // other hand there would take that category away too.
+                    if (castLvl >= 4 && hands.right && hands.right != a_spell) {
+                        if (auto* other = hands.right->As<RE::SpellItem>())
+                            a_actor->DeselectSpell(other);
+                    }
+
                     g_equipClock.try_emplace(id, now);
                     a_why = "replaced their own spell with the gambit spell";
                     return Ready::AlreadyReady;

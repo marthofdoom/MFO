@@ -1185,18 +1185,29 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   arbitration-only). This bridge only ever CLAIMS facets (`ClaimCasting`/`ClaimCombatTarget` →
   `RequestEx`/`Repoint`, basis 200); MFO executes the real cast with its OWN mechanisms.
 - **THE OWNED CAST (default), a real AI-DECIDED animated cast — `Actuation::CastOn` FF-non-self
-  hostile branch (`Actuation.cpp` ~`:487`, worker):** MFO (a) CLAIMS the cast + combat-target facets
-  via APMF, then EXECUTES: `SelectCasterSpell` writes the follower's own `selectedSpells[kRightHand]`
-  (+ caster `currentSpell`); `Targeting::Command(follower, target->GetHandle())` commands the target
-  (its UpdateCombat hook re-asserts `currentCombatTarget`); `CasterConsent::Want` (granted at ~`:460`)
-  permits our spell + denies competing; the **Cast-biased combat style** (`Scheduler.cpp:~805` sets
-  `Stance::Cast` when a cast is wanted → raises the magic score) makes the follower's own AI DECIDE
-  to cast. Result: the vanilla AI casts our spell at our target, FULL animation, still MOBILE
-  (ENGINE_NOTES §0.15a/§0.27/§0.28). Resolves [[cast-animations-deferred-to-post-town-polish]].
-  **GRANULAR: movement facet is NOT claimed** — the follower keeps kiting while it casts. **NO force
-  on this path** — `CastSpellImmediate` never runs here; the returned `{NoOp,"owned cast: AI deciding
-  (animated, mobile)"}` just lets the AI act. Concentration never enters this branch (bounded direct
-  fork returns earlier — exact-bounding intact).
+  hostile branch (`Actuation.cpp` ~`:487`, worker):** SELECTION is `Loadout::Prepare`'s
+  `EquipSpell(..., LeftHandSlot())` (§0.28) — **never** a hand-written `selectedSpells`/`currentSpell`
+  (ENGINE_NOTES §585: a hand-write desyncs the engine's select/deselect bookkeeping; the original
+  `SelectCasterSpell` helper did exactly that, on the WRONG hand, every tick, resetting the charge
+  before release — root cause of the fire-and-forget hang, fixed 2026-09-02 and removed). At `Grip::
+  Caster` with a DIFFERENT spell already in hand, `Loadout::Prepare` (`Loadout.cpp:191-213`) also
+  **neutralizes a competing spell in the OTHER hand** (`DeselectSpell`) — but ONLY at `iCastControl`
+  level 4 (exact); looser levels leave that hand to the AI (`CastExempt`). MFO then (a) CLAIMS the
+  cast + combat-target facets via APMF and (b) `Targeting::Command(follower, target->GetHandle())`
+  commands the target (its UpdateCombat hook re-asserts `currentCombatTarget`) — both **gated by an
+  idempotency latch** (`g_ownedCastLast`, `Actuation.cpp:524-551`, keyed `{target,spell}` per
+  follower) so a steady-state latch issues the claim/command ONCE, not every ~133ms tick; released
+  per-follower by `Actuation::ReleaseOwnedCastLatch` (← `Followers::ReleaseHeldState`) and globally by
+  `Actuation::ClearOwnedCastState` (← `Serialization.cpp` `ResetAllState`). `CasterConsent::Want`
+  (granted at `:473`, every tick — cheap, not latch-gated) permits our spell + denies competing; the
+  **Cast-biased combat style** (`Scheduler.cpp:~805` sets `Stance::Cast` when a cast is wanted → raises
+  the magic score) makes the follower's own AI DECIDE to cast. Result: the vanilla AI casts our spell
+  at our target, FULL animation, still MOBILE (ENGINE_NOTES §0.15a/§0.27/§0.28). Resolves
+  [[cast-animations-deferred-to-post-town-polish]]. **GRANULAR: movement facet is NOT claimed** — the
+  follower keeps kiting while it casts. **NO force on this path** — `CastSpellImmediate` never runs
+  here; the returned `{NoOp,"owned cast: AI deciding (animated, mobile)"}` (or `"...latched
+  (unchanged)"` on a deduped tick) just lets the AI act. Concentration never enters this branch
+  (bounded direct fork returns earlier — exact-bounding intact).
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** casting =
   PER-CAST (refreshed each winning cast tick; released crisply by `ReleaseCasting` ← `Scheduler.cpp:~894`
   on `!castSeen`). combat-target = PER-COMBAT (created by the cast directive; re-pointed via APMF

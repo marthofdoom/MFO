@@ -26,21 +26,20 @@ namespace MFO::Actuation {
     // Equip/UnequipObject engine call (the MSTK "copy then act" discipline).
     std::mutex g_forcedMx;
 
-    namespace {
+    // OWNED-CAST DEDUPE (fix, marth 2026-09-02). The owned-cast branch below
+    // (CastOn) re-evaluates every ~133ms tick while the follower's AI is still
+    // deciding/casting. Re-issuing the APMF facet claims + Targeting::Command
+    // every tick is wasted work on the combat/APMF side; keyed per follower on
+    // {target, spell} so a steady-state latch is one claim + one command, not
+    // one every tick. NOT an engine hold (no equip/stow to undo) -- cleared
+    // per-follower on teardown (Followers::ReleaseHeldState) and globally on
+    // revert (ClearOwnedCastState, mirrors ClearForcedWeapons/ClearSelfCasts).
+    std::unordered_map<RE::FormID, std::pair<RE::FormID, RE::FormID>> g_ownedCastLast;
 
-        // MFO's OWN spell-selection write (moderator model, marth 2026-09-02). Sets the
-        // follower's SELECTED right-hand spell so its own combat AI's chosen spell IS the
-        // gambit's spell -- selectedSpells is the input the AI reads; SetCurrentSpell is
-        // unbound at this rev, so write the slot + the caster's currentSpell directly,
-        // guarded (the deck-proven idiom). The AI then DECIDES to cast it (animated) --
-        // this is BEHAVIOR MFO owns; APMF only arbitrates the facet, it never writes here.
-        void SelectCasterSpell(RE::Actor* a_actor, RE::SpellItem* a_spell) {
-            if (!a_actor || !a_spell) return;
-            constexpr auto slot = RE::Actor::SlotTypes::kRightHand;
-            a_actor->GetActorRuntimeData().selectedSpells[slot] = a_spell;
-            if (auto* caster = a_actor->GetMagicCaster(RE::MagicSystem::CastingSource::kRightHand))
-                caster->currentSpell = a_spell;
-        }
+    void ReleaseOwnedCastLatch(RE::FormID a_actorID) { g_ownedCastLast.erase(a_actorID); }
+    void ClearOwnedCastState() { g_ownedCastLast.clear(); }
+
+    namespace {
 
         // #68: the nearest living player-teammate that is not a_follower
         // himself. Walks the maintained g_active list (not a world sweep) --
@@ -488,8 +487,13 @@ namespace MFO::Actuation {
                     //     facets so APMF is the single arbiter (and can suppress competitors).
                     //     APMF executes NOTHING; it makes no cast/combat call.
                     //   * MFO EXECUTES the behaviour with its OWN proven mechanisms:
-                    //       - SELECT our spell: write the follower's own selectedSpells (the
-                    //         input the AI reads);
+                    //       - SELECT our spell: Loadout::Prepare's EquipSpell into the LEFT
+                    //         hand slot (above, §0.28) -- selection comes from the equip, NOT a
+                    //         hand-written selectedSpells/currentSpell (ENGINE_NOTES §585: never
+                    //         write currentSpell by hand, it desyncs the engine's own select/
+                    //         deselect bookkeeping -- the per-tick raw write that regressed this
+                    //         model was doing exactly that, on the WRONG hand, resetting the
+                    //         charge before it could release; fixed 2026-09-02);
                     //       - COMMAND our target: Targeting::Command -> currentCombatTarget
                     //         (its UpdateCombat hook re-asserts it);
                     //       - CONSENT + deny competing spells: CasterConsent::Want (granted
@@ -518,22 +522,38 @@ namespace MFO::Actuation {
                         CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
 
                     if (ownedCast) {
-                        // ARBITRATION: claim the two facets via APMF (it records the owner +
-                        // suppresses competitors; it executes nothing). Movement is NOT claimed.
-                        APMFBridge::ClaimCasting(a_follower->GetFormID(), spell->GetFormID());
-                        APMFBridge::ClaimCombatTarget(a_follower->GetFormID(),
-                                                      a_target->GetFormID(), /*create=*/true);
+                        // IDEMPOTENCY GUARD (fix, marth 2026-09-02): the AI-deciding hold below
+                        // means this branch re-fires every ~133ms tick while the same target and
+                        // spell stay latched. Re-issuing the APMF claims + Targeting::Command
+                        // every tick is redundant (the claim/command already stands) and was
+                        // masking the real regression above. Only re-issue when {target, spell}
+                        // actually changed since the last tick for this follower.
+                        const RE::FormID followerId = a_follower->GetFormID();
+                        const RE::FormID targetId   = a_target->GetFormID();
+                        const RE::FormID spellId    = spell->GetFormID();
+                        auto& last = g_ownedCastLast[followerId];
+                        const bool unchanged = last.first == targetId && last.second == spellId;
 
-                        // EXECUTION (MFO's own): select our spell + command our target. Consent
-                        // was granted above; the Cast combat style (Scheduler) supplies the
-                        // AI's DECISION. The follower's own AI then casts our spell at our
-                        // target -- full animation, still mobile.
-                        SelectCasterSpell(a_follower, spell);
-                        Targeting::Command(a_follower->GetFormID(), a_target->GetHandle());
+                        if (!unchanged) {
+                            // ARBITRATION: claim the two facets via APMF (it records the owner +
+                            // suppresses competitors; it executes nothing). Movement is NOT claimed.
+                            APMFBridge::ClaimCasting(followerId, spellId);
+                            APMFBridge::ClaimCombatTarget(followerId, targetId, /*create=*/true);
+
+                            // EXECUTION (MFO's own): our spell is already selected via the equip
+                            // above (Loadout::Prepare); command our target. Consent was granted
+                            // above; the Cast combat style (Scheduler) supplies the AI's DECISION.
+                            // The follower's own AI then casts our spell at our target -- full
+                            // animation, still mobile.
+                            Targeting::Command(followerId, a_target->GetHandle());
+
+                            last = { targetId, spellId };
+                        }
 
                         // OPAQUE hold: the AI is deciding+casting; firing lower rules now risks
                         // disturbing that decision (the §0.6 confound). No force, ever, here.
-                        return { Result::NoOp, "owned cast: AI deciding (animated, mobile)" };
+                        return { Result::NoOp, unchanged ? "owned cast: latched (unchanged)"
+                                                          : "owned cast: AI deciding (animated, mobile)" };
                     }
 
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
