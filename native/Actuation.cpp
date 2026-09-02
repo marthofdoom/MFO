@@ -459,6 +459,79 @@ namespace MFO::Actuation {
                     // if bCasterHook is off; observe-only in log mode.
                     CasterConsent::Want(a_follower->GetFormID(), spell->GetFormID());
 
+                    // ── OWNED CAST MODEL (default when APMF present; marth 2026-09-02).
+                    // For a HOSTILE cast at a real FOE, APMF OWNS the follower's spell
+                    // SELECTION (cast-select) and HOLDs the combat TARGET (combat-target);
+                    // consent (just granted) then lets his own AI fire the SELECTED spell
+                    // at the HELD target through the engine's normal cast flow -- i.e.
+                    // with the FULL cast ANIMATION/pose ("the animated path"). This is the
+                    // ANIMATED-FIRST path and the point of the model: it RESOLVES MFO's
+                    // long-deferred cast-animation gap
+                    // ([[cast-animations-deferred-to-post-town-polish]]) -- casts animate
+                    // because the AI fires them naturally, not because MFO force-injects
+                    // them (CastSpellImmediate cannot animate, ENGINE_NOTES §0.13). So MFO's
+                    // unanimated force is DEMOTED to a rare last-resort here (one bounded
+                    // CastTargetDirect if the AI genuinely does not fire in the window),
+                    // NOT the package grace churn that contended and stalled in the field.
+                    // Concentration never reaches this branch (its bounded direct fork
+                    // returned above -- an AI channel cannot be exact-bounded, so it stays
+                    // MFO-streamed; that invariant is untouched). The LEGACY hybrid stays
+                    // intact below, selected by bLegacyCastHybrid or APMF-absent.
+                    const bool ownedCast =
+                        APMFBridge::Available() && Config::g_apmfCast.load() &&
+                        !Config::g_legacyCastHybrid.load() &&
+                        a_target && a_target != a_follower &&
+                        a_target != RE::PlayerCharacter::GetSingleton() &&
+                        CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
+
+                    if (ownedCast) {
+                        // Own spell + target; refreshed every winning tick, auto-released
+                        // by APMFBridge::Tick when the gambit stops (worker-safe enqueue).
+                        APMFBridge::OwnHostileCast(a_follower->GetFormID(),
+                                                   spell->GetFormID(), a_target->GetFormID());
+
+                        const float heldO  = Loadout::SecondsSinceEquip(a_follower->GetFormID());
+                        const float graceO = Config::g_aiCastGrace.load() *
+                            (0.87f + 0.26f * Temperament(a_follower->GetFormID()));
+                        const bool  aiOther = CasterConsent::OtherCastSeen(a_follower->GetFormID());
+
+                        // PRIMARY: let the AI fire it ANIMATED. OPAQUE hold (the hold IS
+                        // the cast happening -- firing lower rules mid-window risks the
+                        // §0.6 confound). With target+spell owned this is the normal exit.
+                        if (heldO < graceO && !aiOther) {
+                            return { Result::NoOp, "owned cast: AI casting (animated)" };
+                        }
+
+                        // LAST RESORT (rare): the AI did not fire in the window (or cast
+                        // something else). ONE clean, EXACT-BOUNDED direct cast at the HELD
+                        // target -- unanimated, but LoS + magicka + stream-capped
+                        // (CastTargetDirect), never the package grace churn. Retire the
+                        // miss flag and RE-ARM the grace so the NEXT tick waits for the AI
+                        // again (a fresh animated window) -- so the unanimated force stays
+                        // rare. Deliberately NOT StartCooldown: that would ReleaseSpell and
+                        // rip the spell out of the hand, opening a gap where neither the AI
+                        // nor the APMF selection can act; keeping it in hand lets the AI
+                        // resume the animated path immediately. The re-armed grace +
+                        // CastTargetDirect's own stream pacing already rate-limit the force.
+                        switch (CastTargetDirect(a_follower, spell, a_target)) {
+                        case SelfCast::Applied:
+                            CasterConsent::NoteOurCast(a_follower->GetFormID());
+                            Loadout::ArmGrace(a_follower->GetFormID());
+                            spdlog::info("[cast] {:08X} owned FALLBACK -- AI did not fire {} within "
+                                         "{:.1f}s; one bounded direct cast at {:08X} (UNANIMATED).",
+                                         a_follower->GetFormID(),
+                                         spell->GetName() ? spell->GetName() : "?",
+                                         graceO, a_target->GetFormID());
+                            return { Result::Fired, "owned cast fallback (direct, unanimated)" };
+                        case SelfCast::Refreshed:
+                            return { Result::NoOp, "owned cast fallback (paced)", true };
+                        case SelfCast::Declined:
+                        default:
+                            break;   // fall through to the silent apply below
+                        }
+                        break;   // owned model handled this tick -- do NOT run the legacy hybrid
+                    }
+
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
                     //
                     // This is the whole point and it is easy to destroy. The
@@ -963,30 +1036,13 @@ namespace MFO::Actuation {
         // the same off-worker read as the existing combat guards, no new lock.
         if (op == Vocab::kActCastSelf || op == Vocab::kActCastPlayer ||
             op == Vocab::kActCastTarget) {
-            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
-            if (sp && CasterHasLiveSummon(a_follower, sp)) {
+            if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
+                sp && CasterHasLiveSummon(a_follower, sp)) {
                 return { Result::NoOp, "summon still live", true };
             }
-            // APMF CAST-SELECTION ASSIST (Phase 3). ADDITIVE + GUARDED: while a cast
-            // gambit picks spell S for this follower, ask APMF to set the follower's
-            // OWN right-hand spell selection to S, so an AI-first cast casts the RIGHT
-            // spell (the "cast X but the AI casts its own spell" gap). This is a
-            // SELECTION layer on TOP of MFO's own forced delivery below -- it changes
-            // nothing about MFO's cast path and is wholly inert unless APMF.dll is
-            // present (APMFBridge::Available()) and bApmfCast is on. The per-pump
-            // sweep (APMFBridge::Tick) auto-releases the claim once this stops firing
-            // (gambit ended / target lost). Worker-safe (APMF enqueues cross-thread).
-            //
-            // HOSTILE/OFFENSIVE SPELLS ONLY (review fix): APMF sets the SELECTED
-            // spell but the follower's own combat AI picks the TARGET, so forcing a
-            // BENEFICIAL spell into the hand risks the AI casting a heal/buff AT AN
-            // ENEMY. MFO's own forced delivery (CastSpellImmediate, below) already
-            // lands beneficial + self casts on the right recipient, so APMF selection
-            // adds no value there and only risk. Gate on the canonical taxonomy
-            // (CasterConsent::ClassifySpell == Offense: any hostile/detrimental
-            // effect); Heal/Buff spells are skipped and keep working via MFO delivery.
-            if (sp && CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Offense)
-                APMFBridge::SelectSpell(a_follower->GetFormID(), a_choice.actionParam);
+            // (APMF cast ownership is engaged inside CastOn's FF-non-self hostile
+            // branch, where the RESOLVED target is known -- see the OWNED cast model
+            // there. Not here: the target is not resolved for kActCastTarget yet.)
         }
         if (op == Vocab::kActCastSelf) {
             return CastOn(a_follower, a_choice.actionParam, a_follower);

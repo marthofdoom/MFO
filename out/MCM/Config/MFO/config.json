@@ -193,6 +193,16 @@
           }
         },
         {
+          "id": "bLegacyCastHybrid:General",
+          "text": "Legacy cast (no APMF)",
+          "type": "toggle",
+          "help": "OFF (default): with APMF installed, a hostile cast gambit is OWNED -- APMF holds the target and selects the spell so the follower's own AI casts the right spell at the right target with the FULL cast animation. ON: use the old AI-first-wait plus force-on-miss hybrid instead (unanimated forced cast). Has no effect if APMF is not installed (the legacy hybrid runs either way).",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
           "text": "Timing",
           "type": "header"
         },

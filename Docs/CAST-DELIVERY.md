@@ -26,15 +26,33 @@ through a **delivery-flipped proxy** (`ConcProxy`) so it lands on the recipient 
 collapsing onto the follower. Fire-and-forget, self-casts, and non-Self concentration are the
 untouched baseline.
 
-**APMF cast-SELECTION assist (additive, does NOT change delivery).** When the separate
-APMF.dll is present, `Actuation::Fire`'s cast-op block also calls
-`APMFBridge::SelectSpell(follower, spell)` (Phase 3) — APMF sets the follower's OWN
-right-hand spell SELECTION to the gambit's spell, so an AI-first cast casts the RIGHT
-spell (the "cast X but the AI casts its own spell" gap). This is a SELECTION layer
-layered ON TOP of the forced delivery above; it is wholly inert without APMF
-(`APMFBridge::Available()`) or with `bApmfCast` off, changes nothing in the delivery
-model below, and holds no save state (claim released by a per-pump expiry sweep,
-`APMFBridge::Tick`; all claims dropped at kPreLoadGame). See MAP.md `APMFBridge`.
+**APMF OWNED CAST MODEL — the ANIMATED path (default when APMF present; marth 2026-09-02).**
+This is the important exception to the "everything is CastSpellImmediate" model above, and it
+is DELIBERATELY the animated primary. `CastSpellImmediate` fires a spell but **cannot animate**
+(the caster is driven by the animation graph — ENGINE_NOTES §0.13); the only animated cast is
+the vanilla one the follower's own AI runs. So for a **HOSTILE** cast gambit at a real foe,
+`Actuation::CastOn`'s FF-non-self branch hands ownership to the separate APMF.dll:
+`APMFBridge::OwnHostileCast(follower, spell, target)` OWNS the follower's spell SELECTION
+(APMF cast-select) AND HOLDs the combat TARGET (APMF combat-target). With `CasterConsent::Want`
+granting the follower's own AI consent to cast the selected spell, **the AI fires the right
+spell at the held target through the engine's normal flow — with the FULL cast animation/pose.**
+This RESOLVES MFO's long-deferred cast-animation gap ([[cast-animations-deferred-to-post-town-polish]]):
+casts animate because the AI fires them, not because MFO force-injects them.
+
+- **Force is DEMOTED to a rare last-resort.** MFO does NOT reach for `CastSpellImmediate` on the
+  normal cadence in this model. Only if the AI genuinely does not fire within the grace window
+  does CastOn fire **ONE** clean, exact-bounded `CastTargetDirect` at the held target (unanimated),
+  logged `owned FALLBACK`, then re-arm the grace so the next tick offers the AI a fresh animated
+  window. With target+spell owned the AI fires reliably, so the fallback is rare/never.
+- **Concentration is untouched.** A concentration spell never enters this branch — its bounded
+  direct-force fork (`ConcentrationCast` → `CastTargetDirect`/`CastSelfDirect`) returns earlier,
+  because an AI-channeled concentration cannot be exact-bounded (the freeze). Exact-bounding holds.
+- **Scope + degrade.** Owned model is HOSTILE-only (`CasterConsent::ClassifySpell == Offense`),
+  foe-only (never self/player). It is active iff `APMFBridge::Available() && bApmfCast &&
+  !bLegacyCastHybrid`. Turn on the MCM **bLegacyCastHybrid**, or run without APMF, and CastOn
+  uses the ORIGINAL AI-first-wait + force-on-miss package hybrid instead (byte-identical to
+  pre-APMF). No save/co-save state; claims auto-expire via `APMFBridge::Tick` and drop at
+  kPreLoadGame. See MAP.md `APMFBridge`.
 
 ---
 

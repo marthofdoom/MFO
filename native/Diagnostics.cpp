@@ -331,7 +331,7 @@ namespace MFO::Diagnostics {
                         Scheduler::Tick();
                         Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
                         Actuation::TargetCastReconcile();   // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
-                        APMFBridge::Tick();                 // Phase 3: auto-release APMF cast-select claims once the gambit stops firing (no-op without APMF)
+                        APMFBridge::Tick();                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
                         Loadout::Tick();   // hand back stowed two-handers
 
                         if (diagTurn) Probe::Tick();

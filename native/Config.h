@@ -165,13 +165,21 @@ namespace MFO::Config {
     // requires line of sight (Sightline) so it never fires into a wall.
     inline std::atomic<bool>  g_forceCastOnMiss{ true };
 
-    // APMF CAST-SELECTION ASSIST (APMFBridge, Phase 3). When APMF.dll is present,
-    // MFO asks APMF's cast-select channel to set the follower's OWN right-hand spell
-    // selection to the gambit's spell, so an AI-first cast casts the RIGHT spell (on
-    // TOP of MFO's own forced delivery -- Docs/CAST-DELIVERY.md). ON by default but
-    // wholly INERT unless APMF is in the load order (APMFBridge::Available()); this
-    // INI kill-switch (bApmfCast) exists for A/B field testing. No save/co-save state.
+    // APMF CAST ASSIST (APMFBridge, Phase 3). When APMF.dll is present, the OWNED
+    // cast model routes a HOSTILE cast gambit through APMF: it OWNS the follower's
+    // spell selection AND HOLDs the combat target, so the follower's own AI fires the
+    // right spell at the right target ANIMATED (Docs/CAST-DELIVERY.md). ON by default
+    // but wholly INERT unless APMF is in the load order (APMFBridge::Available());
+    // this INI kill-switch (bApmfCast) exists for A/B field testing. No save state.
     inline std::atomic<bool>  g_apmfCast{ true };
+
+    // LEGACY CAST HYBRID (MCM bLegacyCastHybrid). The owned cast model (above) is the
+    // DEFAULT. Turn this ON to force MFO's ORIGINAL AI-first-wait + force-on-miss
+    // package hybrid instead (the pre-APMF behaviour, unanimated force via the cast
+    // package). OFF (default) + APMF present -> owned/animated model; ON, or APMF
+    // absent, -> the legacy hybrid, gracefully. FROZEN KEY (INVARIANTS #37): its
+    // semantics never change -- a new behaviour gets a new key, never this one.
+    inline std::atomic<bool>  g_legacyCastHybrid{ false };
 
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc

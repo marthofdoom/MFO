@@ -129,7 +129,8 @@ namespace MFO::Config {
             else if (a_key == "bWeaponStyleControl") setB(g_weaponStyleControl); // default ON, debug kill-switch
             else if (a_key == "bUsePackages")       setB(g_usePackages);
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
-            else if (a_key == "bApmfCast")          setB(g_apmfCast);          // APMF cast-select assist, inert without APMF
+            else if (a_key == "bApmfCast")          setB(g_apmfCast);          // APMF cast assist, inert without APMF
+            else if (a_key == "bLegacyCastHybrid")  setB(g_legacyCastHybrid);  // ON = old AI-first+force hybrid; default OFF = APMF owned model
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "iCastControl")       setI(g_castControl, 0, 4);
@@ -257,6 +258,7 @@ namespace MFO::Config {
             g_casterMode         = 1;
             g_usePackages        = true;    // v1.0.27: the forced-cast delivery route
             g_forceCastOnMiss    = true;
+            g_legacyCastHybrid   = false;   // default = APMF owned cast model (animated)
             g_castSource         = 3;
             g_equipToCast        = true;
             g_aiCastGrace        = 3.0f;
@@ -346,6 +348,7 @@ namespace MFO::Config {
             { "bEquipToCast", "1" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
             { "bForceCastOnMiss", "1" },       { "iCastControl", "2" },
+            { "bLegacyCastHybrid", "0" },
             { "iOverlayX", "12" },             { "iOverlayY", "12" },
             { "bDollsMode", "0" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },
