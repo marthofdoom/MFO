@@ -26,40 +26,45 @@ through a **delivery-flipped proxy** (`ConcProxy`) so it lands on the recipient 
 collapsing onto the follower. Fire-and-forget, self-casts, and non-Self concentration are the
 untouched baseline.
 
-**APMF OWNED CAST MODEL — the ANIMATED path (default when APMF present; marth 2026-09-02).**
-This is the important exception to the "everything is CastSpellImmediate" model above, and it
-is DELIBERATELY the animated primary. `CastSpellImmediate` fires a spell but **cannot animate**
-(the caster is driven by the animation graph — ENGINE_NOTES §0.13); the only animated cast is
-the vanilla one the follower's own AI runs. So for a **HOSTILE** cast gambit at a real foe,
-`Actuation::CastOn`'s FF-non-self branch hands ownership to the separate APMF.dll:
-`APMFBridge::OwnHostileCast(follower, spell, target)` OWNS the follower's spell SELECTION
-(APMF cast-select) AND HOLDs the combat TARGET (APMF combat-target). With `CasterConsent::Want`
-granting the follower's own AI consent to cast the selected spell, **the AI fires the right
-spell at the held target through the engine's normal flow — with the FULL cast animation/pose.**
-This RESOLVES MFO's long-deferred cast-animation gap ([[cast-animations-deferred-to-post-town-polish]]):
-casts animate because the AI fires them, not because MFO force-injects them.
+**APMF OWNED CAST MODEL — the REAL, AI-DECIDED animated cast (default when APMF present; MODERATOR
+model, marth 2026-09-02).** This is the important exception to the "everything is CastSpellImmediate"
+model above, and it is DELIBERATELY the animated primary — a REAL cast the follower's OWN combat AI
+DECIDES to make, NOT a forced one. `CastSpellImmediate` fires a spell but **cannot animate** (the
+caster is driven by the animation graph — ENGINE_NOTES §0.13); the only animated cast is the vanilla
+one the AI runs. MFO could already produce that real animated cast (§0.15a/§0.27/§0.28) — the ONLY
+problem was that its deterministic route did it via the rooting **UseMagic package** (`ForceCast` →
+`Packages::CastAt`), which stopped locomotion and took the package slot. The owned model keeps the
+real cast and DROPS that cost.
 
-- **Force is DEMOTED to a rare last-resort.** MFO does NOT reach for `CastSpellImmediate` on the
-  normal cadence in this model. Only if the AI genuinely does not fire within the grace window
-  does CastOn fire **ONE** clean, exact-bounded `CastTargetDirect` at the held target (unanimated),
-  logged `owned FALLBACK`, then re-arm the grace so the next tick offers the AI a fresh animated
-  window. With target+spell owned the AI fires reliably, so the fallback is rare/never.
-- **Two decoupled ownership lifecycles (marth 2026-09-02).** cast-SELECT is PER-CAST (refreshed
-  each winning cast tick, released crisply when no cast rule holds). combat-TARGET is PER-COMBAT:
-  created by the cast directive, RE-POINTED in place (APMF `Repoint`, same claim) whenever the foe
-  changes — including on a cast→melee transition (the attack directive re-points it) — kept alive
-  every in-combat tick, and released ONLY when the fight ends (refreshing stops → expiry). So a
-  mid-battle rule change RE-POINTS the held target; it never releases it. APMF's `CombatTarget::
-  Release` relinquishes (never `StopCombat`), so even the combat-end release is graceful.
+- **APMF ARBITRATES; MFO EXECUTES (the moderator split).** `Actuation::CastOn`'s FF-non-self hostile
+  branch CLAIMS two facets via APMF (`APMFBridge::ClaimCasting` + `ClaimCombatTarget` — APMF records
+  the owner + suppresses competitors, it executes NOTHING), then MFO makes the AI decide to cast with
+  its OWN mechanisms: writes the follower's own `selectedSpells` (`SelectCasterSpell`), commands the
+  target via `Targeting::Command` → `currentCombatTarget`, grants `CasterConsent::Want` (permit our
+  spell + deny competing), and the **Cast-biased combat style** (`Scheduler` applies `MFO_CastStyle`
+  when a cast is wanted — raises the magic score so the AI CHOOSES to cast; the inverse of a deny).
+  The AI then casts our spell at our target, **full animation, still MOBILE**. Resolves the
+  long-deferred cast-animation gap ([[cast-animations-deferred-to-post-town-polish]]).
+- **GRANULAR — movement is NOT touched.** The owned path claims ONLY the cast + combat-target facets;
+  it does NOT claim/block the movement facet (no `SetDontMove`, no package). The follower keeps
+  kiting/repositioning under its own control WHILE its AI casts. That granular non-interruption is
+  the whole reason the cast routes through APMF.
+- **NO force on this path.** `CastSpellImmediate` NEVER runs in the owned model — no rooting package,
+  no unanimated force. If a follower's combat style still won't DECIDE to cast, that is a magic-score
+  bias question (raise it, the inverse of a deny), NOT a reason to force. Force + the rooting UseMagic
+  package survive ONLY in the LEGACY hybrid.
 - **Concentration is untouched.** A concentration spell never enters this branch — its bounded
   direct-force fork (`ConcentrationCast` → `CastTargetDirect`/`CastSelfDirect`) returns earlier,
   because an AI-channeled concentration cannot be exact-bounded (the freeze). Exact-bounding holds.
-- **Scope + degrade.** Owned model is HOSTILE-only (`CasterConsent::ClassifySpell == Offense`),
-  foe-only (never self/player). It is active iff `APMFBridge::Available() && bApmfCast &&
-  !bLegacyCastHybrid`. Turn on the MCM **bLegacyCastHybrid**, or run without APMF, and CastOn
-  uses the ORIGINAL AI-first-wait + force-on-miss package hybrid instead (byte-identical to
-  pre-APMF). No save/co-save state; claims auto-expire via `APMFBridge::Tick` and drop at
-  kPreLoadGame. See MAP.md `APMFBridge`.
+- **Claim lifecycles + scope + degrade.** casting-claim = per-cast (released crisply on `!castSeen`);
+  combat-target-claim = per-combat (re-pointed via APMF `Repoint` on a foe change, kept alive each
+  in-combat tick, released at combat end; APMF's `CombatTarget::Release` relinquishes). Owned model is
+  HOSTILE-only (`CasterConsent::ClassifySpell == Offense`), foe-only. Active iff
+  `APMFBridge::Available() && bApmfCast && !bLegacyCastHybrid`. Turn on the MCM **bLegacyCastHybrid**,
+  or run without APMF, and CastOn uses the ORIGINAL AI-first-wait + force-on-miss package hybrid
+  (byte-identical to pre-APMF — the only place the rooting package + `CastSpellImmediate` force live).
+  No save/co-save state; claims auto-expire via `APMFBridge::Tick` and drop at kPreLoadGame. See
+  MAP.md `APMFBridge`.
 
 ---
 

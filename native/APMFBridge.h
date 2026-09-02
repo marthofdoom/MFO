@@ -8,24 +8,28 @@
 // applies to `MEO_API.h`) plus APMF's runtime interface query. APMF holds ZERO
 // MFO-specific code; this bridge is the ONLY MFO code that knows APMF exists.
 //
-// WHAT THIS WIRES — the OWNED CAST MODEL (marth 2026-09-02) with TWO DECOUPLED
-// LIFECYCLES. MFO asks APMF to OWN both halves of a follower's combat:
-//   * cast-select  (kIntent_SelectSpell)  := the gambit's spell  -> the AI selects it.
-//       PER-CAST: refreshed each winning cast tick; released CRISPLY the instant no
-//       cast rule holds (ReleaseCastSpell).
-//   * combat-target(kIntent_CombatTarget) := the follower's foe  -> APMF HOLDs it.
-//       PER-COMBAT: created by a cast directive, RE-POINTED (same handle, no
-//       release/re-request) whenever the target changes, kept alive every in-combat
-//       tick, and released ONLY when the fight ENDS (refreshing stops -> expiry). A
-//       cast->melee rule transition mid-battle RE-POINTS it, it does NOT release it.
-// With the spell selected, the target held, and MFO's CasterConsent granting the
-// follower's own AI consent to cast it, the follower fires the RIGHT spell at the
-// RIGHT target through the engine's NORMAL cast flow — i.e. it plays the FULL cast
-// ANIMATION/pose ("the animated path"). This is the ANIMATED-FIRST path and the point
-// of the owned model: it resolves MFO's long-deferred cast-animation gap
-// ([[cast-animations-deferred-to-post-town-polish]]) — casts animate because the AI
-// fires them naturally, not because MFO force-injects them. MFO's own unanimated
-// CastSpellImmediate force is demoted to a RARE last-resort (see Actuation CastOn).
+// THE MODERATOR MODEL (marth 2026-09-02). APMF ARBITRATES facets; it NEVER generates
+// behaviour. MFO makes the behaviour with its OWN proven mechanisms and EXECUTES it;
+// APMF only makes it WIN (single arbiter of the facet + suppresses competitors). So
+// this bridge only ever CLAIMS facets — it never asks APMF to cast, command a target,
+// or move a body (APMF would refuse; its channels are arbitration-only).
+//
+// The OWNED CAST, granularly: for a hostile cast gambit MFO CLAIMS two facets here —
+//   * ClaimCasting      (kIntent_SelectSpell)  — "MFO owns this follower's cast choice"
+//   * ClaimCombatTarget (kIntent_CombatTarget) — "MFO owns this follower's combat target"
+// and then, in Actuation::CastOn, EXECUTES the real cast ITSELF: writes the follower's
+// own `selectedSpells`, commands the target via `Targeting::Command` (currentCombatTarget),
+// grants its own `CasterConsent`, and a Cast-biased combat style makes the follower's own
+// AI DECIDE to cast — a real, fully-animated, MOBILE cast. Crucially MFO does NOT claim
+// the MOVEMENT facet, so the follower keeps kiting while it casts — that granular
+// non-interruption is exactly why the cast routes through APMF. No forced cast on this
+// path (see CAST-DELIVERY.md; force lives only in the legacy hybrid).
+//
+// Claim lifecycles: casting = PER-CAST (refreshed each winning cast tick; released
+// crisply by ReleaseCasting the instant no cast rule holds). combat-target = PER-COMBAT
+// (created by a cast directive, re-pointed via APMF Repoint when the foe changes, kept
+// alive every in-combat tick by RefreshCombatTarget, released only at combat end via the
+// expiry sweep) — so a cast->melee transition keeps the claim, it does not drop it.
 //
 // DEGRADE-WHEN-ABSENT. APMF is a declared prerequisite, but MFO must never hard-fail
 // without it: Acquire() logs once and leaves the interface null; every call here
@@ -53,27 +57,29 @@ namespace MFO::APMFBridge {
     // Is the APMF interface live (present + ABI >= 2, so RequestEx is available)?
     bool Available();
 
-    // ── cast-SELECT: PER-CAST ────────────────────────────────────────────────────
-    // Worker-safe. Select `a_spell` in the follower's right hand (APMF cast-select) so
-    // his own AI casts THAT spell. Call every winning cast tick; switches the selection
-    // when the gambit's spell changes (re-pointed in place on a v3 APMF). No-op when
-    // APMF is absent or Config::g_apmfCast is off.
-    void SelectCastSpell(RE::FormID a_follower, RE::FormID a_spell);
+    // ── casting facet CLAIM: PER-CAST ────────────────────────────────────────────
+    // Worker-safe. CLAIM the casting facet for this follower (APMF records MFO as the
+    // owner; the chosen `a_spell` rides along for arbitration/observability). This does
+    // NOT select or cast anything — MFO writes selectedSpells + grants consent itself in
+    // CastOn. Call every winning cast tick (re-pointed in place on a v3 APMF when the
+    // spell changes). No-op when APMF is absent or Config::g_apmfCast is off.
+    void ClaimCasting(RE::FormID a_follower, RE::FormID a_spell);
 
-    // Worker-safe. Release ONLY the cast-select claim now (the combat-target claim, if
+    // Worker-safe. Release ONLY the casting facet-claim now (the combat-target claim, if
     // any, is left alone). Call the instant no cast rule holds (Scheduler !castSeen) so
-    // the spell selection releases crisply, not after the 500 ms expiry backstop.
-    void ReleaseCastSpell(RE::FormID a_follower);
+    // the claim releases crisply, not after the 500 ms expiry backstop.
+    void ReleaseCasting(RE::FormID a_follower);
 
-    // ── combat-TARGET: PER-COMBAT ────────────────────────────────────────────────
-    // Worker-safe. HOLD combat-target on `a_target` for the follower and RE-POINT it in
-    // place when the target changes (same claim/handle — never a release+re-request, so
-    // a mid-battle retarget is not a release). `a_create`: true from a CAST directive
-    // (creates the claim if none — the caster's fight); false from a non-cast combat
-    // directive (attack) — refreshes/re-points ONLY an existing claim, never creating
-    // one, so a pure-melee follower keeps MFO's own targeting. No-op when APMF is absent
-    // or Config::g_apmfCast is off.
-    void HoldCombatTarget(RE::FormID a_follower, RE::FormID a_target, bool a_create);
+    // ── combat-target facet CLAIM: PER-COMBAT ────────────────────────────────────
+    // Worker-safe. CLAIM the combat-target facet for this follower (APMF records the
+    // owner; the intended `a_target` rides along). This does NOT command the target —
+    // MFO commands it via Targeting::Command itself. RE-POINTS the claim in place when
+    // the target changes (same handle, via APMF Repoint — a mid-battle retarget is not a
+    // release). `a_create`: true from a CAST directive (creates the claim if none); false
+    // from a non-cast directive (attack) — re-points ONLY an existing claim, never
+    // creating one, so a pure-melee follower is not claimed. No-op when APMF is absent or
+    // Config::g_apmfCast is off.
+    void ClaimCombatTarget(RE::FormID a_follower, RE::FormID a_target, bool a_create);
 
     // Worker-safe. Keep the follower's EXISTING combat-target claim alive (refresh its
     // expiry timestamp only — no create, no re-point). Call every in-combat service tick

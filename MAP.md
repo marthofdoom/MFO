@@ -1175,46 +1175,42 @@ domain-matching gem); tier 2 effect-aware (MCM `bMeoAwareGems`, default OFF) ran
 class-preference heuristic on gid/name + magnitude and swaps up a socketed gem a better
 loose gem beats. Whole feature no-ops below MEO v3.
 
-### APMFBridge.cpp / APMFBridge.h — optional APMF OWNED-CAST client (Phase 3)
+### APMFBridge.cpp / APMFBridge.h — optional APMF client (MODERATOR model, Phase 3)
 Makes MFO a client of the SEPARATE APMF.dll (AI Package Management Framework) via the
 byte-shared `APMF_API.h` (C-ABI POD; append-only, mirror APMF's copy). `Acquire()` ←
 `plugin.cpp:289` (kDataLoaded): `GetModuleHandleA("APMF.dll")` + `GetProcAddress(
-"APMF_GetInterface")` → `fn(kABIVersion)` → cast up to `APMF_API_v2*` (needs ABI ≥ 2 for
-`RequestEx`); **null-degrades** with one log line if APMF is absent/old — MFO then runs the
-legacy cast hybrid, byte-identical.
-- **OWNED CAST MODEL (default).** `Actuation::CastOn` FF-non-self **hostile** branch
-  (`Actuation.cpp` ~`:461`, worker) drives BOTH APMF channels for the follower, basis 200:
-  `SelectCastSpell(follower,spell)` (`kIntent_SelectSpell`) + `HoldCombatTarget(follower,target,
-  create=true)` (`kIntent_CombatTarget`). With spell selected + target held + `CasterConsent::Want`
-  granting the AI consent, the follower fires the RIGHT spell at the RIGHT target through the
-  engine's normal flow → **FULL cast ANIMATION** (resolves
-  [[cast-animations-deferred-to-post-town-polish]]). ANIMATED-FIRST primary; MFO's unanimated
-  `CastSpellImmediate` force is a RARE last-resort (ONE bounded `CastTargetDirect` only if the AI
-  doesn't fire in the grace window — NOT the package churn). Concentration never enters this branch
-  (its bounded direct fork returns earlier — exact-bounding intact). Per-follower map (`g_owned`,
-  mutex-guarded — worker+main).
-- **TWO DECOUPLED LIFECYCLES (marth's correction).**
-  - *cast-SELECT = PER-CAST:* refreshed each winning cast tick; released CRISPLY by
-    `ReleaseCastSpell(follower)` ← `Scheduler.cpp:~880` the instant no cast rule holds (`!castSeen`,
-    the spell-in-hand release signal). Releases ONLY the spell claim.
-  - *combat-TARGET = PER-COMBAT:* `HoldCombatTarget` CREATES it from the cast directive and
-    RE-POINTS it (same handle, via APMF `Repoint`) when the target changes; the ATTACK directive
-    (`Fire` kActAttack, create=false) re-points it too so cast→melee follows without a release;
-    `RefreshCombatTarget(follower)` ← `Scheduler.cpp:~323` (every in-combat tick) keeps it alive
-    across non-targeting rules. Released ONLY by the expiry sweep once refreshing STOPS = **combat
-    end** — so a mid-battle rule transition never releases it, it re-points. (create=false never
-    creates a claim → a pure-melee follower keeps MFO's own Targeting hook.)
-  - `Tick()` ← `Diagnostics.cpp` pump body (~`:333`) is the per-claim 500 ms expiry (cast-select
-    backstop; combat-target = the combat-end detector). Re-point uses APMF `Repoint` (ABI v3) in
-    place; falls back to release+request only against an older v2 APMF.
-- **Gating:** owned model active iff `Available() && Config::g_apmfCast (bApmfCast, INI, default
-  ON) && !Config::g_legacyCastHybrid (bLegacyCastHybrid, MCM, default OFF)`. Toggle ON, or APMF
-  absent → the ORIGINAL AI-first-wait + force-on-miss package hybrid (unchanged, `Actuation.cpp`
-  legacy branch below the owned block).
+"APMF_GetInterface")` → `fn(kABIVersion)` → cast up to `APMF_API_v2*`; **null-degrades** with one
+log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-identical.
+- **THE MODEL: APMF ARBITRATES; MFO EXECUTES.** APMF never generates behaviour (its channels are
+  arbitration-only). This bridge only ever CLAIMS facets (`ClaimCasting`/`ClaimCombatTarget` →
+  `RequestEx`/`Repoint`, basis 200); MFO executes the real cast with its OWN mechanisms.
+- **THE OWNED CAST (default), a real AI-DECIDED animated cast — `Actuation::CastOn` FF-non-self
+  hostile branch (`Actuation.cpp` ~`:487`, worker):** MFO (a) CLAIMS the cast + combat-target facets
+  via APMF, then EXECUTES: `SelectCasterSpell` writes the follower's own `selectedSpells[kRightHand]`
+  (+ caster `currentSpell`); `Targeting::Command(follower, target->GetHandle())` commands the target
+  (its UpdateCombat hook re-asserts `currentCombatTarget`); `CasterConsent::Want` (granted at ~`:460`)
+  permits our spell + denies competing; the **Cast-biased combat style** (`Scheduler.cpp:~805` sets
+  `Stance::Cast` when a cast is wanted → raises the magic score) makes the follower's own AI DECIDE
+  to cast. Result: the vanilla AI casts our spell at our target, FULL animation, still MOBILE
+  (ENGINE_NOTES §0.15a/§0.27/§0.28). Resolves [[cast-animations-deferred-to-post-town-polish]].
+  **GRANULAR: movement facet is NOT claimed** — the follower keeps kiting while it casts. **NO force
+  on this path** — `CastSpellImmediate` never runs here; the returned `{NoOp,"owned cast: AI deciding
+  (animated, mobile)"}` just lets the AI act. Concentration never enters this branch (bounded direct
+  fork returns earlier — exact-bounding intact).
+- **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** casting =
+  PER-CAST (refreshed each winning cast tick; released crisply by `ReleaseCasting` ← `Scheduler.cpp:~894`
+  on `!castSeen`). combat-target = PER-COMBAT (created by the cast directive; re-pointed via APMF
+  `Repoint` when the foe changes; the ATTACK directive `ClaimCombatTarget(create=false)` ← `Actuation.cpp:~1009`
+  re-points an existing claim so cast→melee follows; `RefreshCombatTarget` ← `Scheduler.cpp:~330` keeps
+  it alive every in-combat tick; released only at combat end via the expiry sweep). `Tick()` ←
+  `Diagnostics.cpp` (~`:334`) is the per-claim 500 ms expiry.
+- **Gating:** owned model active iff `Available() && bApmfCast (INI, default ON) && !bLegacyCastHybrid
+  (MCM, default OFF)`. Toggle ON, or APMF absent → the ORIGINAL AI-first-wait + force-on-miss package
+  hybrid (unchanged legacy branch below the owned block — the ONLY place `CastSpellImmediate` force
+  and the rooting UseMagic package survive).
 - **Runtime-only — NO save/co-save state**; `ClearTransientState()` ← `plugin.cpp` kPreLoadGame
-  (after `StopPump`) drops all claims (APMF wipes its own map there too, so a stale-handle
-  Release is a no-op). `g_apmf` is `std::atomic` (written kDataLoaded, read worker). APMF holds
-  ZERO MFO code; this bridge is the ONLY MFO code aware of APMF.
+  (after `StopPump`). `g_apmf` is `std::atomic`. APMF holds ZERO MFO code; this bridge is the ONLY
+  MFO code aware of APMF.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

@@ -87,20 +87,22 @@ namespace APMF_API {
     using Handle = std::uint32_t;
     inline constexpr Handle kInvalidHandle = 0;
 
-    // What a client wants APMF to do to an NPC. Each maps to exactly one channel
-    // family. APPEND-ONLY: never renumber; add new intents at the end.
+    // Which FACET a client claims control of on an NPC. APMF MODERATES that facet
+    // (arbitrates who owns it + DENYs competitors); it never generates the behavior --
+    // the client executes with its own mechanisms (design.md §1a). Each maps to one
+    // channel family. APPEND-ONLY: never renumber; add new intents at the end.
     enum Intent : std::uint32_t {
         kIntent_None          = 0,
-        kIntent_MovementBlock = 1,   // ch.1  full stand-still (block the move intent)
-        kIntent_Disposition   = 2,   // ch.11 aggression/confidence/assistance/morality bias
+        kIntent_MovementBlock = 1,   // ch.1  full stand-still (DENY the move intent at the mover)
+        kIntent_Disposition   = 2,   // ch.11 aggression/confidence/assistance/morality bias (AV)
         kIntent_Headtrack     = 3,   // ch.5  look-at (known-incomplete block)
-        kIntent_SelectSpell   = 4,   // ch.8  own the cast selection (right hand)
+        kIntent_SelectSpell   = 4,   // ch.8  CLAIM the casting facet (arbitration; client selects+fires)
         kIntent_WeaponDrawn   = 5,   // ch.4  draw/sheathe
         kIntent_Dialogue      = 6,   // ch.10 pause current dialogue (one-shot)
-        kIntent_Gait          = 7,   // ch.1a gait scale (kSpeedMult)
+        kIntent_Gait          = 7,   // ch.1a gait scale (kSpeedMult AV)
         kIntent_Detection     = 8,   // ch.16 silent movement + reduced detect range (AVs)
         kIntent_Stance        = 9,   // ch.3  sneak/crouch
-        kIntent_CombatTarget  = 10,  // ch.6  combat-target HOLD (StartCombat + drift re-assert; Repoint to re-target)
+        kIntent_CombatTarget  = 10,  // ch.6  CLAIM the combat-target facet (arbitration; client commands it)
         kIntent_Idle          = 11,  // ch.12 one-shot idle/animation
         kIntent_ShoutPower    = 12,  // ch.14 shout/power selection
         kIntent_Equipment     = 13,  // ch.15 unequip/equip a worn item (melee-vs-ranged lever)

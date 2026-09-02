@@ -325,8 +325,8 @@ namespace MFO::Scheduler {
         // the WHOLE fight. Refreshes the expiry timestamp only (no create, no re-point)
         // every in-combat tick, so a non-targeting rule (potion/flee/wait) does not let
         // it lapse mid-battle -- it is released by the expiry sweep ONLY once combat
-        // ends (this stops being called). Steering/re-pointing stays with the cast/attack
-        // directives (HoldCombatTarget). No-op without APMF or if no claim is held.
+        // ends (this stops being called). Re-pointing the claim stays with the cast/attack
+        // directives (ClaimCombatTarget). No-op without APMF or if no claim is held.
         APMFBridge::RefreshCombatTarget(id);
 
         // IN COMBAT: end any loot excursion for this follower FIRST, so he fights
@@ -884,14 +884,14 @@ namespace MFO::Scheduler {
         // and their AI cannot cast what they are not holding either way.
         if (!castSeen) {
             Loadout::ReleaseSpell(id);
-            // Crisp release of the APMF cast-SELECT claim (per-cast) the moment no cast
+            // Crisp release of the APMF casting facet-CLAIM (per-cast) the moment no cast
             // rule's condition holds -- the same "the cast gambit stopped wanting it"
-            // signal that releases the spell in hand. This releases ONLY the spell
-            // selection; the combat-TARGET claim is per-COMBAT and is deliberately NOT
-            // dropped here (it is kept alive by RefreshCombatTarget below and released
-            // only at combat end), so a cast->melee transition re-points the target
-            // rather than releasing it. No-op when APMF is absent / no cast-select claim.
-            APMFBridge::ReleaseCastSpell(id);
+            // signal that releases the spell in hand. This releases ONLY the casting
+            // claim; the combat-TARGET claim is per-COMBAT and is deliberately NOT dropped
+            // here (kept alive by RefreshCombatTarget above, released only at combat end),
+            // so a cast->melee transition keeps the target facet claimed rather than
+            // releasing it. No-op when APMF is absent / no casting claim held.
+            APMFBridge::ReleaseCasting(id);
         }
 
         const char* name = f->GetName() ? f->GetName() : "?";   // flair #11

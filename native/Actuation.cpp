@@ -28,6 +28,20 @@ namespace MFO::Actuation {
 
     namespace {
 
+        // MFO's OWN spell-selection write (moderator model, marth 2026-09-02). Sets the
+        // follower's SELECTED right-hand spell so its own combat AI's chosen spell IS the
+        // gambit's spell -- selectedSpells is the input the AI reads; SetCurrentSpell is
+        // unbound at this rev, so write the slot + the caster's currentSpell directly,
+        // guarded (the deck-proven idiom). The AI then DECIDES to cast it (animated) --
+        // this is BEHAVIOR MFO owns; APMF only arbitrates the facet, it never writes here.
+        void SelectCasterSpell(RE::Actor* a_actor, RE::SpellItem* a_spell) {
+            if (!a_actor || !a_spell) return;
+            constexpr auto slot = RE::Actor::SlotTypes::kRightHand;
+            a_actor->GetActorRuntimeData().selectedSpells[slot] = a_spell;
+            if (auto* caster = a_actor->GetMagicCaster(RE::MagicSystem::CastingSource::kRightHand))
+                caster->currentSpell = a_spell;
+        }
+
         // #68: the nearest living player-teammate that is not a_follower
         // himself. Walks the maintained g_active list (not a world sweep) --
         // same precedent as Evaluator.cpp's PickAlly, just by DISTANCE
@@ -459,24 +473,43 @@ namespace MFO::Actuation {
                     // if bCasterHook is off; observe-only in log mode.
                     CasterConsent::Want(a_follower->GetFormID(), spell->GetFormID());
 
-                    // ── OWNED CAST MODEL (default when APMF present; marth 2026-09-02).
-                    // For a HOSTILE cast at a real FOE, APMF OWNS the follower's spell
-                    // SELECTION (cast-select) and HOLDs the combat TARGET (combat-target);
-                    // consent (just granted) then lets his own AI fire the SELECTED spell
-                    // at the HELD target through the engine's normal cast flow -- i.e.
-                    // with the FULL cast ANIMATION/pose ("the animated path"). This is the
-                    // ANIMATED-FIRST path and the point of the model: it RESOLVES MFO's
-                    // long-deferred cast-animation gap
-                    // ([[cast-animations-deferred-to-post-town-polish]]) -- casts animate
-                    // because the AI fires them naturally, not because MFO force-injects
-                    // them (CastSpellImmediate cannot animate, ENGINE_NOTES §0.13). So MFO's
-                    // unanimated force is DEMOTED to a rare last-resort here (one bounded
-                    // CastTargetDirect if the AI genuinely does not fire in the window),
-                    // NOT the package grace churn that contended and stalled in the field.
+                    // ── OWNED CAST MODEL (default when APMF present; MODERATOR redesign,
+                    // marth 2026-09-02). A REAL, AI-DECIDED, MOBILE, ANIMATED cast, made
+                    // by the FOLLOWER'S OWN combat AI -- MFO does NOT force it. This is the
+                    // same real cast MFO could already produce (equip + consent + a cast-
+                    // biased combat style => the AI's own vanilla animated cast, ENGINE_NOTES
+                    // §0.15a/§0.27/§0.28), but WITHOUT its old movement cost: the animated
+                    // cast never needed the rooting UseMagic package (that was only the
+                    // legacy force route) -- so we drop the package entirely and the follower
+                    // keeps kiting while it casts.
+                    //
+                    // DIVISION OF LABOUR (the whole point of routing through APMF):
+                    //   * APMF ARBITRATES the facets -- MFO CLAIMS the cast + combat-target
+                    //     facets so APMF is the single arbiter (and can suppress competitors).
+                    //     APMF executes NOTHING; it makes no cast/combat call.
+                    //   * MFO EXECUTES the behaviour with its OWN proven mechanisms:
+                    //       - SELECT our spell: write the follower's own selectedSpells (the
+                    //         input the AI reads);
+                    //       - COMMAND our target: Targeting::Command -> currentCombatTarget
+                    //         (its UpdateCombat hook re-asserts it);
+                    //       - CONSENT + deny competing spells: CasterConsent::Want (granted
+                    //         just above) -- the AI is permitted to cast OUR spell and denied
+                    //         its others;
+                    //       - DECIDE to cast: the Cast-biased combat style (Scheduler applies
+                    //         MFO_CastStyle each combat tick a cast is wanted -- raises the
+                    //         magic score so the AI CHOOSES to cast; the INVERSE of a deny,
+                    //         never a force).
+                    // GRANULAR: we claim ONLY the cast + combat-target facets -- we do NOT
+                    // touch the movement facet (no SetDontMove, no block), so the follower
+                    // keeps moving under its own control WHILE its AI casts. That granular
+                    // non-interruption is exactly APMF's value for casting.
+                    //
+                    // NO forced cast on this path -- CastSpellImmediate NEVER runs here; force
+                    // survives only in the LEGACY hybrid below (bLegacyCastHybrid / APMF
+                    // absent). If a follower's combat style still will not DECIDE to cast,
+                    // that is a magic-score bias question (raise it), NOT a reason to force.
                     // Concentration never reaches this branch (its bounded direct fork
-                    // returned above -- an AI channel cannot be exact-bounded, so it stays
-                    // MFO-streamed; that invariant is untouched). The LEGACY hybrid stays
-                    // intact below, selected by bLegacyCastHybrid or APMF-absent.
+                    // returned above -- exact-bounding intact).
                     const bool ownedCast =
                         APMFBridge::Available() && Config::g_apmfCast.load() &&
                         !Config::g_legacyCastHybrid.load() &&
@@ -485,56 +518,22 @@ namespace MFO::Actuation {
                         CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
 
                     if (ownedCast) {
-                        // Own the two halves on DECOUPLED lifecycles: cast-SELECT is
-                        // per-cast (refreshed here, released crisply on !castSeen);
-                        // combat-TARGET is per-combat (created here, RE-POINTED on a
-                        // target change, kept alive by the combat service, released only
-                        // at combat end). A cast->melee transition thus re-points the
-                        // target, never releases it (worker-safe enqueue).
-                        APMFBridge::SelectCastSpell(a_follower->GetFormID(), spell->GetFormID());
-                        APMFBridge::HoldCombatTarget(a_follower->GetFormID(),
-                                                     a_target->GetFormID(), /*create=*/true);
+                        // ARBITRATION: claim the two facets via APMF (it records the owner +
+                        // suppresses competitors; it executes nothing). Movement is NOT claimed.
+                        APMFBridge::ClaimCasting(a_follower->GetFormID(), spell->GetFormID());
+                        APMFBridge::ClaimCombatTarget(a_follower->GetFormID(),
+                                                      a_target->GetFormID(), /*create=*/true);
 
-                        const float heldO  = Loadout::SecondsSinceEquip(a_follower->GetFormID());
-                        const float graceO = Config::g_aiCastGrace.load() *
-                            (0.87f + 0.26f * Temperament(a_follower->GetFormID()));
-                        const bool  aiOther = CasterConsent::OtherCastSeen(a_follower->GetFormID());
+                        // EXECUTION (MFO's own): select our spell + command our target. Consent
+                        // was granted above; the Cast combat style (Scheduler) supplies the
+                        // AI's DECISION. The follower's own AI then casts our spell at our
+                        // target -- full animation, still mobile.
+                        SelectCasterSpell(a_follower, spell);
+                        Targeting::Command(a_follower->GetFormID(), a_target->GetHandle());
 
-                        // PRIMARY: let the AI fire it ANIMATED. OPAQUE hold (the hold IS
-                        // the cast happening -- firing lower rules mid-window risks the
-                        // §0.6 confound). With target+spell owned this is the normal exit.
-                        if (heldO < graceO && !aiOther) {
-                            return { Result::NoOp, "owned cast: AI casting (animated)" };
-                        }
-
-                        // LAST RESORT (rare): the AI did not fire in the window (or cast
-                        // something else). ONE clean, EXACT-BOUNDED direct cast at the HELD
-                        // target -- unanimated, but LoS + magicka + stream-capped
-                        // (CastTargetDirect), never the package grace churn. Retire the
-                        // miss flag and RE-ARM the grace so the NEXT tick waits for the AI
-                        // again (a fresh animated window) -- so the unanimated force stays
-                        // rare. Deliberately NOT StartCooldown: that would ReleaseSpell and
-                        // rip the spell out of the hand, opening a gap where neither the AI
-                        // nor the APMF selection can act; keeping it in hand lets the AI
-                        // resume the animated path immediately. The re-armed grace +
-                        // CastTargetDirect's own stream pacing already rate-limit the force.
-                        switch (CastTargetDirect(a_follower, spell, a_target)) {
-                        case SelfCast::Applied:
-                            CasterConsent::NoteOurCast(a_follower->GetFormID());
-                            Loadout::ArmGrace(a_follower->GetFormID());
-                            spdlog::info("[cast] {:08X} owned FALLBACK -- AI did not fire {} within "
-                                         "{:.1f}s; one bounded direct cast at {:08X} (UNANIMATED).",
-                                         a_follower->GetFormID(),
-                                         spell->GetName() ? spell->GetName() : "?",
-                                         graceO, a_target->GetFormID());
-                            return { Result::Fired, "owned cast fallback (direct, unanimated)" };
-                        case SelfCast::Refreshed:
-                            return { Result::NoOp, "owned cast fallback (paced)", true };
-                        case SelfCast::Declined:
-                        default:
-                            break;   // fall through to the silent apply below
-                        }
-                        break;   // owned model handled this tick -- do NOT run the legacy hybrid
+                        // OPAQUE hold: the AI is deciding+casting; firing lower rules now risks
+                        // disturbing that decision (the §0.6 confound). No force, ever, here.
+                        return { Result::NoOp, "owned cast: AI deciding (animated, mobile)" };
                     }
 
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
@@ -1001,13 +1000,14 @@ namespace MFO::Actuation {
             if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
 
             // OWNED MODEL: if this follower is a caster with a LIVE APMF combat-target
-            // claim (created by a cast directive earlier this fight), RE-POINT it to the
-            // melee foe too, so the held target follows a cast->melee transition instead
-            // of going stale. create=false => it NEVER creates a claim for a pure-melee
-            // follower (they keep MFO's own Targeting hook, unchanged). No-op without APMF.
+            // CLAIM (created by a cast directive earlier this fight), keep that facet-claim
+            // pointed at the melee foe too, so the arbitration record follows a cast->melee
+            // transition. create=false => it NEVER creates a claim for a pure-melee follower.
+            // (MFO's own Targeting::Command below is what actually commands the target;
+            // APMF only arbitrates the facet, it executes nothing.) No-op without APMF.
             if (APMFBridge::Available() && Config::g_apmfCast.load() &&
                 !Config::g_legacyCastHybrid.load())
-                APMFBridge::HoldCombatTarget(a_follower->GetFormID(), foe->GetFormID(), /*create=*/false);
+                APMFBridge::ClaimCombatTarget(a_follower->GetFormID(), foe->GetFormID(), /*create=*/false);
 
             // Ask the HOOK, not the config. They disagree whenever install was
             // refused with the flag on -- VR, today. Reporting Fired there would

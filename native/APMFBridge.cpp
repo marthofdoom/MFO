@@ -28,7 +28,7 @@ namespace MFO::APMFBridge {
 
         // Per-follower owned-cast claims -- TWO INDEPENDENT LIFECYCLES:
         //   * cast-SELECT (spell): PER-CAST. Refreshed each winning cast tick; released
-        //     CRISPLY the moment no cast rule holds (ReleaseCastSpell <- Scheduler
+        //     CRISPLY the moment no cast rule holds (ReleaseCasting <- Scheduler
         //     !castSeen); the expiry is only a backstop.
         //   * combat-TARGET: PER-COMBAT. Refreshed every in-combat tick (by the cast/
         //     attack directive that steers it AND by RefreshCombatTarget from the
@@ -52,7 +52,7 @@ namespace MFO::APMFBridge {
 
         // A claim not refreshed within this window is released. combat-target: this is
         // the combat-END detector (refreshing stops when the fight ends). cast-select:
-        // a backstop behind the crisp ReleaseCastSpell. ~4 pumps at kPumpMs=133.
+        // a backstop behind the crisp ReleaseCasting. ~4 pumps at kPumpMs=133.
         constexpr auto kExpiry = std::chrono::milliseconds(500);
 
         // Ensure ONE channel claim tracks `want` (0 == release it). Caller holds g_mx.
@@ -135,7 +135,7 @@ namespace MFO::APMFBridge {
     bool Available() { return g_apmf.load(std::memory_order_relaxed) != nullptr; }
 
     // ── cast-SELECT (per-cast) ──────────────────────────────────────────────────
-    void SelectCastSpell(RE::FormID a_follower, RE::FormID a_spell) {
+    void ClaimCasting(RE::FormID a_follower, RE::FormID a_spell) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || a_follower == 0 || a_spell == 0 || !Config::g_apmfCast.load()) return;
         std::scoped_lock lock(g_mx);
@@ -145,7 +145,7 @@ namespace MFO::APMFBridge {
         EraseIfEmpty(g_owned.find(a_follower));
     }
 
-    void ReleaseCastSpell(RE::FormID a_follower) {
+    void ReleaseCasting(RE::FormID a_follower) {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
         if (it == g_owned.end()) return;
@@ -154,7 +154,7 @@ namespace MFO::APMFBridge {
     }
 
     // ── combat-TARGET (per-combat) ──────────────────────────────────────────────
-    void HoldCombatTarget(RE::FormID a_follower, RE::FormID a_target, bool a_create) {
+    void ClaimCombatTarget(RE::FormID a_follower, RE::FormID a_target, bool a_create) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || a_follower == 0 || a_target == 0 || !Config::g_apmfCast.load()) return;
         std::scoped_lock lock(g_mx);
