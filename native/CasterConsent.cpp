@@ -6,6 +6,8 @@
 #include "Followers.h"
 #include "Forms.h"         // P1 probe: the MFO caster-forward combat style
 #include "Packages.h"      // StreamLive -- the concentration bound is latch-independent
+#include "APMFBridge.h"    // IsOwnedCastActive -- stand down the exclusivity deny where
+                            // APMF's T2 allowance hooks now own it (Phase 2)
 
 namespace MFO::CasterConsent {
 
@@ -558,6 +560,16 @@ namespace MFO::CasterConsent {
             // from pacing. LOG mode still only observes. NOTE: this is only the
             // ADVISORY half -- the SpellCast hook hard-aborts what slips through.
             if (!isWanted) {
+                // Phase 2 (APMF ALLOWANCE-TEMPLATE.md §7): the owned-cast model
+                // claims this facet via APMF ch.8, and APMF's OWN CheckCast (0x0A,
+                // hard gate) hook now enforces this exact exclusivity -- deny any
+                // spell that isn't the claimed one. MFO's advisory CheckStartCast
+                // deny is redundant there and would only fight it (two
+                // independently-configured deny paths, different slider level vs.
+                // hard claim); stand down and let APMF own it for this follower.
+                // Consent (the isWanted==true path below) is untouched -- that is
+                // MFO's own mechanism, not a facet APMF ever provides.
+                if (APMFBridge::IsOwnedCastActive(fid)) return aiSaysYes;
                 if (Config::g_casterMode.load() == 0) return aiSaysYes;   // dev observe-only
                 if (castLvl < 4) {
                     const SpellKind kind = ClassifySpell(mi);
@@ -818,8 +830,17 @@ namespace MFO::CasterConsent {
 
             // HARD EXCLUSIVE CONTROL: refuse a latched follower's non-gambit spell
             // at the gate -> no charge, no animation, the engine fizzles cleanly.
+            // Still CALL ShouldDeny unconditionally (it populates `want`, which
+            // the friendly-fire exemption and the #59 gate below both need) --
+            // but on the APMF owned-cast path, do NOT ACT on the verdict: APMF's
+            // own CheckCast (0x0A) hook already enforces this exact exclusivity
+            // via the ch.8 claim (Phase 2, ALLOWANCE-TEMPLATE.md §7). Running
+            // MFO's OWN deny here too would be a second, independently-configured
+            // (iCastControl slider) enforcement of the SAME decision -- redundant,
+            // and it fights APMF rather than deferring to it.
             RE::FormID want = 0;
-            if (ShouldDeny(fid, a_spell, want)) {
+            const bool exclusivityDeny = ShouldDeny(fid, a_spell, want);
+            if (exclusivityDeny && !APMFBridge::IsOwnedCastActive(fid)) {
                 AbortLog(fid, actor, a_spell->GetFormID(), "exclusive");
                 return false;
             }

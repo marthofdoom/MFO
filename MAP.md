@@ -597,6 +597,17 @@ engine vtables).
   `Actuation.cpp:273,459,533`. `WantedSpell` (`:933`) → `Scheduler.cpp:596` +
   `CombatStyle.cpp:268` (the equip gate's one exemption). `NoteCooldown` (`:1012`)
   → `Loadout.cpp:321`. `ClearTransientState` (`:1057`) → `Serialization.cpp:598`.
+- **Phase 2 APMF hand-off (2026-09-02, ALLOWANCE-TEMPLATE.md §7):** both exclusivity
+  denies (`thunk`'s `!isWanted` branch, `CheckCastThunk`'s `ShouldDeny` verdict) now
+  check `APMFBridge::IsOwnedCastActive(fid)` first and STAND DOWN (return the AI's own
+  answer) when true — APMF's own CheckCast/CheckShouldEquip T2 hooks (separate
+  APMF.dll) already enforce the identical exclusivity via the ch.8 claim for an
+  owned-cast follower; running MFO's OWN deny too is redundant and fights it (two
+  independently-configured deny paths, iCastControl slider vs. hard claim). `Want`
+  (the consent GRANT / veto-removal) is UNCHANGED and still called unconditionally —
+  that mechanism is MFO's alone, APMF only ever narrows a YES to a NO. Legacy
+  (non-APMF / `bLegacyCastHybrid`) followers are unaffected: `IsOwnedCastActive`
+  returns false for them, so both denies run exactly as before.
 - **Latch lifetime:** the Want latch does NOT clear on cast (spans the whole
   combat); `Want` overwrites SPELL only, never `permitAfter` or pacing breaks.
   Force-YES must NEVER apply to concentration spells (permanent-stream freeze,
@@ -625,6 +636,18 @@ the AI can't re-arm magic over a forced weapon.
   NOT engage the gate (must not mute the AI's own magic). Reads
   `Forms::g_meleeStyle/rangedStyle/castStyle` (`:53`) — missing form → stance
   silently disabled.
+- **Phase 2 APMF hand-off (2026-09-02, ALLOWANCE-TEMPLATE.md §7):** the equip-gate
+  thunk checks `APMFBridge::IsOwnedCastActive(fid)` right after resolving `fid` and
+  stands down (returns the AI's own answer) unconditionally for that follower — APMF's
+  own T2a `CheckShouldEquip` hook (separate APMF.dll, mutex-free RCU read) already
+  denies any spell/staff that isn't the ch.8-claimed one, covering exactly what this
+  gate's `WantedSpell` exemption protects (same source spell — `ClaimCasting` passes
+  the identical FormID `Want` does). This is a full stand-down, not just the
+  exemption: it also means MFO's own weapon-equip-order deny does not apply to this
+  follower's magic items while APMF owns its cast — safe because APMF's hook denies
+  every non-claimed spell/staff regardless of weapon-order state, so the forced weapon
+  stays equally protected. Legacy followers (APMF absent / `bLegacyCastHybrid`) are
+  unaffected — `IsOwnedCastActive` returns false and the gate runs exactly as before.
 
 ### Sightline.cpp — line-of-sight split across threads (NOT a hook)
 Raycast runs only on the main thread, results cached, worker reads the cache.
@@ -1223,6 +1246,14 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   (MCM, default OFF)`. Toggle ON, or APMF absent → the ORIGINAL AI-first-wait + force-on-miss package
   hybrid (unchanged legacy branch below the owned block — the ONLY place `CastSpellImmediate` force
   and the rooting UseMagic package survive).
+- **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7):** worker- AND
+  combat-thread-safe read (the same `g_mx` every other accessor takes) — true iff the
+  follower holds a LIVE cast-select claim (`g_owned[id].spellHandle` valid).
+  `CasterConsent.cpp`'s two exclusivity denies and `CombatStyle.cpp`'s equip gate all
+  consult it to stand down for that follower once APMF's own T2 hooks (a separate
+  APMF.dll) enforce the identical exclusivity via the SAME claim — avoiding two
+  independently-configured deny mechanisms disagreeing. Does NOT touch consent
+  (`CasterConsent::Want`'s veto-removal stays MFO's alone, called unconditionally).
 - **Runtime-only — NO save/co-save state**; `ClearTransientState()` ← `plugin.cpp` kPreLoadGame
   (after `StopPump`). `g_apmf` is `std::atomic`. APMF holds ZERO MFO code; this bridge is the ONLY
   MFO code aware of APMF.

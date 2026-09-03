@@ -134,6 +134,15 @@ namespace MFO::APMFBridge {
 
     bool Available() { return g_apmf.load(std::memory_order_relaxed) != nullptr; }
 
+    bool IsOwnedCastActive(RE::FormID a_follower) {
+        // Fast-out before the lock: APMF absent -> never active (mirrors every
+        // other accessor's g_apmf check).
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        return it != g_owned.end() && it->second.spellHandle != APMF_API::kInvalidHandle;
+    }
+
     // ── cast-SELECT (per-cast) ──────────────────────────────────────────────────
     void ClaimCasting(RE::FormID a_follower, RE::FormID a_spell) {
         auto* api = g_apmf.load(std::memory_order_relaxed);

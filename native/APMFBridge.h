@@ -57,6 +57,21 @@ namespace MFO::APMFBridge {
     // Is the APMF interface live (present + ABI >= 2, so RequestEx is available)?
     bool Available();
 
+    // Worker- AND combat-thread-safe (mutex-guarded read; the SAME g_mx every
+    // other accessor here takes). Does `a_follower` currently hold a LIVE
+    // cast-select facet claim (i.e. is the owned-cast model actively driving
+    // this follower's cast right now)? Phase 2 (Docs/ALLOWANCE-TEMPLATE.md
+    // §7, APMF repo): once APMF's own T2 allowance hooks (CastGate/EquipGate)
+    // enforce "only the claimed spell" at the engine gate, MFO's OWN
+    // cast-exclusivity gates (CasterConsent's competing-spell deny,
+    // CombatStyle's equip-gate deny) consult this to STAND DOWN for that one
+    // follower -- avoiding two independently-configured deny mechanisms
+    // (MFO's iCastControl slider vs. APMF's hard claim) disagreeing on the
+    // same decision. Does NOT affect CasterConsent's own consent-GRANT (the
+    // veto-removal that lets the AI consider casting at all) -- that stays
+    // MFO's, APMF only ever narrows a YES to a NO, never invents one.
+    bool IsOwnedCastActive(RE::FormID a_follower);
+
     // ── casting facet CLAIM: PER-CAST ────────────────────────────────────────────
     // Worker-safe. CLAIM the casting facet for this follower (APMF records MFO as the
     // owner; the chosen `a_spell` rides along for arbitration/observability). This does

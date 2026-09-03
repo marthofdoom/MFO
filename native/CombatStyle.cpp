@@ -3,6 +3,8 @@
 #include "CasterConsent.h"   // the equip gate exempts the latched gambit spell (#75)
 #include "Config.h"
 #include "Forms.h"
+#include "APMFBridge.h"      // IsOwnedCastActive -- stand the gate down where APMF's
+                             // T2a CheckShouldEquip hook now owns it (Phase 2)
 
 namespace MFO::CombatStyle {
 
@@ -269,6 +271,17 @@ namespace MFO::CombatStyle {
             auto* actor = attPtr.get();
             if (!actor) return aiSaysYes;
             const auto fid = actor->GetFormID();
+
+            // Phase 2 (APMF ALLOWANCE-TEMPLATE.md §7): while this follower's cast
+            // is APMF-owned, APMF's OWN CheckShouldEquip hook (T2a, EquipGate.cpp)
+            // already denies any spell/staff that isn't the ch.8-claimed one --
+            // covering exactly what this gate's WantedSpell exemption protects,
+            // sourced from the SAME claim (ClaimCasting passes the identical
+            // spell). Standing down here avoids two independently-sourced equip
+            // denies (MFO's own weapon-equip-order gate vs. APMF's claim gate)
+            // disagreeing; APMF's hook keeps the gambit spell equippable even
+            // while an unrelated weapon equip-order is held on this follower.
+            if (APMFBridge::IsOwnedCastActive(fid)) return aiSaysYes;
 
             bool held = false;
             {
