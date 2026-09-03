@@ -1116,6 +1116,84 @@ namespace MFO::Logistics {
             return moved;
         }
 
+        // Is this item an alchemy ingredient? FormType-classified (never by
+        // name, §4.8.2 pattern) -- IngredientItem is CommonLib's class for
+        // INGR records.
+        bool IsIngredientItem(RE::TESBoundObject* a_obj) {
+            return a_obj->As<RE::IngredientItem>() != nullptr;
+        }
+
+        // Take all the alchemy ingredients on a corpse/container. Free tier
+        // like ammo/lockpicks (TierReleased below) -- nobody else competes for
+        // a follower's own reagent restock. Collect-then-transfer like LootAmmo
+        // (#2), with the same carry-weight gate as Jewelry/SoulGems (ingredients
+        // are light but not weightless).
+        bool LootIngredients(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; };
+            std::vector<Take> takes;
+            for (auto& [obj, data] : a_src->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (!IsIngredientItem(obj)) continue;
+                // NEVER-LOOT: quest ingredients stay for the player.
+                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (a_peek) return true;
+                takes.push_back({ obj, data.first });
+            }
+            if (a_peek) return false;
+            bool moved = false;
+            for (const auto& t : takes) {
+                if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
+                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                  nullptr, a_follower);
+                moved = true;
+            }
+            return moved;
+        }
+
+        // Is this a "valuable" MISC item worth grabbing to sell -- gold/weight
+        // ratio clears Config::g_valuablesRatio (raw gemstones and similar
+        // high-density loot). MISC-restricted and explicitly excludes gold and
+        // soul gems so "loot valuables" never double-claims what a more
+        // specific category already owns. GetGoldValue()/GetWeight() are
+        // TESForm-level reads (same API LootJewelry/SoulGems already use via
+        // t.obj->GetWeight()), so no per-subclass accessor is needed.
+        bool IsValuableMisc(RE::TESBoundObject* a_obj) {
+            constexpr RE::FormID kGold001 = 0x0000000F;
+            if (!a_obj->As<RE::TESObjectMISC>()) return false;   // MISC only
+            if (a_obj->GetFormID() == kGold001 || IsCoinLoot(a_obj)) return false;   // Gold tier
+            if (IsSoulGemItem(a_obj)) return false;                                   // SoulGems tier
+            const float value = static_cast<float>(std::max<std::int32_t>(a_obj->GetGoldValue(), 0));
+            if (value <= 0.0f) return false;
+            const float weight = a_obj->GetWeight();
+            const float ratio = weight > 0.0f ? value / weight : value;   // weightless & valuable still counts
+            return ratio >= Config::g_valuablesRatio.load();
+        }
+
+        // Take all "valuable" MISC items on a corpse/container -- grabbed and
+        // dibs-protected like gold/jewellery (Valuables tier below); SELLING
+        // them is a separate existing/future economy path, this only loots.
+        bool LootValuables(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; };
+            std::vector<Take> takes;
+            for (auto& [obj, data] : a_src->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (!IsValuableMisc(obj)) continue;
+                // NEVER-LOOT: quest/artifact MISC stays for the player.
+                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (a_peek) return true;
+                takes.push_back({ obj, data.first });
+            }
+            if (a_peek) return false;
+            bool moved = false;
+            for (const auto& t : takes) {
+                if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
+                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                  nullptr, a_follower);
+                moved = true;
+            }
+            return moved;
+        }
+
         // ── CLAIM-AND-RELEASE: is the player CONSIDERING this source right now? ──
         // The one live-claim signal, true for BOTH loot UIs (INVARIANTS #22g and
         // the new #22g-QL). Detected once whether QuickLoot is in the load order:
@@ -1287,7 +1365,8 @@ namespace MFO::Logistics {
         bool TierReleased(Category a_cat, RE::TESObjectREFR* a_src,
                           const RE::NiPoint3& a_playerPos, Clock::time_point a_now) {
             if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
-                a_cat == Category::Potions || a_cat == Category::Lockpicks)
+                a_cat == Category::Potions || a_cat == Category::Lockpicks ||
+                a_cat == Category::Ingredients)
                 return true;
 
             const RE::FormID   srcId  = a_src->GetFormID();
@@ -1321,7 +1400,10 @@ namespace MFO::Logistics {
                        std::chrono::duration<float>(a_now - cl.seen).count()
                            >= Config::g_firstDibsDelay.load();
             }
-            // Gold / Jewelry / SoulGems -> Valuables tier.
+            // Gold / Jewelry / SoulGems / Valuables (Category::Valuables, the
+            // MISC sell-tier scan) -> Valuables tier. Falls through here by
+            // default: anything not in the free-tier list above and not
+            // Equipment lands on this shared path.
             const bool departed = cl.everNear &&
                 cl.farSince.time_since_epoch().count() != 0 &&
                 std::chrono::duration<float>(a_now - cl.farSince).count() >= kDepartRelease;
@@ -1372,6 +1454,8 @@ namespace MFO::Logistics {
             case Category::Jewelry:   return LootJewelry(a_follower, a_ref);
             case Category::SoulGems:  return LootSoulGems(a_follower, a_ref);
             case Category::Lockpicks: return LootLockpicks(a_follower, a_ref);
+            case Category::Ingredients: return LootIngredients(a_follower, a_ref);
+            case Category::Valuables: return LootValuables(a_follower, a_ref);
             }
             return false;
         }
@@ -1390,6 +1474,8 @@ namespace MFO::Logistics {
             case Category::Jewelry:   return LootJewelry(a_follower, a_ref, true);
             case Category::SoulGems:  return LootSoulGems(a_follower, a_ref, true);
             case Category::Lockpicks: return LootLockpicks(a_follower, a_ref, true);
+            case Category::Ingredients: return LootIngredients(a_follower, a_ref, true);
+            case Category::Valuables: return LootValuables(a_follower, a_ref, true);
             }
             return false;
         }
@@ -2138,6 +2224,8 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootJewelry)        cat = Category::Jewelry;
                 else if (op == Vocab::kActLootSoulGems)       cat = Category::SoulGems;
                 else if (op == Vocab::kActLootLockpicks)      cat = Category::Lockpicks;
+                else if (op == Vocab::kActLootIngredients)    cat = Category::Ingredients;
+                else if (op == Vocab::kActLootValuables)      cat = Category::Valuables;
                 else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
                 else isLoot = false;
                 if (isLoot) {
@@ -2196,6 +2284,8 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootJewelry)        acted = LootNearby(a_follower, Category::Jewelry, a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
                 else if (op == Vocab::kActLootSoulGems)       acted = LootNearby(a_follower, Category::SoulGems, a_now, RE::ActorValue::kNone,   LootMode::kExcursion);
                 else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);
+                else if (op == Vocab::kActLootIngredients)    acted = LootNearby(a_follower, Category::Ingredients, a_now, RE::ActorValue::kNone, LootMode::kExcursion);
+                else if (op == Vocab::kActLootValuables)      acted = LootNearby(a_follower, Category::Valuables, a_now, RE::ActorValue::kNone,   LootMode::kExcursion);
                 else if (op == Vocab::kActWait) break;   // Wait is the user's deliberate STOP gambit
                                                          // (#3.3): end the batch -- returning false with
                                                          // nothing "waiting" makes Holding release.

@@ -258,6 +258,8 @@ namespace MFO::Board {
         { Vocab::kActLootJewelry,        "Loot jewellery" },
         { Vocab::kActLootSoulGems,       "Loot soul gems" },
         { Vocab::kActLootLockpicks,      "Loot lockpicks" },
+        { Vocab::kActLootIngredients,    "Loot ingredients" },
+        { Vocab::kActLootValuables,      "Loot valuables (to sell)" },
         { Vocab::kActEquipTorch,         "Equip torch" },
         // Cast in logistics (mage update): out-of-combat casting -- self-buffs,
         // candlelight, out-of-combat heals. Same opcodes as combat; the
@@ -285,6 +287,29 @@ namespace MFO::Board {
     ParamKind kindFor(const std::string& op, const VocabEntry* tab, int n) {
         for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].kind;
         return ParamKind::None;
+    }
+
+    // ── PICKER SUBMENU GROUPING ─────────────────────────────────────────
+    // The list-picker popups below are flat scans over kCondsCombat /
+    // kActsLogi. As those tables grew, "Foe: ..." conditions and the loot
+    // actions needed grouping into nested submenus so the flat list stays
+    // scannable. Grouping is PRESENTATION ONLY: condTab/actTab stay the
+    // single flat source of truth (cycleIdx/labelFor/kindFor above, and the
+    // co-save, never see a group) -- these predicates just say which entries
+    // a picker should collapse into one nested-popup row.
+    bool IsFoeCond(const char* op) {
+        return op && std::strncmp(op, "cond.foe_", 9) == 0;
+    }
+    bool IsPotionLootAct(const char* op) {
+        return op && (!std::strcmp(op, Vocab::kActLootPotions)      ||
+                      !std::strcmp(op, Vocab::kActLootHealthPotion) ||
+                      !std::strcmp(op, Vocab::kActLootStaminaPotion)||
+                      !std::strcmp(op, Vocab::kActLootMagickaPotion));
+    }
+    bool IsMiscLootAct(const char* op) {
+        return op && (!std::strcmp(op, Vocab::kActLootIngredients) ||
+                      !std::strcmp(op, Vocab::kActLootSoulGems)    ||
+                      !std::strcmp(op, Vocab::kActLootJewelry));
     }
 
 
@@ -787,6 +812,44 @@ namespace MFO::Board {
                                 });
                         }
 
+                        // Submenu grouping for the WHEN (condTab) and DO (actTab)
+                        // pickers -- built once per table, not per row. A -1 slot
+                        // in a *TopIdx marks the nested-group row (rendered as
+                        // "Foe:" / "Loot potions:" / "Loot misc:"); the matching
+                        // *Idx vector below holds the real condTab/actTab indices
+                        // that group opens onto. Empty when the current table has
+                        // no members of that group (e.g. combat's actTab has no
+                        // loot actions) -- the group row is simply never added.
+                        std::vector<int> condTopIdx;      // indices into condTab; -1 = "Foe:" row
+                        std::vector<int> condFoeIdx;       // condTab indices shown in the Foe: submenu
+                        int condFoeSlot = -1;
+                        for (int k = 0; k < condN; ++k) {
+                            if (IsFoeCond(condTab[k].op)) {
+                                if (condFoeSlot < 0) { condFoeSlot = (int)condTopIdx.size();
+                                                        condTopIdx.push_back(-1); }
+                                condFoeIdx.push_back(k);
+                            } else {
+                                condTopIdx.push_back(k);
+                            }
+                        }
+                        std::vector<int> actTopIdx;       // indices into actTab; -1 = potions, -2 = misc
+                        std::vector<int> actPotionIdx;     // actTab indices in the Loot potions: submenu
+                        std::vector<int> actMiscIdx;       // actTab indices in the Loot misc: submenu
+                        int actPotionSlot = -1, actMiscSlot = -1;
+                        for (int k = 0; k < actN; ++k) {
+                            if (IsPotionLootAct(actTab[k].op)) {
+                                if (actPotionSlot < 0) { actPotionSlot = (int)actTopIdx.size();
+                                                          actTopIdx.push_back(-1); }
+                                actPotionIdx.push_back(k);
+                            } else if (IsMiscLootAct(actTab[k].op)) {
+                                if (actMiscSlot < 0) { actMiscSlot = (int)actTopIdx.size();
+                                                        actTopIdx.push_back(-2); }
+                                actMiscIdx.push_back(k);
+                            } else {
+                                actTopIdx.push_back(k);
+                            }
+                        }
+
                         // ── DENSE GAMBIT LIST ───────────────────────────
                         // Tight padding so a full page of gambits reads like
                         // FFXII's, not a few fat rows. Scrolls when long.
@@ -950,15 +1013,53 @@ namespace MFO::Board {
                                     if (wait) ImGui::PopStyleColor();
                                     if (clicked) ImGui::OpenPopup("##act");
                                     track();
+                                    // The 4 potion loot actions and the 3 misc loot
+                                    // actions (Ingredients/SoulGems/Jewelry) each
+                                    // collapse to one nested-popup row (actTopIdx/
+                                    // actPotionIdx/actMiscIdx, built once above the
+                                    // row loop). Combat's actTab has no loot actions,
+                                    // so those slots simply never appear there.
+                                    const bool curIsPotionAct = IsPotionLootAct(rv.actOp.c_str());
+                                    const bool curIsMiscAct   = IsMiscLootAct(rv.actOp.c_str());
                                     int curA = 0;
-                                    for (int k = 0; k < actN; ++k)
-                                        if (rv.actOp == actTab[k].op) { curA = k; break; }
-                                    listPopup("##act", "Do (action)", actN,
-                                        [&](int k) { return actTab[k].label; }, curA,
-                                        [&](int k) {
+                                    for (int t = 0; t < (int)actTopIdx.size(); ++t) {
+                                        if (actTopIdx[t] == -1) { if (curIsPotionAct) { curA = t; break; } }
+                                        else if (actTopIdx[t] == -2) { if (curIsMiscAct) { curA = t; break; } }
+                                        else if (rv.actOp == actTab[actTopIdx[t]].op) { curA = t; break; }
+                                    }
+                                    listPopup("##act", "Do (action)", (int)actTopIdx.size(),
+                                        [&](int t) { return actTopIdx[t] == -1 ? "Loot potions:"
+                                                            : actTopIdx[t] == -2 ? "Loot misc:"
+                                                            : actTab[actTopIdx[t]].label; },
+                                        curA,
+                                        [&](int t) {
+                                            if (actTopIdx[t] == -1) { ImGui::OpenPopup("##actpotions"); return; }
+                                            if (actTopIdx[t] == -2) { ImGui::OpenPopup("##actmisc"); return; }
                                             QueueEdit({ EditKind::SetAct, sel, selTable,
-                                                        rv.uid, (float)k });
+                                                        rv.uid, (float)actTopIdx[t] });
                                         });
+                                    if (actPotionSlot >= 0) {
+                                        int curP = 0;
+                                        for (int t = 0; t < (int)actPotionIdx.size(); ++t)
+                                            if (rv.actOp == actTab[actPotionIdx[t]].op) { curP = t; break; }
+                                        listPopup("##actpotions", "Loot potions:", (int)actPotionIdx.size(),
+                                            [&](int t) { return actTab[actPotionIdx[t]].label; }, curP,
+                                            [&](int t) {
+                                                QueueEdit({ EditKind::SetAct, sel, selTable,
+                                                            rv.uid, (float)actPotionIdx[t] });
+                                            });
+                                    }
+                                    if (actMiscSlot >= 0) {
+                                        int curM = 0;
+                                        for (int t = 0; t < (int)actMiscIdx.size(); ++t)
+                                            if (rv.actOp == actTab[actMiscIdx[t]].op) { curM = t; break; }
+                                        listPopup("##actmisc", "Loot misc:", (int)actMiscIdx.size(),
+                                            [&](int t) { return actTab[actMiscIdx[t]].label; }, curM,
+                                            [&](int t) {
+                                                QueueEdit({ EditKind::SetAct, sel, selTable,
+                                                            rv.uid, (float)actMiscIdx[t] });
+                                            });
+                                    }
                                 }
 
                                 // SPELL -- only for cast actions; its own list.

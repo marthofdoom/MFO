@@ -250,7 +250,10 @@ namespace MFO::Logistics {
         };
 
         // ── the looting dispatcher ──────────────────────────────────────────
-        enum class Category { Arrows, Bolts, Potions, Equipment, Gold, Jewelry, SoulGems, Lockpicks };
+        // APPEND-ONLY (marth CLAUDE.md hard rule): existing ordinals are
+        // frozen, new categories go at the end.
+        enum class Category { Arrows, Bolts, Potions, Equipment, Gold, Jewelry, SoulGems, Lockpicks,
+                               Ingredients, Valuables };
 
         // Category label for the [loot] diagnostic. Naming the scanned category is
         // the ONLY way to read the composition line: "empty=36" is meaningless
@@ -266,6 +269,8 @@ namespace MFO::Logistics {
             case Category::Jewelry:   return "jewelry";
             case Category::SoulGems:  return "soulgems";
             case Category::Lockpicks: return "lockpicks";
+            case Category::Ingredients: return "ingredients";
+            case Category::Valuables: return "valuables";
             default:                  return "?";
             }
         }

@@ -1093,6 +1093,8 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootJewelry)        acted = LootNearby(a_follower, Category::Jewelry, now);
             else if (op == Vocab::kActLootSoulGems)       acted = LootNearby(a_follower, Category::SoulGems, now);
             else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, now);
+            else if (op == Vocab::kActLootIngredients)    acted = LootNearby(a_follower, Category::Ingredients, now);
+            else if (op == Vocab::kActLootValuables)      acted = LootNearby(a_follower, Category::Valuables, now);
             else if (op == Vocab::kActEquipTorch)         acted = EquipTorch(a_follower);   // #35: torch is upkeep
             else if (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
                      op == Vocab::kActCastPlayer) {

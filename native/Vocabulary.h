@@ -203,6 +203,15 @@ namespace MFO::Vocab {
     // are Free tier like ammo -- a consumable nobody competes for.
     inline constexpr const char* kActLootSoulGems       = "act.loot_soul_gems";
     inline constexpr const char* kActLootLockpicks      = "act.loot_lockpicks";
+    // Ingredients tier: alchemy reagents, classified by FormType::Ingredient
+    // (never by name). Free tier like ammo/lockpicks -- nobody competes for
+    // a flower.
+    inline constexpr const char* kActLootIngredients    = "act.loot_ingredients";
+    // Valuables: MISC items whose gold/weight ratio clears
+    // Config::g_valuablesRatio (raw gemstones etc.), excluding anything a more
+    // specific category already covers. Grabbed and dibs-protected like other
+    // looted goods -- selling them is a separate existing/future path.
+    inline constexpr const char* kActLootValuables      = "act.loot_valuables";
 
     // A cheap actor-value-percentage read. Reads THE NAMED actor's state
     // (INVARIANTS #15 -- say whose).
