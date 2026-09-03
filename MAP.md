@@ -1190,15 +1190,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   (ENGINE_NOTES §585: a hand-write desyncs the engine's select/deselect bookkeeping; the original
   `SelectCasterSpell` helper did exactly that, on the WRONG hand, every tick, resetting the charge
   before release — root cause of the fire-and-forget hang, fixed 2026-09-02 and removed). At `Grip::
-  Caster` with a DIFFERENT spell already in hand, `Loadout::Prepare` (`Loadout.cpp:191-234`) also
-  **neutralizes a competing spell in the OTHER hand** (`DeselectSpell`) at EVERY `iCastControl`
-  level ≥1 (marth 2026-09-02, was exact-only) — gated by the SAME `CasterConsent::CastExempt`
-  policy (`CasterConsent.h:44`, exposed from the anon namespace as single source of truth) the
-  deny hook enforces, so "denied" is always accompanied by "evicted": a category CastExempt still
-  keeps for the AI at that level (heals at 1-3, self-heals at 3) is left alone; a non-exempt
-  competitor (e.g. Offense at the level-2 default) is deselected so the follower's own AI candidate
-  pool actually runs dry and falls through to the gambit spell, instead of denying the same
-  competing cast forever while it sits equipped (deck field test, Jesper/0002DD29). MFO then (a) CLAIMS the
+  Caster` with a DIFFERENT spell already in hand, `Loadout::Prepare` (`Loadout.cpp:191-213`) also
+  **neutralizes a competing spell in the OTHER hand** (`DeselectSpell`) — but ONLY at `iCastControl`
+  level 4 (exact); looser levels leave that hand to the AI (`CastExempt`). MFO then (a) CLAIMS the
   cast + combat-target facets via APMF (`Actuation.cpp:522-523`) and (b) `Targeting::Command(follower,
   target->GetHandle())` commands the target (its UpdateCombat hook re-asserts `currentCombatTarget`,
   `:533`) — **every owned tick, deliberately not deduped here**: `EnsureClaimLocked`

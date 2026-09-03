@@ -33,24 +33,6 @@ namespace MFO::CasterConsent {
         return restoresHealth ? SpellKind::Heal : SpellKind::Buff;
     }
 
-    // Does the AI KEEP this spell at slider level `lvl` (i.e. MFO exempts
-    // it)? "ignore X" = leave category X to the follower's AI; tighter
-    // toward exact. lvl 1 ignore buffs+heals, 2 ignore heals (default),
-    // 3 ignore self-heals; lvl>=4 (exact) exempts nothing; lvl<=0 handled
-    // before this is ever called. PUBLIC (moved out of the anon namespace,
-    // marth 2026-09-02): Loadout::Prepare neutralizes a competing hand off
-    // this SAME policy (CasterConsent.h) so "denied" is always accompanied
-    // by "evicted" at every level, not just exact -- see Loadout.cpp's
-    // other-hand DeselectSpell call.
-    bool CastExempt(SpellKind a_kind, bool a_selfHeal, int a_lvl) {
-        switch (a_lvl) {
-            case 1:  return a_kind != SpellKind::Offense;            // keep buffs + all heals
-            case 2:  return a_kind == SpellKind::Heal;               // keep all heals
-            case 3:  return a_kind == SpellKind::Heal && a_selfHeal; // keep self-heals only
-            default: return false;                                   // exact: exempt nothing
-        }
-    }
-
     namespace {
 
         using Clock = std::chrono::steady_clock;
@@ -119,6 +101,20 @@ namespace MFO::CasterConsent {
         // Each concrete caster vtable is a separate function pointer, so the
         // originals are keyed by the vtable pointer we read off `this`.
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_orig;
+
+        // Does the AI KEEP this spell at slider level `lvl` (i.e. MFO exempts
+        // it)? "ignore X" = leave category X to the follower's AI; tighter
+        // toward exact. lvl 1 ignore buffs+heals, 2 ignore heals (default),
+        // 3 ignore self-heals; lvl>=4 (exact) exempts nothing; lvl<=0 handled
+        // before this is ever called.
+        bool CastExempt(SpellKind a_kind, bool a_selfHeal, int a_lvl) {
+            switch (a_lvl) {
+                case 1:  return a_kind != SpellKind::Offense;            // keep buffs + all heals
+                case 2:  return a_kind == SpellKind::Heal;               // keep all heals
+                case 3:  return a_kind == SpellKind::Heal && a_selfHeal; // keep self-heals only
+                default: return false;                                   // exact: exempt nothing
+            }
+        }
 
         // Throttle for the EXCLUSIVE-CONTROL deny log. The thunk runs at
         // caster-tick frequency, so a suppressed own-spell is logged only when

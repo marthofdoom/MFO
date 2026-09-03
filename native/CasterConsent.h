@@ -32,17 +32,6 @@ namespace MFO::CasterConsent {
     enum class SpellKind : std::uint8_t { Offense, Buff, Heal };
     SpellKind ClassifySpell(RE::MagicItem* a_mi);
 
-    // Does the AI KEEP a spell of this kind at slider level `a_lvl` (i.e. MFO
-    // exempts it from the deny/evict policy)? "ignore X" = leave category X to
-    // the follower's own AI; tighter toward exact. lvl 1 ignores buffs+heals,
-    // 2 ignores heals (default), 3 ignores self-heals only, >=4 (exact) exempts
-    // nothing; lvl<=0 is cast-control OFF and must be checked by the caller
-    // before calling this. PUBLIC (single source of truth) so Loadout::Prepare
-    // can neutralize a competing hand using the SAME policy this hook denies
-    // by -- selection and enforcement must never disagree about which spells
-    // the AI is allowed to keep.
-    bool CastExempt(SpellKind a_kind, bool a_selfHeal, int a_lvl);
-
     // Install the CheckStartCast hook across the concrete caster vtables. Once,
     // at kDataLoaded. No-op when bCasterHook is off.
     void InstallHook();
