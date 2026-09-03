@@ -195,22 +195,42 @@ namespace MFO::Loadout {
                     m->EquipSpell(a_actor, a_spell, LeftHandSlot());
                     a_actor->DrawWeaponMagicHands(true);
 
-                    // EXACT MODE (level 4) ONLY: neutralize a competing spell left in
-                    // the OTHER (right) hand. EquipSpell above only ever targets the
-                    // LEFT slot, so a follower's own spell sitting in the RIGHT hand
-                    // survives the swap untouched -- their AI keeps re-selecting it
-                    // and getting denied by CasterConsent's exclusivity gate
+                    // NEUTRALIZE A COMPETING SPELL left in the OTHER (right) hand --
+                    // gated by the SAME CastExempt policy CasterConsent's deny hook
+                    // enforces (CasterConsent.h/.cpp, single source of truth), not a
+                    // hardcoded level. EquipSpell above only ever targets the LEFT
+                    // slot, so a follower's own spell sitting in the RIGHT hand
+                    // survives the swap untouched -- their AI keeps re-selecting it,
+                    // getting denied by CasterConsent's exclusivity gate
                     // (CasterConsent.cpp ~:560), charging and never releasing instead
                     // of ever casting the gambit spell (the owned-cast regression,
-                    // fixed 2026-09-02). DeselectSpell, NOT UnequipObject -- a
-                    // hand-held spell is *selected*, not inventory-equipped
-                    // (Reconcile's note below has the same call). Gated to level 4
-                    // only: looser levels deliberately leave a category (heals,
-                    // buffs...) to the AI's own hand (CastExempt), and stripping the
-                    // other hand there would take that category away too.
-                    if (castLvl >= 4 && hands.right && hands.right != a_spell) {
-                        if (auto* other = hands.right->As<RE::SpellItem>())
-                            a_actor->DeselectSpell(other);
+                    // originally fixed 2026-09-02 for exact mode only -- the deny
+                    // side (CastExempt) was already graduated 1-4, but this evict
+                    // side stayed binary at ">=4", so "denied" was not always
+                    // accompanied by "evicted" below exact: at the level-2 DEFAULT
+                    // an Offense competitor is denied every attempt yet never
+                    // cleared from the hand, so the AI's candidate pool never runs
+                    // dry and 0x0002DD29-class gambit spells never get a turn --
+                    // deck field test, marth 2026-09-02). DeselectSpell, NOT
+                    // UnequipObject -- a hand-held spell is *selected*, not
+                    // inventory-equipped (Reconcile's note below has the same
+                    // call), and DeselectSpell is transient/unserialized like all
+                    // of Loadout's state (MAP.md), never RemoveSpell (save-
+                    // affecting, would touch the follower's known-spell list).
+                    // A category CastExempt still keeps for the AI at this level
+                    // (heals at 1-3, self-heals at 3) is deliberately left alone --
+                    // only a spell the deny hook would ALREADY refuse is evicted.
+                    // (castLvl is already >0 here -- the enclosing `if` above --
+                    // so every level that reaches this point is eligible; the
+                    // grading now lives entirely in CastExempt below.)
+                    if (hands.right && hands.right != a_spell) {
+                        if (auto* other = hands.right->As<RE::SpellItem>()) {
+                            const auto kind = CasterConsent::ClassifySpell(other);
+                            const bool selfHeal = kind == CasterConsent::SpellKind::Heal &&
+                                other->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+                            if (!CasterConsent::CastExempt(kind, selfHeal, castLvl))
+                                a_actor->DeselectSpell(other);
+                        }
                     }
 
                     g_equipClock.try_emplace(id, now);
