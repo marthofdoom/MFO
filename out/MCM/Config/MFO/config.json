@@ -495,13 +495,30 @@
           "id": "fPlayerBubble:General",
           "text": "Yield bubble (units)",
           "type": "slider",
-          "help": "A follower never walks to loot within this distance of you -- you win the race for it.",
+          "help": "A follower never walks to loot within this distance of you -- you win the race for it. Arrows/bolts/lockpicks are exempt.",
           "valueOptions": {
             "min": 0.0,
             "max": 1024.0,
             "step": 32.0,
             "sourceType": "ModSettingFloat",
-            "defaultValue": 256.0
+            "defaultValue": 150.0
+          }
+        },
+        {
+          "text": "Selling",
+          "type": "header"
+        },
+        {
+          "id": "fValuablesRatio:General",
+          "text": "Valuables threshold (gold/weight)",
+          "type": "slider",
+          "help": "A MISC item qualifies for 'Loot valuables (to sell)' once its gold value / weight clears this. Raw gemstones easily clear it.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 100.0,
+            "step": 5.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 20.0
           }
         }
       ]
