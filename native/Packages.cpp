@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "Forms.h"
 #include "Sightline.h"   // concentration hold: the mid-stream line-of-fire watch
+#include "APMFBridge.h"  // ch.9 0x49 loot-travel route (package-locked-follower fix)
 
 namespace MFO::Packages {
 
@@ -560,6 +561,94 @@ namespace MFO::Packages {
             return true;
         }
 
+        // ── APMF LOOT-TRAVEL (ch.9 0x49 route) ───────────────────────────────
+        //
+        // ALTERNATE delivery for the SAME Option-A intent, tried FIRST by
+        // LootTravelFill/Retarget/Clear below when APMF is present: instead of
+        // MFO_LootQuest's alias/static-priority-60 race (which an outranking
+        // custom AI framework's own package can win -- the Cicero case, and
+        // exactly what the PACKAGE-THEFT guard in Logistics.cpp reactively
+        // limps around), claim the follower's package-offer facet
+        // (APMFBridge::OfferPackage) so APMF's 0x49 hook hands him
+        // MFO_APMFLootTravelPackage<slot> directly and unconditionally.
+        //
+        // Because APMF delivers the package with NO alias fill (0x49 answers
+        // per-actor, not per-alias), the destination cannot ride an alias the
+        // way the legacy route's Location input does (PLDT type 8). Instead
+        // this package is authored with PLDT type 0 ("Near Reference" --
+        // RE::PackageLocation::Type::kNearReference) and the DLL overwrites its
+        // LIVE runtime target here, the same "read the wrapper by name, guard
+        // the layout by its reported type, write only after both guards pass"
+        // discipline ReadTarget/SetInputs already use for the cast package's
+        // PTDA Spell/Target inputs -- generalised from PackageTarget to
+        // PackageLocation. The offset model (IPackageData* + 0x10 to the
+        // wrapped pointer) is the SAME one ReadTarget already relies on,
+        // independently cross-checked for BGSPackageDataLocation specifically
+        // (sizeof 0x20, parent IPackageDataAIWorldLocationHandle asserted at
+        // 0x10 -- see the LAYOUT note at the top of this file); the refHandle
+        // union member itself is the direct analogue of PackageTarget's
+        // target.handle route MFO already field-proved for a cast target
+        // (SetInputs's dead t0 branch, "probes 1-3"). UNVERIFIED IN THE FIELD
+        // for a Location input specifically pending the Cicero test -- but
+        // guarded exactly like every other package-memory write in this file:
+        // any layout mismatch DECLINES loudly and writes nothing, never a
+        // blind stomp.
+        constexpr std::string_view kTypeLocation  = "Location"sv;
+        constexpr std::string_view kInputLocation = "Location"sv;
+
+        // Recover the PackageLocation* a Location input carries, guarded by its
+        // own reported type name -- the Location twin of ReadTarget.
+        RE::PackageLocation* ReadLocation(RE::IPackageData* a_pd, std::string_view a_what) {
+            if (!a_pd) return nullptr;
+            const auto& tn = a_pd->GetTypeName();
+            const std::string_view name = tn.empty() ? std::string_view{} : std::string_view(tn.c_str());
+            if (name != kTypeLocation) {
+                spdlog::error("[pkg] {} input reports type '{}' -- not a PackageLocation carrier; "
+                              "refusing to read through it", a_what,
+                              name.empty() ? "<unnamed>"sv : name);
+                return nullptr;
+            }
+            constexpr std::size_t off = kPointerOffFromIPackageData;   // same offset ReadTarget uses
+            auto* pl = *reinterpret_cast<RE::PackageLocation* const*>(
+                           reinterpret_cast<const unsigned char*>(a_pd) + off);
+            if (!pl) {
+                spdlog::error("[pkg] {} input '{}' has a null PackageLocation at +0x{:X}",
+                              a_what, name, off);
+                return nullptr;
+            }
+            spdlog::debug("[pkg] {} input '{}' at +0x{:X}: authored locType {}",
+                          a_what, name, off, static_cast<int>(pl->locType.get()));
+            return pl;
+        }
+
+        // Point an APMF loot-travel package's Location input at a LIVE ref via a
+        // runtime handle (targType/locType 0, "Near Reference") and a radius.
+        // Returns false without writing anything if the input fails its layout
+        // guard -- never a half-mutated package.
+        bool SetAPMFLootTravelTarget(RE::TESPackage* a_pkg, RE::TESObjectREFR* a_ref, float a_radius) {
+            if (!a_pkg || !a_ref) return false;
+            auto* locPd = FindInput(a_pkg, kInputLocation);
+            if (!locPd) return false;
+            auto* loc = ReadLocation(locPd, "Location");
+            if (!loc) return false;
+            loc->locType       = RE::PackageLocation::Type::kNearReference;
+            loc->data.refHandle = a_ref->CreateRefHandle();
+            loc->rad            = static_cast<std::uint32_t>(a_radius);
+            return true;
+        }
+
+        constexpr float kAPMFTravelRadius = 128.0f;   // matches make_travel_package()'s slots
+
+        // Per-slot bookkeeping for the APMF route -- file-local, NEVER serialized
+        // (the claim itself is runtime-only, APMFBridge.h). Mirrors g_travelSlots'
+        // shape (Logistics_internal.h) just enough to know, PER SLOT, whether this
+        // excursion is APMF-routed (so Retarget/Clear touch the right mechanism)
+        // and who to release if a caller clears a slot without a follower pointer
+        // (LootTravelClear's a_follower is optional; ReleaseOfferPackage needs a
+        // FormID). Reset on every ReleaseAll (#55-equivalent self-heal on load).
+        std::array<bool, kMaxLootSlots>       g_apmfSlotActive{};
+        std::array<RE::FormID, kMaxLootSlots> g_apmfSlotFollower{};
+
         // ── CONTENTION ──────────────────────────────────────────────────────
 
         // Does another quest already own the alias-package layer on this actor
@@ -1085,6 +1174,21 @@ namespace MFO::Packages {
     }
 
     void Pump() {
+        // APMF LOOT-TRAVEL REFRESH (ch.9 0x49 route): runs UNCONDITIONALLY, before
+        // the cast-holder early-return below -- an active APMF-routed slot's
+        // package-offer claim needs a keep-alive well under APMFBridge's 500ms
+        // expiry backstop (the exact reason RefreshCombatTarget exists for the
+        // cast facet's combat-target claim), and LootTravelFill/Retarget only
+        // touch this claim at excursion-start/leg-boundary, not every tick a leg
+        // is mid-walk. Cheap on the common (unchanged) case: OfferPackage's
+        // EnsureClaimLocked no-ops on an unchanged package form -- a mutex lock +
+        // map lookup + timestamp write, no actual APMF RequestEx/Repoint call.
+        for (int slot = 0; slot < kMaxLootSlots; ++slot) {
+            if (!g_apmfSlotActive[slot]) continue;
+            if (auto* pkg = Forms::APMFLootTravelPackage(slot))
+                APMFBridge::OfferPackage(g_apmfSlotFollower[slot], pkg->GetFormID());
+        }
+
         if (g_holder.phase == Phase::Idle) return;
 
         auto* actor = HolderActor();
@@ -1260,6 +1364,22 @@ namespace MFO::Packages {
         // so the player is only evicted once the marker exists (post-load
         // reconcile runs after EnsureEvictMarker); a marker-less sweep keeps
         // the old skip rather than pointlessly filling player-with-player.
+        // APMF LOOT-TRAVEL (ch.9 0x49 route): runtime-only, never serialized (no
+        // alias fill exists for it -- nothing here needs an engine-side sweep on
+        // load). But THIS module's own slot-active bookkeeping is in-process
+        // state that must self-heal on every load/revert exactly like
+        // g_travelSlots does (Logistics.cpp) -- and any still-live claim must be
+        // dropped so a stale package-offer never outlives its excursion.
+        for (int slot = 0; slot < kMaxLootSlots; ++slot) {
+            if (g_apmfSlotActive[slot]) {
+                APMFBridge::ReleaseOfferPackage(g_apmfSlotFollower[slot]);
+                spdlog::info("[loot] {} -- APMF travel slot {} was live (held {:08X}); released",
+                             a_why, slot, g_apmfSlotFollower[slot]);
+                g_apmfSlotActive[slot]   = false;
+                g_apmfSlotFollower[slot] = 0;
+            }
+        }
+
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* ev = EvictionRef();
         const bool haveMarker = ev && ev != player;   // a real non-actor to displace with
@@ -1380,8 +1500,32 @@ namespace MFO::Packages {
     bool LootTravelFill(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, int a_slot) {
         if (!Config::g_lootTravel.load())          return false;
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
+        if (!a_follower || !a_ref)                 return false;
+
+        // APMF ROUTE FIRST (ch.9 0x49): package-locked-follower fix (Cicero). No
+        // alias/priority race -- APMF's hook hands this package directly to the
+        // claimed actor, unconditionally, for as long as the claim is held. Tried
+        // before the legacy alias route; falls through to it on any decline.
+        if (APMFBridge::Available() && Config::g_apmfLootTravel.load()) {
+            if (auto* pkg = Forms::APMFLootTravelPackage(a_slot)) {
+                if (SetAPMFLootTravelTarget(pkg, a_ref, kAPMFTravelRadius)) {
+                    APMFBridge::OfferPackage(a_follower->GetFormID(), pkg->GetFormID());
+                    g_apmfSlotActive[a_slot]   = true;
+                    g_apmfSlotFollower[a_slot] = a_follower->GetFormID();
+                    a_follower->EvaluatePackage(true, false);   // never resetAI
+                    spdlog::info("[loot] {:08X}: APMF travel dispatched to {:08X} (slot {})",
+                                 a_follower->GetFormID(), a_ref->GetFormID(), a_slot);
+                    return true;
+                }
+                spdlog::warn("[loot] {:08X}: APMF loot-travel package write failed (slot {}) -- "
+                             "falling back to the alias route", a_follower->GetFormID(), a_slot);
+            }
+        }
+
+        // LEGACY ALIAS ROUTE (unchanged) -- also the fallback when APMF is
+        // absent/off or the write above declined.
         auto* quest = Forms::g_lootQuest;
-        if (!a_follower || !a_ref || !quest)       return false;
+        if (!quest)                                return false;
         // The native ForceRefTo id is AE-only (see ForceRefToNative). Off AE we
         // simply do not offer travel -- the caller falls back to arm's-reach.
         if (!REL::Module::IsAE())                  return false;
@@ -1426,8 +1570,25 @@ namespace MFO::Packages {
         // to the new destination. A movement change, not a loot mutation.
         if (!Config::g_lootTravel.load())          return false;
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
+        if (!a_follower || !a_ref)                 return false;
+
+        // APMF ROUTE: this slot's excursion started on the APMF package (Fill
+        // above), so it stays on it for the whole excursion -- rewrite the SAME
+        // package's runtime target and refresh the claim (same package form ->
+        // EnsureClaimLocked's unchanged-claim fast path, no re-engage churn).
+        if (g_apmfSlotActive[a_slot]) {
+            auto* pkg = Forms::APMFLootTravelPackage(a_slot);
+            if (!pkg || !SetAPMFLootTravelTarget(pkg, a_ref, kAPMFTravelRadius)) return false;
+            APMFBridge::OfferPackage(a_follower->GetFormID(), pkg->GetFormID());
+            a_follower->EvaluatePackage(true, false);
+            spdlog::info("[loot] {:08X}: APMF leg -> {:08X} (excursion, slot {})",
+                         a_follower->GetFormID(), a_ref->GetFormID(), a_slot);
+            return true;
+        }
+
+        // LEGACY ALIAS ROUTE (unchanged).
         auto* quest = Forms::g_lootQuest;
-        if (!a_follower || !a_ref || !quest)       return false;
+        if (!quest)                                return false;
         if (!REL::Module::IsAE())                  return false;
         if (!quest->IsRunning())                   return false;
         if (!ForceRefToNative(quest, LootTargetAlias(a_slot), a_ref)) return false;
@@ -1488,6 +1649,33 @@ namespace MFO::Packages {
         // slot is inert (#48: the player here got yanked out of furniture); the
         // next dispatch replaces the marker.
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return;
+
+        // APMF ROUTE: no alias was ever filled for this slot -- release the
+        // package-offer claim instead of evicting anything. a_follower is
+        // optional (see the header): fall back to the tracked FormID from Fill/
+        // Retarget so a slot-index-only clear (e.g. the excursion-cap/subsystem-
+        // off calls in Logistics.cpp) still releases the right claim.
+        if (g_apmfSlotActive[a_slot]) {
+            const RE::FormID fid = a_follower ? a_follower->GetFormID() : g_apmfSlotFollower[a_slot];
+            g_apmfSlotActive[a_slot]   = false;
+            g_apmfSlotFollower[a_slot] = 0;
+            if (fid) APMFBridge::ReleaseOfferPackage(fid);
+            if (a_follower) a_follower->EvaluatePackage(true, false);   // nudge; never resetAI
+            spdlog::info("[loot] APMF travel released ({}) -- slot {}", a_why, a_slot);
+            return;
+        }
+
+        // LEGACY ALIAS ROUTE (unchanged): RELEASE BY EVICTION. The loot quest is
+        // STATIC priority 60 (> the framework's 50), so a filled alias 0 ALWAYS
+        // claims the follower -- and dropping the number does NOT un-claim him
+        // (the engine locks the owning quest at ALIAS-FILL time; the runtime
+        // raise/drop never re-arbitrates -- deck WALK diagnostic, ENGINE_NOTES
+        // 0.36). So to release, EVICT him: force-fill alias 0 with the eviction
+        // MARKER -- a real ForceRefTo (works; the null clear is a no-op, 0.34) --
+        // which replaces the follower's alias instance so the framework reclaims
+        // him and he follows. A non-actor never runs the alias package, so
+        // occupying the slot is inert (#48: the player here got yanked out of
+        // furniture); the next dispatch replaces the marker.
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
         if (auto* ev = EvictionRef())
@@ -1514,6 +1702,20 @@ namespace MFO::Packages {
         // every load. Evict him (fill the marker -- a real ForceRefTo; the null
         // clear is a no-op, 0.34) so he detaches. Scans every slot because a
         // dismissed follower could hold any of the four.
+        //
+        // APMF ROUTE: a_id never occupied an alias for its slot (0x49 delivers
+        // with no alias fill) -- occupancy there is tracked in g_apmfSlotFollower
+        // instead. Scan it the same way, releasing the claim so a dismissed
+        // follower doesn't outlive the roster holding a package-offer claim.
+        for (int slot = 0; slot < kMaxLootSlots; ++slot) {
+            if (g_apmfSlotActive[slot] && g_apmfSlotFollower[slot] == a_id) {
+                g_apmfSlotActive[slot]   = false;
+                g_apmfSlotFollower[slot] = 0;
+                APMFBridge::ReleaseOfferPackage(a_id);
+                spdlog::info("[loot] APMF travel released (dismissed) -- slot {} held {:08X}", slot, a_id);
+            }
+        }
+
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
         for (int slot = 0; slot < kMaxLootSlots; ++slot) {

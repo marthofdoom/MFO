@@ -72,7 +72,20 @@ FID_RANGED_STYLE    = OWN | 0x834  # ranged-dominant CSTY: swapped in for act.eq
 # -- probe 6's proven-clean shape. Wiring is DLL-gated (bCastSelf) until the
 # production path is deck-confirmed.
 FID_CAST_PACKAGE_SELF = OWN | 0x835  # UseMagic PACK, targType-6 self, no QNAM
-NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x900-0x902 = P7 travel packages)
+# APMF LOOT-TRAVEL (ch.9 0x49 route, Docs/ALLOWANCE-TEMPLATE.md T3 in the APMF
+# repo): one Travel PACK per concurrent loot slot, mirroring FID_TRAVEL_PACKAGE{,
+# _1,_2,_3}'s per-slot shape but with a RUNTIME-HANDLE Location input (PLDT type
+# 0 "Near Reference") instead of an alias (type 8) -- APMF's 0x49 hook hands the
+# package directly to the claimed actor, bypassing MFO's own alias/quest-priority
+# arbitration entirely, so a follower package-locked by an outranking custom AI
+# framework (the Cicero case) still gets walked to the loot. No QNAM: the
+# Location input names no alias. See make_apmf_loot_travel_package().
+FID_APMF_LOOT_TRAVEL_PACKAGE_0 = OWN | 0x836
+FID_APMF_LOOT_TRAVEL_PACKAGE_1 = OWN | 0x837
+FID_APMF_LOOT_TRAVEL_PACKAGE_2 = OWN | 0x838
+FID_APMF_LOOT_TRAVEL_PACKAGE_3 = OWN | 0x839
+NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x836-0x839 = APMF loot-travel packages,
+                                   # 0x900-0x902 = P7 travel packages)
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -818,7 +831,7 @@ def make_cast_self_package():
                           waiver='t6-self')
 
 
-def build_travel(fid, edid, alias_idx, radius, qnam, pkdt_flags=0x00002000):
+def build_travel(fid, edid, alias_idx, radius, qnam, pkdt_flags=0x00002000, runtime_target=False):
     """One PACK instance riding vanilla Travel (00016FAA): walk to the ref an
     alias holds, then stop. Byte shape mirrored VERBATIM from the shipped
     alias-delivered exemplar VC01FalionAtSummoningCircle (0010FF16) -- PLDT
@@ -863,11 +876,32 @@ def build_travel(fid, edid, alias_idx, radius, qnam, pkdt_flags=0x00002000):
     # invalidates the PACKAGE leaves the follower claimed-with-nothing and ROOTS
     # him (ENGINE_NOTES 0.24/0.25, deck-measured). To release we drop the quest
     # BELOW the follower framework so the framework reclaims him.
-    # QNAM (owner quest) is MANDATORY for an alias-valued input (626/626 vanilla).
-    body += subrec('QNAM', struct.pack('<I', qnam))
+    # QNAM (owner quest) is MANDATORY for an alias-valued input (626/626 vanilla) --
+    # and ONLY for one: runtime_target's Location is type 0 (a live ref, never an
+    # alias), so it names no alias and needs no QNAM (qnam is None for that call).
+    assert (qnam is None) == runtime_target, \
+        "QNAM is mandatory for the alias-valued Location (runtime_target=False) " \
+        "and forbidden for the runtime-handle Location (runtime_target=True)"
+    if qnam is not None:
+        body += subrec('QNAM', struct.pack('<I', qnam))
     body += subrec('PKCU', struct.pack('<III', 3, FREF_TMPL_TRAVEL, 3))
-    # input 0: Location -> PLDT type 8 (reference alias) / alias index / radius.
-    body += pack_input("Location", 'PLDT', struct.pack('<III', 8, alias_idx, radius))
+    if runtime_target:
+        # APMF LOOT-TRAVEL route: PLDT type 0 ("Near Reference", RE::PackageLocation
+        # ::Type::kNearReference) authored with a placeholder non-null ref -- 0 of
+        # 4,048 vanilla type-0 PLDTs ship a null target (see the MFO_PLDT_PLAYER
+        # experiment above) -- FREF_PLAYER, harmless, since the DLL always
+        # overwrites PackageLocation::data.refHandle with the real loot ref before
+        # ever claiming the actor via APMFBridge::OfferPackage (Packages.cpp
+        # SetAPMFLootTravelTarget). UNVERIFIED IN THE FIELD pending the Cicero
+        # test: the read/write shape (BGSPackageDataLocation, pointer at
+        # IPackageData*+0x10, PackageLocation::data.refHandle) is cross-checked
+        # against the public CommonLibSSE-NG headers and MFO's own prior
+        # PackageTarget precedent (SetInputs, the analogous PTDA route), not yet
+        # field-observed for a Location input specifically.
+        body += pack_input("Location", 'PLDT', struct.pack('<IiI', 0, FREF_PLAYER, radius))
+    else:
+        # input 0: Location -> PLDT type 8 (reference alias) / alias index / radius.
+        body += pack_input("Location", 'PLDT', struct.pack('<III', 8, alias_idx, radius))
     # inputs 2 and 4: the two Bools, both false -- as every WERoad travel ships.
     body += pack_input("Bool", 'CNAM', struct.pack('<B', 0))
     body += pack_input("Bool", 'CNAM', struct.pack('<B', 0))
@@ -897,6 +931,26 @@ def make_travel_package():
           + build_travel(FID_TRAVEL_PACKAGE_1, "MFO_TravelPackage1", alias_idx=3, radius=128, qnam=FID_LOOT_QUEST)
           + build_travel(FID_TRAVEL_PACKAGE_2, "MFO_TravelPackage2", alias_idx=5, radius=128, qnam=FID_LOOT_QUEST)
           + build_travel(FID_TRAVEL_PACKAGE_3, "MFO_TravelPackage3", alias_idx=7, radius=128, qnam=FID_LOOT_QUEST))
+
+
+def make_apmf_loot_travel_package():
+    """APMF ch.9 (0x49 package-offer) loot-travel packages -- ONE per concurrent
+    loot slot (kMaxLootSlots), mirroring make_travel_package()'s per-slot
+    instances but with the RUNTIME-HANDLE route (runtime_target=True) instead of
+    an alias: APMF's 0x49 hook hands this package directly to the actor holding
+    a live kIntent_OfferPackage claim naming it, bypassing MFO's own alias/
+    priority arbitration entirely -- the fix for a follower package-locked by an
+    outranking custom AI framework (the Cicero case), whose own package would
+    otherwise beat MFO_LootQuest's static priority 60. No QNAM (no alias-valued
+    input); radius/gait identical to the alias route's slots.
+    """
+    ids = (FID_APMF_LOOT_TRAVEL_PACKAGE_0, FID_APMF_LOOT_TRAVEL_PACKAGE_1,
+           FID_APMF_LOOT_TRAVEL_PACKAGE_2, FID_APMF_LOOT_TRAVEL_PACKAGE_3)
+    out = b''
+    for i, fid in enumerate(ids):
+        out += build_travel(fid, f"MFO_APMFLootTravelPackage{i}", alias_idx=0,
+                            radius=128, qnam=None, runtime_target=True)
+    return out
 
 
 def make_retreat_package():
@@ -942,6 +996,7 @@ def make_pack():
     if POC_ENABLED:
         body += make_poc_packages()
     body += make_travel_package()
+    body += make_apmf_loot_travel_package()
     body += make_retreat_package()
     return group('PACK', body)
 
@@ -1690,6 +1745,9 @@ def main():
           + ("  [NOT attached under POC]" if POC_ENABLED else ""))
     print(f"  PACK  0x{FID_CAST_PACKAGE_SELF & 0xFFF:03X}        MFO_CastPackageSelf -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X} (t6 self, NO QNAM; DLL bCastSelf-gated)")
     print(f"  PACK  0x{FID_TRAVEL_PACKAGE & 0xFFF:03X}        MFO_TravelPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X}")
+    print(f"  PACK  0x{FID_APMF_LOOT_TRAVEL_PACKAGE_0 & 0xFFF:03X}-0x{FID_APMF_LOOT_TRAVEL_PACKAGE_3 & 0xFFF:03X}    "
+          f"MFO_APMFLootTravelPackage0-3 -> vanilla Travel {FREF_TMPL_TRAVEL:08X} (runtime-handle Location, "
+          f"ch.9 0x49 route, APMFBridge::OfferPackage)")
     print(f"  PACK  0x{FID_RETREAT_PACKAGE & 0xFFF:03X}        MFO_RetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat")
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
     print(f"  CSTY  0x{FID_MELEE_STYLE & 0xFFF:03X}        MFO_MeleeStyle (equip_melee stance -- default ON)")

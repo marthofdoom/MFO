@@ -181,6 +181,17 @@ namespace MFO::Config {
     // semantics never change -- a new behaviour gets a new key, never this one.
     inline std::atomic<bool>  g_legacyCastHybrid{ false };
 
+    // APMF LOOT-TRAVEL (APMFBridge, ch.9 0x49 package-offer). When APMF.dll is
+    // present, LootTravelFill/Retarget/Clear (Packages.cpp) route the walk through
+    // APMF's package-offer channel instead of MFO's own alias/quest-priority --
+    // the fix for a follower package-locked by an outranking custom AI framework
+    // (the Cicero case), whose own package would otherwise beat MFO_LootQuest's
+    // static priority 60. ON by default but wholly INERT unless APMF is in the
+    // load order; this INI kill-switch exists for A/B field testing, same pattern
+    // as bApmfCast. No save state (the offer claim is runtime-only, like the cast
+    // claims). Falls back to the byte-identical legacy alias route when off/absent.
+    inline std::atomic<bool>  g_apmfLootTravel{ true };
+
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc
     // hook. Now ON by default (field-proven; audit 2026-07-28).

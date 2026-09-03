@@ -360,7 +360,10 @@ releases **by eviction** with a non-actor XMarker.
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and
   can't be lowered to release. `LootTravelRetarget` refills only the TARGET alias,
-  leaving actor alias 0 filled (no hand-back between corpses).
+  leaving actor alias 0 filled (no hand-back between corpses). **PASS B: the loot
+  trio now tries the APMF ch.9 0x49 route FIRST** (see the dedicated Packages.cpp
+  entry below, near APMFBridge.cpp) — degrades to this unchanged alias route when
+  APMF is absent/off.
   The full per-follower teardown (Loadout/Targeting/CombatStyle/ForcedWeapon/
   CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
   `Followers::ReleaseHeldState(id)` (`Followers.cpp`, worker-only, idempotent) —
@@ -1257,6 +1260,50 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Runtime-only — NO save/co-save state**; `ClearTransientState()` ← `plugin.cpp` kPreLoadGame
   (after `StopPump`). `g_apmf` is `std::atomic`. APMF holds ZERO MFO code; this bridge is the ONLY
   MFO code aware of APMF.
+- **PASS B (ch.9/ch.7 channels): `OfferPackage`/`ReleaseOfferPackage` (package-offer, `kIntent_
+  OfferPackage`) + `ClaimCombatActionDeny`/`ReleaseCombatActionDeny` (combat-action deny,
+  `kIntent_CombatAction`, `param.ival` category bitmask) — SAME `g_owned`/`EnsureClaimLocked`
+  machinery, two new fields (`packageHandle`/`package`, `actionHandle`/`actionMask`) + an ival
+  twin `EnsureIvalClaimLocked`. `ClaimCombatActionDeny` is built but NOT wired into loot-travel
+  (see Packages.cpp below) — MFO's own PACKAGE-THEFT guard already concedes loot-travel to a
+  live combat package on purpose.
+
+### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
+`LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now try
+`APMFBridge::OfferPackage` FIRST, before the alias/static-priority-60 race: claims the
+package-offer facet naming `Forms::APMFLootTravelPackage(slot)` (4 NEW packages, `Forms.h`
+`kAPMFLootTravelPackage0-3` = `0x836-0x839`, `MFO_GenerateESP.py make_apmf_loot_travel_package()`)
+so APMF's 0x49 hook hands the follower that package directly and unconditionally — no alias fill,
+no arbitration race, so a follower package-locked by an outranking custom AI framework (Cicero)
+still gets walked to the loot. Falls through to the unchanged legacy alias route on any decline
+(APMF absent, `bApmfLootTravel` off, or the package write below fails) — **byte-identical
+degrade-when-absent**.
+- **RUNTIME-HANDLE TARGET (no alias to carry it):** the new packages are authored PLDT type 0
+  ("Near Reference", `RE::PackageLocation::Type::kNearReference`) instead of type 8 (alias);
+  `SetAPMFLootTravelTarget` (`Packages.cpp` ~`:628`) overwrites `PackageLocation::data.refHandle`
+  at runtime via `ReadLocation`, the Location twin of `ReadTarget` (SAME `kPointerOffFromIPackageData`
+  offset model, generalised from `PackageTarget` to `PackageLocation` — **UNVERIFIED IN THE FIELD**
+  for a Location input specifically, pending the Cicero test; guarded identically: any layout
+  mismatch declines loudly, never a blind write).
+- **Per-slot bookkeeping** (`g_apmfSlotActive`/`g_apmfSlotFollower`, file-local, never serialized —
+  the claim itself is runtime-only) tracks which of the 4 slots is APMF-routed so Retarget/Clear/
+  EvictIf touch the right mechanism, and who to release when a caller clears by slot index alone
+  (`LootTravelClear`'s `a_follower` is optional). Swept on `ReleaseAll` (every load/revert) exactly
+  like `g_travelSlots` self-heals in `Logistics.cpp`.
+- **PUMP REFRESH IS LOAD-BEARING:** `Packages::Pump()` (`:1176`) now refreshes every active
+  APMF-routed slot's claim UNCONDITIONALLY, first, before its own cast-holder early-return — a
+  multi-second walk needs a keep-alive well under APMFBridge's 500ms expiry backstop, and
+  Fill/Retarget only touch the claim at excursion-start/leg-boundary, not every tick mid-walk
+  (the exact starvation lesson from the owned-cast dedupe-latch revert above, applied up front
+  instead of discovered the same way).
+- **`Forms::IsTravelPackage`** now recognizes all 8 packages (4 alias + 4 APMF) — load-bearing for
+  the PACKAGE-THEFT guard (`Logistics.cpp:917-974`): a follower legitimately running his
+  APMF-delivered package must read as "on the travel package", never as "stolen" (theft cannot
+  actually happen on the APMF route — 0x49 wins unconditionally for as long as the claim holds —
+  but the guard must not misfire and churn regardless).
+- **`ClaimCombatActionDeny` is NOT wired here** (see APMFBridge.cpp above) — left available, not
+  scoped into this dispatch, per marth's "keep it scoped" instruction and the existing
+  concede-to-combat design.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

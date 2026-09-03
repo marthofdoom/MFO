@@ -106,6 +106,30 @@ namespace APMF_API {
         kIntent_Idle          = 11,  // ch.12 one-shot idle/animation
         kIntent_ShoutPower    = 12,  // ch.14 shout/power selection
         kIntent_Equipment     = 13,  // ch.15 unequip/equip a worn item (melee-vs-ranged lever)
+        kIntent_CombatAction  = 14,  // ch.7  DENY named combat behavior-tree leaf CATEGORIES (param.ival = a
+                                     //       CombatActionCategory bitmask); graduated from the field-proven
+                                     //       T1 combat-behavior-tree-leaf probe (Docs/PROBE-ALLOWANCE.md)
+        kIntent_OfferPackage  = 15,  // ch.9  CLAIM the package-offer facet: param.form = the TESPackage FormID
+                                     //       to offer the actor (Actor::CheckForCurrentAliasPackage, 0x49);
+                                     //       graduated from the field-proven 0x49 package-offer probe
+    };
+
+    // ── Combat-action CATEGORY bitmask (kIntent_CombatAction's param.ival) ──────
+    // Which combat behavior-tree leaf CATEGORY a kIntent_CombatAction claim
+    // denies for its actor (ch.7, Docs/CHANNEL-MAP.md). A claim's param.ival is
+    // the OR of every category it wants denied; a leaf is denied only when its
+    // OWN classified category bit is set in the winning claim's mask -- an
+    // all-zero mask (or no claim at all) denies nothing, never a blanket lock.
+    // APPEND-ONLY: never renumber an existing bit; OR in a new bit at the next
+    // free position for a future category (defense/movement/utility are
+    // deliberately NOT assigned a bit yet -- Docs/ALLOWANCE-TEMPLATE.md §3's T1
+    // row lists them as never-denied by design until a real client need names
+    // one).
+    enum CombatActionCategory : std::uint32_t {
+        kCombatActionCat_None    = 0,
+        kCombatActionCat_Offense = 1u << 0,   // Attack/AttackLow/Bash/RangedAttack/SpecialAttack/
+                                               // GroundAttack/FlyingAttack/CastImmediateSpell/
+                                               // CastConcentrationSpell/CastShout/PrepareDualCast leaves
     };
 
     // ── Channel PARAM (ABI v2) ─────────────────────────────────────────────────

@@ -108,6 +108,42 @@ namespace MFO::APMFBridge {
     // from the pump body.
     void Tick();
 
+    // ── package-offer facet CLAIM: PER-EXCURSION (ch.9, T3 0x49) ────────────────
+    // Worker-safe. CLAIM the package-offer facet for a_follower, naming a_packageForm
+    // (kIntent_OfferPackage, param.form). While this claim is held, APMF's 0x49 hook
+    // (Actor::CheckForCurrentAliasPackage) hands a_follower this package DIRECTLY,
+    // unconditionally -- no alias fill, no quest-priority race, so a follower who is
+    // package-locked by an outranking custom AI framework (the Cicero case) still
+    // gets it. The CALLER owns the package's own runtime target (Packages.cpp writes
+    // a targType-0 runtime handle into it BEFORE calling this) -- this bridge only
+    // ever names the FormID. RE-POINTS in place (same handle) on a repeat call with a
+    // DIFFERENT form; a repeat call with the SAME form is a cheap refresh (matches
+    // EnsureClaimLocked's existing unchanged-claim fast path). No-op when APMF is
+    // absent or Config::g_apmfLootTravel is off.
+    void OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm);
+
+    // Worker-safe. Release ONLY the package-offer claim (any combat-action-deny claim
+    // held for the same follower, if any, is left alone -- release it separately).
+    // Call the instant the excursion ends (arrival / loot done / abandoned) so the
+    // follower's framework package resumes immediately, not after the expiry backstop.
+    void ReleaseOfferPackage(RE::FormID a_follower);
+
+    // ── combat-action DENY facet CLAIM: PER-EXCURSION (ch.7, T1) ────────────────
+    // Worker-safe. CLAIM the combat-action-deny facet for a_follower, naming
+    // a_categoryMask (kIntent_CombatAction, param.ival -- an OR of
+    // APMF_API::CombatActionCategory bits). While held, APMF denies the combat
+    // behavior-tree leaves classified under the claimed categories (e.g.
+    // kCombatActionCat_Offense denies Attack/Bash/RangedAttack/Cast*/etc). NOT
+    // wired into the loot-travel dispatch by default (Logistics_Loot.cpp) --
+    // MFO's own PACKAGE-THEFT guard already concedes loot-travel to a live combat
+    // package on purpose (a follower who is actually fighting should keep
+    // fighting); this helper exists for a caller that has a narrower, considered
+    // need. No-op when APMF is absent or Config::g_apmfLootTravel is off.
+    void ClaimCombatActionDeny(RE::FormID a_follower, std::uint32_t a_categoryMask);
+
+    // Worker-safe. Release the combat-action-deny claim.
+    void ReleaseCombatActionDeny(RE::FormID a_follower);
+
     // Release every claim and clear the map. kPreLoadGame / revert, AFTER the pump is
     // drained (so no worker tick races the map).
     void ClearTransientState();

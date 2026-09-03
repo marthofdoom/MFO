@@ -67,6 +67,18 @@ namespace MFO::Forms {
     // runtime -- the rev-4 crash cell. Route is DLL-gated (bCastSelf) pending a
     // deck-confirmed production run.
     inline constexpr RE::FormID kCastPackageSelf  = 0x835;
+    // APMF LOOT-TRAVEL (ch.9 0x49 route, APMFBridge::OfferPackage): ONE package
+    // per concurrent loot slot (kMaxLootSlots), mirroring kTravelPackage{,1,2,3}'s
+    // per-slot shape but with a RUNTIME-HANDLE Location input (PLDT type 0, "Near
+    // Reference") instead of an alias -- APMF's 0x49 hook delivers the package
+    // directly to the claimed actor, so there is no alias to carry the target;
+    // Packages.cpp overwrites PackageLocation::data.refHandle at runtime before
+    // claiming. No QNAM (no alias-valued input). See MFO_GenerateESP.py
+    // make_apmf_loot_travel_package().
+    inline constexpr RE::FormID kAPMFLootTravelPackage0 = 0x836;
+    inline constexpr RE::FormID kAPMFLootTravelPackage1 = 0x837;
+    inline constexpr RE::FormID kAPMFLootTravelPackage2 = 0x838;
+    inline constexpr RE::FormID kAPMFLootTravelPackage3 = 0x839;
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -86,14 +98,35 @@ namespace MFO::Forms {
     inline RE::TESPackage* g_travelPackage1 = nullptr; // P7 slot 1
     inline RE::TESPackage* g_travelPackage2 = nullptr; // P7 slot 2
     inline RE::TESPackage* g_travelPackage3 = nullptr; // P7 slot 3
+    // APMF loot-travel (ch.9 0x49 route), one per slot -- see kAPMFLootTravelPackage0-3.
+    inline RE::TESPackage* g_apmfLootTravelPackage0 = nullptr;
+    inline RE::TESPackage* g_apmfLootTravelPackage1 = nullptr;
+    inline RE::TESPackage* g_apmfLootTravelPackage2 = nullptr;
+    inline RE::TESPackage* g_apmfLootTravelPackage3 = nullptr;
 
-    // WALK-diagnostic predicate: is a_pkg ANY of the (up to 4) loot-travel
-    // packages? A slot-k follower rides slot k's package, so the single-package
-    // comparison would read false for slots 1-3 and mislead. Never gates
-    // behaviour -- diagnostic only. Unresolved extras compare as nullptr (safe).
+    // Per-slot accessor for the APMF loot-travel packages (Packages.cpp). nullptr
+    // for an out-of-range slot or an unresolved record.
+    inline RE::TESPackage* APMFLootTravelPackage(int a_slot) {
+        switch (a_slot) {
+        case 0: return g_apmfLootTravelPackage0;
+        case 1: return g_apmfLootTravelPackage1;
+        case 2: return g_apmfLootTravelPackage2;
+        case 3: return g_apmfLootTravelPackage3;
+        default: return nullptr;
+        }
+    }
+
+    // WALK-diagnostic predicate: is a_pkg ANY of the (up to 8, 4 alias + 4 APMF)
+    // loot-travel packages? A slot-k follower rides slot k's package, so the
+    // single-package comparison would read false for other slots and mislead.
+    // Also load-bearing for the PACKAGE-THEFT guard (Logistics.cpp): a follower
+    // legitimately running his APMF-delivered package must read as "on the travel
+    // package", never as "stolen". Unresolved extras compare as nullptr (safe).
     inline bool IsTravelPackage(const RE::TESPackage* a_pkg) {
         return a_pkg && (a_pkg == g_travelPackage  || a_pkg == g_travelPackage1 ||
-                         a_pkg == g_travelPackage2 || a_pkg == g_travelPackage3);
+                         a_pkg == g_travelPackage2 || a_pkg == g_travelPackage3 ||
+                         a_pkg == g_apmfLootTravelPackage0 || a_pkg == g_apmfLootTravelPackage1 ||
+                         a_pkg == g_apmfLootTravelPackage2 || a_pkg == g_apmfLootTravelPackage3);
     }
     inline RE::TESQuest*   g_retreatQuest   = nullptr; // RETREAT PROBE
     inline RE::TESPackage* g_retreatPackage = nullptr; // RETREAT PROBE

@@ -37,11 +37,22 @@ namespace MFO::APMFBridge {
         //     end. It is NOT tied to the cast gambit's win/lose, so a cast->melee
         //     transition RE-POINTS it, never releases it.
         // Each claim carries its own refresh timestamp. Guarded by g_mx (worker + main).
+        // package-offer (ch.9) and combat-action-deny (ch.7) are PER-EXCURSION,
+        // caller-driven lifecycles (Packages.cpp's loot-travel routing): created on
+        // the first winning dispatch, refreshed by a repeat call (same form/mask ==
+        // cheap no-op via EnsureClaimLocked/EnsureIvalClaimLocked), released the
+        // instant the caller says so (arrival/loot-done/abandoned), with the SAME
+        // kExpiry backstop as cast-select/combat-target in case a caller's release
+        // is ever missed (e.g. a mid-excursion crash-adjacent edge).
         struct Owned {
             APMF_API::Handle spellHandle  = APMF_API::kInvalidHandle;  RE::FormID spell  = 0;
             std::chrono::steady_clock::time_point spellRefreshed{};
             APMF_API::Handle targetHandle = APMF_API::kInvalidHandle;  RE::FormID target = 0;
             std::chrono::steady_clock::time_point targetRefreshed{};
+            APMF_API::Handle packageHandle = APMF_API::kInvalidHandle;  RE::FormID package = 0;
+            std::chrono::steady_clock::time_point packageRefreshed{};
+            APMF_API::Handle actionHandle  = APMF_API::kInvalidHandle;  std::uint32_t actionMask = 0;
+            std::chrono::steady_clock::time_point actionRefreshed{};
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
@@ -83,7 +94,37 @@ namespace MFO::APMFBridge {
             }
         }
 
+        // ival twin of EnsureClaimLocked, for kIntent_CombatAction's param.ival
+        // (a category bitmask) rather than a param.form. Same create / re-point-in-
+        // place (v3) / release+request (v2 fallback) shape; `want == 0` releases.
+        void EnsureIvalClaimLocked(const APMF_API::APMF_API_v2* api, RE::FormID follower,
+                                   APMF_API::Intent intent, APMF_API::Handle& handle,
+                                   std::uint32_t& cur, std::uint32_t want) {
+            if (want == 0) {
+                if (handle != APMF_API::kInvalidHandle) { api->Release(handle); handle = APMF_API::kInvalidHandle; }
+                cur = 0;
+                return;
+            }
+            if (handle != APMF_API::kInvalidHandle && cur == want) return;   // unchanged
+            APMF_API::APMF_Param p{};
+            p.ival = static_cast<std::int32_t>(want);
+            if (handle == APMF_API::kInvalidHandle) {
+                handle = api->RequestEx(follower, intent, kOwnBasis, &p);
+                cur    = (handle != APMF_API::kInvalidHandle) ? want : 0;
+            } else if (api->abiVersion >= 3) {
+                reinterpret_cast<const APMF_API::APMF_API_v3*>(api)->Repoint(handle, &p);
+                cur = want;
+            } else {
+                api->Release(handle);
+                handle = api->RequestEx(follower, intent, kOwnBasis, &p);
+                cur    = (handle != APMF_API::kInvalidHandle) ? want : 0;
+            }
+        }
+
         // Release one handle (thread-safe; no-ops a stale handle). Caller holds g_mx.
+        // RE::FormID IS std::uint32_t (a plain alias, not a distinct type), so this
+        // ONE overload also serves actionMask -- a second overload on that "different"
+        // parameter type would be a duplicate-definition error, not a real overload.
         void ReleaseHandleLocked(APMF_API::Handle& handle, RE::FormID& cur) {
             auto* api = g_apmf.load(std::memory_order_relaxed);
             if (api && handle != APMF_API::kInvalidHandle) api->Release(handle);
@@ -91,10 +132,11 @@ namespace MFO::APMFBridge {
             cur = 0;
         }
 
-        // Drop the map entry once BOTH claims are gone. Caller holds g_mx.
+        // Drop the map entry once EVERY claim is gone. Caller holds g_mx.
         void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
-            if (it->second.spellHandle == APMF_API::kInvalidHandle &&
-                it->second.targetHandle == APMF_API::kInvalidHandle)
+            const auto& o = it->second;
+            if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
+                o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle)
                 g_owned.erase(it);
         }
     }
@@ -191,6 +233,44 @@ namespace MFO::APMFBridge {
             it->second.targetRefreshed = std::chrono::steady_clock::now();   // keep-alive: timestamp only
     }
 
+    // ── package-offer (per-excursion) ───────────────────────────────────────────
+    void OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || a_packageForm == 0 || !Config::g_apmfLootTravel.load()) return;
+        std::scoped_lock lock(g_mx);
+        auto& o = g_owned[a_follower];
+        EnsureClaimLocked(api, a_follower, APMF_API::kIntent_OfferPackage, o.packageHandle, o.package, a_packageForm);
+        o.packageRefreshed = std::chrono::steady_clock::now();
+        EraseIfEmpty(g_owned.find(a_follower));
+    }
+
+    void ReleaseOfferPackage(RE::FormID a_follower) {
+        std::scoped_lock lock(g_mx);
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return;
+        ReleaseHandleLocked(it->second.packageHandle, it->second.package);
+        EraseIfEmpty(it);
+    }
+
+    // ── combat-action deny (per-excursion) ──────────────────────────────────────
+    void ClaimCombatActionDeny(RE::FormID a_follower, std::uint32_t a_categoryMask) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || a_categoryMask == 0 || !Config::g_apmfLootTravel.load()) return;
+        std::scoped_lock lock(g_mx);
+        auto& o = g_owned[a_follower];
+        EnsureIvalClaimLocked(api, a_follower, APMF_API::kIntent_CombatAction, o.actionHandle, o.actionMask, a_categoryMask);
+        o.actionRefreshed = std::chrono::steady_clock::now();
+        EraseIfEmpty(g_owned.find(a_follower));
+    }
+
+    void ReleaseCombatActionDeny(RE::FormID a_follower) {
+        std::scoped_lock lock(g_mx);
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return;
+        ReleaseHandleLocked(it->second.actionHandle, it->second.actionMask);
+        EraseIfEmpty(it);
+    }
+
     void Tick() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api) return;
@@ -202,7 +282,12 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.spellHandle,  o.spell);
             if (o.targetHandle != APMF_API::kInvalidHandle && now - o.targetRefreshed >= kExpiry)
                 ReleaseHandleLocked(o.targetHandle, o.target);
-            if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle)
+            if (o.packageHandle != APMF_API::kInvalidHandle && now - o.packageRefreshed >= kExpiry)
+                ReleaseHandleLocked(o.packageHandle, o.package);
+            if (o.actionHandle != APMF_API::kInvalidHandle && now - o.actionRefreshed >= kExpiry)
+                ReleaseHandleLocked(o.actionHandle, o.actionMask);
+            if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
+                o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle)
                 it = g_owned.erase(it);
             else
                 ++it;
@@ -214,6 +299,8 @@ namespace MFO::APMFBridge {
         for (auto& [id, o] : g_owned) {
             ReleaseHandleLocked(o.spellHandle,  o.spell);
             ReleaseHandleLocked(o.targetHandle, o.target);
+            ReleaseHandleLocked(o.packageHandle, o.package);
+            ReleaseHandleLocked(o.actionHandle,  o.actionMask);
         }
         g_owned.clear();
     }

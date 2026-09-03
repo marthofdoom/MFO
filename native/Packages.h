@@ -211,7 +211,11 @@ namespace MFO::Packages {
     bool StreamLive(RE::FormID a_actor, RE::FormID a_spell);
 
     // Observe engine state and advance the phase. MAIN THREAD, once per tick.
-    // This is the ONLY function that moves the state machine.
+    // This is the ONLY function that moves the state machine. ALSO refreshes
+    // any live APMF loot-travel (ch.9) package-offer claim, UNCONDITIONALLY and
+    // first -- the keep-alive an active excursion needs every tick, well under
+    // APMFBridge's 500ms expiry backstop, since LootTravelFill/Retarget only
+    // touch that claim at excursion-start/leg-boundary. See the .cpp.
     void Pump();
 
     // Release the alias if this actor holds it. Idempotent.
@@ -252,6 +256,17 @@ namespace MFO::Packages {
     // Logistics owns the follower->slot map and passes the owning slot down every
     // call. Returns false if bLootTravel is off, the records are unresolved, off
     // AE, or the quest is not running.
+    //
+    // ALTERNATE DELIVERY (APMF ch.9 0x49, .cpp-internal): when APMF is present
+    // and bApmfLootTravel is on, this trio tries APMFBridge::OfferPackage FIRST
+    // -- claiming the package-offer facet so APMF's 0x49 hook hands the follower
+    // MFO_APMFLootTravelPackage<slot> directly, unconditionally, bypassing the
+    // alias/static-priority-60 race below entirely (the fix for a follower
+    // package-locked by an outranking custom AI framework, e.g. Cicero) -- and
+    // fall through to the alias route on any decline. Callers never see which
+    // mechanism ran; the external contract (SAVE-SERIALIZED alias fill, MUST
+    // Clear) is unchanged for the fallback path. The APMF path is runtime-only
+    // (no alias fill, nothing serialized for it).
     //
     // The fill is SAVE-SERIALIZED (#55): the caller MUST LootTravelClear() on
     // arrival, interrupt (combat), or timeout. ReleaseAll clears every slot on

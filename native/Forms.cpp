@@ -44,6 +44,13 @@ namespace MFO::Forms {
         g_travelPackage1 = Look<RE::TESPackage>(kTravelPackage1, "MFO_TravelPackage1");  // P7 slot 1
         g_travelPackage2 = Look<RE::TESPackage>(kTravelPackage2, "MFO_TravelPackage2");  // P7 slot 2
         g_travelPackage3 = Look<RE::TESPackage>(kTravelPackage3, "MFO_TravelPackage3");  // P7 slot 3
+        // APMF loot-travel (ch.9 0x49 route). A miss disables ONLY that slot's APMF
+        // route -- LootTravelFill falls back to the alias route (named log, never a
+        // hard requirement).
+        g_apmfLootTravelPackage0 = Look<RE::TESPackage>(kAPMFLootTravelPackage0, "MFO_APMFLootTravelPackage0");
+        g_apmfLootTravelPackage1 = Look<RE::TESPackage>(kAPMFLootTravelPackage1, "MFO_APMFLootTravelPackage1");
+        g_apmfLootTravelPackage2 = Look<RE::TESPackage>(kAPMFLootTravelPackage2, "MFO_APMFLootTravelPackage2");
+        g_apmfLootTravelPackage3 = Look<RE::TESPackage>(kAPMFLootTravelPackage3, "MFO_APMFLootTravelPackage3");
         g_retreatQuest   = Look<RE::TESQuest>(kRetreatQuest, "MFO_RetreatQuest");        // RETREAT PROBE
         g_retreatPackage = Look<RE::TESPackage>(kRetreatPackage, "MFO_RetreatPackage");  // RETREAT PROBE
         g_tradeQuest     = Look<RE::TESQuest>(kTradeQuest, "MFO_TradeQuest");            // #21 econ bridge
