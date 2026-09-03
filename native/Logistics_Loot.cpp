@@ -1872,9 +1872,12 @@ namespace MFO::Logistics {
                 // Activate). A grab BEYOND plain arm's reach also honours the
                 // player bubble -- never hoover a body you are standing over.
                 const float grabR = LooseRef(ref) ? kArrivalDist : GrabRadiusFor(rid);
+                // Clutter (arrows/bolts/lockpicks) is exempt from the bubble --
+                // grabbed right under the player's feet, never deferred.
                 const bool  grabOk = df <= kArrivalDist ||
                     (df <= grabR &&
-                     playerPos.GetDistance(ref->GetPosition()) > Config::g_playerBubble.load());
+                     (IsClutterCat(a_cat) ||
+                      playerPos.GetDistance(ref->GetPosition()) > Config::g_playerBubble.load()));
 
                 // ── EXCURSION MODE: the follower is already claimed (priority 60)
                 // and driving a batch. The closest eligible candidate decides the
@@ -1935,7 +1938,9 @@ namespace MFO::Logistics {
                     // keeps the ref IN THE RUNNING: it sorts to the back, and the
                     // in-range grown-grab path above never consults this list.
                     if (TravelFailedRecently(rid, a_now))                          continue;
-                    if (playerPos.GetDistance(ref->GetPosition())
+                    // Clutter is exempt from the bubble (IsClutterCat, above).
+                    if (!IsClutterCat(a_cat) &&
+                        playerPos.GetDistance(ref->GetPosition())
                             <= Config::g_playerBubble.load())                      continue;
                     // OFF-NAVMESH GATE: if no navmesh is near the ref, the Travel
                     // package can't build a path and he'd freeze -- skip + blocklist
@@ -1997,7 +2002,9 @@ namespace MFO::Logistics {
                     if (TravelFailedRecently(rid, a_now)) continue;
                     // CONVERGENCE YIELD: never walk to loot the player is right
                     // next to -- you win the race for the corpse you're heading to.
-                    if (playerPos.GetDistance(ref->GetPosition()) <= Config::g_playerBubble.load())
+                    // Clutter is exempt from the bubble (IsClutterCat, above).
+                    if (!IsClutterCat(a_cat) &&
+                        playerPos.GetDistance(ref->GetPosition()) <= Config::g_playerBubble.load())
                         continue;
                     // P7: claim the first FREE slot; skip if all are busy.
                     const int s = FreeSlotIndex();
@@ -2079,7 +2086,10 @@ namespace MFO::Logistics {
                                      "aliasBusy={} navdist={:.0f}(gate {:.0f})",
                                      a_follower->GetFormID(), CatName(a_cat), r0id, dF, dP, walkLimit,
                                      PlayerIsConsidering(r0id),
-                                     dP <= Config::g_playerBubble.load(), Config::g_playerBubble.load(),
+                                     // Clutter is bubble-exempt (IsClutterCat) --
+                                     // report false/exempt so the log stays truthful.
+                                     !IsClutterCat(a_cat) && dP <= Config::g_playerBubble.load(),
+                                     Config::g_playerBubble.load(),
                                      TravelFailedRecently(r0id, a_now),
                                      (FreeSlotIndex() < 0 && SlotIndexOf(a_follower->GetFormID()) < 0),
                                      NavmeshReach(a_follower, r0), Config::g_navmeshGate.load());

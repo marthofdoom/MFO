@@ -384,7 +384,16 @@ namespace MFO::Config {
     inline std::atomic<float> g_fairChance{ 6.0f };           // seconds near+facing before valuables release
     inline std::atomic<float> g_abandonDelay{ 45.0f };        // never-approached backstop before valuables release
     inline std::atomic<float> g_departRadius{ 700.0f };       // player must leave this far for "moved on"
-    inline std::atomic<float> g_playerBubble{ 256.0f };       // convergence yield: defer within this of a target
+    // 150 (was 256, marth field-test): clutter (arrows/bolts/lockpicks) is
+    // exempt from this gate entirely (IsClutterCat, Logistics_Loot.cpp) --
+    // only non-clutter loot defers this close to the player.
+    inline std::atomic<float> g_playerBubble{ 150.0f };       // convergence yield: defer within this of a target
+
+    // VALUABLES eligibility (kActLootValuables, Logistics_Loot.cpp): a MISC
+    // item qualifies when its gold-value / weight ratio clears this. 20 puts
+    // raw gemstones and similar high-density loot in; ordinary clutter (most
+    // MISC is well under 5/unit) stays out. fValuablesRatio.
+    inline std::atomic<float> g_valuablesRatio{ 20.0f };
 
     // How far a follower REACHES for loot. Until active pathing lands (the
     // deferred "Option A"), this is a TELEPORT-GRAB radius: the follower takes

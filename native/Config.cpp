@@ -154,6 +154,7 @@ namespace MFO::Config {
             else if (a_key == "fAbandonDelay")      setF(g_abandonDelay,     0.0f, 600.0f);
             else if (a_key == "fDepartRadius")      setF(g_departRadius,    64.0f, 8192.0f);
             else if (a_key == "fPlayerBubble")      setF(g_playerBubble,     0.0f, 4096.0f);
+            else if (a_key == "fValuablesRatio")    setF(g_valuablesRatio,   0.0f, 1000.0f);
             else if (a_key == "fLootRadius")        setF(g_lootRadius,     64.0f, 4096.0f);
             else if (a_key == "bLootTravel")        setB(g_lootTravel);
             else if (a_key == "bLootInPlayerHomes") setB(g_lootInPlayerHomes);
@@ -295,7 +296,8 @@ namespace MFO::Config {
             g_fairChance         = 6.0f;
             g_abandonDelay       = 45.0f;
             g_departRadius       = 700.0f;
-            g_playerBubble       = 256.0f;
+            g_playerBubble       = 150.0f;
+            g_valuablesRatio     = 20.0f;
             g_lootRadius         = 3000.0f;
             g_lootTravel         = true;
             g_lootInPlayerHomes  = false;

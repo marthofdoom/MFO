@@ -270,6 +270,17 @@ namespace MFO::Logistics {
             }
         }
 
+        // CLUTTER categories are exempt from Config::g_playerBubble (the
+        // convergence-yield gate): lockpicks/arrows/bolts are Free-tier
+        // consumables nobody else competes for, so a follower should still
+        // grab them right under the player's feet instead of deferring like
+        // real Valuables/Gear does. Checked at every bubble-gate site in
+        // Logistics_Loot.cpp + the arrival site in Logistics.cpp.
+        inline bool IsClutterCat(Category a_cat) {
+            return a_cat == Category::Lockpicks || a_cat == Category::Arrows ||
+                   a_cat == Category::Bolts;
+        }
+
         // OPTION A travel state -- up to kMaxLootSlots travellers AT ONCE (one loot
         // quest, four alias pairs; see g_travelSlots below). Worker-tick-only, NOT
         // serialized: this just remembers the intent; the engine-side alias fill is

@@ -826,7 +826,10 @@ namespace MFO::Logistics {
                     const float grown = GrabRadiusFor(tref->GetFormID());
                     if (grown > arrivalDist) {
                         auto* pcG = RE::PlayerCharacter::GetSingleton();
-                        if (!pcG || pcG->GetPosition().GetDistance(tref->GetPosition()) >
+                        // Clutter (arrows/bolts/lockpicks) is exempt from the
+                        // bubble -- tr.cat carries this leg's category.
+                        if (IsClutterCat(tr.cat) || !pcG ||
+                            pcG->GetPosition().GetDistance(tref->GetPosition()) >
                                         Config::g_playerBubble.load())
                             arrivalDist = grown;
                     }
