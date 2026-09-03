@@ -929,16 +929,22 @@ namespace MFO::Board {
                                         if (condTopIdx[t] == -1) { if (curIsFoeCond) { curC = t; break; } }
                                         else if (rv.condOp == condTab[condTopIdx[t]].op) { curC = t; break; }
                                     }
+                                    // Defer the child-popup open to THIS (row) scope: OpenPopup
+                                    // and the ##condfoe BeginPopup must hash against the SAME ID
+                                    // stack. Calling OpenPopup inside the ##cond popup's onPick
+                                    // mismatches the ID -> an invisible, input-blocking popup.
+                                    bool openCondFoe = false;
                                     listPopup("##cond", "When (target / condition)",
                                         (int)condTopIdx.size(),
                                         [&](int t) { return condTopIdx[t] == -1
                                                             ? "Foe:" : condTab[condTopIdx[t]].label; },
                                         curC,
                                         [&](int t) {
-                                            if (condTopIdx[t] == -1) { ImGui::OpenPopup("##condfoe"); return; }
+                                            if (condTopIdx[t] == -1) { openCondFoe = true; return; }
                                             QueueEdit({ EditKind::SetCond, sel, selTable,
                                                         rv.uid, (float)condTopIdx[t] });
                                         });
+                                    if (openCondFoe) ImGui::OpenPopup("##condfoe");
                                     if (condFoeSlot >= 0) {
                                         int curF = 0;
                                         for (int t = 0; t < (int)condFoeIdx.size(); ++t)
@@ -1027,17 +1033,23 @@ namespace MFO::Board {
                                         else if (actTopIdx[t] == -2) { if (curIsMiscAct) { curA = t; break; } }
                                         else if (rv.actOp == actTab[actTopIdx[t]].op) { curA = t; break; }
                                     }
+                                    // Defer child-popup opens to THIS (row) scope -- same ID-stack
+                                    // reason as ##condfoe above (an OpenPopup inside the ##act popup
+                                    // mismatches the child's BeginPopup ID -> invisible hung popup).
+                                    bool openActPotions = false, openActMisc = false;
                                     listPopup("##act", "Do (action)", (int)actTopIdx.size(),
                                         [&](int t) { return actTopIdx[t] == -1 ? "Loot potions:"
                                                             : actTopIdx[t] == -2 ? "Loot misc:"
                                                             : actTab[actTopIdx[t]].label; },
                                         curA,
                                         [&](int t) {
-                                            if (actTopIdx[t] == -1) { ImGui::OpenPopup("##actpotions"); return; }
-                                            if (actTopIdx[t] == -2) { ImGui::OpenPopup("##actmisc"); return; }
+                                            if (actTopIdx[t] == -1) { openActPotions = true; return; }
+                                            if (actTopIdx[t] == -2) { openActMisc = true; return; }
                                             QueueEdit({ EditKind::SetAct, sel, selTable,
                                                         rv.uid, (float)actTopIdx[t] });
                                         });
+                                    if (openActPotions) ImGui::OpenPopup("##actpotions");
+                                    if (openActMisc)    ImGui::OpenPopup("##actmisc");
                                     if (actPotionSlot >= 0) {
                                         int curP = 0;
                                         for (int t = 0; t < (int)actPotionIdx.size(); ++t)
