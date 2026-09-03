@@ -8,6 +8,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #undef GetObject
 
@@ -164,9 +165,10 @@ namespace MFO::Board {
         { Vocab::kCondSelfMpBelow,   "Self Magicka % below", ParamKind::Percent },
         { Vocab::kCondSelfSpBelow,   "Self Stamina % below", ParamKind::Percent },
         { Vocab::kCondPlayerHpBelow, "Player HP % below",    ParamKind::Percent },
-        { Vocab::kCondFoeLowestHp,   "Foe: lowest HP",       ParamKind::None    },
+        { Vocab::kCondFoeLowestHp,   "Foe: lowest HP %",     ParamKind::None    },
         { Vocab::kCondFoeHpBelow,    "Foe: HP % below",      ParamKind::Percent },
-        { Vocab::kCondFoeHighestHp,  "Foe: highest HP",      ParamKind::None    },
+        { Vocab::kCondFoeHighestHp,  "Foe: highest HP %",    ParamKind::None    },
+        { Vocab::kCondFoeHighestLevel,"Foe: highest level",  ParamKind::None    },
         { Vocab::kCondFoeAny,        "Foe: nearest",         ParamKind::None    },
         { Vocab::kCondFoeWithinRange,"Foe targeted within range", ParamKind::Distance},
         { Vocab::kCondFoeBeyondRange,"Foe targeted beyond range", ParamKind::Distance},
@@ -179,6 +181,7 @@ namespace MFO::Board {
         { Vocab::kCondFoeIsCaster,   "Foe is a spellcaster", ParamKind::None    },
         { Vocab::kCondFoeIsRanged,   "Foe is ranged",        ParamKind::None    },
         { Vocab::kCondFoeWeakerThanMe, "Foe is weaker than me", ParamKind::None },
+        { Vocab::kCondFoeStrongerThanMe,"Foe is stronger than me", ParamKind::None },
         { Vocab::kCondFoeBlocking,   "Foe is blocking",      ParamKind::None    },
         { Vocab::kCondFoeFleeing,    "Foe is fleeing",       ParamKind::None    },
         { Vocab::kCondFoeWeakFire,   "Foe: weak to fire",    ParamKind::None    },
@@ -854,15 +857,36 @@ namespace MFO::Board {
                                     track();
                                     if (rv.lastFired) { ImGui::SameLine();
                                         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1), "*"); }
+                                    // Foe: conditions collapse to one nested-popup
+                                    // row (condTopIdx/condFoeIdx, built once above
+                                    // the row loop) so the flat list stays short.
+                                    const bool curIsFoeCond = IsFoeCond(rv.condOp.c_str());
                                     int curC = 0;
-                                    for (int k = 0; k < condN; ++k)
-                                        if (rv.condOp == condTab[k].op) { curC = k; break; }
-                                    listPopup("##cond", "When (target / condition)", condN,
-                                        [&](int k) { return condTab[k].label; }, curC,
-                                        [&](int k) {
+                                    for (int t = 0; t < (int)condTopIdx.size(); ++t) {
+                                        if (condTopIdx[t] == -1) { if (curIsFoeCond) { curC = t; break; } }
+                                        else if (rv.condOp == condTab[condTopIdx[t]].op) { curC = t; break; }
+                                    }
+                                    listPopup("##cond", "When (target / condition)",
+                                        (int)condTopIdx.size(),
+                                        [&](int t) { return condTopIdx[t] == -1
+                                                            ? "Foe:" : condTab[condTopIdx[t]].label; },
+                                        curC,
+                                        [&](int t) {
+                                            if (condTopIdx[t] == -1) { ImGui::OpenPopup("##condfoe"); return; }
                                             QueueEdit({ EditKind::SetCond, sel, selTable,
-                                                        rv.uid, (float)k });
+                                                        rv.uid, (float)condTopIdx[t] });
                                         });
+                                    if (condFoeSlot >= 0) {
+                                        int curF = 0;
+                                        for (int t = 0; t < (int)condFoeIdx.size(); ++t)
+                                            if (rv.condOp == condTab[condFoeIdx[t]].op) { curF = t; break; }
+                                        listPopup("##condfoe", "Foe:", (int)condFoeIdx.size(),
+                                            [&](int t) { return condTab[condFoeIdx[t]].label; }, curF,
+                                            [&](int t) {
+                                                QueueEdit({ EditKind::SetCond, sel, selTable,
+                                                            rv.uid, (float)condFoeIdx[t] });
+                                            });
+                                    }
                                 }
 
                                 // VALUE -- opens a preset list matched to what the

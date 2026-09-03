@@ -18,12 +18,14 @@ namespace MFO::Eval {
         bool IsFoeSelector(const std::string& a_op) {
             return a_op == Vocab::kCondFoeAny        || a_op == Vocab::kCondFoeHpBelow  ||
                    a_op == Vocab::kCondFoeLowestHp   || a_op == Vocab::kCondFoeHighestHp ||
+                   a_op == Vocab::kCondFoeHighestLevel ||
                    a_op == Vocab::kCondFoeWithinRange|| a_op == Vocab::kCondFoeBeyondRange ||
                    a_op == Vocab::kCondFoeAttackingPlayer || a_op == Vocab::kCondFoeAttackingMe ||
                    a_op == Vocab::kCondFoeAttackingMeMelee || a_op == Vocab::kCondFoeAttackingMeRanged ||
                    a_op == Vocab::kCondFoeIsUndead   || a_op == Vocab::kCondFoeIsDragon ||
                    a_op == Vocab::kCondFoeIsCaster   || a_op == Vocab::kCondFoeIsRanged ||
-                   a_op == Vocab::kCondFoeWeakerThanMe || a_op == Vocab::kCondFoeBlocking ||
+                   a_op == Vocab::kCondFoeWeakerThanMe || a_op == Vocab::kCondFoeStrongerThanMe ||
+                   a_op == Vocab::kCondFoeBlocking ||
                    a_op == Vocab::kCondFoeFleeing    ||
                    a_op == Vocab::kCondFoeWeakFire   || a_op == Vocab::kCondFoeWeakFrost ||
                    a_op == Vocab::kCondFoeWeakShock;
@@ -269,6 +271,8 @@ namespace MFO::Eval {
                         score = hp;
                     } else if (a_op == Vocab::kCondFoeHighestHp) {
                         score = -Vocab::HealthPct(foe);
+                    } else if (a_op == Vocab::kCondFoeHighestLevel) {
+                        score = -static_cast<float>(foe->GetLevel());
                     } else if (a_op == Vocab::kCondFoeAttackingPlayer) {
                         if (!FoeTargets(foe, a_player)) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingMe) {
@@ -293,6 +297,8 @@ namespace MFO::Eval {
                         if (!FoeIsRanged(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeWeakerThanMe) {
                         if (foe->GetLevel() >= a_self->GetLevel()) continue;
+                    } else if (a_op == Vocab::kCondFoeStrongerThanMe) {
+                        if (foe->GetLevel() <= a_self->GetLevel()) continue;
                     } else if (a_op == Vocab::kCondFoeBlocking) {
                         if (!foe->IsBlocking()) continue;
                     } else if (a_op == Vocab::kCondFoeFleeing) {

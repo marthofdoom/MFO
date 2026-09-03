@@ -81,6 +81,10 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeCountAtLeast = "cond.foe_count_at_least";
     // Foe SELECTORS -- choose a target AND gate, resolved in PickFoe.
     inline constexpr const char* kCondFoeHighestHp       = "cond.foe_highest_hp";
+    // Highest-LEVEL selector -- mirrors kCondFoeHighestHp's shape but sorts by
+    // GetLevel() instead of HealthPct (score = -level, so the strongest sorts
+    // first). Frozen serialization string (#10).
+    inline constexpr const char* kCondFoeHighestLevel    = "cond.foe_highest_level";
     inline constexpr const char* kCondFoeWithinRange     = "cond.foe_within_range";   // param = units; TARGET-relative (current combat target)
     inline constexpr const char* kCondFoeBeyondRange     = "cond.foe_beyond_range";   // param = units; TARGET-relative (current combat target)
     inline constexpr const char* kCondFoeAttackingPlayer = "cond.foe_attacking_player";
@@ -96,6 +100,9 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeIsCaster        = "cond.foe_is_caster";
     inline constexpr const char* kCondFoeIsRanged        = "cond.foe_is_ranged";
     inline constexpr const char* kCondFoeWeakerThanMe    = "cond.foe_weaker_than_me";
+    // Exact mirror of kCondFoeWeakerThanMe (foe->GetLevel() <= self level
+    // instead of >=). Frozen serialization string (#10).
+    inline constexpr const char* kCondFoeStrongerThanMe  = "cond.foe_stronger_than_me";
     inline constexpr const char* kCondFoeBlocking        = "cond.foe_blocking";
     inline constexpr const char* kCondFoeFleeing         = "cond.foe_fleeing";
     // ELEMENTAL WEAKNESS selectors -- choose the nearest foe whose resistance to
