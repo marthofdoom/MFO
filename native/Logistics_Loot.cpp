@@ -500,18 +500,15 @@ namespace MFO::Logistics {
         }
 
         // QUEST-OBJECT INSTANCE GUARD (bLootSpecialItems). Per-INSTANCE, not
-        // per-base-record: RE::ExtraDataList::HasQuestObjectAlias() is the
-        // engine's own "this exact item is currently filled into a live quest
-        // alias" check (same signal QuickLoot-style mods use to grey out quest
-        // items). Checked UNCONDITIONALLY at every loot-acquisition site this
-        // toggle opens up -- quest items stay engine-protected regardless of
-        // bLootSpecialItems (marth's decision); a base-record catalog exclusion
-        // is a coarser, author-time signal and is what the toggle governs.
+        // per-base-record: RE::InventoryEntryData::IsQuestObject() is the
+        // engine's own "this exact item instance is currently needed by a live
+        // quest" check. Checked UNCONDITIONALLY at every loot-acquisition site
+        // this toggle opens up -- quest items stay engine-protected regardless
+        // of bLootSpecialItems (marth's decision); a base-record catalog
+        // exclusion is a coarser, author-time signal and is what the toggle
+        // governs.
         bool IsQuestObjectInstance(RE::InventoryEntryData* a_entry) {
-            if (!a_entry || !a_entry->extraLists) return false;
-            for (auto* xl : *a_entry->extraLists)
-                if (xl && xl->HasQuestObjectAlias()) return true;
-            return false;
+            return a_entry && a_entry->IsQuestObject();
         }
 
         // The ARMO currently WORN in a logical mage-apparel slot (MageClothingSlot
