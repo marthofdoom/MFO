@@ -288,11 +288,6 @@ namespace MFO::Followers {
         // latch left behind keeps redirecting the follower AND keeps every
         // Character in combat worldwide off the fast path.
         Targeting::Clear(id);
-        // The owned-cast dedupe latch -- left behind, a re-latch onto the SAME
-        // {target, spell} right after this teardown would wrongly read as
-        // "unchanged" and skip re-issuing the APMF claim + Targeting::Command
-        // that teardown just cleared above.
-        Actuation::ReleaseOwnedCastLatch(id);
         // The weapon-stance ownership -- an entry left behind keeps every
         // combatant paying the ApplyTick lookup and could re-swap a style we no
         // longer own. Idempotent erase-miss when unowned.

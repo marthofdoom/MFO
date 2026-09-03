@@ -653,7 +653,6 @@ namespace MFO {
         // ledger must not survive to re-equip gear into the next save (#16).
         Loadout::ClearTransientState();
         Actuation::ClearSelfCasts();   // drop forced self-cast + AUTO fan-out pacing state (no equip/stow to undo)
-        Actuation::ClearOwnedCastState();   // drop the owned-cast {target,spell} dedupe latch -- same rule
         // The latch is a live commanded target; it cannot outlive the world.
         Targeting::ClearAll();
         CasterConsent::ClearTransientState();

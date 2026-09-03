@@ -1193,13 +1193,17 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   Caster` with a DIFFERENT spell already in hand, `Loadout::Prepare` (`Loadout.cpp:191-213`) also
   **neutralizes a competing spell in the OTHER hand** (`DeselectSpell`) — but ONLY at `iCastControl`
   level 4 (exact); looser levels leave that hand to the AI (`CastExempt`). MFO then (a) CLAIMS the
-  cast + combat-target facets via APMF and (b) `Targeting::Command(follower, target->GetHandle())`
-  commands the target (its UpdateCombat hook re-asserts `currentCombatTarget`) — both **gated by an
-  idempotency latch** (`g_ownedCastLast`, `Actuation.cpp:524-551`, keyed `{target,spell}` per
-  follower) so a steady-state latch issues the claim/command ONCE, not every ~133ms tick; released
-  per-follower by `Actuation::ReleaseOwnedCastLatch` (← `Followers::ReleaseHeldState`) and globally by
-  `Actuation::ClearOwnedCastState` (← `Serialization.cpp` `ResetAllState`). `CasterConsent::Want`
-  (granted at `:473`, every tick — cheap, not latch-gated) permits our spell + denies competing; the
+  cast + combat-target facets via APMF (`Actuation.cpp:522-523`) and (b) `Targeting::Command(follower,
+  target->GetHandle())` commands the target (its UpdateCombat hook re-asserts `currentCombatTarget`,
+  `:533`) — **every owned tick, deliberately not deduped here**: `EnsureClaimLocked`
+  (`APMFBridge.cpp:70`) already no-ops an unchanged claim but still stamps its liveness timestamp on
+  every call (`:144`/`:173`), which is what keeps the claim alive past its `kExpiry` backstop (500ms,
+  `:56`/`:192-194`) — a per-follower dedupe latch that skipped these calls on an unchanged tick was
+  tried 2026-09-02 and reverted the same day (Fable review) for starving the claim mid-cast
+  ("casting facet released" while the AI was still charging); `Targeting::Command` has its own
+  unchanged-latch dedupe (`Targeting.h:37-41`) so calling it every tick is equally cheap.
+  `CasterConsent::Want` (granted at `:460`, every tick — same reasoning) permits our spell + denies
+  competing; the
   **Cast-biased combat style** (`Scheduler.cpp:~805` sets `Stance::Cast` when a cast is wanted → raises
   the magic score) makes the follower's own AI DECIDE to cast. Result: the vanilla AI casts our spell
   at our target, FULL animation, still MOBILE (ENGINE_NOTES §0.15a/§0.27/§0.28). Resolves

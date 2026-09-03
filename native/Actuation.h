@@ -117,14 +117,6 @@ namespace MFO::Actuation {
     // equip/debt to undo (mirrors ClearForcedWeapons).
     void ClearSelfCasts();
 
-    // OWNED-CAST DEDUPE (fix, marth 2026-09-02): drop the {target,spell} latch
-    // CastOn's owned-cast branch uses to skip re-issuing the APMF claims +
-    // Targeting::Command every tick. No engine call to undo (mirrors
-    // ClearSelfCasts). Per-follower on teardown/dismissal; ClearOwnedCastState
-    // is the session-wide revert/load counterpart.
-    void ReleaseOwnedCastLatch(RE::FormID a_actorID);
-    void ClearOwnedCastState();
-
     // AUTO TARGET INFERENCE for act.cast_target. The board's default "Auto" pick
     // (Subject::Self, no subject actor, no selector target) infers WHO from the
     // spell and fans the cast out: hostile -> every nearby enemy; beneficial ->
