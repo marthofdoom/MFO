@@ -422,6 +422,20 @@ namespace MFO::Config {
     // bLootInPlayerHomes.
     inline std::atomic<bool>  g_lootInPlayerHomes{ false };
 
+    // LOOT ARTIFACTS + SELL SOCKETED GEAR. Default ON (permissive). This ONE
+    // toggle lifts TWO protections at once: Catalog::IsExcluded artifact/
+    // unique-item loot-ACQUISITION exclusion (never touches the "don't strip a
+    // worn artifact off a follower" site -- that stays unconditional), and the
+    // socketed-gear guard in ShedOffRoleWeapon (Logistics.cpp) that otherwise
+    // never sheds a gemmed off-role weapon. NOTE (marth, flag for review): the
+    // ACTUAL vendor sell path's socketed-gear guard is a SEPARATE mechanism
+    // (gemHold in Logistics_Economy.cpp, ungem-then-sell/protect) and is NOT
+    // gated by this toggle -- ON here only lets a socketed off-role weapon be
+    // DROPPED on the floor, it does not make merchant selling touch gemmed
+    // gear. OFF restores both protections (the shipped v1.1.x behavior). Quest
+    // items stay engine-protected regardless of this toggle. bLootSpecialItems.
+    inline std::atomic<bool>  g_lootSpecialItems{ true };
+
     // #21 FOLLOWER ECONOMY. Default ON. When on, a follower standing at a merchant
     // sells its junk (Phase 2) and buys supplies it's short on (Phase 3), via the
     // MFO_Trade Papyrus bridge. OFF makes the econ scan a DRY RUN -- it logs the
