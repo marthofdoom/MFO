@@ -595,8 +595,26 @@ namespace MFO::Packages {
         // guarded exactly like every other package-memory write in this file:
         // any layout mismatch DECLINES loudly and writes nothing, never a
         // blind stomp.
+        // kTypeLocation is the ANAM TYPE-STRING (what GetTypeName() returns --
+        // ReadLocation's own guard, matching the ANAM "Location" this file's
+        // pack_input("Location", 'PLDT', ...) authors on every Travel-template
+        // instance). kInputLocation is a COMPLETELY DIFFERENT thing: the
+        // TEMPLATE's own BNAM-declared HUMAN PARAMETER NAME, which FindInput
+        // searches for (name -> uid -> slot, exactly like kInputSpell="Spell"/
+        // kInputTarget="Target" on the UseMagic template) -- FIELD-PROVEN WRONG
+        // as "Location" (deck 2026-09-03, Tuxborn, Cicero test): FindInput's
+        // one-shot name-map dump on the miss read the vanilla Travel template's
+        // (00016FAA) REAL three parameter names verbatim -- "Place to Travel"
+        // (uid 0, the Location input), "Ride Horse if possible?" (uid 2), "Prefer
+        // Preferred Path?" (uid 4) -- proving BOTH maps genuinely lack "Location"
+        // (not a stale/missing map; the dump listed exactly 3 entries each, an
+        // exhaustive miss) and handing the correct string directly, no further
+        // guessing needed. This is why the runtime-handle write NEVER RAN: FindInput
+        // returned null before ReadLocation/the PackageLocation write were ever
+        // reached, so the offset-model/GetTypeName() risk flagged above is STILL
+        // UNVERIFIED -- this fix only clears the parameter-name miss in front of it.
         constexpr std::string_view kTypeLocation  = "Location"sv;
-        constexpr std::string_view kInputLocation = "Location"sv;
+        constexpr std::string_view kInputLocation = "Place to Travel"sv;
 
         // Recover the PackageLocation* a Location input carries, guarded by its
         // own reported type name -- the Location twin of ReadTarget.

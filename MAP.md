@@ -1286,9 +1286,22 @@ decline-fallback.
   ("Near Reference", `RE::PackageLocation::Type::kNearReference`) instead of type 8 (alias);
   `SetAPMFLootTravelTarget` (`Packages.cpp` ~`:628`) overwrites `PackageLocation::data.refHandle`
   at runtime via `ReadLocation`, the Location twin of `ReadTarget` (SAME `kPointerOffFromIPackageData`
-  offset model, generalised from `PackageTarget` to `PackageLocation` — **UNVERIFIED IN THE FIELD**
-  for a Location input specifically, pending the Cicero test; guarded identically: any layout
-  mismatch declines loudly, never a blind write).
+  offset model, generalised from `PackageTarget` to `PackageLocation`; guarded identically: any
+  layout mismatch declines loudly, never a blind write).
+- **FIELD BUG FOUND + FIXED (2026-09-03, deck Tuxborn, first Cicero test): `kInputLocation` was
+  authored as `"Location"` — WRONG.** `FindInput`'s name→uid lookup (`Packages.cpp:389`) resolves
+  the TEMPLATE's own BNAM-declared human parameter name (like `kInputSpell="Spell"`/`kInputTarget=
+  "Target"` on the UseMagic template), NOT the ANAM type-string (`kTypeLocation="Location"`,
+  ReadLocation's own, correct, unrelated guard). The one-shot both-maps-miss dump
+  (`FindInput`'s `DumpNameMap`) read the vanilla Travel template's (`00016FAA`) REAL 3 parameter
+  names verbatim off the deck log: **`"Place to Travel"` (uid 0, the Location input)**, `"Ride
+  Horse if possible?"` (uid 2), `"Prefer Preferred Path?"` (uid 4) — an exhaustive 3-of-3 miss on
+  `"Location"`, so `FindInput` returned null EVERY call and the runtime write never ran (never
+  reached `ReadLocation`/the `PackageLocation` write at all — logged, not a crash, per the guard
+  discipline). Fixed: `kInputLocation = "Place to Travel"sv`. **The offset-model/`GetTypeName()`
+  risk on the write itself is THEREFORE STILL UNVERIFIED** — this fix only clears the parameter-
+  name miss standing in front of it; the NEXT Cicero field test is the first one that actually
+  exercises `ReadLocation`/the `PackageLocation::data.refHandle` write.
 - **Per-slot bookkeeping** (`g_apmfSlotActive`/`g_apmfSlotFollower`, file-local, never serialized —
   the claim itself is runtime-only) tracks which of the 4 slots is APMF-routed so Retarget/Clear/
   EvictIf touch the right mechanism, and who to release when a caller clears by slot index alone
