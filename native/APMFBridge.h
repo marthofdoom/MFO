@@ -120,7 +120,14 @@ namespace MFO::APMFBridge {
     // DIFFERENT form; a repeat call with the SAME form is a cheap refresh (matches
     // EnsureClaimLocked's existing unchanged-claim fast path). No-op when APMF is
     // absent or Config::g_apmfLootTravel is off.
-    void OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm);
+    //
+    // Returns whether a_follower now holds a LIVE package-offer claim (false on a
+    // no-op no-APMF call, OR on a live APMF that REFUSED the claim -- e.g. it lost
+    // arbitration to a higher-basis client, or no channel serves the intent on an
+    // older ABI). MFO IS AN APMF SHOWPIECE (Docs/STATUS.md): the caller uses this
+    // to LOG a refusal loudly, never to silently fall back to a pre-APMF route --
+    // with APMF present, the APMF path is committed, not a first-try-then-decline.
+    bool OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm);
 
     // Worker-safe. Release ONLY the package-offer claim (any combat-action-deny claim
     // held for the same follower, if any, is left alone -- release it separately).
@@ -138,8 +145,10 @@ namespace MFO::APMFBridge {
     // MFO's own PACKAGE-THEFT guard already concedes loot-travel to a live combat
     // package on purpose (a follower who is actually fighting should keep
     // fighting); this helper exists for a caller that has a narrower, considered
-    // need. No-op when APMF is absent or Config::g_apmfLootTravel is off.
-    void ClaimCombatActionDeny(RE::FormID a_follower, std::uint32_t a_categoryMask);
+    // need. No-op when APMF is absent or Config::g_apmfLootTravel is off. Returns
+    // whether a_follower now holds a LIVE claim -- same showpiece-logging contract
+    // as OfferPackage's return, for whichever caller eventually wires this in.
+    bool ClaimCombatActionDeny(RE::FormID a_follower, std::uint32_t a_categoryMask);
 
     // Worker-safe. Release the combat-action-deny claim.
     void ReleaseCombatActionDeny(RE::FormID a_follower);

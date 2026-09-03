@@ -234,14 +234,16 @@ namespace MFO::APMFBridge {
     }
 
     // ── package-offer (per-excursion) ───────────────────────────────────────────
-    void OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm) {
+    bool OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api || a_follower == 0 || a_packageForm == 0 || !Config::g_apmfLootTravel.load()) return;
+        if (!api || a_follower == 0 || a_packageForm == 0 || !Config::g_apmfLootTravel.load()) return false;
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
         EnsureClaimLocked(api, a_follower, APMF_API::kIntent_OfferPackage, o.packageHandle, o.package, a_packageForm);
         o.packageRefreshed = std::chrono::steady_clock::now();
+        const bool live = o.packageHandle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
+        return live;
     }
 
     void ReleaseOfferPackage(RE::FormID a_follower) {
@@ -253,14 +255,16 @@ namespace MFO::APMFBridge {
     }
 
     // ── combat-action deny (per-excursion) ──────────────────────────────────────
-    void ClaimCombatActionDeny(RE::FormID a_follower, std::uint32_t a_categoryMask) {
+    bool ClaimCombatActionDeny(RE::FormID a_follower, std::uint32_t a_categoryMask) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api || a_follower == 0 || a_categoryMask == 0 || !Config::g_apmfLootTravel.load()) return;
+        if (!api || a_follower == 0 || a_categoryMask == 0 || !Config::g_apmfLootTravel.load()) return false;
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
         EnsureIvalClaimLocked(api, a_follower, APMF_API::kIntent_CombatAction, o.actionHandle, o.actionMask, a_categoryMask);
         o.actionRefreshed = std::chrono::steady_clock::now();
+        const bool live = o.actionHandle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
+        return live;
     }
 
     void ReleaseCombatActionDeny(RE::FormID a_follower) {

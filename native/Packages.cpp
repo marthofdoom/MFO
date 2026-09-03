@@ -563,14 +563,16 @@ namespace MFO::Packages {
 
         // ── APMF LOOT-TRAVEL (ch.9 0x49 route) ───────────────────────────────
         //
-        // ALTERNATE delivery for the SAME Option-A intent, tried FIRST by
-        // LootTravelFill/Retarget/Clear below when APMF is present: instead of
-        // MFO_LootQuest's alias/static-priority-60 race (which an outranking
-        // custom AI framework's own package can win -- the Cicero case, and
-        // exactly what the PACKAGE-THEFT guard in Logistics.cpp reactively
-        // limps around), claim the follower's package-offer facet
-        // (APMFBridge::OfferPackage) so APMF's 0x49 hook hands him
-        // MFO_APMFLootTravelPackage<slot> directly and unconditionally.
+        // SHOWPIECE routing for the SAME Option-A intent (marth, Docs/STATUS.md:
+        // "MFO is an APMF showpiece"): LootTravelFill/Retarget/Clear below COMMIT
+        // to this when APMF is present, instead of MFO_LootQuest's alias/static-
+        // priority-60 race (which an outranking custom AI framework's own package
+        // can win -- the Cicero case, and exactly what the PACKAGE-THEFT guard in
+        // Logistics.cpp reactively limps around): claim the follower's
+        // package-offer facet (APMFBridge::OfferPackage) so APMF's 0x49 hook
+        // hands him MFO_APMFLootTravelPackage<slot> directly and unconditionally.
+        // The alias route is the APMF-ABSENT degrade only -- never a fallback
+        // from a decline on this path (see LootTravelFill's own comment).
         //
         // Because APMF delivers the package with NO alias fill (0x49 answers
         // per-actor, not per-alias), the destination cannot ride an alias the
@@ -1502,28 +1504,51 @@ namespace MFO::Packages {
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
         if (!a_follower || !a_ref)                 return false;
 
-        // APMF ROUTE FIRST (ch.9 0x49): package-locked-follower fix (Cicero). No
-        // alias/priority race -- APMF's hook hands this package directly to the
-        // claimed actor, unconditionally, for as long as the claim is held. Tried
-        // before the legacy alias route; falls through to it on any decline.
+        // APMF SHOWPIECE PRINCIPLE (marth, Docs/STATUS.md): MFO is a showpiece for
+        // APMF -- with APMF present, MFO ROUTES THROUGH APMF and COMMITS to it.
+        // The legacy alias/static-priority-60 route below runs ONLY when APMF is
+        // entirely ABSENT (Available() false, or the bApmfLootTravel kill switch
+        // is off -- the SAME compound gate the owned cast uses for "count as
+        // absent"). It is NEVER a decline-fallback: a failure on the APMF path
+        // (an unresolved package record, a layout-guard decline on the runtime
+        // write, or APMF itself refusing the claim -- e.g. a lost arbitration to
+        // a higher-basis client) is logged LOUDLY and FAILS CLOSED (no travel
+        // dispatched this tick; the caller's existing arm's-reach fallback is the
+        // ONLY degrade, same as "off AE" already behaves) rather than silently
+        // reverting to the pre-APMF route and masking an APMF-path bug behind a
+        // false "it worked".
         if (APMFBridge::Available() && Config::g_apmfLootTravel.load()) {
-            if (auto* pkg = Forms::APMFLootTravelPackage(a_slot)) {
-                if (SetAPMFLootTravelTarget(pkg, a_ref, kAPMFTravelRadius)) {
-                    APMFBridge::OfferPackage(a_follower->GetFormID(), pkg->GetFormID());
-                    g_apmfSlotActive[a_slot]   = true;
-                    g_apmfSlotFollower[a_slot] = a_follower->GetFormID();
-                    a_follower->EvaluatePackage(true, false);   // never resetAI
-                    spdlog::info("[loot] {:08X}: APMF travel dispatched to {:08X} (slot {})",
-                                 a_follower->GetFormID(), a_ref->GetFormID(), a_slot);
-                    return true;
-                }
-                spdlog::warn("[loot] {:08X}: APMF loot-travel package write failed (slot {}) -- "
-                             "falling back to the alias route", a_follower->GetFormID(), a_slot);
+            auto* pkg = Forms::APMFLootTravelPackage(a_slot);
+            if (!pkg) {
+                spdlog::error("[loot] {:08X}: APMF present but MFO_APMFLootTravelPackage{} did not "
+                             "resolve (stale/missing ESP record?) -- APMF is the COMMITTED route, "
+                             "NOT falling back to the alias route; travel declined this tick",
+                             a_follower->GetFormID(), a_slot);
+                return false;
             }
+            if (!SetAPMFLootTravelTarget(pkg, a_ref, kAPMFTravelRadius)) {
+                spdlog::error("[loot] {:08X}: APMF loot-travel package write failed (slot {}) -- "
+                             "APMF is the COMMITTED route, NOT falling back to the alias route; "
+                             "travel declined this tick", a_follower->GetFormID(), a_slot);
+                return false;
+            }
+            if (!APMFBridge::OfferPackage(a_follower->GetFormID(), pkg->GetFormID())) {
+                spdlog::error("[loot] {:08X}: APMF REFUSED the package-offer claim (slot {}, lost "
+                             "arbitration to a higher-basis client?) -- APMF is the COMMITTED route, "
+                             "NOT falling back to the alias route; travel declined this tick",
+                             a_follower->GetFormID(), a_slot);
+                return false;
+            }
+            g_apmfSlotActive[a_slot]   = true;
+            g_apmfSlotFollower[a_slot] = a_follower->GetFormID();
+            a_follower->EvaluatePackage(true, false);   // never resetAI
+            spdlog::info("[loot] {:08X}: APMF travel dispatched to {:08X} (slot {})",
+                         a_follower->GetFormID(), a_ref->GetFormID(), a_slot);
+            return true;
         }
 
-        // LEGACY ALIAS ROUTE (unchanged) -- also the fallback when APMF is
-        // absent/off or the write above declined.
+        // LEGACY ALIAS ROUTE -- the APMF-ABSENT DEGRADE ONLY (see above; never a
+        // decline-fallback from the branch above, which always returns).
         auto* quest = Forms::g_lootQuest;
         if (!quest)                                return false;
         // The native ForceRefTo id is AE-only (see ForceRefToNative). Off AE we
@@ -1576,17 +1601,31 @@ namespace MFO::Packages {
         // above), so it stays on it for the whole excursion -- rewrite the SAME
         // package's runtime target and refresh the claim (same package form ->
         // EnsureClaimLocked's unchanged-claim fast path, no re-engage churn).
+        // COMMITTED, same as Fill: a failure here fails this leg closed (returns
+        // false; the excursion loop tries the next candidate/tick) rather than
+        // ever dropping to the legacy alias route mid-excursion.
         if (g_apmfSlotActive[a_slot]) {
             auto* pkg = Forms::APMFLootTravelPackage(a_slot);
-            if (!pkg || !SetAPMFLootTravelTarget(pkg, a_ref, kAPMFTravelRadius)) return false;
-            APMFBridge::OfferPackage(a_follower->GetFormID(), pkg->GetFormID());
+            if (!pkg || !SetAPMFLootTravelTarget(pkg, a_ref, kAPMFTravelRadius)) {
+                spdlog::error("[loot] {:08X}: APMF leg retarget write failed (slot {}) -- "
+                             "committed to APMF, not reverting to the alias route", a_follower->GetFormID(), a_slot);
+                return false;
+            }
+            if (!APMFBridge::OfferPackage(a_follower->GetFormID(), pkg->GetFormID())) {
+                spdlog::error("[loot] {:08X}: APMF package-offer claim not live on retarget (slot {}, "
+                             "lost arbitration?) -- committed to APMF, not reverting to the alias "
+                             "route; leg declined", a_follower->GetFormID(), a_slot);
+                return false;
+            }
             a_follower->EvaluatePackage(true, false);
             spdlog::info("[loot] {:08X}: APMF leg -> {:08X} (excursion, slot {})",
                          a_follower->GetFormID(), a_ref->GetFormID(), a_slot);
             return true;
         }
 
-        // LEGACY ALIAS ROUTE (unchanged).
+        // LEGACY ALIAS ROUTE -- this excursion started here because APMF was
+        // absent (or the kill switch was off) at Fill time; stays on it for the
+        // excursion's whole lifetime, same principle as the APMF branch above.
         auto* quest = Forms::g_lootQuest;
         if (!quest)                                return false;
         if (!REL::Module::IsAE())                  return false;

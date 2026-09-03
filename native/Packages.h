@@ -257,16 +257,21 @@ namespace MFO::Packages {
     // call. Returns false if bLootTravel is off, the records are unresolved, off
     // AE, or the quest is not running.
     //
-    // ALTERNATE DELIVERY (APMF ch.9 0x49, .cpp-internal): when APMF is present
-    // and bApmfLootTravel is on, this trio tries APMFBridge::OfferPackage FIRST
-    // -- claiming the package-offer facet so APMF's 0x49 hook hands the follower
-    // MFO_APMFLootTravelPackage<slot> directly, unconditionally, bypassing the
-    // alias/static-priority-60 race below entirely (the fix for a follower
-    // package-locked by an outranking custom AI framework, e.g. Cicero) -- and
-    // fall through to the alias route on any decline. Callers never see which
-    // mechanism ran; the external contract (SAVE-SERIALIZED alias fill, MUST
-    // Clear) is unchanged for the fallback path. The APMF path is runtime-only
-    // (no alias fill, nothing serialized for it).
+    // APMF SHOWPIECE ROUTING (ch.9 0x49, .cpp-internal; Docs/STATUS.md): when
+    // APMF is present (Available() && bApmfLootTravel), this trio ROUTES THROUGH
+    // and COMMITS to APMFBridge::OfferPackage -- claiming the package-offer facet
+    // so APMF's 0x49 hook hands the follower MFO_APMFLootTravelPackage<slot>
+    // directly, unconditionally, bypassing the alias/static-priority-60 race
+    // below entirely (the fix for a follower package-locked by an outranking
+    // custom AI framework, e.g. Cicero). COMMITTED means a failure on the APMF
+    // path (unresolved record, layout-guard decline, a lost arbitration) is
+    // logged loudly and FAILS CLOSED -- it never falls through to the alias
+    // route, which would mask an APMF-path bug behind a false "it worked". The
+    // alias route below runs ONLY when APMF is entirely ABSENT (or the kill
+    // switch is off) -- the sole reason it still exists. Callers see the same
+    // bool contract either way; the external SAVE-SERIALIZED-fill/MUST-Clear
+    // promise is unchanged for the alias path. The APMF path is runtime-only (no
+    // alias fill, nothing serialized for it).
     //
     // The fill is SAVE-SERIALIZED (#55): the caller MUST LootTravelClear() on
     // arrival, interrupt (combat), or timeout. ReleaseAll clears every slot on

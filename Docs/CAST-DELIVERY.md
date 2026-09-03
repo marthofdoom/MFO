@@ -66,6 +66,15 @@ real cast and DROPS that cost.
   No save/co-save state; claims auto-expire via `APMFBridge::Tick` and drop at kPreLoadGame. See
   MAP.md `APMFBridge`.
 
+**STANDING PRINCIPLE (marth, 2026-09-03): MFO is an APMF showpiece.** With APMF present, MFO
+ROUTES THROUGH APMF and COMMITS to it — a legacy/pre-APMF path is the APMF-ABSENT degrade ONLY,
+never a decline-fallback. A failure on an APMF-committed path is logged loudly and fails closed
+(no dispatch this tick/action); it never silently reverts to the old mechanism, which would mask
+an APMF-path bug behind a false "it worked". This governs every APMF-client path in MFO, not just
+casting — see `Packages.cpp`'s loot-travel routing (ch.9 0x49 `OfferPackage`, `LootTravelFill`/
+`Retarget`, MAP.md's `Packages.cpp — APMF LOOT-TRAVEL` entry) for the second worked example, and
+apply it to any future channel MFO consumes from APMF.
+
 ---
 
 ## THE DELIVERY DECISION TABLE

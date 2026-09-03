@@ -1269,15 +1269,19 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   live combat package on purpose.
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
-`LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now try
-`APMFBridge::OfferPackage` FIRST, before the alias/static-priority-60 race: claims the
-package-offer facet naming `Forms::APMFLootTravelPackage(slot)` (4 NEW packages, `Forms.h`
-`kAPMFLootTravelPackage0-3` = `0x836-0x839`, `MFO_GenerateESP.py make_apmf_loot_travel_package()`)
-so APMF's 0x49 hook hands the follower that package directly and unconditionally — no alias fill,
-no arbitration race, so a follower package-locked by an outranking custom AI framework (Cicero)
-still gets walked to the loot. Falls through to the unchanged legacy alias route on any decline
-(APMF absent, `bApmfLootTravel` off, or the package write below fails) — **byte-identical
-degrade-when-absent**.
+`LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE
+THROUGH and COMMIT TO `APMFBridge::OfferPackage` whenever APMF is present (`Available() &&
+bApmfLootTravel`), instead of the alias/static-priority-60 race: claims the package-offer facet
+naming `Forms::APMFLootTravelPackage(slot)` (4 NEW packages, `Forms.h` `kAPMFLootTravelPackage0-3`
+= `0x836-0x839`, `MFO_GenerateESP.py make_apmf_loot_travel_package()`) so APMF's 0x49 hook hands
+the follower that package directly and unconditionally — no alias fill, no arbitration race, so a
+follower package-locked by an outranking custom AI framework (Cicero) still gets walked to the
+loot. **APMF SHOWPIECE PRINCIPLE (marth, `Docs/STATUS.md`): with APMF present, MFO is COMMITTED
+to it — a decline on the APMF path (unresolved record, layout-guard, lost arbitration) FAILS
+CLOSED (logged loudly, no dispatch this tick) and NEVER falls through to the alias route.** The
+alias route runs ONLY when APMF is entirely ABSENT (or `bApmfLootTravel` is off) — the sole
+reason it still exists — so it stays byte-identical **degrade-when-absent**, never a
+decline-fallback.
 - **RUNTIME-HANDLE TARGET (no alias to carry it):** the new packages are authored PLDT type 0
   ("Near Reference", `RE::PackageLocation::Type::kNearReference`) instead of type 8 (alias);
   `SetAPMFLootTravelTarget` (`Packages.cpp` ~`:628`) overwrites `PackageLocation::data.refHandle`
