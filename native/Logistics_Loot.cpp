@@ -499,6 +499,18 @@ namespace MFO::Logistics {
             return a_armo && (a_armo->GetFormFlags() & (1u << 2)) != 0;
         }
 
+        // QUEST-OBJECT INSTANCE GUARD (bLootSpecialItems). Per-INSTANCE, not
+        // per-base-record: RE::InventoryEntryData::IsQuestObject() is the
+        // engine's own "this exact item instance is currently needed by a live
+        // quest" check. Checked UNCONDITIONALLY at every loot-acquisition site
+        // this toggle opens up -- quest items stay engine-protected regardless
+        // of bLootSpecialItems (marth's decision); a base-record catalog
+        // exclusion is a coarser, author-time signal and is what the toggle
+        // governs.
+        bool IsQuestObjectInstance(RE::InventoryEntryData* a_entry) {
+            return a_entry && a_entry->IsQuestObject();
+        }
+
         // The ARMO currently WORN in a logical mage-apparel slot (MageClothingSlot
         // order: 0 head[head/hair/circlet], 1 body, 2 hands, 3 feet, 4 ring, 5
         // amulet), or nullptr if that slot is bare. Worker-safe read of a loaded
@@ -719,7 +731,8 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
-                if (!w || IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
+                if (!w || IsCreatureWeapon(w) ||
+                    (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID()))) continue;
                 if (meleeTargetClass != WepClass::Other &&
                     WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
                     baseDmg = std::max(baseDmg, w->GetAttackDamage());
@@ -748,10 +761,12 @@ namespace MFO::Logistics {
 
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
-                // NEVER-LOOT: the catalog marks quest items, artifacts/unique
-                // enchantments, and scripted/no-drop gear as off-limits -- leave
-                // them for the player (marth). Fail-open with no patcher run.
-                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                // NEVER-LOOT: quest items stay engine-protected regardless of
+                // bLootSpecialItems (per-instance alias check). The catalog
+                // artifact/unique/no-drop exclusion below is what the toggle
+                // governs; default ON lifts it -- leave the rest for the player.
+                if (IsQuestObjectInstance(data.second.get())) continue;
+                if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
 
                 if (auto* armo = obj->As<RE::TESObjectARMO>()) {
                     // Never loot a NON-PLAYABLE creature "skin" armor (MNC's
@@ -1065,8 +1080,11 @@ namespace MFO::Logistics {
                 if (!obj || data.first <= 0) continue;
                 auto* armo = obj->As<RE::TESObjectARMO>();
                 if (!armo || !IsJewelryPiece(armo)) continue;
-                // NEVER-LOOT: quest amulets / unique rings stay for the player.
-                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                // NEVER-LOOT: quest amulets/rings stay engine-protected regardless
+                // of bLootSpecialItems (per-instance alias check). Unique-ring
+                // catalog exclusion below is what the toggle governs.
+                if (IsQuestObjectInstance(data.second.get())) continue;
+                if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
@@ -1100,8 +1118,11 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (!IsSoulGemItem(obj)) continue;
-                // NEVER-LOOT: quest gems (Azura's Star et al.) stay for the player.
-                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                // NEVER-LOOT: quest gems (Azura's Star et al.) stay engine-protected
+                // regardless of bLootSpecialItems (per-instance alias check). The
+                // catalog exclusion below is what the toggle governs.
+                if (IsQuestObjectInstance(data.second.get())) continue;
+                if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
@@ -1134,8 +1155,11 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (!IsIngredientItem(obj)) continue;
-                // NEVER-LOOT: quest ingredients stay for the player.
-                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                // NEVER-LOOT: quest ingredients stay engine-protected regardless
+                // of bLootSpecialItems (per-instance alias check). The catalog
+                // exclusion below is what the toggle governs.
+                if (IsQuestObjectInstance(data.second.get())) continue;
+                if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }
@@ -1178,8 +1202,11 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (!IsValuableMisc(obj)) continue;
-                // NEVER-LOOT: quest/artifact MISC stays for the player.
-                if (Catalog::IsExcluded(obj->GetFormID())) continue;
+                // NEVER-LOOT: quest MISC stays engine-protected regardless of
+                // bLootSpecialItems (per-instance alias check). The artifact/MISC
+                // catalog exclusion below is what the toggle governs.
+                if (IsQuestObjectInstance(data.second.get())) continue;
+                if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (a_peek) return true;
                 takes.push_back({ obj, data.first });
             }

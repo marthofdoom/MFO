@@ -746,21 +746,24 @@ namespace MFO::Logistics {
 
                 std::vector<TradeBridge::SellRow> sell;
                 int purse = 0;
-                // GEM HANDLING (marth: UNGEM-THEN-SELL, not skip). A gemmed junk item
-                // must still sell -- but its gems are extracted to the follower's OWN
-                // inventory FIRST (kept as loose gems for a later update's re-socket),
-                // then the now-ungemmed item sells. GetActorGemsCarried (MEO v2) scans
+                // GEM HANDLING (marth: NEVER HOARD -- ungem-then-sell where possible,
+                // sell-as-is otherwise; only the shipped/OFF behavior protects). A
+                // gemmed junk item must still SELL. GetActorGemsCarried (MEO v2) scans
                 // the WHOLE inventory for real socketed gems; the (base,uid)->slots set
                 // is cached per follower (main-thread refresh above), read here.
                 //   * MEO v3 (unsocket): a WARM-cache gemmed item -> queue UnsocketGem
                 //     for each slot (UnsocketItemGems, de-duped) and DON'T sell it this
                 //     scan; it sells once the async unsocket lands + the cache refreshes
                 //     (it drops out of the gemmed set). Gems accumulate as loose gems.
-                //   * MEO v2 only (detect, no unsocket): fall back to PROTECT -- keep
-                //     the gemmed item, don't sell (lose nothing rather than lose gems).
+                //     Unconditional -- already never hoards, toggle doesn't change it.
+                //   * MEO v2 only (detect, no unsocket -- can't extract): bLootSpecialItems
+                //     ON (default) -- SELL it AS-IS, gems included (never hoard; v2 has
+                //     no extraction path so this is the only way it ever sells). OFF --
+                //     PROTECT (shipped behavior): hold the gemmed item, don't sell.
                 //   * COLD cache (not yet warmed, v2/v3): conservative -- don't sell
-                //     ANY nonzero-uid instance (can't know slots yet); brief, never
-                //     permanent. Once warm, v3 extracts / v2 protects.
+                //     ANY nonzero-uid instance this scan (can't know slots yet); brief,
+                //     never permanent, unaffected by the toggle. Once warm: v3 extracts,
+                //     v2 sells-as-is (ON) or protects (OFF).
                 //   * MEO < v2 / absent: NO gem handling (worn + keepWeapons/keepArmor
                 //     still protect worn gems); the bare-uid over-block never returns.
                 // MULTI-INSTANCE: GetInventory aggregates a base's instances into one
@@ -768,6 +771,7 @@ namespace MFO::Logistics {
                 const bool gemSupported = MEOBridge::CarriedGemsSupported();
                 const bool gemWarmed    = gemSupported && MEOBridge::CacheWarmed(fid);
                 const bool gemUnsocket  = MEOBridge::CarriedGemUnsocketSupported();   // v3
+                const bool sellSocketed = Config::g_lootSpecialItems.load();   // v2-only: sell as-is instead of hoarding
                 // Returns true = DON'T sell this scan; side-effect (v3 warm) = queue
                 // the ungem so it can sell later.
                 auto gemHold = [&](RE::InventoryEntryData* e, RE::FormID base) -> bool {
@@ -778,9 +782,14 @@ namespace MFO::Logistics {
                         if (!uid || uid->uniqueID == 0) continue;
                         if (!gemWarmed) { hold = true; continue; }   // cold: protect, can't extract yet
                         if (MEOBridge::IsCarriedGemmed(fid, base, uid->uniqueID)) {
-                            hold = true;
-                            if (gemUnsocket)   // v3: extract this instance's gems -> sells ungemmed later
+                            if (gemUnsocket) {   // v3: extract this instance's gems -> sells ungemmed later
+                                hold = true;
                                 MEOBridge::UnsocketItemGems(a_follower, base, uid->uniqueID);
+                            } else if (!sellSocketed) {
+                                hold = true;   // v2-only, toggle OFF: protect (shipped behavior)
+                            }
+                            // v2-only, toggle ON: no extraction path -- fall through and
+                            // sell it as-is (gems included) rather than hoard it forever.
                         }
                     }
                     return hold;

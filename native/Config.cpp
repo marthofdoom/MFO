@@ -158,6 +158,7 @@ namespace MFO::Config {
             else if (a_key == "fLootRadius")        setF(g_lootRadius,     64.0f, 4096.0f);
             else if (a_key == "bLootTravel")        setB(g_lootTravel);
             else if (a_key == "bLootInPlayerHomes") setB(g_lootInPlayerHomes);
+            else if (a_key == "bLootSpecialItems")  setB(g_lootSpecialItems);  // default ON: loot artifacts + sell socketed gear
             else if (a_key == "bEconomy")           setB(g_economy);
             else if (a_key == "bEconomyBuyGear")    setB(g_economyBuyGear);
             else if (a_key == "bEconomyBuyTomes")   setB(g_economyBuyTomes);
@@ -301,6 +302,7 @@ namespace MFO::Config {
             g_lootRadius         = 3000.0f;
             g_lootTravel         = true;
             g_lootInPlayerHomes  = false;
+            g_lootSpecialItems   = true;    // default ON -- loot artifacts + sell socketed gear
             g_economy            = true;
             g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
@@ -366,6 +368,7 @@ namespace MFO::Config {
             { "fPlayerBubble", "150.000000" }, { "fValuablesRatio", "20.000000" },
             { "fLootRadius", "3000.000000" },
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
+            { "bLootSpecialItems", "1" },
             { "bEconomy", "1" },               { "bAutoRetreat", "1" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
             { "bHmsRedistribute", "1" },       { "fHmsSkewMax", "20.000000" },

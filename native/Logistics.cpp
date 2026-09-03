@@ -569,7 +569,7 @@ namespace MFO::Logistics {
             // management (the Gauldurbow fix) -- an off-role signature weapon
             // stays in the pack, not handed to the player.
             if (IsStockGear(a_follower->GetFormID(), obj->GetFormID())) continue;
-            if (socketed(data.second.get())) continue;
+            if (!Config::g_lootSpecialItems.load() && socketed(data.second.get())) continue;
             if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
         }
         if (!shed || inRoleWeapons == 0) return false;   // don't disarm

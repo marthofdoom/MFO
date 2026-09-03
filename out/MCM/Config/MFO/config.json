@@ -276,6 +276,16 @@
           }
         },
         {
+          "id": "bLootSpecialItems:General",
+          "text": "Loot artifacts & sell socketed gear",
+          "type": "toggle",
+          "help": "ON (default): followers loot artifacts/unique items, and SELL their gem-socketed gear instead of letting it pile up unsold -- extracting and keeping the gems first when your gem-mod (MEO) supports it, otherwise selling the item as-is. OFF: both are protected -- artifacts are never looted, socketed gear is never sold. Either way, a follower never strips a worn artifact off itself, and quest items always stay engine-protected.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "id": "iMinPotionMag:General",
           "text": "Ignore weak potions (min power)",
           "type": "slider",
