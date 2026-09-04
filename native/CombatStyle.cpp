@@ -283,6 +283,22 @@ namespace MFO::CombatStyle {
             // while an unrelated weapon equip-order is held on this follower.
             if (APMFBridge::IsOwnedCastActive(fid)) return aiSaysYes;
 
+            // Phase 2 (APMF ch.15, kIntent_Equipment): while this follower's OWN
+            // weapon-order is APMF-claimed (APMFBridge::ClaimEquipment, engaged/
+            // refreshed by Actuation::ReconcileForcedWeapon for as long as the
+            // force-hold survives), APMF's OWN CheckShouldEquip hook (T2a,
+            // EquipGate.cpp) already denies any spell/staff re-arm for the exact
+            // same reason this gate would (replicating this gate's own
+            // WantedSpell exemption, so the off-hand loan below still works) --
+            // standing down here avoids two independently-sourced equip denies
+            // (this gate vs. APMF's claim gate) disagreeing. Independent of the
+            // cast-active stand-down above: either, both, or neither may be true
+            // for a given follower on a given tick. IsEquipmentClaimActive is
+            // false whenever APMF is absent/off or no claim was made, so the
+            // APMF-absent path below is untouched -- byte-identical native
+            // enforcement.
+            if (APMFBridge::IsEquipmentClaimActive(fid)) return aiSaysYes;
+
             bool held = false;
             {
                 // Same lock ApplyTick already takes on this (combat) thread.

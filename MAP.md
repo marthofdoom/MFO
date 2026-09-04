@@ -651,6 +651,19 @@ the AI can't re-arm magic over a forced weapon.
   every non-claimed spell/staff regardless of weapon-order state, so the forced weapon
   stays equally protected. Legacy followers (APMF absent / `bLegacyCastHybrid`) are
   unaffected — `IsOwnedCastActive` returns false and the gate runs exactly as before.
+- **Phase 2 APMF hand-off #2 (2026-09-03, ch.15 `kIntent_Equipment`):** the equip-gate
+  thunk ALSO checks `APMFBridge::IsEquipmentClaimActive(fid)` (right after the
+  `IsOwnedCastActive` check, independent of it — either/both/neither may hold for a
+  follower on a given tick) and stands down for the follower's OWN weapon-order deny
+  when true. The claim is engaged/refreshed by `Actuation::ReconcileForcedWeapon`
+  every tick the force-hold (`g_forcedWeapon`) survives, and released by
+  `Actuation::ReleaseForcedWeapon` (the single choke point every teardown path
+  funnels through) the instant it releases — so the claim is alive for exactly as
+  long as the native force-hold is. APMF's own T2a `CheckShouldEquip` hook enforces
+  the SAME deny + the SAME `kIntent_SelectSpell` off-hand-loan exemption while the
+  claim is live (APMF_API.h's `kIntent_Equipment` comment). `IsEquipmentClaimActive`
+  is false whenever APMF is absent/off or no claim was made — the APMF-absent path
+  is byte-identical native enforcement.
 
 ### Sightline.cpp — line-of-sight split across threads (NOT a hook)
 Raycast runs only on the main thread, results cached, worker reads the cache.
@@ -1253,11 +1266,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   (bounded direct fork returns earlier — exact-bounding intact).
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** casting =
   PER-CAST (refreshed each winning cast tick; released crisply by `ReleaseCasting` ← `Scheduler.cpp:~894`
-  on `!castSeen`). combat-target = PER-COMBAT (created by the cast directive; re-pointed via APMF
-  `Repoint` when the foe changes; the ATTACK directive `ClaimCombatTarget(create=false)` ← `Actuation.cpp:~1009`
-  re-points an existing claim so cast→melee follows; `RefreshCombatTarget` ← `Scheduler.cpp:~330` keeps
-  it alive every in-combat tick; released only at combat end via the expiry sweep). `Tick()` ←
-  `Diagnostics.cpp` (~`:334`) is the per-claim 500 ms expiry.
+  on `!castSeen`). combat-target = PER-COMBAT (created by EITHER the cast directive OR the ATTACK
+  directive — both `ClaimCombatTarget(create=true)` ← `Actuation.cpp:~1009` (2026-09-03: melee-attack
+  directives now get the same arbitration a caster already had, not just a re-point of a
+  pre-existing claim) — re-pointed via APMF `Repoint` when the foe changes; `RefreshCombatTarget` ←
+  `Scheduler.cpp:~330` keeps it alive every in-combat tick; released only at combat end via the
+  expiry sweep). `Tick()` ← `Diagnostics.cpp` (~`:334`) is the per-claim 500 ms expiry.
 - **Gating:** owned model active iff `Available() && bApmfCast (INI, default ON) && !bLegacyCastHybrid
   (MCM, default OFF)`. Toggle ON, or APMF absent → the ORIGINAL AI-first-wait + force-on-miss package
   hybrid (unchanged legacy branch below the owned block — the ONLY place `CastSpellImmediate` force
@@ -1280,6 +1294,21 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   twin `EnsureIvalClaimLocked`. `ClaimCombatActionDeny` is built but NOT wired into loot-travel
   (see Packages.cpp below) — MFO's own PACKAGE-THEFT guard already concedes loot-travel to a
   live combat package on purpose.
+- **PASS C (ch.15 `kIntent_Equipment`, 2026-09-03): `ClaimEquipment`/`ReleaseEquipment`/
+  `IsEquipmentClaimActive`** — retires MFO's native weapon-order equip gate
+  (`CombatStyle.cpp`'s `EquipGateThunk`) onto APMF's T2a `CheckShouldEquip` hook, same
+  `g_owned`/`EnsureClaimLocked` shape, one new field pair (`equipHandle`/`equip`). GATE-ONLY:
+  the claim's `param.form` (the forced weapon's FormID) makes APMF write nothing; MFO still
+  EXECUTES the force-equip itself (`Actuation.cpp`'s `EquipWeapon`/`g_forcedWeapon`). Engaged
+  + refreshed every tick the force-hold survives by `Actuation::ReconcileForcedWeapon`
+  (`Actuation.cpp:~1237`, gated `Config::g_weaponStyleControl`); released by
+  `Actuation::ReleaseForcedWeapon` (`:~1216`, the single choke point every teardown path —
+  `Followers.cpp`, `Scheduler.cpp` — funnels through). `CombatStyle.cpp`'s `EquipGateThunk`
+  consults `IsEquipmentClaimActive(fid)` right after the existing `IsOwnedCastActive` check
+  (independent of it) and stands its own weapon-order deny down when true — APMF's hook
+  replicates the SAME `kIntent_SelectSpell` off-hand-loan exemption
+  (`APMF_API.h`'s `kIntent_Equipment` comment). False whenever APMF is absent/off or no claim
+  was made → byte-identical native enforcement on that path.
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE
