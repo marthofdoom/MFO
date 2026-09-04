@@ -203,6 +203,18 @@ namespace MFO::Config {
     // off/absent.
     inline std::atomic<bool>  g_apmfRetreat{ true };
 
+    // WARN WHEN APMF IS ABSENT (MCM bWarnNoApmf). Default ON. 2.0.0 makes APMF
+    // (Harbinger) a recommended companion; MFO still runs its full legacy
+    // fallback without it, but a player who forgot to install it should know
+    // MFO is degraded, not silently different. When APMFBridge::Available() is
+    // false, APMFBridge::MaybeWarnAbsence() (driven off the existing worker
+    // pump, Diagnostics.cpp's SleeperLoop) posts one unobtrusive corner toast
+    // (RE::DebugNotification, main-thread via MainThread::Post) roughly once
+    // every 10 minutes -- never a modal, never spammy. OFF silences it
+    // entirely for a player who deliberately runs without APMF. Zero cost and
+    // never fires at all when APMF IS present, regardless of this toggle.
+    inline std::atomic<bool>  g_warnNoApmf{ true };
+
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc
     // hook. Now ON by default (field-proven; audit 2026-07-28).

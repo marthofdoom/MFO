@@ -1,6 +1,8 @@
 #include "APMFBridge.h"
 #include "APMF_API.h"
 #include "Config.h"
+#include "MainThread.h"
+#include "Rapport.h"
 
 #include <atomic>
 #include <chrono>
@@ -182,6 +184,38 @@ namespace MFO::APMFBridge {
     }
 
     bool Available() { return g_apmf.load(std::memory_order_relaxed) != nullptr; }
+
+    namespace {
+        // The exact toast wording, in ONE place. Plain, one sentence, no em/en-
+        // dash, no semicolon (Docs/VOICE.md).
+        constexpr const char* kNoApmfToast =
+            "MFO works best with Harbinger (APMF) installed, and it's running in fallback mode without it.";
+
+        constexpr double kWarnFirstAtMinutes = 0.6;    // ~36s after load: seen once, early
+        constexpr double kWarnEveryMinutes   = 10.0;   // then roughly every 10 minutes
+
+        // -1.0 = never fired yet this session. Rapport::SessionMinutes() resets on
+        // every load, so a load that makes it go backwards (mins < last) is this
+        // module's own "new session" signal -- no separate reset hook needed, and
+        // nothing here touches serialization.
+        std::atomic<double> g_warnLastMinutes{ -1.0 };
+    }
+
+    void MaybeWarnAbsence() {
+        if (Available()) return;                     // APMF present: never warn, one cheap check
+        if (!Config::g_warnNoApmf.load()) return;     // silenced
+
+        const double mins = Rapport::SessionMinutes();
+        double last = g_warnLastMinutes.load(std::memory_order_relaxed);
+        if (mins < last) last = -1.0;                 // a new load happened; treat as a fresh session
+
+        const bool fire = (last < 0.0) ? (mins >= kWarnFirstAtMinutes)
+                                        : (mins - last >= kWarnEveryMinutes);
+        if (!fire) return;
+
+        g_warnLastMinutes.store(mins, std::memory_order_relaxed);
+        MainThread::Post([]() { RE::DebugNotification(kNoApmfToast); });
+    }
 
     bool IsOwnedCastActive(RE::FormID a_follower) {
         // Fast-out before the lock: APMF absent -> never active (mirrors every

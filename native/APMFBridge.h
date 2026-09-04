@@ -57,6 +57,19 @@ namespace MFO::APMFBridge {
     // Is the APMF interface live (present + ABI >= 2, so RequestEx is available)?
     bool Available();
 
+    // Worker-safe (called from the pump, Diagnostics.cpp's SleeperLoop, beside
+    // Tick()). No-ops instantly when Available() is true -- ZERO cost beyond
+    // that one check whenever APMF is present, and the toast can NEVER fire in
+    // that case. When APMF is absent AND Config::g_warnNoApmf is on, posts one
+    // unobtrusive RE::DebugNotification corner toast (never a modal) reminding
+    // the player MFO is running its legacy fallback: once ~30-60s after load,
+    // then roughly every 10 minutes for as long as APMF stays absent. Cadence
+    // state is plain session-relative timing (Rapport::SessionMinutes(), which
+    // itself resets on load) -- no new co-save state, nothing serialized. The
+    // actual DebugNotification call is routed through MainThread::Post since
+    // this runs on the job worker, not the main thread.
+    void MaybeWarnAbsence();
+
     // Worker- AND combat-thread-safe (mutex-guarded read; the SAME g_mx every
     // other accessor here takes). Does `a_follower` currently hold a LIVE
     // cast-select facet claim (i.e. is the owned-cast model actively driving
