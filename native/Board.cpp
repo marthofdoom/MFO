@@ -26,6 +26,7 @@
 #include "Followers.h"
 #include "Rapport.h"
 #include "Config.h"
+#include "Logistics.h"   // IsLooting/IsTrading for the [C][L][T] activity glyphs
 #include "Forms.h"
 #include "State.h"
 #include "Probe.h"
@@ -595,7 +596,12 @@ namespace MFO::Board {
                             } else if (r.commanded) {
                                 ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "summon");
                             } else if (r.inCombat) {
-                                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "IN COMBAT");
+                                // Same color code as the HUD [C][L][T] strip.
+                                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "In Combat");
+                            } else if (r.looting) {
+                                ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Looting");
+                            } else if (r.trading) {
+                                ImGui::TextColored(ImVec4(0.45f, 0.6f, 1.0f, 1.0f), "Trading");
                             } else {
                                 ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "following");
                             }
@@ -1449,8 +1455,16 @@ namespace MFO::Board {
                     ++shown;
                     ImGui::Text("%-16s", r.name.c_str());
                     ImGui::SameLine();
+                    // Activity strip: red C combat, green L looting, blue T trading.
+                    // Each glyph lit when active, dim otherwise, butted into [C][L][T].
                     if (r.inCombat) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "[C]");
-                    else            ImGui::TextDisabled("[ ]");
+                    else            ImGui::TextDisabled("[C]");
+                    ImGui::SameLine(0.0f, 0.0f);
+                    if (r.looting)  ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "[L]");
+                    else            ImGui::TextDisabled("[L]");
+                    ImGui::SameLine(0.0f, 0.0f);
+                    if (r.trading)  ImGui::TextColored(ImVec4(0.45f, 0.6f, 1.0f, 1.0f), "[T]");
+                    else            ImGui::TextDisabled("[T]");
                     ImGui::SameLine();
                     ImGui::Text("R%u %u total", r.rank, r.rapport);
 
@@ -2252,6 +2266,9 @@ namespace MFO::Board {
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = a->IsInCombat();
+            // Activity glyphs (worker-domain reads; this drain IS the worker, #4).
+            r.looting   = Logistics::IsLooting(r.id);
+            r.trading   = Logistics::IsTrading(r.id);
 
             // ONE formula, shared with the evaluator. These bars are how the
             // player checks why a rule did or did not fire, so a HUD that

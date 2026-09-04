@@ -622,6 +622,15 @@ namespace MFO::Logistics {
         return true;
     }
 
+    // HUD activity glyphs -- see Logistics.h. Worker-domain reads only.
+    bool IsLooting(RE::FormID a_id) {
+        return SlotOf(a_id) != nullptr;
+    }
+    bool IsTrading(RE::FormID a_id) {
+        auto it = g_econTrade.find(a_id);
+        return it != g_econTrade.end() && Clock::now() < it->second;
+    }
+
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
         // #78: per-follower MFO master switch. The Scheduler already gates the

@@ -123,6 +123,18 @@ namespace MFO::Logistics {
     // only; a_state is the follower's live record.
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state);
 
+    // HUD ACTIVITY GLYPHS (the board's [C][L][T] strip + the Followers-tab status
+    // word). Both read worker-owned state (g_travelSlots / g_econTrade), so the
+    // ONLY safe caller is the board snapshot drain, which runs on the same task
+    // worker as ServiceFollower (#4) -- never call these off that domain.
+    //   IsLooting: the follower currently holds a loot-travel excursion slot
+    //     (APMF-routed or legacy alias -- g_travelSlots tracks both).
+    //   IsTrading: the follower dispatched a vendor trade within the last 8 s
+    //     (the g_econTrade settle window). A placeholder signal for the richer
+    //     town-update trade/errand excursions to come.
+    bool IsLooting(RE::FormID a_id);
+    bool IsTrading(RE::FormID a_id);
+
     // Drink the best restore potion of a_which the follower carries, if any and
     // not on cooldown (~the potion's own duration, per resource). Returns true
     // if a potion was consumed. Exposed so the COMBAT dispatcher (Actuation) can
