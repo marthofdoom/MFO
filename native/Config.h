@@ -369,6 +369,28 @@ namespace MFO::Config {
     // swap is free and ungated; stowing a greatsword is not.
     inline std::atomic<float> g_twoHandedDebounce{ 6.0f };
 
+    // CSTY RE-ASSERT (Docs/SPEC-COMBATSTYLE-SOURCEGATE.md), DEFAULT ON -- byte-
+    // identical to pre-toggle behavior. CombatStyle::ApplyTick's branch C
+    // re-writes cc->combatStyle every tick the engine has re-derived the base
+    // style away from MFO's owned stance (CombatStyle.cpp:189-219, branch C) --
+    // the suspected cause of combat-only, intermittent follower positioning
+    // stutter (MFO's stance style and the engine's re-derived style prefer
+    // different combat distances, so the movement planner's goal flips tick
+    // to tick). ON (default): re-assert every tick as today. OFF (proof/fix
+    // mode): branch C stops writing -- the one-shot stance set at controller-
+    // acquire (branch A, CombatStyle.cpp:165-176) stands, and the existing
+    // equip gate (CombatStyle.cpp's EquipGateThunk) is relied on to hold the
+    // weapon instead of the per-tick fight. MCM-exposed (unlike the P1-probe
+    // precedent) because
+    // this IS the field A/B: marth flips it mid-battle via the dev hotkey
+    // below to compare positioning smoothness with the loop on vs. off.
+    inline std::atomic<bool>  g_cstyReassert{ true };
+    // DIK code for the bCstyReassert live-flip hotkey (mirrors iProgProbeKey/
+    // iFocusKey). 0x47 is Numpad 7 -- unbound in vanilla. 0 disables the
+    // trigger. INI-only, no MCM control (same precedent as iProgProbeKey):
+    // this is a dev A/B instrument, not a player-facing binding.
+    inline std::atomic<int>   g_cstyReassertKey{ 0x47 };
+
     // -- evaluator (M5) ------------------------------------------------------
     inline std::atomic<bool>  g_seedEvaluatorRules{ false };
     inline std::atomic<bool>  g_profileEvaluator{ false };

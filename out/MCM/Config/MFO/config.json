@@ -213,6 +213,16 @@
           }
         },
         {
+          "id": "bCstyReassert:General",
+          "text": "Re-assert combat style each tick",
+          "type": "toggle",
+          "help": "Dev diagnostic. ON (default): when the engine re-derives a follower's combat style away from MFO's owned stance mid-combat, MFO re-asserts it every tick -- suspected cause of combat-only, intermittent positioning stutter. OFF: re-assert only once (when MFO first takes the controller) and rely on the equip gate to hold the weapon instead. Numpad 7 flips this live mid-battle for an A/B test. Leave ON unless you're helping diagnose the stutter.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "text": "Timing",
           "type": "header"
         },

@@ -650,11 +650,20 @@ the AI can't re-arm magic over a forced weapon.
   (`Serialization.cpp:106`), read v4 (`:380`), cast directly by Scheduler
   (`:378,578`). Renumbering corrupts every saved override → **requires a
   serialization version bump.**
-- `ApplyTick` (`:112`) is NOT a hook — called by Targeting's thunk; writes through
+- `ApplyTick` (`:138`) is NOT a hook — called by Targeting's thunk; writes through
   the live controller, never dereferences the stored pointer (identity-compare only).
-  Equip-gate static_asserts pin `combatStyle==0x38<0x68`, `attackerHandle==0x28`,
-  `CombatInventoryItem::item==0x10` (`:17,196,206`). The 30-vtable list deliberately
-  EXCLUDES weapon/potion/scroll/shout (`:305`) — widening it denies combat drinking
+  Three write branches: A new-controller one-shot ownership (`:165-176`), B stance
+  handoff one-shot (`:184-188`), C engine-re-derive re-assert (`:189-219`). Branch C
+  is gated on `Config::g_cstyReassert` (default ON = byte-identical re-assert every
+  tick, as before; OFF = the A/B proof/fix mode for combat-only positioning stutter,
+  `Docs/SPEC-COMBATSTYLE-SOURCEGATE.md` — one-shot stance from branch A stands, no
+  per-tick fight, relies on the equip gate below to hold the weapon). Flippable live
+  via the Numpad-7 dev hotkey (`Config::g_cstyReassertKey`, `Board.cpp`'s
+  `InputDispatchHook`, mirrors the ProgProbe/ProgHarness hotkey pattern) — a bare
+  atomic store, no `MainThread::Post` needed. Equip-gate static_asserts pin
+  `combatStyle==0x38<0x68` (`:19,22`), `attackerHandle==0x28` (`:240,243`),
+  `CombatInventoryItem::item==0x10` (`:250`). The 30-vtable list deliberately
+  EXCLUDES weapon/potion/scroll/shout (`:376`) — widening it denies combat drinking
   (v1.0.32 lesson).
 - `Want` (`:76`) → `Scheduler.cpp:378,380,612`; `Clear`/`ClearAll` →
   `Followers.cpp:285`, `Serialization.cpp:599`. Only a WEAPON stance can be an

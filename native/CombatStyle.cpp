@@ -188,11 +188,29 @@ namespace MFO::CombatStyle {
                          fid, target->GetFormID(), Name(o.stance));
         } else if (a_cc->combatStyle != target) {
             // The engine re-derived the base style under us mid-combat (the cast
-            // probe proved it does). Re-assert EVERY tick, but LOG ONLY THE
-            // FIRST -- this is a default-ON feature and a persistent re-derive
-            // would otherwise write one MFO.log line per combat tick. The first
-            // line proves it happens; the count rides the state report.
+            // probe proved it does). COUNT it regardless of the toggle below --
+            // the state report's rederive count stays meaningful whether or not
+            // MFO is fighting it.
             ++o.rederives;
+
+            // bCstyReassert (Docs/SPEC-COMBATSTYLE-SOURCEGATE.md), default ON.
+            // OFF = PROOF/FIX MODE: do NOT fight the engine every tick. The
+            // one-shot ownership set from branch A stands; the equip gate
+            // (EquipGateThunk, below) is relied on to hold the weapon
+            // instead. This is the ONLY gated write in ApplyTick -- branch A
+            // (initial ownership) and branch B (stance handoff) are untouched,
+            // so ON stays byte-identical to pre-toggle behavior.
+            if (!Config::g_cstyReassert.load(std::memory_order_relaxed)) {
+                if (o.rederives == 1)
+                    spdlog::info("[wstyle] {:08X}: re-assert SUPPRESSED (bCstyReassert off) -- "
+                                 "one-shot stance held, equip gate holds", fid);
+                return;
+            }
+
+            // Re-assert EVERY tick, but LOG ONLY THE FIRST -- this is a
+            // default-ON feature and a persistent re-derive would otherwise
+            // write one MFO.log line per combat tick. The first line proves it
+            // happens; the count rides the state report.
             a_cc->combatStyle = target;
             if (o.rederives == 1)
                 spdlog::info("[wstyle] {:08X}: engine RE-DERIVED the style under the swap "
