@@ -586,6 +586,334 @@ namespace MFO::Logistics {
                 if (priceFactor > 0.0f) sellFraction = 1.0 / static_cast<double>(priceFactor);
             }
 
+            // ---- FOLLOWER-SIDE STATE (vendor-independent) -----------------------
+            // Everything from here through the sell-candidate build + buy-needs
+            // scan draws only on a_follower's own inventory/skills/gambits and
+            // global Config -- NEVER on the per-vendor `h`/`vendor`/`fac`/`chest`.
+            // It used to sit inside the `for (auto& h : living)` loop below and
+            // get fully recomputed for up to kMaxVendorCands=16 vendor candidates
+            // every scan (SEV3 perf). Computed ONCE here instead; only the current
+            // vendor's own buy/sell keyword filter (VendorTrades) and the chest/
+            // gold read legitimately vary per vendor, so those alone remain in
+            // the loop.
+
+            // KEEP THE LOADOUT: a follower who fights with a bow AND a melee weapon
+            // only ever has ONE worn at a time, so the sheathed other reads unworn
+            // and was SOLD (marth). Protect the best weapon of EACH weapon CLASS --
+            // 1H, 2H, bow, crossbow, staff kept SEPARATELY (Fable: merging 1H+2H or
+            // bow+crossbow by raw damage let a junk greatsword/crossbow win the keep
+            // and the real weapon get sold). Only worse in-class duplicates are junk.
+            std::unordered_set<RE::TESBoundObject*> keepWeapons;
+            {
+                // bucket: 1=1H 2=2H 3=bow 4=crossbow 5=staff; -1 = don't protect.
+                auto bucketOf = [](RE::WEAPON_TYPE wt) -> int {
+                    using WT = RE::WEAPON_TYPE;
+                    switch (wt) {
+                        case WT::kBow:          return 3;
+                        case WT::kCrossbow:     return 4;
+                        case WT::kStaff:        return 5;
+                        case WT::kTwoHandSword:
+                        case WT::kTwoHandAxe:   return 2;
+                        case WT::kHandToHandMelee: return -1;   // never protect fists
+                        default:                return 1;      // 1h sword/dagger/axe/mace
+                    }
+                };
+                std::unordered_map<int, std::pair<RE::TESBoundObject*, std::uint16_t>> best;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* w = obj->As<RE::TESObjectWEAP>();
+                    if (!w || IsCreatureWeapon(w)) continue;
+                    const int b = bucketOf(w->GetWeaponType());
+                    if (b < 0) continue;
+                    // Staves are ranked by their ENCHANTED WORTH (GetGoldValue), not
+                    // GetAttackDamage() -- a staff's melee swing stat is irrelevant to
+                    // its value, so ranking that bucket by damage could keep the worse
+                    // (cheaper) of 2+ unworn staves and sell the better one (SEV2 fix).
+                    // Every other bucket still ranks by combat stat (attack damage).
+                    const std::uint16_t rank = (b == 5)
+                        ? static_cast<std::uint16_t>(std::clamp<std::int32_t>(w->GetGoldValue(), 0, 0xFFFF))
+                        : w->GetAttackDamage();
+                    auto& slot = best[b];
+                    if (!slot.first || rank >= slot.second)
+                        slot = { obj, rank };
+                }
+                for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
+            }
+
+            // #21 KEEP-ARMOR: protect what the follower WEARS + its single best
+            // next-upgrade PER LOGICAL SLOT from being sold, so a just-BOUGHT
+            // upgrade is not re-sold as junk (keepWeapons does this for weapons) --
+            // but EVERYTHING ELSE (extra/old clothing, spare armor) stays sellable.
+            // BUG FIXED: the old version bucketed by the RAW GetSlotMask() bitmask,
+            // so two same-logical-slot robes with different modded slot-bit combos
+            // (plain robe = body; "Blue Mage Robes" = head+body) each survived as
+            // "best in its own bucket" -> a mage kept ALL his clothing and sold
+            // none. Now: bucket by LOGICAL slot (MageClothingSlot for clothing/
+            // jewelry, primary biped slot for rated armor), keep ONE best per slot,
+            // ranked to MATCH what EquipBestOwnedGear would actually wear.
+            std::unordered_set<RE::TESBoundObject*> keepArmor;
+            std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best obj (worn-inferior convergence)
+            if (Config::g_economyBuyGear.load()) {
+                using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+                const bool caster         = IsCasterFollower(a_state);
+                const bool useMageApparel = caster && Config::g_mageWearRobes.load() &&
+                                            !Config::g_dollsMode.load();
+                const std::uint8_t top2   = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
+                const bool schoolPrimary  = !MEOBridge::Available() ||
+                                            Config::g_mageApparelStrictSchool.load();
+                const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
+                // A shield is in-role ONLY for a dedicated one-hand MELEE follower. A
+                // ranged (bow) or caster follower never equips one, so it must NOT be
+                // kept -- it is dead weight that should sell. (The off-role WEAPON shed
+                // drops wrong-role weapons; a shield is armor and slipped past it.)
+                const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+                const bool usesShield   = (roles.melee == WepClass::OneHand) &&
+                                          !roles.doRanged && !caster;
+
+                // (a) Always keep what is WORN, regardless of the bucket math (the
+                //     sell loop's IsWorn gate already bars worn gear; this is belt-
+                //     and-suspenders and also pins the jewelry logical slots).
+                for (int ls = 0; ls < 6; ++ls)
+                    if (auto* w = WornInLogicalSlot(a_follower, ls)) keepArmor.insert(w);
+                for (auto sl : { Slot::kForearms, Slot::kCalves })
+                    if (auto* w = a_follower->GetWornArmor(sl)) keepArmor.insert(w);
+                if (usesShield)
+                    if (auto* w = a_follower->GetWornArmor(Slot::kShield)) keepArmor.insert(w);
+
+                // (b) The single best NEXT-UPGRADE per LOGICAL slot.
+                auto armorLogicalSlot = [](std::uint32_t mask) -> int {
+                    if (mask & static_cast<std::uint32_t>(Slot::kBody))   return 1;
+                    if (mask & static_cast<std::uint32_t>(Slot::kHead))   return 0;
+                    if (mask & static_cast<std::uint32_t>(Slot::kHands))  return 2;
+                    if (mask & static_cast<std::uint32_t>(Slot::kFeet))   return 3;
+                    if (mask & static_cast<std::uint32_t>(Slot::kShield)) return 4;
+                    return -1;
+                };
+                struct Best { RE::TESBoundObject* obj = nullptr; float primary = -1e9f; float secondary = -1e9f; };
+                std::unordered_map<int, Best> best;   // key: clothing 0..5, rated armor 10..14
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* ar = obj->As<RE::TESObjectARMO>();
+                    if (!ar) continue;
+                    int key = -1; float primary = 0.0f, secondary = 0.0f;
+                    if (useMageApparel) {
+                        // A mage's body/clothing slot holds ONE item -- a robe (rating 0)
+                        // OR a rated-armor outfit both compete for the SAME biped slot, so
+                        // bucket BOTH by MageClothingSlot (one bucket per slot) instead of
+                        // splitting rated-vs-clothing (which let two body pieces both survive).
+                        // Rated armor competes at plain tier by BASE value (no gem), so a
+                        // pricier outfit beats a cheaper robe and only one survives
+                        // (marth: Khajiit ~800 must beat Nord ~100, not bucket apart).
+                        const int cs = MageClothingSlot(ar);
+                        if (cs < 0) continue;   // shields/other -> a mage doesn't wear them, sells
+                        int t = 0; std::int32_t m = 0;
+                        if (ar->GetArmorRating() > 0.0f) {
+                            t = 0; m = std::max<std::int32_t>(ar->GetGoldValue(), 0);
+                        } else if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) {
+                            continue;
+                        }
+                        key = cs; primary = static_cast<float>(t); secondary = static_cast<float>(m);
+                    } else if (ar->GetArmorRating() > 0.0f) {                // non-mage: rated armor by biped slot
+                        const int ls = armorLogicalSlot(static_cast<std::uint32_t>(ar->GetSlotMask()));
+                        if (ls < 0) continue;
+                        if (ls == 4 && !usesShield) continue;   // don't keep a shield for a non-shield-user -> it sells
+                        key = 10 + ls;
+                        primary   = ar->GetArmorRating();
+                        secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
+                    } else {
+                        continue;   // a non-mage's clothing/jewelry is sellable junk (nothing wears it)
+                    }
+                    auto& b = best[key];
+                    if (!b.obj || primary > b.primary ||
+                        (primary == b.primary && secondary > b.secondary))
+                        b = { obj, primary, secondary };
+                }
+                for (auto& [k, b] : best) if (b.obj) { keepArmor.insert(b.obj); bestBySlot[k] = b.obj; }
+            }
+
+            int purse = 0;
+            // GEM HANDLING (marth: NEVER HOARD -- ungem-then-sell where possible,
+            // sell-as-is otherwise; only the shipped/OFF behavior protects). A
+            // gemmed junk item must still SELL. GetActorGemsCarried (MEO v2) scans
+            // the WHOLE inventory for real socketed gems; the (base,uid)->slots set
+            // is cached per follower (main-thread refresh above), read here.
+            //   * MEO v3 (unsocket): a WARM-cache gemmed item -> queue UnsocketGem
+            //     for each slot (UnsocketItemGems, de-duped) and DON'T sell it this
+            //     scan; it sells once the async unsocket lands + the cache refreshes
+            //     (it drops out of the gemmed set). Gems accumulate as loose gems.
+            //     Unconditional -- already never hoards, toggle doesn't change it.
+            //   * MEO v2 only (detect, no unsocket -- can't extract): bLootSpecialItems
+            //     ON (default) -- SELL it AS-IS, gems included (never hoard; v2 has
+            //     no extraction path so this is the only way it ever sells). OFF --
+            //     PROTECT (shipped behavior): hold the gemmed item, don't sell.
+            //   * COLD cache (not yet warmed, v2/v3): conservative -- don't sell
+            //     ANY nonzero-uid instance this scan (can't know slots yet); brief,
+            //     never permanent, unaffected by the toggle. Once warm: v3 extracts,
+            //     v2 sells-as-is (ON) or protects (OFF).
+            //   * MEO < v2 / absent: NO gem handling (worn + keepWeapons/keepArmor
+            //     still protect worn gems); the bare-uid over-block never returns.
+            // MULTI-INSTANCE: GetInventory aggregates a base's instances into one
+            // entry with multiple extraLists -- check EVERY uid.
+            const bool gemSupported = MEOBridge::CarriedGemsSupported();
+            const bool gemWarmed    = gemSupported && MEOBridge::CacheWarmed(fid);
+            const bool gemUnsocket  = MEOBridge::CarriedGemUnsocketSupported();   // v3
+            const bool sellSocketed = Config::g_lootSpecialItems.load();   // v2-only: sell as-is instead of hoarding
+            // Returns true = DON'T sell this scan; side-effect (v3 warm) = queue
+            // the ungem so it can sell later.
+            auto gemHold = [&](RE::InventoryEntryData* e, RE::FormID base) -> bool {
+                if (!gemSupported || !e || !e->extraLists) return false;
+                bool hold = false;
+                for (auto* xl : *e->extraLists) {
+                    auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
+                    if (!uid || uid->uniqueID == 0) continue;
+                    if (!gemWarmed) { hold = true; continue; }   // cold: protect, can't extract yet
+                    if (MEOBridge::IsCarriedGemmed(fid, base, uid->uniqueID)) {
+                        if (gemUnsocket) {   // v3: extract this instance's gems -> sells ungemmed later
+                            hold = true;
+                            MEOBridge::UnsocketItemGems(a_follower, base, uid->uniqueID);
+                        } else if (!sellSocketed) {
+                            hold = true;   // v2-only, toggle OFF: protect (shipped behavior)
+                        }
+                        // v2-only, toggle ON: no extraction path -- fall through and
+                        // sell it as-is (gems included) rather than hoard it forever.
+                    }
+                }
+                return hold;
+            };
+
+            // [sell] per-item EXCLUSION diagnostic. Rate-limited ~15s/follower via a
+            // worker-sequential static (one ServiceFollower at a time -- same pattern
+            // as s_nextMageFix/s_nextHeal, no lock). Names WHY each weap/armo is not
+            // offered, so a "sell n=0" is never a black box again. INFO-level, cheap.
+            static std::unordered_map<RE::FormID, Clock::time_point> s_nextSellDiag;
+            bool diag = false;
+            {
+                const auto now = Clock::now();
+                auto& nx = s_nextSellDiag[fid];
+                if (now >= nx) { diag = true; nx = now + std::chrono::seconds(15); }
+            }
+            auto sdiag = [&](RE::TESBoundObject* o, const char* why) {
+                if (diag) spdlog::info("[sell] {:08X} '{}' -> {}", fid,
+                                       o && o->GetName() ? o->GetName() : "?", why);
+            };
+            if (diag)
+                spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
+
+            const bool umaSell = IsCasterFollower(a_state) && Config::g_mageWearRobes.load() &&
+                                 !Config::g_dollsMode.load();
+
+            // SELL CANDIDATES: the follower's OWN unworn weapons/armour (jewellery is
+            // ARMO, so IsJewelryPiece rides along) + valuable MISC that clear every
+            // follower-side guard (quest/stock/keep/gem/catalog). Everything EXCEPT
+            // the vendor's own buy/sell keyword filter (VendorTrades) -- the one gate
+            // that legitimately differs per candidate vendor -- is decided here; that
+            // filter is applied per-vendor below against this shared candidate list.
+            struct SellCandidate {
+                RE::TESBoundObject* obj;
+                std::int32_t        count;
+                std::int32_t        price;
+                bool                jewelry;
+                RE::BGSKeywordForm* kwf;
+                const char*         passTag;   // sdiag label once the vendor filter clears it
+            };
+            std::vector<SellCandidate> sellCandidates;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
+                auto* weap = obj->As<RE::TESObjectWEAP>();
+                auto* armo = obj->As<RE::TESObjectARMO>();
+                if (!weap && !armo) {
+                    // MISC closer for the "Loot valuables (to sell)" gambit -- a
+                    // value-dense MISC item (IsValuableMisc, shared def in
+                    // Logistics_Loot.cpp) gets the SAME guard order as equipment
+                    // above: per-instance quest protection, catalog exclusion
+                    // (unconditional here, matching the equipment sell path's
+                    // Catalog::IsExcluded below -- NOT gated by bLootSpecialItems),
+                    // then (deferred, per-vendor) the vendor's buy/sell keyword
+                    // filter. Non-valuable MISC (keys, notes, clutter) is untouched.
+                    if (IsValuableMisc(obj)) {
+                        auto* mentry = data.second.get();
+                        if (IsQuestObjectInstance(mentry))         { sdiag(obj, "quest"); continue; }
+                        if (Catalog::IsExcluded(obj->GetFormID())) { sdiag(obj, "excluded"); continue; }
+                        auto* misc = obj->As<RE::TESObjectMISC>();
+                        auto* mkwf = static_cast<RE::BGSKeywordForm*>(misc);
+                        const std::int32_t baseVal = mentry ? mentry->GetValue() : 0;
+                        sellCandidates.push_back(SellCandidate{
+                            obj, static_cast<std::int32_t>(data.first),
+                            static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
+                            false, mkwf, "valuable" });
+                    }
+                    continue;
+                }
+                if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // #69 own signature gear
+                // CONVERGENCE (marth): a WORN piece that is NOT its slot's best (a strictly
+                // kept-better exists) is a redundant inferior. The engine keeps re-applying
+                // it from the follower's DEFAULT OUTFIT, so unequip-and-wait never wins the
+                // race. Instead flag it and SELL it even while worn -- it bypasses the
+                // keepArmor/IsWorn gates below, the gem (if any) is extracted first, and the
+                // trade's RemoveItem unequips it on sale. Once it's gone the engine has
+                // nothing to put back (Jesper's Nord Tribal outfit, Auri's spare boots).
+                bool redundantInferior = false;
+                if (armo && data.second && data.second->IsWorn() && !bestBySlot.empty()) {
+                    int sk = -1;
+                    if (umaSell)                            { sk = MageClothingSlot(armo); }   // mage: robes + rated armor share one body bucket
+                    else if (armo->GetArmorRating() > 0.0f) { const int ls = ArmorBuySlot(armo); if (ls >= 0) sk = 10 + ls; }
+                    if (sk >= 0) {
+                        auto bit = bestBySlot.find(sk);
+                        if (bit != bestBySlot.end() && bit->second && bit->second != obj)
+                            redundantInferior = true;
+                    }
+                }
+                // Force-sell also covers BLACKLISTED apparel (marth's annoyance list) --
+                // never keep/wear it; sell it even while worn (RemoveItem unequips it).
+                const bool forceSell = redundantInferior || (armo && IsBlacklistedApparel(armo));
+                if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
+                if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
+                RE::BGSKeywordForm* kwf = weap
+                    ? static_cast<RE::BGSKeywordForm*>(weap)
+                    : static_cast<RE::BGSKeywordForm*>(armo);
+                auto* entry = data.second.get();
+                if (forceSell)                              sdiag(obj, "force-sell");           // redundant/blacklisted worn -> sell (RemoveItem unequips it)
+                else if (entry && entry->IsWorn())          { sdiag(obj, "worn"); continue; }     // never sell worn gear
+                if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
+                if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
+                // #21 speech-scaled sell price (base instance value * sellFraction).
+                const std::int32_t baseVal = entry ? entry->GetValue() : 0;
+                sellCandidates.push_back(SellCandidate{
+                    obj, static_cast<std::int32_t>(data.first),
+                    static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
+                    armo && IsJewelryPiece(armo), kwf, "SELL" });
+            }
+            // Highest-value first: the vendor's barter gold is limited (field log:
+            // sale total often > vendor gold), so sell the most valuable junk first
+            // to convert the most worth per visit. Papyrus caps at the chest's gold.
+            // Sorted ONCE here -- a per-vendor VEND-filter pass over this list (below)
+            // is a stable subset-select, so the filtered result stays sorted too.
+            std::sort(sellCandidates.begin(), sellCandidates.end(),
+                      [](const auto& a, const auto& b) { return a.price > b.price; });
+
+            // BUY NEEDS: each supply gambit BELOW its threshold -> the category
+            // + how many MORE to acquire. Papyrus enumerates the vendor's ACTUAL
+            // stock and TradeBridge::PlanBuy matches it to these (best affordable
+            // first, capped at quota + purse). Native can't pre-name the stock --
+            // the field log proved guessing gives stock=0 -- so it names the
+            // NEED and lets the enumeration find the match.
+            std::vector<TradeBridge::NeedCat> needs;
+            auto addNeed = [&](TradeBridge::NeedCat::Kind a_kind, int have, int want) {
+                if (have < want) needs.push_back({ static_cast<std::int32_t>(a_kind),
+                                                   static_cast<std::int32_t>(want - have) });
+            };
+            for (const auto& g : a_logistics) {
+                if (!g.enabled) continue;
+                const auto& c    = g.conditionOpcode;
+                const int   want = static_cast<int>(g.conditionParam);
+                if      (c == Vocab::kCondSelfLowHealthPotion)  addNeed(TradeBridge::NeedCat::kPotHealth,  CountPotions(a_follower, RE::ActorValue::kHealth),  want);
+                else if (c == Vocab::kCondSelfLowStaminaPotion) addNeed(TradeBridge::NeedCat::kPotStamina, CountPotions(a_follower, RE::ActorValue::kStamina), want);
+                else if (c == Vocab::kCondSelfLowMagickaPotion) addNeed(TradeBridge::NeedCat::kPotMagicka, CountPotions(a_follower, RE::ActorValue::kMagicka), want);
+                else if (c == Vocab::kCondSelfOutOfArrows)      addNeed(TradeBridge::NeedCat::kArrows,     ArrowCount(a_follower),                             want);
+                else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
+            }
+
             for (auto& h : living) {
                 auto  ptr    = h.get();
                 auto* vendor = ptr.get();
@@ -617,312 +945,21 @@ namespace MFO::Logistics {
                 // CTDs on any thread (§0.37). The chest read moves to Papyrus.
                 auto* chest = fac->vendorData.merchantContainer;
                 if (!chest || !chest->GetContainer()) continue;
-                // SELL list: the follower's OWN unworn weapons/armour (jewellery is
-                // ARMO, so IsJewelryPiece rides along) that clear the never-loot
-                // catalog and the vendor's VEND filter -- all native-SAFE reads. Also
-                // count the PURSE in the same pass: Actor::GetGoldAmount() CTDs here
-                // (Actor.cpp:445, null-deref on the InventoryChanges the worker tick
-                // may be mutating -- crash 2026-08-01), but the GetInventory snapshot
-                // is safe, so sum Gold001 (0x0000000F) straight from it.
-                // KEEP THE LOADOUT: a follower who fights with a bow AND a melee weapon
-                // only ever has ONE worn at a time, so the sheathed other reads unworn
-                // and was SOLD (marth). Protect the best weapon of EACH weapon CLASS --
-                // 1H, 2H, bow, crossbow, staff kept SEPARATELY (Fable: merging 1H+2H or
-                // bow+crossbow by raw damage let a junk greatsword/crossbow win the keep
-                // and the real weapon get sold). Only worse in-class duplicates are junk.
-                std::unordered_set<RE::TESBoundObject*> keepWeapons;
-                {
-                    // bucket: 1=1H 2=2H 3=bow 4=crossbow 5=staff; -1 = don't protect.
-                    auto bucketOf = [](RE::WEAPON_TYPE wt) -> int {
-                        using WT = RE::WEAPON_TYPE;
-                        switch (wt) {
-                            case WT::kBow:          return 3;
-                            case WT::kCrossbow:     return 4;
-                            case WT::kStaff:        return 5;
-                            case WT::kTwoHandSword:
-                            case WT::kTwoHandAxe:   return 2;
-                            case WT::kHandToHandMelee: return -1;   // never protect fists
-                            default:                return 1;      // 1h sword/dagger/axe/mace
-                        }
-                    };
-                    std::unordered_map<int, std::pair<RE::TESBoundObject*, std::uint16_t>> best;
-                    for (auto& [obj, data] : a_follower->GetInventory()) {
-                        if (!obj || data.first <= 0) continue;
-                        auto* w = obj->As<RE::TESObjectWEAP>();
-                        if (!w || IsCreatureWeapon(w)) continue;
-                        const int b = bucketOf(w->GetWeaponType());
-                        if (b < 0) continue;
-                        auto& slot = best[b];
-                        if (!slot.first || w->GetAttackDamage() >= slot.second)
-                            slot = { obj, w->GetAttackDamage() };
-                    }
-                    for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
-                }
 
-                // #21 KEEP-ARMOR: protect what the follower WEARS + its single best
-                // next-upgrade PER LOGICAL SLOT from being sold, so a just-BOUGHT
-                // upgrade is not re-sold as junk (keepWeapons does this for weapons) --
-                // but EVERYTHING ELSE (extra/old clothing, spare armor) stays sellable.
-                // BUG FIXED: the old version bucketed by the RAW GetSlotMask() bitmask,
-                // so two same-logical-slot robes with different modded slot-bit combos
-                // (plain robe = body; "Blue Mage Robes" = head+body) each survived as
-                // "best in its own bucket" -> a mage kept ALL his clothing and sold
-                // none. Now: bucket by LOGICAL slot (MageClothingSlot for clothing/
-                // jewelry, primary biped slot for rated armor), keep ONE best per slot,
-                // ranked to MATCH what EquipBestOwnedGear would actually wear.
-                std::unordered_set<RE::TESBoundObject*> keepArmor;
-                std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best obj (worn-inferior convergence)
-                if (Config::g_economyBuyGear.load()) {
-                    using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-                    const bool caster         = IsCasterFollower(a_state);
-                    const bool useMageApparel = caster && Config::g_mageWearRobes.load() &&
-                                                !Config::g_dollsMode.load();
-                    const std::uint8_t top2   = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
-                    const bool schoolPrimary  = !MEOBridge::Available() ||
-                                                Config::g_mageApparelStrictSchool.load();
-                    const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
-                    // A shield is in-role ONLY for a dedicated one-hand MELEE follower. A
-                    // ranged (bow) or caster follower never equips one, so it must NOT be
-                    // kept -- it is dead weight that should sell. (The off-role WEAPON shed
-                    // drops wrong-role weapons; a shield is armor and slipped past it.)
-                    const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
-                    const bool usesShield   = (roles.melee == WepClass::OneHand) &&
-                                              !roles.doRanged && !caster;
-
-                    // (a) Always keep what is WORN, regardless of the bucket math (the
-                    //     sell loop's IsWorn gate already bars worn gear; this is belt-
-                    //     and-suspenders and also pins the jewelry logical slots).
-                    for (int ls = 0; ls < 6; ++ls)
-                        if (auto* w = WornInLogicalSlot(a_follower, ls)) keepArmor.insert(w);
-                    for (auto sl : { Slot::kForearms, Slot::kCalves })
-                        if (auto* w = a_follower->GetWornArmor(sl)) keepArmor.insert(w);
-                    if (usesShield)
-                        if (auto* w = a_follower->GetWornArmor(Slot::kShield)) keepArmor.insert(w);
-
-                    // (b) The single best NEXT-UPGRADE per LOGICAL slot.
-                    auto armorLogicalSlot = [](std::uint32_t mask) -> int {
-                        if (mask & static_cast<std::uint32_t>(Slot::kBody))   return 1;
-                        if (mask & static_cast<std::uint32_t>(Slot::kHead))   return 0;
-                        if (mask & static_cast<std::uint32_t>(Slot::kHands))  return 2;
-                        if (mask & static_cast<std::uint32_t>(Slot::kFeet))   return 3;
-                        if (mask & static_cast<std::uint32_t>(Slot::kShield)) return 4;
-                        return -1;
-                    };
-                    struct Best { RE::TESBoundObject* obj = nullptr; float primary = -1e9f; float secondary = -1e9f; };
-                    std::unordered_map<int, Best> best;   // key: clothing 0..5, rated armor 10..14
-                    for (auto& [obj, data] : a_follower->GetInventory()) {
-                        if (!obj || data.first <= 0) continue;
-                        auto* ar = obj->As<RE::TESObjectARMO>();
-                        if (!ar) continue;
-                        int key = -1; float primary = 0.0f, secondary = 0.0f;
-                        if (useMageApparel) {
-                            // A mage's body/clothing slot holds ONE item -- a robe (rating 0)
-                            // OR a rated-armor outfit both compete for the SAME biped slot, so
-                            // bucket BOTH by MageClothingSlot (one bucket per slot) instead of
-                            // splitting rated-vs-clothing (which let two body pieces both survive).
-                            // Rated armor competes at plain tier by BASE value (no gem), so a
-                            // pricier outfit beats a cheaper robe and only one survives
-                            // (marth: Khajiit ~800 must beat Nord ~100, not bucket apart).
-                            const int cs = MageClothingSlot(ar);
-                            if (cs < 0) continue;   // shields/other -> a mage doesn't wear them, sells
-                            int t = 0; std::int32_t m = 0;
-                            if (ar->GetArmorRating() > 0.0f) {
-                                t = 0; m = std::max<std::int32_t>(ar->GetGoldValue(), 0);
-                            } else if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) {
-                                continue;
-                            }
-                            key = cs; primary = static_cast<float>(t); secondary = static_cast<float>(m);
-                        } else if (ar->GetArmorRating() > 0.0f) {                // non-mage: rated armor by biped slot
-                            const int ls = armorLogicalSlot(static_cast<std::uint32_t>(ar->GetSlotMask()));
-                            if (ls < 0) continue;
-                            if (ls == 4 && !usesShield) continue;   // don't keep a shield for a non-shield-user -> it sells
-                            key = 10 + ls;
-                            primary   = ar->GetArmorRating();
-                            secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
-                        } else {
-                            continue;   // a non-mage's clothing/jewelry is sellable junk (nothing wears it)
-                        }
-                        auto& b = best[key];
-                        if (!b.obj || primary > b.primary ||
-                            (primary == b.primary && secondary > b.secondary))
-                            b = { obj, primary, secondary };
-                    }
-                    for (auto& [k, b] : best) if (b.obj) { keepArmor.insert(b.obj); bestBySlot[k] = b.obj; }
-                }
-
+                // VEND-FILTER PASS: the one thing that legitimately varies per
+                // vendor -- apply this vendor's buy/sell keyword list (and the
+                // merchant-perk bypass) to the shared, already-sorted candidate
+                // list. #21 merchant-perk bypass: a "sell anything" follower
+                // ignores the vendor's VEND filter (like the player); otherwise
+                // the filter holds.
                 std::vector<TradeBridge::SellRow> sell;
-                int purse = 0;
-                // GEM HANDLING (marth: NEVER HOARD -- ungem-then-sell where possible,
-                // sell-as-is otherwise; only the shipped/OFF behavior protects). A
-                // gemmed junk item must still SELL. GetActorGemsCarried (MEO v2) scans
-                // the WHOLE inventory for real socketed gems; the (base,uid)->slots set
-                // is cached per follower (main-thread refresh above), read here.
-                //   * MEO v3 (unsocket): a WARM-cache gemmed item -> queue UnsocketGem
-                //     for each slot (UnsocketItemGems, de-duped) and DON'T sell it this
-                //     scan; it sells once the async unsocket lands + the cache refreshes
-                //     (it drops out of the gemmed set). Gems accumulate as loose gems.
-                //     Unconditional -- already never hoards, toggle doesn't change it.
-                //   * MEO v2 only (detect, no unsocket -- can't extract): bLootSpecialItems
-                //     ON (default) -- SELL it AS-IS, gems included (never hoard; v2 has
-                //     no extraction path so this is the only way it ever sells). OFF --
-                //     PROTECT (shipped behavior): hold the gemmed item, don't sell.
-                //   * COLD cache (not yet warmed, v2/v3): conservative -- don't sell
-                //     ANY nonzero-uid instance this scan (can't know slots yet); brief,
-                //     never permanent, unaffected by the toggle. Once warm: v3 extracts,
-                //     v2 sells-as-is (ON) or protects (OFF).
-                //   * MEO < v2 / absent: NO gem handling (worn + keepWeapons/keepArmor
-                //     still protect worn gems); the bare-uid over-block never returns.
-                // MULTI-INSTANCE: GetInventory aggregates a base's instances into one
-                // entry with multiple extraLists -- check EVERY uid.
-                const bool gemSupported = MEOBridge::CarriedGemsSupported();
-                const bool gemWarmed    = gemSupported && MEOBridge::CacheWarmed(fid);
-                const bool gemUnsocket  = MEOBridge::CarriedGemUnsocketSupported();   // v3
-                const bool sellSocketed = Config::g_lootSpecialItems.load();   // v2-only: sell as-is instead of hoarding
-                // Returns true = DON'T sell this scan; side-effect (v3 warm) = queue
-                // the ungem so it can sell later.
-                auto gemHold = [&](RE::InventoryEntryData* e, RE::FormID base) -> bool {
-                    if (!gemSupported || !e || !e->extraLists) return false;
-                    bool hold = false;
-                    for (auto* xl : *e->extraLists) {
-                        auto* uid = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
-                        if (!uid || uid->uniqueID == 0) continue;
-                        if (!gemWarmed) { hold = true; continue; }   // cold: protect, can't extract yet
-                        if (MEOBridge::IsCarriedGemmed(fid, base, uid->uniqueID)) {
-                            if (gemUnsocket) {   // v3: extract this instance's gems -> sells ungemmed later
-                                hold = true;
-                                MEOBridge::UnsocketItemGems(a_follower, base, uid->uniqueID);
-                            } else if (!sellSocketed) {
-                                hold = true;   // v2-only, toggle OFF: protect (shipped behavior)
-                            }
-                            // v2-only, toggle ON: no extraction path -- fall through and
-                            // sell it as-is (gems included) rather than hoard it forever.
-                        }
+                sell.reserve(sellCandidates.size());
+                for (auto& c : sellCandidates) {
+                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, c.kwf)) {
+                        sdiag(c.obj, "vendor-filter"); continue;
                     }
-                    return hold;
-                };
-
-                // [sell] per-item EXCLUSION diagnostic. Rate-limited ~15s/follower via a
-                // worker-sequential static (one ServiceFollower at a time -- same pattern
-                // as s_nextMageFix/s_nextHeal, no lock). Names WHY each weap/armo is not
-                // offered, so a "sell n=0" is never a black box again. INFO-level, cheap.
-                static std::unordered_map<RE::FormID, Clock::time_point> s_nextSellDiag;
-                bool diag = false;
-                {
-                    const auto now = Clock::now();
-                    auto& nx = s_nextSellDiag[fid];
-                    if (now >= nx) { diag = true; nx = now + std::chrono::seconds(15); }
-                }
-                auto sdiag = [&](RE::TESBoundObject* o, const char* why) {
-                    if (diag) spdlog::info("[sell] {:08X} '{}' -> {}", fid,
-                                           o && o->GetName() ? o->GetName() : "?", why);
-                };
-                if (diag)
-                    spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
-
-                const bool umaSell = IsCasterFollower(a_state) && Config::g_mageWearRobes.load() &&
-                                     !Config::g_dollsMode.load();
-
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
-                    if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
-                    auto* weap = obj->As<RE::TESObjectWEAP>();
-                    auto* armo = obj->As<RE::TESObjectARMO>();
-                    if (!weap && !armo) {
-                        // MISC closer for the "Loot valuables (to sell)" gambit -- a
-                        // value-dense MISC item (IsValuableMisc, shared def in
-                        // Logistics_Loot.cpp) gets the SAME guard order as equipment
-                        // above: per-instance quest protection, catalog exclusion
-                        // (unconditional here, matching the equipment sell path's
-                        // Catalog::IsExcluded below -- NOT gated by bLootSpecialItems),
-                        // then the vendor's buy/sell keyword filter. Non-valuable MISC
-                        // (keys, notes, clutter) is untouched.
-                        if (IsValuableMisc(obj)) {
-                            auto* mentry = data.second.get();
-                            if (IsQuestObjectInstance(mentry))         { sdiag(obj, "quest"); continue; }
-                            if (Catalog::IsExcluded(obj->GetFormID())) { sdiag(obj, "excluded"); continue; }
-                            auto* misc = obj->As<RE::TESObjectMISC>();
-                            auto* mkwf = static_cast<RE::BGSKeywordForm*>(misc);
-                            if (!sellAnything && !VendorTrades(vend, vv.notBuySell, mkwf)) {
-                                sdiag(obj, "vendor-filter"); continue;
-                            }
-                            if (diag) sdiag(obj, "valuable");
-                            const std::int32_t baseVal = mentry ? mentry->GetValue() : 0;
-                            sell.push_back(TradeBridge::SellRow{
-                                obj, static_cast<std::int32_t>(data.first),
-                                static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
-                                false });
-                        }
-                        continue;
-                    }
-                    if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // #69 own signature gear
-                    // CONVERGENCE (marth): a WORN piece that is NOT its slot's best (a strictly
-                    // kept-better exists) is a redundant inferior. The engine keeps re-applying
-                    // it from the follower's DEFAULT OUTFIT, so unequip-and-wait never wins the
-                    // race. Instead flag it and SELL it even while worn -- it bypasses the
-                    // keepArmor/IsWorn gates below, the gem (if any) is extracted first, and the
-                    // trade's RemoveItem unequips it on sale. Once it's gone the engine has
-                    // nothing to put back (Jesper's Nord Tribal outfit, Auri's spare boots).
-                    bool redundantInferior = false;
-                    if (armo && data.second && data.second->IsWorn() && !bestBySlot.empty()) {
-                        int sk = -1;
-                        if (umaSell)                            { sk = MageClothingSlot(armo); }   // mage: robes + rated armor share one body bucket
-                        else if (armo->GetArmorRating() > 0.0f) { const int ls = ArmorBuySlot(armo); if (ls >= 0) sk = 10 + ls; }
-                        if (sk >= 0) {
-                            auto bit = bestBySlot.find(sk);
-                            if (bit != bestBySlot.end() && bit->second && bit->second != obj)
-                                redundantInferior = true;
-                        }
-                    }
-                    // Force-sell also covers BLACKLISTED apparel (marth's annoyance list) --
-                    // never keep/wear it; sell it even while worn (RemoveItem unequips it).
-                    const bool forceSell = redundantInferior || (armo && IsBlacklistedApparel(armo));
-                    if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
-                    if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
-                    RE::BGSKeywordForm* kwf = weap
-                        ? static_cast<RE::BGSKeywordForm*>(weap)
-                        : static_cast<RE::BGSKeywordForm*>(armo);
-                    auto* entry = data.second.get();
-                    if (forceSell)                              sdiag(obj, "force-sell");           // redundant/blacklisted worn -> sell (RemoveItem unequips it)
-                    else if (entry && entry->IsWorn())          { sdiag(obj, "worn"); continue; }     // never sell worn gear
-                    if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
-                    if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
-                    // #21 merchant-perk bypass: a "sell anything" follower ignores the
-                    // vendor's VEND filter (like the player); otherwise the filter holds.
-                    if (!sellAnything && !VendorTrades(vend, vv.notBuySell, kwf)) { sdiag(obj, "vendor-filter"); continue; }
-                    if (diag) sdiag(obj, "SELL");
-                    // #21 speech-scaled sell price (base instance value * sellFraction).
-                    const std::int32_t baseVal = entry ? entry->GetValue() : 0;
-                    sell.push_back(TradeBridge::SellRow{
-                        obj, static_cast<std::int32_t>(data.first),
-                        static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
-                        armo && IsJewelryPiece(armo) });
-                }
-                // Highest-value first: the vendor's barter gold is limited (field log:
-                // sale total often > vendor gold), so sell the most valuable junk first
-                // to convert the most worth per visit. Papyrus caps at the chest's gold.
-                std::sort(sell.begin(), sell.end(),
-                          [](const auto& a, const auto& b) { return a.value > b.value; });
-
-                // BUY NEEDS: each supply gambit BELOW its threshold -> the category
-                // + how many MORE to acquire. Papyrus enumerates the vendor's ACTUAL
-                // stock and TradeBridge::PlanBuy matches it to these (best affordable
-                // first, capped at quota + purse). Native can't pre-name the stock --
-                // the field log proved guessing gives stock=0 -- so it names the
-                // NEED and lets the enumeration find the match.
-                std::vector<TradeBridge::NeedCat> needs;
-                auto addNeed = [&](TradeBridge::NeedCat::Kind a_kind, int have, int want) {
-                    if (have < want) needs.push_back({ static_cast<std::int32_t>(a_kind),
-                                                       static_cast<std::int32_t>(want - have) });
-                };
-                for (const auto& g : a_logistics) {
-                    if (!g.enabled) continue;
-                    const auto& c    = g.conditionOpcode;
-                    const int   want = static_cast<int>(g.conditionParam);
-                    if      (c == Vocab::kCondSelfLowHealthPotion)  addNeed(TradeBridge::NeedCat::kPotHealth,  CountPotions(a_follower, RE::ActorValue::kHealth),  want);
-                    else if (c == Vocab::kCondSelfLowStaminaPotion) addNeed(TradeBridge::NeedCat::kPotStamina, CountPotions(a_follower, RE::ActorValue::kStamina), want);
-                    else if (c == Vocab::kCondSelfLowMagickaPotion) addNeed(TradeBridge::NeedCat::kPotMagicka, CountPotions(a_follower, RE::ActorValue::kMagicka), want);
-                    else if (c == Vocab::kCondSelfOutOfArrows)      addNeed(TradeBridge::NeedCat::kArrows,     ArrowCount(a_follower),                             want);
-                    else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
+                    if (diag) sdiag(c.obj, c.passTag);
+                    sell.push_back(TradeBridge::SellRow{ c.obj, c.count, c.price, c.jewelry });
                 }
 
                 // Only burn the cooldown + stop scanning if a trade ACTUALLY
@@ -930,7 +967,7 @@ namespace MFO::Logistics {
                 // follower's order, or the bridge being down, must not cost this
                 // follower its 8 s window -- try the next vendor / next scan.
                 if (TradeBridge::VendorTrade(a_follower, vendor, chest,
-                                             std::move(sell), std::move(needs), purse, buy)) {
+                                             std::move(sell), needs, purse, buy)) {
                     g_econTrade[fid] = a_now + std::chrono::seconds(8);
                     break;
                 }

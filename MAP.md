@@ -775,10 +775,13 @@ are declared there and defined in their home module). Layout:
 - `Logistics_Cast.cpp` (269) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
   `TopTwoSchoolMask`, `LearnCarriedTomes:137`, school name/keyword helpers.
-- `Logistics_Economy.cpp` (1034) — #21 economy: mage-apparel scoring,
+- `Logistics_Economy.cpp` (1106) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
-  `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
-- `Logistics_Loot.cpp` (2387) — the loot judge + per-category looters,
+  `EconomyProbe:488` (follower-side sell-candidate/buy-needs state built ONCE
+  per call, ~583-909; only the per-vendor VEND-filter pass + chest/gold read
+  stay inside the `for (auto& h : living)` loop, ~911-968 -- 2026-09 perf fix),
+  public buy helpers (`MageApparelBuyKey:1066` et al).
+- `Logistics_Loot.cpp` (2358) — the loot judge + per-category looters,
   claim-and-release, navmesh reach, `AcquireEquip:538`, `LootEquipment:617`,
   `LootNearby:1609`, `StripCorpse:2250`, `RunExcursionScan:2314`.
 - `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state

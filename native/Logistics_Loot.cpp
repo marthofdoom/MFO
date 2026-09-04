@@ -2355,33 +2355,4 @@ namespace MFO::Logistics {
             }
             return false;
         }
-
-        // ── ECONOMY PROBE (#21, temp) ───────────────────────────────────────
-        // LOG-ONLY dry run of follower<->vendor trading: ZERO transactions, ZERO
-        // mutations -- every call below is a read. Validates, BEFORE any gold
-        // moves: (a) vendor-faction resolution off a living actor, (b) the
-        // merchant-chest read (incl. an UNLOADED chest -- inventory lives in
-        // extra data, not 3D), (c) where the vendor's gold actually is (chest vs
-        // pocket), and (d) the VEND keyword filter on the follower's sellables.
-        //
-        // Faction resolution is Actor::VisitFactions, NOT GetVendorFaction --
-        // that one has an NG bug and MUTATES engine state (caches the resolved
-        // faction back onto the process), which breaks the zero-mutation
-        // contract of a probe. First faction with IsVendor() && OffersServices()
-        // wins, matching the engine's own barter pick closely enough to verify.
-        //
-        // WORKER THREAD (§0.37, ServiceFollower's task -- NOT MainThread::Post).
-        // The follower reads (GetInventory / CountPotions / g_travel) must share
-        // the thread with the loot/heal/loadout mutations in that same task or they
-        // race InventoryChanges. This routine is LOG-ONLY: the merchant read + any
-        // transaction run in Papyrus (VM, dispatched worker->VM), so nothing here
-        // touches a live merchant's inventory off the main thread -- the CTD class
-        // the old MainThread::Post existed for. The cadence statics below are the
-        // namespace-scope g_econ* maps, wiped on revert by ClearTransientState.
-        // Takes the logistics GAMBITS by const-reference (a_state.logistics(), a
-        // reference into g_followers) -- shared serially with the same worker task.
-
-        // Does the vendor's VEND list trade this item? The list holds KEYWORDS
-        // (VendorItemWeapon et al.); notBuySell inverts it into an EXCLUSION
-        // list (the engine's own semantics for that flag).
 }
