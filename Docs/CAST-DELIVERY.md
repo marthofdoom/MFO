@@ -262,6 +262,28 @@ touch ONLY the one genuinely-broken case: concentration + Self + off-self.** FF 
 self-cast were already correct; do not touch them, do not re-broaden the proxy, do not
 reintroduce AddTarget.
 
+## OPT-IN ANIMATED HEAL (bHealAnimPackage, DEFAULT OFF — experimental A/B)
+
+The baseline above delivers heals via `kInstant` `CastSpellImmediate`: the effect
+lands, with **no cast animation** (offense animates because the follower's OWN AI
+fires the held spell; the AI won't CHOOSE to self/party-heal, so MFO force-applies).
+The MCM toggle `bHealAnimPackage` (default OFF, inert without APMF) flips a HEAL onto
+the **M9 forced-casting package** (ENGINE_NOTES §0.17/§0.21) delivered through APMF's
+ch.9 0x49 package-offer channel, so the follower's own AI casts the heal **animated**
+while movement stays alive. `CastSelfDirect`/`CastTargetDirect` call
+`Packages::HealAnimFill` after the competence gate; if it takes over the tick they
+`return Applied` and the `kInstant` apply is skipped. `HealAnimFill` is fully
+self-gating (false → baseline path, byte-identical, unless toggle+APMF+`IsHealSpell`
+all hold; false on APMF refusal too, so the heal still lands). Two new UseMagic ESP
+records, Spell set at runtime, target STATIC (no unproven runtime target write):
+`MFO_APMFHealSelfPackage` (0x83B, t6 self) and `MFO_APMFHealPlayerPackage` (0x83C,
+t0→player). Ally/other-actor heals stay on `kInstant`. Per-follower `g_healAnimMap`
+(many concurrent holders); `Packages::Pump` keep-alive + stale release; precedence
+retreat > heal > loot on the shared OfferPackage handle. **FIELD-UNCERTAIN**: whether
+0x49 direct-delivery drives a UseMagic cast the way the M9 alias probes did — this is
+what the toggle A/Bs. A non-working ON path leaves default-OFF heals untouched. See
+`native/Packages.cpp` `HealAnimFill` / `MFO_GenerateESP.py` `make_apmf_heal_packages()`.
+
 ## KEY SYMBOLS (Actuation.cpp)
 
 `ConcProxy` (owner-keyed `Slot g_slot[2]{form,source,owner}`, `Configure`, `Acquire`,
