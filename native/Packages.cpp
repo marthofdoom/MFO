@@ -95,7 +95,12 @@ namespace MFO::Packages {
         // is not. UseMagic 000504F5 declares 13 inputs and MFO supplies 11 of
         // them; hardcoding "slot 1" would silently follow the wrong input the
         // day the generator emits one more.
-        constexpr std::string_view kInputSpell  = "Spell"sv;
+        // The UseMagic template (000504F5) authors this input as "SPELL" (all
+        // caps) -- the vanilla template name. "Spell" misses both name maps and
+        // falls back to positional uid 3 (which happens to BE SPELL, so it worked
+        // by luck, but logged an error every offer -- deck 2026-09-04). "Target"
+        // is authored title-case and matches as-is.
+        constexpr std::string_view kInputSpell  = "SPELL"sv;
         constexpr std::string_view kInputTarget = "Target"sv;
 
         // PTDA targType values, established by resolving what vanilla actually
