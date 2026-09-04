@@ -35,6 +35,7 @@
 #include "MainThread.h"
 #include "Vocabulary.h"
 #include "Scheduler.h"
+#include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the focus-fire sink
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -1662,7 +1663,18 @@ namespace MFO::Board {
                             if (!b->IsDown()) continue;                 // edge only
                             if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
                             if (static_cast<int>(b->GetIDCode()) != fk) continue;
-                            SKSE::GetTaskInterface()->AddTask([]() { Probe::FocusOnCrosshair(); });
+                            // SEV-1: FocusOnCrosshair reads follower membership; run its
+                            // deferred body under PumpTickGate like every MFO AddTask body
+                            // so a revert/save draining the pump makes it bail (#4).
+                            // (Follow-up, OUT OF THIS WAVE'S SCOPE: FocusOnCrosshair in
+                            // Probe.cpp still probes via the unlocked Followers::IsTracked
+                            // walk -- switch it to IsTrackedFast to fully close the read.)
+                            const auto epoch = MFO::Diagnostics::CurrentPumpEpoch();
+                            SKSE::GetTaskInterface()->AddTask([epoch]() {
+                                MFO::Diagnostics::PumpTickGate gate(epoch);
+                                if (!gate) return;
+                                Probe::FocusOnCrosshair();
+                            });
                         }
                     }
 

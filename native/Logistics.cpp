@@ -23,6 +23,7 @@
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
 #include "Sightline.h"    // LoS + line-of-fire gate on the OOC hostile-FF direct fallback
 #include "Followers.h"    // #62 on-load beast-head sweep iterates g_active (main thread)
+#include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the loot-waiver sink
 #include <functional>     // #62 self-reposting on-load sweep closure
 #include <memory>         // std::shared_ptr for that closure
 #include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
@@ -225,7 +226,14 @@ namespace MFO::Logistics {
                 // Sinks QUEUE; they never touch a main-thread map inline (#1/#4).
                 // The timer RESETS on every take, so multiple QuickLoot takes push
                 // the follower's window out to the LAST one.
-                SKSE::GetTaskInterface()->AddTask([srcID]() {
+                // SEV-1: the body mutates the save-scoped loot maps (g_playerLooted/
+                // g_claim/g_lastLootSource), so it runs under PumpTickGate like every
+                // other MFO AddTask body -- else a revert's StopPump/ResetAllState (or a
+                // save's PausePump) could clear those maps while this writes them (#4).
+                const auto epoch = MFO::Diagnostics::CurrentPumpEpoch();
+                SKSE::GetTaskInterface()->AddTask([srcID, epoch]() {
+                    MFO::Diagnostics::PumpTickGate gate(epoch);
+                    if (!gate) return;
                     g_playerLooted[srcID] = Clock::now();
                     EvictOldest(g_playerLooted);
                     // R1: the player's take is from a DIFFERENT source than their
@@ -1667,10 +1675,15 @@ namespace MFO::Logistics {
         auto tries = std::make_shared<int>(120);   // ~2s window for late-loading followers
         auto self  = std::make_shared<std::function<void()>>();
         *self = [done, tries, self]() {
-            for (const auto& h : Followers::g_active) {
-                auto* a = h.get().get();
+            // SEV-1: this runs on the MAIN thread (MainThread::Post), but g_active is
+            // rebuilt by Followers::Refresh on the JOB WORKER, so a raw walk here races
+            // that reassignment (#4). Read the lock-guarded FormID snapshot instead;
+            // late-loading teammates not yet in it are caught by the ~2s retry below,
+            // exactly as when g_active itself was still filling.
+            auto snap = Followers::ActiveSnapshot();
+            if (snap) for (const RE::FormID id : *snap) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
                 if (!a || !a->IsPlayerTeammate() || !a->Is3DLoaded()) continue;
-                const RE::FormID id = a->GetFormID();
                 if (done->count(id)) continue;
                 KeepHeadClear(a);
                 done->insert(id);

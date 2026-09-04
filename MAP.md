@@ -294,8 +294,9 @@ releases **by eviction** with a non-actor XMarker.
   `ApplyTargetEffect` conc branch + `SustainConcentrationEffect` keyed on the copy) — lands
   on the recipient, follower is caster (rate+cost), player uninvolved. **A proxy cast starts a
   REAL ENGINE CHANNEL that drains the follower per-second independent of MFO's apply** (runaway
-  = magicka drain with NO `FORCE-CAST` log). **SLOT-FOR-DURATION (owner-keyed `Slot g_slot[2]
-  {form,source,owner}`):** each live stream OWNS a slot (`ConcProxy::Acquire(follower, src)` —
+  = magicka drain with NO `FORCE-CAST` log). **SLOT-FOR-DURATION (owner-keyed `Slot g_slot[kSlotCount=6]
+  {form,source,owner}`, one per concurrent party healer — grown from 2 so a 3rd+
+  self-delivery stream no longer overflows to a silent skip):** each live stream OWNS a slot (`ConcProxy::Acquire(follower, src)` —
   reuse owner's slot / `Configure` a FREE slot / else nullptr → caller SKIPS); a slot is
   Configure'd ONLY when free, never while its channel lives (else freeze + heal-full-stops-1st-
   not-2nd). RELEASE (`TargetCastEndActor(target,spell,owner)`, EVERY release) = dispel source +
@@ -1581,10 +1582,13 @@ that re-checks the epoch, sets `TickActiveGuard`, then runs `Followers::Refresh`
   scheduler, not just diagnostics. `DumpReport` uses `find()` not `operator[]`
   (`:365`) to avoid persisting a spurious `0xFF`-keyed record.
 - **Wave-1 worker-quiesce API:** every MFO `AddTask` body now runs under a
-  `PumpTickGate(epoch)` RAII (`:77`) — STOREs `g_tickActive=true` (seq_cst) then
+  `PumpTickGate(epoch)` RAII — STOREs `g_tickActive=true` (seq_cst) then
   re-checks the epoch (Dekker handshake, closes the check-then-set TOCTOU), and
-  bails if a `StopPump`/`PausePump` is in progress. `PausePump()`/`ResumePump()`
-  (`:515`/`:532`) are the RESUMABLE quiesce for `SaveCallback` (SEV-1): PausePump
+  bails if a `StopPump`/`PausePump` is in progress. **Now DECLARED in `Diagnostics.h`
+  + defined out-of-line (the g_active concurrency wave exposed `PumpTickGate` +
+  `CurrentPumpEpoch` so the cross-TU sinks — Rapport death, Logistics loot-waiver,
+  Board focus-fire — drain identically; pump atomics stay file-local).**
+  `PausePump()`/`ResumePump()` are the RESUMABLE quiesce for `SaveCallback` (SEV-1): PausePump
   drains the worker like StopPump but WITHOUT tearing the pump down, so the save
   can iterate `g_followers` with no worker insert racing it; ResumePump lifts it.
   MUST be paired (RAII across the save). Off-worker sink bodies gate on

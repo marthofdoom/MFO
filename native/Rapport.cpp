@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "State.h"
 #include "MainThread.h"   // #63 quash runs on the pump, never in the dispatch
+#include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the death-sink body
 
 namespace MFO::Rapport {
 
@@ -112,7 +113,15 @@ namespace MFO::Rapport {
                                             ? a_event->actorKiller->CreateRefHandle() : RE::ObjectRefHandle{};
 
                 // Sinks QUEUE; they never do engine work inline (INVARIANTS #1).
-                SKSE::GetTaskInterface()->AddTask([victimHandle, killerHandle]() {
+                // SEV-1: capture the pump epoch NOW; the deferred body calls
+                // Followers::Refresh + walks g_active/g_activeIds, so it must run under
+                // PumpTickGate exactly like Diagnostics.cpp's own sinks -- else a
+                // StopPump/ResetAllState (revert) or PausePump (save) could clear those
+                // maps mid-body (#4). Construct the gate FIRST, bail on !gate.
+                const auto epoch = MFO::Diagnostics::CurrentPumpEpoch();
+                SKSE::GetTaskInterface()->AddTask([victimHandle, killerHandle, epoch]() {
+                    MFO::Diagnostics::PumpTickGate gate(epoch);
+                    if (!gate) return;
                     auto* victimRef = victimHandle.get().get();
                     auto* killerRef = killerHandle.get().get();
                     auto* victim = victimRef ? victimRef->As<RE::Actor>() : nullptr;

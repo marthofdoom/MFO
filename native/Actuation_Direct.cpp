@@ -158,22 +158,31 @@ namespace MFO::Actuation {
         // player never casts / pays. Used ONLY for concentration+Self+off-self -- FF /
         // self-cast / non-Self are untouched baseline.
         //
-        // TWO transient dynamic (0xFF__) slots, SLOT-FOR-DURATION (marth's hard rule):
-        // a CONCENTRATION proxy cast starts a REAL engine channel on the caster (it
-        // drains the caster per-second and sustains the effect), so the proxy FORM is
-        // load-bearing for the WHOLE life of that channel -- reconfiguring or handing
+        // A POOL of transient dynamic (0xFF__) slots, SLOT-FOR-DURATION (marth's hard
+        // rule): a CONCENTRATION proxy cast starts a REAL engine channel on the caster
+        // (it drains the caster per-second and sustains the effect), so the proxy FORM
+        // is load-bearing for the WHOLE life of that channel -- reconfiguring or handing
         // its form to another cast while the channel is live corrupts the in-flight
         // cast (the freeze) and entangles two streams (heal-full stops the 1st but not
         // the 2nd). So each live stream OWNS a slot for its duration: a slot is
         // Configure'd ONLY when FREE, never while its channel lives; released (its
         // channel INTERRUPTED, see TargetCastEndActor) only when the stream ends. Owner
         // = the caster (follower) FormID; one live concentration channel per follower.
-        // 2-slot cap: if both slots are owned by OTHER live streams, Acquire returns
-        // nullptr and the caller SKIPS (overflow). Never serialized (dynamic forms are
-        // not). MAIN THREAD only (form table); returns nullptr off-main (VR).
+        // POOL CAP: one slot per concurrent self-delivery concentration stream, i.e.
+        // per healer/warder in the party. The old cap was 2, so a 3rd concurrent
+        // self-delivery stream got nullptr + a silent skip and that follower never
+        // healed (a 3-healer party's 3rd healer was dead weight, SEV-3). Sized to 6
+        // (a party-realistic healer count) so Acquire only overflows past a genuinely
+        // pathological caster count; past it Acquire returns nullptr and the caller
+        // SKIPS. Never serialized (dynamic forms are not). MAIN THREAD only (form
+        // table); returns nullptr off-main (VR).
+        //   MERGE NOTE (human): a SEPARATE branch (feat/heal-anim-proxy) adds its own
+        //   `g_healSlot` pool near here. This wave is NOT on that branch and only grows
+        //   the existing g_slot pool -- reconcile the two pools when that branch merges.
         namespace ConcProxy {
             struct Slot { RE::SpellItem* form = nullptr; RE::FormID source = 0; RE::FormID owner = 0; };
-            Slot g_slot[2];
+            constexpr std::size_t kSlotCount = 6;   // concurrent self-delivery conc streams (party healers)
+            Slot g_slot[kSlotCount];
 
             void Configure(RE::SpellItem* a_p, RE::SpellItem* a_src) {
                 a_p->data          = a_src->data;                                 // castingType/cost/etc.
@@ -418,6 +427,26 @@ namespace MFO::Actuation {
                     // (Baseline: an FF Self spell force-cast here lands on tgt.)
                     inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
                 }
+                // ── CONCENTRATION DOUBLE-CHARGE: OPEN, deliberately UNCHANGED ─────
+                // Concurrency-wave verdict (representative of all three Apply* paths):
+                // a possible double-charge exists on CONCENTRATION streams -- the manual
+                // per-beat deduct below AND, per TargetCastEndActor's field note, a REAL
+                // engine channel this cast starts that "drains him per-second INDEPENDENT
+                // of MFO's per-beat apply" (the runaway that InterruptCast exists to stop).
+                // But the code+docs evidence is CONTRADICTORY and cannot settle it:
+                //   * ENGINE_NOTES 0.22/0.23(b) MEASURED these casts as FREE (Thunderbolt
+                //     343, pool 1000 -> 1000 after) -- which is the whole REASON MFO
+                //     deducts manually; if that holds for concentration too there is NO
+                //     double-charge and this deduct is the SOLE charge (correct).
+                //   * ENGINE_NOTES 0.9 MEASURED CastSpellImmediate as DEDUCTING and warns
+                //     #16 double-spend -- the opposite.
+                //   * The self-drain claim is a field observation of a runaway AFTER a
+                //     stream ends, not an isolated measurement of a per-beat double-deduct
+                //     DURING one; concentration magicka was never A/B measured either way.
+                // Deciding needs runtime instrumentation (deduct disabled -> does a live
+                // concentration stream still drain?), which code review cannot do. Per the
+                // brief's rule -- never guess a magicka path; breaking the economy is worse
+                // than the flag -- this is left EXACTLY as-is and flagged for a field A/B.
                 const float cost  = sp->CalculateMagickaCost(caster);
                 const float spend = avo ? std::min(cost, before) : 0.0f;   // #6: never negative
                 if (avo && spend > 0.0f)
@@ -849,7 +878,11 @@ namespace MFO::Actuation {
         // floored at the old 2 s so it never releases SLOWER-to-react than before
         // when the party is small / the window short.
         const float suppress   = std::max(0.0f, Config::g_suppressWindow.load());
-        const float partySize  = static_cast<float>(Followers::g_active.size() + 1);  // + player
+        // SEV-1: size the party from the lock-guarded snapshot, never a raw
+        // g_active.size() -- this runs on the job worker and a concurrent
+        // Followers::Refresh (death/loot sink) can be rebuilding g_active (#4).
+        const auto  snap       = Followers::ActiveSnapshot();
+        const float partySize  = static_cast<float>((snap ? snap->size() : 0) + 1);  // + player
         const float releaseSec = std::max(2.0f,
                                           suppress * 1.12f + 0.133f * partySize + 0.5f);
         std::vector<RE::FormID> done;
@@ -1038,12 +1071,13 @@ namespace MFO::Actuation {
         const auto now = SelfClock::now();
         // Same release window as SelfCastReconcile: out-wait the worst-case
         // round-robin + suppression gap so a still-winning rule is never torn down.
-        // (KNOWN SEV-1, shared with SelfCastReconcile: g_active is main-thread/
-        // serial-task-only (#4) and this runs on the job worker -- tracked in
-        // REVIEW-2026-08-18-comprehensive; the whole cluster is being fixed in
-        // one wave, do not half-fix it here.)
+        // (Was the KNOWN SEV-1 shared with SelfCastReconcile: g_active is main-
+        // thread/serial-task-only (#4) and this runs on the job worker. FIXED in
+        // the concurrency wave -- the party size now reads the lock-guarded
+        // snapshot, immune to a concurrent Followers::Refresh reallocating g_active.)
         const float suppress   = std::max(0.0f, Config::g_suppressWindow.load());
-        const float partySize  = static_cast<float>(Followers::g_active.size() + 1);
+        const auto  snap       = Followers::ActiveSnapshot();
+        const float partySize  = static_cast<float>((snap ? snap->size() : 0) + 1);
         const float releaseSec = std::max(2.0f, suppress * 1.12f + 0.133f * partySize + 0.5f);
         std::vector<RE::FormID> done;
         for (auto& [id, tc] : g_targetCast) {
@@ -1181,7 +1215,12 @@ namespace MFO::Actuation {
                     const float hp = Vocab::HealthPct(m);
                     if (hp < lowest) { lowest = hp; neediest = m; }
                 };
-                for (const auto& h : Followers::g_active) { auto p = h.get(); probe(p.get()); }
+                // SEV-1: iterate the lock-guarded FormID snapshot, not the live
+                // g_active handle vector -- a concurrent Followers::Refresh can
+                // reallocate it under this worker read (#4). See Sightline/CasterConsent.
+                if (auto snap = Followers::ActiveSnapshot())
+                    for (const RE::FormID fid : *snap)
+                        probe(RE::TESForm::LookupByID<RE::Actor>(fid));
                 probe(RE::PlayerCharacter::GetSingleton());
                 // Prefer the CURRENT stream's recipient if it is still hurt and no one
                 // else is dramatically worse (the hysteresis above).
@@ -1258,6 +1297,17 @@ namespace MFO::Actuation {
             const float floor   = (reserve > 0.0f && mx > 0.0f) ? reserve * mx : 0.0f;
             auto affordable = [&] { return cost <= budget && (budget - cost) >= floor; };
 
+            // AUTO-fan budget honesty (SEV-3): a CONCENTRATION + Self spell fanned
+            // to a NON-caster is SILENTLY SKIPPED by ApplyEffectFromTo (it would leak
+            // a ConcProxy slot AUTO cannot later FREE -- see its comment), so the
+            // ONLY target such a spell can actually land on under AUTO is the caster
+            // himself. Pre-FILTER those dead targets out during enumeration (below),
+            // alongside the SpellHealsHealth heal-gate, so fired/budget count REAL
+            // applications and never charge for a target the apply drops on the floor.
+            const bool concSelf =
+                spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+                spell->GetDelivery()    == RE::MagicSystem::Delivery::kSelf;
+
             // ENUMERATE the inferred set (worker-safe reads, same context/precedent
             // as Evaluator::PickFoe / PickAlly which run on this same tick). F1:
             // collect FormIDs, NEVER raw Actor* -- the fan-out below runs AFTER the
@@ -1276,6 +1326,7 @@ namespace MFO::Actuation {
                         auto  ptr = t.targetHandle.get();
                         auto* foe = ptr.get();
                         if (!foe || foe == a_follower) continue;
+                        if (concSelf) continue;   // SEV-3: a conc-Self spell lands only on the caster under AUTO -- no foe is a real target
                         if (foe->IsDead() || foe->IsDisabled() || !foe->Is3DLoaded()) continue;
                         if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
                         if (!foe->IsHostileToActor(a_follower)) continue;   // brawl gate (#34)
@@ -1313,6 +1364,10 @@ namespace MFO::Actuation {
                                   SpellHealsHealth(spell);
                 auto consider = [&](RE::Actor* ally) {
                     if (!ally) return;
+                    // SEV-3: a conc-Self spell only lands on the caster under AUTO
+                    // (ApplyEffectFromTo drops it for anyone else), so never enumerate
+                    // another ally for it -- that keeps fired/budget honest below.
+                    if (concSelf && ally != a_follower) return;
                     if (ally->IsDead() || ally->IsDisabled() || !ally->Is3DLoaded()) return;
                     if (selfPos.GetDistance(ally->GetPosition()) > radius) return;
                     // #2: heal only allies whose status matches the FIRING gambit's
@@ -1333,7 +1388,13 @@ namespace MFO::Actuation {
                     if (!ShouldApplyTo(ally, spell, false)) return;
                     targets.push_back(ally->GetFormID());
                 };
-                for (const auto& h : Followers::g_active) { auto p = h.get(); consider(p.get()); }
+                // SEV-1: read the lock-guarded FormID SNAPSHOT, never the live
+                // g_active handle vector -- a concurrent Followers::Refresh (death/
+                // loot sink on another job worker) can reallocate it under us (#4).
+                // Matches Sightline/CasterConsent's off-domain read pattern.
+                if (auto snap = Followers::ActiveSnapshot())
+                    for (const RE::FormID fid : *snap)
+                        consider(RE::TESForm::LookupByID<RE::Actor>(fid));
                 consider(RE::PlayerCharacter::GetSingleton());
             }
 
