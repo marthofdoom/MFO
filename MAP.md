@@ -1424,6 +1424,26 @@ decline-fallback.
   same pattern as `bApmfLootTravel`/`bApmfCast`. kIgnoreCombat (`0x00102000`) preserved on
   the new package — retreat is the one Travel use that must win THROUGH combat, opposite
   of loot-travel's plain preferred-speed flag.
+- **HARD MUTUAL-EXCLUSION GUARD (2026-09-03): retreat and loot-travel share ONE
+  per-follower `APMFBridge::OfferPackage` handle** (`APMFBridge.cpp`'s `g_owned` map is
+  keyed by `FormID` alone, not by intent+slot) — if a follower ever held BOTH a live
+  loot-travel excursion and a retreat hold, the two claims would stomp that single
+  handle every `Pump()` tick (loot's slot-refresh loop and the retreat refresh both call
+  `OfferPackage` unconditionally, unaware of each other). Belt-and-suspenders, retreat
+  wins (the disengage is the more urgent directive): `RetreatFill`'s APMF branch
+  (`Packages.cpp:~1911`, right where `g_retreatHold.actorID` is set) calls
+  `LootTravelEvictIf(fid, "retreat engaging")` to drop any live loot claim BEFORE
+  finalizing the retreat hold; `LootTravelFill`/`LootTravelRetarget` (`Packages.cpp:1548`,
+  `1633`) reciprocally early-return `false` while `g_retreatHold.actorID` names that same
+  follower, covering the reverse race. `LootTravelEvictIf` gained an `a_why` parameter
+  (default `"dismissed"`, its original/only caller `Logistics.cpp:1725` unaffected) so the
+  retreat-triggered eviction logs distinctly from the roster-dismissal one. **This closes a
+  window that was live in this SAME change** (retreat never touched `OfferPackage` before
+  this pass — see the paragraph above — so the collision could not occur on any
+  previously-shipped code; it existed only between this pass's retreat-APMF commit and
+  this guard, gated on the scheduler's combat/logistics table split which SHOULD keep
+  loot and retreat mutually exclusive but is not a hard guarantee — see `Scheduler.cpp`'s
+  "THE TWO TABLES NEVER INTERLEAVE" note, `§4.8`).
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

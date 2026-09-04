@@ -1549,6 +1549,15 @@ namespace MFO::Packages {
         if (!Config::g_lootTravel.load())          return false;
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
         if (!a_follower || !a_ref)                 return false;
+        // RETREAT HAS PRECEDENCE: a follower currently held by retreat never
+        // starts a loot excursion. Reciprocal to RetreatFill's own loot-evict
+        // (see its APMF branch) -- both routes share ONE per-follower
+        // APMFBridge::OfferPackage handle, so the two claims must never be
+        // live at once for the same follower. Belt-and-suspenders: RetreatFill
+        // already evicts any live loot excursion when retreat engages, so this
+        // only matters for the reverse ordering (a loot dispatch landing on a
+        // follower already retreating, same tick or a race).
+        if (g_retreatHold.actorID == a_follower->GetFormID()) return false;
 
         // APMF SHOWPIECE PRINCIPLE (marth, Docs/STATUS.md): MFO is a showpiece for
         // APMF -- with APMF present, MFO ROUTES THROUGH APMF and COMMITS to it.
@@ -1642,6 +1651,12 @@ namespace MFO::Packages {
         if (!Config::g_lootTravel.load())          return false;
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
         if (!a_follower || !a_ref)                 return false;
+        // RETREAT HAS PRECEDENCE -- same reciprocal guard as LootTravelFill's:
+        // a leg boundary landing on a follower retreat has since claimed
+        // (RetreatFill evicts any live loot excursion on engage, but this
+        // guards the reverse race) must not re-touch the shared per-follower
+        // OfferPackage handle either.
+        if (g_retreatHold.actorID == a_follower->GetFormID()) return false;
 
         // APMF ROUTE: this slot's excursion started on the APMF package (Fill
         // above), so it stays on it for the whole excursion -- rewrite the SAME
@@ -1790,29 +1805,33 @@ namespace MFO::Packages {
         return g_apmfSlotActive[a_slot];
     }
 
-    void LootTravelEvictIf(RE::FormID a_id) {
+    void LootTravelEvictIf(RE::FormID a_id, const char* a_why) {
         // Evict a_id from whichever slot's ACTOR alias he currently occupies, keyed
         // to alias OCCUPANCY across ALL slots (not the caller's intent map -- the
         // alias is never emptied, so occupancy is the authoritative state). With
         // release-by-eviction (LootTravelClear) a slot normally holds the MARKER
-        // between excursions, so this now matters for ONE case: a follower dismissed
-        // DURING an excursion, before Clear ran. If he is still in his actor alias
-        // when he leaves the roster, his framework claim is gone, so MFO's static-60
-        // claim is his sole one -- he'd walk to the stale corpse and re-latch on
-        // every load. Evict him (fill the marker -- a real ForceRefTo; the null
-        // clear is a no-op, 0.34) so he detaches. Scans every slot because a
-        // dismissed follower could hold any of the four.
+        // between excursions, so this now matters for TWO cases: a follower dismissed
+        // DURING an excursion, before Clear ran (a_why="dismissed", the original/
+        // default caller, Logistics.cpp); or a follower whose retreat is now
+        // claiming the SAME per-follower APMFBridge::OfferPackage handle, evicted
+        // preemptively by RetreatFill (a_why="retreat engaging") so the two claims
+        // are never simultaneously live -- see RetreatFill's own comment. If he is
+        // still in his actor alias when either fires, his framework claim is gone
+        // (or about to be superseded), so MFO's static-60 claim is his sole one --
+        // he'd walk to the stale corpse and re-latch on every load. Evict him (fill
+        // the marker -- a real ForceRefTo; the null clear is a no-op, 0.34) so he
+        // detaches. Scans every slot because the follower could hold any of the four.
         //
         // APMF ROUTE: a_id never occupied an alias for its slot (0x49 delivers
         // with no alias fill) -- occupancy there is tracked in g_apmfSlotFollower
-        // instead. Scan it the same way, releasing the claim so a dismissed
-        // follower doesn't outlive the roster holding a package-offer claim.
+        // instead. Scan it the same way, releasing the claim so he doesn't outlive
+        // the reason he was evicted still holding a package-offer claim.
         for (int slot = 0; slot < kMaxLootSlots; ++slot) {
             if (g_apmfSlotActive[slot] && g_apmfSlotFollower[slot] == a_id) {
                 g_apmfSlotActive[slot]   = false;
                 g_apmfSlotFollower[slot] = 0;
                 APMFBridge::ReleaseOfferPackage(a_id);
-                spdlog::info("[loot] APMF travel released (dismissed) -- slot {} held {:08X}", slot, a_id);
+                spdlog::info("[loot] APMF travel released ({}) -- slot {} held {:08X}", a_why, slot, a_id);
             }
         }
 
@@ -1827,7 +1846,7 @@ namespace MFO::Packages {
             if (auto* ev = EvictionRef())
                 ForceRefToNative(quest, LootActorAlias(slot), ev);   // no-op off AE, fine
             if (auto* actor = held->As<RE::Actor>())
-                VerifyDetached(actor, "dismissed");   // prove the ex-actor detached
+                VerifyDetached(actor, a_why);   // prove the ex-actor detached
         }
     }
 
@@ -1889,6 +1908,20 @@ namespace MFO::Packages {
             // over a live combat target, not just runs alongside it.
             a_follower->StopCombat();
             a_follower->EvaluatePackage(true, false);   // never resetAI
+            // HARD MUTUAL-EXCLUSION GUARD: retreat and loot-travel share ONE
+            // per-follower APMFBridge::OfferPackage handle (APMFBridge.cpp's
+            // g_owned map is keyed by FormID alone, not by intent-plus-slot),
+            // so a follower with BOTH a live loot excursion and a retreat hold
+            // would have the two claims stomp that single handle every Pump
+            // tick. Retreat wins (the disengage is the more urgent directive):
+            // drop any active loot-travel excursion for this follower now,
+            // right as retreat claims the handle, so the next loot Pump
+            // refresh (Packages::Pump, g_apmfSlotActive loop) has nothing left
+            // to re-assert. Reciprocal guard in LootTravelFill/Retarget (early
+            // return while g_retreatHold.actorID == this follower) covers the
+            // reverse ordering. Not previously guarded -- see the commit
+            // message for whether a collision window existed before this.
+            LootTravelEvictIf(a_follower->GetFormID(), "retreat engaging");
             g_retreatHold.actorID  = a_follower->GetFormID();
             g_retreatHold.startAt  = Clock::now();
             g_retreatHold.startPos = a_follower->GetPosition();

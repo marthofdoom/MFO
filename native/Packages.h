@@ -303,8 +303,13 @@ namespace MFO::Packages {
     // is never emptied, so a follower dismissed any time after his last travel
     // still holds it). Priority can't free a dismissed follower (nothing reclaims
     // him); this force-fills his slot's actor alias with the eviction marker.
-    // No-op if a_id holds no slot. See the .cpp.
-    void LootTravelEvictIf(RE::FormID a_id);
+    // No-op if a_id holds no slot. a_why tags the log line / VerifyDetached
+    // readback -- default "dismissed" (the original caller, Logistics.cpp);
+    // RetreatFill also calls this with "retreat engaging" to preemptively drop
+    // a live loot claim before retreat claims the SAME per-follower
+    // APMFBridge::OfferPackage handle (the two must never be live at once).
+    // See the .cpp.
+    void LootTravelEvictIf(RE::FormID a_id, const char* a_why = "dismissed");
 
     // ── RETREAT PROBE: travel-to-PLAYER under kIgnoreCombat ─────────────────
     // One question, answered in natural play: can an alias Travel package
