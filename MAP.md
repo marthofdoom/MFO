@@ -1476,6 +1476,42 @@ decline-fallback.
   this guard, gated on the scheduler's combat/logistics table split which SHOULD keep
   loot and retreat mutually exclusive but is not a hard guarantee — see `Scheduler.cpp`'s
   "THE TWO TABLES NEVER INTERLEAVE" note, `§4.8`).
+- **ANIMATED HEAL via the forced-cast package (OPT-IN `bHealAnimPackage`, DEFAULT OFF,
+  2026-09-03). `HealAnimFill`/`HealAnimHolds`/`HealAnimEvictIf` (`Packages.cpp`, near the
+  retreat functions) + `IsHealSpell`/`SetPackageSpell` (anon ns).** Revives the M9
+  forced-casting package (ENGINE_NOTES §0.17/§0.21) to ANIMATE heals — offense casts
+  animate because the AI fires the held spell, heals don't because the AI won't CHOOSE to
+  self/party-heal so MFO force-applies via kInstant (§0.15/§0.16). When the toggle is ON
+  and APMF is present, `CastSelfDirect`/`CastTargetDirect` (`Actuation_Direct.cpp:729`/`927`,
+  the branch sits AFTER the magicka competence gate so an unaffordable heal declines exactly
+  as today) call `Packages::HealAnimFill` FIRST and, if it takes over, `return Applied` —
+  skipping the kInstant apply. `HealAnimFill` is fully self-gating (returns `false`, path
+  BYTE-IDENTICAL, unless `Config::g_healAnimPackage` + `APMFBridge::Available()` + `IsHealSpell`
+  all hold), sets ONLY the Spell input (`SetPackageSpell` = `SetSelfSpell` generalized; the
+  target is authored STATICALLY so NO unproven runtime target write occurs), then routes
+  through `APMFBridge::OfferPackage` (ch.9 0x49) so the AI casts it animated while movement
+  stays alive. **TWO new ESP records, both UseMagic (`000504F5`), no QNAM** (`MFO_GenerateESP.py
+  make_apmf_heal_packages()`): `MFO_APMFHealSelfPackage` (`kAPMFHealSelfPackage = 0x83B`, t6
+  self — probe 6's proven shape) for self-heals, `MFO_APMFHealPlayerPackage`
+  (`kAPMFHealPlayerPackage = 0x83C`, t0→player static — probe 1's proven shape) for
+  heal-the-player; picked by target identity in `HealAnimFill`. An ally/other runtime actor
+  is NOT animated (needs an unproven runtime t0-handle write) — returns `false`, kInstant
+  heal kept. **MANY concurrent holders** (unlike retreat's single `g_retreatHold`): an
+  OfferPackage claim is per-follower, so `g_healAnimMap` is keyed by follower FormID (the
+  per-follower twin of loot's `g_apmfSlotFollower`). `Pump()` re-offers each live entry
+  (keep-alive under APMF's 500ms expiry) and releases any hold stale > `kHealAnimStale` (3s
+  — the heal rule stopped: topped off / lost). Released also on dismissal
+  (`Followers.cpp` `OnFollowerRemoved` → `HealAnimEvictIf`), `ReleaseAll`, `ClearTransientState`.
+  **PRECEDENCE on the shared handle: retreat > heal > loot** — `HealAnimFill` declines while
+  `g_retreatHold` names the follower and evicts any loot excursion on engage; `RetreatFill`
+  evicts any heal hold (`HealAnimEvictIf`) when it engages; `LootTravelFill`/`Retarget`
+  early-return while `HealAnimHolds(fid)`. All heal guards are no-ops (map empty) when the
+  toggle is off, so the loot/retreat paths stay byte-identical. Config: `bHealAnimPackage`
+  6 sync points (`Config.h` decl `g_healAnimPackage{false}`, `Config.cpp` reader +
+  ResetToDefaults + INI defaults map, `out/MCM/Config/MFO/config.json` toggle, the three
+  default INIs). NO save/co-save state (offer claim is runtime-only). FIELD-UNCERTAIN: whether
+  0x49 direct-delivery drives a UseMagic cast the way the M9 alias probes did — this is the
+  A/B the toggle exists for; a non-working ON path leaves default-OFF heals untouched.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

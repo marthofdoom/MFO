@@ -313,6 +313,10 @@ namespace MFO::Followers {
         // The retreat-probe alias -- identical claim model, identical serialized
         // tail.
         Packages::RetreatEvictIf(id);
+        // The animated-heal offer (OPT-IN bHealAnimPackage): runtime-only (no
+        // serialized alias tail), but a dismissed follower's live package-offer
+        // claim must be released so it never outlives him. No-op if he holds none.
+        Packages::HealAnimEvictIf(id);
     }
 
     void Refresh() {

@@ -748,6 +748,20 @@ namespace MFO::Actuation {
             }
         }
 
+        // ANIMATED HEAL (OPT-IN bHealAnimPackage, default OFF): route a SELF heal
+        // through the M9 forced-casting package via APMF's ch.9 offer channel, so
+        // the follower's OWN AI casts it ANIMATED while movement stays alive --
+        // instead of the kInstant force-apply below. Placed AFTER the competence
+        // gate so an unaffordable heal declines exactly as today (only the
+        // DELIVERY of an affordable heal changes). HealAnimFill is fully
+        // self-gating: it returns false (this path untouched, BYTE-IDENTICAL to
+        // today) unless the toggle is on, APMF is present, AND a_spell is a heal;
+        // on an APMF refusal it also returns false so the kInstant heal below
+        // still lands (a heal must never silently vanish). Re-offered every tick
+        // the rule wins; Packages::Pump owns the keep-alive + stale release.
+        if (Packages::HealAnimFill(a_follower, a_spell, a_follower))
+            return SelfCast::Applied;
+
         const auto now = SelfClock::now();
         auto it = g_selfCast.find(id);
 
@@ -948,6 +962,19 @@ namespace MFO::Actuation {
                 if (mx > 0.0f && (have - cost) < reserve * mx) return SelfCast::Declined;
             }
         }
+
+        // ANIMATED HEAL (OPT-IN bHealAnimPackage, default OFF): route a heal AT
+        // THE PLAYER through the M9 forced-casting package via APMF's ch.9 offer
+        // channel (animated, movement stays alive) instead of the kInstant
+        // force-apply below. Placed AFTER the competence gate (parity with
+        // CastSelfDirect) and before the offense sightline gate below -- heals
+        // are never offense, so order there is immaterial. Self-gating: false
+        // (byte-identical) unless the toggle+APMF+heal all hold; HealAnimFill
+        // covers ONLY player targets here (t0->player package) and returns false
+        // for an ally/other runtime actor, which keeps the kInstant heal (an
+        // animated ally target needs an unproven runtime t0-handle write).
+        if (Packages::HealAnimFill(a_follower, a_spell, a_target))
+            return SelfCast::Applied;
 
         // HOSTILE offense: LoS + line-of-fire gates on the direct path too (the
         // package's ffWatch has no analog here, so re-check every tick). Held ->
