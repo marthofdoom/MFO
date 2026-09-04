@@ -95,6 +95,30 @@ namespace MFO::Actuation {
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                               RE::Actor* a_target);
 
+    // ── PACKAGE-DRIVEN DELIVERY-FLIPPED PROXY (heal-anim) ─────────────────────
+    // Exposed to Packages::HealAnimFill (Docs/CAST-DELIVERY.md "OPT-IN ANIMATED
+    // HEAL"): a HEAL-OTHER routed through the M9 forced-cast package is a REAL
+    // AI-driven cast, which (unlike CastSpellImmediate) resolves its target from
+    // the spell's authored DELIVERY unconditionally -- a raw Self-delivery heal
+    // (e.g. Fast Healing) cast through a player-target package still lands on
+    // the follower. Fabricates/reuses a transient copy with ONLY
+    // data.delivery flipped kSelf -> kTargetActor, same fabrication code
+    // (Configure) as ConcProxy's direct-force copy, but a SEPARATE owner-keyed
+    // 2-slot pool (heal-anim's lifetime is driven by the follower's own AI
+    // package cadence, not an MFO-owned CastSpellImmediate channel, and sharing
+    // the direct-force pool would let an unrelated CastTargetDirect stream and
+    // a live heal-anim offer reconfigure each other's slot out from under a
+    // live cast -- the "freeze" ConcProxy's own comment warns about). Returns
+    // nullptr on 2-slot overflow or off-main (VR) -- the caller MUST degrade
+    // (never hand the raw Self spell to an off-self package). MAIN THREAD only.
+    RE::SpellItem* AcquireDeliveryFlippedProxy(RE::FormID a_owner, RE::SpellItem* a_source);
+
+    // Release a_owner's heal-anim proxy slot (idempotent -- a no-op if a_owner
+    // does not currently hold one). Call when the heal-anim offer is evicted
+    // (mirrors ConcProxy::Free's slot-for-duration discipline: the form is kept
+    // for reuse, only the ownership markers clear).
+    void ReleaseDeliveryFlippedProxy(RE::FormID a_owner);
+
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any
     // lingering ward/buff effect so it cannot persist as a stuck gameplay effect.

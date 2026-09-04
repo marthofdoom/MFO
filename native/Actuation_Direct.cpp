@@ -175,6 +175,29 @@ namespace MFO::Actuation {
             struct Slot { RE::SpellItem* form = nullptr; RE::FormID source = 0; RE::FormID owner = 0; };
             Slot g_slot[2];
 
+            // ── SECOND, INDEPENDENT 2-slot pool: PACKAGE-DRIVEN heal-anim proxies ──
+            // Packages::HealAnimFill (Docs/CAST-DELIVERY.md "OPT-IN ANIMATED HEAL")
+            // needs the SAME delivery-flip fabrication for a HEAL-OTHER cast routed
+            // through the M9 forced-cast package -- a REAL AI-driven cast resolves
+            // its target from the spell's authored DELIVERY unconditionally (unlike
+            // CastSpellImmediate's FF exemption below), so a raw Self-delivery heal
+            // aimed at the player still lands on the follower. DELIBERATELY a
+            // SEPARATE pool from g_slot above (a considered deviation from "reuse
+            // the SAME 2-slot pool", recorded here): heal-anim's lifetime is driven
+            // by the follower's OWN AI package cadence (g_healAnimMap in
+            // Packages.cpp), a completely different registry/lifecycle than
+            // g_targetCast's CastSpellImmediate-driven channel -- and gambit
+            // priority can flip BETWEEN the two for the same follower on
+            // consecutive ticks (a heal rule loses to a buff rule mid-offer, or
+            // vice versa). Sharing g_slot would let one system's Acquire
+            // RECONFIGURE the other's still-live slot out from under it -- exactly
+            // the "freeze" the block comment below warns about, just cross-system
+            // instead of within one stream. A second pool costs at most 2 more
+            // session-only dynamic forms (never serialized) and removes the
+            // collision entirely. Reuses Configure() (the identical fabrication
+            // code) -- only the ownership array differs.
+            Slot g_healSlot[2];
+
             void Configure(RE::SpellItem* a_p, RE::SpellItem* a_src) {
                 a_p->data          = a_src->data;                                 // castingType/cost/etc.
                 a_p->data.delivery = RE::MagicSystem::Delivery::kTargetActor;     // the ONLY change
@@ -232,6 +255,46 @@ namespace MFO::Actuation {
                 for (auto& s : g_slot) {
                     if (s.form) s.form->effects.clear();   // drop borrowed source Effect*
                     s = {};
+                }
+                for (auto& s : g_healSlot) {
+                    if (s.form) s.form->effects.clear();
+                    s = {};
+                }
+            }
+
+            // heal-anim proxy Acquire/Free -- see g_healSlot's declaration above
+            // (beside g_slot) for why this is a separate pool. Same discipline as
+            // Acquire/Free above: reuse the owner's slot (RECONFIG only if the
+            // heal spell itself changed), else claim a free slot, else overflow.
+            RE::SpellItem* AcquireHeal(RE::FormID a_owner, RE::SpellItem* a_src) {
+                if (!a_src || !a_owner || !MainThread::IsInstalled()) return nullptr;
+                const auto sid = a_src->GetFormID();
+                for (auto& s : g_healSlot) if (s.owner == a_owner && s.form) {
+                    if (s.source != sid) {   // owner's heal spell changed -> reconfigure in place
+                        Configure(s.form, a_src); s.source = sid;
+                        spdlog::info("[healanim] proxy slot RECONFIG owner {:08X} src {:08X}", a_owner, sid);
+                    }
+                    return s.form;
+                }
+                for (auto& s : g_healSlot) if (s.owner == 0) {
+                    if (!s.form) {
+                        auto* f = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
+                        s.form = f ? static_cast<RE::SpellItem*>(f->Create()) : nullptr;
+                        if (!s.form) return nullptr;
+                    }
+                    Configure(s.form, a_src); s.source = sid; s.owner = a_owner;
+                    spdlog::info("[healanim] proxy slot ACQUIRE owner {:08X} src {:08X} form {:08X}",
+                                 a_owner, sid, s.form->GetFormID());
+                    return s.form;
+                }
+                spdlog::info("[healanim] proxy slot OVERFLOW owner {:08X} src {:08X} -- skipped", a_owner, sid);
+                return nullptr;   // both heal slots held by other followers -> caller degrades
+            }
+            // Release the owner's heal-anim slot (form kept for reuse). Idempotent.
+            void FreeHeal(RE::FormID a_owner) {
+                for (auto& s : g_healSlot) if (s.owner == a_owner) {
+                    spdlog::info("[healanim] proxy slot FREE owner {:08X}", a_owner);
+                    s.owner = 0; s.source = 0;
                 }
             }
         }
@@ -724,6 +787,29 @@ namespace MFO::Actuation {
                 return true;   // a live commanded summon from this spell is up
         }
         return false;
+    }
+
+    // Public wrappers -- see the declaration comments in Actuation.h and the
+    // g_healSlot block comment above for the design (separate pool, why).
+    RE::SpellItem* AcquireDeliveryFlippedProxy(RE::FormID a_owner, RE::SpellItem* a_source) {
+        return ConcProxy::AcquireHeal(a_owner, a_source);
+    }
+    // Does NOT InterruptCast anything: TargetCastEndActor's InterruptCast is
+    // paired with a stream MFO itself channels via the follower's kInstant
+    // magic caster (a CastSpellImmediate stream), so MFO both knows the live
+    // casting source and must actively stop it. A heal-anim offer instead runs
+    // through the follower's OWN AI + package (an unknown casting source to
+    // MFO, and FIELD-UNCERTAIN territory per Docs/CAST-DELIVERY.md already) --
+    // losing the package offer ends the AI's procedure on its own. RESIDUAL
+    // RISK (recorded, marth's call 2026-09-04): if the AI is still mid-cast the
+    // instant this frees the slot AND a DIFFERENT owner's AcquireHeal
+    // reconfigures it in the same beat, the old cast could read a mutated
+    // form. Narrow window in practice (release fires from staleness/retreat/
+    // loot-preempt, not a hot per-tick path); if field-proven to matter, the
+    // proper fix is an explicit InterruptCast here once the M9 package's real
+    // casting source is confirmed.
+    void ReleaseDeliveryFlippedProxy(RE::FormID a_owner) {
+        ConcProxy::FreeHeal(a_owner);
     }
 
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {

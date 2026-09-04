@@ -1521,6 +1521,37 @@ decline-fallback.
   default INIs). NO save/co-save state (offer claim is runtime-only). FIELD-UNCERTAIN: whether
   0x49 direct-delivery drives a UseMagic cast the way the M9 alias probes did — this is the
   A/B the toggle exists for; a non-working ON path leaves default-OFF heals untouched.
+  **HEAL-OTHER DELIVERY-FLIP FIX (2026-09-04, `feat/heal-anim-proxy`).** A REAL AI-driven
+  cast (unlike `CastSpellImmediate`) resolves its target from the spell's authored
+  DELIVERY unconditionally, so a raw Self-delivery heal (e.g. Fast Healing `0002F3B8`)
+  routed through `MFO_APMFHealPlayerPackage` landed back on the FOLLOWER, not the player
+  (HEAL-SELF was always correct; HEAL-OTHER silently healed nobody). Fix: `HealAnimFill`
+  (`Packages.cpp:2191`), for `a_target != a_follower` AND `a_spell->GetDelivery() ==
+  kSelf`, sets the package's Spell to a transient delivery-flipped copy via
+  `Actuation::AcquireDeliveryFlippedProxy(fid, a_spell)` (`Actuation.h`, impl
+  `Actuation_Direct.cpp` — public wrappers just before `CastSelfDirect:815`) instead of
+  the raw spell; HEAL-SELF and an already non-Self heal are untouched (raw spell, no
+  proxy). **DEDICATED 2-slot pool (`ConcProxy::g_healSlot[2]`, `Actuation_Direct.cpp:199`),
+  NOT `ConcProxy::g_slot[2]`** (the direct-force streams' pool) — a considered deviation
+  from "reuse the same pool": heal-anim's lifetime is driven by the follower's own AI
+  package cadence (`g_healAnimMap`), a different registry than `g_targetCast`'s
+  `CastSpellImmediate`-driven channel, and gambit priority can flip between a heal and an
+  unrelated off-self concentration buff on consecutive ticks for the SAME follower —
+  sharing one pool would let either system RECONFIGURE the other's still-live slot (the
+  "freeze" `ConcProxy`'s block comment warns about), now cross-system. Reuses
+  `ConcProxy::Configure` (identical fabrication code), separate ownership array. Released
+  (`Actuation::ReleaseDeliveryFlippedProxy`, `ConcProxy::FreeHeal`) everywhere
+  `g_healAnimMap` releases a hold — `HealAnimEvictIf`, the `Pump()` staleness sweep, the
+  `ReleaseAll` sweep, `ClearTransientState` — plus on a self<->other retarget when the new
+  target is self (no longer needs the proxy). `ConcProxy::Reset()` (kPreLoadGame /
+  `ClearSelfCasts`) clears both pools. GRACEFUL DEGRADE: nullptr (2-slot overflow /
+  off-main VR) → `HealAnimFill` returns `false`, caller keeps the byte-identical kInstant
+  heal — a heal never silently vanishes. RESIDUAL RISK (recorded, marth's call): release
+  does NOT `InterruptCast` anything (unlike `TargetCastEndActor`'s direct-force release) —
+  the AI's real casting source for the M9 package is unconfirmed (FIELD-UNCERTAIN, same as
+  the rest of heal-anim), so a narrow window exists where an evicted-but-still-mid-cast AI
+  could read a slot a DIFFERENT owner reconfigures in the same beat; if field-proven to
+  matter, add an explicit `InterruptCast` once the real casting source is confirmed.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

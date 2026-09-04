@@ -284,6 +284,29 @@ retreat > heal > loot on the shared OfferPackage handle. **FIELD-UNCERTAIN**: wh
 what the toggle A/Bs. A non-working ON path leaves default-OFF heals untouched. See
 `native/Packages.cpp` `HealAnimFill` / `MFO_GenerateESP.py` `make_apmf_heal_packages()`.
 
+**HEAL-OTHER DELIVERY FIX (2026-09-04).** A REAL AI-driven cast (the package route)
+resolves its target from the spell's authored DELIVERY unconditionally — unlike
+`CastSpellImmediate`'s FF exemption above, this holds for BOTH fire-and-forget and
+concentration. Heal spells are typically Self-delivery, so a HEAL-OTHER (target ≠
+follower) through the raw spell collapsed onto the follower exactly like the
+uncorrected concentration case this doc already describes; HEAL-SELF was always
+correct (self-delivery + self-target agree). Fix: `HealAnimFill`, for
+`a_target != a_follower && a_spell->GetDelivery() == kSelf`, sets the package's Spell
+to a delivery-flipped (`kSelf → kTargetActor`) transient copy via
+`Actuation::AcquireDeliveryFlippedProxy` — the SAME fabrication code as `ConcProxy`
+above (`Configure`), but a DEDICATED 2-slot pool (`ConcProxy::g_healSlot`), NOT the
+direct-force streams' `g_slot`: heal-anim's lifetime is driven by the follower's own
+AI package cadence (a different registry, `g_healAnimMap`, than `g_targetCast`), and
+gambit priority can flip between a heal-anim offer and an unrelated off-self
+concentration stream on consecutive ticks for the same follower — sharing one pool
+would let either RECONFIGURE the other's still-live slot (the "freeze" above,
+cross-system). Released everywhere a heal-anim hold releases (eviction, staleness,
+`ReleaseAll`, `ClearTransientState`, and on a retarget back to self). Overflow /
+off-main → `HealAnimFill` returns `false` (kInstant heal kept, never silently
+vanishes). See `MAP.md`'s "HEAL-OTHER DELIVERY-FLIP FIX" note for the full residual-
+risk record (no `InterruptCast` on release — the AI's real casting source for the M9
+package is unconfirmed, same FIELD-UNCERTAIN territory as the rest of heal-anim).
+
 ## KEY SYMBOLS (Actuation.cpp)
 
 `ConcProxy` (owner-keyed `Slot g_slot[2]{form,source,owner}`, `Configure`, `Acquire`,

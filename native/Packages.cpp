@@ -5,6 +5,7 @@
 #include "Forms.h"
 #include "Sightline.h"   // concentration hold: the mid-stream line-of-fire watch
 #include "APMFBridge.h"  // ch.9 0x49 loot-travel route (package-locked-follower fix)
+#include "Actuation.h"   // heal-anim delivery-flipped proxy (HealAnimFill, HEAL-OTHER)
 
 namespace MFO::Packages {
 
@@ -1313,6 +1314,7 @@ namespace MFO::Packages {
             }
             for (auto fid : healStale) {
                 APMFBridge::ReleaseOfferPackage(fid);
+                Actuation::ReleaseDeliveryFlippedProxy(fid);   // no-op unless a heal-other proxy was live
                 g_healAnimMap.erase(fid);
                 spdlog::info("[healanim] {:08X}: animated heal released (rule stopped)", fid);
             }
@@ -1551,6 +1553,7 @@ namespace MFO::Packages {
         // never outlives the session (mid-heal save / revert / new game).
         for (auto& [fid, e] : g_healAnimMap) {
             APMFBridge::ReleaseOfferPackage(fid);
+            Actuation::ReleaseDeliveryFlippedProxy(fid);   // no-op unless a heal-other proxy was live
             spdlog::info("[healanim] {} -- APMF animated heal was live (held {:08X}); released", a_why, fid);
         }
         g_healAnimMap.clear();
@@ -2180,6 +2183,7 @@ namespace MFO::Packages {
         auto it = g_healAnimMap.find(a_id);
         if (it == g_healAnimMap.end()) return;   // no-op unless he holds a heal offer
         APMFBridge::ReleaseOfferPackage(a_id);   // runtime-only; no serialized alias tail
+        Actuation::ReleaseDeliveryFlippedProxy(a_id);   // no-op unless this hold used a proxy (heal-other)
         g_healAnimMap.erase(it);
         spdlog::info("[healanim] {:08X}: animated heal released ({})", a_id, a_why);
     }
@@ -2198,9 +2202,10 @@ namespace MFO::Packages {
         // the byte-identical kInstant heal.
         RE::TESPackage* pkg = nullptr;
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if      (a_target == a_follower) pkg = Forms::g_apmfHealSelfPackage;
-        else if (a_target == player)     pkg = Forms::g_apmfHealPlayerPackage;
-        else                             return false;
+        const bool self = (a_target == a_follower);
+        if      (self)                pkg = Forms::g_apmfHealSelfPackage;
+        else if (a_target == player)  pkg = Forms::g_apmfHealPlayerPackage;
+        else                          return false;
 
         const RE::FormID fid = a_follower->GetFormID();
         if (!pkg) {
@@ -2215,9 +2220,36 @@ namespace MFO::Packages {
             spdlog::debug("[healanim] {:08X}: declined -- retreat holds this follower", fid);
             return false;
         }
+
+        // HEAL-OTHER + SELF-DELIVERY: unlike CastSpellImmediate (the kInstant
+        // baseline, Docs/CAST-DELIVERY.md), a REAL AI-driven cast -- which is
+        // exactly what the package route produces -- resolves its target from
+        // the spell's authored DELIVERY unconditionally. A raw Self-delivery
+        // heal (e.g. Fast Healing 0002F3B8) aimed at the player package still
+        // lands on the FOLLOWER: he animates a self-heal and the player is
+        // never healed. FIX: set the package's Spell to a transient copy with
+        // ONLY data.delivery flipped kSelf -> kTargetActor (mirrors
+        // Actuation_Direct.cpp's ConcProxy delivery-flip; see
+        // Actuation::AcquireDeliveryFlippedProxy's own comment for why this is
+        // a DEDICATED pool, not the direct-force streams' pool). A heal-other
+        // spell that is ALREADY non-Self delivery needs no flip -- the
+        // package's authored target already resolves correctly, so only
+        // fabricate for kSelf. GRACEFUL DEGRADE: nullptr (2-slot overflow /
+        // off-main VR) -> false, so the caller keeps the kInstant heal (a heal
+        // must never silently vanish). HEAL-SELF is untouched (raw spell).
+        RE::SpellItem* packageSpell = a_spell;
+        if (!self && a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf) {
+            packageSpell = Actuation::AcquireDeliveryFlippedProxy(fid, a_spell);
+            if (!packageSpell) {
+                spdlog::debug("[healanim] {:08X}: delivery-flip proxy unavailable "
+                              "(2-slot busy / off-main) -- kInstant heal kept", fid);
+                return false;
+            }
+        }
+
         // Set the spell (target is static). A layout-guard failure writes nothing
         // and keeps the kInstant heal.
-        if (!SetPackageSpell(pkg, a_spell)) {
+        if (!SetPackageSpell(pkg, packageSpell)) {
             spdlog::error("[healanim] {:08X}: heal package spell write failed -- kInstant heal kept", fid);
             return false;
         }
@@ -2226,19 +2258,25 @@ namespace MFO::Packages {
         // loudly -- it never silently masks an APMF-path bug.
         if (!APMFBridge::OfferPackage(fid, pkg->GetFormID())) {
             spdlog::error("[healanim] {:08X}: APMF REFUSED the heal package-offer claim -- kInstant heal kept", fid);
-            HealAnimEvictIf(fid, "offer refused");   // drop any prior live entry
+            HealAnimEvictIf(fid, "offer refused");   // drop any prior live entry (+ its proxy slot)
             return false;
         }
         auto it = g_healAnimMap.find(fid);
         const bool fresh = (it == g_healAnimMap.end()) || it->second.pkgID != pkg->GetFormID();
         if (fresh) {
+            // A retarget INTO self no longer needs the delivery-flip proxy (self
+            // uses the raw spell) -- free it now rather than let it sit owned
+            // until staleness/eviction, so the follower's slot is immediately
+            // available if he engages a heal-other again.
+            if (self) Actuation::ReleaseDeliveryFlippedProxy(fid);
             // First engage (or a self<->player retarget): heal beats loot on the
             // shared handle -- drop any loot excursion for this follower -- and
             // nudge the AI to pick up the offered package (never resetAI, #3).
             LootTravelEvictIf(fid, "heal-anim engaging");
             a_follower->EvaluatePackage(true, false);
-            spdlog::info("[healanim] {:08X}: animated heal offered -> pkg {:08X} spell {:08X} target {:08X}",
-                         fid, pkg->GetFormID(), a_spell->GetFormID(), a_target->GetFormID());
+            spdlog::info("[healanim] {:08X}: animated heal offered -> pkg {:08X} spell {:08X}{} target {:08X}",
+                         fid, pkg->GetFormID(), a_spell->GetFormID(),
+                         packageSpell != a_spell ? " (delivery-flip proxy)" : "", a_target->GetFormID());
         }
         auto& e = g_healAnimMap[fid];
         e.pkgID      = pkg->GetFormID();
@@ -2271,7 +2309,10 @@ namespace MFO::Packages {
         // APMF animated-heal holds are runtime-only (no serialized alias tail),
         // but the offers must be released so a stale package-offer never outlives
         // the session -- same discipline as the loot/retreat sweep in ReleaseAll.
-        for (auto& [fid, e] : g_healAnimMap) APMFBridge::ReleaseOfferPackage(fid);
+        for (auto& [fid, e] : g_healAnimMap) {
+            APMFBridge::ReleaseOfferPackage(fid);
+            Actuation::ReleaseDeliveryFlippedProxy(fid);   // no-op unless a heal-other proxy was live
+        }
         g_healAnimMap.clear();
         g_requests    = 0;
         g_completions = 0;
