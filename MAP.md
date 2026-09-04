@@ -741,9 +741,9 @@ are declared there and defined in their home module). Layout:
 - `Logistics_Economy.cpp` (1034) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
   `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
-- `Logistics_Loot.cpp` (2227) — the loot judge + per-category looters,
+- `Logistics_Loot.cpp` (2387) — the loot judge + per-category looters,
   claim-and-release, navmesh reach, `AcquireEquip:538`, `LootEquipment:617`,
-  `LootNearby:1477`, `StripCorpse:2108`, `RunExcursionScan:2170`.
+  `LootNearby:1609`, `StripCorpse:2250`, `RunExcursionScan:2314`.
 - `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state
   (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
   `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/`Claim`,
@@ -821,6 +821,34 @@ anonymous-namespace copy — that silently forks the instance).
   ("second gold pile on the same table"). Idle blocklist reassess (`ServiceFollower`) is
   AGE-GATED (≥10s): a full wipe let follower B erase follower A's 200ms-old fail
   verdict → instant same-target redispatch churn.
+- **LOOT RUN ORDERING, no-dibs-first (2026-09, marth: "no-dibs + closest only
+  first, then the dibs items later in the runs, no pauses").** Both gambit-
+  table dispatch loops that pick a loot action — the normal per-tick loop
+  (`Logistics.cpp:~1114-1512`) and the excursion leg-boundary dispatcher
+  (`RunExcursionScan`, `Logistics_Loot.cpp:2314`) — now run the follower's
+  gambit table TWICE: pass 0 defers any dibs-tier loot op (Equipment/Gold/
+  Jewelry/SoulGems/Valuables — `IsDibsTierLootOp`, `Logistics_internal.h:308`)
+  so free-tier categories (arrows/bolts/potions/lockpicks/ingredients —
+  `IsFreeTierCat`, `Logistics_internal.h:298`, mirrors `TierReleased`'s own
+  free branch) always get first crack at the tick REGARDLESS of the player's
+  gambit-table priority order; pass 1 is the original unrestricted walk, so a
+  released/cleared dibs item still loots normally once nothing free-tier
+  fired. `StripCorpse` (arm's-reach full drain once already at a body,
+  `Logistics_Loot.cpp:2250`) is UNCHANGED — it already skips a still-dibs'd
+  category per visit without stalling (leaves the body eligible for a future
+  revisit), so reordering it can't remove a pause that doesn't exist there.
+  Also removed: the excursion `Holding`-phase linger-and-re-scan hold that
+  fired specifically when the only remaining nearby loot was dibs-waiting
+  (`g_scanSawWaiting`, bounded by `fBatchLinger`, `Logistics.cpp` HOLDING
+  block) — that was a real, if short, stall-in-place; the follower now
+  releases the excursion at once instead of holding position, and the
+  dibs-waiting item re-enters naturally once `TierReleased` flips.
+  `g_scanSawWaiting` (`Logistics_internal.h:430`) is now write-only (still set
+  by `LootNearby`, no remaining read) — harmless, kept for potential future
+  diagnostic use. Ordering only: `TierReleased`'s timing (`fFirstDibsDelay`/
+  `fFairChance`/`g_abandonDelay`), the APMF loot-travel path
+  (`OfferPackage`/quiet-hold, `Packages.cpp`), the combat-eviction, the
+  excursion cap, and the leash are all untouched.
 - **UNIFIED LOOT-FAILURE MODEL + in-reach drain (perf/stall pass, 2026-09):**
   (a) candidate sort (`LootNearby`, `Logistics_Loot.cpp:~1830`) is failed-recently-
   LAST then closest-first — a path-troubled target is DEPRIORITIZED, never removed;

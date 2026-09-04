@@ -1051,9 +1051,15 @@ namespace MFO::Logistics {
             }
 
             // ── HOLDING: seek the next leg (retarget to a walkable corpse) or
-            // grab one within arm's reach. If nothing is actionable but loot is
-            // still under the player's dibs, linger and re-scan; else the batch is
-            // exhausted -> release and return to the player.
+            // grab one within arm's reach; else the batch is exhausted -> release
+            // and return to the player. marth's "no pauses" loot-ordering spec:
+            // a category that's still under the player's dibs (g_scanSawWaiting)
+            // no longer earns a linger-and-re-scan hold here -- that WAS a real,
+            // if short (fBatchLinger-bounded), stall-in-place. Release at once
+            // instead; the dibs-waiting item re-enters naturally (TierReleased
+            // flips, normal-mode loot picks it up) once it clears -- ordering
+            // (free-tier swept first, see the pass-0/pass-1 split above) is what
+            // keeps the follower busy in the meantime, not holding position.
             if (tr.active && tr.phase == TravelPhase::Holding) {
                 // The two loot bars (a ContainerMenu open, or the player sneaking)
                 // make LootNearby early-return BEFORE it scans, so the excursion
@@ -1072,8 +1078,12 @@ namespace MFO::Logistics {
                         tr.lingerUntil = now + BatchLingerDur();
                     return;
                 }
-                if (g_scanSawWaiting && now <= tr.lingerUntil)
-                    return;   // loot still under your dibs -- hold, re-scan next tick
+                // No pause on an all-waiting dibs category (marth): even a
+                // g_scanSawWaiting-bounded hold here is a visible stall, so
+                // release the excursion immediately instead of lingering --
+                // the still-waiting item re-enters on a later tick once
+                // TierReleased flips. tr.lingerUntil is still written above
+                // (productive-scan case) but no longer gates a release.
                 Packages::LootTravelClear("batch done", a_follower, slot);
                 tr = TravelIntent{};
                 return;
@@ -1093,12 +1103,26 @@ namespace MFO::Logistics {
         bool  acted = false;
         int   fired = -1;
         std::string label;   // a COPY -- `choice` is loop-scoped; c_str() would dangle
+        // LOOT RUN ORDERING (marth: "no-dibs + closest only first, then the
+        // dibs items later in the runs, no pauses"). Pass 0 walks the gambit
+        // table with dibs-tier loot ops (Equipment/Gold/Jewelry/SoulGems/
+        // Valuables) deferred, so free-tier loot -- and drink/cast/torch,
+        // untouched -- always gets first crack at the tick regardless of the
+        // player's gambit-table order. Pass 1 is the original unrestricted
+        // walk: a released dibs item still loots normally once nothing
+        // free-tier fired. Ordering only -- TierReleased's timing is untouched.
+        for (int pass = 0; pass < 2 && !acted; ++pass) {
+        const bool restrictFree = (pass == 0);
         for (int start = 0; ; ) {
             const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
             if (choice.ruleIndex < 0) break;          // nothing (more) matched
             const auto& op = choice.actionOpcode;
             fired = choice.ruleIndex;
             label = op;
+
+            if (restrictFree && IsDibsTierLootOp(op)) {
+                start = choice.ruleIndex + 1; continue;   // dibs-tier: defer to pass 1
+            }
 
             if      (op == Vocab::kActDrinkHealthPotion)  acted = DrinkBest(a_follower, RE::ActorValue::kHealth);
             else if (op == Vocab::kActDrinkStaminaPotion) acted = DrinkBest(a_follower, RE::ActorValue::kStamina);
@@ -1485,6 +1509,7 @@ namespace MFO::Logistics {
             if (acted) break;                  // did something real -> done this tick
             start = choice.ruleIndex + 1;      // matched but no-op -> try the next rule
         }
+        }   // end pass loop (no-dibs-first loot ordering)
 
         if (acted) {
             g_idleCycles.erase(id);   // productive -> not idle

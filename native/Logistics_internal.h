@@ -286,6 +286,31 @@ namespace MFO::Logistics {
                    a_cat == Category::Bolts;
         }
 
+        // LOOT RUN ORDERING (marth, "no-dibs + closest only first, then the dibs
+        // items later in the runs, no pauses"). Mirrors TierReleased's own
+        // free-tier branch exactly: Arrows/Bolts/Potions/Lockpicks/Ingredients
+        // release at once (no dibs, nobody competes). Equipment (short anti-
+        // snatch grace) and Gold/Jewelry/SoulGems/Valuables (full dibs chain)
+        // are NOT free-tier for this ordering -- they're deferred to the
+        // second pass so a follower always sweeps what's immediately available
+        // before ever waiting on a dibs-gated category. Ordering only -- does
+        // not touch TierReleased's timing.
+        inline bool IsFreeTierCat(Category a_cat) {
+            return a_cat == Category::Arrows || a_cat == Category::Bolts ||
+                   a_cat == Category::Potions || a_cat == Category::Lockpicks ||
+                   a_cat == Category::Ingredients;
+        }
+
+        // Same ordering test at the OPCODE level, for the two gambit-table
+        // dispatch loops (Logistics.cpp's per-tick loop + RunExcursionScan)
+        // that switch on the raw Vocab op string before ever resolving a
+        // Category. Kept in lockstep with IsFreeTierCat/TierReleased.
+        inline bool IsDibsTierLootOp(const std::string& a_op) {
+            return a_op == Vocab::kActLootEquipment || a_op == Vocab::kActLootGold  ||
+                   a_op == Vocab::kActLootJewelry   || a_op == Vocab::kActLootSoulGems ||
+                   a_op == Vocab::kActLootValuables;
+        }
+
         // OPTION A travel state -- up to kMaxLootSlots travellers AT ONCE (one loot
         // quest, four alias pairs; see g_travelSlots below). Worker-tick-only, NOT
         // serialized: this just remembers the intent; the engine-side alias fill is

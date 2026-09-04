@@ -2314,10 +2314,21 @@ namespace MFO::Logistics {
         bool RunExcursionScan(RE::Actor* a_follower, const FollowerState& a_state,
                               Clock::time_point a_now) {
             g_scanSawWaiting = false;
+            // LOOT RUN ORDERING (marth: no-dibs + closest first, dibs later in
+            // the run). Pass 0 tries only free-tier categories, in gambit-table
+            // order, so a leg boundary always grabs/retargets to what's
+            // immediately available before ever considering a dibs-gated
+            // category; pass 1 is the original unrestricted walk (a released
+            // dibs item still retargets to normally once nothing free-tier hit).
+            for (int pass = 0; pass < 2; ++pass) {
+            const bool restrictFree = (pass == 0);
             for (int start = 0; ; ) {
                 const auto choice = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
                 if (choice.ruleIndex < 0) break;
                 const auto& op = choice.actionOpcode;
+                if (restrictFree && IsDibsTierLootOp(op)) {
+                    start = choice.ruleIndex + 1; continue;   // dibs-tier: defer to pass 1
+                }
                 bool acted = false, isLoot = true;
                 if      (op == Vocab::kActLootArrows)         acted = LootNearby(a_follower, Category::Arrows,  a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
                 else if (op == Vocab::kActLootBolts)          acted = LootNearby(a_follower, Category::Bolts,   a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
@@ -2332,12 +2343,15 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);
                 else if (op == Vocab::kActLootIngredients)    acted = LootNearby(a_follower, Category::Ingredients, a_now, RE::ActorValue::kNone, LootMode::kExcursion);
                 else if (op == Vocab::kActLootValuables)      acted = LootNearby(a_follower, Category::Valuables, a_now, RE::ActorValue::kNone,   LootMode::kExcursion);
-                else if (op == Vocab::kActWait) break;   // Wait is the user's deliberate STOP gambit
-                                                         // (#3.3): end the batch -- returning false with
-                                                         // nothing "waiting" makes Holding release.
+                else if (op == Vocab::kActWait) return false;   // Wait is the user's deliberate STOP
+                                                         // gambit (#3.3): end the batch -- returning
+                                                         // false with nothing "waiting" makes Holding
+                                                         // release. A hard return (not `break`) so
+                                                         // pass 1 can't override the user's stop.
                 else isLoot = false;
                 if (isLoot && acted) return true;
                 start = choice.ruleIndex + 1;   // skip non-loot / no-op, try next
+            }
             }
             return false;
         }
