@@ -1343,6 +1343,15 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Runtime-only — NO save/co-save state**; `ClearTransientState()` ← `plugin.cpp` kPreLoadGame
   (after `StopPump`). `g_apmf` is `std::atomic`. APMF holds ZERO MFO code; this bridge is the ONLY
   MFO code aware of APMF.
+- **`MaybeWarnAbsence()` (`:184` area, beside `Available()`)** — the 2.0.0 "APMF recommended"
+  nudge: an unobtrusive `RE::DebugNotification` corner toast (never a modal), ~10 min cadence, ONLY
+  while `Available()` is false and `Config::g_warnNoApmf` (MCM `bWarnNoApmf`, default ON) is set.
+  Zero cost and can never fire once APMF IS present (one `Available()` check short-circuits it).
+  Called every pump tick from `Diagnostics.cpp`'s `SleeperLoop` beside `Tick()` (worker thread) —
+  cadence state is plain `Rapport::SessionMinutes()` math (no new co-save/serialization hook: a
+  load makes `SessionMinutes()` go backwards, which this reads as "new session, reset the gate").
+  The actual `DebugNotification` call is `MainThread::Post`ed (DebugNotification is main-thread-only;
+  this function itself runs on the worker).
 - **PASS B (ch.9/ch.7 channels): `OfferPackage`/`ReleaseOfferPackage` (package-offer, `kIntent_
   OfferPackage`) + `ClaimCombatActionDeny`/`ReleaseCombatActionDeny` (combat-action deny,
   `kIntent_CombatAction`, `param.ival` category bitmask) — SAME `g_owned`/`EnsureClaimLocked`

@@ -203,6 +203,16 @@
           }
         },
         {
+          "id": "bWarnNoApmf:General",
+          "text": "Warn when Harbinger (APMF) is missing",
+          "type": "toggle",
+          "help": "ON (default): MFO works best with Harbinger (APMF) installed. When it's not in your load order, show one unobtrusive corner-toast reminder about every 10 minutes that MFO is running its legacy fallback. OFF: never show the reminder, for anyone who runs without APMF on purpose. Has no effect at all once APMF IS installed.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "text": "Timing",
           "type": "header"
         },
