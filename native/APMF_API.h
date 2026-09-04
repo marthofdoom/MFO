@@ -2,8 +2,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // APMF (AI Package Management Framework) — SKSE inter-plugin C-ABI.
 //
-// This is the ONLY file a client shares with APMF. APMF and a client (e.g. MFO)
-// compile SEPARATELY and are STRICTLY separate DLLs; they interact ONLY through
+// This is the ONLY file a client mod shares with APMF. APMF and a client
+// compile SEPARATELY and are STRICTLY separate DLLs. They interact ONLY through
 // this header at runtime. Because the C++ ABI is NOT stable across two separately
 // built DLLs, this surface is deliberately C-ABI: a POD struct of function
 // pointers with POD argument types only (RE::FormID, a plain enum, floats, and the
@@ -11,12 +11,13 @@
 // boundary.
 //
 // APPEND-ONLY CONTRACT. Once shipped, never change or reorder an existing field,
-// enum value, or function-pointer slot in a shipped interface struct — only
+// enum value, or function-pointer slot in a shipped interface struct -- only
 // APPEND: add new Intent values at the END, add new function-pointer slots at the
 // END of a NEW versioned struct whose leading fields are byte-identical to the
 // previous struct, add new fields at the END of APMF_Param, and bump kABIVersion.
 // A client built against an older ABI must keep working against every later APMF.
-// (Same discipline MFO applies to MEO_API.h.)
+// (The same discipline any byte-shared C-ABI header between two separately
+// compiled DLLs needs.)
 //
 // ── VERSIONING SHAPE (COM-style prefix extension) ──
 // Each ABI revision adds a struct APMF_API_vN whose LEADING members are exactly,
@@ -34,20 +35,20 @@
 // after SKSE load (e.g. your kPostLoad/kDataLoaded), then keep the pointer:
 //
 //     #include "APMF_API.h"
-//     const APMF_API::APMF_API_v3* g_apmf = nullptr;   // pick the newest struct you use
+//     const APMF_API::APMF_API_v4* g_apmf = nullptr;   // pick the newest struct you use
 //     if (HMODULE h = GetModuleHandleA("APMF.dll")) {
 //         auto fn = reinterpret_cast<APMF_API::GetInterface_t>(
 //             GetProcAddress(h, APMF_API::kGetInterfaceExport));
 //         if (fn) {
 //             if (auto* base = fn(APMF_API::kABIVersion)) {          // nullptr on ABI mismatch
-//                 if (base->abiVersion >= 3)
-//                     g_apmf = reinterpret_cast<const APMF_API::APMF_API_v3*>(base);
+//                 if (base->abiVersion >= 4)
+//                     g_apmf = reinterpret_cast<const APMF_API::APMF_API_v4*>(base);
 //             }
 //         }
 //     }
 //     // If g_apmf is null, APMF is absent or too old — guard every call. (A client
 //     // that only needs v2 checks `>= 2` and casts to APMF_API_v2*; a v3 field like
-//     // Repoint requires `>= 3`.)
+//     // Repoint requires `>= 3`; a v4 field like SetSpellAllowList requires `>= 4`.)
 //
 // (An exported query fn was chosen over the SKSE-messaging handshake MEO uses: it
 // is synchronous, has no message-ordering or sender/receiver routing subtlety, and
@@ -55,11 +56,14 @@
 // ABI contract; the transport is just how you get the pointer.)
 //
 // ── Threading ──
-// Request/RequestEx/Repoint/Release are SAFE FROM ANY THREAD. They capture POD (a
-// FormID, a copy of the APMF_Param) and enqueue the work; APMF applies it on the
-// game thread. A client's BSJobs worker may call them directly. The APMF_Param
-// pointer passed to RequestEx/Repoint is READ AND COPIED synchronously inside the
-// call — APMF never retains the client's pointer, so a stack temporary is fine.
+// Request/RequestEx/Repoint/Release/SetSpellAllowList are SAFE FROM ANY THREAD.
+// They capture POD (a FormID, a copy of the APMF_Param, or — for
+// SetSpellAllowList — a copy of the forms array) and enqueue the work; APMF
+// applies it on the game thread. A client's BSJobs worker may call them
+// directly. The APMF_Param pointer passed to RequestEx/Repoint, and the
+// RE::FormID* passed to SetSpellAllowList, are READ AND COPIED synchronously
+// inside the call — APMF never retains the client's pointer, so a stack
+// temporary/local array is fine.
 //
 // ── Exceptions ──
 // NO exception ever crosses this boundary. Every APMF-side body (Request,
@@ -77,7 +81,7 @@ namespace RE {
 
 namespace APMF_API {
 
-    inline constexpr std::uint32_t kABIVersion = 3;
+    inline constexpr std::uint32_t kABIVersion = 4;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -87,43 +91,87 @@ namespace APMF_API {
     using Handle = std::uint32_t;
     inline constexpr Handle kInvalidHandle = 0;
 
+    // ABI v4: the bound on SetSpellAllowList's allow-set. Chosen generously above
+    // what a follower's realistic known heal/buff spell count needs (typically
+    // single digits to low teens even for a heavily-modded mage build) -- an
+    // overflow degrades to "the excess spells are treated as non-exempt" (still
+    // denied, never a crash or an unbounded write). See SetSpellAllowList below.
+    inline constexpr std::uint32_t kMaxSpellAllowList = 32;
+
     // Which FACET a client claims control of on an NPC. APMF MODERATES that facet
     // (arbitrates who owns it + DENYs competitors); it never generates the behavior --
-    // the client executes with its own mechanisms (design.md §1a). Each maps to one
-    // channel family. APPEND-ONLY: never renumber; add new intents at the end.
+    // the client executes with its own mechanisms (design.md Section 1a). Each maps
+    // to one channel family. APPEND-ONLY: never renumber; add new intents at the end.
+    //
+    // Each entry below follows the same shape: the facet, its Mode, and which
+    // APMF_Param field it uses. Three modes exist (design.md Section 1a's three
+    // legal channel actions):
+    //   ARBITRATE -- APMF records who owns the facet. The client executes the
+    //                 behavior with its own mechanism. APMF calls nothing.
+    //   DENY      -- APMF suppresses the losing input at its source (an actor
+    //                 value, a vfunc answer, a package offer). No re-assert.
+    //   PROMOTE   -- a single bounded one-shot call at Engage/Release, no Tick,
+    //                 no re-assert (a stance toggle, a draw/sheathe, an idle).
+    // A facet can combine ARBITRATE with DENY (e.g. casting: APMF records the
+    // claim AND enforces it). See the param-usage table after APMF_Param below
+    // for which Intents actually read a field today vs. accept-and-ignore it.
     enum Intent : std::uint32_t {
-        kIntent_None          = 0,
-        kIntent_MovementBlock = 1,   // ch.1  full stand-still (DENY the move intent at the mover)
-        kIntent_Disposition   = 2,   // ch.11 aggression/confidence/assistance/morality bias (AV)
-        kIntent_Headtrack     = 3,   // ch.5  look-at (known-incomplete block)
-        kIntent_SelectSpell   = 4,   // ch.8  CLAIM the casting facet (arbitration; client selects+fires)
-        kIntent_WeaponDrawn   = 5,   // ch.4  draw/sheathe
-        kIntent_Dialogue      = 6,   // ch.10 pause current dialogue (one-shot)
-        kIntent_Gait          = 7,   // ch.1a gait scale (kSpeedMult AV)
-        kIntent_Detection     = 8,   // ch.16 silent movement + reduced detect range (AVs)
-        kIntent_Stance        = 9,   // ch.3  sneak/crouch
-        kIntent_CombatTarget  = 10,  // ch.6  CLAIM the combat-target facet (arbitration; client commands it)
-        kIntent_Idle          = 11,  // ch.12 one-shot idle/animation
-        kIntent_ShoutPower    = 12,  // ch.14 shout/power selection
-        kIntent_Equipment     = 13,  // ch.15 unequip/equip a worn item (melee-vs-ranged lever).
-                                     //       param.form = the weapon/item FormID the claim holds
-                                     //       the actor's hands to (0 = no param -> the channel's
-                                     //       probe default, an unconditional right-hand deny). A
-                                     //       non-zero param.form is GATE-ONLY: channels/Equipment.cpp
-                                     //       makes no engine write for it; core/EquipGate.cpp's T2a
-                                     //       CheckShouldEquip hook reads this SAME claim and denies
-                                     //       any spell/staff re-arm while it stands (2026-09-03,
-                                     //       replicates MFO CombatStyle.cpp's weapon-order gate) --
-                                     //       exempting the actor's own actively-claimed
-                                     //       kIntent_SelectSpell form (the off-hand loan a
-                                     //       spellsword-style gambit needs). param.ival is reserved
-                                     //       for a future hand-slot discriminator; unused today.
-        kIntent_CombatAction  = 14,  // ch.7  DENY named combat behavior-tree leaf CATEGORIES (param.ival = a
-                                     //       CombatActionCategory bitmask); graduated from the field-proven
-                                     //       T1 combat-behavior-tree-leaf probe (Docs/PROBE-ALLOWANCE.md)
-        kIntent_OfferPackage  = 15,  // ch.9  CLAIM the package-offer facet: param.form = the TESPackage FormID
-                                     //       to offer the actor (Actor::CheckForCurrentAliasPackage, 0x49);
-                                     //       graduated from the field-proven 0x49 package-offer probe
+        kIntent_None          = 0,   // no facet; Request/RequestEx return kInvalidHandle
+
+        kIntent_MovementBlock = 1,   // ch.1  Full stand-still. Mode: DENY (nulls the actor's
+                                     //       own move goal at the source). Param: none.
+        kIntent_Disposition   = 2,   // ch.11 Aggression/confidence/assistance/morality bias.
+                                     //       Mode: DENY (sets the actor values the AI's own
+                                     //       decisions read). Param: fval (reserved).
+        kIntent_Headtrack     = 3,   // ch.5  Look-at target. Mode: DENY, known-incomplete
+                                     //       (owns one headtrack slot of several the AI
+                                     //       writes). Param: form (reserved).
+        kIntent_SelectSpell   = 4,   // ch.8  CLAIM the casting facet. Mode: ARBITRATE + DENY
+                                     //       (the claim's spell is enforced as the actor's
+                                     //       only castable choice; denying a COMPETING
+                                     //       framework's own selection is a future gap).
+                                     //       Param: form (the spell FormID).
+        kIntent_WeaponDrawn   = 5,   // ch.4  Draw/sheathe. Mode: PROMOTE (one-shot, sticky).
+                                     //       Param: none.
+        kIntent_Dialogue      = 6,   // ch.10 Pause the actor's own in-progress dialogue.
+                                     //       Mode: DENY (fires once, no ongoing block).
+                                     //       Param: none.
+        kIntent_Gait          = 7,   // ch.1a Movement speed scale. Mode: DENY (sets the
+                                     //       speed-mult actor value). Param: fval (reserved).
+        kIntent_Detection     = 8,   // ch.16 Silent movement + reduced detect range. Mode:
+                                     //       DENY (sets the detection actor values). Param:
+                                     //       fval (reserved).
+        kIntent_Stance        = 9,   // ch.3  Sneak/crouch. Mode: PROMOTE (one-shot toggle).
+                                     //       Param: ival (reserved).
+        kIntent_CombatTarget  = 10,  // ch.6  CLAIM the combat-target facet. Mode: ARBITRATE
+                                     //       only (the client writes the target itself;
+                                     //       denying a competing framework's own target
+                                     //       write is a future gap). Param: form (the
+                                     //       target actor).
+        kIntent_Idle          = 11,  // ch.12 One-shot idle/animation. Mode: PROMOTE.
+                                     //       Param: none.
+        kIntent_ShoutPower    = 12,  // ch.14 Shout/power selection. Mode: ARBITRATE only
+                                     //       (mirrors ch.6/ch.8, no deny gate yet). Param:
+                                     //       form (the shout/power FormID).
+        kIntent_Equipment     = 13,  // ch.15 Unequip/equip a worn item (the melee-vs-ranged
+                                     //       lever). Mode: DENY (owns the equipped set).
+                                     //       Param: form (optional). No param: deny the
+                                     //       actor's right-hand item (the channel's
+                                     //       default). form set: additionally GATE-ONLY --
+                                     //       deny any spell/staff re-arm while the claim
+                                     //       stands (no engine write for the form itself;
+                                     //       the same underlying hook ch.8's exact-match
+                                     //       deny rides). ival is reserved for a future
+                                     //       hand-slot discriminator.
+        kIntent_CombatAction  = 14,  // ch.7  DENY named combat behavior-tree leaf
+                                     //       CATEGORIES. Mode: DENY (graduated from a
+                                     //       field-proven probe, Docs/PROBE-ALLOWANCE.md).
+                                     //       Param: ival (a CombatActionCategory bitmask,
+                                     //       see below).
+        kIntent_OfferPackage  = 15,  // ch.9  CLAIM the package-offer facet. Mode: DENY
+                                     //       (redirects the package offer to the claimed
+                                     //       package; graduated from a field-proven probe).
+                                     //       Param: form (the TESPackage FormID).
     };
 
     // ── Combat-action CATEGORY bitmask (kIntent_CombatAction's param.ival) ──────
@@ -156,11 +204,30 @@ namespace APMF_API {
     // APPEND-ONLY: never reorder/retype an existing field; add new fields at the END
     // (a v1-era caller zero-inits the whole struct, so appended fields read 0).
     struct APMF_Param {
-        RE::FormID   form;   // a form the channel acts on: cast-select => the SpellItem;
-                             //   combat-target => the target Actor. 0 => channel default.
-        float        fval;   // a scalar: disposition bias / gait scale / detection factor.
-        std::int32_t ival;   // an integer/enum variant (e.g. a stance code). 0 => default.
+        RE::FormID   form;   // a form the channel acts on (a SpellItem, an Actor, a
+                             //   TESPackage, a weapon/item...). 0 => channel default.
+        float        fval;   // a scalar (a bias / scale / factor). 0 => channel default.
+        std::int32_t ival;   // an integer/enum variant (e.g. a category bitmask).
+                             //   0 => default.
     };
+
+    // ── APMF_Param field usage, per Intent (at a glance) ────────────────────────
+    // A client may always pass an APMF_Param (RequestEx/Repoint zero-init a v1-era
+    // caller sees as "no param" too). This table says which Intents actually READ
+    // a field TODAY versus accept-and-ignore it -- read the per-Intent comments
+    // above for the full picture; this is the quick-scan version.
+    //
+    //   form   kIntent_SelectSpell     the spell FormID
+    //   form   kIntent_CombatTarget    the target actor
+    //   form   kIntent_ShoutPower      the shout/power FormID
+    //   form   kIntent_OfferPackage    the TESPackage FormID
+    //   form   kIntent_Equipment       optional, gates re-equip when set (see above)
+    //   ival   kIntent_CombatAction    a CombatActionCategory bitmask (see below)
+    //   none   every other Intent      accepted, not yet read by the channel
+    //
+    // fval is not read by any channel yet (reserved for a future per-request bias
+    // on ch.11, scale on ch.1a, factor on ch.16).
+    // ─────────────────────────────────────────────────────────────────────────────
 
     // The v1 interface: a POD struct of function pointers. NO vtable. `abiVersion`
     // is the first field so a client can sanity-check the layout it received.
@@ -226,6 +293,41 @@ namespace APMF_API {
         // the game thread). Its NON-owning-claim behavior: the stored param is updated
         // so it takes effect if/when the claim later becomes the owner.
         void (*Repoint)(Handle handle, const APMF_Param* param);
+    };
+
+    // The v4 interface: APMF_API_v3's members verbatim (identical initial sequence),
+    // then the appended SetSpellAllowList slot. A v1/v2/v3 client reading this
+    // object through its own struct pointer sees exactly its prefix; a v4 client
+    // reads SetSpellAllowList too.
+    struct APMF_API_v4 {
+        std::uint32_t abiVersion;
+        Handle (*Request)(RE::FormID actor, Intent intent, float basis);
+        void   (*Release)(Handle handle);
+        Handle (*RequestEx)(RE::FormID actor, Intent intent, float basis,
+                            const APMF_Param* param);
+        void   (*Repoint)(Handle handle, const APMF_Param* param);
+
+        // Attach a bounded ADDITIONAL allow-set of spell FormIDs to an EXISTING
+        // kIntent_SelectSpell claim (`handle`, as returned by RequestEx/Request):
+        // the actor's AI may cast the claim's primary `param.form` (the
+        // selected spell, unchanged) OR any spell FormID in `forms` -- e.g. a
+        // bounded exempt set of heal/buff spells a client wants to allow
+        // alongside its chosen spell. `forms` is READ AND COPIED
+        // synchronously inside the call -- APMF never retains the pointer, same
+        // contract as RequestEx/Repoint's `param` (a stack-local array is fine).
+        // `count` is silently clamped to kMaxSpellAllowList; a count over the
+        // bound degrades to "the excess spells are treated as non-exempt" (never
+        // a crash or an unbounded write). `count == 0` or `forms == nullptr`
+        // clears the allow-set -- the claim falls back to today's exact
+        // claim.form-only match, so a v1-v3 client, or a v4 client that never
+        // calls this, is byte-for-byte unaffected. A stale/unknown `handle`, or a
+        // handle whose claim is on a channel OTHER than kIntent_SelectSpell, is a
+        // silent no-op (mirrors Repoint's own no-op-on-unknown-handle discipline).
+        // Updates the STORED claim whether or not it currently OWNS the channel --
+        // same non-owning semantics as Repoint, so a claim that later wins
+        // arbitration already carries its allow-set. Thread-safe (enqueues;
+        // applied on the game thread, never off it).
+        void (*SetSpellAllowList)(Handle handle, const RE::FormID* forms, std::uint32_t count);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
