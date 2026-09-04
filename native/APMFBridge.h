@@ -90,10 +90,11 @@ namespace MFO::APMFBridge {
     // owner; the intended `a_target` rides along). This does NOT command the target —
     // MFO commands it via Targeting::Command itself. RE-POINTS the claim in place when
     // the target changes (same handle, via APMF Repoint — a mid-battle retarget is not a
-    // release). `a_create`: true from a CAST directive (creates the claim if none); false
-    // from a non-cast directive (attack) — re-points ONLY an existing claim, never
-    // creating one, so a pure-melee follower is not claimed. No-op when APMF is absent or
-    // Config::g_apmfCast is off.
+    // release). `a_create`: true creates the claim if none exists yet — both a CAST
+    // directive and an Attack directive pass true, so a pure-melee follower gets the
+    // same arbitration a caster does (Actuation.cpp's kActAttack handler); pass false to
+    // re-point ONLY an existing claim without ever creating one. No-op when APMF is
+    // absent or Config::g_apmfCast is off.
     void ClaimCombatTarget(RE::FormID a_follower, RE::FormID a_target, bool a_create);
 
     // Worker-safe. Keep the follower's EXISTING combat-target claim alive (refresh its
@@ -107,6 +108,43 @@ namespace MFO::APMFBridge {
     // expiry window (cast-select backstop; combat-target = combat-end detector). Call
     // from the pump body.
     void Tick();
+
+    // ── weapon-order EQUIPMENT facet CLAIM: PER-ORDER (ch.15) ───────────────────
+    // Retires MFO's native weapon-order equip gate (CombatStyle.cpp's EquipGateThunk)
+    // onto APMF's T2a CheckShouldEquip hook, mirroring the cast-select/CasterConsent
+    // retirement above -- MFO still EXECUTES the force-equip itself (ActorEquipManager
+    // forceEquip, Actuation.cpp's EquipWeapon/g_forcedWeapon); this claim only makes
+    // APMF's OWN gate enforce "no spell/staff re-arm while the order holds the hands"
+    // instead of MFO's own gate doing it natively. GATE-ONLY: APMF makes no engine
+    // write for a param'd Equipment claim (APMF_API.h's kIntent_Equipment comment).
+    //
+    // Worker-safe. CLAIM (or refresh-in-place) the equipment facet for a_follower,
+    // naming a_weaponForm (kIntent_Equipment, param.form = the forced weapon's
+    // FormID). Call every tick the force-hold survives (Actuation::ReconcileForcedWeapon
+    // when it decides to KEEP the hold) -- same "the claim call also refreshes" idiom
+    // ClaimCasting uses, so one call both engages a new hold and keeps an existing one
+    // alive under the shared kExpiry backstop. RE-POINTS in place (same handle) if the
+    // held weapon FormID changes (a melee<->ranged flip re-forces a different weapon).
+    // No-op when APMF is absent or Config::g_weaponStyleControl is off.
+    void ClaimEquipment(RE::FormID a_follower, RE::FormID a_weaponForm);
+
+    // Worker-safe. Release the equipment claim. Call the instant the force-hold
+    // actually releases (Actuation::ReleaseForcedWeapon, its single choke point --
+    // reached from ReconcileForcedWeapon's release branch AND every teardown site
+    // that force-unequips directly) so MFO's native gate re-enforces immediately if
+    // APMF is absent, with no gap between "hands freed" and "gate re-armed".
+    void ReleaseEquipment(RE::FormID a_follower);
+
+    // Worker- AND combat-thread-safe (mutex-guarded read; the SAME g_mx every other
+    // accessor here takes, matching IsOwnedCastActive's shape exactly). Does
+    // `a_follower` currently hold a LIVE equipment facet claim? CombatStyle.cpp's
+    // EquipGateThunk consults this to stand its OWN weapon-order deny down (APMF's
+    // T2a now owns that enforcement) -- independent of, and checked alongside,
+    // IsOwnedCastActive's existing cast stand-down; either, both, or neither may be
+    // true for a given follower on a given tick. Returns false (native gate keeps
+    // enforcing, byte-identical to pre-APMF) whenever APMF is absent, the claim was
+    // never made, or it already expired.
+    bool IsEquipmentClaimActive(RE::FormID a_follower);
 
     // ── package-offer facet CLAIM: PER-EXCURSION (ch.9, T3 0x49) ────────────────
     // Worker-safe. CLAIM the package-offer facet for a_follower, naming a_packageForm

@@ -53,6 +53,12 @@ namespace MFO::APMFBridge {
             std::chrono::steady_clock::time_point packageRefreshed{};
             APMF_API::Handle actionHandle  = APMF_API::kInvalidHandle;  std::uint32_t actionMask = 0;
             std::chrono::steady_clock::time_point actionRefreshed{};
+            // weapon-order equipment (ch.15) -- PER-ORDER: refreshed every tick the
+            // force-hold survives (Actuation::ReconcileForcedWeapon), released the
+            // instant it releases (Actuation::ReleaseForcedWeapon), same shared
+            // kExpiry backstop as every other facet here.
+            APMF_API::Handle equipHandle   = APMF_API::kInvalidHandle;  RE::FormID equip  = 0;
+            std::chrono::steady_clock::time_point equipRefreshed{};
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
@@ -136,7 +142,8 @@ namespace MFO::APMFBridge {
         void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
             const auto& o = it->second;
             if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
-                o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle)
+                o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
+                o.equipHandle == APMF_API::kInvalidHandle)
                 g_owned.erase(it);
         }
     }
@@ -233,6 +240,35 @@ namespace MFO::APMFBridge {
             it->second.targetRefreshed = std::chrono::steady_clock::now();   // keep-alive: timestamp only
     }
 
+    // ── weapon-order equipment (per-order, ch.15) ───────────────────────────────
+    void ClaimEquipment(RE::FormID a_follower, RE::FormID a_weaponForm) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || a_weaponForm == 0 || !Config::g_weaponStyleControl.load()) return;
+        std::scoped_lock lock(g_mx);
+        auto& o = g_owned[a_follower];
+        EnsureClaimLocked(api, a_follower, APMF_API::kIntent_Equipment, o.equipHandle, o.equip, a_weaponForm);
+        o.equipRefreshed = std::chrono::steady_clock::now();
+        EraseIfEmpty(g_owned.find(a_follower));
+    }
+
+    void ReleaseEquipment(RE::FormID a_follower) {
+        std::scoped_lock lock(g_mx);
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return;
+        ReleaseHandleLocked(it->second.equipHandle, it->second.equip);
+        EraseIfEmpty(it);
+    }
+
+    bool IsEquipmentClaimActive(RE::FormID a_follower) {
+        // Fast-out before the lock: APMF absent -> never active (mirrors
+        // IsOwnedCastActive exactly, so the EquipGateThunk caller's native
+        // enforcement path is byte-identical when APMF is not present).
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        return it != g_owned.end() && it->second.equipHandle != APMF_API::kInvalidHandle;
+    }
+
     // ── package-offer (per-excursion) ───────────────────────────────────────────
     bool OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
@@ -290,8 +326,11 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.packageHandle, o.package);
             if (o.actionHandle != APMF_API::kInvalidHandle && now - o.actionRefreshed >= kExpiry)
                 ReleaseHandleLocked(o.actionHandle, o.actionMask);
+            if (o.equipHandle != APMF_API::kInvalidHandle && now - o.equipRefreshed >= kExpiry)
+                ReleaseHandleLocked(o.equipHandle, o.equip);
             if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
-                o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle)
+                o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
+                o.equipHandle == APMF_API::kInvalidHandle)
                 it = g_owned.erase(it);
             else
                 ++it;
@@ -305,6 +344,7 @@ namespace MFO::APMFBridge {
             ReleaseHandleLocked(o.targetHandle, o.target);
             ReleaseHandleLocked(o.packageHandle, o.package);
             ReleaseHandleLocked(o.actionHandle,  o.actionMask);
+            ReleaseHandleLocked(o.equipHandle,   o.equip);
         }
         g_owned.clear();
     }

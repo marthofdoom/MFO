@@ -1000,15 +1000,16 @@ namespace MFO::Actuation {
             auto* foe = ptr.get();
             if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
 
-            // OWNED MODEL: if this follower is a caster with a LIVE APMF combat-target
-            // CLAIM (created by a cast directive earlier this fight), keep that facet-claim
-            // pointed at the melee foe too, so the arbitration record follows a cast->melee
-            // transition. create=false => it NEVER creates a claim for a pure-melee follower.
+            // A commanded Attack directive gets the SAME APMF combat-target arbitration
+            // a cast directive already gets (ch.6 plumbing, no new APMF work): claim (or
+            // re-point) the facet at the chosen foe. create=true => a pure-melee follower
+            // with no prior cast-directive claim this fight now gets one created here,
+            // instead of getting zero arbitration until/unless it later casts.
             // (MFO's own Targeting::Command below is what actually commands the target;
             // APMF only arbitrates the facet, it executes nothing.) No-op without APMF.
             if (APMFBridge::Available() && Config::g_apmfCast.load() &&
                 !Config::g_legacyCastHybrid.load())
-                APMFBridge::ClaimCombatTarget(a_follower->GetFormID(), foe->GetFormID(), /*create=*/false);
+                APMFBridge::ClaimCombatTarget(a_follower->GetFormID(), foe->GetFormID(), /*create=*/true);
 
             // Ask the HOOK, not the config. They disagree whenever install was
             // refused with the flag on -- VR, today. Reporting Fired there would
@@ -1230,6 +1231,12 @@ namespace MFO::Actuation {
         // create. Engine call OUTSIDE the lock.
         if (auto* mgr = RE::ActorEquipManager::GetSingleton(); mgr && obj)
             mgr->UnequipObject(a_follower, obj, nullptr, 1, nullptr, true, true);
+        // APMF ch.15: hands are free again -- release the equipment claim too, so
+        // MFO's own EquipGateThunk re-enforces immediately if APMF is absent (no-op
+        // if APMF is absent/off or no claim was ever made). This is the single choke
+        // point every release path (Reconcile's release branch, Followers.cpp/
+        // Scheduler.cpp teardown) funnels through.
+        APMFBridge::ReleaseEquipment(id);
         spdlog::info("[equip] {:08X}: force-hold released", id);
     }
 
@@ -1246,6 +1253,7 @@ namespace MFO::Actuation {
         // Feature OFF -> release immediately, regardless of the scan. Decide
         // UNDER the lock, Release OUTSIDE it (Release re-locks -> no self-deadlock).
         bool release = false;
+        RE::FormID heldWeaponForm = 0;   // captured under the lock; used outside it below
         {
             std::scoped_lock lk(g_forcedMx);
             auto it = g_forcedWeapon.find(a_follower->GetFormID());
@@ -1258,8 +1266,20 @@ namespace MFO::Actuation {
                 release = (a_wantStance != cat);       // condition confirmed false / flipped
             }
             // else: scan stopped early -> UNKNOWN -> keep the hold this tick.
+            if (!release && it->second) heldWeaponForm = it->second->GetFormID();
         }
-        if (release) ReleaseForcedWeapon(a_follower);
+        if (release) {
+            ReleaseForcedWeapon(a_follower);
+        } else if (heldWeaponForm != 0) {
+            // APMF ch.15: keep the equipment claim alive for as long as the
+            // force-hold holds the hands. ClaimEquipment both ENGAGES it (the
+            // first reconcile tick after EquipWeapon sets g_forcedWeapon) and
+            // REFRESHES it (every tick after, same "the claim call also
+            // refreshes" idiom ClaimCasting uses) -- so there is never a tick
+            // where the hold survives but the claim is left to expire under
+            // APMFBridge's kExpiry backstop.
+            APMFBridge::ClaimEquipment(a_follower->GetFormID(), heldWeaponForm);
+        }
     }
 
     void ClearForcedWeapons() {

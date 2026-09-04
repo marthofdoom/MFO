@@ -105,7 +105,19 @@ namespace APMF_API {
         kIntent_CombatTarget  = 10,  // ch.6  CLAIM the combat-target facet (arbitration; client commands it)
         kIntent_Idle          = 11,  // ch.12 one-shot idle/animation
         kIntent_ShoutPower    = 12,  // ch.14 shout/power selection
-        kIntent_Equipment     = 13,  // ch.15 unequip/equip a worn item (melee-vs-ranged lever)
+        kIntent_Equipment     = 13,  // ch.15 unequip/equip a worn item (melee-vs-ranged lever).
+                                     //       param.form = the weapon/item FormID the claim holds
+                                     //       the actor's hands to (0 = no param -> the channel's
+                                     //       probe default, an unconditional right-hand deny). A
+                                     //       non-zero param.form is GATE-ONLY: channels/Equipment.cpp
+                                     //       makes no engine write for it; core/EquipGate.cpp's T2a
+                                     //       CheckShouldEquip hook reads this SAME claim and denies
+                                     //       any spell/staff re-arm while it stands (2026-09-03,
+                                     //       replicates MFO CombatStyle.cpp's weapon-order gate) --
+                                     //       exempting the actor's own actively-claimed
+                                     //       kIntent_SelectSpell form (the off-hand loan a
+                                     //       spellsword-style gambit needs). param.ival is reserved
+                                     //       for a future hand-slot discriminator; unused today.
         kIntent_CombatAction  = 14,  // ch.7  DENY named combat behavior-tree leaf CATEGORIES (param.ival = a
                                      //       CombatActionCategory bitmask); graduated from the field-proven
                                      //       T1 combat-behavior-tree-leaf probe (Docs/PROBE-ALLOWANCE.md)
