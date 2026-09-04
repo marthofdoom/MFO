@@ -104,12 +104,34 @@ namespace MFO::CasterConsent {
         // originals are keyed by the vtable pointer we read off `this`.
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_orig;
 
+        // SHELVED 2026-09-04 (marth): the GRADUATED middle levels (castLvl
+        // 1-3) are disabled. Porting the graduated exemption to APMF's
+        // pre-computed T2c allow-list can't match this hook's NATIVE
+        // reactive per-cast gate -- APMF would need every castable spell
+        // enumerated ahead of time, and a staff's bound spell / scroll /
+        // mod-granted spell would fall off that list and get wrongly
+        // denied. Revival is gated on the Synthesis patcher pre-classifying
+        // EVERY spell (a complete map, no runtime gap) -- see
+        // [[apmf-graduated-cast-claim-shape]]. Until then this ONE flag
+        // collapses every graduated call site (CtrlUnlatchedDeny,
+        // ShouldDeny, and the CheckStartCast thunk's inline check all
+        // funnel their kind-filter through CastExempt) to EXACT behavior:
+        // castLvl 0 stays fully OFF (untouched -- gated before CastExempt is
+        // ever called), but 1-3 now exempt NOTHING, same as 4 -- a follower
+        // with an old/stored 1-3 value gets the gambit-forced-exact
+        // experience rather than a silently-inert partial filter. The
+        // switch below is left in place, NOT deleted, so reviving this is a
+        // one-line flip back to `false`.
+        constexpr bool kGraduatedShelved = true;
+
         // Does the AI KEEP this spell at slider level `lvl` (i.e. MFO exempts
         // it)? "ignore X" = leave category X to the follower's AI; tighter
         // toward exact. lvl 1 ignore buffs+heals, 2 ignore heals (default),
         // 3 ignore self-heals; lvl>=4 (exact) exempts nothing; lvl<=0 handled
-        // before this is ever called.
+        // before this is ever called. DORMANT while kGraduatedShelved: every
+        // level >=1 falls through to the exact case.
         bool CastExempt(SpellKind a_kind, bool a_selfHeal, int a_lvl) {
+            if (kGraduatedShelved) return false;   // exact-only: exempt nothing (see above)
             switch (a_lvl) {
                 case 1:  return a_kind != SpellKind::Offense;            // keep buffs + all heals
                 case 2:  return a_kind == SpellKind::Heal;               // keep all heals

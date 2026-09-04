@@ -304,6 +304,13 @@ namespace MFO::Config {
     //   4 exact            -- only the gambit spell is ever cast (deny all else)
     // "ignore X" = MFO EXEMPTS category X, leaving it to the AI; tighter toward
     // exact. Applied in the CheckStartCast consent hook (CasterConsent).
+    //
+    // SHELVED 2026-09-04 (marth): levels 1-3 above are the GRADUATED middle
+    // (dormant, not deleted -- see CasterConsent.cpp's kGraduatedShelved next
+    // to CastExempt). A stored/selected 1-3 now behaves like 4 (exact): only
+    // the gambit spell is ever cast. 0 (off) is untouched. The MCM slider's
+    // labels still describe the graduated behavior; that's a stale-until-
+    // revival cosmetic, not a functional gap.
     inline std::atomic<int>   g_castControl{ 2 };
 
     // FRIENDLY-FIRE HOLD (v1.0.35), DEFAULT ON. In the SpellCast hook, hold a

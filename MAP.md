@@ -611,6 +611,29 @@ engine vtables).
   that mechanism is MFO's alone, APMF only ever narrows a YES to a NO. Legacy
   (non-APMF / `bLegacyCastHybrid`) followers are unaffected: `IsOwnedCastActive`
   returns false for them, so both denies run exactly as before.
+- **GRADUATED CAST SHELVED (2026-09-04, marth):** `CastExempt` (`:133`, the castLvl
+  1-3 kind-filter) now starts with `if (kGraduatedShelved) return false;` (`:132`
+  the flag, dormant switch left in place below it) — collapses every graduated call
+  site to EXACT for any castLvl in 1-3 (only `CtrlUnlatchedDeny` `:228-251` and
+  `ShouldDeny` `:703-720` and `thunk`'s inline check `:594-602` route through
+  `CastExempt`, so this ONE flag governs all three; `CheckCastThunk` `:807` is
+  unaffected directly — it calls `ShouldDeny`/`CtrlUnlatchedDeny`, which now always
+  says "deny" at 1-3, same as it always did at 4). Reason: porting the graduated
+  exemption to APMF's T2c pre-computed allow-list can't match this hook's reactive
+  per-cast gate without enumerating every castable spell (a staff's bound spell /
+  scroll / mod-granted spell would fall off the list); revival is gated on a
+  Synthesis-patcher spell classification pass. **UNTOUCHED by the shelve:** the
+  owned/exact APMF stand-down (`IsOwnedCastActive` at `:594` and `:865` — the
+  `!isWanted`/`exclusivityDeny` branches), `ConcUnboundedDeny` (`:174`, EXACT-only
+  already — `lvl<4` fast-outs before ever reaching `CastExempt`, so it was never
+  part of the graduated path), and the `CheckCast` (0x0A) hook install (`:920`,
+  stays installed — still needed for `ConcUnboundedDeny`'s hard bound and the
+  APMF-absent exact-cast degrade). `Config::g_castControl` (`Config.h:307`) keeps
+  its stored 0-4 range; 1-3 now behaves identically to 4 (only 0/off is distinct).
+  MCM slider labels ("ignore heals" etc.) are now stale-until-revival cosmetic
+  text, not touched (not a functional gap — see `Docs/MFO-CONVERSION-ROADMAP.md`
+  facet #2 in the APMF repo, not updated here per the shelving brief's
+  do-not-touch-APMF-repo constraint).
 - **Latch lifetime:** the Want latch does NOT clear on cast (spans the whole
   combat); `Want` overwrites SPELL only, never `permitAfter` or pacing breaks.
   Force-YES must NEVER apply to concentration spells (permanent-stream freeze,
