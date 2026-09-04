@@ -38,7 +38,10 @@ namespace MFO::APMFBridge {
         //     released ONLY by the expiry sweep once refreshing STOPS -- i.e. at combat
         //     end. It is NOT tied to the cast gambit's win/lose, so a cast->melee
         //     transition RE-POINTS it, never releases it.
-        // Each claim carries its own refresh timestamp. Guarded by g_mx (worker + main).
+        // Each claim carries its own refresh timestamp. Guarded by g_mx (worker + main
+        // + the COMBAT THREAD: Phase 2's IsOwnedCastActive/IsEquipmentClaimActive are
+        // called from CasterConsent/CombatStyle thunks). Real mutex, never nested, never
+        // held across a Post/form-table walk, so the combat thread can't stall on it.
         // package-offer (ch.9) and combat-action-deny (ch.7) are PER-EXCURSION,
         // caller-driven lifecycles (Packages.cpp's loot-travel routing): created on
         // the first winning dispatch, refreshed by a repeat call (same form/mask ==
