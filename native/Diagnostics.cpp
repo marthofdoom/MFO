@@ -75,26 +75,10 @@ namespace MFO::Diagnostics {
         //     return without touching game state. The captured epoch is taken at
         //     QUEUE time; the guard compares it at RUN time.
         // Construct it FIRST in the body; test it as a bool; on false, return.
-        struct PumpTickGate {
-            explicit PumpTickGate(std::uint64_t a_queuedEpoch) {
-                g_tickActive.store(true, std::memory_order_seq_cst);
-                m_ok = g_pumpRunning.load(std::memory_order_seq_cst) &&
-                       !g_pumpPaused.load(std::memory_order_seq_cst) &&
-                       g_pumpEpoch.load(std::memory_order_seq_cst) == a_queuedEpoch;
-            }
-            ~PumpTickGate() { g_tickActive.store(false, std::memory_order_seq_cst); }
-            explicit operator bool() const { return m_ok; }
-            PumpTickGate(const PumpTickGate&)            = delete;
-            PumpTickGate& operator=(const PumpTickGate&) = delete;
-        private:
-            bool m_ok = false;
-        };
-
-        // The epoch a sink captures at QUEUE time, so its deferred body can tell
-        // it apart from a body queued before a revert/load swapped the pump.
-        std::uint64_t CurrentPumpEpoch() {
-            return g_pumpEpoch.load(std::memory_order_seq_cst);
-        }
+        // PumpTickGate + CurrentPumpEpoch are now DECLARED in Diagnostics.h (the
+        // SEV-1 wave exposed them to the cross-TU sinks in Rapport/Logistics/
+        // Board) and DEFINED out-of-line below, after this anonymous namespace,
+        // so the pump atomics above stay file-local while the class is shared.
 
         // The shield restore trigger (DESIGN §4.5b). A shield only matters when
         // something is hitting you, so that is exactly when MFO gives it back
@@ -347,6 +331,23 @@ namespace MFO::Diagnostics {
         }
 
     }
+
+    // ── Cross-TU pump gate, defined out-of-line ───────────────────────────────
+    // Same TU as the anonymous-namespace pump atomics above (they have internal
+    // linkage but are visible here), so these reach g_tickActive/g_pumpRunning/
+    // g_pumpPaused/g_pumpEpoch while the header keeps them out of other TUs. The
+    // behaviour is byte-identical to the former in-anon-namespace definitions;
+    // only the linkage/visibility changed (the SEV-1 wave shares the guard).
+    std::uint64_t CurrentPumpEpoch() {
+        return g_pumpEpoch.load(std::memory_order_seq_cst);
+    }
+    PumpTickGate::PumpTickGate(std::uint64_t a_queuedEpoch) {
+        g_tickActive.store(true, std::memory_order_seq_cst);
+        m_ok = g_pumpRunning.load(std::memory_order_seq_cst) &&
+               !g_pumpPaused.load(std::memory_order_seq_cst) &&
+               g_pumpEpoch.load(std::memory_order_seq_cst) == a_queuedEpoch;
+    }
+    PumpTickGate::~PumpTickGate() { g_tickActive.store(false, std::memory_order_seq_cst); }
 
     void DumpReport(const char* a_trigger) {
         const auto* plugin = SKSE::PluginDeclaration::GetSingleton();

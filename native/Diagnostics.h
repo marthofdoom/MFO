@@ -24,4 +24,28 @@ namespace MFO::Diagnostics {
     // Full state dump to MFO.log. Safe to call from the main thread only.
     void DumpReport(const char* a_trigger);
 
+    // ── Cross-TU pump-drain gate (SEV-1 concurrency wave) ─────────────────────
+    // Event sinks in OTHER translation units (Rapport death, Logistics loot,
+    // Board focus-fire) queue AddTask bodies that mutate save-scoped state
+    // (Followers::Refresh, the loot/claim maps) exactly like this file's own
+    // sinks do, so they must drain with StopPump/PausePump the same way -- or a
+    // revert/save can clear those maps mid-body (the #4 hazard). These expose the
+    // ONE guard shape used by every AddTask body queued in Diagnostics.cpp:
+    // capture the epoch at QUEUE time, construct the gate FIRST in the deferred
+    // body, and bail on `!gate`. See the HitSink in Diagnostics.cpp for the
+    // canonical use. The pump atomics stay file-local; the gate's ctor/dtor are
+    // defined out-of-line in Diagnostics.cpp so they reach them.
+    std::uint64_t CurrentPumpEpoch();
+
+    class PumpTickGate {
+    public:
+        explicit PumpTickGate(std::uint64_t a_queuedEpoch);
+        ~PumpTickGate();
+        explicit operator bool() const { return m_ok; }
+        PumpTickGate(const PumpTickGate&)            = delete;
+        PumpTickGate& operator=(const PumpTickGate&) = delete;
+    private:
+        bool m_ok = false;
+    };
+
 }
