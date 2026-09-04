@@ -1,3 +1,11 @@
+## Unreleased (branch feat/forced-cast, not shipped) -- Composed Forced Cast groundwork
+
+- **Not a release. This branch is not merged, not pushed, and CI has not run on it.** Nothing below changes what you see in game yet.
+- Fixed a real bug where a follower's own forced cast could get wrongly vetoed as "unbounded" at the strictest cast-control setting (Exact), and the cast would hard-abort mid-stream. That bound now recognizes every cast MFO itself is running, not just the one it used to.
+- Laid the groundwork for a real animated forced cast, the kind of thing that would let a heal actually play its cast animation instead of just landing. The one piece that triggers the animation is not built yet, so this does nothing visible for now. Heals still work exactly the way they do today.
+- Retired the old package-based animated-heal experiment. It is replaced by the groundwork above, and it was never shipped, so there is nothing for you to notice.
+- Harbinger's interface bumped a version to carry the new cast-claim contract this groundwork needs.
+
 ## v2.0.0 -- Followers cast for real, and Harbinger arrives
 
 - **MFO now runs on Harbinger (APMF), a new framework of mine.** It is a required file. Harbinger is a control layer that lets several mods drive the same follower without fighting over them, and MFO is its first and biggest user. With it installed, MFO routes a follower's casting, combat target, packages and gear through Harbinger so nothing gets clobbered. Without it MFO still runs on its old fallback paths and quietly reminds you every so often that it is missing. Grab Harbinger from its own page.

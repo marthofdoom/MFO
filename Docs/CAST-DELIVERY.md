@@ -262,27 +262,106 @@ touch ONLY the one genuinely-broken case: concentration + Self + off-self.** FF 
 self-cast were already correct; do not touch them, do not re-broaden the proxy, do not
 reintroduce AddTarget.
 
-## OPT-IN ANIMATED HEAL (bHealAnimPackage, DEFAULT OFF — experimental A/B)
+## COMPOSED FORCED CAST (CFC) — bHealAnimPackage repurposed, DEFAULT OFF
 
-The baseline above delivers heals via `kInstant` `CastSpellImmediate`: the effect
-lands, with **no cast animation** (offense animates because the follower's OWN AI
-fires the held spell; the AI won't CHOOSE to self/party-heal, so MFO force-applies).
-The MCM toggle `bHealAnimPackage` (default OFF, inert without APMF) flips a HEAL onto
-the **M9 forced-casting package** (ENGINE_NOTES §0.17/§0.21) delivered through APMF's
-ch.9 0x49 package-offer channel, so the follower's own AI casts the heal **animated**
-while movement stays alive. `CastSelfDirect`/`CastTargetDirect` call
-`Packages::HealAnimFill` after the competence gate; if it takes over the tick they
-`return Applied` and the `kInstant` apply is skipped. `HealAnimFill` is fully
-self-gating (false → baseline path, byte-identical, unless toggle+APMF+`IsHealSpell`
-all hold; false on APMF refusal too, so the heal still lands). Two new UseMagic ESP
-records, Spell set at runtime, target STATIC (no unproven runtime target write):
-`MFO_APMFHealSelfPackage` (0x83B, t6 self) and `MFO_APMFHealPlayerPackage` (0x83C,
-t0→player). Ally/other-actor heals stay on `kInstant`. Per-follower `g_healAnimMap`
-(many concurrent holders); `Packages::Pump` keep-alive + stale release; precedence
-retreat > heal > loot on the shared OfferPackage handle. **FIELD-UNCERTAIN**: whether
-0x49 direct-delivery drives a UseMagic cast the way the M9 alias probes did — this is
-what the toggle A/Bs. A non-working ON path leaves default-OFF heals untouched. See
-`native/Packages.cpp` `HealAnimFill` / `MFO_GenerateESP.py` `make_apmf_heal_packages()`.
+This replaces the old OPT-IN ANIMATED HEAL section (2026-09-04 rework,
+`Docs/SPEC-FORCED-CAST.md`). The M9 forced-casting PACKAGE route is gone.
+`Packages::HealAnimFill`, `g_healAnimMap`, and the two UseMagic PACKs
+(`MFO_APMFHealSelfPackage` 0x83B, `MFO_APMFHealPlayerPackage` 0x83C) are deleted. A
+heal is a cast facet now, not a package facet. The FormIDs stay retired forever
+(INVARIANTS #41), never recycled.
+
+`ComposedCast::Try(follower, spell, target, kind)` (`native/ComposedCast.cpp`) sits
+where `HealAnimFill` used to be called, in `CastSelfDirect`/`CastTargetDirect`
+(`Actuation_Direct.cpp`), after the competence gate. It composes five things before
+it ever touches the hand.
+
+1. An APMF cast-execution claim (`kIntent_Cast`, ABI v5, `APMFBridge::ClaimCast`).
+   APMF denies the follower's own casting and re-arm for a bounded TTL. APMF fires
+   nothing. Movement is never claimed.
+2. A `CastBounds::Arm` registration for (actor, spell) and (actor, proxy) if any.
+   This is the fix for the CasterConsent HARD-ABORT described below.
+3. The trigger. One isolated seam, `DriveObservedCast`, turns an armed cast into a
+   real animated one.
+4. Observe. The trigger arms an "expected cast" hand-off that
+   `Diagnostics::SpellSink` consults. A match logs the animated path.
+5. Restore. `CastBounds::Disarm` and `APMFBridge::ReleaseCast` run on every exit,
+   including every degrade.
+
+Any failure at any step degrades to the caller's existing `kInstant` apply. A heal
+always lands, exactly as it does today.
+
+### The trigger is not built yet
+
+`SPEC-FORCED-CAST.md`'s original guess for the trigger was a hand-built
+`RE::TESActionData::Process` call with `ActionRightAttack`/`ActionRightRelease` and
+four `BGSAction` FormIDs. That guess was dropped (steering decision, 2026-09-04,
+marth-approved). It was unproven and version-fragile, and it was never built.
+
+The trigger is OBSERVE-AND-REPLICATE instead. A parallel APMF passive observer at
+the 0xAD seat will capture the engine's real full-animation NPC cast sequence from a
+deck cycle: the `MagicCaster` state machine, the animation-graph cast events, and
+the charge/fire boundary. MFO will replicate that captured sequence in
+`DriveObservedCast` (`native/ComposedCast.cpp`).
+
+Until that sequence lands, `DriveObservedCast` returns `kNotImplemented` and `Try`
+always returns false. The whole executor is runtime-inert today, byte-identical to
+the existing kInstant heal, even with `bHealAnimPackage` switched ON. This is a
+deliberate, honest state, not a bug. The build is complete. Only the one seam is
+still open.
+
+### CastBounds — the HARD-ABORT fix (§2)
+
+`CasterConsent::ConcUnboundedDeny` hard-aborts a tracked follower's own
+concentration cast at Exact unless MFO can prove the stream is one MFO itself is
+metering. Before this fix the only proof was the legacy alias-package stream
+(`Packages::StreamLive`, written only by `Packages::Begin`). Every other
+MFO-arranged cast, the `ConcProxy` direct force and now `ComposedCast`, passed
+through the same `CheckCast` (0x0A) thunk but was never registered as MFO's own.
+Exact-bounding vetoed those as an unbounded AI stream. That was the deck
+HARD-ABORT of `0002F3B8` / `FF001BA4`.
+
+`CastBounds` (`native/CastBounds.h/.cpp`) generalizes the legacy one-slot
+`g_liveStream` contract to a lock-free 8-slot registry. `Arm(actor, spell, proxy,
+ttlMs)` registers an MFO-executed bounded cast. `Live(actor, spell)` is the
+combat-thread reader, lock-free and fail-safe. A torn, cleared, or expired slot
+reads as no-match, never as a false permit. `Disarm(actor)` clears every slot an
+actor owns. `Reset()` runs beside `ConcProxy::Reset()` on `kPreLoadGame`.
+
+Three call sites in `CasterConsent.cpp` now check `CastBounds::Live` before
+falling through to a deny: `ConcUnboundedDeny`, the `CheckStartCast` thunk, and
+`CheckCastThunk` (0x0A). A registered cast early-passes every one of them, the
+same way the legacy package stream always did.
+
+**Why `ComposedCast::Try` is the only caller today, and that is correct, not a
+gap.** `CastSpellImmediate` skips the `MagicCaster` state machine entirely
+(`RequestCastImpl → StartChargeImpl → StartReadyImpl → StartCastImpl →
+FinishCastImpl`, ENGINE_NOTES §0.13) — it is the "apply this now, no actor
+deliberation required" trap/script path. The hooked `CheckStartCast`/`CheckCast`
+thunks fire only when the ENGINE itself deliberates a cast through that state
+machine, which `ConcProxy`'s plain `kInstant` `CastSpellImmediate` never enters.
+So `ConcProxy` never reaches `ConcUnboundedDeny` in the first place and needs no
+`CastBounds` registration — proven by it shipping and healing correctly at
+`iCastControl` Exact today, with no HARD-ABORT. The deck HARD-ABORT
+(`0002F3B8`/`FF001BA4`) was specific to the AI-DELIBERATED heal-anim PACKAGE
+build (the since-shelved `feat/heal-anim-proxy`), never the plain kInstant path.
+`ComposedCast`'s future hand cast is the one MFO-driven cast that WILL deliberate
+through the real state machine (that is the whole point of the trigger — a real,
+animated cast), so it is the only path that needs the bound. `ComposedCast::Try`
+being the sole `CastBounds::Arm` caller is by design.
+
+### Path comparison
+
+| path | trigger | animated | target reach | status |
+|---|---|---|---|---|
+| kInstant force-apply | `CastSpellImmediate` | no | any actor | baseline, always on |
+| APMF owned cast | the follower's own AI decides | yes | hostile foe only | default when APMF is present |
+| Composed Forced Cast (CFC) | `ComposedCast::Try` | yes, once the trigger seam lands | any actor, via a delivery-flipped proxy | opt-in (`bHealAnimPackage`). Inert today, degrades to kInstant every time |
+
+See `native/ComposedCast.cpp` `TtlMsFor` for the per-kind bound (heal 6 s, offense
+4 s, buff/utility 4 s) and `Config::g_cfcBackoffMs` (default 10 s) for the
+per-follower degrade backoff that stops a stub trigger from churning an APMF claim
+every beat.
 
 ## KEY SYMBOLS (Actuation.cpp)
 

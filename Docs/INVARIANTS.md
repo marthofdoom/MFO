@@ -1019,3 +1019,37 @@ and mirror it. Known traps found on v1.1.1 (fixed in v1.1.2):
 Affects BOTH the main `MFO.esp` and `MFO_Progression.esl` (same QUST maker pattern).
 audit_esp.py cannot catch this — add a subrecord-ORDER check there or dump-verify
 against Skyrim.esm after any record-maker change. See Docs/TOOLING.md §(c).
+
+### 76. A DELIBERATED MFO-executed cast registers CastBounds BEFORE it touches the hand, and Disarms on every exit path
+
+`MFO` (2026-09-04, the Composed Forced Cast HARD-ABORT fix, ENGINE_NOTES §0.40).
+`CasterConsent::ConcUnboundedDeny` hard-aborts a tracked follower's own
+concentration cast at Exact unless MFO can prove the stream is one it is itself
+metering, but it can only hard-abort a cast that reaches it in the first place —
+the hooked `CheckStartCast`/`CheckCast` thunks fire only when the ENGINE
+deliberates a cast through the `MagicCaster` state machine (§0.13's
+`RequestCastImpl → ... → FinishCastImpl`). Before this fix the only recognized
+proof of "MFO's own" for a DELIBERATED cast was the legacy alias-package stream,
+so any other MFO-driven cast that deliberated through that state machine would
+have been vetoed as an unbounded AI stream. Deck HARD-ABORT: `0002F3B8` /
+`FF001BA4`, on the AI-deliberated heal-anim PACKAGE build (the shelved
+`feat/heal-anim-proxy`) — never on `ConcProxy`'s plain `kInstant`
+`CastSpellImmediate` direct force, which skips that state machine entirely and so
+never reaches these thunks at all (it has shipped and heals correctly at Exact
+with no HARD-ABORT, and needs no `CastBounds` registration).
+
+RULE: any code path that makes a follower execute a cast MFO itself is driving
+*through the engine's own deliberated cast flow* (a real hand cast reaching
+`CheckStartCast`/`CheckCast` — NOT a plain `CastSpellImmediate` apply, which
+never reaches those hooks) must call `CastBounds::Arm(actor, spell, proxy,
+ttlMs)` for that (actor, spell) pair — and the (actor, proxy) pair too, if the
+hand carries a delivery-flipped copy — BEFORE the spell is equipped or fired,
+and must call `CastBounds::Disarm(actor)` on every exit from that stream: normal
+completion, abort, degrade, or teardown. A cast armed but never disarmed leaves a
+stale early-pass that outlives its own stream (bounded only by its TTL, which is
+the crash guardrail, not a substitute for disarming). A DELIBERATED cast that
+touches the hand without ever arming is vetoed by `ConcUnboundedDeny`/
+`CheckCastThunk` exactly as the pre-fix HARD-ABORT was. `CastBounds::Reset()`
+(all slots) runs beside
+`ConcProxy::Reset()` at `kPreLoadGame`, as a backstop, not a substitute for the
+per-stream Disarm.

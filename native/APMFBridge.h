@@ -204,6 +204,49 @@ namespace MFO::APMFBridge {
     // Worker-safe. Release the combat-action-deny claim.
     void ReleaseCombatActionDeny(RE::FormID a_follower);
 
+    // ── cast-EXECUTION facet CLAIM: PER-CAST, TTL-bounded (ch.8b, APMF v5) ──────
+    // MFO's Composed Forced Cast (Docs/SPEC-FORCED-CAST.md) EXECUTES an animated
+    // cast the follower's AI would not choose -- the canonical case a heal at an
+    // ally. BEFORE it touches the hand it claims this facet: APMF records MFO as
+    // the owner and, for the bounded window, DENIES the follower's own casting/
+    // re-arm (ch.8 gates) AND the cast behavior-tree leaves (ch.7 Cast category),
+    // so his AI cannot swap the hand back or fire a competing spell mid-cast.
+    // Attack / block / dodge / MOVEMENT leaves keep firing -- the follower keeps
+    // his own legs; APMF FIRES NOTHING and NEVER claims movement. The claim
+    // AUTO-RELEASES at its TTL if MFO ever forgets (crash guardrail: no standing
+    // hold). Requires APMF ABI >= 5 (RequestCast); on v4-or-older, or APMF absent,
+    // or the executor toggle off, this NO-OPS and returns false -- MFO degrades to
+    // the kInstant apply (a heal must never vanish). "legacy = APMF-absent-only".
+    //
+    // A plain MFO-side POD so this header need not pull in APMF_API.h; the bridge
+    // translates it to APMF_API::APMF_CastRequest at the call, and static_asserts
+    // the flag values match byte-for-byte.
+    struct CastReq {
+        RE::FormID    spell  = 0;   // the spell MFO will fire
+        RE::FormID    proxy  = 0;   // delivery-flipped runtime proxy (0 = none)
+        RE::FormID    target = 0;   // intended target actor (0 = self). RECORD ONLY.
+        std::uint32_t flags  = 0;   // CastReqFlag_*
+        std::uint32_t ttlMs  = 0;   // bounded window (0 -> APMF's default)
+    };
+    // Byte-mirrored from APMF_API::kCastFlag_* (asserted equal in the .cpp).
+    inline constexpr std::uint32_t CastReqFlag_LeftHand      = 1u << 1;
+    inline constexpr std::uint32_t CastReqFlag_Concentration = 1u << 2;
+
+    // Worker-safe. CLAIM (create) or refresh the cast-execution facet for
+    // a_follower. A spell change is a NEW bounded claim (release + re-request; the
+    // rich cast request has no in-place re-point); the same spell just refreshes.
+    // Returns whether a_follower now holds a LIVE cast claim (false = degrade to
+    // kInstant). Same showpiece-logging contract as OfferPackage's return.
+    bool ClaimCast(RE::FormID a_follower, const CastReq& a_req);
+
+    // Worker-safe. Release ONLY the cast-execution claim (every other facet left
+    // alone). Call the instant the executor's window ends (RESTORE / abort / degrade).
+    void ReleaseCast(RE::FormID a_follower);
+
+    // Worker- AND combat-thread-safe (mutex-guarded read; the SAME g_mx). Does
+    // a_follower currently hold a LIVE cast-execution claim?
+    bool IsCastClaimActive(RE::FormID a_follower);
+
     // Release every claim and clear the map. kPreLoadGame / revert, AFTER the pump is
     // drained (so no worker tick races the map).
     void ClearTransientState();

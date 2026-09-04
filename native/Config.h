@@ -215,21 +215,37 @@ namespace MFO::Config {
     // never fires at all when APMF IS present, regardless of this toggle.
     inline std::atomic<bool>  g_warnNoApmf{ true };
 
-    // ANIMATED HEAL VIA THE FORCED-CASTING PACKAGE (MCM bHealAnimPackage).
-    // DEFAULT OFF -- the current heal path (CastSelfDirect/CastTargetDirect,
-    // kInstant force-apply) WORKS: the effect lands, no cast animation. This
-    // opt-in flips a HEAL onto the M9 forced-casting package (ENGINE_NOTES
-    // 0.17/0.21) routed through APMF's ch.9 0x49 package-offer channel, so the
-    // follower's OWN AI casts the heal ANIMATED while movement stays alive
-    // (APMFBridge::OfferPackage; the cast facet never claims movement). Covers
-    // self-heals (t6 package) and heal-the-player (t0->player package); ally/
-    // runtime-actor heals stay on the kInstant path. When OFF (or APMF absent)
-    // the heal is BYTE-IDENTICAL to today -- the guard short-circuits before any
-    // package work. Wholly INERT without APMF. No save state (the offer claim is
-    // runtime-only, like every other APMF facet claim). Field-UNCERTAIN whether
-    // 0x49 delivery drives a UseMagic cast the way the M9 alias probes did --
-    // this exists to A/B that in the field. See native/Packages.cpp HealAnimFill.
+    // ANIMATED FORCED CASTS -- experimental (MCM key bHealAnimPackage, KEPT).
+    // The INI key name is a FROZEN MCM-Helper persistence identity (INVARIANTS /
+    // CLAUDE.md #5), so it is NOT renamed -- but it is REPURPOSED (2026-09-04, the
+    // Composed Forced Cast rework, SPEC-FORCED-CAST.md). It no longer routes a heal
+    // through the M9 forced-casting PACKAGE (that package-substitution route --
+    // HealAnimFill + the two UseMagic PACKs -- is DELETED; §0/§3 of the spec). It
+    // is now the master enable for the ComposedCast EXECUTOR: an animated forced
+    // cast the AI would not choose (a heal at an ally), executed through the hand
+    // caster while the follower's MOVEMENT stays his own, bounded, degrading to the
+    // kInstant apply on any failure so a heal never vanishes.
+    //
+    // DEFAULT OFF, and it stays a no-op until the cast TRIGGER is filled in: the
+    // trigger uses OBSERVE-AND-REPLICATE (replicate the engine's real NPC cast
+    // sequence, captured by APMF's passive 0xAD observer), and while that seam is
+    // unimplemented the executor DEGRADES to the byte-identical kInstant heal. So
+    // even ON, with today's build, behavior is the current heal. Wholly INERT
+    // without APMF and on SE/VR. No save state. See native/ComposedCast.cpp.
     inline std::atomic<bool>  g_healAnimPackage{ false };
+
+    // Composed Forced Cast per-follower DEGRADE backoff, ms (SPEC-FORCED-CAST.md
+    // §1.6). After the executor degrades to kInstant for a follower it is not
+    // re-attempted for this long -- "don't hammer," and (while the trigger seam is
+    // a stub that always degrades) what keeps an opt-in-ON profile from churning an
+    // APMF claim every beat. INI-only (kCfcBackoffMs); no MCM control.
+    inline std::atomic<int>   g_cfcBackoffMs{ 10000 };
+
+    // Composed Forced Cast TRIGGER variant selector (iForcedCastTrigger), RESERVED.
+    // The spec's original 0=action-seat / 1=caster-drive selector is obsolete under
+    // observe-and-replicate; kept as a reserved INI tunable (default 0) for a future
+    // choice of observed-sequence variant. INI-only; no MCM control. Not yet read.
+    inline std::atomic<int>   g_forcedCastTrigger{ 0 };
 
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc

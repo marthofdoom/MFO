@@ -86,17 +86,14 @@ namespace MFO::Forms {
     // MFO_GenerateESP.py make_apmf_retreat_package() / native/Packages.cpp
     // RetreatFill.
     inline constexpr RE::FormID kAPMFRetreatPackage = 0x83A;
-    // APMF ANIMATED HEAL (ch.9 0x49 route, OPT-IN bHealAnimPackage, default OFF).
-    // The M9 forced-casting package (ENGINE_NOTES 0.17/0.21) revived to ANIMATE
-    // heals, delivered via APMF's OfferPackage channel so movement stays alive.
-    // Two UseMagic records, Spell set at runtime, target authored statically:
-    //   _SELF   = t6 self, NO QNAM (probe 6's proven-clean shape)
-    //   _PLAYER = t0 -> the player, NO QNAM (probe 1's proven shape)
-    // A miss (old ESP) disables ONLY the animated heal -- HealAnimFill declines,
-    // the caller keeps the byte-identical kInstant heal. See MFO_GenerateESP.py
-    // make_apmf_heal_packages() / native/Packages.cpp HealAnimFill.
-    inline constexpr RE::FormID kAPMFHealSelfPackage   = 0x83B;
-    inline constexpr RE::FormID kAPMFHealPlayerPackage = 0x83C;
+    // 0x83B / 0x83C RETIRED (2026-09-04): were kAPMFHealSelfPackage /
+    // kAPMFHealPlayerPackage, the two UseMagic PACKs of the package-substitution
+    // animated-heal route (HealAnimFill). That route was DELETED for the Composed
+    // Forced Cast rework (SPEC-FORCED-CAST.md §3): a heal is a cast facet, not a
+    // package facet. The ESP records are dead (the generator no longer emits them);
+    // the ids stay reserved forever, never recycled (INVARIANTS #41).
+    inline constexpr RE::FormID kAPMFHealSelfPackage_RETIRED   = 0x83B;   // reserved, unused
+    inline constexpr RE::FormID kAPMFHealPlayerPackage_RETIRED = 0x83C;   // reserved, unused
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -150,10 +147,9 @@ namespace MFO::Forms {
     inline RE::TESPackage* g_retreatPackage = nullptr; // RETREAT PROBE
     // APMF retreat (ch.9 0x49 route) -- see kAPMFRetreatPackage.
     inline RE::TESPackage* g_apmfRetreatPackage = nullptr;
-    // APMF animated-heal packages (ch.9 0x49 route, OPT-IN) -- see
-    // kAPMFHealSelfPackage / kAPMFHealPlayerPackage.
-    inline RE::TESPackage* g_apmfHealSelfPackage   = nullptr;
-    inline RE::TESPackage* g_apmfHealPlayerPackage = nullptr;
+    // (The two APMF animated-heal package globals were REMOVED with the
+    // package-substitution heal route -- SPEC-FORCED-CAST.md §3. Ids 0x83B/0x83C
+    // stay reserved above.)
 
     // WALK-diagnostic predicate: is a_pkg either retreat package (legacy alias
     // or APMF-routed)? Mirrors IsTravelPackage's role for loot -- a follower

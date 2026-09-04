@@ -5,7 +5,16 @@
 #include "Config.h"
 #include "Followers.h"
 #include "Forms.h"         // P1 probe: the MFO caster-forward combat style
-#include "Packages.h"      // StreamLive -- the concentration bound is latch-independent
+#include "Packages.h"      // StreamLive -- the LEGACY package concentration bound
+#include "CastBounds.h"    // Live -- the GENERAL "this is an MFO-executed cast" bound
+                            // (SPEC-FORCED-CAST.md §2: the HARD-ABORT fix). Read here on
+                            // the COMBAT thread (lock-free); a registered (actor,spell)
+                            // early-passes every consent gate, exactly as StreamLive did
+                            // for the legacy package stream -- generalized to the
+                            // ComposedCast executor's HAND cast (the sole writer). The
+                            // kInstant ConcProxy direct force (CastSpellImmediate) does
+                            // NOT deliberate through these hooks, so it is never vetoed
+                            // and needs no bound.
 #include "APMFBridge.h"    // IsOwnedCastActive -- stand down the exclusivity deny where
                             // APMF's T2 allowance hooks now own it (Phase 2)
 
@@ -188,8 +197,19 @@ namespace MFO::CasterConsent {
             // worker reallocates in Refresh -> UAF. IsTrackedFast probes the
             // g_mx-guarded FormID mirror instead (membership only, any thread).
             if (!Followers::IsTrackedFast(a_fid)) return false;   // world casters: not ours
-            if (Packages::StreamLive(a_fid, a_mi->GetFormID()))
-                return false;                                 // OUR bounded stream -> pass
+            // OUR bounded stream -> pass. TWO registries, same contract: the LEGACY
+            // alias-package stream (StreamLive, written by Packages::Begin) AND the
+            // GENERAL MFO-executed-cast bound (CastBounds::Live, armed by the
+            // ComposedCast executor BEFORE it touches the hand). The second is the §2
+            // HARD-ABORT fix: before it, exact-bounding had no way to recognize a
+            // concentration cast MFO itself was executing through the caster unless it
+            // came through the one legacy package path, so the deleted heal-anim
+            // PACKAGE cast (and the executor's future hand cast) were vetoed at
+            // pre-charge as "concentration unbounded." (The kInstant ConcProxy path
+            // bypasses this hook, so it never needed a bound.)
+            const RE::FormID id = a_mi->GetFormID();
+            if (Packages::StreamLive(a_fid, id) || CastBounds::Live(a_fid, id))
+                return false;
             const SpellKind k = ClassifySpell(a_mi);
             const bool selfHeal = k == SpellKind::Heal &&
                 a_mi->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
@@ -485,6 +505,17 @@ namespace MFO::CasterConsent {
             auto* actor = attPtr.get();
             if (!actor) return aiSaysYes;
             const auto fid = actor->GetFormID();
+
+            // ── MFO-EXECUTED CAST EARLY-PASS (SPEC-FORCED-CAST.md §2.2, edit 3) ──
+            // Mirror of the CheckCast (0x0A) early-pass: if an MFO executor armed
+            // CastBounds for this (actor, spell), the ADVISORY CheckStartCast deny
+            // must stand down too -- the concentration bound (ConcUnboundedDeny)
+            // already consults CastBounds, and this also keeps the continuous /
+            // exclusive advisory denies below from suppressing MFO's own executed
+            // cast. Reads magicItem, which is safe here (past the g_wantCount /
+            // g_ctrlCount / swap fast-out) and only for a spell we ourselves armed.
+            if (auto* mi = a_this->magicItem; mi && CastBounds::Live(fid, mi->GetFormID()))
+                return aiSaysYes;
 
             // Is this follower latched? Decide BEFORE touching the caster's
             // spell -- for a non-latched actor, magicItem is only ever read
@@ -837,6 +868,20 @@ namespace MFO::CasterConsent {
             auto* actor = a_this->GetCasterAsActor();
             if (!actor) return aiOK;
             const auto fid = actor->GetFormID();
+
+            // ── MFO-EXECUTED CAST EARLY-PASS (SPEC-FORCED-CAST.md §2.2) ──────────
+            // The ComposedCast executor armed CastBounds for (actor, spell) AND
+            // (actor, proxy) BEFORE it touched the hand (the kInstant ConcProxy path
+            // bypasses this hook and is never a writer). Such a cast has already
+            // cleared every MFO gambit gate on the
+            // worker -- target choice, LoS, friendly-fire consent, exact-bounding --
+            // so the combat-thread consent hook must not second-guess MFO's own
+            // decision. Allow it outright, ahead of the concentration / exclusive /
+            // continuous / friendly-fire blocks below (this also pre-empts the
+            // "exclusive" deny that would fire when an OFFENSE latch is live on the
+            // same follower and the heal proxy is "not the wanted spell"). This is
+            // the fix for the deck HARD-ABORT of 0002F3B8 / FF001BA4.
+            if (CastBounds::Live(fid, a_spell->GetFormID())) return aiOK;
 
             // CONCENTRATION, latch-independent -- the HARD half of the bound.
             // The CheckStartCast suppression is advisory and advisory denies

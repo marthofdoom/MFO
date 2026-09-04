@@ -56,6 +56,8 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Packages.cpp
     Gait.cpp
     CasterConsent.cpp
+    CastBounds.cpp
+    ComposedCast.cpp
     CombatStyle.cpp
     Sightline.cpp
     ItemCatalog.cpp

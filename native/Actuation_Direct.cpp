@@ -7,6 +7,9 @@
 // pacing. The combat-rule dispatch (Fire), CastOn/ConcentrationCast/ForceCast,
 // EquipWeapon and the force-hold co-save stay in Actuation.cpp.
 #include "Actuation_internal.h"
+#include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
+                            // HealAnimFill package route at the two cast plug-ins below
+#include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
 
 namespace MFO::Actuation {
 
@@ -748,18 +751,17 @@ namespace MFO::Actuation {
             }
         }
 
-        // ANIMATED HEAL (OPT-IN bHealAnimPackage, default OFF): route a SELF heal
-        // through the M9 forced-casting package via APMF's ch.9 offer channel, so
-        // the follower's OWN AI casts it ANIMATED while movement stays alive --
-        // instead of the kInstant force-apply below. Placed AFTER the competence
-        // gate so an unaffordable heal declines exactly as today (only the
-        // DELIVERY of an affordable heal changes). HealAnimFill is fully
-        // self-gating: it returns false (this path untouched, BYTE-IDENTICAL to
-        // today) unless the toggle is on, APMF is present, AND a_spell is a heal;
-        // on an APMF refusal it also returns false so the kInstant heal below
-        // still lands (a heal must never silently vanish). Re-offered every tick
-        // the rule wins; Packages::Pump owns the keep-alive + stale release.
-        if (Packages::HealAnimFill(a_follower, a_spell, a_follower))
+        // COMPOSED FORCED CAST (OPT-IN bHealAnimPackage, default OFF): try to
+        // execute this SELF cast as a REAL animated cast the AI would not choose,
+        // with movement kept -- instead of the kInstant force-apply below. Placed
+        // AFTER the competence gate so an unaffordable cast declines exactly as
+        // today. ComposedCast::Try is fully self-gating and DEGRADES: it returns
+        // false (this path BYTE-IDENTICAL to today, kInstant apply) unless the
+        // executor is enabled (AE + APMF + toggle) AND its trigger seam is
+        // implemented; on ANY failure it degrades so the heal still lands. Returns
+        // true only once it OWNS the cast, so the caller returns Applied.
+        if (ComposedCast::Try(a_follower, a_spell, a_follower,
+                              CasterConsent::ClassifySpell(a_spell)))
             return SelfCast::Applied;
 
         const auto now = SelfClock::now();
@@ -923,6 +925,8 @@ namespace MFO::Actuation {
         g_beneficialRecast.clear();   // fix #3/#6: per-buff recast windows likewise
         ConcProxy::Reset();           // null dangling 0xFF proxy forms + drop borrowed
                                       // source Effect* (cross-load UAF / double-free)
+        CastBounds::Reset();          // drop every MFO-executed-cast bound (§2 registry)
+        ComposedCast::Reset();        // drop executor streams/backoff/expected-cast set
     }
 
     // ON-TARGET DIRECT FORCE = CastSelfDirect generalized to a NON-self target.
@@ -963,17 +967,17 @@ namespace MFO::Actuation {
             }
         }
 
-        // ANIMATED HEAL (OPT-IN bHealAnimPackage, default OFF): route a heal AT
-        // THE PLAYER through the M9 forced-casting package via APMF's ch.9 offer
-        // channel (animated, movement stays alive) instead of the kInstant
-        // force-apply below. Placed AFTER the competence gate (parity with
-        // CastSelfDirect) and before the offense sightline gate below -- heals
-        // are never offense, so order there is immaterial. Self-gating: false
-        // (byte-identical) unless the toggle+APMF+heal all hold; HealAnimFill
-        // covers ONLY player targets here (t0->player package) and returns false
-        // for an ally/other runtime actor, which keeps the kInstant heal (an
-        // animated ally target needs an unproven runtime t0-handle write).
-        if (Packages::HealAnimFill(a_follower, a_spell, a_target))
+        // COMPOSED FORCED CAST (OPT-IN bHealAnimPackage, default OFF): try to
+        // execute this ON-TARGET cast as a REAL animated cast the AI would not
+        // choose (a heal at the player/an ally), with movement kept, instead of the
+        // kInstant force-apply below. Placed AFTER the competence gate (parity with
+        // CastSelfDirect) and before the offense sightline gate -- heals are never
+        // offense, so order there is immaterial. Self-gating and DEGRADING: returns
+        // false (byte-identical kInstant) unless the executor is enabled AND its
+        // trigger seam is implemented; ANY failure degrades so the heal still
+        // lands. Unlike the old HealAnimFill (player-only), the executor targets any
+        // actor via the delivery-flipped proxy. `kind` is computed above.
+        if (ComposedCast::Try(a_follower, a_spell, a_target, kind))
             return SelfCast::Applied;
 
         // HOSTILE offense: LoS + line-of-fire gates on the direct path too (the

@@ -90,27 +90,13 @@ FID_APMF_LOOT_TRAVEL_PACKAGE_3 = OWN | 0x839
 # single shared package covers every follower fleeing concurrently with no
 # per-follower target collision (see make_apmf_retreat_package()).
 FID_APMF_RETREAT_PACKAGE = OWN | 0x83A
-# APMF ANIMATED HEAL (ch.9 0x49 route, OPT-IN bHealAnimPackage, default OFF): the
-# forced-casting package (ENGINE_NOTES 0.17/0.21, "M9 PROVEN -- packages produce
-# ANIMATED casts at a CHOSEN target") revived to ANIMATE follower heals, but
-# delivered via APMF's 0x49 package-offer channel (the same OfferPackage route
-# loot-travel/retreat use) instead of the alias/command-quest route the original
-# M9 arc used -- so the AI DECIDES to cast the heal (animated), while APMF's hold
-# does not stop locomotion and the cast facet never claims movement. TWO records,
-# each a UseMagic (000504F5) instance whose Spell input the DLL sets at runtime
-# (Packages.cpp SetPackageSpell), differing ONLY in the target slot:
-#   _SELF   = t6 (self), NO QNAM  -- probe 6's field-proven-clean self shape (0.22)
-#   _PLAYER = t0 -> the PLAYER (0x14) STATIC, NO QNAM -- probe 1's field-proven
-#             t0->PlayerRef shape; the player is a fixed form so NO runtime target
-#             write is needed (only the Spell input is mutated).
-# Ally/runtime-actor heals are NOT animated here (they'd need a runtime t0-handle
-# write, unproven) and stay on the byte-identical kInstant path. See
-# make_apmf_heal_packages() / native/Packages.cpp HealAnimFill.
-FID_APMF_HEAL_SELF_PACKAGE   = OWN | 0x83B
-FID_APMF_HEAL_PLAYER_PACKAGE = OWN | 0x83C
+# 0x83B/0x83C RETIRED: were FID_APMF_HEAL_SELF_PACKAGE / FID_APMF_HEAL_PLAYER_PACKAGE,
+# the APMF ANIMATED HEAL packages (make_apmf_heal_packages() / native/Packages.cpp
+# HealAnimFill) -- the opt-in bHealAnimPackage route, removed in favor of a new
+# executor. Ids stay retired, never recycled (INVARIANTS #41).
 NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x836-0x839 = APMF loot-travel packages,
-                                   # 0x83A = APMF retreat package, 0x83B/0x83C = APMF animated-heal
-                                   # packages, 0x900-0x902 = P7 travel packages)
+                                   # 0x83A = APMF retreat package, 0x83B/0x83C = retired (see above),
+                                   # 0x900-0x902 = P7 travel packages)
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -1019,45 +1005,6 @@ def make_apmf_retreat_package():
                         pkdt_flags=0x00102000)
 
 
-def make_apmf_heal_packages():
-    """APMF ch.9 (0x49 package-offer) ANIMATED-HEAL packages (OPT-IN
-    bHealAnimPackage, default OFF).
-
-    The M9 FORCED-CASTING PACKAGE (ENGINE_NOTES 0.17/0.21), revived to make a
-    follower's OWN AI cast a HEAL with a real animation -- the mechanism offense
-    already gets for free (AI-discretionary) but heals never did, because the AI
-    won't CHOOSE to self/party-heal, so MFO force-applies via kInstant (no anim,
-    0.15/0.16). The original M9 arc abandoned the package route because the
-    alias/command-quest delivery TOOK OVER the follower (lost movement + other
-    hand); APMF's 0x49 package-offer channel fixes that -- it hands the package
-    directly to the claimed actor while its hold does NOT stop locomotion.
-
-    TWO records, both UseMagic (000504F5, the same template make_cast_package
-    rides), each with its Spell input set at runtime by the DLL
-    (Packages.cpp SetPackageSpell) and a STATICALLY-authored target -- so, unlike
-    the loot/retreat runtime-handle Location write, NO unproven runtime target
-    mutation is needed:
-
-      _SELF   -- t6 (self), NO QNAM. Probe 6's field-proven-clean shape (0.22,
-                 which REVOKED #67): a t6 + no-QNAM self record casts cleanly.
-                 Byte-identical to make_cast_self_package's target slot.
-      _PLAYER -- t0 -> the PLAYER (FREF_PLAYER 0x14), STATIC, NO QNAM. Probe 1's
-                 field-proven t0->PlayerRef shape (0.21). The player is a fixed
-                 form, authored at generation time -- the DLL only writes the
-                 Spell input, never a target.
-
-    Both carry the SAME kIgnoreCombat PKDT + BOUNDS_FF as make_cast_package, so
-    they cast during a fight exactly as the proven foe cast package does. Ally /
-    runtime-actor heals are deliberately NOT covered here (that needs a runtime
-    t0-handle target write, which is unproven) -- they stay on the kInstant path.
-    """
-    body  = build_usemagic(FID_APMF_HEAL_SELF_PACKAGE, "MFO_APMFHealSelfPackage",
-                           FREF_SEED_SPELL, ('t6', 0), BOUNDS_FF, waiver='t6-self')
-    body += build_usemagic(FID_APMF_HEAL_PLAYER_PACKAGE, "MFO_APMFHealPlayerPackage",
-                           FREF_SEED_SPELL, ('t0', FREF_PLAYER), BOUNDS_FF)
-    return body
-
-
 def make_poc_packages():
     """The probe ladder -- see POC_PROBES. One axis of novelty per probe,
     exactly one valid at a time via the MFO_ProbeSelect gate."""
@@ -1088,7 +1035,6 @@ def make_pack():
     body += make_travel_package()
     body += make_apmf_loot_travel_package()
     body += make_apmf_retreat_package()
-    body += make_apmf_heal_packages()   # OPT-IN animated heal (bHealAnimPackage)
     body += make_retreat_package()
     return group('PACK', body)
 
@@ -1843,10 +1789,6 @@ def main():
     print(f"  PACK  0x{FID_RETREAT_PACKAGE & 0xFFF:03X}        MFO_RetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat")
     print(f"  PACK  0x{FID_APMF_RETREAT_PACKAGE & 0xFFF:03X}        MFO_APMFRetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat "
           f"(runtime-handle Location, ch.9 0x49 route, APMFBridge::OfferPackage)")
-    print(f"  PACK  0x{FID_APMF_HEAL_SELF_PACKAGE & 0xFFF:03X}        MFO_APMFHealSelfPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X} "
-          f"(t6 self, NO QNAM; OPT-IN bHealAnimPackage, ch.9 0x49 route)")
-    print(f"  PACK  0x{FID_APMF_HEAL_PLAYER_PACKAGE & 0xFFF:03X}        MFO_APMFHealPlayerPackage -> vanilla UseMagic {FREF_TMPL_USEMAGIC:08X} "
-          f"(t0 -> player, NO QNAM; OPT-IN bHealAnimPackage, ch.9 0x49 route)")
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
     print(f"  CSTY  0x{FID_MELEE_STYLE & 0xFFF:03X}        MFO_MeleeStyle (equip_melee stance -- default ON)")
     print(f"  CSTY  0x{FID_RANGED_STYLE & 0xFFF:03X}        MFO_RangedStyle (equip_ranged stance -- default ON)")

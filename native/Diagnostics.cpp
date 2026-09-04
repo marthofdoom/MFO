@@ -10,6 +10,7 @@
 #include "Scheduler.h"
 #include "Loadout.h"
 #include "Actuation.h"   // SelfCastReconcile -- the forced self-cast channel lifecycle
+#include "ComposedCast.h" // CFC observe hand-off: an executor-armed cast landing is THE animated path
 #include "APMFBridge.h"  // Phase 3: per-pump auto-release of APMF cast-select claims
 #include "Papyrus.h"
 #include "Targeting.h"
@@ -225,6 +226,21 @@ namespace MFO::Diagnostics {
                                          form ? static_cast<int>(form->GetFormType()) : -1,
                                          ours ? "  *** MFO GAMBIT SPELL -- THE ANIMATED PATH ***"
                                               : "  (their own spell, not ours)");
+
+                            // COMPOSED FORCED CAST observe hand-off (SPEC-FORCED-CAST.md
+                            // §1.3 RELEASE / §5). If the executor armed an "expected
+                            // cast" for this (follower, spell) just before it triggered,
+                            // THIS event is the executor's own animated cast landing --
+                            // the positive fire signal its RELEASE phase waits on. (No-op
+                            // today: the trigger seam is a stub, so nothing is ever
+                            // expected; wired and ready for when it lands.)
+                            if (ComposedCast::ExpectingCast(casterID, spellID)) {
+                                ComposedCast::NoteObservedCast(casterID, spellID);
+                                spdlog::info("[cast] {:08X} {} CFC-fired {} ({:08X}) "
+                                             "*** THE ANIMATED PATH ***", casterID,
+                                             actor && actor->GetName() ? actor->GetName() : "?",
+                                             nm && *nm ? nm : "(unnamed)", spellID);
+                            }
 
                             // Their AI just cast OUR spell. That is a real cast
                             // -- pace it exactly like MFO's own (StartCooldown),

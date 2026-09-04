@@ -1763,6 +1763,78 @@ pacing` once per window; and the P1 combat-style probe (`bProbeCastStyle`,
 §0.29 divergence, pinned-header-verified) answering whether a caster-forward
 style raises the CheckStartCast ask rate. Promotion waits on the log (#57).
 
+### 0.40 The CasterConsent HARD-ABORT root cause, and why the forced-cast trigger is OBSERVE-AND-REPLICATE, not the guessed TESActionData drive (2026-09-04)
+
+**The HARD-ABORT.** Deck logs (`0002F3B8` / `FF001BA4`, the Mysticism Fast Healing
+Conc+Self shape) recorded MFO's own exact-bounding gate hard-aborting a follower's
+OWN forced cast mid-stream. Root cause: `CasterConsent::ConcUnboundedDeny` bars a
+tracked follower's concentration cast at `iCastControl` Exact unless MFO can prove
+the stream is one it is itself metering. The ONLY proof that gate recognized was
+the legacy alias-package stream (`Packages::StreamLive`, written exclusively by
+`Packages::Begin`). Every other cast MFO arranges — `ConcProxy`'s delivery-flipped
+direct force, and the new `ComposedCast` executor — reaches the combat thread
+through the same `CheckCast` (0x0A) thunk, but neither one was ever registered as
+"MFO's own" anywhere the gate could see. Exact-bounding read them as an unbounded
+AI stream and vetoed them. That is the HARD-ABORT.
+
+**The fix.** `CastBounds` (`native/CastBounds.h/.cpp`) generalizes the one-slot
+`g_liveStream` contract into a lock-free 8-slot `{atomic key, atomic expiry}`
+registry: writers (worker or main thread) `Arm(actor, spell, proxy, ttlMs)` before
+an executor touches the hand, the combat-thread `Live(actor, spell)` reader is a
+couple of relaxed atomic loads (no lock, no engine call), and a torn, cleared, or
+expired slot reads as no-match — the fail-safe direction is always toward a deny,
+never toward a false permit. Three sites in `CasterConsent.cpp` now check
+`CastBounds::Live` ahead of a deny: `ConcUnboundedDeny` itself, the
+`CheckStartCast` advisory thunk, and `CheckCastThunk` (0x0A) — a registered cast
+early-passes all three, exactly as the legacy package stream always did for the one
+route it covered. `CastBounds::Reset()` runs beside `ConcProxy::Reset()` at
+`kPreLoadGame`.
+
+**Why `ComposedCast::Try` is the only caller, by design.** `CastBounds::Arm`
+today has exactly ONE caller. `ConcProxy`'s plain `kInstant` `CastSpellImmediate`
+direct force never calls it and needs to: `CastSpellImmediate` skips the
+`MagicCaster` state machine entirely (§0.13's `RequestCastImpl → StartChargeImpl
+→ StartReadyImpl → StartCastImpl → FinishCastImpl`), so it never reaches the
+hooked `CheckStartCast`/`CheckCast` thunks in the first place — those thunks fire
+only when the ENGINE deliberates a cast through that state machine. `ConcProxy`
+has SHIPPED and heals correctly at `iCastControl` Exact with no HARD-ABORT; the
+deck HARD-ABORT (`0002F3B8`/`FF001BA4`) was specific to the AI-deliberated
+heal-anim PACKAGE build (the shelved `feat/heal-anim-proxy`), never the plain
+kInstant path. `ComposedCast`'s future hand cast is the one MFO-driven cast that
+WILL deliberate through the real state machine — that is the whole point of the
+trigger, a real animated cast — so it is correctly the only path that needs the
+bound.
+
+**The trigger decision — record this honestly.** `SPEC-FORCED-CAST.md`'s original
+design guessed the forced-cast TRIGGER would be a hand-built
+`RE::TESActionData::Process` call driving `ActionRightAttack`/`ActionRightRelease`
+through the four authored `BGSAction` FormIDs — an "action seat" drive. **That guess
+was NOT built.** It was never proven against a real engine call, and a hand-built
+`TESActionData::Process` invocation is exactly the kind of version-fragile,
+offset-shaped mechanism this codebase tries to avoid when a safer alternative
+exists.
+
+The steering call (2026-09-04, marth-approved) replaces it with
+OBSERVE-AND-REPLICATE: a parallel APMF passive observer, seated at the same 0xAD
+`Actor::Update` hook APMF already uses, will passively CAPTURE the engine's own
+real full-animation NPC cast sequence during a normal deck combat cycle — the
+`MagicCaster` state machine transitions, the animation-graph cast events, and the
+charge/fire boundary, all as the engine itself actually drives them, not as
+guessed from static analysis. MFO's executor will then REPLICATE that captured,
+field-proven sequence in the one isolated seam `ComposedCast::DriveObservedCast`
+(`native/ComposedCast.cpp`).
+
+**Status: UNPROVEN, awaiting the observer's captured sequence.** Nothing about the
+trigger has been field-tested. `DriveObservedCast` today is a stub that
+unconditionally returns `kNotImplemented`; `ComposedCast::Try` degrades to the
+caller's `kInstant` apply on every call. The executor scaffold around it — the
+APMF `kIntent_Cast` claim (ABI v5, `APMF_API.h`/`APMFBridge`), the `CastBounds` arm,
+the observe hand-off into `Diagnostics::SpellSink`, the restore path, and the
+per-follower degrade backoff — is built and wired, but the whole module is
+runtime-inert (byte-identical to today's heal) until the captured sequence lands
+and `DriveObservedCast` is filled in against it. Do not treat any part of the
+trigger as implemented until that happens.
+
 ---
 
 ## 1. Actor control — Tier A primitives

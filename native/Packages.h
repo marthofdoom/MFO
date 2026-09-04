@@ -335,33 +335,6 @@ namespace MFO::Packages {
     // and nothing reclaims a dismissed follower.
     void RetreatEvictIf(RE::FormID a_id);
 
-    // ── APMF ANIMATED HEAL (ch.9 0x49 route, OPT-IN bHealAnimPackage) ────────
-    // Route a HEAL through the M9 forced-casting package (ENGINE_NOTES 0.17/0.21)
-    // delivered via APMFBridge::OfferPackage, so the follower's OWN AI casts it
-    // ANIMATED while movement stays alive -- instead of the kInstant force-apply.
-    // Called from Actuation_Direct's CastSelfDirect/CastTargetDirect, guarded by
-    // Config::g_healAnimPackage + APMFBridge::Available() at the call site.
-    //
-    // Returns true iff it took over delivery for this tick (the caller then skips
-    // its kInstant apply). Returns FALSE -- caller keeps the byte-identical
-    // kInstant heal -- when: a_spell is not a heal; the target is neither the
-    // follower (t6 self package) nor the player (t0->player package); the record
-    // did not resolve; a more-urgent RETREAT holds this follower; or APMF refused
-    // the offer. Only the Spell input is written at runtime (SetPackageSpell); the
-    // target is authored statically, so no unproven runtime target write occurs.
-    // Re-offers each call (keep-alive) -- the caller invokes it every tick the
-    // heal rule wins. UNLIKE retreat this supports MANY concurrent followers (an
-    // APMF offer claim is per-follower), tracked in a per-follower map.
-    bool HealAnimFill(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target);
-    // Is a_id classifiable as a heal-carrying spell/actor mid animated-heal? True
-    // iff a_id currently holds an animated-heal offer (used by the loot/retreat
-    // reciprocal mutual-exclusion guards on the shared OfferPackage handle).
-    bool HealAnimHolds(RE::FormID a_id);
-    // Release a_id's animated-heal offer if he holds one -- the dismissal-path
-    // twin of RetreatEvictIf (runtime-only; no serialized alias tail). Also the
-    // "retreat/loot preempts a heal" hook. No-op if a_id holds no heal offer.
-    void HealAnimEvictIf(RE::FormID a_id, const char* a_why = "dismissed");
-
     // Session-scoped counters, cleared on revert like every sibling module.
     void ClearTransientState();
 

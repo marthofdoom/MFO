@@ -6,7 +6,58 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-02. **✅ v1.1.4 SHIPPED (GitHub):** https://github.com/marthofdoom/MFO/releases/tag/v1.1.4 — `MFO-v1.1.4.zip` (main file only; progression add-on UNCHANGED from v1.1.3, no ESP/ESL touched). Commit `4d7ec03`, DLL `286e2452`, ESP `a3a003a7` (unchanged since v1.1.2), CI `33574059247`. Contents = the loot perf + stall pass ([[loot-multiminute-stall-navmesh-sticky]]): off-navmesh false-positives no longer 5-min-sticky-poison reachable loot; a path-failed BODY grows its in-place grab radius to 600u and is hoovered from range; failed targets sort LAST (not abandoned); sticky 5min→60s; drain-all-in-reach per tick (StripCorpse); kArrivalDist 160→200; batchLinger 4→1.5s; econ cooldowns 6/20/20s→2/8/12s. **FIELD-TESTED on Tuxborn before the cut** (native tree of DLL `3e060894`, identical to the release): off-navmesh refs resolved in <1min, ZERO `STICKY-unreachable` all session, loots succeeding, no new errors. **DEFERRED to next release:** excursion-slot bump (ESP-alias-bound, kept 4) + the range-grab-on-external-hold one-liner (Cicero package-lock loot; untested; `Logistics.cpp:957` add `NotePathFail`). **▶ NEXUS = marth's manual step** (v1.1.4 zip + CHANGELOG v1.1.4 block). **NEW WORK (both in design, see memories):** APMF — "AI Package Management Framework", a SEPARATE repo (`Projects/ai-package-management-framework/`, deep-hook AI-control broker via `Actor::Update` 0xAD; its `design.md` is authoritative; marth wants the GH repo public + README next) + the loot-selection expansion (potion/misc submenus + "valuables" value/weight loot-to-sell).
+> **Last updated:** 2026-09-04 (doc-only touch; see the branch note directly below —
+> the rest of this header below it is UNTOUCHED history and reads OLDER than the
+> shipped v2.0.0 / Harbinger work in CHANGELOG.md; treat the CHANGELOG top entry as
+> the more current source for what actually shipped since this header was last
+> rewritten).
+>
+> **▶ IN FLIGHT (2026-09-04, branch `feat/forced-cast`, NOT merged, NOT pushed —
+> CI status UNVERIFIED, built locally only): the Composed Forced Cast (CFC)
+> rework.** New executor `ComposedCast::Try` (`native/ComposedCast.{h,cpp}`)
+> replaces the deleted `Packages::HealAnimFill` package-substitution heal route at
+> both `Actuation_Direct.cpp` call sites (`CastSelfDirect`/`CastTargetDirect`). It
+> composes an APMF cast-execution claim (`kIntent_Cast`, APMF ABI bumped 4→5,
+> `APMFBridge::ClaimCast`/`ReleaseCast`/`IsCastClaimActive`), a new `CastBounds`
+> registration, the one trigger seam `DriveObservedCast`, and a restore/degrade
+> path. **THE HARD-ABORT FIX (§2, ENGINE_NOTES §0.40, INVARIANTS #76):**
+> `CasterConsent::ConcUnboundedDeny` was hard-aborting an MFO-executed
+> concentration cast at `iCastControl` Exact whenever it did not come through the
+> one legacy alias-package stream (`Packages::StreamLive`) — the deck HARD-ABORT
+> of `0002F3B8`/`FF001BA4`. New file `native/CastBounds.{h,cpp}` (lock-free 8-slot
+> registry, `Arm`/`Disarm`/`Live`/`Reset`) generalizes that one-slot contract; three
+> `CasterConsent.cpp` sites now early-pass a `CastBounds`-registered cast
+> (`ConcUnboundedDeny`, the `CheckStartCast` thunk, `CheckCastThunk`/0x0A). **THE
+> TRIGGER IS NOT BUILT.** `DriveObservedCast` (`ComposedCast.cpp`) is a stub that
+> always returns `kNotImplemented`, so `ComposedCast::Try` always degrades to the
+> existing `kInstant` heal — the whole executor is runtime-inert today, even with
+> the (repurposed) `bHealAnimPackage` toggle ON. The spec's original guessed
+> trigger (`RE::TESActionData::Process` + `ActionRightAttack`/`Release` + four
+> `BGSAction` FormIDs) was explicitly NOT built (steering call, marth-approved) —
+> the trigger is OBSERVE-AND-REPLICATE instead: a parallel APMF passive observer at
+> the 0xAD seat will capture the engine's real NPC full-animation cast sequence
+> from a deck cycle, and `DriveObservedCast` will replicate it. **DELETIONS DONE:**
+> `Packages::HealAnimFill`/`HealAnimHolds`/`HealAnimEvictIf`/`g_healAnimMap` +
+> the two UseMagic PACKs (`Forms.h` `0x83B`/`0x83C`, now `_RETIRED`, reserved
+> forever per #41) + `make_apmf_heal_packages()` in `MFO_GenerateESP.py`.
+> **`feat/heal-anim-proxy` is SHELVED** (tag `archive/heal-anim-proxy-2026-09-04`),
+> not merged. **`CastBounds::Arm` has exactly ONE caller today, `ComposedCast::Try`
+> — this is BY DESIGN, not a gap.** `ConcProxy`'s plain `kInstant`
+> `CastSpellImmediate` direct force skips the `MagicCaster` state machine entirely
+> (ENGINE_NOTES §0.13) and so never reaches the hooked `CheckStartCast`/`CheckCast`
+> thunks at all — it has SHIPPED and heals correctly at `iCastControl` Exact with
+> no HARD-ABORT. The deck HARD-ABORT (`0002F3B8`/`FF001BA4`) was specific to the
+> AI-DELIBERATED heal-anim PACKAGE build (the shelved `feat/heal-anim-proxy`),
+> never the plain kInstant path. `ComposedCast`'s future hand cast is the one
+> MFO-driven cast that WILL deliberate through the real state machine, so it is
+> correctly the only path that needs the bound. **NEXT: field-test at Exact to
+> confirm the HARD-ABORT is gone for the ComposedCast/legacy-package paths, then
+> resume the CFC trigger once the APMF observer's captured sequence lands.** See
+> `Docs/CAST-DELIVERY.md` "COMPOSED FORCED CAST (CFC)", `Docs/ENGINE_NOTES.md`
+> §0.40, `Docs/INVARIANTS.md` #76, `MAP.md`'s `CastBounds.cpp`/`ComposedCast.cpp`
+> entries.
+>
+> **✅ v1.1.4 SHIPPED (GitHub):** https://github.com/marthofdoom/MFO/releases/tag/v1.1.4 — `MFO-v1.1.4.zip` (main file only; progression add-on UNCHANGED from v1.1.3, no ESP/ESL touched). Commit `4d7ec03`, DLL `286e2452`, ESP `a3a003a7` (unchanged since v1.1.2), CI `33574059247`. Contents = the loot perf + stall pass ([[loot-multiminute-stall-navmesh-sticky]]): off-navmesh false-positives no longer 5-min-sticky-poison reachable loot; a path-failed BODY grows its in-place grab radius to 600u and is hoovered from range; failed targets sort LAST (not abandoned); sticky 5min→60s; drain-all-in-reach per tick (StripCorpse); kArrivalDist 160→200; batchLinger 4→1.5s; econ cooldowns 6/20/20s→2/8/12s. **FIELD-TESTED on Tuxborn before the cut** (native tree of DLL `3e060894`, identical to the release): off-navmesh refs resolved in <1min, ZERO `STICKY-unreachable` all session, loots succeeding, no new errors. **DEFERRED to next release:** excursion-slot bump (ESP-alias-bound, kept 4) + the range-grab-on-external-hold one-liner (Cicero package-lock loot; untested; `Logistics.cpp:957` add `NotePathFail`). **▶ NEXUS = marth's manual step** (v1.1.4 zip + CHANGELOG v1.1.4 block). **NEW WORK (both in design, see memories):** APMF — "AI Package Management Framework", a SEPARATE repo (`Projects/ai-package-management-framework/`, deep-hook AI-control broker via `Actor::Update` 0xAD; its `design.md` is authoritative; marth wants the GH repo public + README next) + the loot-selection expansion (potion/misc submenus + "valuables" value/weight loot-to-sell).
 >
 > **v1.1.3 SHIPPED (GitHub):** https://github.com/marthofdoom/MFO/releases/tag/v1.1.3 — tag pushed, `MFO-v1.1.3.zip` + `MFO-Progression-Addon-v1.1.3.zip` (updated 12597b ESL w/ the verdicts sub-FLST) attached. Commit `fc05931`, DLL `3bf46209`, CI `33471410623`. Contents (the post-v1.1.2 batch): (1) per-follower MFO enable/disable toggle (Followers-tab first-column checkbox, co-save FLWR v4→v5, releases held state on OFF); (2) residual #5 — perk-effectiveness verdicts became add-on ESL DATA (`g_verdicts` from manifest, -1 default, DLL holds zero verdicts; `WalkPerkEntries` = the general primitive); (3) #7 loot travel-pkg back-off; (4) LoS — inert OOC cast wall-gate seeded (`Want()`) + MFO's own raycast for cloth tents + height/stairs sampling. **FIELD-TESTED CLEAN on Tuxborn (`Tuxbornrc1`, the CURRENT test list — [[current-test-list-is-tuxborn-on-deck]]):** ~2hr session on the batch DLL, no CTD/error, all four features observed working (#7 strike back-off, `[los]` gate + fail-open fallback, `[hms-diag]` progression classify off the new ESL). **▶ NEXUS = marth's manual step:** upload the two v1.1.3 zips + paste the CHANGELOG v1.1.3 block; description bbcode still pending live-page text ([[bbcode-from-current-nexus-text]]). **3 CommonLibSSE-NG PRs OPEN** (#107 StartCombat, #108 ExtraDataList ctor, #109 SendInventoryUpdateMessage) against CharmedBaryon/CommonLibSSE-NG ([[commonlib-upstream-prs-coverage]]) — stay on CharmedBaryon, po3/dev is a NO-GO (per-runtime build-time model, breaks our single-binary NG design). **🔴 DEFERRED (marth "we defer this work"): 1.7.104 multi-version crash support** ([[multiversion-crash-root-causes]]) — the ecosystem is mid-churn (Steam label "1.7.99" = exe 1.7.104; Address Library/CommonLib catching up). Root causes found: overlay call-site trampolines (hardcoded offsets, 1.6.1170-only — the live 1.5.x/1.7.x crash) + `GetObject<T>` AE-offset poison (`Loadout.cpp:64`, gated off SE). Overlay VTABLE-rewrite (offset-free, the durable fix) is FULLY IMPLEMENTED but shelved on branch `worktree-agent-aae40b089815622ee` (not merged). Both game binaries saved under `binaries/` (gitignored) for a future diff. Resume plan in the memory. **Next threads (marth's pick): cut a version from the unreleased batch after field test / town update / assassin / resume 1.7.104 once upstream settles.**
 >

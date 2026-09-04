@@ -224,9 +224,9 @@
         },
         {
           "id": "bHealAnimPackage:General",
-          "text": "Animated heals (experimental, needs APMF)",
+          "text": "Animated forced casts (experimental)",
           "type": "toggle",
-          "help": "OFF (default): a follower's heal effect lands instantly with no cast animation. ON: route the heal through a forced-casting package via Harbinger (APMF) so the follower's own AI casts it with the FULL animation, while still moving. Covers self-heals and healing you; other-follower heals stay instant. Experimental A/B test: has no effect without APMF installed.",
+          "help": "Route forced casts (heals, buffs) through a real animated hand cast while the follower keeps moving. Experimental; falls back to instant apply on any failure. Requires APMF.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 0
