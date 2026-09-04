@@ -928,8 +928,29 @@ namespace MFO::Logistics {
                 // after kStealGrace concede the leg -- TRANSIENT blocklist, never
                 // sticky/strike. Arrival above still runs during the hold, so a
                 // steal beside the pile still grabs it.
+                //
+                // QUIET HOLD (field-proven 2026-09-03, ch.9 0x49 probe): for an
+                // APMF-routed leg this whole guard is REDUNDANT and actively
+                // harmful. The probe showed APMF's CheckForCurrentAliasPackage
+                // hook already holds the loot-travel package on its own for a
+                // framework-locked follower (Cicero: engine's own alias answer
+                // was the framework package, 0x49 overrode it back to the APMF
+                // package every tick) -- so a momentary framework curPkg here is
+                // the expected, benign gap between the engine's own re-eval and
+                // the hook's override, NOT a theft. Re-asserting (EvaluatePackage)
+                // and accruing strikes against a hold that's already self-healing
+                // is "as good as a fail" (marth): it escalates to abandon on a
+                // leg that was never actually lost. Skip the guard entirely for
+                // these legs -- 0x49 IS the re-assert. Legacy alias-route legs
+                // (APMF absent, IsAPMFTravelHeld false) run the unchanged guard
+                // below, byte-identical.
                 bool stealAbandon = false;
-                if (!gone && tref) {
+                if (!gone && tref && Packages::IsAPMFTravelHeld(slot)) {
+                    // Nothing to do: the 0x49 hold self-heals. Fall through to the
+                    // arrival/stall/deadline checks below unconditionally -- a
+                    // genuinely stuck APMF leg (path fail, not a package steal)
+                    // still stalls/deadlines out the normal way.
+                } else if (!gone && tref) {
                     if (!Forms::IsTravelPackage(a_follower->GetCurrentPackage())) {
                         const auto skey = StealKey(id, tref->GetFormID());
                         if (tr.stolenSince.time_since_epoch().count() == 0) {

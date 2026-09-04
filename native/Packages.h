@@ -290,6 +290,14 @@ namespace MFO::Packages {
     // alias -- see the .cpp.
     void LootTravelClear(const char* a_why, RE::Actor* a_follower = nullptr, int a_slot = 0);
 
+    // QUIET HOLD: true while a_slot's excursion is APMF-routed and the claim
+    // hasn't released -- ch.9 0x49 (CheckForCurrentAliasPackage) holds the
+    // package on its own for this leg, so Logistics.cpp's theft-guard skips
+    // its strike/grace/re-assert machinery when this is true (a momentary
+    // framework curPkg is an expected, benign gap between engine re-evals,
+    // not a theft). See .cpp.
+    bool IsAPMFTravelHeld(int a_slot);
+
     // Evict a_id from the loot alias IF he currently occupies ANY slot's actor
     // alias (keyed to OCCUPANCY across all slots, not the live intent -- the alias
     // is never emptied, so a follower dismissed any time after his last travel

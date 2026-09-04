@@ -788,6 +788,19 @@ anonymous-namespace copy — that silently forks the instance).
   blocklist (`MarkTravelFailed`, never sticky) instead of re-asserting. Reset on
   arrival (`Logistics.cpp:~820`, provably reachable) or target change (fresh key);
   erased on every give-up. Normal single-steal-then-reclaim path unchanged.
+  **QUIET HOLD (2026-09-03):** the WHOLE theft-guard above is skipped for an
+  APMF-held leg (`Packages::IsAPMFTravelHeld(slot)`, `Logistics.cpp:~948`) — a
+  runtime probe proved APMF's ch.9 0x49 hook (`CheckForCurrentAliasPackage`)
+  already re-holds the loot-travel package on its own every engine re-eval, so a
+  momentary framework `curPkg` is benign, not theft; re-asserting against a hold
+  that self-heals only escalated strikes toward a false abandon. `IsAPMFTravelHeld`
+  (`Packages.cpp`, right after `LootTravelClear`) exposes the file-local
+  `g_apmfSlotActive[slot]` flag across the TU boundary. Legacy alias-route legs
+  (APMF absent) still run the guard above, byte-identical. The ~500ms
+  `APMFBridge::OfferPackage` claim-refresh (`Packages.cpp` `Pump()`, unconditional,
+  every slot) and the one-time `EvaluatePackage` on engage/retarget/release are
+  untouched — only the per-tick re-assert nudge inside the theft-guard was
+  redundant.
 - **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1477`; cell set built just below it):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
