@@ -36,7 +36,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 |---|---|---|
 | **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:7-90`). FLWR v5 (#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
-| **`ResetAllState` teardown order** | `Serialization.cpp:562-622` | `StopPump()` MUST run first (`:568`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
+| **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:302-322`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
 | **The worker pump** | `Diagnostics.cpp` | One sleeper thread (`SleeperLoop`, 133 ms) drives the *entire* per-follower tick (`Scheduler::Tick`/`Loadout::Tick`/`Probe::Tick`) via `AddTask`. `kPumpMs` is the evaluator deadline, not a HUD constant. StopPump-before-clear is the linchpin invariant. |
 | **Combat vfunc hooks** | `Targeting.cpp`, `CasterConsent.cpp`, `CombatStyle.cpp` | Three engine vtable hooks, install-once at `plugin.cpp:293-295`, VR-refused. Run on the **combat thread**. Any `CombatController` member touched there must be `< 0x68` (AE +8 layout bug; static_asserts). Signature mismatch corrupts every actor's combat/cast call. |
@@ -92,15 +92,20 @@ state (`g_followers`, `Gambit`, `FollowerState`).
 **Four records (`Serialization.h`), each with its own version + reader:**
 - **`'FLWR'` / `kSchemaVersion=5`** (`Serialization.h:8,50`) — per-follower
   `{rapport, rank, combatClassOverride(v4), mfoEnabled(v5), tables[Combat,Logistics][], overrides[]}`.
-  Written `SaveCallback` `Serialization.cpp:82`; read `LoadCallback` `:229`.
+  Written `SaveCallback` `Serialization.cpp:86`; read by `LoadCallback` `:569`
+  dispatching into the per-record helper `ReadFollowersRecord` `:351` (a short
+  read/implausible count aborts THAT record only and the loop continues to
+  MSTK/PRGN/FWPN — the same isolation contract as `CoSaveLoad`/`CoLoadForcedWeapons`;
+  on the write side a `WriteString` failure sets `flwrOk` and BREAKS to the
+  sibling records instead of returning — never let either side skip the siblings).
   Version history v1→v5 documented `Serialization.h:31-50`; v1 tutored-block
-  reader kept forever (`Serialization.cpp:479`). **v5 (#78) APPENDS `mfoEnabled`
+  reader kept forever (`Serialization.cpp:499`). **v5 (#78) APPENDS `mfoEnabled`
   as one u8 right after `combatClassOverride`, read gated `if(version>=5)`; a
   pre-v5 record has none and defaults `true` — every existing follower stays
   MFO-enabled, v1–v4 byte-identical.**
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
-  Write `Serialization.cpp:187-217`, read `:239-313`. Owner: `Logistics.cpp`.
+  Write `Serialization.cpp:223-254`, read `ReadStockRecord` `:286-346`. Owner: `Logistics.cpp`.
 - **`'PRGN'` / `kProgVersion=6`** (`Serialization.h:16`) — GENERAL per-follower
   **follower-allocation-state slot** (host machinery, v1.1 Phase 8 reframe): all
   fields are general allocation-engine state (enrolled flag, an OPAQUE plugin-
@@ -177,7 +182,7 @@ re-reads the alias from the quest even when the module believes it holds nothing
 - Slot caps `kCombatSlotsByRank`/`kLogisticsSlotsByRank` (`:102-103`) — the
   default kit must fit Rank I (3 combat / 4 logistics) or a round-trip truncates it.
 - **`overrides` / `PackageOverride` (`State.h:57,84`) is vestigial:** the only
-  writer is the co-save loader (`Serialization.cpp:513`); no runtime code
+  writer is the co-save loader (`Serialization.cpp:533`); no runtime code
   populates it (grep-confirmed). It round-trips but is inert — MFO drives packages
   via alias fills, not PapyrusUtil overrides (banned #18/#19).
 
@@ -205,7 +210,7 @@ releases **by eviction** with a non-actor XMarker.
   back to the PLAYER → furniture-ejection bug (v1.0.25/26) re-breaks.
   Must be main-thread (`PlaceObjectAtMe` mutates the cell) + force-persisted.
   Base-`0x3B` revalidation is load-bearing (handle indices rebuild per load).
-- `ReleaseAll(why)` (`:1240`) — callers `plugin.cpp:321,355`, `Serialization.cpp:610`.
+- `ReleaseAll(why)` (`:1240`) — callers `plugin.cpp:321,355`, `Serialization.cpp:733`.
   The save-corruption backstop: sweeps all 4 loot aliases + retreat + command,
   evicting any actor occupant including the player (#48b) with the marker.
   **Ordering:** at kPreLoadGame runs after `StopPump` (can't race `Pump`); the
@@ -518,7 +523,7 @@ teardown. Runs on the AddTask worker.
   first + unconditional (`:135`). Reads `g_followers` (`:190,429,564,663`) — safe
   only because StopPump brackets the load window. Retreating follower `return`s
   before the gambit table (`:348`) so a cast rule can't fight the retreat travel.
-- `ClearTransientState` (`:96`) — caller `Serialization.cpp:581`; must run inside
+- `ClearTransientState` (`:96`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`.
 - Casts `combatClassOverride` directly to `CombatStyle::Stance` (`:378,578`) — the
@@ -549,7 +554,7 @@ a job worker here, not main).
   (`Rapport.cpp:394`), Logistics 3D/merchant/activate (family-wide: `AcquireEquip`/`doDrop`/route-2b in
   `Logistics_Loot.cpp` + `Logistics.cpp`, merchant read in `Logistics_Economy.cpp`), Board/ProgProbe/ProgAllocator hotkeys+polls. Callers that must still
   run on VR check `IsInstalled()` and fall back to a direct call.
-- `Clear()` (`:79`) — caller `Serialization.cpp:572`; drops pending work whose
+- `Clear()` (`:79`) — caller `Serialization.cpp:690`; drops pending work whose
   captured handles would re-resolve against the next session's reused handle table.
 
 ---
@@ -559,7 +564,7 @@ a job worker here, not main).
 Three engine vtable hooks, install-once at `plugin.cpp:293-295`, `.exchange(true)`-
 guarded, VR-refused. Thunk bodies run on the **combat thread**; latch/consent
 writers run on the main thread or job worker. Teardown order fixed at
-`Serialization.cpp:597-601`.
+`Serialization.cpp:716-718`.
 
 **Cluster-wide invariants:** (1) three install-once hooks, never per-load;
 (2) teardown order Targeting→CasterConsent→CombatStyle→Sightline; (3) **§0.29 AE
