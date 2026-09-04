@@ -708,6 +708,8 @@ namespace MFO::Logistics {
                      bool* a_leftWaiting = nullptr);
     bool RunExcursionScan(RE::Actor* a_follower, const FollowerState& a_state,
                           Clock::time_point a_now);
+    bool IsValuableMisc(RE::TESBoundObject* a_obj);
+    bool IsQuestObjectInstance(RE::InventoryEntryData* a_entry);
 
     // defined in Logistics_Cast.cpp
     RE::ActorValue TargetMagicSchool(const FollowerState& a_state, int& a_castGambits);
