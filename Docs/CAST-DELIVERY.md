@@ -291,24 +291,54 @@ it ever touches the hand.
 Any failure at any step degrades to the caller's existing `kInstant` apply. A heal
 always lands, exactly as it does today.
 
-### The trigger is not built yet
+### The trigger — OBSERVE-AND-REPLICATE, now implemented (observe-only)
 
 `SPEC-FORCED-CAST.md`'s original guess for the trigger was a hand-built
 `RE::TESActionData::Process` call with `ActionRightAttack`/`ActionRightRelease` and
 four `BGSAction` FormIDs. That guess was dropped (steering decision, 2026-09-04,
 marth-approved). It was unproven and version-fragile, and it was never built.
 
-The trigger is OBSERVE-AND-REPLICATE instead. A parallel APMF passive observer at
-the 0xAD seat will capture the engine's real full-animation NPC cast sequence from a
-deck cycle: the `MagicCaster` state machine, the animation-graph cast events, and
-the charge/fire boundary. MFO will replicate that captured sequence in
-`DriveObservedCast` (`native/ComposedCast.cpp`).
+The trigger is OBSERVE-AND-REPLICATE. The APMF passive observer at the 0xAD seat
+captured the engine's real full-animation NPC cast sequence from a deck cycle (a
+vanilla mage, Arniel):
 
-Until that sequence lands, `DriveObservedCast` returns `kNotImplemented` and `Try`
-always returns false. The whole executor is runtime-inert today, byte-identical to
-the existing kInstant heal, even with `bHealAnimPackage` switched ON. This is a
-deliberate, honest state, not a bug. The build is complete. Only the one seam is
-still open.
+```
+anim BeginCastRight/Left -> MagicCaster[hand] state 1(ready) -> 2(Charging)
+  -> 3(Charged) -> 4(Casting) -> anim MRh_SpellFire_Event (+MRh_WinStart) [MLh_ left]
+  -> (concentration loops) -> end: anim InterruptCast then CastStop
+```
+
+`DriveObservedCast` (`native/ComposedCast.cpp`) REPLICATES that on the hand caster.
+It is EXACTLY the drive the shipped `bDriveCaster` probe already runs for the
+owned/offense path (`Actuation.cpp:691-744` — `currentSpell`/`state`/`CheckCast`/
+`desiredTarget`/`RequestCastImpl`); the probe's DOCUMENTED gap was that the graph
+RELEASE event never played, so the caster charged and WEDGED. The deck capture
+supplies that missing event, and the seam adds it: mint a dedicated delivery-flipped
+proxy (a separate `HealProxy` pool, never AddSpell'd, never the kInstant ConcProxy
+pool), equip it into the hand, set `desiredTarget`, `CastBounds::Arm` the proxy key,
+fire `BeginCast` + `RequestCastImpl` to charge, poll the caster to Charged, fire
+`MRh_SpellFire_Event`, then the `InterruptCast`/`CastStop` teardown. All of it is
+`MainThread::Post`'d, re-resolving actors by FormID.
+
+**It is EXPERIMENTAL and OBSERVE-ONLY.** It is genuinely uncertain whether driving
+these events makes the engine APPLY the effect or only play the animation. So the
+drive runs to OBSERVE — `Diagnostics`'s `SpellSink` logs `CFC-fired *** THE ANIMATED
+PATH ***` when the driven cast fires a `TESSpellCastEvent` matching an armed key (no
+hotkey; the kInstant `CastSpellImmediate` apply is silent and never emits that event,
+so a match reliably means the animated state-machine cast fired) — and
+`DriveObservedCast` returns `kObserving`, which DEGRADES `Try()` to the caller's
+kInstant apply. A heal ALWAYS lands, correctly, through the proven ConcProxy/self
+machinery. The drive is a SINGLE-SHOT (fire once, tear down) so it never sustains a
+channel competing with the kInstant heal, and EVERY exit runs the teardown (disarm
+bounds, release the APMF claim, free the proxy, unequip, clear the expects) — no
+stuck state on a failed experiment. Behind `bHealAnimPackage` (default OFF), AE-only,
+APMF-gated; off / SE-VR / APMF-absent → byte-identical to the kInstant heal.
+
+The `[castobs]` log (BeginCast → charge poll → SpellFire/WEDGE) plus a `CFC-fired`
+line is what a deck cycle reads to confirm or refute that OUR driven events reproduce
+the sequence and land the effect. **Owning the cast** (returning `kArmed` to suppress
+the kInstant) is deliberately deferred until that deck proof; the reserved
+`iForcedCastTrigger` INI is the knob for a future graduation.
 
 ### CastBounds — the HARD-ABORT fix (§2)
 
@@ -356,7 +386,7 @@ being the sole `CastBounds::Arm` caller is by design.
 |---|---|---|---|---|
 | kInstant force-apply | `CastSpellImmediate` | no | any actor | baseline, always on |
 | APMF owned cast | the follower's own AI decides | yes | hostile foe only | default when APMF is present |
-| Composed Forced Cast (CFC) | `ComposedCast::Try` | yes, once the trigger seam lands | any actor, via a delivery-flipped proxy | opt-in (`bHealAnimPackage`). Inert today, degrades to kInstant every time |
+| Composed Forced Cast (CFC) | `ComposedCast::Try` → `DriveObservedCast` (observe-only) | drives the animated sequence; effect-apply UNPROVEN | any actor, via a delivery-flipped proxy | opt-in (`bHealAnimPackage`). Drives to OBSERVE (CFC-fired log) but still degrades to kInstant every time — heal always lands |
 
 See `native/ComposedCast.cpp` `TtlMsFor` for the per-kind bound (heal 6 s, offense
 4 s, buff/utility 4 s) and `Config::g_cfcBackoffMs` (default 10 s) for the

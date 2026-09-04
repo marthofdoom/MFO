@@ -226,12 +226,15 @@ namespace MFO::Config {
     // caster while the follower's MOVEMENT stays his own, bounded, degrading to the
     // kInstant apply on any failure so a heal never vanishes.
     //
-    // DEFAULT OFF, and it stays a no-op until the cast TRIGGER is filled in: the
-    // trigger uses OBSERVE-AND-REPLICATE (replicate the engine's real NPC cast
-    // sequence, captured by APMF's passive 0xAD observer), and while that seam is
-    // unimplemented the executor DEGRADES to the byte-identical kInstant heal. So
-    // even ON, with today's build, behavior is the current heal. Wholly INERT
-    // without APMF and on SE/VR. No save state. See native/ComposedCast.cpp.
+    // DEFAULT OFF. The TRIGGER is now implemented as an OBSERVE-ONLY animated drive
+    // (OBSERVE-AND-REPLICATE of the engine's real NPC cast sequence captured by
+    // APMF's passive 0xAD observer): ON, the executor DRIVES the hand caster through
+    // that sequence to OBSERVE (the Diagnostics SpellSink logs `CFC-fired` on a
+    // match) whether it produces a real cast, but STILL degrades to the kInstant heal
+    // so a heal always lands. Whether the driven cast applies the effect is unproven,
+    // so the heal is NOT yet routed through it -- behavior with today's build is the
+    // current heal plus a `[castobs]` observation trail. Wholly INERT without APMF and
+    // on SE/VR. No save state. See native/ComposedCast.cpp.
     inline std::atomic<bool>  g_healAnimPackage{ false };
 
     // Composed Forced Cast per-follower DEGRADE backoff, ms (SPEC-FORCED-CAST.md

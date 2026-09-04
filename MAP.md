@@ -1557,10 +1557,11 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   and, if `proxy != 0 && proxy != spell`, (actor, proxy) too, both expiring at
   `now + ttlMs`. Idempotent per key (re-Arm refreshes the expiry, never grows the
   table); overflow evicts the soonest-to-expire slot. Called from
-  `ComposedCast::Try` (`ComposedCast.cpp:149`) BEFORE the hand is touched.
+  `ComposedCast::Try` (spell key, pre-arm) BEFORE the hand is touched, then re-armed
+  with the real proxy key on the main thread inside the drive (`PhaseSelect`).
 - `Disarm(RE::FormID actor)` (`:79`) — clears EVERY slot the actor owns (both spell
-  and proxy keys). Called on every `ComposedCast` exit (`degrade` lambda,
-  `ComposedCast.cpp:125`; `End`, `:178`), by `Actuation_Direct.cpp:928` beside
+  and proxy keys). Called on every `ComposedCast` exit (`degrade` lambda; `End`;
+  and the drive's `DriveTeardown`), by `Actuation_Direct.cpp:928` beside
   `ConcProxy::Reset()`, and by `Followers.cpp:324` (`ReleaseHeldState`, dismissal
   path, beside `APMFBridge::ReleaseCast` — replaces the deleted
   `Packages::HealAnimEvictIf`).
@@ -1593,40 +1594,61 @@ degrading to the caller's `kInstant` apply on any failure. See
 `Docs/CAST-DELIVERY.md` "COMPOSED FORCED CAST (CFC)" and ENGINE_NOTES §0.40 for the
 full design and the OBSERVE-AND-REPLICATE trigger decision.
 - `Try(RE::Actor* follower, RE::SpellItem* spell, RE::Actor* target,
-  CasterConsent::SpellKind kind)` (`ComposedCast.cpp:105`) ← `Actuation_Direct.cpp:763`
+  CasterConsent::SpellKind kind)` (`ComposedCast.cpp:335`) ← `Actuation_Direct.cpp:763`
   (`CastSelfDirect`) and `:980` (`CastTargetDirect`), replacing the two deleted
-  `Packages::HealAnimFill` call sites. Gated `Enabled()` (`:64`): AE-only (`#67`
+  `Packages::HealAnimFill` call sites. Gated `Enabled()` (`:70`): AE-only (`#67`
   mirror), `Config::g_healAnimPackage` (repurposed toggle), `APMFBridge::
   Available()`. Sequence: §1.6 backoff check → `APMFBridge::ClaimCast` (kIntent_Cast)
-  → `CastBounds::Arm` → arm the expected-cast hand-off → `DriveObservedCast` → on
-  anything but `kArmed`, `degrade()` (`:120`, disarms + releases the claim + starts
-  the backoff). Returns TRUE only once the executor OWNS the cast — TODAY ALWAYS
-  FALSE, since `DriveObservedCast` is a stub.
-- `StreamLive(RE::FormID follower)` (`:171`) / `End(RE::FormID follower)` (`:175`)
-  — is an executor-held stream live for this follower, and tear one down (disarm +
-  release claim). Both no-op today (`g_streams` never gets an entry while the
-  trigger is a stub).
-- `DriveObservedCast(RE::Actor*, RE::SpellItem*, RE::Actor*, bool leftHand)`
-  (anon ns, `ComposedCast.cpp:93`) — **THE ONE TRIGGER SEAM.** Unconditionally
-  returns `DriveResult::kNotImplemented` today; this is the single point that
-  will replicate the APMF passive observer's captured NPC cast sequence once it
-  lands. Everything else in this module is scaffold around this one function.
-- `ExpectingCast`/`NoteObservedCast` (`:184`/`:189`) — the observe hand-off
-  `Diagnostics.cpp`'s `SpellSink` consults (near its `TESSpellCastEvent` handling)
-  to log a positive-fire match as the animated path. Wired, currently a no-op set
-  (nothing is ever armed while the trigger is a stub).
-- `Reset()` (`:194`) ← `Actuation_Direct.cpp:929` beside `CastBounds::Reset()` /
-  `ConcProxy::Reset()`. Drops streams/backoff/expected-cast set; APMF claims drop
-  via `APMFBridge::ClearTransientState` on the same `kPreLoadGame`.
-- **Threading:** `Try`/reconciles run on the AddTask job worker (#4); any hand/
-  equip mutation the (future) trigger performs must be `MainThread::Post`'d (#62).
-  `CastBounds::Arm` is lock-free from the worker; `APMFBridge` calls are
-  any-thread-safe.
-- **What breaks:** filling in `DriveObservedCast` without first confirming the
-  observed sequence against a captured deck cycle re-arms the exact class of risk
-  the original `TESActionData::Process` guess was dropped to avoid (version-
-  fragile, unproven engine call). Do not hand-build the trigger from static
-  analysis; replicate only what the APMF observer actually captured.
+  → `CastBounds::Arm` → arm the expected-cast hand-off → `DriveObservedCast`, then a
+  switch on the result: `kArmed` records the stream + returns TRUE (executor owns
+  the cast — NOT returned by today's observe-only drive); `kObserving` sets the
+  backoff and returns FALSE WITHOUT `degrade()` (the async drive owns teardown —
+  degrading here would yank bounds/claim from under it); else `degrade()` (`:349`,
+  disarms + releases the claim + starts the backoff). Observe-only: today always
+  FALSE (caller's kInstant heal lands).
+- `StreamLive(RE::FormID follower)` / `End(RE::FormID follower)` — is an
+  executor-held stream live for this follower, and tear one down (disarm + release
+  claim). No-op today (`g_streams` only gets an entry on the `kArmed`/own-the-cast
+  path, deferred until the observe drive is deck-proven).
+- `DriveObservedCast(RE::Actor*, RE::SpellItem*, RE::Actor*, bool leftHand, u32 ttlMs)`
+  (anon ns, `ComposedCast.cpp:294`) — **THE ONE TRIGGER SEAM, now IMPLEMENTED as an
+  OBSERVE-ONLY animated drive.** Called on the worker; returns `kFailed` if there is
+  no main-thread pump (VR → Try degrades cleanly), else `MainThread::Post`s the drive
+  and returns `kObserving`. The posted phase chain (all main-thread, re-resolving by
+  FormID): mint a dedicated delivery-flipped proxy (`HealProxy` pool, `:111` — a
+  SEPARATE 2-slot pool lifting ConcProxy's design, never AddSpell'd, never the
+  kInstant pool) → `PhaseSelect` (`:258`: `EquipSpell` into the hand via `HandSlot`
+  `:157`, wait for the caster to SELECT it (`currentSpell==castForm`, bounded
+  retries), re-`CastBounds::Arm` the real proxy key on the main thread, then from
+  REST fire `NotifyAnimationGraph("BeginCast…")` + `RequestCastImpl`) → `PhaseFire`
+  (`:210`: poll the caster to state ≥3 Charged, fire `M{R,L}h_SpellFire_Event` +
+  `WinStart`) → `DriveTeardown` (`:187`: `InterruptCast` + `InterruptCast`/`CastStop`
+  anims + `DeselectSpell` + disarm bounds + release claim + free proxy + clear
+  expects). SINGLE-SHOT (never sustains a channel competing with the kInstant heal);
+  EVERY exit funnels through `DriveTeardown`. It is EXACTLY the shipped `bDriveCaster`
+  probe drive (`Actuation.cpp:691-744`) plus the graph RELEASE event the probe lacked.
+- `ExpectingCast`/`NoteObservedCast` — the observe hand-off `Diagnostics.cpp`'s
+  `SpellSink` consults to log `CFC-fired *** THE ANIMATED PATH ***`. `Try` arms
+  (follower, spell); the drive additionally arms (follower, PROXY) since the driven
+  cast fires as the proxy form. The kInstant `CastSpellImmediate` apply is SILENT (no
+  `TESSpellCastEvent`), so a match is a reliable animated-path signal.
+- `Reset()` ← `Actuation_Direct.cpp` beside `CastBounds::Reset()` / `ConcProxy::
+  Reset()`. Drops streams/backoff/expected-cast set + `HealProxy::Reset()` (frees the
+  proxy pool, drops borrowed `Effect*` first); APMF claims drop via
+  `APMFBridge::ClearTransientState` on the same `kPreLoadGame`.
+- **Threading:** `Try`/reconciles run on the AddTask job worker (#4); ALL hand/equip/
+  caster mutation is `MainThread::Post`'d (#62), re-resolving actors by FormID.
+  `HealProxy` is main-thread-serial (Acquire refuses off-main / VR). `g_streams`/
+  `g_backoff` are worker-serial; `g_expect` is mutex-guarded; `CastBounds`/`APMFBridge`
+  are any-thread-safe (the drive's teardown touches them from the main thread).
+- **What breaks:** the drive is EXPERIMENTAL — whether firing the graph events APPLIES
+  the effect or only animates is unproven, which is why it stays observe-only (always
+  degrades to kInstant so a heal lands) and probe-gated behind `bHealAnimPackage`
+  (default OFF). Do NOT flip `DriveObservedCast` to return `kArmed` (suppress the
+  kInstant) until a deck cycle shows `[castobs] … SpellFire` AND a `CFC-fired` line
+  AND the effect actually landing; the reserved `iForcedCastTrigger` INI is the knob
+  for that graduation. Never re-request `RequestCastImpl` off REST (wedges the caster
+  in charge-glow — the probe's hard-won discipline, preserved here).
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

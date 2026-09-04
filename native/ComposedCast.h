@@ -18,15 +18,22 @@
 // THE TRIGGER (steering 2026-09-04, marth-approved): OBSERVE-AND-REPLICATE.
 // The spec's originally-guessed trigger (a hand-built TESActionData::Process with
 // ActionRightAttack/Release) is NOT used -- it was unproven and version-fragile.
-// Instead a parallel APMF passive observer at the 0xAD seat will capture the
-// engine's REAL full-animation NPC cast sequence from a deck cycle (the
-// MagicCaster state machine + the animation-graph cast events + the charge/fire
-// boundary). MFO will then replicate THAT proven sequence in the ONE isolated
-// seam `DriveObservedCast` (ComposedCast.cpp). Until that sequence lands, the seam
-// is UNIMPLEMENTED and reports so, and Try() DEGRADES to the caller's kInstant
-// apply -- the build is complete and the heal still lands. The whole executor is
-// therefore runtime-inert today (byte-identical to the kInstant heal); it activates
-// the day DriveObservedCast is filled in.
+// The APMF passive observer at the 0xAD seat captured the engine's REAL
+// full-animation NPC cast sequence from a deck cycle (a vanilla mage, Arniel):
+// anim BeginCastRight/Left -> MagicCaster[hand] state 1->2->3->4 -> anim
+// MRh_SpellFire_Event(+MRh_WinStart) -> (conc loops) -> anim InterruptCast,CastStop.
+// `DriveObservedCast` (ComposedCast.cpp) now REPLICATES that sequence on the hand
+// caster -- the same drive the shipped bDriveCaster probe runs (currentSpell/state/
+// CheckCast/desiredTarget/RequestCastImpl), plus the graph RELEASE event the probe
+// lacked. It is EXPERIMENTAL + OBSERVE-ONLY: the drive runs to OBSERVE (via the
+// SpellSink CFC-fired log) whether driving those events makes the engine APPLY the
+// effect or only animate, and Try() DEGRADES to the caller's kInstant apply either
+// way, so a heal ALWAYS lands correctly through the proven ConcProxy/self path. The
+// drive is a SINGLE-SHOT (fire once, tear down) so it never sustains a channel
+// competing with the kInstant heal. Owning the cast (returning kArmed to suppress
+// the kInstant) is deferred until a deck cycle proves the driven cast lands the
+// effect. Off / SE-VR / APMF-absent / toggle-off -> byte-identical to the kInstant
+// heal (the executor is inert).
 //
 // THREADING. Try() and the reconcile hooks run on the AddTask job WORKER (the
 // per-follower tick). Any hand/equip/caster mutation the trigger performs is
