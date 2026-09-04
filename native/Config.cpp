@@ -127,6 +127,8 @@ namespace MFO::Config {
             else if (a_key == "bProgHarness")       setB(g_progHarness);      // allocator dev harness, dev-only
             else if (a_key == "iProgHarnessKey")    setI(g_progHarnessKey, 0, 255);
             else if (a_key == "bWeaponStyleControl") setB(g_weaponStyleControl); // default ON, debug kill-switch
+            else if (a_key == "bCstyReassert")      setB(g_cstyReassert);      // default ON, CSTY re-assert A/B proof toggle
+            else if (a_key == "iCstyReassertKey")   setI(g_cstyReassertKey, 0, 255);
             else if (a_key == "bUsePackages")       setB(g_usePackages);
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
             else if (a_key == "bApmfCast")          setB(g_apmfCast);          // APMF cast assist, inert without APMF
@@ -284,6 +286,8 @@ namespace MFO::Config {
             g_progHarness        = false;   // allocator dev harness -- OFF everywhere by default
             g_progHarnessKey     = 0x28;    // DIK apostrophe, unbound in vanilla
             g_weaponStyleControl = true;    // v1.0.33: standard feature -- ON by default
+            g_cstyReassert       = true;    // CSTY re-assert A/B proof toggle -- ON = today's behavior
+            g_cstyReassertKey    = 0x47;    // DIK Numpad 7, unbound in vanilla
             g_castControl        = 2;       // mage update: cast-control slider -- center (ignore heals)
             g_friendlyFireHold   = true;    // v1.0.35: hold offensive casts that would hit a teammate
             g_overlayX           = 12;      // #56 combat-overlay margins (px from top-right)
@@ -359,6 +363,7 @@ namespace MFO::Config {
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
             { "bForceCastOnMiss", "1" },       { "iCastControl", "2" },
             { "bLegacyCastHybrid", "0" },      { "bWarnNoApmf", "1" },
+            { "bCstyReassert", "1" },
             { "iOverlayX", "12" },             { "iOverlayY", "12" },
             { "bDollsMode", "0" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },

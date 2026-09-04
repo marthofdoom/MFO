@@ -281,6 +281,10 @@ namespace {
             MFO::Config::EnsureMcmDefaults();  // idempotent belt-and-suspenders (the real
                                                // seed ran at kInputLoaded, before MCM Helper)
             MFO::Config::Read();            // config first -- everything else reads it
+            spdlog::info("[wstyle] bCstyReassert={} -- Numpad 7 (DIK {:#04x}) flips it live for the "
+                         "A/B combat-style-reassert proof (Docs/SPEC-COMBATSTYLE-SOURCEGATE.md)",
+                         MFO::Config::g_cstyReassert.load() ? "ON" : "OFF",
+                         MFO::Config::g_cstyReassertKey.load());
             MFO::Forms::Resolve();          // then forms
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler

@@ -1690,6 +1690,30 @@ namespace MFO::Board {
                             }
                         }
                     }
+
+                    // CSTY RE-ASSERT A/B TOGGLE HOTKEY (Docs/SPEC-COMBATSTYLE-
+                    // SOURCEGATE.md). Same shape as the keys above, but the
+                    // toggle itself is a bare atomic bool CombatStyle::ApplyTick
+                    // already reads with memory_order_relaxed -- no engine
+                    // mutation, so this flips it in place rather than routing
+                    // through MainThread::Post/AddTask. Lets marth flip
+                    // bCstyReassert mid-battle to A/B the positioning stutter.
+                    {
+                        const int ck = Config::g_cstyReassertKey.load();
+                        if (ck != 0) {
+                            for (auto* e = *a_events; e; e = e->next) {
+                                if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) continue;
+                                auto* b = static_cast<RE::ButtonEvent*>(e);
+                                if (!b->IsDown()) continue;                 // edge only
+                                if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
+                                if (static_cast<int>(b->GetIDCode()) != ck) continue;
+                                const bool now = !Config::g_cstyReassert.load();
+                                Config::g_cstyReassert.store(now);
+                                spdlog::info("[wstyle] bCstyReassert HOTKEY -> {}", now ? "ON (re-assert every tick)"
+                                                                                        : "OFF (one-shot stance + equip gate only)");
+                            }
+                        }
+                    }
                 }
 
                 // CLOSE GRACE: the board just closed (g_open false) but we are still
