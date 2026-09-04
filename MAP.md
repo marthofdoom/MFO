@@ -858,6 +858,11 @@ anonymous-namespace copy — that silently forks the instance).
   primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
   Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
   Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
+  `mageMode` (`Logistics_Loot.cpp:~681`) requires `castGambits > 0` AND the follower is
+  PRIMARILY a caster (base class Mage, or — Auto/no class — no melee/ranged attack
+  gambit) — a Ranged/Melee follower with a secondary cast gambit stays out of mageMode
+  and keeps his class loadout (2026-09 fix; was any-cast-gambit, which flipped a
+  Ranged follower like Adelinda into school-scored robes).
 - **#21 College tome-gate unlock.** `UnlockCollegeTomes` (`Logistics_Economy.cpp:220`, worker,
   `ServiceFollower` idle branch, gated `g_economy && g_economyBuyTomes`, GLOBAL ~30s
   rate-limit) generalizes vanilla's player-skill tome gate to the party: for each of

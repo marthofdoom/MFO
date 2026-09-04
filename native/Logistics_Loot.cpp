@@ -653,6 +653,10 @@ namespace MFO::Logistics {
             const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
             const bool wantsMelee  = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
             const WeaponRoles roles = g_svc ? ComputeWeaponRoles(a_follower, *g_svc) : WeaponRoles{};
+            // Base class (#65 combatClassOverride; 1=Melee 2=Ranged 3=Mage, 0=Auto)
+            // read here, BEFORE mageMode, so mageMode can gate on it directly --
+            // no circular dependency on the roles derived further down.
+            const std::uint8_t baseClass = g_svc ? g_svc->combatClassOverride : 0;
 
             // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
             // Gambit-driven magic-user detection. A magic user gets two loot
@@ -665,7 +669,16 @@ namespace MFO::Logistics {
             RE::ActorValue school = RE::ActorValue::kNone;
             if (Config::g_magicLoadout.load() && g_svc)
                 school = TargetMagicSchool(*g_svc, castGambits);
-            const bool mageMode    = castGambits > 0;   // magic user AND master toggle on
+            // mageMode requires the follower be PRIMARILY a caster, not just
+            // carrying a secondary cast gambit (marth: a Ranged/Melee follower
+            // with a cast gambit must keep his class loadout, not flip to
+            // school-scored mage apparel). "Primarily a caster" = base class
+            // Mage, OR -- for Auto/no explicit class -- no melee/ranged attack
+            // gambit at all (a pure caster who never picked a class). A base
+            // Melee/Ranged follower who ALSO casts is never mageMode here.
+            const bool classIsMage          = baseClass == 3;
+            const bool hasNoWeaponAttackRole = !wantsMelee && !wantsRanged;
+            const bool mageMode    = castGambits > 0 && (classIsMage || hasNoWeaponAttackRole);
             const bool daggersOnly = Config::g_mageDaggersOnly.load();
             // #21 bMageWearRobes (default ON): the mage school-clothing dress-up gate.
             // When OFF, a magic user is treated like any other class for APPAREL and
@@ -700,7 +713,7 @@ namespace MFO::Logistics {
             // earns the full weapon-upgrade role. Auto (0, no explicit class)
             // keeps the old gambit heuristic (mageMode && !wantsMelee). Ordinals
             // match CombatStyle::Stance by construction (State.h:82).
-            const std::uint8_t baseClass   = g_svc ? g_svc->combatClassOverride : 0;
+            // baseClass read earlier now (mageMode gates on it directly, above).
             const bool baseCaster          = baseClass == 3;
             const bool baseWeaponUser      = baseClass == 1 || baseClass == 2;
             const WepClass meleeTargetClass =
