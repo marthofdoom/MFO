@@ -192,6 +192,17 @@ namespace MFO::Config {
     // claims). Falls back to the byte-identical legacy alias route when off/absent.
     inline std::atomic<bool>  g_apmfLootTravel{ true };
 
+    // Same principle, the RETREAT counterpart: when APMF is present,
+    // RetreatFill (Packages.cpp) -- shared by act.flee and the opt-in
+    // auto-retreat leash safety -- routes the disengage through APMF's
+    // package-offer channel instead of MFO_RetreatQuest's alias/static-
+    // priority-60 race. ON by default but wholly INERT unless APMF is in the
+    // load order; this INI kill-switch exists for A/B field testing, same
+    // pattern as bApmfLootTravel/bApmfCast. No save state (the offer claim is
+    // runtime-only). Falls back to the byte-identical legacy alias route when
+    // off/absent.
+    inline std::atomic<bool>  g_apmfRetreat{ true };
+
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc
     // hook. Now ON by default (field-proven; audit 2026-07-28).

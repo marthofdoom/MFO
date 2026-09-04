@@ -132,6 +132,7 @@ namespace MFO::Config {
             else if (a_key == "bApmfCast")          setB(g_apmfCast);          // APMF cast assist, inert without APMF
             else if (a_key == "bLegacyCastHybrid")  setB(g_legacyCastHybrid);  // ON = old AI-first+force hybrid; default OFF = APMF owned model
             else if (a_key == "bApmfLootTravel")    setB(g_apmfLootTravel);   // APMF package-offer loot-travel, inert without APMF
+            else if (a_key == "bApmfRetreat")       setB(g_apmfRetreat);      // APMF package-offer retreat, inert without APMF
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "iCastControl")       setI(g_castControl, 0, 4);
@@ -263,6 +264,7 @@ namespace MFO::Config {
             g_forceCastOnMiss    = true;
             g_legacyCastHybrid   = false;   // default = APMF owned cast model (animated)
             g_apmfLootTravel     = true;    // default = APMF package-offer loot-travel, inert without APMF
+            g_apmfRetreat        = true;    // default = APMF package-offer retreat, inert without APMF
             g_castSource         = 3;
             g_equipToCast        = true;
             g_aiCastGrace        = 3.0f;
