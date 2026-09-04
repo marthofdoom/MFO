@@ -1113,10 +1113,16 @@ namespace MFO::Actuation {
             // Disengage by reusing the RETREAT package -- travel to the player
             // under kIgnoreCombat, the proven machinery that pulls a follower off
             // a fight (Packages::RetreatFill). Cleared on combat end / arrival by
-            // the retreat driver. #35.
+            // the retreat driver. #35. APMF SHOWPIECE: when APMF is present,
+            // RetreatFill routes this through APMF's ch.9 0x49 package-offer
+            // channel instead of MFO_RetreatQuest's alias/static-priority-60
+            // race (same fix as loot-travel, for a follower package-locked by
+            // an outranking custom AI framework); the alias route below is the
+            // APMF-ABSENT degrade only. Transparent here -- RetreatFill owns
+            // the routing decision.
             if (Packages::RetreatFill(a_follower))
                 return { Result::Fired, "flee -> retreat to player" };
-            return { Result::FailedOther, "retreat alias unavailable", true };
+            return { Result::FailedOther, "retreat unavailable", true };
         }
         if (op == Vocab::kActPowerAttack) {
             // "Foe blocking -> Power attack" (marth): get in MELEE range of the

@@ -84,8 +84,14 @@ FID_APMF_LOOT_TRAVEL_PACKAGE_0 = OWN | 0x836
 FID_APMF_LOOT_TRAVEL_PACKAGE_1 = OWN | 0x837
 FID_APMF_LOOT_TRAVEL_PACKAGE_2 = OWN | 0x838
 FID_APMF_LOOT_TRAVEL_PACKAGE_3 = OWN | 0x839
+# APMF RETREAT (ch.9 0x49 route): the flee-to-player counterpart of the four
+# APMF loot-travel packages above, but only ONE record needed -- retreat's
+# destination is ALWAYS the player (unlike loot's per-slot corpse), so a
+# single shared package covers every follower fleeing concurrently with no
+# per-follower target collision (see make_apmf_retreat_package()).
+FID_APMF_RETREAT_PACKAGE = OWN | 0x83A
 NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x836-0x839 = APMF loot-travel packages,
-                                   # 0x900-0x902 = P7 travel packages)
+                                   # 0x83A = APMF retreat package, 0x900-0x902 = P7 travel packages)
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -968,6 +974,32 @@ def make_retreat_package():
                         pkdt_flags=0x00102000)
 
 
+def make_apmf_retreat_package():
+    """APMF ch.9 (0x49 package-offer) retreat package -- the flee-to-player
+    counterpart of make_apmf_loot_travel_package(), routing act.flee (and the
+    opt-in auto-retreat leash safety, which shares native RetreatFill) through
+    APMF's 0x49 hook instead of MFO_RetreatQuest's alias/static-priority-60
+    race -- the SAME fix for a follower package-locked by an outranking custom
+    AI framework (the Cicero case). Unlike loot's per-slot corpses, retreat's
+    destination is ALWAYS the player, so ONE record covers every follower
+    (no per-follower runtime-target collision the way 4 loot slots guard
+    against). Authored with the SAME kIgnoreCombat + preferred-speed flags
+    (0x00102000) and radius (150) as the legacy MFO_RetreatPackage above --
+    identical behaviour, different delivery channel. RUNTIME-HANDLE Location
+    (PLDT type 0, "Near Reference") like the loot-travel packages: 0x49
+    delivers with no alias fill, so there is no alias to carry the target.
+    The authored placeholder (FREF_PLAYER, via build_travel's runtime_target
+    branch) already IS the correct permanent target for retreat specifically
+    (unlike loot's per-corpse case) -- the DLL's runtime write at engage time
+    (Packages.cpp's SetAPMFLootTravelTarget, reused verbatim) is a defensive
+    reassertion, not a real per-follower retarget. No QNAM (no alias-valued
+    input, runtime-handle route).
+    """
+    return build_travel(FID_APMF_RETREAT_PACKAGE, "MFO_APMFRetreatPackage",
+                        alias_idx=0, radius=150, qnam=None, runtime_target=True,
+                        pkdt_flags=0x00102000)
+
+
 def make_poc_packages():
     """The probe ladder -- see POC_PROBES. One axis of novelty per probe,
     exactly one valid at a time via the MFO_ProbeSelect gate."""
@@ -997,6 +1029,7 @@ def make_pack():
         body += make_poc_packages()
     body += make_travel_package()
     body += make_apmf_loot_travel_package()
+    body += make_apmf_retreat_package()
     body += make_retreat_package()
     return group('PACK', body)
 
@@ -1749,6 +1782,8 @@ def main():
           f"MFO_APMFLootTravelPackage0-3 -> vanilla Travel {FREF_TMPL_TRAVEL:08X} (runtime-handle Location, "
           f"ch.9 0x49 route, APMFBridge::OfferPackage)")
     print(f"  PACK  0x{FID_RETREAT_PACKAGE & 0xFFF:03X}        MFO_RetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat")
+    print(f"  PACK  0x{FID_APMF_RETREAT_PACKAGE & 0xFFF:03X}        MFO_APMFRetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat "
+          f"(runtime-handle Location, ch.9 0x49 route, APMFBridge::OfferPackage)")
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
     print(f"  CSTY  0x{FID_MELEE_STYLE & 0xFFF:03X}        MFO_MeleeStyle (equip_melee stance -- default ON)")
     print(f"  CSTY  0x{FID_RANGED_STYLE & 0xFFF:03X}        MFO_RangedStyle (equip_ranged stance -- default ON)")

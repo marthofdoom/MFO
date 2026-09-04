@@ -79,6 +79,13 @@ namespace MFO::Forms {
     inline constexpr RE::FormID kAPMFLootTravelPackage1 = 0x837;
     inline constexpr RE::FormID kAPMFLootTravelPackage2 = 0x838;
     inline constexpr RE::FormID kAPMFLootTravelPackage3 = 0x839;
+    // APMF RETREAT (ch.9 0x49 route): the flee-to-player counterpart of
+    // kAPMFLootTravelPackage0-3, but ONE record -- retreat's destination is
+    // ALWAYS the player, so there is no per-follower runtime-target collision
+    // the way loot's per-corpse case needs 4 slots to avoid. See
+    // MFO_GenerateESP.py make_apmf_retreat_package() / native/Packages.cpp
+    // RetreatFill.
+    inline constexpr RE::FormID kAPMFRetreatPackage = 0x83A;
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;
@@ -130,6 +137,17 @@ namespace MFO::Forms {
     }
     inline RE::TESQuest*   g_retreatQuest   = nullptr; // RETREAT PROBE
     inline RE::TESPackage* g_retreatPackage = nullptr; // RETREAT PROBE
+    // APMF retreat (ch.9 0x49 route) -- see kAPMFRetreatPackage.
+    inline RE::TESPackage* g_apmfRetreatPackage = nullptr;
+
+    // WALK-diagnostic predicate: is a_pkg either retreat package (legacy alias
+    // or APMF-routed)? Mirrors IsTravelPackage's role for loot -- a follower
+    // legitimately running his APMF-delivered retreat package must read as
+    // "on the retreat package", not as some unrelated package. Unresolved
+    // g_apmfRetreatPackage compares as nullptr (safe).
+    inline bool IsRetreatPackage(const RE::TESPackage* a_pkg) {
+        return a_pkg && (a_pkg == g_retreatPackage || a_pkg == g_apmfRetreatPackage);
+    }
     inline RE::TESQuest*   g_tradeQuest     = nullptr; // #21 econ bridge
     // P1 probe. Resolved at kDataLoaded (main thread) so the combat-thread
     // consent hook only ever READS a settled pointer -- it must never run a

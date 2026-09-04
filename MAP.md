@@ -1396,6 +1396,34 @@ decline-fallback.
 - **`ClaimCombatActionDeny` is NOT wired here** (see APMFBridge.cpp above) — left available, not
   scoped into this dispatch, per marth's "keep it scoped" instruction and the existing
   concede-to-combat design.
+- **APMF RETREAT (ch.9 0x49 route, 2026-09-03), the same PASS B conversion applied to
+  `RetreatFill/Clear/EvictIf` (`Packages.cpp:1848-2021`) — shared by BOTH callers, the
+  `act.flee` gambit (`Actuation.cpp:1112-1120`, `Vocab::kActFlee`) and the opt-in
+  auto-retreat leash safety (`Scheduler.cpp:462`).** Same showpiece/commit principle as
+  loot-travel: `Available() && Config::g_apmfRetreat` routes through `APMFBridge::
+  OfferPackage`/`ReleaseOfferPackage` naming `Forms::g_apmfRetreatPackage`
+  (`kAPMFRetreatPackage = 0x83A`, `MFO_GenerateESP.py make_apmf_retreat_package()`) —
+  fails CLOSED on any decline, never falls back to the alias route. **Only ONE new
+  record needed** (not 4 like loot's slots): retreat's destination is ALWAYS the
+  player, so there is no per-follower runtime-target collision — `SetAPMFLootTravelTarget`
+  (the SAME generic Location-writer loot-travel uses) is reused verbatim, called once at
+  engage with the player ref as a defensive reassertion (the authored FREF_PLAYER
+  placeholder is already the permanent correct value for retreat specifically). Single-
+  holder semantics UNCHANGED from the legacy probe (`g_retreatHold`, ONE retreat at a
+  time — a second `RetreatFill` while one is held is declined, same as before); the
+  route choice is tracked by a NEW `RetreatHold::viaAPMF` bool (no alias exists to query
+  under the 0x49 route, unlike loot's `g_apmfSlotActive` per-slot array — retreat only
+  ever has one hold, so one bool suffices) consulted by `RetreatClear`/`RetreatEvictIf`/
+  `ReleaseAll` to pick the right release mechanism. `Pump()` refreshes the claim
+  unconditionally every worker tick (same 500ms-expiry keep-alive loot-travel needs —
+  Scheduler's per-tick `StopCombat` while falling back does NOT touch this claim).
+  `Forms::IsRetreatPackage` (mirrors `IsTravelPackage`) recognizes both the legacy alias
+  package and `g_apmfRetreatPackage` — load-bearing for `Scheduler.cpp:419`'s `note.took`
+  measurement (would silently never latch under the APMF route without it). `bApmfRetreat`
+  (`Config.h`, default ON, inert without APMF) is the retreat-specific A/B kill switch,
+  same pattern as `bApmfLootTravel`/`bApmfCast`. kIgnoreCombat (`0x00102000`) preserved on
+  the new package — retreat is the one Travel use that must win THROUGH combat, opposite
+  of loot-travel's plain preferred-speed flag.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`
@@ -1577,7 +1605,8 @@ Frozen local FormIDs (`Forms.h:21-57`, `0x800`+) are a contract with
 every save that saw it; `0x802` stays reserved. `Resolve` (`:27`) ← `plugin.cpp:283`
 (after Config, before Quirks/sinks) — returns false only if `g_fieldOrders` missing;
 else degrades to one log line, never a crash. Resolved globals (`g_commandQuest`,
-`g_castPackage`, `g_lootQuest`, `g_travelPackage[1-3]`, `g_retreatQuest/Package`,
+`g_castPackage`, `g_lootQuest`, `g_travelPackage[1-3]`, `g_apmfLootTravelPackage0-3`,
+`g_retreatQuest/Package`, `g_apmfRetreatPackage`,
 `g_tradeQuest`, `g_meleeStyle/rangedStyle/castStyle/probeCastStyle`) are resolved once
 on the main thread specifically so combat-thread hooks only READ settled pointers —
 never do a data-handler lookup from those hooks. `EnsurePlayerSetup` (`:96`) grants the

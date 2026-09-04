@@ -53,6 +53,7 @@ namespace MFO::Forms {
         g_apmfLootTravelPackage3 = Look<RE::TESPackage>(kAPMFLootTravelPackage3, "MFO_APMFLootTravelPackage3");
         g_retreatQuest   = Look<RE::TESQuest>(kRetreatQuest, "MFO_RetreatQuest");        // RETREAT PROBE
         g_retreatPackage = Look<RE::TESPackage>(kRetreatPackage, "MFO_RetreatPackage");  // RETREAT PROBE
+        g_apmfRetreatPackage = Look<RE::TESPackage>(kAPMFRetreatPackage, "MFO_APMFRetreatPackage");  // APMF ch.9 0x49 route
         g_tradeQuest     = Look<RE::TESQuest>(kTradeQuest, "MFO_TradeQuest");            // #21 econ bridge
         // P1 probe style. A miss disables ONLY the (default-off) style-swap
         // probe -- ProbeStyleTick refuses to swap on a null pointer and says

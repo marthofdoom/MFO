@@ -416,7 +416,10 @@ namespace MFO::Scheduler {
                 auto& note = g_retreatNotes[id];
                 const float secs  = Packages::RetreatSeconds();
                 auto*       cur   = f->GetCurrentPackage();
-                if (cur == Forms::g_retreatPackage) note.took = true;
+                // Either retreat package counts as "took" -- legacy alias or
+                // APMF-delivered (Forms::IsRetreatPackage), same as loot's
+                // IsTravelPackage recognizing both its alias and APMF forms.
+                if (Forms::IsRetreatPackage(cur)) note.took = true;
                 // Re-disengage each tick: hostiles re-initiate combat, and while she
                 // holds a live target the combat behaviour out-competes the
                 // kIgnoreCombat travel (Auri: took=true but never moved). StopCombat
