@@ -128,14 +128,19 @@ namespace MFO::Targeting {
     }
 
     void InstallHook() {
-        // The UpdateCombat hook now drives TWO features: the target redirect
-        // (bCommandTarget) and weapon-stance ownership (bWeaponStyleControl,
-        // default ON). Either one alone justifies the hook -- install if EITHER
-        // is enabled, or the default-ON stance swap would be silently dead the
-        // moment someone turns target commanding off. The thunk gates each
-        // concern independently, so a disabled feature still does nothing.
-        if (!Config::g_commandTarget.load() && !Config::g_weaponStyleControl.load()) {
-            spdlog::info("[target] bCommandTarget=0 and bWeaponStyleControl=0 -- "
+        // The UpdateCombat hook now drives THREE features: the target redirect
+        // (bCommandTarget), weapon-stance ownership (bWeaponStyleControl, default
+        // ON), and the owned-cast STANCE -- CombatStyle::ApplyTick (which writes
+        // the Cast stance the owned-cast/APMF model biases on) runs off THIS hook
+        // and is wanted whenever iCastControl > 0 (default 2, see Scheduler.cpp's
+        // CombatStyle::Want(Cast) calls). Any one alone justifies the hook -- install
+        // if ANY is enabled, or the feature would be silently dead. In particular,
+        // turning bCommandTarget AND bWeaponStyleControl off while leaving iCastControl
+        // on (e.g. to avoid a target-select mod contention) must NOT kill owned casting.
+        // The thunk gates each concern independently, so a disabled feature still does nothing.
+        if (!Config::g_commandTarget.load() && !Config::g_weaponStyleControl.load() &&
+            Config::g_castControl.load() <= 0) {
+            spdlog::info("[target] bCommandTarget=0, bWeaponStyleControl=0, iCastControl=0 -- "
                          "UpdateCombat hook NOT installed");
             return;
         }

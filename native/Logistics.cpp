@@ -303,6 +303,8 @@ namespace MFO::Logistics {
     }
 
     bool AmmoIsBolt(RE::TESAmmo* a_ammo) {
+        if (!a_ammo) return false;   // defense-in-depth: every current caller null-guards,
+                                     // but a future one shouldn't CTD on GetFormID() here
         switch (Catalog::AmmoKind(a_ammo->GetFormID())) {
         case Catalog::Ammo::kArrow: return false;
         case Catalog::Ammo::kBolt:  return true;

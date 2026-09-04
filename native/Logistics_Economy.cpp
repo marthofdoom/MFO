@@ -185,7 +185,13 @@ namespace MFO::Logistics {
 
         bool VendorTrades(RE::BGSListForm* a_vend, bool a_notBuySell,
                           RE::BGSKeywordForm* a_kwf) {
-            if (!a_vend || !a_kwf) return false;
+            if (!a_kwf) return false;
+            // A null/absent VEND list: an INCLUSION list (notBuySell=false) that is
+            // empty matches NOTHING (false); an EXCLUSION list (notBuySell=true) that
+            // is empty excludes nothing -- a UNIVERSAL trader (true). The old
+            // `!a_vend -> false` wrongly made a "sells everything" merchant (notBuySell
+            // with no VEND list, a real CK/modded pattern) refuse every follower sell.
+            if (!a_vend) return a_notBuySell;
             bool match = false;
             for (auto* f : a_vend->forms) {
                 auto* kw = f ? f->As<RE::BGSKeyword>() : nullptr;
