@@ -821,7 +821,33 @@ namespace MFO::Logistics {
                     if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
                     auto* weap = obj->As<RE::TESObjectWEAP>();
                     auto* armo = obj->As<RE::TESObjectARMO>();
-                    if (!weap && !armo) continue;
+                    if (!weap && !armo) {
+                        // MISC closer for the "Loot valuables (to sell)" gambit -- a
+                        // value-dense MISC item (IsValuableMisc, shared def in
+                        // Logistics_Loot.cpp) gets the SAME guard order as equipment
+                        // above: per-instance quest protection, catalog exclusion
+                        // (unconditional here, matching the equipment sell path's
+                        // Catalog::IsExcluded below -- NOT gated by bLootSpecialItems),
+                        // then the vendor's buy/sell keyword filter. Non-valuable MISC
+                        // (keys, notes, clutter) is untouched.
+                        if (IsValuableMisc(obj)) {
+                            auto* mentry = data.second.get();
+                            if (IsQuestObjectInstance(mentry))         { sdiag(obj, "quest"); continue; }
+                            if (Catalog::IsExcluded(obj->GetFormID())) { sdiag(obj, "excluded"); continue; }
+                            auto* misc = obj->As<RE::TESObjectMISC>();
+                            auto* mkwf = static_cast<RE::BGSKeywordForm*>(misc);
+                            if (!sellAnything && !VendorTrades(vend, vv.notBuySell, mkwf)) {
+                                sdiag(obj, "vendor-filter"); continue;
+                            }
+                            if (diag) sdiag(obj, "valuable");
+                            const std::int32_t baseVal = mentry ? mentry->GetValue() : 0;
+                            sell.push_back(TradeBridge::SellRow{
+                                obj, static_cast<std::int32_t>(data.first),
+                                static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
+                                false });
+                        }
+                        continue;
+                    }
                     if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // #69 own signature gear
                     // CONVERGENCE (marth): a WORN piece that is NOT its slot's best (a strictly
                     // kept-better exists) is a redundant inferior. The engine keeps re-applying
