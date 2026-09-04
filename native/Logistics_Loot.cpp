@@ -672,13 +672,19 @@ namespace MFO::Logistics {
             // mageMode requires the follower be PRIMARILY a caster, not just
             // carrying a secondary cast gambit (marth: a Ranged/Melee follower
             // with a cast gambit must keep his class loadout, not flip to
-            // school-scored mage apparel). "Primarily a caster" = base class
-            // Mage, OR -- for Auto/no explicit class -- no melee/ranged attack
-            // gambit at all (a pure caster who never picked a class). A base
-            // Melee/Ranged follower who ALSO casts is never mageMode here.
+            // school-scored mage apparel). The CLASS is the authority here
+            // (matching meleeTargetClass's !baseWeaponUser gate just below):
+            // a base Ranged/Melee follower (baseClass 1/2) is NEVER mageMode,
+            // no matter what gambits she carries -- an act.attack-only Ranged
+            // follower has no equip_ranged GAMBIT, so a gambit-composition
+            // test alone (no equip-melee/equip-ranged gambit) would wrongly
+            // call her mageMode. "Primarily a caster" = base class Mage (3),
+            // OR -- for Auto/no explicit class (0) only -- no melee/ranged
+            // attack gambit at all (a pure caster who never picked a class).
             const bool classIsMage          = baseClass == 3;
             const bool hasNoWeaponAttackRole = !wantsMelee && !wantsRanged;
-            const bool mageMode    = castGambits > 0 && (classIsMage || hasNoWeaponAttackRole);
+            const bool mageMode    = castGambits > 0 &&
+                (classIsMage || (baseClass == 0 && hasNoWeaponAttackRole));
             const bool daggersOnly = Config::g_mageDaggersOnly.load();
             // #21 bMageWearRobes (default ON): the mage school-clothing dress-up gate.
             // When OFF, a magic user is treated like any other class for APPAREL and
