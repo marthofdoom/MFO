@@ -561,6 +561,48 @@ namespace MFO::Packages {
             return true;
         }
 
+        // ── APMF ANIMATED HEAL (ch.9 0x49 route, OPT-IN bHealAnimPackage) ─────
+        //
+        // Point ANY UseMagic cast package's Spell input at a_spell, and NOTHING
+        // ELSE -- SetSelfSpell generalised to an arbitrary package. Used for the
+        // two animated-heal records (MFO_APMFHealSelfPackage t6 self,
+        // MFO_APMFHealPlayerPackage t0->player), whose TARGET slot is authored
+        // STATICALLY, so the DLL never writes a targType at runtime for either
+        // (no unproven runtime target write; only the Spell input is mutated,
+        // through the exact same layout-guarded discipline SetInputs/SetSelfSpell
+        // use). Returns false without writing if the input fails its layout guard.
+        bool SetPackageSpell(RE::TESPackage* a_pkg, RE::SpellItem* a_spell) {
+            if (!a_pkg || !a_spell) return false;
+            auto* spellPd = FindInput(a_pkg, kInputSpell);
+            if (!spellPd) return false;
+            auto* spellTarget = ReadTarget(spellPd, "Spell(heal)");
+            if (!spellTarget) return false;
+            spellTarget->targType      = kTargTypeObjectID;
+            spellTarget->target.object = a_spell;
+            spellTarget->value         = 0;
+            return true;
+        }
+
+        // Is a_spell a HEAL -- a beneficial spell that restores Health? The
+        // animated-heal package route is HEAL-ONLY: every other self/target cast
+        // (candlelight, buffs, wards, offense) keeps its proven kInstant stream
+        // untouched. A spell qualifies iff it carries a beneficial (NOT
+        // detrimental, NOT hostile) effect whose primary actor value is Health --
+        // the exact predicate Actuation_Direct.cpp's IsHealEffect/SpellHealsHealth
+        // use (that file-local copy can't cross the translation unit, so this
+        // mirrors it verbatim, method-for-method). Damage Health is excluded;
+        // wards / lights / stat buffs carry no kHealth-primary beneficial effect.
+        bool IsHealSpell(RE::SpellItem* a_spell) {
+            if (!a_spell) return false;
+            for (auto* eff : a_spell->effects) {
+                auto* mgef = eff ? eff->baseEffect : nullptr;
+                if (!mgef) continue;
+                if (mgef->data.primaryAV != RE::ActorValue::kHealth) continue;
+                if (!mgef->IsDetrimental() && !mgef->IsHostile()) return true;
+            }
+            return false;
+        }
+
         // ── APMF LOOT-TRAVEL (ch.9 0x49 route) ───────────────────────────────
         //
         // SHOWPIECE routing for the SAME Option-A intent (marth, Docs/STATUS.md:
@@ -1046,6 +1088,30 @@ namespace MFO::Packages {
         };
         RetreatHold g_retreatHold;
 
+        // ── APMF ANIMATED HEAL (ch.9 0x49 route, OPT-IN bHealAnimPackage) ─────
+        // Which package a follower's live animated-heal offer names, and when it
+        // was last refreshed (by HealAnimFill, called every tick the heal rule
+        // wins). UNLIKE retreat (one holder), heals support MANY concurrent
+        // followers -- an APMFBridge::OfferPackage claim is per-follower -- so
+        // this is a MAP keyed by follower FormID, the per-follower twin of the
+        // loot slots' g_apmfSlotFollower array. Runtime-only, never serialized
+        // (0x49 delivers with no alias fill); dropped on dismissal
+        // (HealAnimEvictIf), retreat/loot preemption, staleness (the heal rule
+        // stopped), and ReleaseAll / ClearTransientState.
+        struct HealAnimEntry {
+            RE::FormID        pkgID = 0;   // MFO_APMFHealSelfPackage or ...PlayerPackage
+            Clock::time_point lastFillAt{};
+        };
+        std::unordered_map<RE::FormID, HealAnimEntry> g_healAnimMap;
+        // Release the whole hold once the heal rule stops refreshing it. The
+        // caller re-fills every service/combat tick the rule wins (well under
+        // this), so a gap this long means "topped off / rule lost" -- let it go
+        // so the follower's framework package resumes. The per-Pump keep-alive
+        // (HealAnimPumpInternal) re-offers far more often than APMF's 500ms
+        // claim expiry, so the CLAIM never lapses between rule fires; this window
+        // governs only when MFO tears the whole hold down.
+        constexpr auto kHealAnimStale = std::chrono::seconds(3);
+
         // EVICTION MARKER (#48 furniture-ejection). Releasing a follower from a
         // package-carrying ACTOR alias means forcing some OTHER ref into that
         // alias to displace him. We used the PLAYER -- but the alias runs a
@@ -1224,6 +1290,27 @@ namespace MFO::Packages {
         if (g_retreatHold.actorID && g_retreatHold.viaAPMF) {
             if (auto* pkg = Forms::g_apmfRetreatPackage)
                 APMFBridge::OfferPackage(g_retreatHold.actorID, pkg->GetFormID());
+        }
+
+        // APMF ANIMATED-HEAL REFRESH + STALE RELEASE (ch.9 0x49 route, OPT-IN):
+        // keep each live heal offer alive under APMF's 500ms expiry (the heal
+        // rule re-fills far slower than this 133ms Pump), and tear down any hold
+        // the rule has STOPPED refreshing (topped off / rule lost) so the
+        // follower's framework package resumes. Runs unconditionally like the
+        // loot/retreat refreshes above; the map is empty (a no-op) whenever
+        // bHealAnimPackage is off. Collect stale ids first, never erase mid-walk.
+        if (!g_healAnimMap.empty()) {
+            const auto hnow = Clock::now();
+            std::vector<RE::FormID> healStale;
+            for (auto& [fid, e] : g_healAnimMap) {
+                if (hnow - e.lastFillAt > kHealAnimStale) { healStale.push_back(fid); continue; }
+                APMFBridge::OfferPackage(fid, e.pkgID);   // keep-alive re-offer
+            }
+            for (auto fid : healStale) {
+                APMFBridge::ReleaseOfferPackage(fid);
+                g_healAnimMap.erase(fid);
+                spdlog::info("[healanim] {:08X}: animated heal released (rule stopped)", fid);
+            }
         }
 
         if (g_holder.phase == Phase::Idle) return;
@@ -1453,6 +1540,16 @@ namespace MFO::Packages {
                          a_why, g_retreatHold.actorID);
         }
 
+        // APMF ANIMATED HEAL (ch.9 0x49 route, OPT-IN): runtime-only like the
+        // retreat hold above -- no serialized alias tail -- but any still-live
+        // offer must be released and the map cleared so a stale package-offer
+        // never outlives the session (mid-heal save / revert / new game).
+        for (auto& [fid, e] : g_healAnimMap) {
+            APMFBridge::ReleaseOfferPackage(fid);
+            spdlog::info("[healanim] {} -- APMF animated heal was live (held {:08X}); released", a_why, fid);
+        }
+        g_healAnimMap.clear();
+
         // RETREAT PROBE: same eviction on load, same reason -- the retreat alias
         // is engine-serialized, so a save made mid-retreat loads with the
         // follower still claimed at static 60 and marching to the player's
@@ -1558,6 +1655,12 @@ namespace MFO::Packages {
         // only matters for the reverse ordering (a loot dispatch landing on a
         // follower already retreating, same tick or a race).
         if (g_retreatHold.actorID == a_follower->GetFormID()) return false;
+        // A HEAL likewise outranks loot on the shared handle (heal > loot): a
+        // follower mid animated-heal must not be yanked into a loot walk. No-op
+        // (map empty) when bHealAnimPackage is off, so the loot path is
+        // byte-identical then. Reciprocal: HealAnimFill evicts any loot excursion
+        // when a heal engages.
+        if (HealAnimHolds(a_follower->GetFormID())) return false;
 
         // APMF SHOWPIECE PRINCIPLE (marth, Docs/STATUS.md): MFO is a showpiece for
         // APMF -- with APMF present, MFO ROUTES THROUGH APMF and COMMITS to it.
@@ -1657,6 +1760,9 @@ namespace MFO::Packages {
         // guards the reverse race) must not re-touch the shared per-follower
         // OfferPackage handle either.
         if (g_retreatHold.actorID == a_follower->GetFormID()) return false;
+        // A HEAL also outranks loot on the shared handle (heal > loot). No-op
+        // when bHealAnimPackage is off (byte-identical loot path then).
+        if (HealAnimHolds(a_follower->GetFormID())) return false;
 
         // APMF ROUTE: this slot's excursion started on the APMF package (Fill
         // above), so it stays on it for the whole excursion -- rewrite the SAME
@@ -1922,6 +2028,12 @@ namespace MFO::Packages {
             // reverse ordering. Not previously guarded -- see the commit
             // message for whether a collision window existed before this.
             LootTravelEvictIf(a_follower->GetFormID(), "retreat engaging");
+            // Retreat ALSO outranks a heal on the same shared handle (retreat >
+            // heal > loot): drop any live animated-heal offer for this follower
+            // so it never stomps the retreat claim on the next Pump. No-op (map
+            // empty) when bHealAnimPackage is off. Reciprocal guard in
+            // HealAnimFill (declines while g_retreatHold holds this follower).
+            HealAnimEvictIf(a_follower->GetFormID(), "retreat engaging");
             g_retreatHold.actorID  = a_follower->GetFormID();
             g_retreatHold.startAt  = Clock::now();
             g_retreatHold.startPos = a_follower->GetPosition();
@@ -2053,6 +2165,82 @@ namespace MFO::Packages {
         if (g_retreatHold.actorID == a_id) g_retreatHold = RetreatHold{};
     }
 
+    // ── APMF ANIMATED HEAL (ch.9 0x49 route, OPT-IN bHealAnimPackage) ────────
+
+    bool HealAnimHolds(RE::FormID a_id) {
+        return a_id != 0 && g_healAnimMap.find(a_id) != g_healAnimMap.end();
+    }
+
+    void HealAnimEvictIf(RE::FormID a_id, const char* a_why) {
+        auto it = g_healAnimMap.find(a_id);
+        if (it == g_healAnimMap.end()) return;   // no-op unless he holds a heal offer
+        APMFBridge::ReleaseOfferPackage(a_id);   // runtime-only; no serialized alias tail
+        g_healAnimMap.erase(it);
+        spdlog::info("[healanim] {:08X}: animated heal released ({})", a_id, a_why);
+    }
+
+    bool HealAnimFill(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target) {
+        if (!a_follower || !a_spell || !a_target)  return false;
+        if (!Config::g_healAnimPackage.load())     return false;   // OPT-IN; OFF = never touched
+        if (!APMFBridge::Available())              return false;   // wholly inert without APMF
+        if (!IsHealSpell(a_spell))                 return false;   // heal-only; every other cast keeps kInstant
+
+        // Pick the record by TARGET IDENTITY. Each has a STATICALLY-authored
+        // target, so no runtime target write is ever needed (only the Spell input
+        // is set): self -> t6 self package; the player -> t0->player package. An
+        // ally / any other runtime actor is NOT animated here (that needs an
+        // unproven runtime t0-handle write) -- return false so the caller keeps
+        // the byte-identical kInstant heal.
+        RE::TESPackage* pkg = nullptr;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if      (a_target == a_follower) pkg = Forms::g_apmfHealSelfPackage;
+        else if (a_target == player)     pkg = Forms::g_apmfHealPlayerPackage;
+        else                             return false;
+
+        const RE::FormID fid = a_follower->GetFormID();
+        if (!pkg) {
+            spdlog::error("[healanim] {:08X}: heal package did not resolve (stale ESP?) -- kInstant heal kept", fid);
+            return false;
+        }
+        // RETREAT OUTRANKS a heal on the shared per-follower OfferPackage handle:
+        // a follower mid-disengage must keep fleeing, not stand and channel a
+        // heal. Decline (never stomp the retreat claim). Reciprocal: RetreatFill
+        // evicts any heal hold when it engages -- retreat > heal > loot.
+        if (g_retreatHold.actorID == fid) {
+            spdlog::debug("[healanim] {:08X}: declined -- retreat holds this follower", fid);
+            return false;
+        }
+        // Set the spell (target is static). A layout-guard failure writes nothing
+        // and keeps the kInstant heal.
+        if (!SetPackageSpell(pkg, a_spell)) {
+            spdlog::error("[healanim] {:08X}: heal package spell write failed -- kInstant heal kept", fid);
+            return false;
+        }
+        // COMMIT to APMF. A refusal fails to the kInstant heal (a heal MUST land,
+        // so unlike loot/retreat this one path does degrade) and is logged
+        // loudly -- it never silently masks an APMF-path bug.
+        if (!APMFBridge::OfferPackage(fid, pkg->GetFormID())) {
+            spdlog::error("[healanim] {:08X}: APMF REFUSED the heal package-offer claim -- kInstant heal kept", fid);
+            HealAnimEvictIf(fid, "offer refused");   // drop any prior live entry
+            return false;
+        }
+        auto it = g_healAnimMap.find(fid);
+        const bool fresh = (it == g_healAnimMap.end()) || it->second.pkgID != pkg->GetFormID();
+        if (fresh) {
+            // First engage (or a self<->player retarget): heal beats loot on the
+            // shared handle -- drop any loot excursion for this follower -- and
+            // nudge the AI to pick up the offered package (never resetAI, #3).
+            LootTravelEvictIf(fid, "heal-anim engaging");
+            a_follower->EvaluatePackage(true, false);
+            spdlog::info("[healanim] {:08X}: animated heal offered -> pkg {:08X} spell {:08X} target {:08X}",
+                         fid, pkg->GetFormID(), a_spell->GetFormID(), a_target->GetFormID());
+        }
+        auto& e = g_healAnimMap[fid];
+        e.pkgID      = pkg->GetFormID();
+        e.lastFillAt = Clock::now();
+        return true;
+    }
+
     Status Get() {
         Status s;
         s.phase        = g_holder.phase;
@@ -2075,6 +2263,11 @@ namespace MFO::Packages {
     void ClearTransientState() {
         ResetHolder();
         g_retreatHold = RetreatHold{};
+        // APMF animated-heal holds are runtime-only (no serialized alias tail),
+        // but the offers must be released so a stale package-offer never outlives
+        // the session -- same discipline as the loot/retreat sweep in ReleaseAll.
+        for (auto& [fid, e] : g_healAnimMap) APMFBridge::ReleaseOfferPackage(fid);
+        g_healAnimMap.clear();
         g_requests    = 0;
         g_completions = 0;
         g_declines    = 0;

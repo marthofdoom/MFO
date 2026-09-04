@@ -54,6 +54,12 @@ namespace MFO::Forms {
         g_retreatQuest   = Look<RE::TESQuest>(kRetreatQuest, "MFO_RetreatQuest");        // RETREAT PROBE
         g_retreatPackage = Look<RE::TESPackage>(kRetreatPackage, "MFO_RetreatPackage");  // RETREAT PROBE
         g_apmfRetreatPackage = Look<RE::TESPackage>(kAPMFRetreatPackage, "MFO_APMFRetreatPackage");  // APMF ch.9 0x49 route
+        // APMF animated-heal packages (ch.9 0x49 route, OPT-IN bHealAnimPackage).
+        // A miss disables ONLY the animated heal -- HealAnimFill declines and the
+        // caller keeps the byte-identical kInstant heal (named log, never a hard
+        // requirement).
+        g_apmfHealSelfPackage   = Look<RE::TESPackage>(kAPMFHealSelfPackage,   "MFO_APMFHealSelfPackage");
+        g_apmfHealPlayerPackage = Look<RE::TESPackage>(kAPMFHealPlayerPackage, "MFO_APMFHealPlayerPackage");
         g_tradeQuest     = Look<RE::TESQuest>(kTradeQuest, "MFO_TradeQuest");            // #21 econ bridge
         // P1 probe style. A miss disables ONLY the (default-off) style-swap
         // probe -- ProbeStyleTick refuses to swap on a null pointer and says

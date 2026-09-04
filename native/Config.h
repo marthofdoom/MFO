@@ -215,6 +215,22 @@ namespace MFO::Config {
     // never fires at all when APMF IS present, regardless of this toggle.
     inline std::atomic<bool>  g_warnNoApmf{ true };
 
+    // ANIMATED HEAL VIA THE FORCED-CASTING PACKAGE (MCM bHealAnimPackage).
+    // DEFAULT OFF -- the current heal path (CastSelfDirect/CastTargetDirect,
+    // kInstant force-apply) WORKS: the effect lands, no cast animation. This
+    // opt-in flips a HEAL onto the M9 forced-casting package (ENGINE_NOTES
+    // 0.17/0.21) routed through APMF's ch.9 0x49 package-offer channel, so the
+    // follower's OWN AI casts the heal ANIMATED while movement stays alive
+    // (APMFBridge::OfferPackage; the cast facet never claims movement). Covers
+    // self-heals (t6 package) and heal-the-player (t0->player package); ally/
+    // runtime-actor heals stay on the kInstant path. When OFF (or APMF absent)
+    // the heal is BYTE-IDENTICAL to today -- the guard short-circuits before any
+    // package work. Wholly INERT without APMF. No save state (the offer claim is
+    // runtime-only, like every other APMF facet claim). Field-UNCERTAIN whether
+    // 0x49 delivery drives a UseMagic cast the way the M9 alias probes did --
+    // this exists to A/B that in the field. See native/Packages.cpp HealAnimFill.
+    inline std::atomic<bool>  g_healAnimPackage{ false };
+
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc
     // hook. Now ON by default (field-proven; audit 2026-07-28).
