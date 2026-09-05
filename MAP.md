@@ -585,48 +585,49 @@ Hooks `Character::UpdateCombat` (`VTABLE_Character[0]`, idx `0xE4`, `:110,142`).
   if EITHER `g_commandTarget` OR `g_weaponStyleControl` is on (`:122`).
 
 ### CasterConsent.cpp — cast control (magic twin of Targeting)
-Hooks `CombatMagicCaster::CheckStartCast` (advisory, 14 vtables, idx `0x06`, `:906`)
-and `MagicCaster::CheckCast` (hard gate, `VTABLE_ActorMagicCaster[0]` ONLY, idx
-`0x0A`, `:872` — [1]/[2] are base-subobject vtables, patching them clobbers unrelated
-engine vtables).
+Hooks `CombatMagicCaster::CheckStartCast` (advisory, 14 vtables, idx `0x06`,
+`thunk` at `:495`, `InstallHook` at `:1010`) and `MagicCaster::CheckCast` (hard
+gate, `VTABLE_ActorMagicCaster[0]` ONLY, idx `0x0A`, `CheckCastThunk` at `:874`,
+`InstallCheckCastHook` at `:994` — [1]/[2] are base-subobject vtables, patching
+them clobbers unrelated engine vtables).
 - Signatures (mismatch corrupts every actor's cast gate): CheckStartCast
-  `bool(*)(CombatMagicCaster*, CombatController*)` (`:411`); CheckCast
-  `bool(*)(MagicCaster*, MagicItem*, bool, float*, CannotCastReason*, bool)` (`:760`).
+  `bool(*)(CombatMagicCaster*, CombatController*)` (`:495`); CheckCast
+  `bool(*)(MagicCaster*, MagicItem*, bool, float*, CannotCastReason*, bool)` (`:874`).
   Both dispatch to per-vtable original via `g_orig`/`g_castOrig` keyed on the vtable
   pointer; unrecognized vtable returns benign.
 - **§0.29 guard:** reads the actor via `a_cc->attackerHandle` (0x28) ONLY, never
-  `cachedAttacker`; static_asserts pin `attackerHandle==0x28 && <0x68` (`:251`).
-- `ClassifySpell` (PUBLIC, `:22`) → `Actuation.cpp:239`. `Want` (`:939`) →
-  `Actuation.cpp:273,459,533`. `WantedSpell` (`:933`) → `Scheduler.cpp:596` +
-  `CombatStyle.cpp:268` (the equip gate's one exemption). `NoteCooldown` (`:1012`)
-  → `Loadout.cpp:321`. `ClearTransientState` (`:1057`) → `Serialization.cpp:598`.
+  `cachedAttacker`; static_asserts pin `attackerHandle==0x28 && <0x68` (`:333,336`).
+- `ClassifySpell` (PUBLIC, `:33`) → `Actuation.cpp:239`. `Want` (`:1070`) →
+  `Actuation.cpp:273,459,533`. `WantedSpell` (`:1064`) → `Scheduler.cpp:596` +
+  `CombatStyle.cpp:268` (the equip gate's one exemption). `NoteCooldown` (`:1143`)
+  → `Loadout.cpp:321`. `ClearTransientState` (`:1188`) → `Serialization.cpp:598`.
 - **Phase 2 APMF hand-off (2026-09-02, ALLOWANCE-TEMPLATE.md §7):** both exclusivity
-  denies (`thunk`'s `!isWanted` branch, `CheckCastThunk`'s `ShouldDeny` verdict) now
-  check `APMFBridge::IsOwnedCastActive(fid)` first and STAND DOWN (return the AI's own
-  answer) when true — APMF's own CheckCast/CheckShouldEquip T2 hooks (separate
-  APMF.dll) already enforce the identical exclusivity via the ch.8 claim for an
-  owned-cast follower; running MFO's OWN deny too is redundant and fights it (two
-  independently-configured deny paths, iCastControl slider vs. hard claim). `Want`
-  (the consent GRANT / veto-removal) is UNCHANGED and still called unconditionally —
-  that mechanism is MFO's alone, APMF only ever narrows a YES to a NO. Legacy
-  (non-APMF / `bLegacyCastHybrid`) followers are unaffected: `IsOwnedCastActive`
-  returns false for them, so both denies run exactly as before.
-- **GRADUATED CAST SHELVED (2026-09-04, marth):** `CastExempt` (`:133`, the castLvl
-  1-3 kind-filter) now starts with `if (kGraduatedShelved) return false;` (`:132`
+  denies (`thunk`'s `!isWanted` branch `:651`, `CheckCastThunk`'s `exclusivityDeny`
+  verdict `:948-949`) now check `APMFBridge::IsOwnedCastActive(fid)` first and STAND
+  DOWN (return the AI's own answer) when true — APMF's own CheckCast/CheckShouldEquip
+  T2 hooks (separate APMF.dll) already enforce the identical exclusivity via the ch.8
+  claim for an owned-cast follower; running MFO's OWN deny too is redundant and
+  fights it (two independently-configured deny paths, iCastControl slider vs. hard
+  claim). `Want` (the consent GRANT / veto-removal) is UNCHANGED and still called
+  unconditionally — that mechanism is MFO's alone, APMF only ever narrows a YES to a
+  NO. Legacy (non-APMF / `bLegacyCastHybrid`) followers are unaffected:
+  `IsOwnedCastActive` returns false for them, so both denies run exactly as before.
+- **GRADUATED CAST SHELVED (2026-09-04, marth):** `CastExempt` (`:142`, the castLvl
+  1-3 kind-filter) now starts with `if (kGraduatedShelved) return false;` (`:134`
   the flag, dormant switch left in place below it) — collapses every graduated call
-  site to EXACT for any castLvl in 1-3 (only `CtrlUnlatchedDeny` `:228-251` and
-  `ShouldDeny` `:703-720` and `thunk`'s inline check `:594-602` route through
-  `CastExempt`, so this ONE flag governs all three; `CheckCastThunk` `:807` is
+  site to EXACT for any castLvl in 1-3 (only `CtrlUnlatchedDeny` `:282`,
+  `ShouldDeny` `:770`, and `thunk`'s inline check `:632-650` route through
+  `CastExempt`, so this ONE flag governs all three; `CheckCastThunk` `:874` is
   unaffected directly — it calls `ShouldDeny`/`CtrlUnlatchedDeny`, which now always
   says "deny" at 1-3, same as it always did at 4). Reason: porting the graduated
   exemption to APMF's T2c pre-computed allow-list can't match this hook's reactive
   per-cast gate without enumerating every castable spell (a staff's bound spell /
   scroll / mod-granted spell would fall off the list); revival is gated on a
   Synthesis-patcher spell classification pass. **UNTOUCHED by the shelve:** the
-  owned/exact APMF stand-down (`IsOwnedCastActive` at `:594` and `:865` — the
-  `!isWanted`/`exclusivityDeny` branches), `ConcUnboundedDeny` (`:174`, EXACT-only
+  owned/exact APMF stand-down (`IsOwnedCastActive` at `:661` and `:949` — the
+  `!isWanted`/`exclusivityDeny` branches), `ConcUnboundedDeny` (`:218`, EXACT-only
   already — `lvl<4` fast-outs before ever reaching `CastExempt`, so it was never
-  part of the graduated path), and the `CheckCast` (0x0A) hook install (`:920`,
+  part of the graduated path), and the `CheckCast` (0x0A) hook install (`:994`,
   stays installed — still needed for `ConcUnboundedDeny`'s hard bound and the
   APMF-absent exact-cast degrade). `Config::g_castControl` (`Config.h:307`) keeps
   its stored 0-4 range; 1-3 now behaves identically to 4 (only 0/off is distinct).
@@ -634,56 +635,55 @@ engine vtables).
   text, not touched (not a functional gap — see `Docs/MFO-CONVERSION-ROADMAP.md`
   facet #2 in the APMF repo, not updated here per the shelving brief's
   do-not-touch-APMF-repo constraint).
-- **CastBounds early-pass — the HARD-ABORT fix (2026-09-04, `Docs/SPEC-FORCED-CAST.md`
-  §2, ENGINE_NOTES §0.40, INVARIANTS #76). `CastBounds.cpp` is now a COMBAT-THREAD
-  READER of this file's exclusivity gates — a new dependency, added to `CasterConsent`'s
-  blast radius.** `ConcUnboundedDeny` (`:206`) checks `CastBounds::Live(a_fid, id)`
-  alongside the legacy `Packages::StreamLive` before applying the hard exact-bounding
-  veto. The `CheckStartCast` thunk (`:512`) and `CheckCastThunk`/0x0A (`:878`) each gained
-  an early `if (CastBounds::Live(...)) return <pass>;` ahead of every other deny in
-  those functions (latch/exclusivity/concentration/friendly-fire alike) — a
-  `CastBounds`-registered cast is MFO's OWN already-vetted cast and skips ALL of
-  them, not just the concentration bound. **What breaks:** any executor that arms
-  `CastBounds` for a spell it does NOT actually control (or forgets to `Disarm` on
-  exit) gets a standing bypass of every consent gate in this file for that (actor,
-  spell) pair until the TTL lapses — treat `CastBounds::Arm` as carrying the same
-  weight as the legacy `Packages::Begin` alias fill did. Sole caller today:
-  `ComposedCast::Try` (see that entry, near `Packages.cpp`'s APMF section below) —
-  by design, not a gap. `ConcProxy`'s plain `kInstant` `CastSpellImmediate` direct
-  force skips the `MagicCaster` state machine entirely (ENGINE_NOTES §0.13:
-  `RequestCastImpl → StartChargeImpl → StartReadyImpl → StartCastImpl →
-  FinishCastImpl`), so it never reaches these hooked thunks in the first place —
-  it has SHIPPED and heals correctly at `iCastControl` Exact with no HARD-ABORT.
-  The deck HARD-ABORT was specific to the AI-DELIBERATED heal-anim PACKAGE build
-  (shelved `feat/heal-anim-proxy`), never the plain kInstant path. Only a cast
-  that DELIBERATES through the real state machine needs the bound — as of
-  feat/cast-act (2026-09-05) that is APMF's OWN driven hand cast
-  (`core/CastExecutor.cpp`) on `ComposedCast`'s behalf, not an MFO-side hand
-  cast; the thunks can't tell the difference, which is exactly why the bound
-  is still required.
-- **BROADENED (2026-09-05, S1 field fix): `IsHealCastActive` standdown, alongside
-  every `CastBounds::Live` check above.** Deck field-test HARD-ABORT ("HARD-ABORTED
-  cast of 0004D3F2 (concentration unbounded)") proved the per-(actor,spell)
-  `CastBounds::Live` check alone is FRAGILE for the APMF-driven path: MFO no longer
-  touches the hand itself (PASS E), so it cannot be certain the exact FormID APMF's
-  animated drive or its guaranteed-delivery `CastSpellImmediate` fallback ends up
-  running through this hook is the SAME FormID `ComposedCast::Try` armed. All THREE
-  hard-abort sites (`ConcUnboundedDeny` `:219`, the `CheckStartCast` thunk's
-  early-pass `:532`, `CheckCastThunk`'s early-pass `:911`) now ALSO stand down on
-  `APMFBridge::IsHealCastActive(fid)` alone — a broad per-ACTOR trust, mirroring
-  `IsOwnedCastActive`'s identical per-actor (not per-spell) standdown for the
-  offense exclusivity deny. **What breaks:** this is deliberately coarser than
-  `CastBounds::Live` — ANY hard-abort deny in this file is suppressed for the WHOLE
-  duration of a live heal-cast claim, not just for the one armed spell. Acceptable
-  because a heal-cast claim only ever exists for a HEAL-kind spell MFO's own gambit
-  already vetted (`ComposedCast`'s `Enabled()` is heal-only-gated); widening this
-  standdown to cover offense would be a real regression (never do that).
+- **`ClientCastClaimed(fid, magicItem)` — THE GENERALIZED CLIENT-CAST-CLAIM
+  STANDDOWN (`:196`, anon ns; 2026-09-05, Task 2 audit of `Docs/CAST-ON-FRIENDLY.md`'s
+  "let the AI cast it, don't drive it" architecture).** Consolidates what used to be
+  three hand-duplicated OR-expressions (the 2026-09-04 `CastBounds` HARD-ABORT fix,
+  `Docs/SPEC-FORCED-CAST.md` §2/ENGINE_NOTES §0.40/INVARIANTS #76, then BROADENED
+  2026-09-05 by the S1 field fix) into one helper, called FIRST — ahead of every
+  other gate — at all three sites that must never hard-abort, deny, or force a
+  claimed cast: `ConcUnboundedDeny` (`:218`, folded into its `Packages::StreamLive ||
+  ClientCastClaimed` OR at `:245`), the `CheckStartCast` thunk's early-pass (`:553`),
+  and `CheckCastThunk`'s early-pass (`:922`). Two independent proofs, either
+  sufficient: (1) `CastBounds::Live(fid, spell)` — an MFO-side executor (today:
+  `ComposedCast::Try`) armed exactly this (actor, spell) as a cast it already
+  vetted; narrow, lock-free. (2) `APMFBridge::IsHealCastActive(fid)` — a live
+  declarative heal-cast claim exists for this actor at all; BROADER (per-actor, any
+  spell) because APMF's own drive (or its guaranteed-delivery `CastSpellImmediate`
+  fallback) is not guaranteed to land through the EXACT FormID `CastBounds` was
+  armed for (the 2026-09-05 S1 field HARD-ABORT, "HARD-ABORTED cast of 0004D3F2
+  (concentration unbounded)", proved (1) alone fragile for the APMF-driven path).
+  (1) is always implied by (2) today (`ComposedCast::Try` only ever Arms `CastBounds`
+  in the same call that succeeds a heal claim), so (2) alone already covers every
+  observed case — (1) stays because `CastBounds` is the general reusable primitive
+  (see its own entry below) and a future MFO-side executor could reintroduce a
+  (1)-only case. **What breaks:** any executor that arms `CastBounds` for a spell it
+  does NOT actually control (or forgets to `Disarm` on exit), or any caller of
+  `ClaimHealCast` that leaves a stale claim, gets a standing bypass of EVERY consent
+  gate in this file for that actor (heal-claim case: any spell, not just the armed
+  one) until the TTL/expiry lapses — treat both as carrying the same weight the
+  legacy `Packages::Begin` alias fill did. Deliberately does NOT fold in
+  `IsOwnedCastActive` (offense's own, separate exclusivity standdown, checked
+  independently at `:661`/`:949` — heal and offense stay two distinct claims, Task 3).
+  `ConcProxy`'s plain `kInstant` `CastSpellImmediate` direct force skips the
+  `MagicCaster` state machine entirely (ENGINE_NOTES §0.13: `RequestCastImpl →
+  StartChargeImpl → StartReadyImpl → StartCastImpl → FinishCastImpl`), so it never
+  reaches these hooked thunks and needs no claim/bound at all. Sole `CastBounds`
+  writer today: `ComposedCast::Try` (see that entry, near `Packages.cpp`'s APMF
+  section below) — by design, not a gap. **Audited 2026-09-05 (feat/mfo-claim-only-heal,
+  Task 2): every DENIED/HARD-ABORT/veto path in this file was walked and confirmed to
+  sit downstream of one of these two early-passes** — `ConcUnboundedDeny`,
+  `CtrlUnlatchedDeny` (only reachable past the thunk's own early-pass),
+  `ShouldDeny`/the exclusivity deny, the concentration force-block, the pacing deny,
+  the force-YES path, and `CheckCastThunk`'s friendly-fire hold all sit AFTER the
+  early-pass return in their respective functions, so a live claim silences all of
+  them, never just the concentration bound.
 - **Latch lifetime:** the Want latch does NOT clear on cast (spans the whole
   combat); `Want` overwrites SPELL only, never `permitAfter` or pacing breaks.
   Force-YES must NEVER apply to concentration spells (permanent-stream freeze,
-  `:579`). Fast-out needs ALL THREE `g_wantCount==0 && g_styleSwapCount==0 &&
-  g_ctrlCount==0` (`:434`). `WouldHitTeammate`'s `highActorHandles` walk is
-  main-thread-gated (`:848`), fails open off-main (§0.30 crash).
+  `:684`). Fast-out needs ALL THREE `g_wantCount==0 && g_styleSwapCount==0 &&
+  g_ctrlCount==0` (`:516`). `WouldHitTeammate`'s `highActorHandles` walk is
+  main-thread-gated (`:763,818`), fails open off-main (§0.30 crash).
 
 ### CombatStyle.cpp — weapon stance + equip gate (#75)
 Owns a follower's live per-combat `CombatController::combatStyle` (0x38); gates
@@ -1700,8 +1700,9 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
 - `Live(RE::FormID actor, RE::FormID spell)` (`:91`) — the COMBAT-THREAD reader.
   Lock-free (relaxed/acquire atomic loads only, no engine call); a torn, cleared,
   or expired slot reads false (fail-safe toward deny, never toward a false
-  permit). Consulted by `CasterConsent.cpp` at `:206` (`ConcUnboundedDeny`), `:512`
-  (`CheckStartCast` thunk), and `:878` (`CheckCastThunk`, 0x0A).
+  permit). Consulted (via `CasterConsent.cpp`'s `ClientCastClaimed` helper,
+  `:196`) by `ConcUnboundedDeny` (`:218`), the `CheckStartCast` thunk's
+  early-pass (`:553`), and `CheckCastThunk`'s early-pass (`:922`, 0x0A).
 - `Reset()` (`:104`) — clears every slot. `kPreLoadGame`/revert, called from
   `Actuation_Direct.cpp:928` beside `ConcProxy::Reset()`, NOT independently wired
   into `plugin.cpp` (folded into `ClearSelfCasts`'s existing teardown call site).
@@ -1722,6 +1723,27 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   HARD-ABORT was (`0002F3B8`/`FF001BA4` deck crash, ENGINE_NOTES §0.40,
   INVARIANTS #76), or leaves a stale early-pass outliving its stream (bounded
   only by TTL — a backstop, not a substitute for disarming).
+- **TASK 3 VERDICT (feat/mfo-claim-only-heal, 2026-09-05): KEEP, not retired —
+  but its per-spell precision is now PROVABLY REDUNDANT for the heal path
+  specifically.** `CasterConsent`'s `ClientCastClaimed` OR's `CastBounds::Live`
+  with `APMFBridge::IsHealCastActive`, and the latter is a strict superset for
+  every observed case: `ComposedCast::Try` only ever `Arm`s `CastBounds` in the
+  SAME call that a heal claim succeeds, and only ever `Disarm`s it in the same
+  call/exit path that releases the claim — so whenever `CastBounds::Live` is
+  true for the heal path, `IsHealCastActive` is already true too, and the
+  broadening that added the latter (2026-09-05 S1 field fix, see
+  `CasterConsent.cpp`'s entry above) exists precisely because a per-spell match
+  proved fragile where the coarser per-actor one did not. Kept anyway, for two
+  reasons neither of which is "it might do something today": (1) it is a
+  GENERAL, cheap (lock-free, 8 slots), already-battle-tested primitive — "the
+  MFO-executed-cast bound" — documented as outliving any one caller (this
+  entry's own header), so a future MFO-side executor that once again drives a
+  bounded cast directly (not through APMF) would need this exact mechanism
+  back; deleting it now means re-inventing it later. (2) `Docs/CAST-DELIVERY.md`
+  and `ENGINE_NOTES §0.40`/`INVARIANTS #76` document it as the fix for a REAL
+  field HARD-ABORT crash — removing a crash-class safety net to save ~190 lines
+  of dead-weight-today code is the wrong trade (`CLAUDE.md`: "do not delete it
+  reflexively"). No code changed here this pass.
 
 ### ComposedCast.cpp / ComposedCast.h — the Composed Forced Cast (CFC) shim (S1, 2026-09-05)
 THIN SHIM as of the feat/cast-act pass — replaces the deleted `HealAnimFill` package
@@ -1811,6 +1833,38 @@ full history (the OBSERVE-AND-REPLICATE drive this superseded, and why it raced)
   file. That is an APMF-side architectural change outside MFO's control; flagged
   here rather than worked around, since MFO's own dispatch logic for offense is
   untouched and CI never links a live APMF.dll to exercise it.
+- **TASK 1 VERDICT (feat/mfo-claim-only-heal, 2026-09-05): already claim-only —
+  audited, not reworked.** The brief for this pass asked for MFO to become
+  claim-only (issue + release, no equip/drive/proxy/`CastSpellImmediate` of its
+  own). Line-by-line audit found `Try`/`End` already satisfy this exactly, as
+  shipped by the PASS E + facet-expiry work above: `Try` calls only
+  `APMFBridge::ClaimHealCast` + `CastBounds::Arm`, `End` calls only
+  `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm` — no engine call, no
+  equip, no hand touch anywhere in this file. No functional change made; see
+  the calling task's report for the full audit trail.
+- **FORWARD LOOK — the "let the native AI cast it" design is RE'd, NOT built
+  (2026-09-05).** A parallel research pass (see the coordinating session's
+  `cast-on-friendly.md`/`fable-cast-re-findings.md` notebooks) worked out a
+  DIFFERENT, more native mechanism than today's PASS E: instead of APMF's
+  `core/CastExecutor.cpp` equipping+driving the hand caster on MFO's behalf,
+  APMF would patch five vfunc seats (`CheckShouldEquip` 0x0F, `CheckStartCast`
+  0x06, `GetMagicTarget` 0x0A, `CheckStopCast` 0x07, `SetupAimController` 0x0D)
+  so the FOLLOWER'S OWN AI equips, charges, aims, and fires the heal at the
+  claimed ally with zero engine-cast call from ANY mod. **This is a genuine
+  research conclusion with an implementation plan, not yet implemented
+  anywhere in the APMF tree** (verified 2026-09-05: every APMF branch with this
+  work is OBSERVE-ONLY — passive seat probes, no seat answers written). The
+  natural channel for it is the EXISTING, already-declared-but-currently-UNUSED
+  `kIntent_Cast`/`RequestCast`/`APMF_CastRequest` (ABI v5, `APMF_API.h`) — but
+  that Intent's OWN doc comment still describes the RETIRED PASS D contract
+  ("APMF fires NO cast: the CLIENT executes its own animated cast"), i.e. the
+  exact MFO-drives-the-hand design that raced and was pulled. Switching
+  `ComposedCast::Try` to `RequestCast` TODAY, ahead of APMF actually
+  implementing the 5-seat answers, would be a regression: nothing would equip
+  or cast the heal at all. **Do not make that switch until APMF's seat-answering
+  implementation lands and its `APMF_API.h` comments are updated to match** —
+  at that point `ComposedCast`'s two-line `Try`/`End` shape is expected to stay
+  exactly as thin, just pointed at a different Intent.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

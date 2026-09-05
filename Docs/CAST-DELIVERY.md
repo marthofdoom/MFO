@@ -294,16 +294,30 @@ immediate false): offense and buff casts never enter this module and stay on the
 byte-identical AI-fired / kInstant paths. It composes two things, no hand touch at
 all:
 
-1. `APMFBridge::ClaimHealCast(fid, spellID, targetID, hand=0)` — the declarative
-   `kIntent_SelectSpell` +ACT claim:
+1. `APMFBridge::ClaimHealCast(fid, spellID, targetID, APMFBridge::kApmfHandLeft)`
+   — the declarative `kIntent_SelectSpell` +ACT claim:
 
    ```cpp
    APMF_API::APMF_Param p{};
    p.form   = spellFormID;      // the SpellItem
-   p.ival   = HAND;             // 0 auto / 1 right / 2 left / 3 dual
+   p.ival   = kApmfHandLeft;    // ALWAYS left (2) -- never auto (0). See the HAND FIX below.
    p.target = castTargetFid;    // 0 => self (or a winning combat-target claim first)
    Handle h = api->RequestEx(actorFid, kIntent_SelectSpell, basis, &p);
    ```
+
+   **HAND FIX (2026-09-05, deck: heal driven right hand, then displaced by the
+   equip gambit's own re-equip ~500ms later, cast never left "rest").**
+   `ClaimHealCast` used to pass `hand=0` (auto); APMF's auto resolution prefers
+   the RIGHT hand when it reads free, and while a follower was transiently
+   unarmed (a facet-expiry gap, see below) auto grabbed the right hand — then
+   the equip gambit's own periodic re-equip put the melee weapon right back
+   into that hand, displacing the spell. THE RULE: whenever an equip gambit is
+   actively force-holding a weapon (`APMFBridge::IsEquipmentClaimActive`), that
+   weapon owns the RIGHT hand, so a spell must claim LEFT rather than contest
+   it; LEFT is also the correct fallback with no weapon held (heals are
+   left-hand almost always regardless). An intelligent per-perk/loadout-aware
+   hand pass (dual-cast when both hands are free, etc.) is tracked separately
+   as future work, not built here.
 
    APMF equips the resolved hand(s), drives the observed animated sequence
    (`core/CastExecutor.cpp`, ported/graduated from this file's old drive — same
@@ -323,8 +337,31 @@ A refused claim `CastBounds::Disarm`s and degrades to the caller's existing
 (`ComposedCast::End` → `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`) has no
 dedicated per-tick reconcile call site — `Try` short-circuits `CastSelfDirect`/
 `CastTargetDirect` before their own stream bookkeeping runs, so an abandoned claim
-relies on the SAME "stop refreshing → expire" ~500 ms backstop (`APMFBridge::
-Tick()`) the offense combat-target/cast-select claims already use.
+relies on the SAME "stop refreshing → expire" backstop the offense
+combat-target/cast-select claims already use. **This is deliberate, not a gap**
+(marth: "hold the claim across ticks and Repoint rather than release/re-claim") —
+the caller re-`Try`s (which Repoints the SAME handle) every tick the gambit still
+wants the heal; the instant the gambit stops evaluating that rule (target healed,
+lost, out of range, spell switched to a different one), `Try` simply stops being
+called and the claim ages out on its own, with NO explicit release call needed on
+the common path. `APMFBridge::Tick()`'s expiry sweep no longer uses the flat 500ms
+`kExpiry` for this facet: see `FacetExpiry()` below.
+
+**`FacetExpiry()` — round-robin-aware expiry (2026-09-05, `feat/facet-expiry`).**
+The heal claim (and the offense cast-select/combat-target/equipment claims) are
+refreshed from inside the SAME per-follower `Scheduler::Tick` ROUND-ROBIN lap —
+one follower serviced per ~133ms — so a given follower's own gambit only re-fires
+every ~0.133s × party size. For anything but a 1-2-follower party that gap already
+exceeds a flat 500ms, so the OLD flat backstop released a live, still-wanted claim
+every round-robin lap (deck-proven: `feat/heal-claim-hold`'s "claim/release every
+~530ms, caster stuck at rest forever", then re-proven the SAME day on the
+equipment claim, Cicero deck capture). `FacetExpiry()` (`APMFBridge.cpp`, anon ns)
+sizes the window the SAME way `TargetCastReconcile`/`SelfCastReconcile` already
+size their own round-robin-aware release windows (`suppress*1.12 + 0.133*partySize
++ 0.5`, floored at the old 500ms) — `Tick()`'s heal/cast/target/equipment handle
+checks all compare against `FacetExpiry()` now, not the flat `kExpiry` (which
+package-offer and combat-action-deny still use — see `APMFBridge.cpp`'s own
+entry in `MAP.md` for why those two are unaffected).
 
 ### S1 deck field-test fixes (2026-09-05) — two real MFO-side bugs
 
@@ -342,6 +379,21 @@ mirroring `IsOwnedCastActive`'s existing per-actor (not per-spell) standdown for
 the offense exclusivity deny. A live heal-cast claim is proof MFO already
 vetted this cast; the consent hook no longer needs an exact spell-identity
 match to stand down for it.
+
+**GENERALIZED (`feat/mfo-claim-only-heal`, 2026-09-05, Task 2 audit).** The three
+duplicated OR-expressions BUG A's fix added (`CastBounds::Live(...) ||
+APMFBridge::IsHealCastActive(fid)`, hand-copied at all three sites) are now one
+helper, `CasterConsent.cpp`'s `ClientCastClaimed(fid, magicItem)` — same two
+checks, same behavior, called first at all three sites. Every `DENIED`/
+`HARD-ABORT`/veto path in `CasterConsent.cpp` was walked this pass to confirm it
+sits downstream of one of the two early-passes that call it (`ConcUnboundedDeny`,
+`CtrlUnlatchedDeny`, `ShouldDeny`/the exclusivity deny, the concentration
+force-block, the pacing deny, the force-YES path, and `CheckCastThunk`'s
+friendly-fire hold) — a live client cast claim silences ALL of them for its
+follower, not just the concentration bound. See `MAP.md`'s `CasterConsent.cpp`
+entry for the full site-by-site trail. Deliberately does NOT fold in
+`IsOwnedCastActive` (offense's own, separate standdown) — heal and offense stay
+two distinct claims.
 
 **BUG B — investigated, NOT a code bug (marth, 2026-09-05).** Field observation:
 MFO requested +ACT for two different heal spells on the same follower, one
@@ -387,6 +439,45 @@ an APMF-side architectural change outside this repo's control; MFO's own offense
 dispatch logic is untouched by this pass, and CI never links a live APMF.dll to
 exercise the interaction.
 
+### Task 1/3 audit (`feat/mfo-claim-only-heal`, 2026-09-05) — already claim-only
+
+A later pass was briefed to "make the heal path claim-only": MFO issues an APMF
+claim naming the gambit's spell/target and releases it when the gambit no longer
+wants the heal, calling no engine cast function, equipping nothing, driving no
+caster, minting no proxy. Line-by-line audit of `ComposedCast::Try`/`End` (this
+section, above) found that description ALREADY matches this file's PASS E shape
+exactly — `Try` calls only `ClaimHealCast` + `CastBounds::Arm`, `End` calls only
+`ReleaseHealCast` + `CastBounds::Disarm`, and release is the existing
+"stop refreshing → expire" idiom described above. **No functional change was
+needed or made** for Task 1; the hand policy (`kApmfHandLeft`) and the
+`bHealAnimPackage` opt-in gate were likewise already exactly as specified.
+
+### FORWARD LOOK — native-AI seat-answering (RE'd, NOT built, 2026-09-05)
+
+A separate research effort (outside this repo) worked out a DIFFERENT, more
+native mechanism than the PASS E shape documented above: instead of APMF's
+`core/CastExecutor.cpp` equipping+driving the follower's hand caster on MFO's
+behalf, APMF would answer five vfunc seats on the follower's own combat caster
+object — `CheckShouldEquip` (0x0F), `CheckStartCast` (0x06), `GetMagicTarget`
+(0x0A), `CheckStopCast` (0x07), `SetupAimController` (0x0D) — so the FOLLOWER'S
+OWN AI equips, aims, charges, and fires the heal at the claimed ally, with ZERO
+engine-cast call from either mod. This is a real, disassembly-backed research
+conclusion with a concrete implementation plan (the RE notebook's own "IMPLEMENTATION
+PLAN — research conclusion, no code written"), but as of this writing **it is not
+implemented anywhere in the APMF tree** — every branch touching this idea is
+OBSERVE-ONLY (passive seat probes, no seat answered). The natural channel for it
+is the already-declared `kIntent_Cast`/`RequestCast`/`APMF_CastRequest` (ABI v5,
+`APMF_API.h`) — currently UNUSED by MFO — but that Intent's own doc comment still
+describes the RETIRED PASS D contract ("APMF fires NO cast: the CLIENT executes
+its own animated cast"), i.e. the exact MFO-drives-the-hand design this file's
+"S1 rework" section above already retired for racing. **Switching
+`ComposedCast::Try` onto `RequestCast` today, ahead of APMF actually
+implementing the 5-seat answers, would silently break heal delivery** (nothing
+would equip or animate the spell). Do not make that switch until an APMF build
+exists that answers those seats and `APMF_API.h`'s own comments are updated to
+match it — at that point this file's `ComposedCast` section is expected to need
+only its Intent/function-pointer names updated, not its overall shape.
+
 ### CastBounds — the HARD-ABORT fix (§2)
 
 `CasterConsent::ConcUnboundedDeny` hard-aborts a tracked follower's own
@@ -428,6 +519,19 @@ real state machine (that is the whole point — a real, animated cast), so it is
 only path that needs the bound, regardless of which DLL's code is actually turning
 the crank on the hand caster. `ComposedCast::Try` being the sole `CastBounds::Arm`
 caller is by design.
+
+**Task 3 verdict (`feat/mfo-claim-only-heal`, 2026-09-05): KEEP, redundancy
+noted, nothing deleted.** `CasterConsent`'s `ClientCastClaimed` helper ORs
+`CastBounds::Live` with `APMFBridge::IsHealCastActive`, and for the heal path
+specifically the latter is a strict superset of the former today (`ComposedCast::
+Try` only ever `Arm`s `CastBounds` in the same call a heal claim succeeds, and
+only ever `Disarm`s it alongside releasing that claim) — so `CastBounds::Live`
+currently never fires independently of `IsHealCastActive` for this consumer.
+Kept anyway: it is the general, cheap, already-proven "MFO-executed-cast bound"
+primitive documented above as outliving any one caller, and it is the fix for a
+real field HARD-ABORT crash — pruning a crash-class safety net to remove
+~190 lines of code that costs nothing to keep is the wrong trade. No code
+changed here this pass.
 
 ### Path comparison
 
