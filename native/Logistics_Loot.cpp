@@ -1215,7 +1215,20 @@ namespace MFO::Logistics {
         // Take all "valuable" MISC items on a corpse/container -- grabbed and
         // dibs-protected like gold/jewellery (Valuables tier below); SELLING
         // them is a separate existing/future economy path, this only loots.
+        //
+        // GOLD FOLDS INTO VALUABLES (marth 2026-09-05, deck evidence): a chest
+        // holding only 101 gold was classified "empty" and skipped, because
+        // Valuables explicitly excluded coin (IsValuableMisc) and almost nobody
+        // separately configures act.loot_gold. "Loot valuables (to sell)"
+        // already means "grab what's worth money" -- coin is the purest case --
+        // so a Valuables rule now also takes gold. act.loot_gold is UNCHANGED
+        // and still works standalone for anyone who wants coin only. The take
+        // reuses LootGold verbatim (the proven Gold001/OCF-coin scan over
+        // GetInventory) rather than re-deriving a gold count here --
+        // Actor::GetGoldAmount() is known to null-deref on some containers,
+        // which is exactly why LootGold never calls it.
         bool LootValuables(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
+            if (a_peek && LootGold(a_follower, a_src, true)) return true;
             struct Take { RE::TESBoundObject* obj; std::int32_t count; };
             std::vector<Take> takes;
             for (auto& [obj, data] : a_src->GetInventory()) {
@@ -1230,7 +1243,7 @@ namespace MFO::Logistics {
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;
-            bool moved = false;
+            bool moved = LootGold(a_follower, a_src, false);   // proven take, see banner above
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
                 a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer,
@@ -1744,9 +1757,9 @@ namespace MFO::Logistics {
                     } else if (auto* base = ref->GetBaseObject()) {
                         lootable = base->Is(RE::FormType::Container);
                         // ACQUIRE PROBE (route 2b) WHITELIST: for the Arrows /
-                        // Bolts / Gold scans ONLY, a loose world ref of exactly
-                        // that thing is a candidate too. It rides the SAME
-                        // excursion machinery (walk to it; every gate below
+                        // Bolts / Gold / Potions / Valuables scans ONLY, a loose
+                        // world ref of exactly that thing is a candidate too. It
+                        // rides the SAME excursion machinery (walk to it; every gate below
                         // still applies) and the acquire happens at ARRIVAL via
                         // a VM-dispatched ObjectReference.Activate in the
                         // excursion driver -- NEVER an in-place PickUpObject
@@ -1756,10 +1769,28 @@ namespace MFO::Logistics {
                                 if (auto* ammo = base->As<RE::TESAmmo>();
                                     ammo && AmmoIsBolt(ammo) == (a_cat == Category::Bolts))
                                     lootable = loose = true;
-                            } else if (a_cat == Category::Gold) {
-                                constexpr RE::FormID kGold001 = 0x0000000F;   // see TakeGold
-                                if (base->GetFormID() == kGold001)
+                            } else if (a_cat == Category::Gold || a_cat == Category::Valuables) {
+                                // Gold folds into Valuables (marth 2026-09-05):
+                                // a loose Gold001 pile qualifies for a Valuables
+                                // rule too, via the same proven walk-and-Activate
+                                // excursion.
+                                constexpr RE::FormID kGold001 = 0x0000000F;   // see LootGold
+                                if (base->GetFormID() == kGold001) {
                                     lootable = loose = true;
+                                } else if (a_cat == Category::Valuables && IsValuableMisc(base)) {
+                                    // Loose gems / value-dense MISC (marth
+                                    // 2026-09-05 scope addition: "very loose
+                                    // item variation, just gems for now").
+                                    // Same eligibility test the container take
+                                    // (LootValuables/IsValuableMisc, the
+                                    // value/weight-ratio rule) already uses --
+                                    // a loose ref qualifies iff a container
+                                    // holding it would have been looted. Soul
+                                    // gems/jewelry/ingredients/equipment as
+                                    // loose refs stay out of scope; loose isn't
+                                    // generalized to every item type yet.
+                                    lootable = loose = true;
+                                }
                             } else if (a_cat == Category::Potions) {
                                 // Loose potion on a surface (marth field: Stenvar
                                 // walked past a health potion on a table). Same

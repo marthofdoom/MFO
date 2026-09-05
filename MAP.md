@@ -817,9 +817,27 @@ are declared there and defined in their home module). Layout:
 - `Logistics_Economy.cpp` (1034) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
   `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
-- `Logistics_Loot.cpp` (2387) — the loot judge + per-category looters,
-  claim-and-release, navmesh reach, `AcquireEquip:538`, `LootEquipment:617`,
-  `LootNearby:1609`, `StripCorpse:2250`, `RunExcursionScan:2314`.
+- `Logistics_Loot.cpp` (2419) — the loot judge + per-category looters,
+  claim-and-release, navmesh reach, `AcquireEquip:550`, `LootEquipment:629`,
+  `LootGold:1026`, `LootValuables:1230`, `HasLoot:1525`, `LootNearby:1622`,
+  `StripCorpse:2282`, `RunExcursionScan:2346`.
+  **GOLD + LOOSE GEMS FOLD INTO VALUABLES (2026-09-05):** `Category::Valuables`
+  (`Logistics_internal.h:256`) now also matches gold — `LootValuables`
+  (`Logistics_Loot.cpp:1230`) peeks/takes gold by calling `LootGold` (`:1026`)
+  directly rather than re-deriving a gold count (never `Actor::GetGoldAmount`,
+  which null-derefs — `LootGold` sums `Gold001`/OCF-coin off `GetInventory`).
+  The route-2b loose-ref whitelist inside `LootNearby` (`:1773`) accepts a
+  loose `Gold001` ref for `Category::Valuables` the same as it always has for
+  `Category::Gold`, AND a loose value-dense MISC ref (a dropped gem etc.) for
+  `Category::Valuables`, gated by the same `IsValuableMisc` (`:1203`,
+  value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:489`) the
+  container take already uses — a loose ref qualifies iff a container holding
+  it would have been looted. `act.loot_gold` is UNCHANGED, still a gold-only
+  rule. Loose soul gems/jewelry/ingredients/equipment are still NOT
+  whitelisted — loose-item pickup (route 2b) isn't generalized to every item
+  type yet; that generalization is a documented follow-up, not built here.
+  BEHAVIOUR CHANGE: an existing `act.loot_valuables` rule now also picks up
+  coin and loose gems.
 - `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state
   (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
   `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/`Claim`,

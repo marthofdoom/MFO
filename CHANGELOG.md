@@ -1,3 +1,10 @@
+## Unreleased (branch feat/loot-valuables-gold, not shipped) -- Gold and loose gems fold into "loot valuables"
+
+- **Not a release. This branch is not merged and not part of any shipped build yet.** Nothing below changes what you see in game unless you are running this exact branch.
+- **A follower set to loot valuables now grabs gold too, from a container or a loose pile on the ground.** Loot valuables always meant "grab what's worth money," and coin is the plainest case, but until now it needed its own separate "loot gold" rule that almost nobody set, so gold sat there ignored. This is a real behavior change for anyone already using "loot valuables": your followers will start picking up coin they didn't before. "Loot gold" is untouched and still works on its own if that is all you want.
+- **A loose gem or other value-dense trinket lying out in the open now counts too**, not just ones already sitting in a container or on a corpse. Same rule decides whether it is worth grabbing either way.
+- Loose soul gems, jewellery, ingredients and equipment lying out in the open are still not picked up -- generalizing "loose on the ground" to every item type is a later step, not this one.
+
 ## Unreleased (branch feat/forced-cast, not shipped) -- Composed Forced Cast groundwork
 
 - **Not a release. This branch is not merged, not pushed, and CI has not run on it.** Nothing below changes what you see in game yet.
