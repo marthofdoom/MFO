@@ -1442,8 +1442,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `IsHealCastActive`** (`APMFBridge.cpp:392,409,419`, decls `APMFBridge.h:248,
   255,264`) — the DECLARATIVE heal-cast facet `ComposedCast` claims, superseding
   PASS D. Rides the SAME `kIntent_SelectSpell` channel offense's `ClaimCasting`
-  uses (PER-CAST, refresh-or-expire — same `kExpiry` 500ms backstop shape as
-  every other claim in this file), but a SEPARATE `g_owned` slot
+  uses (PER-CAST, refresh-or-expire), but a SEPARATE `g_owned` slot
   (`healHandle`/`healSpell`/`healTarget`/`healHand`/`healRefreshed`) — heal and
   hostile casts are mutually exclusive per tick by `CasterConsent::SpellKind`,
   never concurrent on one follower, but kept distinct to avoid cross-talk.
@@ -1466,6 +1465,37 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   structural fix for the PASS D force-equip race. `a_hand` (0 auto / 1 right /
   2 left / 3 dual) is always passed 0 by MFO today; `a_target` (0 = self) is
   the ally/player FormID for heal-other.
+- **FIELD BUG FOUND + FIXED (2026-09-05, deck: claim/release every ~530ms,
+  caster stuck at rest forever — `feat/heal-claim-hold`).** `healHandle` used
+  to share the flat 500ms `kExpiry` backstop with every other facet in this
+  file — fine for spellHandle/targetHandle (refreshed on a tight combat-thread
+  cadence), WRONG for the heal claim: it is only refreshed once per
+  `Scheduler::Tick` ROUND-ROBIN lap for its owning follower (ONE follower
+  serviced per ~133ms, `Scheduler.cpp`), so for anything but a 1-2-follower
+  party the real refresh gap already exceeds 500ms and `Tick()`'s sweep
+  released a live, still-wanted claim every lap. Fixed with a dedicated
+  `HealExpiry()` (`APMFBridge.cpp:~93`, anon ns) sized the SAME way
+  `TargetCastReconcile`/`SelfCastReconcile` already size their own
+  round-robin-aware release windows (`suppress*1.12 + 0.133*partySize + 0.5`,
+  floored at the old 500ms) — `Tick()`'s `healHandle` check now compares
+  against `HealExpiry()`, not `kExpiry`. Reads `Followers::g_active.size()`
+  from `Tick()`/the claiming worker context, same as the Reconcile functions
+  already do from the identical `SleeperLoop` `AddTask` body (`Diagnostics.cpp`)
+  — safe by the same serial-job-worker reasoning (#4), not a new access
+  pattern. **Second bug, same symptom:** `Logistics.cpp`'s OOC concentration
+  branch (`ServiceFollower`'s `for (pass < 2 && !acted)` dibs-tier loot-order
+  wrapper) `break`'d its inner scan on a delivered `CastTargetDirect` Applied
+  without setting `acted = true`, so pass 1 re-ran the WHOLE scan and re-fired
+  the same already-delivered cast a second time this tick (double
+  `"[logistics] ... OOC concentration ..."` log line, double `ClaimHealCast`
+  call — `CastTargetDirect` returns `Applied` unconditionally, unpaced, the
+  instant `ComposedCast::Try` claims, so the 2nd call was a real 2nd claim
+  call, not just a log dupe). Fixed: `acted = true` before the `break`,
+  matching the `selfPkg`/`immediate` branches beside it. The IN-COMBAT
+  concentration path (`Scheduler.cpp:552`'s single-pass combat scan) shares
+  the SAME `CastTargetDirect`/`ComposedCast::Try` call (so it got the
+  `HealExpiry()` fix for free) but never had the double-fire bug — its scan
+  has no pass-0/pass-1 wrapper, `stopped=true; break;` ends it after one Fire.
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE
@@ -1670,8 +1700,10 @@ full history (the OBSERVE-AND-REPLICATE drive this superseded, and why it raced)
   configured spell. If two different spells fire for one follower, two
   different RULES name them; that is a config question for marth, not a code bug.
 - `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`.
-  Call the instant the gambit stops wanting the heal; the shared `APMFBridge` 500ms
-  `kExpiry` backstop (`Tick()`, `Diagnostics.cpp`) covers a caller that forgets —
+  Call the instant the gambit stops wanting the heal; the `APMFBridge` `HealExpiry()`
+  backstop (`Tick()`, `Diagnostics.cpp` — round-robin/party-size-aware since the
+  2026-09-05 claim/release fix, NOT the flat 500ms `kExpiry` the other facets use)
+  covers a caller that forgets —
   **there is no per-tick reconcile wired to call `End` explicitly** (Try short-
   circuits `CastSelfDirect`/`CastTargetDirect` before their own `g_selfCast`/
   `g_targetCast` bookkeeping runs), so release relies on the SAME "stop refreshing

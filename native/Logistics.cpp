@@ -1295,6 +1295,18 @@ namespace MFO::Logistics {
                     if (r == Actuation::SelfCast::Applied) {
                         spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
                                      "(direct force, bounded)", id, sp->GetFormID(), tgt->GetFormID());
+                        // acted = true (NOT just `break`): this `break` only exits the
+                        // INNER start-scan; the OUTER "for (pass < 2 && !acted)" loot-
+                        // ordering wrapper above (marth's dibs-tier pass 0/1 split) does
+                        // not know this delivered, so leaving `acted` false let pass 1
+                        // re-run the WHOLE scan from start=0, re-match this same rule
+                        // (never deferred -- it isn't a dibs-tier loot op), and re-fire
+                        // CastTargetDirect a SECOND time this tick -- the double
+                        // "[logistics] ... OOC concentration ..." line (and a doubled
+                        // APMFBridge::ClaimHealCast call under it) the deck captured
+                        // 2026-09-05. One winning cast is one tick's action, exactly
+                        // like the selfPkg/immediate branches below.
+                        acted = true;
                         break;                          // delivered -> done this tick
                     }
                     // Refreshed (paced this tick) OR Declined (unaffordable / off-AE /

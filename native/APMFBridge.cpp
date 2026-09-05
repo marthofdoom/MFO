@@ -1,6 +1,7 @@
 #include "APMFBridge.h"
 #include "APMF_API.h"
 #include "Config.h"
+#include "Followers.h"   // g_active.size() -- heal-claim expiry sizing (HealExpiry)
 #include "MainThread.h"
 #include "Rapport.h"
 
@@ -84,6 +85,29 @@ namespace MFO::APMFBridge {
         // the combat-END detector (refreshing stops when the fight ends). cast-select:
         // a backstop behind the crisp ReleaseCasting. ~4 pumps at kPumpMs=133.
         constexpr auto kExpiry = std::chrono::milliseconds(500);
+
+        // HEAL-CAST'S OWN EXPIRY (deck 2026-09-05: claim/release every ~530 ms,
+        // caster stuck at rest forever). Every OTHER facet above is refreshed on
+        // a tight cadence (a live combat controller re-Wants every combat-thread
+        // beat), so the flat 500 ms kExpiry is a fine backstop for them. The
+        // heal-cast claim is different: it is refreshed once per Scheduler::Tick
+        // ROUND-ROBIN lap for its owning follower -- ONE follower serviced per
+        // ~133 ms (Scheduler.cpp), so a given follower's own gambit only re-fires
+        // (and re-Claims/Repoints) every ~0.133s * partySize. For anything but a
+        // 1-2-follower party that gap already exceeds the flat 500 ms, so the
+        // Tick() sweep below released a live, still-wanted heal claim every
+        // round-robin lap and APMF's animated cast could never leave "rest"
+        // (APMF log: CLAIMED -> released ~531 ms later, forever, deck capture).
+        // Size it the SAME way TargetCastReconcile/SelfCastReconcile already
+        // size their own round-robin-aware release windows: out-wait the
+        // worst-case suppression + round-robin gap, floored at kExpiry so a
+        // small party never regresses to a SLOWER release than before.
+        std::chrono::milliseconds HealExpiry() {
+            const float suppress  = std::max(0.0f, Config::g_suppressWindow.load());
+            const float partySize = static_cast<float>(Followers::g_active.size() + 1);   // + player
+            const float sec = std::max(0.5f, suppress * 1.12f + 0.133f * partySize + 0.5f);
+            return std::chrono::milliseconds(static_cast<std::uint64_t>(sec * 1000.0f));
+        }
 
         // Ensure ONE channel claim tracks `want` (0 == release it). Caller holds g_mx.
         // On a CHANGE of an existing claim, RE-POINTS in place via Repoint (v3, same
@@ -449,7 +473,7 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.actionHandle, o.actionMask);
             if (o.equipHandle != APMF_API::kInvalidHandle && now - o.equipRefreshed >= kExpiry)
                 ReleaseHandleLocked(o.equipHandle, o.equip);
-            if (o.healHandle != APMF_API::kInvalidHandle && now - o.healRefreshed >= kExpiry) {
+            if (o.healHandle != APMF_API::kInvalidHandle && now - o.healRefreshed >= HealExpiry()) {
                 ReleaseHandleLocked(o.healHandle, o.healSpell);
                 o.healTarget = 0; o.healHand = 0;
             }
