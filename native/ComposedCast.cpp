@@ -65,10 +65,17 @@ namespace MFO::ComposedCast {
 
         // CLAIM (create) or refresh/re-point the declarative heal-cast facet:
         // APMF equips + drives the animated cast + guarantees delivery. hand =
-        // auto (0) -- APMF picks a free hand; an intelligent per-perk hand
-        // choice is a future pass. Refused (lost arbitration / APMF absent /
-        // toggle off) -> degrade to kInstant, byte-identical to today.
-        if (!APMFBridge::ClaimHealCast(fid, spellID, targetID, /*hand*/ 0)) {
+        // LEFT (APMFBridge::kApmfHandLeft), never auto -- an equip gambit's forced
+        // weapon owns the RIGHT hand, so the spell must not contest it (see
+        // APMFBridge.h's ClaimHealCast doc for the deck-proven failure auto caused:
+        // it grabbed the right hand while briefly unarmed, then the equip gambit's
+        // own re-equip shoved the spell back out ~500ms later). LEFT is also the
+        // right fallback with no weapon held -- heals are left-hand almost always
+        // regardless. An intelligent per-perk/loadout hand choice (dual-cast when
+        // both hands are free, etc.) is a future pass, not built here. Refused
+        // (lost arbitration / APMF absent / toggle off) -> degrade to kInstant,
+        // byte-identical to today.
+        if (!APMFBridge::ClaimHealCast(fid, spellID, targetID, APMFBridge::kApmfHandLeft)) {
             CastBounds::Disarm(fid);
             spdlog::info("[cfc] {:08X} heal-cast claim refused -- kInstant apply", fid);
             return false;

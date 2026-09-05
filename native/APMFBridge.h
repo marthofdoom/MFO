@@ -117,8 +117,14 @@ namespace MFO::APMFBridge {
     // combat ended). No-op if the follower holds no combat-target claim.
     void RefreshCombatTarget(RE::FormID a_follower);
 
-    // Worker-safe. Once-per-pump sweep: release each claim not refreshed within the
-    // expiry window (cast-select backstop; combat-target = combat-end detector). Call
+    // Worker-safe. Once-per-pump sweep: release each claim not refreshed within its
+    // expiry window (cast-select backstop; combat-target = combat-end detector).
+    // cast-select/combat-target/weapon-order-equipment/heal-cast all use the
+    // round-robin-aware FacetExpiry() (APMFBridge.cpp, anon ns) -- proven
+    // round-robin-bound, not flat-cadence (2026-09-05: first the heal claim, then
+    // the equipment claim, deck-captured); package-offer alone stays on the flat
+    // kExpiry (proven genuinely flat-refreshed, Packages::Pump()); combat-action-
+    // deny is unwired and inherits the flat backstop pending real evidence. Call
     // from the pump body.
     void Tick();
 
@@ -136,8 +142,12 @@ namespace MFO::APMFBridge {
     // FormID). Call every tick the force-hold survives (Actuation::ReconcileForcedWeapon
     // when it decides to KEEP the hold) -- same "the claim call also refreshes" idiom
     // ClaimCasting uses, so one call both engages a new hold and keeps an existing one
-    // alive under the shared kExpiry backstop. RE-POINTS in place (same handle) if the
-    // held weapon FormID changes (a melee<->ranged flip re-forces a different weapon).
+    // alive under the round-robin-aware FacetExpiry() backstop (2026-09-05: this
+    // facet used to share the flat kExpiry and a deck capture on Cicero proved that
+    // dropped a still-wanted claim ~919ms in -- ReconcileForcedWeapon runs from the
+    // SAME per-follower Scheduler::Tick round-robin lap as cast-select, not a tight
+    // beat, so it needed the same fix). RE-POINTS in place (same handle) if the held
+    // weapon FormID changes (a melee<->ranged flip re-forces a different weapon).
     // No-op when APMF is absent or Config::g_weaponStyleControl is off.
     void ClaimEquipment(RE::FormID a_follower, RE::FormID a_weaponForm);
 
@@ -233,8 +243,19 @@ namespace MFO::APMFBridge {
     // follower, but keeping distinct state avoids any accidental cross-talk.
     //
     // a_hand: 0 auto (APMF picks a free hand, prefers right) / 1 right / 2 left /
-    // 3 dual (mirrors apmf::castexec::HandMode; MFO always passes 0 today -- the
-    // per-perk intelligent hand choice is a future pass). a_target: 0 = self
+    // 3 dual (mirrors apmf::castexec::HandMode). THE RULE (marth 2026-09-05,
+    // deck-proven): whenever an equip gambit is actively force-holding a weapon
+    // (APMFBridge::IsEquipmentClaimActive), that weapon owns the RIGHT hand, so a
+    // spell must claim LEFT (kApmfHandLeft below) rather than auto -- auto
+    // prefers the right hand when it reads free, and a follower briefly unarmed
+    // (e.g. the facet-expiry bug this same file fixed 2026-09-05) let auto grab
+    // the right hand, only for the equip gambit's own re-equip to shove the spell
+    // right back out ~500ms later (deck: "driving right hand" -> re-equipped
+    // 'Elven Dagger' -> "never left rest -- degrading"). LEFT is also the correct
+    // fallback with no weapon held: heals are left-hand almost always regardless.
+    // MFO always passes kApmfHandLeft today (a full per-perk/loadout-aware hand
+    // pass -- both-hands-free dual-cast/juggle, melee-vs-caster balance -- is
+    // tracked separately as future work, not built here). a_target: 0 = self
     // (APMF's own fallback order: explicit target -> a winning combat-target
     // claim -> self); an ally/player FormID for heal-other.
     //
@@ -252,13 +273,19 @@ namespace MFO::APMFBridge {
     // claim (false -> caller degrades to kInstant, a heal must never vanish).
     // No-op (returns false) when APMF is absent or Config::g_healAnimPackage is
     // off.
+    // Hand-mode constant for a_hand below (2 = left, per APMF's ival encoding --
+    // see the a_hand doc comment above for the weapon-hand-exclusion rule this
+    // implements). Named so a call site reads as policy, not a bare magic 2.
+    inline constexpr std::int32_t kApmfHandLeft = 2;
+
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
-                       std::int32_t a_hand = 0);
+                       std::int32_t a_hand = kApmfHandLeft);
 
     // Worker-safe. Release ONLY the heal-cast claim now (every other facet left
     // alone). Call the instant the gambit stops wanting the heal (target lost /
     // spell/rule no longer wins) so APMF restores the hand immediately -- the
-    // shared kExpiry backstop (Tick()) covers a caller that forgets.
+    // round-robin-aware FacetExpiry() backstop (Tick()) covers a caller that
+    // forgets.
     void ReleaseHealCast(RE::FormID a_follower);
 
     // Worker- AND combat-thread-safe (mutex-guarded read; the SAME g_mx every

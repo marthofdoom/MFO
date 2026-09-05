@@ -514,7 +514,12 @@ namespace MFO::Actuation {
                         // already no-ops an unchanged claim, and critically each call stamps
                         // spellRefreshed/targetRefreshed (APMFBridge.cpp:144/173) regardless,
                         // which is what keeps the claim alive: a claim not refreshed within
-                        // kExpiry (500ms, ~4 pumps) is dropped (APMFBridge.cpp:56,192-194). A
+                        // FacetExpiry() is dropped (APMFBridge.cpp's Tick() sweep). This call
+                        // site is itself the reason that expiry is round-robin-aware, not the
+                        // flat 500ms it used to be: "EVERY tick this branch wins" means this
+                        // follower's own Scheduler::Tick round-robin lap, ONE follower serviced
+                        // per ~133ms, so the real refresh gap scales with party size (proven by
+                        // the Cicero deck capture on the sibling equipment claim, 2026-09-05). A
                         // per-follower dedupe latch here (tried 2026-09-02, reverted same day
                         // per Fable review) skipped these calls on an unchanged tick and starved
                         // the claim mid-cast -- "casting facet released" while the AI was still
@@ -1283,7 +1288,11 @@ namespace MFO::Actuation {
             // REFRESHES it (every tick after, same "the claim call also
             // refreshes" idiom ClaimCasting uses) -- so there is never a tick
             // where the hold survives but the claim is left to expire under
-            // APMFBridge's kExpiry backstop.
+            // APMFBridge's expiry backstop. That backstop is FacetExpiry()
+            // (round-robin-aware), not the flat kExpiry -- this reconcile call is
+            // itself one round-robin lap of Scheduler::Tick, same as cast-select,
+            // and a flat 500ms sweep proved it could drop a still-wanted claim
+            // (Cicero deck capture, 2026-09-05).
             APMFBridge::ClaimEquipment(a_follower->GetFormID(), heldWeaponForm);
         }
     }

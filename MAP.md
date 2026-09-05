@@ -1375,11 +1375,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   cast + combat-target facets via APMF (`Actuation.cpp:522-523`) and (b) `Targeting::Command(follower,
   target->GetHandle())` commands the target (its UpdateCombat hook re-asserts `currentCombatTarget`,
   `:533`) — **every owned tick, deliberately not deduped here**: `EnsureClaimLocked`
-  (`APMFBridge.cpp:70`) already no-ops an unchanged claim but still stamps its liveness timestamp on
-  every call (`:144`/`:173`), which is what keeps the claim alive past its `kExpiry` backstop (500ms,
-  `:56`/`:192-194`) — a per-follower dedupe latch that skipped these calls on an unchanged tick was
-  tried 2026-09-02 and reverted the same day (Fable review) for starving the claim mid-cast
-  ("casting facet released" while the AI was still charging); `Targeting::Command` has its own
+  (`APMFBridge.cpp:151`) already no-ops an unchanged claim but still stamps its liveness timestamp on
+  every call (`:338`/`:367`), which is what keeps the claim alive past its `FacetExpiry()` backstop
+  (round-robin-aware, `:140`; NOT the flat `kExpiry`, `:114` — see the 2026-09-05 entry below, proven
+  round-robin-bound by the Cicero equipment-claim capture) — a per-follower dedupe latch that skipped
+  these calls on an unchanged tick was tried 2026-09-02 and reverted the same day (Fable review) for
+  starving the claim mid-cast ("casting facet released" while the AI was still charging);
+  `Targeting::Command` has its own
   unchanged-latch dedupe (`Targeting.h:37-41`) so calling it every tick is equally cheap.
   `CasterConsent::Want` (granted at `:460`, every tick — same reasoning) permits our spell + denies
   competing; the
@@ -1398,7 +1400,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   directives now get the same arbitration a caster already had, not just a re-point of a
   pre-existing claim) — re-pointed via APMF `Repoint` when the foe changes; `RefreshCombatTarget` ←
   `Scheduler.cpp:~330` keeps it alive every in-combat tick; released only at combat end via the
-  expiry sweep). `Tick()` ← `Diagnostics.cpp` (~`:334`) is the per-claim 500 ms expiry.
+  expiry sweep). `Tick()` ← `Diagnostics.cpp` (~`:334`) is the per-claim expiry sweep — casting/
+  combat-target/weapon-order-equipment/heal-cast compare against `FacetExpiry()` (round-robin-
+  aware, see the 2026-09-05 entry below), package-offer alone against the flat 500 ms `kExpiry`.
 - **Gating:** owned model active iff `Available() && bApmfCast (INI, default ON) && !bLegacyCastHybrid
   (MCM, default OFF)`. Toggle ON, or APMF absent → the ORIGINAL AI-first-wait + force-on-miss package
   hybrid (unchanged legacy branch below the owned block — the ONLY place `CastSpellImmediate` force
@@ -1437,8 +1441,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   the claim's `param.form` (the forced weapon's FormID) makes APMF write nothing; MFO still
   EXECUTES the force-equip itself (`Actuation.cpp`'s `EquipWeapon`/`g_forcedWeapon`). Engaged
   + refreshed every tick the force-hold survives by `Actuation::ReconcileForcedWeapon`
-  (`Actuation.cpp:~1237`, gated `Config::g_weaponStyleControl`); released by
-  `Actuation::ReleaseForcedWeapon` (`:~1216`, the single choke point every teardown path —
+  (`Actuation.cpp:~1254`, gated `Config::g_weaponStyleControl`); released by
+  `Actuation::ReleaseForcedWeapon` (`:~1227`, the single choke point every teardown path —
   `Followers.cpp`, `Scheduler.cpp` — funnels through). `CombatStyle.cpp`'s `EquipGateThunk`
   consults `IsEquipmentClaimActive(fid)` right after the existing `IsOwnedCastActive` check
   (independent of it) and stands its own weapon-order deny down when true — APMF's hook
@@ -1457,14 +1461,14 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   but MFO no longer calls any of it.
 - **PASS E (ch.8 `kIntent_SelectSpell` +ACT, feat/cast-act, 2026-09-05,
   `Docs/SPEC-FORCED-CAST.md`): `ClaimHealCast`/`ReleaseHealCast`/
-  `IsHealCastActive`** (`APMFBridge.cpp:392,409,419`, decls `APMFBridge.h:248,
-  255,264`) — the DECLARATIVE heal-cast facet `ComposedCast` claims, superseding
+  `IsHealCastActive`** (`APMFBridge.cpp:460,477,487`, decls `APMFBridge.h:281,
+  289,298`) — the DECLARATIVE heal-cast facet `ComposedCast` claims, superseding
   PASS D. Rides the SAME `kIntent_SelectSpell` channel offense's `ClaimCasting`
   uses (PER-CAST, refresh-or-expire), but a SEPARATE `g_owned` slot
   (`healHandle`/`healSpell`/`healTarget`/`healHand`/`healRefreshed`) — heal and
   hostile casts are mutually exclusive per tick by `CasterConsent::SpellKind`,
   never concurrent on one follower, but kept distinct to avoid cross-talk.
-  `EnsureHealClaimLocked` (`:158`, anon ns) is `EnsureClaimLocked`'s triple-key
+  `EnsureHealClaimLocked` (`:217`, anon ns) is `EnsureClaimLocked`'s triple-key
   twin: the claim's identity is `(spell, target, hand)` all riding the SAME
   `APMF_Param` (`p.form`/`p.ival`/`p.target`), so a change in ANY of the three
   re-points the SAME handle in place via `Repoint` (v3+; release+reclaim only on
@@ -1481,39 +1485,84 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   (its own `CastSpellImmediate` fallback if the drive can't animate, VR
   included) — **MFO makes NO engine call for this path at all**, which is the
   structural fix for the PASS D force-equip race. `a_hand` (0 auto / 1 right /
-  2 left / 3 dual) is always passed 0 by MFO today; `a_target` (0 = self) is
+  2 left / 3 dual) is always passed `kApmfHandLeft` (2, `APMFBridge.h:279`) by
+  MFO today (2026-09-05 fix, see below) — never auto; `a_target` (0 = self) is
   the ally/player FormID for heal-other.
+- **HAND FIX (2026-09-05, deck: heal driven right hand, then displaced by the
+  equip gambit's own re-equip ~500ms later, cast never left "rest").**
+  `ClaimHealCast` used to pass `a_hand=0` (auto); APMF's auto resolution prefers
+  the RIGHT hand when it reads free, and while a follower was transiently
+  unarmed (the SAME facet-expiry bug below briefly drops the equip claim) auto
+  grabbed the right hand — then the equip gambit's own periodic re-equip put
+  the melee weapon right back into that hand, displacing the spell. THE RULE:
+  whenever an equip gambit is actively force-holding a weapon
+  (`APMFBridge::IsEquipmentClaimActive`), that weapon owns the RIGHT hand, so a
+  spell must claim LEFT rather than contest it; LEFT is also the correct
+  fallback with no weapon held (heals are left-hand almost always regardless).
+  `ComposedCast::Try` (`ComposedCast.cpp:~78`) now passes `APMFBridge::
+  kApmfHandLeft` unconditionally — a default, not the full picture: an
+  intelligent per-perk/loadout-aware hand pass (both-hands-free → dual-cast or
+  juggle, melee → left, mage → auto) is tracked separately as future work
+  ([[mage-dualcast-diff-hands-perk-gated-todo]]), not built here.
 - **FIELD BUG FOUND + FIXED (2026-09-05, deck: claim/release every ~530ms,
-  caster stuck at rest forever — `feat/heal-claim-hold`).** `healHandle` used
-  to share the flat 500ms `kExpiry` backstop with every other facet in this
-  file — fine for spellHandle/targetHandle (refreshed on a tight combat-thread
-  cadence), WRONG for the heal claim: it is only refreshed once per
-  `Scheduler::Tick` ROUND-ROBIN lap for its owning follower (ONE follower
-  serviced per ~133ms, `Scheduler.cpp`), so for anything but a 1-2-follower
-  party the real refresh gap already exceeds 500ms and `Tick()`'s sweep
-  released a live, still-wanted claim every lap. Fixed with a dedicated
-  `HealExpiry()` (`APMFBridge.cpp:~93`, anon ns) sized the SAME way
-  `TargetCastReconcile`/`SelfCastReconcile` already size their own
-  round-robin-aware release windows (`suppress*1.12 + 0.133*partySize + 0.5`,
-  floored at the old 500ms) — `Tick()`'s `healHandle` check now compares
-  against `HealExpiry()`, not `kExpiry`. Reads `Followers::g_active.size()`
-  from `Tick()`/the claiming worker context, same as the Reconcile functions
-  already do from the identical `SleeperLoop` `AddTask` body (`Diagnostics.cpp`)
-  — safe by the same serial-job-worker reasoning (#4), not a new access
-  pattern. **Second bug, same symptom:** `Logistics.cpp`'s OOC concentration
-  branch (`ServiceFollower`'s `for (pass < 2 && !acted)` dibs-tier loot-order
-  wrapper) `break`'d its inner scan on a delivered `CastTargetDirect` Applied
-  without setting `acted = true`, so pass 1 re-ran the WHOLE scan and re-fired
-  the same already-delivered cast a second time this tick (double
-  `"[logistics] ... OOC concentration ..."` log line, double `ClaimHealCast`
-  call — `CastTargetDirect` returns `Applied` unconditionally, unpaced, the
-  instant `ComposedCast::Try` claims, so the 2nd call was a real 2nd claim
-  call, not just a log dupe). Fixed: `acted = true` before the `break`,
-  matching the `selfPkg`/`immediate` branches beside it. The IN-COMBAT
-  concentration path (`Scheduler.cpp:552`'s single-pass combat scan) shares
-  the SAME `CastTargetDirect`/`ComposedCast::Try` call (so it got the
-  `HealExpiry()` fix for free) but never had the double-fire bug — its scan
-  has no pass-0/pass-1 wrapper, `stopped=true; break;` ends it after one Fire.
+  caster stuck at rest forever — `feat/heal-claim-hold`; RE-PROVEN the SAME day
+  on the weapon-order equipment claim, Cicero deck capture, `feat/facet-expiry`).**
+  `healHandle` used to share the flat 500ms `kExpiry` backstop with every other
+  facet in this file. **The comment here used to assert this was "fine for
+  spellHandle/targetHandle (refreshed on a tight combat-thread cadence)" —
+  THAT WAS WRONG, disproven in the field the same day:** `ClaimCasting`/
+  `ClaimCombatTarget` (`Actuation::CastOn`) and `ClaimEquipment`
+  (`Actuation::ReconcileForcedWeapon`) are ALL refreshed from inside the SAME
+  per-follower `Scheduler::Tick` ROUND-ROBIN lap the heal claim uses — ONE
+  follower serviced per ~133ms (`Scheduler.cpp`), so a given follower's own
+  gambit only re-fires (and re-Claims/Repoints/refreshes) every
+  ~0.133s × partySize. For anything but a 1-2-follower party that gap already
+  exceeds 500ms, so `Tick()`'s sweep released a live, still-wanted claim every
+  round-robin lap — first observed on the heal claim, then on the equipment
+  claim (Cicero: `CLAIMED gate-only` → APMF-side `RELEASED` 919ms later, a
+  full round-robin lap early, while MFO's own `g_forcedWeapon` force-hold was
+  still standing — proven the sweep and NOT a deliberate release because
+  `ReleaseEquipment` is only ever called from `Actuation::ReleaseForcedWeapon`,
+  which ALSO logs `"force-hold released"` in the SAME call — that log appeared
+  540ms LATER as a separate event, so the earlier APMF-side release could only
+  have come from `Tick()`'s expiry sweep). User-visible symptom: a follower's
+  APMF-side equipment GATE lapsing mid-hold let something else (the AI's own
+  idle/holster behavior, or a competing custom-AI framework's own equip logic
+  under APMF arbitration) interfere with the weapon while MFO's own force-hold
+  was still nominally up, and since `ReconcileForcedWeapon` never re-asserts
+  the physical equip (only the claim) between `EquipWeapon`'s one-shot fires,
+  a follower stuck in that gap the moment reads as "standing around unarmed
+  until the next fight re-fires the equip gambit." Fixed with a dedicated
+  `FacetExpiry()` (`APMFBridge.cpp:140`, anon ns, renamed from `HealExpiry()`)
+  sized the SAME way `TargetCastReconcile`/`SelfCastReconcile` already size
+  their own round-robin-aware release windows (`suppress*1.12 +
+  0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s
+  spellHandle/targetHandle/equipHandle/healHandle checks (`:505-519`) all
+  compare against `FacetExpiry()` now, not the flat `kExpiry`. package-offer
+  (`packageHandle`) stays on the flat `kExpiry` — VERIFIED (not assumed) it is
+  genuinely refreshed every ~133ms flat, unconditionally, for every active
+  loot slot, by `Packages::Pump()` (not gated by the round-robin cursor).
+  combat-action-deny (`actionHandle`) also stays flat — it has NO current
+  caller anywhere in the tree (still "built but not wired", see PASS B above),
+  so there is no live refresh cadence to size against; revisit when it is
+  actually wired. Reads `Followers::g_active.size()` from `Tick()`/the
+  claiming worker context, same as the Reconcile functions already do from the
+  identical `SleeperLoop` `AddTask` body (`Diagnostics.cpp`) — safe by the same
+  serial-job-worker reasoning (#4), not a new access pattern. **Second bug,
+  same symptom (heal claim only):** `Logistics.cpp`'s OOC concentration branch
+  (`ServiceFollower`'s `for (pass < 2 && !acted)` dibs-tier loot-order wrapper)
+  `break`'d its inner scan on a delivered `CastTargetDirect` Applied without
+  setting `acted = true`, so pass 1 re-ran the WHOLE scan and re-fired the same
+  already-delivered cast a second time this tick (double `"[logistics] ... OOC
+  concentration ..."` log line, double `ClaimHealCast` call — `CastTargetDirect`
+  returns `Applied` unconditionally, unpaced, the instant `ComposedCast::Try`
+  claims, so the 2nd call was a real 2nd claim call, not just a log dupe).
+  Fixed: `acted = true` before the `break`, matching the `selfPkg`/`immediate`
+  branches beside it. The IN-COMBAT concentration path (`Scheduler.cpp:552`'s
+  single-pass combat scan) shares the SAME `CastTargetDirect`/`ComposedCast::Try`
+  call (so it got the `FacetExpiry()` fix for free) but never had the
+  double-fire bug — its scan has no pass-0/pass-1 wrapper, `stopped=true;
+  break;` ends it after one Fire.
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE
