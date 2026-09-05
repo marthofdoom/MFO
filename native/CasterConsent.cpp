@@ -197,18 +197,27 @@ namespace MFO::CasterConsent {
             // worker reallocates in Refresh -> UAF. IsTrackedFast probes the
             // g_mx-guarded FormID mirror instead (membership only, any thread).
             if (!Followers::IsTrackedFast(a_fid)) return false;   // world casters: not ours
-            // OUR bounded stream -> pass. TWO registries, same contract: the LEGACY
-            // alias-package stream (StreamLive, written by Packages::Begin) AND the
-            // GENERAL MFO-executed-cast bound (CastBounds::Live, armed by the
-            // ComposedCast executor BEFORE it touches the hand). The second is the §2
-            // HARD-ABORT fix: before it, exact-bounding had no way to recognize a
-            // concentration cast MFO itself was executing through the caster unless it
-            // came through the one legacy package path, so the deleted heal-anim
-            // PACKAGE cast (and the executor's future hand cast) were vetoed at
-            // pre-charge as "concentration unbounded." (The kInstant ConcProxy path
-            // bypasses this hook, so it never needed a bound.)
+            // OUR bounded stream -> pass. THREE registries, same contract: the LEGACY
+            // alias-package stream (StreamLive, written by Packages::Begin), the
+            // GENERAL MFO-executed-cast bound (CastBounds::Live, armed by
+            // ComposedCast::Try BEFORE it claims the APMF facet), AND (2026-09-05,
+            // the S1 field HARD-ABORT: deck log "HARD-ABORTED cast of 0004D3F2
+            // (concentration unbounded)") a BROAD per-actor standdown,
+            // APMFBridge::IsHealCastActive(a_fid) -- MFO no longer touches the hand
+            // itself for this path (APMF's feat/cast-act drive does, via
+            // core/CastExecutor.cpp), so the EXACT spell FormID CastBounds was armed
+            // for (the gambited spell MFO named in the claim) is not guaranteed to be
+            // the ONLY FormID that ends up going through this hook while APMF is
+            // driving OR falling back to its own guaranteed-delivery CastSpellImmediate
+            // for a CONCENTRATION heal -- a per-spell match is fragile against
+            // whatever APMF does internally to land it. A LIVE heal-cast claim on this
+            // actor means MFO already vetted and wants this cast; trust the claim, not
+            // a spell-identity guess (mirrors IsOwnedCastActive's identical per-actor
+            // standdown for the offense exclusivity deny below). The kInstant ConcProxy
+            // path bypasses this hook entirely, so it never needed a bound.
             const RE::FormID id = a_mi->GetFormID();
-            if (Packages::StreamLive(a_fid, id) || CastBounds::Live(a_fid, id))
+            if (Packages::StreamLive(a_fid, id) || CastBounds::Live(a_fid, id) ||
+                APMFBridge::IsHealCastActive(a_fid))
                 return false;
             const SpellKind k = ClassifySpell(a_mi);
             const bool selfHeal = k == SpellKind::Heal &&
@@ -514,7 +523,15 @@ namespace MFO::CasterConsent {
             // exclusive advisory denies below from suppressing MFO's own executed
             // cast. Reads magicItem, which is safe here (past the g_wantCount /
             // g_ctrlCount / swap fast-out) and only for a spell we ourselves armed.
-            if (auto* mi = a_this->magicItem; mi && CastBounds::Live(fid, mi->GetFormID()))
+            //
+            // ALSO stand down on a live heal-cast claim alone (2026-09-05, S1 field
+            // HARD-ABORT), same per-actor trust as CheckCastThunk's identical
+            // broadening below -- APMF's feat/cast-act drive touches the hand now,
+            // not MFO, so this cannot rely on the caster's magicItem being exactly
+            // the FormID CastBounds was armed for.
+            if (auto* mi = a_this->magicItem;
+                (mi && CastBounds::Live(fid, mi->GetFormID())) ||
+                APMFBridge::IsHealCastActive(fid))
                 return aiSaysYes;
 
             // Is this follower latched? Decide BEFORE touching the caster's
@@ -870,18 +887,30 @@ namespace MFO::CasterConsent {
             const auto fid = actor->GetFormID();
 
             // ── MFO-EXECUTED CAST EARLY-PASS (SPEC-FORCED-CAST.md §2.2) ──────────
-            // The ComposedCast executor armed CastBounds for (actor, spell) AND
-            // (actor, proxy) BEFORE it touched the hand (the kInstant ConcProxy path
-            // bypasses this hook and is never a writer). Such a cast has already
-            // cleared every MFO gambit gate on the
-            // worker -- target choice, LoS, friendly-fire consent, exact-bounding --
-            // so the combat-thread consent hook must not second-guess MFO's own
-            // decision. Allow it outright, ahead of the concentration / exclusive /
-            // continuous / friendly-fire blocks below (this also pre-empts the
-            // "exclusive" deny that would fire when an OFFENSE latch is live on the
-            // same follower and the heal proxy is "not the wanted spell"). This is
-            // the fix for the deck HARD-ABORT of 0002F3B8 / FF001BA4.
-            if (CastBounds::Live(fid, a_spell->GetFormID())) return aiOK;
+            // ComposedCast::Try armed CastBounds for (actor, spell) BEFORE claiming
+            // the APMF facet (the kInstant ConcProxy path bypasses this hook and is
+            // never a writer). Such a cast has already cleared every MFO gambit gate
+            // on the worker -- target choice, LoS, friendly-fire consent, exact-
+            // bounding -- so the combat-thread consent hook must not second-guess
+            // MFO's own decision. Allow it outright, ahead of the concentration /
+            // exclusive / continuous / friendly-fire blocks below (this also
+            // pre-empts the "exclusive" deny that would fire when an OFFENSE latch is
+            // live on the same follower and the heal proxy is "not the wanted
+            // spell"). This is the fix for the deck HARD-ABORT of 0002F3B8 / FF001BA4.
+            //
+            // BROADENED (2026-09-05, S1 field HARD-ABORT: "HARD-ABORTED cast of
+            // 0004D3F2 (concentration unbounded)"): also stand down on
+            // APMFBridge::IsHealCastActive(fid) alone, same per-actor trust
+            // IsOwnedCastActive already gets below for offense -- APMF's own
+            // feat/cast-act drive (core/CastExecutor.cpp) now touches the hand, not
+            // MFO, so the EXACT FormID that ends up here (its animated drive, or its
+            // guaranteed-delivery CastSpellImmediate fallback for a CONCENTRATION
+            // heal) is not guaranteed to be only the one FormID CastBounds was armed
+            // for. A live heal-cast claim on this actor is proof enough MFO already
+            // wants this cast through.
+            if (CastBounds::Live(fid, a_spell->GetFormID()) ||
+                APMFBridge::IsHealCastActive(fid))
+                return aiOK;
 
             // CONCENTRATION, latch-independent -- the HARD half of the bound.
             // The CheckStartCast suppression is advisory and advisory denies

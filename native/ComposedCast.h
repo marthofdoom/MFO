@@ -48,6 +48,18 @@ namespace MFO::ComposedCast {
     // target or spell mid-stream stays one continuous claim. Returns TRUE only
     // once APMF holds the claim (caller returns without applying its own
     // effect); FALSE degrades to the caller's kInstant apply.
+    //
+    // NEVER SUBSTITUTES: a_spell is always the gambit's own configured spell,
+    // passed straight to APMF unchanged. A DELIVERY/TARGET MISMATCH (a_spell is
+    // Self-delivery, a_target is not the caster -- e.g. a Self-only heal
+    // gambited to heal an ally) declines the +ACT drive outright (returns
+    // false) rather than either substituting a different known spell OR
+    // building a delivery-flip proxy from this WORKER-context function (proxy
+    // creation is main-thread-only in this codebase's own established
+    // discipline, ConcProxy/the retired HealProxy) -- the caller's kInstant/
+    // ConcProxy degrade already builds that proxy correctly and safely, so the
+    // GAMBITED spell still lands on the GAMBITED target, just not animated for
+    // this one mismatched case.
     bool Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
              CasterConsent::SpellKind a_kind);
 

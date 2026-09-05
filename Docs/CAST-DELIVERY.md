@@ -326,6 +326,44 @@ dedicated per-tick reconcile call site — `Try` short-circuits `CastSelfDirect`
 relies on the SAME "stop refreshing → expire" ~500 ms backstop (`APMFBridge::
 Tick()`) the offense combat-target/cast-select claims already use.
 
+### S1 deck field-test fixes (2026-09-05) — two real MFO-side bugs
+
+**BUG A — HARD-ABORT despite an armed claim.** Deck log: `HARD-ABORTED cast of
+0004D3F2 (concentration unbounded)`. `ComposedCast::Try` armed `CastBounds` for
+the EXACT gambited spell FormID, but MFO no longer touches the hand itself for
+this path (APMF's drive does) — so there is no guarantee the FormID that
+actually reaches `CasterConsent`'s hooked thunks (APMF's animated drive, or its
+own guaranteed-delivery `CastSpellImmediate` fallback for a CONCENTRATION heal)
+is the SAME one `CastBounds` was armed for. Fix: all THREE hard-abort sites in
+`CasterConsent.cpp` (`ConcUnboundedDeny`, the `CheckStartCast` thunk's
+early-pass, `CheckCastThunk`'s early-pass) now ALSO stand down on
+`APMFBridge::IsHealCastActive(fid)` alone — a broad PER-ACTOR trust, exactly
+mirroring `IsOwnedCastActive`'s existing per-actor (not per-spell) standdown for
+the offense exclusivity deny. A live heal-cast claim is proof MFO already
+vetted this cast; the consent hook no longer needs an exact spell-identity
+match to stand down for it.
+
+**BUG B — never substitute the gambited spell.** Field observation: MFO
+requested +ACT for two different heal spells on the same follower, one
+Self-delivery (needs a proxy to heal an ally) and one already target-delivery.
+Audited every dispatch path from the gambit's own `actionParamForm` (`Board.cpp`)
+through `CastOn`/`ConcentrationCast`/`CastAuto`/`CastSelfDirect`/
+`CastTargetDirect` down to `ComposedCast::Try` — **none of them ever substitutes
+a spell; every one forwards the gambit's own configured FormID unchanged.** What
+WAS missing: the +ACT path had no delivery/target-mismatch handling at all (it
+handed APMF the raw spell FormID regardless of a Self-vs-non-self mismatch,
+unlike the kInstant path's own `DeliverySpell`/`ConcProxy`). Fix: `ComposedCast::
+Try` now DECLINES the +ACT drive outright for a mismatched pair (`!selfCast &&
+spell->GetDelivery() == kSelf`) rather than either substituting a different
+known spell or building a NEW delivery-flip proxy from its own WORKER context
+(proxy creation/configuration is main-thread-only in this codebase's own
+established discipline — `ConcProxy`/the retired `HealProxy` both ran on main;
+building one on the worker risks a NEW cross-thread race reading/writing the
+SAME proxy form APMF's own async drive might be using, precisely the class of
+bug S1 just removed). The caller's PROVEN kInstant/`ConcProxy` degrade already
+builds that proxy correctly and safely, so a mismatched heal still lands on the
+GAMBITED target with the GAMBITED spell — just not animated for that one case.
+
 **Flagged, not fixed here (out of this pass's scope):** offense's own "owned cast"
 gambit (`Actuation.cpp:522`, `APMFBridge::ClaimCasting`) rides the SAME
 `kIntent_SelectSpell` channel this heal claim uses. APMF's `feat/cast-act` drives

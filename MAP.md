@@ -661,6 +661,23 @@ engine vtables).
   (`core/CastExecutor.cpp`) on `ComposedCast`'s behalf, not an MFO-side hand
   cast; the thunks can't tell the difference, which is exactly why the bound
   is still required.
+- **BROADENED (2026-09-05, S1 field fix): `IsHealCastActive` standdown, alongside
+  every `CastBounds::Live` check above.** Deck field-test HARD-ABORT ("HARD-ABORTED
+  cast of 0004D3F2 (concentration unbounded)") proved the per-(actor,spell)
+  `CastBounds::Live` check alone is FRAGILE for the APMF-driven path: MFO no longer
+  touches the hand itself (PASS E), so it cannot be certain the exact FormID APMF's
+  animated drive or its guaranteed-delivery `CastSpellImmediate` fallback ends up
+  running through this hook is the SAME FormID `ComposedCast::Try` armed. All THREE
+  hard-abort sites (`ConcUnboundedDeny` `:219`, the `CheckStartCast` thunk's
+  early-pass `:532`, `CheckCastThunk`'s early-pass `:911`) now ALSO stand down on
+  `APMFBridge::IsHealCastActive(fid)` alone — a broad per-ACTOR trust, mirroring
+  `IsOwnedCastActive`'s identical per-actor (not per-spell) standdown for the
+  offense exclusivity deny. **What breaks:** this is deliberately coarser than
+  `CastBounds::Live` — ANY hard-abort deny in this file is suppressed for the WHOLE
+  duration of a live heal-cast claim, not just for the one armed spell. Acceptable
+  because a heal-cast claim only ever exists for a HEAL-kind spell MFO's own gambit
+  already vetted (`ComposedCast`'s `Enabled()` is heal-only-gated); widening this
+  standdown to cover offense would be a real regression (never do that).
 - **Latch lifetime:** the Want latch does NOT clear on cast (spans the whole
   combat); `Want` overwrites SPELL only, never `permitAfter` or pacing breaks.
   Force-YES must NEVER apply to concentration spells (permanent-stream freeze,
@@ -1626,10 +1643,26 @@ full history (the OBSERVE-AND-REPLICATE drive this superseded, and why it raced)
   this kind-gate is NEW in this pass — the prior `Enabled()` had no kind check, so
   re-verify this before assuming ComposedCast was always heal-scoped), `Config::
   g_healAnimPackage` (repurposed toggle), `APMFBridge::Available()`. Sequence:
-  `APMFBridge::ClaimHealCast(fid, spellID, targetID, hand=0)` → refused →
-  `CastBounds::Disarm` + log + return false (degrade to kInstant); claimed →
-  `CastBounds::Arm(fid, spellID, 0, 6000ms)` → return true (caller skips its
-  kInstant apply). `target` is 0 for a self-cast, else `a_target`'s FormID.
+  **DELIVERY/TARGET MISMATCH check (2026-09-05, S1 field fix, marth: "healing hands
+  is not gambited") FIRST** — `!selfCast && a_spell->GetDelivery() ==
+  Delivery::kSelf` → decline outright (return false), NO claim attempted; a
+  Self-only spell gambited to heal a non-self target needs a delivery-flip proxy
+  to land on anyone but the caster, and this module runs on the WORKER (proxy
+  minting is main-thread-only, `ConcProxy`/the retired `HealProxy`'s own
+  discipline) — so it defers to the caller's ALREADY-CORRECT kInstant/`ConcProxy`
+  degrade (which builds that proxy safely on main) rather than risk a NEW
+  cross-thread proxy race or (worse) silently substitute a different spell the
+  follower happens to know. **Audited (2026-09-05): no code path from gambit
+  resolution (`Board.cpp`'s `actionParamForm` write) through `CastOn`/
+  `ConcentrationCast`/`CastAuto`/`CastSelfDirect`/`CastTargetDirect` down to this
+  function ever substitutes a spell — every one forwards the gambit's own
+  configured FormID unchanged; this mismatch-decline is the fix for a REAL gap
+  (the +ACT path had no delivery-flip handling at all), not a confirmed
+  substitution bug in MFO's dispatch.** Past the mismatch check: `APMFBridge::
+  ClaimHealCast(fid, spellID, targetID, hand=0)` → refused → `CastBounds::Disarm`
+  + log + return false (degrade to kInstant); claimed → `CastBounds::Arm(fid,
+  spellID, 0, 6000ms)` → return true (caller skips its kInstant apply). `target`
+  is 0 for a self-cast, else `a_target`'s FormID.
 - `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`.
   Call the instant the gambit stops wanting the heal; the shared `APMFBridge` 500ms
   `kExpiry` backstop (`Tick()`, `Diagnostics.cpp`) covers a caller that forgets —
@@ -1655,6 +1688,12 @@ full history (the OBSERVE-AND-REPLICATE drive this superseded, and why it raced)
   `Actuation_Direct` entry point. No main-thread posting left in this module — APMF's
   own drive runs on ITS confirmed-main seat inside APMF.dll. `CastBounds` is
   lock-free; `APMFBridge` calls are any-thread-safe.
+- **`CasterConsent.cpp`'s standdown is now BROADER than `CastBounds::Live` alone**
+  (2026-09-05, S1 field fix) — all three of its hard-abort sites also check
+  `APMFBridge::IsHealCastActive(fid)` (see `CasterConsent.cpp`'s own entry above),
+  because a live claim here does not guarantee the exact FormID APMF ends up
+  running through those hooks (its animated drive or its `CastSpellImmediate`
+  fallback) still matches what `CastBounds::Arm` was given.
 - **What breaks:** if `Enabled()`'s kind-gate is ever removed/loosened, offense casts
   would ALSO route through the declarative APMF claim — this pass's explicit
   "offense stays on the legacy AI-fired path" boundary depends on that one check.
