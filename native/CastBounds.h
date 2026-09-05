@@ -9,22 +9,26 @@
 // concentration cast at Exact unless MFO can prove the stream is one MFO itself
 // is metering. Historically the ONLY such proof was the legacy alias-package
 // stream (`Packages::StreamLive` / `g_liveStream`, written only by
-// `Packages::Begin`). Any cast MFO arranges THROUGH the AI/caster deliberation --
-// the (now deleted) heal-anim UseMagic PACKAGE, and the new ComposedCast
-// executor's HAND cast -- passes through the same CheckCast (0x0A) / CheckStartCast
-// thunks, but was NEVER registered as ours, so exact-bounding vetoed it as an
-// "unbounded AI stream." That was the deck HARD-ABORT of 0002F3B8 / FF001BA4.
-// (The kInstant ConcProxy direct-force path -- `CastSpellImmediate` -- does NOT
-// deliberate through those hooks, so it is never vetoed and needs no bound; it is
-// deliberately NOT a CastBounds writer. `ComposedCast::Try` is the SOLE writer.)
+// `Packages::Begin`). Any cast driven THROUGH the caster's real CheckCast (0x0A)
+// / CheckStartCast thunks -- the (now deleted) heal-anim UseMagic PACKAGE, and
+// today APMF's own declarative SelectSpell +ACT drive (feat/cast-act) equipping
+// and firing the hand caster on ComposedCast's behalf -- passes through the SAME
+// hooked thunks (they are installed globally on the shared engine vtable, so it
+// makes no difference which DLL's code is driving the hand), but was NEVER
+// registered as ours, so exact-bounding vetoed it as an "unbounded AI stream."
+// That was the deck HARD-ABORT of 0002F3B8 / FF001BA4. (The kInstant ConcProxy
+// direct-force path -- `CastSpellImmediate` -- does NOT deliberate through those
+// hooks, so it is never vetoed and needs no bound; it is deliberately NOT a
+// CastBounds writer. `ComposedCast::Try` is the SOLE writer.)
 //
-// THE FIX. Before an MFO executor touches the hand it ARMS (actor, spell) here
-// -- and (actor, proxy) too, since the hand may hold a delivery-flipped copy --
-// for a bounded TTL. CasterConsent then early-passes a registered (actor, spell)
-// (§2.2): an MFO-executed cast has already cleared every gambit gate on the
-// worker, so the combat-thread consent hooks must not second-guess it. This is
-// exactly the legacy `g_liveStream` contract, generalized from one slot to
-// eight and made lock-free so the combat-thread reader never blocks.
+// THE FIX. Before claiming the APMF heal-cast facet, ComposedCast ARMS (actor,
+// spell) here for a bounded TTL (a_proxy is 0 today -- APMF owns any delivery-
+// flip proxy on its own side now). CasterConsent then early-passes a registered
+// (actor, spell) (§2.2): an MFO-executed cast has already cleared every gambit
+// gate on the worker, so the combat-thread consent hooks must not second-guess
+// it, no matter which process actually drives the hand. This is exactly the
+// legacy `g_liveStream` contract, generalized from one slot to eight and made
+// lock-free so the combat-thread reader never blocks.
 //
 // THREADING. Writers (Arm/Disarm) run on the worker OR the main thread; the
 // reader (Live) runs on the COMBAT thread inside the CasterConsent thunks. The
@@ -36,9 +40,9 @@
 // the worst case is a legitimately-bounded cast being denied one tick, never a
 // truly-unbounded stream let through).
 //
-// AUTO-EXPIRY is the crash guardrail: a follower whose executor crashed/timed
-// out mid-phase never leaves a standing early-pass -- the slot lapses at the TTL
-// the claim carried, the same bound APMF's kIntent_Cast claim auto-releases at.
+// AUTO-EXPIRY is the crash guardrail: a follower whose claim crashed/was
+// forgotten mid-cast never leaves a standing early-pass -- the slot lapses at
+// its own TTL (Arm's a_ttlMs) regardless of what APMF does with its claim.
 // ─────────────────────────────────────────────────────────────────────────────
 namespace MFO::CastBounds {
 

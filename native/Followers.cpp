@@ -6,7 +6,7 @@
 #include "CombatStyle.h"     // v1.0.33: dismissal drops weapon-stance ownership
 #include "Actuation.h"       // #76: dismissal releases the equip force-hold too
 #include "Packages.h"
-#include "APMFBridge.h"   // ReleaseCast -- drop a dismissed follower's live cast claim
+#include "APMFBridge.h"   // ReleaseHealCast -- drop a dismissed follower's live heal-cast claim
 #include "CastBounds.h"   // Disarm -- drop his MFO-executed-cast bound (§2 registry)
 #include "Logistics.h"
 #include "Forms.h"
@@ -316,11 +316,11 @@ namespace MFO::Followers {
         // tail.
         Packages::RetreatEvictIf(id);
         // The Composed Forced Cast (OPT-IN bHealAnimPackage): runtime-only (no
-        // serialized tail), but a dismissed follower's live cast-execution claim +
+        // serialized tail), but a dismissed follower's live heal-cast claim +
         // MFO-executed-cast bound must be released so neither outlives him. Both
         // calls are thread-safe (APMF mutex / CastBounds lock-free) and no-op if he
         // holds none. (Replaced the deleted Packages::HealAnimEvictIf.)
-        APMFBridge::ReleaseCast(id);
+        APMFBridge::ReleaseHealCast(id);
         CastBounds::Disarm(id);
     }
 

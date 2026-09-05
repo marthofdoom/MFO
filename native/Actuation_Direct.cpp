@@ -752,14 +752,14 @@ namespace MFO::Actuation {
         }
 
         // COMPOSED FORCED CAST (OPT-IN bHealAnimPackage, default OFF): try to
-        // execute this SELF cast as a REAL animated cast the AI would not choose,
-        // with movement kept -- instead of the kInstant force-apply below. Placed
-        // AFTER the competence gate so an unaffordable cast declines exactly as
-        // today. ComposedCast::Try is fully self-gating and DEGRADES: it returns
-        // false (this path BYTE-IDENTICAL to today, kInstant apply) unless the
-        // executor is enabled (AE + APMF + toggle) AND its trigger seam is
-        // implemented; on ANY failure it degrades so the heal still lands. Returns
-        // true only once it OWNS the cast, so the caller returns Applied.
+        // claim this SELF cast as a declarative APMF SelectSpell +ACT cast (APMF
+        // equips + animates + fires it, movement kept) instead of the kInstant
+        // force-apply below. Placed AFTER the competence gate so an unaffordable
+        // cast declines exactly as today. ComposedCast::Try is fully self-gating
+        // (HEAL-ONLY; AE + APMF + toggle) and DEGRADES on any failure: it returns
+        // false (this path BYTE-IDENTICAL to today, kInstant apply) for offense/
+        // buff or when the claim is refused. Returns true only once APMF OWNS
+        // the cast, so the caller returns Applied without its own engine call.
         if (ComposedCast::Try(a_follower, a_spell, a_follower,
                               CasterConsent::ClassifySpell(a_spell)))
             return SelfCast::Applied;
@@ -968,15 +968,17 @@ namespace MFO::Actuation {
         }
 
         // COMPOSED FORCED CAST (OPT-IN bHealAnimPackage, default OFF): try to
-        // execute this ON-TARGET cast as a REAL animated cast the AI would not
-        // choose (a heal at the player/an ally), with movement kept, instead of the
-        // kInstant force-apply below. Placed AFTER the competence gate (parity with
+        // claim this ON-TARGET cast as a declarative APMF SelectSpell +ACT cast
+        // (a heal at the player/an ally -- APMF equips + animates + fires it,
+        // movement kept, explicit target rides the claim so a follower fighting
+        // one foe can still heal a DIFFERENT ally) instead of the kInstant
+        // force-apply below. Placed AFTER the competence gate (parity with
         // CastSelfDirect) and before the offense sightline gate -- heals are never
-        // offense, so order there is immaterial. Self-gating and DEGRADING: returns
-        // false (byte-identical kInstant) unless the executor is enabled AND its
-        // trigger seam is implemented; ANY failure degrades so the heal still
-        // lands. Unlike the old HealAnimFill (player-only), the executor targets any
-        // actor via the delivery-flipped proxy. `kind` is computed above.
+        // offense, so order there is immaterial. Self-gating (HEAL-ONLY; AE + APMF
+        // + toggle) and DEGRADING: returns false (byte-identical kInstant) for
+        // offense/buff or a refused claim; a heal never vanishes. Unlike the old
+        // HealAnimFill (player-only), this targets any actor -- APMF owns its own
+        // delivery-flip proxy. `kind` is computed above.
         if (ComposedCast::Try(a_follower, a_spell, a_target, kind))
             return SelfCast::Applied;
 

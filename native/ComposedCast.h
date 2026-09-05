@@ -3,76 +3,73 @@
 #include "CasterConsent.h"   // SpellKind
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ComposedCast -- the Composed Forced Cast (CFC) executor.
+// ComposedCast -- the Composed Forced Cast (CFC) executor, now a THIN SHIM
+// (S1, marth 2026-09-05: prove cast+heal on APMF).
 //
-// GOAL (Docs/SPEC-FORCED-CAST.md). Make a follower cast a spell his AI will NOT
-// choose (the canonical case: a heal at an ally / the player) such that it is a
-// REAL, ANIMATED cast, lands on the chosen target, the follower's MOVEMENT stays
-// his own, it is BOUNDED, and a heal NEVER silently vanishes. It composes five
-// things -- a delivery-flipped proxy, an APMF cast-execution claim (deny the AI's
-// own casting/re-arm, keep movement), a CastBounds registration (so MFO's own
-// consent gate recognizes the cast as bounded, §2), the hand arm, and the TRIGGER
-// -- then observes, bounds, restores, and DEGRADES to today's kInstant apply on
-// any failure. MOVEMENT is never claimed.
+// WHAT CHANGED. The old drive lived here: DriveObservedCast/PhaseSelect/
+// PhaseFire/HealProxy force-equipped the follower's hand caster and replayed
+// the engine's observed animated-cast sequence by hand. It stayed OBSERVE-ONLY
+// (always degraded to the caller's kInstant apply) because it raced APMF/the
+// AI for the SAME hand -- a cross-thread use-after-free that CTD'd in the
+// field. APMF's feat/cast-act graduated kIntent_SelectSpell into a DECLARATIVE
+// contract: name the spell/hand/target (APMFBridge::ClaimHealCast) and APMF
+// itself equips the hand, drives the observed sequence, and GUARANTEES
+// delivery (its own CastSpellImmediate fallback). MFO makes NO engine call for
+// this path any more -- the force-equip that caused the race is gone
+// structurally, not just gated off.
 //
-// THE TRIGGER (steering 2026-09-04, marth-approved): OBSERVE-AND-REPLICATE.
-// The spec's originally-guessed trigger (a hand-built TESActionData::Process with
-// ActionRightAttack/Release) is NOT used -- it was unproven and version-fragile.
-// The APMF passive observer at the 0xAD seat captured the engine's REAL
-// full-animation NPC cast sequence from a deck cycle (a vanilla mage, Arniel):
-// anim BeginCastRight/Left -> MagicCaster[hand] state 1->2->3->4 -> anim
-// MRh_SpellFire_Event(+MRh_WinStart) -> (conc loops) -> anim InterruptCast,CastStop.
-// `DriveObservedCast` (ComposedCast.cpp) now REPLICATES that sequence on the hand
-// caster -- the same drive the shipped bDriveCaster probe runs (currentSpell/state/
-// CheckCast/desiredTarget/RequestCastImpl), plus the graph RELEASE event the probe
-// lacked. It is EXPERIMENTAL + OBSERVE-ONLY: the drive runs to OBSERVE (via the
-// SpellSink CFC-fired log) whether driving those events makes the engine APPLY the
-// effect or only animate, and Try() DEGRADES to the caller's kInstant apply either
-// way, so a heal ALWAYS lands correctly through the proven ConcProxy/self path. The
-// drive is a SINGLE-SHOT (fire once, tear down) so it never sustains a channel
-// competing with the kInstant heal. Owning the cast (returning kArmed to suppress
-// the kInstant) is deferred until a deck cycle proves the driven cast lands the
-// effect. Off / SE-VR / APMF-absent / toggle-off -> byte-identical to the kInstant
-// heal (the executor is inert).
+// WHAT THIS MODULE STILL DOES. (1) HEAL-ONLY gate: only CasterConsent::
+// SpellKind::Heal is ever routed through APMF here -- offense and buff return
+// false immediately and stay on the byte-identical AI-fired / kInstant paths,
+// untouched by this pass. (2) Arms CastBounds so MFO's OWN CasterConsent hook
+// -- installed globally, so it ALSO intercepts APMF's driven CheckCast/
+// RequestCastImpl on the SAME hand caster -- stands down for the window
+// (SPEC-FORCED-CAST.md §2); that hook doesn't know or care which DLL is
+// driving the hand, only that MFO itself vouches for the (actor, spell) pair.
 //
-// THREADING. Try() and the reconcile hooks run on the AddTask job WORKER (the
-// per-follower tick). Any hand/equip/caster mutation the trigger performs is
-// MainThread::Post'd (#62). CastBounds is armed on the worker (lock-free);
-// APMFBridge calls are any-thread-safe. Never touch g_followers/g_active off the
-// worker (#4).
+// Try() returns TRUE only once APMF confirms it holds the claim (the caller
+// then skips its own kInstant apply); FALSE degrades to the caller's proven
+// kInstant heal (a heal must never vanish -- APMF absent, ABI too old, toggle
+// off, SE/VR, or a refused claim all degrade cleanly, byte-identical to today).
+//
+// THREADING. Try()/End() run on the AddTask job WORKER (the per-follower tick),
+// matching every other Actuation_Direct entry point (#4). CastBounds is
+// lock-free; APMFBridge calls are any-thread-safe.
 // ─────────────────────────────────────────────────────────────────────────────
 namespace MFO::ComposedCast {
 
-    // Try to EXECUTE a_spell as an ANIMATED forced cast by a_follower at a_target
-    // (a_target == a_follower => a self cast, no proxy). a_kind is the caster-
-    // consent classification (Heal / Buff / Offense), used to bound the window.
+    // Try to CLAIM a_spell as a declarative APMF-driven cast by a_follower at
+    // a_target (a_target == a_follower, or nullptr, -> self; wire target = 0).
+    // a_kind gates: only SpellKind::Heal is ever routed through APMF here.
     //
-    // Returns TRUE only when the executor OWNED this cast (armed + driving), so the
-    // caller returns without applying its own effect. Returns FALSE to DEGRADE:
-    // the caller applies its existing kInstant effect THIS tick (a heal must land).
-    // TODAY it always returns false (the trigger seam is not yet filled in).
+    // Call every tick the gambit still wants the heal -- a repeat call with the
+    // SAME (spell, target) is a cheap refresh; a CHANGE re-points the SAME APMF
+    // claim in place (no release/re-engage churn), so a heal that switches
+    // target or spell mid-stream stays one continuous claim. Returns TRUE only
+    // once APMF holds the claim (caller returns without applying its own
+    // effect); FALSE degrades to the caller's kInstant apply.
     bool Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
              CasterConsent::SpellKind a_kind);
 
-    // Is a_follower currently running an executor-held (animated) stream? The
-    // concentration reconciles consult this so they treat an executor stream as
-    // "live" and hand its END to this module rather than dispel + InterruptCast.
-    // FALSE today (no stream is ever held until the trigger lands).
-    bool StreamLive(RE::FormID a_follower);
-
-    // End an executor-held stream (RESTORE the hand, disarm bounds, release the
-    // APMF claim, free the proxy). Safe to call when no stream is held (no-op).
+    // Release a_follower's heal-cast claim + its CastBounds arm now. Call the
+    // instant the gambit stops wanting the heal (target lost / rule no longer
+    // wins) so APMF restores the hand immediately; the shared APMFBridge
+    // kExpiry backstop (~500 ms) covers a caller that forgets. Safe to call
+    // when nothing is held (no-op).
     void End(RE::FormID a_follower);
 
-    // ── observe hand-off (Diagnostics::SpellSink consults these) ────────────────
-    // The trigger arms an "expected cast" for (follower, spell) just before it
-    // fires; the TESSpellCastEvent sink reports a positive match as the ANIMATED
-    // path. Both no-ops today.
+    // ── observe hand-off (Diagnostics::SpellSink's call site, kept inert) ───────
+    // The retired hand-drive used to arm an "expected cast" here and report a
+    // positive TESSpellCastEvent match as the animated path landing. APMF now
+    // owns that whole observation on its own side; these are permanent no-ops
+    // so Diagnostics.cpp's existing call site keeps compiling unchanged.
     bool ExpectingCast(RE::FormID a_follower, RE::FormID a_spell);
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell);
 
-    // kPreLoadGame / revert -- beside ConcProxy::Reset() / CastBounds::Reset().
-    // Drops every stream, frees the dedicated proxy pool, releases every claim.
+    // kPreLoadGame / revert -- beside CastBounds::Reset(). This shim holds no
+    // local state of its own (APMFBridge::ClearTransientState drops the claim;
+    // CastBounds::Reset drops the bound); kept as the one seam Actuation_Direct.
+    // cpp's ClearSelfCasts already calls.
     void Reset();
 
 }

@@ -61,12 +61,17 @@ namespace MFO::APMFBridge {
             // kExpiry backstop as every other facet here.
             APMF_API::Handle equipHandle   = APMF_API::kInvalidHandle;  RE::FormID equip  = 0;
             std::chrono::steady_clock::time_point equipRefreshed{};
-            // cast-EXECUTION (ch.8b, v5) -- PER-CAST, TTL-bounded. Held by the
-            // Composed Forced Cast executor for the life of one bounded hand cast;
-            // released in RESTORE/abort, and auto-expired by the kExpiry backstop
-            // AND (on APMF's side) by the claim's own TTL.
-            APMF_API::Handle castHandle    = APMF_API::kInvalidHandle;  RE::FormID cast   = 0;
-            std::chrono::steady_clock::time_point castRefreshed{};
+            // heal-cast +ACT (ch.8, feat/cast-act) -- PER-CAST, declarative. Held
+            // by ComposedCast for the life of a claimed heal; refreshed every tick
+            // the gambit still wants it (create-or-repoint on a spell/target/hand
+            // change), released the instant it stops (ComposedCast::End), and
+            // auto-expired by the shared kExpiry backstop if a caller forgets --
+            // same PER-CAST refresh-or-expire shape as spellHandle above, just a
+            // distinct slot (heal vs. offense's arbitrate-only claim never overlap
+            // on one follower, but each gets its own state to avoid any cross-talk).
+            APMF_API::Handle healHandle    = APMF_API::kInvalidHandle;  RE::FormID healSpell  = 0;
+            RE::FormID       healTarget    = 0;                          std::int32_t healHand = 0;
+            std::chrono::steady_clock::time_point healRefreshed{};
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
@@ -146,12 +151,44 @@ namespace MFO::APMFBridge {
             cur = 0;
         }
 
+        // Heal-cast (+ACT) create-or-repoint: like EnsureClaimLocked, but the
+        // claim's identity is the (spell, target, hand) TRIPLE -- all three ride
+        // the SAME APMF_Param -- so a change in ANY of them is a re-point, not
+        // just the spell. Caller holds g_mx. `wantSpell == 0` releases.
+        void EnsureHealClaimLocked(const APMF_API::APMF_API_v2* api, RE::FormID follower,
+                                   APMF_API::Handle& handle, RE::FormID& curSpell,
+                                   RE::FormID& curTarget, std::int32_t& curHand,
+                                   RE::FormID wantSpell, RE::FormID wantTarget, std::int32_t wantHand) {
+            if (wantSpell == 0) {
+                if (handle != APMF_API::kInvalidHandle) { api->Release(handle); handle = APMF_API::kInvalidHandle; }
+                curSpell = 0; curTarget = 0; curHand = 0;
+                return;
+            }
+            if (handle != APMF_API::kInvalidHandle && curSpell == wantSpell &&
+                curTarget == wantTarget && curHand == wantHand)
+                return;   // unchanged
+            APMF_API::APMF_Param p{};
+            p.form   = wantSpell;
+            p.ival   = wantHand;
+            p.target = wantTarget;
+            if (handle == APMF_API::kInvalidHandle) {                        // create
+                handle = api->RequestEx(follower, APMF_API::kIntent_SelectSpell, kOwnBasis, &p);
+            } else if (api->abiVersion >= 3) {                               // re-point in place
+                reinterpret_cast<const APMF_API::APMF_API_v3*>(api)->Repoint(handle, &p);
+            } else {                                                        // v2 fallback: release+request
+                api->Release(handle);
+                handle = api->RequestEx(follower, APMF_API::kIntent_SelectSpell, kOwnBasis, &p);
+            }
+            if (handle != APMF_API::kInvalidHandle) { curSpell = wantSpell; curTarget = wantTarget; curHand = wantHand; }
+            else                                     { curSpell = 0; curTarget = 0; curHand = 0; }
+        }
+
         // Drop the map entry once EVERY claim is gone. Caller holds g_mx.
         void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
             const auto& o = it->second;
             if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
-                o.equipHandle == APMF_API::kInvalidHandle && o.castHandle == APMF_API::kInvalidHandle)
+                o.equipHandle == APMF_API::kInvalidHandle && o.healHandle == APMF_API::kInvalidHandle)
                 g_owned.erase(it);
         }
     }
@@ -351,65 +388,39 @@ namespace MFO::APMFBridge {
         EraseIfEmpty(it);
     }
 
-    // ── cast-EXECUTION (per-cast, TTL-bounded, ch.8b) ───────────────────────────
-    // The MFO-side flag bits MUST equal APMF's, since ClaimCast copies them
-    // straight into APMF_CastRequest::flags across the byte-shared boundary.
-    static_assert(CastReqFlag_LeftHand      == APMF_API::kCastFlag_LeftHand,
-                  "CastReqFlag_LeftHand diverged from APMF_API::kCastFlag_LeftHand");
-    static_assert(CastReqFlag_Concentration == APMF_API::kCastFlag_Concentration,
-                  "CastReqFlag_Concentration diverged from APMF_API::kCastFlag_Concentration");
-
-    bool ClaimCast(RE::FormID a_follower, const CastReq& a_req) {
+    // ── heal-cast +ACT (per-cast, declarative, ch.8, feat/cast-act) ─────────────
+    bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
+                       std::int32_t a_hand) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         // Executor toggle = the (repurposed) bHealAnimPackage key. APMF absent /
         // toggle off / no spell -> OFF, degrade to kInstant.
-        if (!api || a_follower == 0 || a_req.spell == 0 || !Config::g_healAnimPackage.load())
+        if (!api || a_follower == 0 || a_spell == 0 || !Config::g_healAnimPackage.load())
             return false;
-        // RequestCast is a v5 slot; on an older APMF the executor stays OFF (the
-        // heal still lands via the caller's kInstant degrade). Logged ONCE.
-        if (api->abiVersion < 5) {
-            static std::atomic<bool> s_warned{ false };
-            if (!s_warned.exchange(true))
-                spdlog::warn("[apmf] ABI v{} has no RequestCast (need >= 5) -- Composed Forced "
-                             "Cast OFF; heals apply via kInstant (degrade).", api->abiVersion);
-            return false;
-        }
-        auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
-        // A spell change is a NEW bounded claim (no in-place re-point for the rich
-        // request); release the old one first so the two never overlap.
-        if (o.castHandle != APMF_API::kInvalidHandle && o.cast != a_req.spell)
-            ReleaseHandleLocked(o.castHandle, o.cast);
-        if (o.castHandle == APMF_API::kInvalidHandle) {
-            APMF_API::APMF_CastRequest cr{};
-            cr.spell  = a_req.spell;
-            cr.proxy  = a_req.proxy;
-            cr.target = a_req.target;
-            cr.flags  = a_req.flags;
-            cr.ttlMs  = a_req.ttlMs;
-            o.castHandle = v5->RequestCast(a_follower, kOwnBasis, &cr);
-            o.cast       = (o.castHandle != APMF_API::kInvalidHandle) ? a_req.spell : 0;
-        }
-        o.castRefreshed = std::chrono::steady_clock::now();
-        const bool live = o.castHandle != APMF_API::kInvalidHandle;
+        EnsureHealClaimLocked(api, a_follower, o.healHandle, o.healSpell, o.healTarget, o.healHand,
+                              a_spell, a_target, a_hand);
+        o.healRefreshed = std::chrono::steady_clock::now();
+        const bool live = o.healHandle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
         return live;
     }
 
-    void ReleaseCast(RE::FormID a_follower) {
+    void ReleaseHealCast(RE::FormID a_follower) {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
         if (it == g_owned.end()) return;
-        ReleaseHandleLocked(it->second.castHandle, it->second.cast);
+        ReleaseHandleLocked(it->second.healHandle, it->second.healSpell);
+        it->second.healTarget = 0;
+        it->second.healHand   = 0;
         EraseIfEmpty(it);
     }
 
-    bool IsCastClaimActive(RE::FormID a_follower) {
+    bool IsHealCastActive(RE::FormID a_follower) {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
-        return it != g_owned.end() && it->second.castHandle != APMF_API::kInvalidHandle;
+        return it != g_owned.end() && it->second.healHandle != APMF_API::kInvalidHandle;
     }
 
     void Tick() {
@@ -429,11 +440,13 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.actionHandle, o.actionMask);
             if (o.equipHandle != APMF_API::kInvalidHandle && now - o.equipRefreshed >= kExpiry)
                 ReleaseHandleLocked(o.equipHandle, o.equip);
-            if (o.castHandle != APMF_API::kInvalidHandle && now - o.castRefreshed >= kExpiry)
-                ReleaseHandleLocked(o.castHandle, o.cast);
+            if (o.healHandle != APMF_API::kInvalidHandle && now - o.healRefreshed >= kExpiry) {
+                ReleaseHandleLocked(o.healHandle, o.healSpell);
+                o.healTarget = 0; o.healHand = 0;
+            }
             if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
-                o.equipHandle == APMF_API::kInvalidHandle && o.castHandle == APMF_API::kInvalidHandle)
+                o.equipHandle == APMF_API::kInvalidHandle && o.healHandle == APMF_API::kInvalidHandle)
                 it = g_owned.erase(it);
             else
                 ++it;
@@ -448,7 +461,8 @@ namespace MFO::APMFBridge {
             ReleaseHandleLocked(o.packageHandle, o.package);
             ReleaseHandleLocked(o.actionHandle,  o.actionMask);
             ReleaseHandleLocked(o.equipHandle,   o.equip);
-            ReleaseHandleLocked(o.castHandle,    o.cast);
+            ReleaseHandleLocked(o.healHandle,    o.healSpell);
+            o.healTarget = 0; o.healHand = 0;
         }
         g_owned.clear();
     }
