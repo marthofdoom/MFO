@@ -1643,26 +1643,32 @@ full history (the OBSERVE-AND-REPLICATE drive this superseded, and why it raced)
   this kind-gate is NEW in this pass — the prior `Enabled()` had no kind check, so
   re-verify this before assuming ComposedCast was always heal-scoped), `Config::
   g_healAnimPackage` (repurposed toggle), `APMFBridge::Available()`. Sequence:
-  **DELIVERY/TARGET MISMATCH check (2026-09-05, S1 field fix, marth: "healing hands
-  is not gambited") FIRST** — `!selfCast && a_spell->GetDelivery() ==
-  Delivery::kSelf` → decline outright (return false), NO claim attempted; a
-  Self-only spell gambited to heal a non-self target needs a delivery-flip proxy
-  to land on anyone but the caster, and this module runs on the WORKER (proxy
-  minting is main-thread-only, `ConcProxy`/the retired `HealProxy`'s own
-  discipline) — so it defers to the caller's ALREADY-CORRECT kInstant/`ConcProxy`
-  degrade (which builds that proxy safely on main) rather than risk a NEW
-  cross-thread proxy race or (worse) silently substitute a different spell the
-  follower happens to know. **Audited (2026-09-05): no code path from gambit
-  resolution (`Board.cpp`'s `actionParamForm` write) through `CastOn`/
-  `ConcentrationCast`/`CastAuto`/`CastSelfDirect`/`CastTargetDirect` down to this
-  function ever substitutes a spell — every one forwards the gambit's own
-  configured FormID unchanged; this mismatch-decline is the fix for a REAL gap
-  (the +ACT path had no delivery-flip handling at all), not a confirmed
-  substitution bug in MFO's dispatch.** Past the mismatch check: `APMFBridge::
-  ClaimHealCast(fid, spellID, targetID, hand=0)` → refused → `CastBounds::Disarm`
-  + log + return false (degrade to kInstant); claimed → `CastBounds::Arm(fid,
-  spellID, 0, 6000ms)` → return true (caller skips its kInstant apply). `target`
-  is 0 for a self-cast, else `a_target`'s FormID.
+  `APMFBridge::ClaimHealCast(fid, spellID, targetID, hand=0)` — spellID/targetID
+  FORWARDED UNCHANGED (a_spell always the gambit's own configured spell; MFO
+  does not inspect delivery, does not proxy, does not substitute) → refused →
+  `CastBounds::Disarm` + log + return false (degrade to kInstant); claimed →
+  `CastBounds::Arm(fid, spellID, 0, 6000ms)` → return true (caller skips its
+  kInstant apply). `target` is 0 for a self-cast, else `a_target`'s FormID. A
+  Self-delivery spell gambited at a non-self target is APMF's OWN problem: its
+  feat/cast-act drive mints its own delivery-flip proxy synchronously on ITS
+  confirmed-main thread (`core/CastExecutor.cpp`'s `proxy::Acquire`, called from
+  `StartHandDrive`) and drives that instead — field-proven (deck APMF.log:
+  `driving left hand -- spell 0002F3B8 cast-as FF001A7D target 0009BCB0`, Fast
+  Healing/Self correctly proxied onto an ally). **An earlier revision of this
+  function (2026-09-05) DECLINED that mismatch instead, reasoning MFO would
+  need to build its own proxy from this WORKER-context function -- WRONG (no
+  such proxy is MFO's to build) and a REGRESSION (silently killed animated
+  heal-other for every Self-delivery gambit spell); reverted same day, marth.**
+  Separately AUDITED (2026-09-05, marth: "healing hands is not gambited"): no
+  code path from gambit resolution (`Board.cpp`'s `actionParamForm` write)
+  through `CastOn`/`ConcentrationCast`/`CastAuto`/`CastSelfDirect`/
+  `CastTargetDirect` down to this function EVER substitutes a spell — every one
+  forwards the gambit's own configured FormID unchanged. The ONLY fallthrough
+  found: an unresolvable/unknown-to-the-follower spell DECLINES that rule and
+  falls to the NEXT rule in the list (`Logistics.cpp:1188` et al.) — never a
+  substitution, just evaluation moving to a DIFFERENT rule with its OWN
+  configured spell. If two different spells fire for one follower, two
+  different RULES name them; that is a config question for marth, not a code bug.
 - `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`.
   Call the instant the gambit stops wanting the heal; the shared `APMFBridge` 500ms
   `kExpiry` backstop (`Tick()`, `Diagnostics.cpp`) covers a caller that forgets —

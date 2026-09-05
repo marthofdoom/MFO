@@ -343,26 +343,39 @@ the offense exclusivity deny. A live heal-cast claim is proof MFO already
 vetted this cast; the consent hook no longer needs an exact spell-identity
 match to stand down for it.
 
-**BUG B — never substitute the gambited spell.** Field observation: MFO
-requested +ACT for two different heal spells on the same follower, one
-Self-delivery (needs a proxy to heal an ally) and one already target-delivery.
-Audited every dispatch path from the gambit's own `actionParamForm` (`Board.cpp`)
-through `CastOn`/`ConcentrationCast`/`CastAuto`/`CastSelfDirect`/
-`CastTargetDirect` down to `ComposedCast::Try` — **none of them ever substitutes
-a spell; every one forwards the gambit's own configured FormID unchanged.** What
-WAS missing: the +ACT path had no delivery/target-mismatch handling at all (it
-handed APMF the raw spell FormID regardless of a Self-vs-non-self mismatch,
-unlike the kInstant path's own `DeliverySpell`/`ConcProxy`). Fix: `ComposedCast::
-Try` now DECLINES the +ACT drive outright for a mismatched pair (`!selfCast &&
-spell->GetDelivery() == kSelf`) rather than either substituting a different
-known spell or building a NEW delivery-flip proxy from its own WORKER context
-(proxy creation/configuration is main-thread-only in this codebase's own
-established discipline — `ConcProxy`/the retired `HealProxy` both ran on main;
-building one on the worker risks a NEW cross-thread race reading/writing the
-SAME proxy form APMF's own async drive might be using, precisely the class of
-bug S1 just removed). The caller's PROVEN kInstant/`ConcProxy` degrade already
-builds that proxy correctly and safely, so a mismatched heal still lands on the
-GAMBITED target with the GAMBITED spell — just not animated for that one case.
+**BUG B — investigated, NOT a code bug (marth, 2026-09-05).** Field observation:
+MFO requested +ACT for two different heal spells on the same follower, one
+Self-delivery (needs a proxy to heal an ally) and one already target-delivery,
+and marth recalled only one being gambited. Audited every dispatch path from
+the gambit's own `actionParamForm` (`Board.cpp`) through `CastOn`/
+`ConcentrationCast`/`CastAuto`/`CastSelfDirect`/`CastTargetDirect` down to
+`ComposedCast::Try` — **none of them ever substitutes a spell; every one
+forwards the gambit's own configured FormID unchanged.** The only fallthrough
+found is a DECLINE-and-fall-to-the-next-rule when a configured spell is unknown
+to the follower (`Logistics.cpp:1188` et al.) — never a substitution, just
+evaluation moving to a DIFFERENT rule with its OWN configured spell. The deck
+APMF.log independently showed multiple `act.cast_target` rules ("rule 2",
+"rule 4") on the SAME follower, so two spells firing means two RULES name them
+— a gambit-configuration question for marth to check on the Board, not an MFO
+dispatch bug.
+
+A REAL (but separate) gap was found and FIXED then REVERTED the same day: an
+initial pass had `ComposedCast::Try` decline the +ACT drive outright for a
+Self-delivery-spell-at-non-self-target mismatch, reasoning MFO would need to
+build a delivery-flip proxy from its own WORKER context (unsafe -- proxy
+creation is main-thread-only in this codebase's discipline) and that declining
+was safer than that risk. This was WRONG and a REGRESSION: **no such proxy is
+MFO's to build.** APMF's feat/cast-act drive already mints its OWN delivery-
+flip proxy synchronously on ITS confirmed-main Engage/Repoint path
+(`core/CastExecutor.cpp`'s `proxy::Acquire`, called from `StartHandDrive`),
+field-proven in the deck APMF.log (`driving left hand -- spell 0002F3B8
+cast-as FF001A7D target 0009BCB0` -- Fast Healing/Self correctly proxied onto
+Cicero). Declining silently killed animated heal-other for every Self-delivery
+gambit spell, the primary capability this whole workstream exists to deliver.
+Reverted: `ComposedCast::Try` forwards a_spell + a_target to `APMFBridge::
+ClaimHealCast` UNCHANGED in every case -- MFO does not inspect delivery, does
+not proxy, does not substitute; APMF resolves delivery entirely on its side
+(mismatch → its proxy, match → the raw spell).
 
 **Flagged, not fixed here (out of this pass's scope):** offense's own "owned cast"
 gambit (`Actuation.cpp:522`, `APMFBridge::ClaimCasting`) rides the SAME

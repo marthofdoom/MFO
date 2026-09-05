@@ -50,16 +50,14 @@ namespace MFO::ComposedCast {
     // effect); FALSE degrades to the caller's kInstant apply.
     //
     // NEVER SUBSTITUTES: a_spell is always the gambit's own configured spell,
-    // passed straight to APMF unchanged. A DELIVERY/TARGET MISMATCH (a_spell is
-    // Self-delivery, a_target is not the caster -- e.g. a Self-only heal
-    // gambited to heal an ally) declines the +ACT drive outright (returns
-    // false) rather than either substituting a different known spell OR
-    // building a delivery-flip proxy from this WORKER-context function (proxy
-    // creation is main-thread-only in this codebase's own established
-    // discipline, ConcProxy/the retired HealProxy) -- the caller's kInstant/
-    // ConcProxy degrade already builds that proxy correctly and safely, so the
-    // GAMBITED spell still lands on the GAMBITED target, just not animated for
-    // this one mismatched case.
+    // forwarded to APMF UNCHANGED, along with the actual a_target -- MFO does
+    // not inspect delivery, does not proxy, and does not pick a different
+    // spell the follower happens to know. A DELIVERY/TARGET MISMATCH (a_spell
+    // is Self-delivery, a_target is not the caster -- e.g. a Self-only heal
+    // gambited to heal an ally) is APMF's OWN problem to solve: its
+    // feat/cast-act drive mints its own delivery-flip proxy synchronously on
+    // ITS confirmed-main thread (core/CastExecutor.cpp's proxy pool, field-
+    // proven) and drives that instead. MFO has no business building one here.
     bool Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
              CasterConsent::SpellKind a_kind);
 

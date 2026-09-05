@@ -46,33 +46,22 @@ namespace MFO::ComposedCast {
         const bool        selfCast = (!a_target) || (a_target == a_follower);
         const RE::FormID  targetID = selfCast ? 0 : a_target->GetFormID();
 
-        // DELIVERY/TARGET MISMATCH -- decline the +ACT drive, never substitute.
-        // MFO must drive the GAMBIT'S OWN spell, exactly as configured -- it must
-        // never pick a different spell the follower happens to know instead. A
-        // Self-delivery spell aimed at a non-self target (the canonical case: a
-        // Self-only heal like Fast Healing gambited to heal an ALLY) needs a
-        // delivery-flipped PROXY to land on anyone but the caster; the kInstant
-        // degrade path already builds that proxy correctly and safely
-        // (Actuation_Direct.cpp's DeliverySpell/ConcProxy, MAIN-THREAD-only,
-        // proven in the field). Building an EQUIVALENT proxy for the +ACT claim
-        // here would require minting/reconfiguring a SpellItem from THIS
-        // function's WORKER context while APMF's own drive may be reading that
-        // same form asynchronously on ITS thread -- precisely the class of
-        // cross-thread race S1 just removed (the retired MFO-side hand-drive).
-        // So: decline the animated drive for a mismatched pair and let the
-        // caller's kInstant/ConcProxy apply the GAMBITED spell correctly (via
-        // its own proxy) this tick instead -- never wrong, only not animated for
-        // this one case. A spell whose OWN delivery already matches the target
-        // relationship (self-cast of any delivery, or a non-self cast of an
-        // already Aimed/Touch/TargetActor spell) is unaffected and still routes
-        // through APMF's animated +ACT drive below, using the RAW gambited
-        // FormID -- never a substitute.
-        if (!selfCast && a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf) {
-            spdlog::info("[cfc] {:08X} delivery mismatch (spell {:08X} is Self, target {:08X} "
-                         "is not the caster) -- declining +ACT, kInstant proxy delivers the "
-                         "gambited spell instead", fid, spellID, targetID);
-            return false;
-        }
+        // FORWARD UNCHANGED -- MFO does not inspect delivery, does not proxy, does
+        // not substitute. a_spell is always the gambit's own configured spell;
+        // spellID/targetID ride to APMF exactly as given. APMF resolves delivery
+        // itself: a Self-delivery spell aimed at a non-self target gets APMF's
+        // OWN delivery-flip proxy, minted synchronously on ITS confirmed-main
+        // Engage/Repoint path (core/CastExecutor.cpp's `proxy::Acquire`, called
+        // from StartHandDrive) -- proven in the field (deck APMF.log: "driving
+        // left hand -- spell 0002F3B8 cast-as FF001A7D target 0009BCB0", Fast
+        // Healing/Self correctly proxied onto an ally). This is APMF's job, not
+        // MFO's: MFO has no main-thread seat inside this WORKER-context function
+        // to safely mint/reconfigure a proxy form itself (an earlier revision of
+        // this function declined the mismatch case instead, reasoning MFO would
+        // need to build its own proxy -- WRONG: no such proxy is MFO's to build,
+        // and declining silently killed animated heal-other for every
+        // Self-delivery gambit spell, the primary case this workstream exists to
+        // deliver. Reverted 2026-09-05, marth).
 
         // CLAIM (create) or refresh/re-point the declarative heal-cast facet:
         // APMF equips + drives the animated cast + guarantees delivery. hand =
