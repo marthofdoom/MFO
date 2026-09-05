@@ -260,7 +260,7 @@ namespace MFO::Board {
         { Vocab::kActLootSoulGems,       "Loot soul gems" },
         { Vocab::kActLootLockpicks,      "Loot lockpicks" },
         { Vocab::kActLootIngredients,    "Loot ingredients" },
-        { Vocab::kActLootValuables,      "Loot valuables (to sell)" },
+        { Vocab::kActLootValuables,      "Loot valuables + gold (to sell)" },
         { Vocab::kActEquipTorch,         "Equip torch" },
         // Cast in logistics (mage update): out-of-combat casting -- self-buffs,
         // candlelight, out-of-combat heals. Same opcodes as combat; the
