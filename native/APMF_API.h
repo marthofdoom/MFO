@@ -130,18 +130,22 @@ namespace APMF_API {
                                      //       (the claim's spell is enforced as the actor's
                                      //       only castable choice; denying a COMPETING
                                      //       framework's own selection is a future gap).
-                                     //       Param: form (the spell FormID), ival (+ACT hand
-                                     //       mode: 0 auto/1 right/2 left/3 dual -- see
+                                     //       Param: form (the spell FormID), ival (bits 0-1:
+                                     //       +ACT hand mode 0 auto/1 right/2 left/3 dual; bit 2
+                                     //       kActFlag_Drive: the +ACT OPT-IN, see below -- see
                                      //       core/CastExecutor.h), target (the cast target
                                      //       actor; 0 -> falls back to a winning
                                      //       kIntent_CombatTarget claim, then self), pos
                                      //       (reserved -- a world-location target for a
                                      //       location-delivery spell; NOT yet wired, see
                                      //       core/CastExecutor.cpp).
-                                     //       +ACT MODE (feat/cast-act): when driven by
-                                     //       core/CastExecutor.cpp, this claim doesn't just
-                                     //       narrow the AI -- APMF equips + animates + fires
-                                     //       the cast itself. See CastExecutor.h.
+                                     //       +ACT MODE is OPT-IN (feat/cast-act, the
+                                     //       offense-safety fix): `ival`'s kActFlag_Drive bit
+                                     //       CLEAR (incl. ival==0, the pre-+ACT shape) stays
+                                     //       pure gate-only -- the client's OWN AI casts, APMF
+                                     //       only narrows/denies (unchanged; MFO's offense
+                                     //       gambit uses this). Bit SET -> core/CastExecutor.cpp
+                                     //       equips + animates + fires the cast itself.
         kIntent_WeaponDrawn   = 5,   // ch.4  Draw/sheathe. Mode: PROMOTE (one-shot, sticky).
                                      //       Param: none.
         kIntent_Dialogue      = 6,   // ch.10 Pause the actor's own in-progress dialogue.
@@ -294,9 +298,11 @@ namespace APMF_API {
     // above for the full picture; this is the quick-scan version.
     //
     //   form   kIntent_SelectSpell     the spell FormID
-    //   ival   kIntent_SelectSpell     +ACT hand mode: 0 auto/1 right/2 left/3 dual
+    //   ival   kIntent_SelectSpell     bits 0-1 hand mode (0 auto/1 right/2 left/3 dual);
+    //                                  bit 2 kActFlag_Drive OPT-IN (clear = gate-only,
+    //                                  the default; set = APMF equips+drives, +ACT)
     //   target kIntent_SelectSpell     the cast target actor (0 -> a winning
-    //                                  kIntent_CombatTarget claim -> self)
+    //                                  kIntent_CombatTarget claim -> self); +ACT only
     //   pos    kIntent_SelectSpell     RESERVED (a location-delivery target; not yet
     //                                  read -- core/CastExecutor.cpp)
     //   form   kIntent_CombatTarget    the target actor

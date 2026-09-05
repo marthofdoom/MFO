@@ -389,6 +389,15 @@ namespace MFO::APMFBridge {
     }
 
     // ── heal-cast +ACT (per-cast, declarative, ch.8, feat/cast-act) ─────────────
+    // ival bit 2 = APMF's +ACT opt-in (APMF_API.h kIntent_SelectSpell: bits 0-1
+    // are the hand, bit 2 is kActFlag_Drive). CLEAR (offense's ClaimCasting,
+    // above) stays pure gate-only -- the client's OWN AI casts, APMF only
+    // narrows/denies. SET -> APMF itself equips + animates + fires the cast
+    // (core/CastExecutor.cpp) -- exactly what a heal-cast claim needs, since
+    // nothing else will ever make the AI choose to cast it. A NAMED constant,
+    // never a bare magic number at the call site.
+    static constexpr std::int32_t kApmfCastActDrive = 0x4;
+
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                        std::int32_t a_hand) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
@@ -399,7 +408,7 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
         EnsureHealClaimLocked(api, a_follower, o.healHandle, o.healSpell, o.healTarget, o.healHand,
-                              a_spell, a_target, a_hand);
+                              a_spell, a_target, a_hand | kApmfCastActDrive);
         o.healRefreshed = std::chrono::steady_clock::now();
         const bool live = o.healHandle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));

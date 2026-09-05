@@ -238,6 +238,13 @@ namespace MFO::APMFBridge {
     // (APMF's own fallback order: explicit target -> a winning combat-target
     // claim -> self); an ally/player FormID for heal-other.
     //
+    // The .cpp ORs a_hand with the +ACT opt-in bit (APMF_API.h kIntent_
+    // SelectSpell: ival bit 2, kApmfCastActDrive here) before sending it as
+    // param.ival -- a heal-cast claim ALWAYS wants APMF to equip+drive (nothing
+    // else will ever make the AI choose to cast it), unlike offense's
+    // ClaimCasting (above), which stays gate-only (bit clear) so the follower's
+    // OWN AI keeps deciding whether/when to cast.
+    //
     // Worker-safe. CREATE-OR-REPOINT: call every tick the gambit still wants the
     // heal -- a repeat call with the SAME (spell, target, hand) is a cheap
     // refresh; a CHANGE in any of the three re-points the SAME handle in place
