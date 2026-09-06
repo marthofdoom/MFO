@@ -36,8 +36,10 @@ namespace MFO::APMFBridge {
         //     (ReleaseOffenseCast <- Scheduler !castSeen); the expiry is only a
         //     backstop. PORTED feat/offense-cast-seats (2026-09-05) off the retired
         //     ch.8 kIntent_SelectSpell gate-only claim this field used to back --
-        //     see Owned::offenseHandle below and APMFBridge.h's ClaimOffenseCast
-        //     doc for the full port rationale. IMPORTANT (2026-09-05, corrects an
+        //     see Owned::offense below (feat/per-hand-cast-slots, 2026-09-06:
+        //     now a 2-slot array, one per hand) and APMFBridge.h's
+        //     ClaimOffenseCast doc for the full port rationale. IMPORTANT
+        //     (2026-09-05, corrects an
         //     earlier false assumption): "each winning cast tick" is a
         //     Scheduler::Tick ROUND-ROBIN lap for this follower's OWN service, not a
         //     tight combat-thread beat -- ONE follower is serviced per ~133ms pump
@@ -68,6 +70,22 @@ namespace MFO::APMFBridge {
         // Docs/STATUS.md) -- actionHandle is dead weight today, so its flat kExpiry is
         // unexercised rather than proven; revisit sizing WHEN it is actually wired,
         // based on whatever actually drives it then.
+        // A single kIntent_Cast claim's full state -- ONE handle plus the
+        // (spell,target,hand,concentration,stopPct) it was created/refreshed
+        // with, plus its own refresh timestamp. Factored out (feat/per-hand-
+        // cast-slots, 2026-09-06) so `Owned::offense` can hold TWO of these
+        // (one per hand) without duplicating six parallel fields per slot; heal
+        // stays a single instance (always LEFT, never per-hand).
+        struct CastClaim {
+            APMF_API::Handle handle = APMF_API::kInvalidHandle;
+            RE::FormID       spell  = 0;
+            RE::FormID       target = 0;
+            std::int32_t     hand   = 0;
+            bool             conc   = false;
+            std::uint32_t    stopPct = 0;
+            std::chrono::steady_clock::time_point refreshed{};
+        };
+
         struct Owned {
             APMF_API::Handle targetHandle = APMF_API::kInvalidHandle;  RE::FormID target = 0;
             std::chrono::steady_clock::time_point targetRefreshed{};
@@ -86,33 +104,31 @@ namespace MFO::APMFBridge {
             APMF_API::Handle equipHandle   = APMF_API::kInvalidHandle;  RE::FormID equip  = 0;
             std::chrono::steady_clock::time_point equipRefreshed{};
             // heal-cast (ch.8b, kIntent_Cast/RequestCast, ported feat/mfo-cast-port)
-            // -- PER-CAST, TTL-bounded. Held by ComposedCast for the life of a
-            // claimed heal; refreshed every tick the gambit still wants it
+            // -- PER-CAST, TTL-bounded, single slot (LEFT always -- ClaimHealCast's
+            // own hard rule, never per-hand). Held by ComposedCast for the life of
+            // a claimed heal; refreshed every tick the gambit still wants it
             // (create-or-refresh on a spell/target/hand/concentration/stopPct
             // change -- RequestCast has no in-place re-point, so a CHANGE releases
             // and re-requests, a new bounded claim), released the instant it stops
             // (ComposedCast::End), and auto-expired by FacetExpiry() (below) AND
-            // (on APMF's side) by the claim's own TTL if a caller forgets -- same
-            // PER-CAST refresh-or-expire shape as offenseHandle below, just a
-            // distinct slot (heal and offense claims never overlap on one
-            // follower -- CasterConsent::SpellKind makes them mutually exclusive
-            // per tick -- but each gets its own state to avoid any cross-talk).
-            APMF_API::Handle healHandle    = APMF_API::kInvalidHandle;  RE::FormID healSpell  = 0;
-            RE::FormID       healTarget    = 0;                          std::int32_t healHand = 0;
-            bool              healConc     = false;                      std::uint32_t healStopPct = 0;
-            std::chrono::steady_clock::time_point healRefreshed{};
+            // (on APMF's side) by the claim's own TTL if a caller forgets. Distinct
+            // from `offense` below (heal and offense claims never overlap on one
+            // follower's SAME hand -- CasterConsent::SpellKind makes them mutually
+            // exclusive per tick for a given spell -- but each gets its own state
+            // to avoid any cross-talk; a heal on LEFT and an offense claim on RIGHT
+            // CAN now be concurrently live, feat/per-hand-cast-slots).
+            CastClaim heal;
             // offense-cast (ch.8b, kIntent_Cast/RequestCast, PORTED feat/offense-
             // cast-seats, 2026-09-05, off the retired ch.8 kIntent_SelectSpell
             // gate-only claim this slot used to back -- see APMFBridge.h's
-            // ClaimOffenseCast doc) -- PER-CAST, TTL-bounded, same shape/lifecycle
-            // as healHandle above, just a DISTINCT slot: heal and offense casts
-            // are mutually exclusive per tick by CasterConsent::SpellKind, never
-            // concurrent on one follower, but each keeps its own state so neither
-            // claim's release/refresh ever cross-talks with the other's.
-            APMF_API::Handle offenseHandle = APMF_API::kInvalidHandle;  RE::FormID offenseSpell = 0;
-            RE::FormID       offenseTarget = 0;                          std::int32_t offenseHand = 0;
-            bool              offenseConc  = false;                      std::uint32_t offenseStopPct = 0;
-            std::chrono::steady_clock::time_point offenseRefreshed{};
+            // ClaimOffenseCast doc) -- PER-CAST, TTL-bounded, and PER-HAND
+            // (feat/per-hand-cast-slots, 2026-09-06): [0] = left, [1] = right, so
+            // two independent offense claims can stand on one follower at once
+            // (the parallel APMF change arbitrates kIntent_Cast per (actor, hand)
+            // now). A DualCast claim is ONE underlying handle mirrored into BOTH
+            // indices -- see ClaimOffenseCast's own doc for how that mirroring is
+            // created and torn down without a double-release.
+            CastClaim offense[2];
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
@@ -160,8 +176,8 @@ namespace MFO::APMFBridge {
     // already size their own round-robin-aware release windows: out-wait the
     // worst-case suppression + round-robin gap, floored at the old kExpiry so a
     // small party never regresses to a SLOWER release than before. Shared by
-    // offenseHandle/targetHandle/equipHandle/healHandle -- one formula, no
-    // per-facet copy-paste (none of the four need different sizing: they all
+    // offense[0]/offense[1]/targetHandle/equipHandle/heal -- one formula, no
+    // per-facet copy-paste (none of these need different sizing: they all
     // share the identical round-robin service as their refresh source). NOW ALSO
     // reused by Actuation.cpp's cast-gambit lock (Task 2) as the staleness window
     // for its own un-claimed (direct-force concentration) fallback case.
@@ -240,33 +256,39 @@ namespace MFO::APMFBridge {
             cur = 0;
         }
 
+        // Release ONE CastClaim's handle (if live) and reset it to default.
+        // Caller holds g_mx. Safe to call on an already-empty claim (no-op).
+        void ReleaseClaimLocked(CastClaim& c) {
+            auto* api = g_apmf.load(std::memory_order_relaxed);
+            if (api && c.handle != APMF_API::kInvalidHandle) api->Release(c.handle);
+            c = CastClaim{};
+        }
+
         // kIntent_Cast create-or-refresh (kIntent_Cast/RequestCast, ch.8b) -- SHARED
         // by both ClaimHealCast and ClaimOffenseCast (renamed from
         // EnsureHealClaimLocked, feat/offense-cast-seats, 2026-09-05: the function
         // was already fully generic over its handle/curX out-params, only the name
-        // was heal-specific). Unlike EnsureClaimLocked's retired kIntent_SelectSpell
-        // Repoint, RequestCast's rich payload has NO in-place re-point -- a CHANGE
-        // in any of (spell, target, hand, concentration, stopPct) releases the old
-        // claim and requests a fresh one (a new bounded window; never two live
-        // claims on the same follower's slot at once). Caller holds g_mx AND must
-        // have already verified api->abiVersion >= 5 (RequestCast is a v5 slot --
-        // see ClaimHealCast/ClaimOffenseCast). `wantSpell == 0` releases.
+        // was heal-specific; feat/per-hand-cast-slots, 2026-09-06: folded the six
+        // parallel out-params into one CastClaim& now that offense needs TWO of
+        // them). Unlike EnsureClaimLocked's retired kIntent_SelectSpell Repoint,
+        // RequestCast's rich payload has NO in-place re-point -- a CHANGE in any of
+        // (spell, target, hand, concentration, stopPct) releases the old claim and
+        // requests a fresh one (a new bounded window; never two live claims on the
+        // same slot at once). Caller holds g_mx AND must have already verified
+        // api->abiVersion >= 5 (RequestCast is a v5 slot -- see ClaimHealCast/
+        // ClaimOffenseCast). `wantSpell == 0` releases.
         void EnsureCastClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
-                                   APMF_API::Handle& handle, RE::FormID& curSpell,
-                                   RE::FormID& curTarget, std::int32_t& curHand,
-                                   bool& curConc, std::uint32_t& curStopPct,
-                                   RE::FormID wantSpell, RE::FormID wantTarget, std::int32_t wantHand,
-                                   bool wantConc, std::uint32_t wantStopPct) {
+                                   CastClaim& c, RE::FormID wantSpell, RE::FormID wantTarget,
+                                   std::int32_t wantHand, bool wantConc, std::uint32_t wantStopPct) {
             if (wantSpell == 0) {
-                if (handle != APMF_API::kInvalidHandle) { api->Release(handle); handle = APMF_API::kInvalidHandle; }
-                curSpell = 0; curTarget = 0; curHand = 0; curConc = false; curStopPct = 0;
+                ReleaseClaimLocked(c);
                 return;
             }
-            if (handle != APMF_API::kInvalidHandle && curSpell == wantSpell &&
-                curTarget == wantTarget && curHand == wantHand &&
-                curConc == wantConc && curStopPct == wantStopPct)
+            if (c.handle != APMF_API::kInvalidHandle && c.spell == wantSpell &&
+                c.target == wantTarget && c.hand == wantHand &&
+                c.conc == wantConc && c.stopPct == wantStopPct)
                 return;   // unchanged -- cheap no-op, no release/re-request churn
-            if (handle != APMF_API::kInvalidHandle) { api->Release(handle); handle = APMF_API::kInvalidHandle; }
+            if (c.handle != APMF_API::kInvalidHandle) { api->Release(c.handle); c.handle = APMF_API::kInvalidHandle; }
             APMF_API::APMF_CastRequest req{};
             req.spell  = wantSpell;
             req.proxy  = 0;   // APMF mints its own delivery-flip proxy for kSelf-delivery (core/CastProxy.h)
@@ -274,14 +296,15 @@ namespace MFO::APMFBridge {
             // kCastFlag_DualCast and kCastFlag_LeftHand are mutually exclusive (APMF_API.h:
             // "do NOT set kCastFlag_LeftHand alongside it") -- kApmfHandDualCast (Loadout::
             // HandPick::DualCast, via HandFor above) claims BOTH hands and never also sets
-            // the single-hand hint.
+            // the single-hand hint. Anything else (kApmfHandRight, or bare 0) is the RIGHT
+            // hint -- APMF's own default when kCastFlag_LeftHand is unset (APMF_API.h).
             const bool wantDual = (wantHand == kApmfHandDualCast);
             req.flags  = (wantDual                    ? APMF_API::kCastFlag_DualCast :
                           wantHand == kApmfHandLeft    ? APMF_API::kCastFlag_LeftHand : 0u) |
                          (wantConc ? APMF_API::kCastFlag_Concentration : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
             req.ttlMs  = kHealCastTtlMs;
-            handle = api->RequestCast(follower, kOwnBasis, &req);
+            c.handle = api->RequestCast(follower, kOwnBasis, &req);
             // [cfc] dual-cast ask vs. observed outcome (marth 2026-09-06): the flag is a
             // HINT (APMF_API.h) -- APMF may still only arm one hand, and never reports which.
             // This distinguishes "asked for dual, claim granted" (engine may still degrade to
@@ -291,7 +314,7 @@ namespace MFO::APMFBridge {
             // unchanged-claim fast path above already skips repeat ticks), so this is
             // inherently rate-limited, not spammy.
             if (wantDual) {
-                if (handle != APMF_API::kInvalidHandle)
+                if (c.handle != APMF_API::kInvalidHandle)
                     spdlog::info("[cfc] {:08X} asked for dual-cast (spell {:08X}) -- claim "
                                  "granted; engine may still arm only one hand (hint only)",
                                  follower, wantSpell);
@@ -300,11 +323,11 @@ namespace MFO::APMFBridge {
                                  "REFUSED outright, not just downgraded to one hand",
                                  follower, wantSpell);
             }
-            if (handle != APMF_API::kInvalidHandle) {
-                curSpell = wantSpell; curTarget = wantTarget; curHand = wantHand;
-                curConc  = wantConc;  curStopPct = wantStopPct;
+            if (c.handle != APMF_API::kInvalidHandle) {
+                c.spell = wantSpell; c.target = wantTarget; c.hand = wantHand;
+                c.conc  = wantConc;  c.stopPct = wantStopPct;
             } else {
-                curSpell = 0; curTarget = 0; curHand = 0; curConc = false; curStopPct = 0;
+                c = CastClaim{};
             }
         }
 
@@ -313,8 +336,8 @@ namespace MFO::APMFBridge {
             const auto& o = it->second;
             if (o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
-                o.equipHandle == APMF_API::kInvalidHandle && o.healHandle == APMF_API::kInvalidHandle &&
-                o.offenseHandle == APMF_API::kInvalidHandle)
+                o.equipHandle == APMF_API::kInvalidHandle && o.heal.handle == APMF_API::kInvalidHandle &&
+                o.offense[0].handle == APMF_API::kInvalidHandle && o.offense[1].handle == APMF_API::kInvalidHandle)
                 g_owned.erase(it);
         }
     }
@@ -386,21 +409,44 @@ namespace MFO::APMFBridge {
         MainThread::Post([]() { RE::DebugNotification(kNoApmfToast); });
     }
 
+    namespace {
+        // Left -> slot 0; everything else (kApmfHandRight, bare 0, or an
+        // unrecognized value) -> slot 1. Dual is handled separately by its own
+        // caller (ClaimOffenseCast mirrors into BOTH slots; a single-slot
+        // lookup is meaningless for it, so nothing here maps kApmfHandDualCast
+        // specially -- callers never pass it to this helper).
+        inline std::size_t OffenseSlot(std::int32_t a_hand) {
+            return a_hand == kApmfHandLeft ? 0 : 1;
+        }
+    }
+
     bool IsOwnedCastActive(RE::FormID a_follower) {
         // Fast-out before the lock: APMF absent -> never active (mirrors every
         // other accessor's g_apmf check).
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
-        return it != g_owned.end() && it->second.offenseHandle != APMF_API::kInvalidHandle;
+        return it != g_owned.end() &&
+               (it->second.offense[0].handle != APMF_API::kInvalidHandle ||
+                it->second.offense[1].handle != APMF_API::kInvalidHandle);
     }
 
-    // ── offense-cast (per-cast, TTL-bounded, ch.8b, kIntent_Cast/RequestCast) ───
+    bool IsOwnedCastActiveOnHand(RE::FormID a_follower, std::int32_t a_hand) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        return it != g_owned.end() &&
+               it->second.offense[OffenseSlot(a_hand)].handle != APMF_API::kInvalidHandle;
+    }
+
+    // ── offense-cast (per-cast, TTL-bounded, PER-HAND, ch.8b, kIntent_Cast/RequestCast) ──
     // PORTED feat/offense-cast-seats (2026-09-05) off the retired ch.8
     // kIntent_SelectSpell gate-only claim (ClaimCasting/ReleaseCasting, removed)
-    // this call site used to make -- see APMFBridge.h's ClaimOffenseCast doc for
-    // the full port rationale; this is just the claim plumbing, mirroring
-    // ClaimHealCast's shape exactly via the shared EnsureCastClaimLocked helper.
+    // this call site used to make; REKEYED per-hand (feat/per-hand-cast-slots,
+    // 2026-09-06) -- see APMFBridge.h's ClaimOffenseCast doc for the full
+    // rationale. Claim plumbing, mirroring ClaimHealCast's shape via the shared
+    // EnsureCastClaimLocked helper, just applied to ONE of the two `offense[]`
+    // slots (or BOTH, mirrored, for a DualCast ask).
     bool ClaimOffenseCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                          std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
@@ -422,11 +468,48 @@ namespace MFO::APMFBridge {
         auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
-        EnsureCastClaimLocked(v5, a_follower, o.offenseHandle, o.offenseSpell, o.offenseTarget, o.offenseHand,
-                              o.offenseConc, o.offenseStopPct, a_spell, a_target, a_hand,
-                              a_concentration, a_stopPct);
-        o.offenseRefreshed = std::chrono::steady_clock::now();
-        const bool live = o.offenseHandle != APMF_API::kInvalidHandle;
+
+        if (a_hand == kApmfHandDualCast) {
+            // Defensive: if slot 1 (right) currently holds an INDEPENDENT
+            // (non-mirrored) single-hand claim, release it BEFORE mirroring
+            // the dual claim over it below -- overwriting a live handle
+            // without releasing it would leak an APMF-side claim. Callers are
+            // expected to have already verified BOTH hands are free via the
+            // per-hand cast-lock juggle (Actuation.cpp's ResolveCastHand)
+            // before ever requesting Dual, so this should be a no-op in
+            // practice; it exists so a caller mistake corrupts nothing.
+            if (o.offense[1].handle != APMF_API::kInvalidHandle &&
+                o.offense[1].handle != o.offense[0].handle)
+                ReleaseClaimLocked(o.offense[1]);
+            // ONE underlying APMF claim (a single RequestCast with
+            // kCastFlag_DualCast) occupies BOTH hands -- mirror it into both
+            // slots rather than asking APMF to arbitrate the same dual claim
+            // twice. Ensure against slot 0 (the "primary"), then copy its
+            // result into slot 1 verbatim (same handle -- see ReleaseOffenseCast
+            // for the matching dedup-on-release).
+            EnsureCastClaimLocked(v5, a_follower, o.offense[0], a_spell, a_target, a_hand,
+                                  a_concentration, a_stopPct);
+            o.offense[0].refreshed = std::chrono::steady_clock::now();
+            o.offense[1] = o.offense[0];
+        } else {
+            const std::size_t idx   = OffenseSlot(a_hand);
+            const std::size_t other = 1 - idx;
+            // If the OTHER slot currently mirrors a live DUAL claim (same
+            // handle this single-hand ask is about to replace), un-mirror it
+            // FIRST -- Ensure below will Release/replace slot `idx`'s copy of
+            // that shared handle, and the other slot's copy must not go on
+            // pointing at a handle that no longer exists.
+            if (o.offense[idx].handle != APMF_API::kInvalidHandle &&
+                o.offense[idx].handle == o.offense[other].handle)
+                o.offense[other] = CastClaim{};
+            EnsureCastClaimLocked(v5, a_follower, o.offense[idx], a_spell, a_target, a_hand,
+                                  a_concentration, a_stopPct);
+            o.offense[idx].refreshed = std::chrono::steady_clock::now();
+        }
+
+        const bool live = a_hand == kApmfHandDualCast
+            ? o.offense[0].handle != APMF_API::kInvalidHandle
+            : o.offense[OffenseSlot(a_hand)].handle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
         return live;
     }
@@ -435,11 +518,16 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
         if (it == g_owned.end()) return;
-        ReleaseHandleLocked(it->second.offenseHandle, it->second.offenseSpell);   // offense-cast only; leave combat-target
-        it->second.offenseTarget  = 0;
-        it->second.offenseHand    = 0;
-        it->second.offenseConc    = false;
-        it->second.offenseStopPct = 0;
+        auto& o = it->second;
+        // A mirrored DualCast claim shares ONE handle across both slots --
+        // release it exactly once (Release on an already-cleared/invalid
+        // handle would be a no-op anyway, but this avoids depending on that
+        // and keeps the intent explicit: one claim, one Release call).
+        const bool sharedDual = o.offense[0].handle != APMF_API::kInvalidHandle &&
+                                 o.offense[0].handle == o.offense[1].handle;
+        ReleaseClaimLocked(o.offense[0]);
+        if (sharedDual) o.offense[1] = CastClaim{};
+        else            ReleaseClaimLocked(o.offense[1]);
         EraseIfEmpty(it);
     }
 
@@ -588,11 +676,10 @@ namespace MFO::APMFBridge {
         auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
-        EnsureCastClaimLocked(v5, a_follower, o.healHandle, o.healSpell, o.healTarget, o.healHand,
-                              o.healConc, o.healStopPct, a_spell, a_target, a_hand,
+        EnsureCastClaimLocked(v5, a_follower, o.heal, a_spell, a_target, a_hand,
                               a_concentration, a_stopPct);
-        o.healRefreshed = std::chrono::steady_clock::now();
-        const bool live = o.healHandle != APMF_API::kInvalidHandle;
+        o.heal.refreshed = std::chrono::steady_clock::now();
+        const bool live = o.heal.handle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
         return live;
     }
@@ -601,11 +688,7 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
         if (it == g_owned.end()) return;
-        ReleaseHandleLocked(it->second.healHandle, it->second.healSpell);
-        it->second.healTarget  = 0;
-        it->second.healHand    = 0;
-        it->second.healConc    = false;
-        it->second.healStopPct = 0;
+        ReleaseClaimLocked(it->second.heal);
         EraseIfEmpty(it);
     }
 
@@ -613,7 +696,7 @@ namespace MFO::APMFBridge {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
-        return it != g_owned.end() && it->second.healHandle != APMF_API::kInvalidHandle;
+        return it != g_owned.end() && it->second.heal.handle != APMF_API::kInvalidHandle;
     }
 
     void Tick() {
@@ -627,9 +710,20 @@ namespace MFO::APMFBridge {
         const auto facetExpiry = FacetExpiry();
         for (auto it = g_owned.begin(); it != g_owned.end();) {
             auto& o = it->second;
-            if (o.offenseHandle != APMF_API::kInvalidHandle && now - o.offenseRefreshed >= facetExpiry) {
-                ReleaseHandleLocked(o.offenseHandle, o.offenseSpell);
-                o.offenseTarget = 0; o.offenseHand = 0; o.offenseConc = false; o.offenseStopPct = 0;
+            // offense[0]/[1]: PER-HAND now (feat/per-hand-cast-slots) -- each
+            // slot expires independently. A mirrored DualCast claim shares ONE
+            // handle across both slots and keeps identical `refreshed` stamps
+            // (ClaimOffenseCast stamps both together), so it goes stale on the
+            // SAME sweep pass for both -- release the shared handle exactly
+            // once (capture the dual-ness BEFORE releasing slot i, since
+            // releasing zeroes it).
+            for (std::size_t i = 0; i < 2; ++i) {
+                auto& c = o.offense[i];
+                if (c.handle != APMF_API::kInvalidHandle && now - c.refreshed >= facetExpiry) {
+                    const bool sharedDual = o.offense[1 - i].handle == c.handle;
+                    ReleaseClaimLocked(c);
+                    if (sharedDual) o.offense[1 - i] = CastClaim{};
+                }
             }
             if (o.targetHandle != APMF_API::kInvalidHandle && now - o.targetRefreshed >= facetExpiry)
                 ReleaseHandleLocked(o.targetHandle, o.target);
@@ -643,14 +737,12 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.actionHandle, o.actionMask);
             if (o.equipHandle != APMF_API::kInvalidHandle && now - o.equipRefreshed >= facetExpiry)
                 ReleaseHandleLocked(o.equipHandle, o.equip);
-            if (o.healHandle != APMF_API::kInvalidHandle && now - o.healRefreshed >= facetExpiry) {
-                ReleaseHandleLocked(o.healHandle, o.healSpell);
-                o.healTarget = 0; o.healHand = 0; o.healConc = false; o.healStopPct = 0;
-            }
+            if (o.heal.handle != APMF_API::kInvalidHandle && now - o.heal.refreshed >= facetExpiry)
+                ReleaseClaimLocked(o.heal);
             if (o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
-                o.equipHandle == APMF_API::kInvalidHandle && o.healHandle == APMF_API::kInvalidHandle &&
-                o.offenseHandle == APMF_API::kInvalidHandle)
+                o.equipHandle == APMF_API::kInvalidHandle && o.heal.handle == APMF_API::kInvalidHandle &&
+                o.offense[0].handle == APMF_API::kInvalidHandle && o.offense[1].handle == APMF_API::kInvalidHandle)
                 it = g_owned.erase(it);
             else
                 ++it;
@@ -664,10 +756,15 @@ namespace MFO::APMFBridge {
             ReleaseHandleLocked(o.packageHandle, o.package);
             ReleaseHandleLocked(o.actionHandle,  o.actionMask);
             ReleaseHandleLocked(o.equipHandle,   o.equip);
-            ReleaseHandleLocked(o.healHandle,    o.healSpell);
-            o.healTarget = 0; o.healHand = 0; o.healConc = false; o.healStopPct = 0;
-            ReleaseHandleLocked(o.offenseHandle, o.offenseSpell);
-            o.offenseTarget = 0; o.offenseHand = 0; o.offenseConc = false; o.offenseStopPct = 0;
+            ReleaseClaimLocked(o.heal);
+            // Mirrored DualCast claim: release the shared handle once (see
+            // Tick()'s identical dedupe for why -- a stray second Release on
+            // the same handle is never safe to assume harmless).
+            const bool sharedDual = o.offense[0].handle != APMF_API::kInvalidHandle &&
+                                     o.offense[0].handle == o.offense[1].handle;
+            ReleaseClaimLocked(o.offense[0]);
+            if (sharedDual) o.offense[1] = CastClaim{};
+            else            ReleaseClaimLocked(o.offense[1]);
         }
         g_owned.clear();
     }

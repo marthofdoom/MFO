@@ -402,7 +402,15 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
 - `CastOn` (`Actuation.cpp:265`) escalation: AE-only gate (`:314`) → range/competence/reserve →
-  **the Task 2 firing-spell gambit lock (`CheckCastLock`, PASS H below)** →
+  **the Task 2 firing-spell gambit lock, PER-HAND now (`ResolveCastHand`, feat/per-hand-
+  cast-slots 2026-09-06 — renamed off `CheckCastLock`; TWO lock slots per follower,
+  index 0=left/1=right, so a spell firing in one hand no longer holds off a DIFFERENT
+  spell that would use the other. Self/concentration/Heal-Buff are forced LEFT; an
+  Offense spell at a real target consults `Loadout::PlanCastHand` and juggles
+  EitherFree onto whichever hand is free (DualCast needs BOTH free-or-refreshing or
+  it holds off entirely — never a half-landed dual-cast). `handPlan`/`lockHands`
+  thread the resolved hand(s) to every `HoldCastLock`/`ClaimOffenseCast` call site
+  below in the SAME function so the lock and the actual APMF claim never disagree)** →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:70`) via `Packages::CastAt`.
   Off-AE the whole path declines transparently (#67) so vanilla AI keeps casting.
@@ -417,8 +425,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   cast pipeline they sit on), so deny-the-AI + deliver-directly is coherent, never a
   lockout. No bForceCastOnMiss/bUsePackages gate, no Loadout cooldown (the channel
   self-paces; a 4 s cooldown hole would let the ~2 s stale window tear it down).
-  Both its Applied/Refreshed branches now also call `HoldCastLock` (PASS H) so a
-  live stream is protected by the SAME lock `CastOn` checks up front.
+  Both its Applied/Refreshed branches now also call `HoldCastLock(id, kHandLeft, ...)`
+  (PASS H; hardcoded LEFT — concentration always is) so a live stream is protected by
+  the SAME per-hand lock `CastOn` checks up front (feat/per-hand-cast-slots).
 - `CastTargetDirect` (PUBLIC, `Actuation_Direct.cpp:927`) = `CastSelfDirect` generalized to a NON-self target: the
   known-working DIRECT FORCE (`CastSpellImmediate` onto the target + magicka deduct, NO
   package → beats the `§4.6` lock). Registry `g_targetCast`; concentration re-applies
@@ -1546,8 +1555,29 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   not annexed here). **IN-COMBAT ONLY** — `CastOn` only runs from `Actuation::Fire`'s combat dispatch;
   the OOC mirror (`Logistics.cpp`'s FF beneficial direct-apply) is deliberately untouched (open
   question: whether `kIntent_Cast`'s engine seats function without a live `CombatController`).
+- **PER-HAND offense claims (feat/per-hand-cast-slots, 2026-09-06).** The field problem this
+  closes: a heal (LEFT, always) and an offense spell serialised onto ONE hand while the
+  follower's OTHER hand sat idle — 36 cast rules fired, only 22 claims made. The parallel APMF
+  change arbitrates `kIntent_Cast` PER (actor, hand) now, so MFO calls `RequestCast` up to
+  twice per follower (no API change on APMF's side). `Owned::offense` is now `CastClaim[2]`
+  ([0]=left, [1]=right; `Owned::heal` stays a single `CastClaim`, always left).
+  `ClaimOffenseCast(a_hand)` routes to `offense[0]` for `kApmfHandLeft`, `offense[1]` for
+  anything else (the NEW `kApmfHandRight` constant, or bare 0), or BOTH (mirrored, ONE
+  underlying handle) for `kApmfHandDualCast` — a single-hand ask un-mirrors a stale dual
+  mirror in the OTHER slot first so a shared handle is never double-released.
+  `ReleaseOffenseCast(follower)` (no hand param — its two callers, `Scheduler`'s `!castSeen`
+  and `Followers`' dismissal, both mean "nothing wanted on either hand anymore") releases
+  BOTH slots, dedupe-aware for a mirrored dual claim. `IsOwnedCastActive(follower)` keeps its
+  existing "ANY hand" per-actor contract (CasterConsent/CombatStyle's standdowns never cared
+  which hand); NEW `IsOwnedCastActiveOnHand(follower, hand)` answers ONE slot, consumed by
+  `Actuation.cpp`'s per-hand cast-gambit lock (`CastLockLive`). `ComposedCast`'s `[cfc]`
+  silent-claim watch (`g_watch`) is likewise now `FollowerWatch{Watch hand[2]}` — `WatchClaim`
+  takes an `a_hand` param (default `kApmfHandLeft`, so heal's own callers are unchanged);
+  `ComposedCast::End()`/a refused heal claim clear ONLY the left slot so a concurrent
+  right-hand offense watch survives.
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** offense-cast =
-  PER-CAST, TTL-bounded (`kIntent_Cast`; refreshed each winning cast tick; released crisply by
+  PER-CAST, TTL-bounded (`kIntent_Cast`, PER-HAND now — see above; refreshed each winning cast
+  tick; released crisply by
   `ReleaseOffenseCast` ← `Scheduler.cpp:~901` on `!castSeen`, which also clears the shared `[cfc]`
   watch, `ComposedCast::ClearWatch`). combat-target = PER-COMBAT (created by EITHER the cast directive
   OR the ATTACK directive — both `ClaimCombatTarget(create=true)` ← `Actuation.cpp:~1064` (2026-09-03:
@@ -1562,10 +1592,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   loss) → the ORIGINAL AI-first-wait + force-on-miss package hybrid (unchanged legacy branch below the
   owned block — the ONLY place `CastSpellImmediate` force and the rooting UseMagic package survive).
 - **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7; REPOINTED feat/offense-cast-seats
-  2026-09-05):** worker- AND combat-thread-safe read (the same `g_mx` every other accessor takes) —
-  true iff the follower holds a LIVE `kIntent_Cast` offense claim (`g_owned[id].offenseHandle` valid —
-  was `spellHandle`/`kIntent_SelectSpell` before this port; same accessor name, same call sites, new
-  backing store). `CasterConsent.cpp`'s two exclusivity denies AND (new this pass) `ClientCastClaimed`'s
+  2026-09-05; backing store re-shaped feat/per-hand-cast-slots 2026-09-06):** worker- AND
+  combat-thread-safe read (the same `g_mx` every other accessor takes) —
+  true iff the follower holds a LIVE `kIntent_Cast` offense claim on EITHER hand
+  (`g_owned[id].offense[0].handle` OR `offense[1].handle` valid — was one flat `offenseHandle`,
+  was `spellHandle`/`kIntent_SelectSpell` before that port; same accessor name, same call sites,
+  new backing store each time — its own per-actor "any hand" CONTRACT never changed). `CasterConsent.cpp`'s two exclusivity denies AND (new this pass) `ClientCastClaimed`'s
   generalized early-pass, plus `CombatStyle.cpp`'s equip gate, all consult it to stand down for that
   follower once APMF's own seats/T2 hooks (a separate APMF.dll) enforce the identical exclusivity via
   the SAME claim — avoiding two independently-configured deny mechanisms disagreeing, and (via
@@ -1713,16 +1745,19 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   build sets `kCastFlag_DualCast` INSTEAD OF `kCastFlag_LeftHand` for
   `kApmfHandDualCast` (never both bits together). A `[cfc]` log line
   distinguishes "asked for dual, claim granted" from "asked for dual, claim
-  REFUSED outright" (silence = never asked). **Still NOT wired to any live
-  caller**: offense's `ClaimCasting` (`Actuation.cpp`, ch.8,
-  `kIntent_SelectSpell`) carries no hand parameter, and `kIntent_SelectSpell`'s
-  payload cannot carry `CastFlags` at all (only `kIntent_Cast`/
-  `APMF_CastRequest` can) — a live offense wire needs a `kIntent_Cast`-based
-  caller (e.g. a future `ClaimOffenseCast`) that calls `PlanCastHand` and
-  passes `HandFor`'s result; deliberately out of this pass's scope, owned by
-  `feat/offense-cast-api`. Supersedes
+  REFUSED outright" (silence = never asked). **NOW WIRED (integration/2026-09-06
+  then feat/per-hand-cast-slots, 2026-09-06)** — superseded the "still NOT
+  wired" state this entry used to describe: `Actuation.cpp`'s `CastOn`
+  (`ownedCast` branch, ch.8b `ClaimOffenseCast`) consults `PlanCastHand`
+  (via the per-hand cast-gambit lock's `ResolveCastHand`, see this file's
+  `Actuation.cpp` entry) and passes the resolved `HandPlan` through as
+  `ClaimOffenseCast`'s `a_hand` — `HandFor` is no longer the last step for this
+  call site (it cannot express an already-juggled concrete Right; `CastOn`
+  builds the `a_hand` value directly from `HandPlan`) but still documents the
+  raw `HandPick` → `a_hand` mapping for the Left/DualCast cases. Supersedes
   ([[mage-dualcast-diff-hands-perk-gated-todo]]) as the design; that backlog
-  note's WIRING half is still open.
+  note's WIRING half is now closed for offense (assassin/dual-wield work is a
+  separate, later backlog item).
 - **FIELD BUG FOUND + FIXED (2026-09-05, deck: claim/release every ~530ms,
   caster stuck at rest forever — `feat/heal-claim-hold`; RE-PROVEN the SAME day
   on the weapon-order equipment claim, Cicero deck capture, `feat/facet-expiry`).**
@@ -1843,20 +1878,39 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `kConcentration` -- the exact "FUTURE call site" PASS G's own doc predicted
   and left unwired. Refused/absent/off/SE degrades to the SAME direct-force
   stream that already ran, byte-identical. (2) `Actuation.cpp` gained a
-  per-follower `CastLock{spell,target,lastSeen}` (`g_castLock`/`g_lastLockLog`,
-  anon-namespace, file-local) that `CastOn` consults (`CheckCastLock`, called
-  right after the range/competence gates) before letting a DIFFERENT
-  `(spell,target)` than one already occupying the follower (an owned-cast claim
-  or a concentration stream) touch equip/consent/claims -- held off
-  (transparent `NoOp`, rate-limited `[eval]` log) while `CastLockLive` says the
-  old one is still live: `APMFBridge::IsOwnedCastActive`/`IsHealCastActive`
-  checked FIRST (authoritative), else `APMFBridge::FacetExpiry()` (REUSED, #9)
-  as a round-robin-aware staleness fallback for the un-claimed direct-force
-  case. Released by `Actuation::ClearCastLock(id)` -- wired into `Scheduler.
-  cpp`'s `!castSeen` release AND its out-of-combat teardown block, and
-  `Followers::ReleaseHeldState`'s dismissal teardown -- and in bulk by
-  `Actuation::ClearCastLocks()`, called from `Actuation::ClearSelfCasts()` (the
-  existing `Serialization.cpp` revert call site; no new one added).
+  cast-gambit lock (`g_castLock`/`g_lastLockLog`, anon-namespace, file-local)
+  that `CastOn` consults right after the range/competence gates before letting
+  a DIFFERENT `(spell,target)` than one already occupying the follower touch
+  equip/consent/claims -- held off (transparent `NoOp`, rate-limited `[eval]`
+  log) while the lock says the old one is still live.
+  **PER-HAND (feat/per-hand-cast-slots, 2026-09-06): re-keyed off ONE
+  `CastLock{spell,target,lastSeen}` per follower onto `FollowerCastLocks{CastLock
+  hand[2]}` (index 0=left, 1=right) — the field problem this closes: a heal
+  (always LEFT) and an offense spell serialised onto ONE hand while the
+  follower's OTHER hand sat idle (36 rules fired, 22 claims made). `CheckCastLock`
+  is RETIRED, replaced by `ResolveCastHand(follower, HandPick, spell, target,
+  HandPlan&)` — the SAME gate, now hand-aware: self-target/concentration/
+  Heal-Buff are forced `HandPick::Left`; an Offense spell at a real target
+  passes its `Loadout::PlanCastHand` result through. `ResolveCastHand`
+  implements THE JUGGLE per `HandPick`: `Left` checks hand 0 only; `EitherFree`
+  tries hand 0 then hand 1 (`HandFree`, which treats a live-false/stale lock as
+  free and drops it in place); `DualCast` requires BOTH hands free-or-
+  refreshing-the-same-spell at once or holds off entirely (never a half-landed
+  dual-cast — CLAUDE.md principle 7). `CastLockLive(follower,hand,lock)` checks
+  `APMFBridge::IsOwnedCastActiveOnHand(follower, hand)` (NEW) for that ONE
+  slot — ORed with `IsHealCastActive` for hand 0 only (heals are always LEFT) —
+  else falls back to `APMFBridge::FacetExpiry()` (REUSED, #9) as the
+  round-robin-aware staleness window, same as before. `CastOn` resolves
+  `handPlan` ONCE (right after the gate) and reuses it via a `lockHands` lambda
+  at every `HoldCastLock`/`ClaimOffenseCast`/`ComposedCast::WatchClaim` call
+  site in the function, so the lock and the actual APMF claim never disagree on
+  which hand(s) they occupy; `ConcentrationCast` (a separate function) hardcodes
+  hand 0, matching its own always-LEFT delivery. Released by
+  `Actuation::ClearCastLock(id)` (erases BOTH hands for that follower — wired
+  into `Scheduler.cpp`'s `!castSeen` release AND its out-of-combat teardown
+  block, and `Followers::ReleaseHeldState`'s dismissal teardown) -- and in bulk
+  by `Actuation::ClearCastLocks()`, called from `Actuation::ClearSelfCasts()`
+  (the existing `Serialization.cpp` revert call site; no new one added).
   `APMFBridge::FacetExpiry()` (`APMFBridge.cpp:159` was anon-namespace-private;
   MOVED to external linkage + declared in `APMFBridge.h` for this cross-TU
   reuse -- pure visibility change, same formula, every in-TU caller unaffected).
@@ -2090,28 +2144,45 @@ native seats) and ENGINE_NOTES §0.40.
   neediest target) and converts it to a whole percent; every other
   `CastSelfDirect`/`CastTargetDirect` caller passes the default 0 (stop at
   full), byte-identical to pre-port behaviour.
-- **SILENT-CLAIM DIAGNOSTIC (`WatchArmed`/`g_watch`, anon ns, Task 6).** NOT a
+- **SILENT-CLAIM DIAGNOSTIC (`WatchArmed`/`g_watch`, anon ns, Task 6; PER-HAND
+  feat/per-hand-cast-slots 2026-09-06).** NOT a
   delivery watchdog — logs only, never re-fires/re-claims/falls back
-  (APMF's INVARIANTS.md #0). `Try()` arms/refreshes a per-follower `{spell, since,
-  observed, lastWarn}` record on every successful claim; if 2s+ pass with no
-  observed cast (rate-limited to once per 5s), logs a `[cfc]` warning naming
-  the follower/spell. `ExpectingCast(follower, spell)` (REVIVED from a
-  permanent no-op under PASS E) returns true when the watch's spell matches;
-  `Diagnostics.cpp`'s `SpellSink` (its `TESSpellCastEvent` handler, ALREADY
-  calling both for every tracked follower's own-AI cast) then calls
-  `NoteObservedCast` to mark it observed and logs its own `CFC-fired ... THE
-  ANIMATED PATH` line. Both are worker-serial, no lock — `Try`/`End` and the
-  sink's call site are the SAME serialized AddTask job-worker queue (mirrors
-  `Actuation_Direct.cpp`'s unlocked `g_selfCast`/`g_targetCast`).
+  (APMF's INVARIANTS.md #0). `g_watch` is now `unordered_map<FormID,
+  FollowerWatch{Watch hand[2]}>` (was one `Watch` per follower) — a heal claim
+  (always hand 0) and a concurrent offense claim on hand 1 no longer overwrite
+  each other's watch. `Try()` arms/refreshes hand 0's `{spell, since,
+  observed, lastWarn}` record on every successful HEAL claim; `WatchClaim
+  (follower, spell, a_hand = kApmfHandLeft)` (PUBLIC, `WatchSlot(a_hand)`
+  local to this TU, mirrors `APMFBridge`'s own `OffenseSlot` mapping — kept
+  separate since this TU has no access to that anon-ns helper, but the two
+  MUST agree) is the same arm for a caller claiming `kIntent_Cast` directly
+  (`Actuation::CastOn`'s `ownedCast` branch, via `ClaimOffenseCast`) — called
+  once per hand the claim actually occupies (both, for a DualCast plan). If
+  2s+ pass with no observed cast on that hand (rate-limited to once per 5s),
+  logs a `[cfc]` warning naming the follower/spell/hand.
+  `ExpectingCast(follower, spell)` (REVIVED from a permanent no-op under PASS
+  E; signature UNCHANGED — `Diagnostics.cpp`'s sink has no hand to report)
+  returns true when EITHER hand's watch spell matches; `NoteObservedCast`
+  likewise marks BOTH hands observed if either matches (a spell is never
+  claimed on both hands independently outside a DualCast mirror, so this
+  cannot cross-confirm two different spells). Both are worker-serial, no lock
+  — `Try`/`End` and the sink's call site are the SAME serialized AddTask
+  job-worker queue (mirrors `Actuation_Direct.cpp`'s unlocked
+  `g_selfCast`/`g_targetCast`).
 - `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`
-  + drops the diagnostic watch (`g_watch.erase`). Call the instant the gambit
-  stops wanting the heal; the `APMFBridge` `FacetExpiry()` backstop (`Tick()`,
+  + clears ONLY hand 0's watch slot (heal is always LEFT — a concurrent
+  offense watch on hand 1 must survive a heal ending; PER-HAND, feat/per-hand-
+  cast-slots). `ClearWatch(follower)` (no hand param) clears BOTH hands —
+  reserved for a caller meaning "nothing wanted on this follower at all"
+  (`Scheduler.cpp`'s `!castSeen`, `Followers`' dismissal teardown). Call `End`
+  the instant the gambit stops wanting the heal; the `APMFBridge`
+  `FacetExpiry()` backstop (`Tick()`,
   `Diagnostics.cpp` — round-robin/party-size-aware) AND the claim's own TTL (on
   APMF's side) cover a caller that forgets — **there is no per-tick reconcile
   wired to call `End` explicitly** (Try short-circuits `CastSelfDirect`/
   `CastTargetDirect` before their own `g_selfCast`/`g_targetCast` bookkeeping
   runs), so release relies on the SAME "stop refreshing → expire" idiom
-  `ClaimCombatTarget`/`ClaimCasting` already use — not a new pattern.
+  `ClaimCombatTarget`/`ClaimOffenseCast` already use — not a new pattern.
 - `Reset()` — clears `g_watch` (the diagnostic's only local state): `APMFBridge::
   ClearTransientState` drops the claim on `kPreLoadGame`, `CastBounds::Reset` drops
   the bound. Kept as the seam `Actuation_Direct.cpp`'s `ClearSelfCasts` already calls.

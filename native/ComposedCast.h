@@ -1,6 +1,7 @@
 #pragma once
 #include "PCH.h"
 #include "CasterConsent.h"   // SpellKind
+#include "APMFBridge.h"      // kApmfHandLeft/kApmfHandRight -- WatchClaim's a_hand default/param
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ComposedCast -- the Composed Forced Cast (CFC) executor, a THIN SHIM over
@@ -113,21 +114,36 @@ namespace MFO::ComposedCast {
     bool ExpectingCast(RE::FormID a_follower, RE::FormID a_spell);
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell);
 
-    // ── generic claim-observed diagnostic (feat/offense-cast-seats, 2026-09-05) ─
+    // ── generic claim-observed diagnostic (feat/offense-cast-seats, 2026-09-05;
+    // PER-HAND feat/per-hand-cast-slots, 2026-09-06) ────────────────────────────
     // Arm/clear the SAME "[cfc]-style, claim live N ms with NO observed cast"
     // watch Try() arms for a heal, for a caller that claims kIntent_Cast through
     // a DIFFERENT path -- today: Actuation::CastOn's owned-cast branch, via
     // APMFBridge::ClaimOffenseCast, which does not go through Try() (Try() stays
     // HEAL-ONLY-gated, see Enabled() above; this is reuse of the diagnostic, NOT
-    // a widening of the claim gate). Keyed only by follower -- heal and offense
-    // claims are mutually exclusive per tick (CasterConsent::SpellKind), so one
-    // shared watch slot per follower is safe; ExpectingCast/NoteObservedCast
-    // above are already generic over (follower, spell) and need no change.
-    // WatchClaim: call every tick the caller's OWN claim call (ClaimOffenseCast)
-    // returns live. ClearWatch: call the instant that claim releases (mirrors
-    // End()'s own g_watch.erase for a caller that manages its own APMFBridge
-    // release directly rather than through End()/Try()).
-    void WatchClaim(RE::FormID a_follower, RE::FormID a_spell);
+    // a widening of the claim gate).
+    //
+    // PER-HAND now: a follower can hold a LIVE heal claim (always LEFT) and an
+    // offense claim (LEFT, RIGHT, or both for a DualCast plan) CONCURRENTLY
+    // (feat/per-hand-cast-slots -- APMF arbitrates kIntent_Cast per (actor,
+    // hand) now), so a single shared-by-follower watch slot would let a second
+    // hand's claim silently overwrite the first's diagnostic. Two slots per
+    // follower now (a_hand selects which -- kApmfHandLeft or kApmfHandRight;
+    // omit for the heal-matching default of LEFT). ExpectingCast/
+    // NoteObservedCast above are unchanged in SIGNATURE (still (follower,
+    // spell) only, matching Diagnostics.cpp's SpellSink call site, which has no
+    // hand to report) -- internally they now check BOTH hand slots for a
+    // matching spell.
+    // WatchClaim: call every tick the caller's OWN claim call (ClaimOffenseCast/
+    // ClaimHealCast) returns live, naming the hand(s) actually granted (both,
+    // for a DualCast plan). ClearWatch: clears BOTH hands -- call when NOTHING
+    // is wanted on this follower at all anymore (mirrors End()'s own
+    // g_watch.erase for a caller that manages its own APMFBridge release
+    // directly rather than through End()/Try()); a caller releasing only ONE
+    // hand's claim (e.g. ComposedCast::End() for the heal, always LEFT) clears
+    // only that hand's slot internally instead.
+    void WatchClaim(RE::FormID a_follower, RE::FormID a_spell,
+                    std::int32_t a_hand = APMFBridge::kApmfHandLeft);
     void ClearWatch(RE::FormID a_follower);
 
     // kPreLoadGame / revert -- beside CastBounds::Reset(). Drops this module's

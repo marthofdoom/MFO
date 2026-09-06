@@ -54,18 +54,32 @@ namespace MFO::ComposedCast {
         // kInstant on a timeout; it only logs, so the deck log shows the
         // condition instead of a heal quietly never landing with no trace.
         //
-        // Keyed on the follower; identity is the claimed spell (a spell change
-        // is logically a new claim -- see Try() below). Worker-serial, no lock
-        // (see the header's THREADING note: Try()/End() and Diagnostics.cpp's
-        // ExpectingCast/NoteObservedCast call site are the SAME serialized
-        // AddTask job-worker queue).
+        // Keyed on the follower, PER HAND now (feat/per-hand-cast-slots,
+        // 2026-09-06: a heal claim, always LEFT, and an offense claim on
+        // EITHER hand can be concurrently live on one follower, so a single
+        // shared-by-follower slot would let one overwrite the other's
+        // diagnostic); identity within a slot is the claimed spell (a spell
+        // change is logically a new claim -- see Try() below). Worker-serial,
+        // no lock (see the header's THREADING note: Try()/End() and
+        // Diagnostics.cpp's ExpectingCast/NoteObservedCast call site are the
+        // SAME serialized AddTask job-worker queue).
         struct Watch {
             RE::FormID        spell    = 0;
             Clock::time_point since{};       // when this exact (follower, spell) claim began
             bool              observed = false;   // SpellSink confirmed a real cast since `since`
             Clock::time_point lastWarn{};      // rate-limit
         };
-        std::unordered_map<RE::FormID, Watch> g_watch;
+        struct FollowerWatch { Watch hand[2]; };   // [0] = left, [1] = right
+        std::unordered_map<RE::FormID, FollowerWatch> g_watch;
+
+        // Left -> slot 0; anything else (right, or the implicit-right 0) -> slot
+        // 1. Mirrors APMFBridge's own OffenseSlot mapping -- kept separate (this
+        // TU has no access to that anonymous-namespace helper) but MUST agree
+        // with it, since a caller names the SAME hand it just claimed via
+        // ClaimOffenseCast/ClaimHealCast.
+        inline std::size_t WatchSlot(std::int32_t a_hand) {
+            return a_hand == APMFBridge::kApmfHandLeft ? 0 : 1;
+        }
 
         // A claim may stand silent this long before the first warning -- long
         // enough to clear one Try() refresh lap + the engine's own charge time
@@ -77,24 +91,28 @@ namespace MFO::ComposedCast {
         // never fires must not spam the log every Try() tick.
         constexpr auto kSilentWarnEvery = std::chrono::milliseconds(5000);
 
-        // Called from Try() on every successful HEAL claim, and (feat/offense-
-        // cast-seats, 2026-09-05) from the public WatchClaim() below for the
-        // offense kIntent_Cast claim (Actuation::CastOn, via ClaimOffenseCast) --
-        // GENERIC over which claim armed it, hence the message below no longer
-        // says "heal-cast" specifically. Caller passes the fid already resolved.
-        void WatchArmed(RE::FormID a_fid, RE::FormID a_spell) {
-            auto& w = g_watch[a_fid];
+        // Called from Try() on every successful HEAL claim (always the LEFT
+        // slot), and (feat/offense-cast-seats, 2026-09-05) from the public
+        // WatchClaim() below for the offense kIntent_Cast claim (Actuation::
+        // CastOn, via ClaimOffenseCast, naming whichever hand(s) it was
+        // granted) -- GENERIC over which claim armed it, hence the message
+        // below no longer says "heal-cast" specifically. Caller passes the fid
+        // already resolved. PER-HAND (feat/per-hand-cast-slots, 2026-09-06):
+        // operates on ONE hand slot, so a concurrent claim on the OTHER hand
+        // never resets or silences this one.
+        void WatchArmed(RE::FormID a_fid, std::size_t a_slot, RE::FormID a_spell) {
+            auto& w = g_watch[a_fid].hand[a_slot];
             if (w.spell != a_spell) { w = Watch{}; w.spell = a_spell; w.since = Clock::now(); return; }
             if (w.observed) return;   // already confirmed firing this claim -- stay quiet
             const auto now = Clock::now();
             if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
             if (now - w.lastWarn < kSilentWarnEvery) return;  // rate-limited
             spdlog::warn("[cfc] {:08X} kIntent_Cast claim live {} ms with NO observed cast "
-                         "(spell {:08X}) -- APMF's engine seats may not be firing it; "
+                         "(spell {:08X}, {} hand) -- APMF's engine seats may not be firing it; "
                          "check APMF.log for the seat state",
                          a_fid,
                          std::chrono::duration_cast<std::chrono::milliseconds>(now - w.since).count(),
-                         a_spell);
+                         a_spell, a_slot == 0 ? "left" : "right");
             w.lastWarn = now;
         }
     }
@@ -137,7 +155,13 @@ namespace MFO::ComposedCast {
         if (!APMFBridge::ClaimHealCast(fid, spellID, targetID, APMFBridge::kApmfHandLeft,
                                        isConcentration, a_stopPct)) {
             CastBounds::Disarm(fid);
-            g_watch.erase(fid);
+            // Heal is always LEFT -- clear only that slot (see End()'s own
+            // comment: a concurrent offense watch on the RIGHT hand must
+            // survive a refused/ended heal claim).
+            if (auto it = g_watch.find(fid); it != g_watch.end()) {
+                it->second.hand[0] = Watch{};
+                if (it->second.hand[1].spell == 0) g_watch.erase(it);
+            }
             spdlog::info("[cfc] {:08X} heal-cast claim refused -- kInstant apply", fid);
             return false;
         }
@@ -150,8 +174,9 @@ namespace MFO::ComposedCast {
         CastBounds::Arm(fid, spellID, 0, kHealBoundsTtlMs);
 
         // Diagnostic only -- never gates the return value or re-fires anything
-        // (Task 6: no delivery watchdog). See WatchArmed's own comment.
-        WatchArmed(fid, spellID);
+        // (Task 6: no delivery watchdog). Heal is always the LEFT slot. See
+        // WatchArmed's own comment.
+        WatchArmed(fid, WatchSlot(APMFBridge::kApmfHandLeft), spellID);
 
         return true;   // APMF owns the cast: caller skips its kInstant apply.
     }
@@ -159,20 +184,36 @@ namespace MFO::ComposedCast {
     void End(RE::FormID a_follower) {
         APMFBridge::ReleaseHealCast(a_follower);
         CastBounds::Disarm(a_follower);
-        g_watch.erase(a_follower);
+        // Heal is always LEFT -- clear only that slot; a concurrent offense
+        // claim on the RIGHT hand (feat/per-hand-cast-slots) must not lose its
+        // own watch just because the heal ended.
+        auto it = g_watch.find(a_follower);
+        if (it != g_watch.end()) {
+            it->second.hand[0] = Watch{};
+            if (it->second.hand[1].spell == 0) g_watch.erase(it);
+        }
     }
 
     bool ExpectingCast(RE::FormID a_follower, RE::FormID a_spell) {
         const auto it = g_watch.find(a_follower);
-        return it != g_watch.end() && it->second.spell == a_spell;
+        return it != g_watch.end() &&
+               (it->second.hand[0].spell == a_spell || it->second.hand[1].spell == a_spell);
     }
 
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell) {
         auto it = g_watch.find(a_follower);
-        if (it != g_watch.end() && it->second.spell == a_spell) it->second.observed = true;
+        if (it == g_watch.end()) return;
+        if (it->second.hand[0].spell == a_spell) it->second.hand[0].observed = true;
+        if (it->second.hand[1].spell == a_spell) it->second.hand[1].observed = true;
     }
 
-    void WatchClaim(RE::FormID a_follower, RE::FormID a_spell) { WatchArmed(a_follower, a_spell); }
+    void WatchClaim(RE::FormID a_follower, RE::FormID a_spell, std::int32_t a_hand) {
+        WatchArmed(a_follower, WatchSlot(a_hand), a_spell);
+    }
+    // Clears BOTH hands -- callers mean "nothing is wanted on this follower at
+    // all anymore" (a full teardown, e.g. dismissal or Scheduler's !castSeen).
+    // A caller releasing only ONE hand's claim uses its own targeted clear
+    // instead (End() above, for the heal's always-LEFT slot).
     void ClearWatch(RE::FormID a_follower) { g_watch.erase(a_follower); }
 
     void Reset() {

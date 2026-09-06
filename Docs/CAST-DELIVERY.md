@@ -399,14 +399,15 @@ one.
    "asked for dual, claim granted" from "asked for dual, claim REFUSED
    outright" (silence = never asked), so the field can tell a refused second
    hand from a policy that never requested one.
-   **Still NOT wired to any live caller**: offense's `ClaimCasting`
-   (`Actuation.cpp`, ch.8, `kIntent_SelectSpell`) carries no hand parameter at
-   all today, and `kIntent_SelectSpell`'s payload cannot carry `CastFlags` in
-   the first place (only `kIntent_Cast`/`APMF_CastRequest` can) — MFO lets the
-   AI's own scored equip pick the hand there. Wiring offense through needs a
-   caller (on `kIntent_Cast`, e.g. a future `ClaimOffenseCast`) that calls
-   `Loadout::PlanCastHand` and passes `HandFor`'s result — deliberately out of
-   this file's scope; owned by a separate branch (`feat/offense-cast-api`).
+   **NOW WIRED (integration/2026-09-06, then feat/per-hand-cast-slots,
+   2026-09-06)** — supersedes the "still NOT wired" state this paragraph used
+   to describe. `Actuation.cpp`'s `CastOn` (`ownedCast` branch, ch.8b
+   `ClaimOffenseCast`) consults `Loadout::PlanCastHand` (via the per-hand
+   cast-gambit lock's `ResolveCastHand` — see the "PER-HAND CAST SLOTS"
+   section below) and passes the resolved hand plan through directly, rather
+   than `HandFor`'s bare `HandPick` mapping (which cannot express an
+   already-juggled concrete Right). `HandFor` still documents the raw
+   `HandPick` → `a_hand` mapping used for the Left/DualCast cases.
 
    **STOP-PERCENT (feat/mfo-cast-port, Task 3).** Bits 8-15 of `flags`
    (`APMF_API::MakeStopPct`) tell seat 0x07 `CheckStopCast` to end a
@@ -670,16 +671,27 @@ is now the one that actually fires.
   two distinct claims" invariant, preserved). Uses the SAME round-robin-aware
   `FacetExpiry()` backstop the heal/combat-target/equipment claims already use.
 
-**HAND POLICY.** `ClaimOffenseCast` always passes `hand = APMFBridge::
-kApmfHandLeft` — this is not a new conditional rule, it matches PHYSICAL
-REALITY: `Loadout::Prepare`'s `EquipSpell` (`Actuation.cpp`, unchanged by this
-pass) has ALWAYS targeted `LeftHandSlot()` unconditionally, whether or not a
-weapon is held in the right hand. Since the claimed hand and the
-physically-equipped hand must never disagree (the deck-proven heal-path
-failure this exact rule already fixed once — see the HAND FIX entry above),
-LEFT-always is simply the correct value here too; there was no scenario where
-"no weapon held → free/auto" would differ from LEFT in practice, so no new
-weapon-state branching was added.
+**HAND POLICY — SUPERSEDED (integration/2026-09-06, then feat/per-hand-
+cast-slots, 2026-09-06).** `ClaimOffenseCast` no longer always passes LEFT: it
+now consults `Loadout::PlanCastHand` (via `Actuation.cpp`'s per-hand
+cast-gambit lock, `ResolveCastHand` — see the "PER-HAND CAST SLOTS" section
+below for the full mechanism), which can resolve Left, Right, or DualCast
+depending on the follower's real weapon-hand state and dual-casting
+eligibility. `Loadout::Prepare`'s `EquipSpell` call itself is UNCHANGED by
+either pass and still always targets `LeftHandSlot()` unconditionally — see
+the "PER-HAND CAST SLOTS" section's own flagged open item for why that is not
+yet verified safe for a Right/DualCast claim. This paragraph's original
+reasoning (kept below for history) was correct for its own time, when
+`ClaimOffenseCast` genuinely never requested anything but LEFT:
+
+*Original text: "this is not a new conditional rule, it matches PHYSICAL
+REALITY: `Loadout::Prepare`'s `EquipSpell` has ALWAYS targeted `LeftHandSlot()`
+unconditionally, whether or not a weapon is held in the right hand. Since the
+claimed hand and the physically-equipped hand must never disagree (the
+deck-proven heal-path failure this exact rule already fixed once), LEFT-always
+is simply the correct value here too; there was no scenario where 'no weapon
+held → free/auto' would differ from LEFT in practice, so no new weapon-state
+branching was added."*
 
 **CONCENTRATION / STOP-PERCENT.** `ClaimOffenseCast`'s sole call site
 (`CastOn`'s `ownedCast` branch) never reaches it for a concentration spell —
@@ -832,6 +844,143 @@ is a deliberate target-cycling design, not the re-pointing bug this lock
 exists for — see [[cast-fanning-known-good-behavior]]). The out-of-combat
 Logistics dispatch never calls `CastOn`/`ConcentrationCast` at all (single-pass,
 no suppression-window rule scan to re-point from), so it needs no gate.
+
+### PER-HAND CAST SLOTS (feat/per-hand-cast-slots, 2026-09-06)
+
+**THE FIELD PROBLEM.** Deck-confirmed: casts fired less often than they should,
+and hands were used unwisely when two spells were valid within a few ticks.
+36 cast rules fired, only 22 claims made — ~14 wanted casts suppressed. Log:
+
+```
+[eval] 750012C6 cast gambit HELD OFF -- spell 0002F3B8 wants the follower, spell 0002DD29 is still firing
+[eval] 750012C6 cast gambit HELD OFF -- spell 0002DD29 wants the follower, spell 0002F3B8 is still firing
+```
+
+**Two causes, both closed by this pass.** (1) The firing-gambit lock above
+(Task 2) was PER-FOLLOWER: a spell firing in one hand held off a DIFFERENT
+spell that could have used the OTHER hand. Mechanically, this alternation
+happens WITHIN one Scheduler tick too — the evaluator scan falls through a
+transparent HELD-OFF outcome (GAMBIT_FLOWS §2) to the next rule, so a heal
+rule and an offense rule can both be evaluated (and one of them held off) in
+the SAME tick, not just across ticks. (2) `APMFBridge` held ONE offense
+kIntent_Cast claim slot and one heal slot per follower — even with a per-hand
+lock, there was nowhere to put a second concurrent offense claim.
+`Loadout::PlanCastHand`'s `EitherFree` "juggle" plan (two different spells,
+one per hand) was unexpressible on the claim side.
+
+**THE COORDINATED CHANGE.** A parallel APMF change makes `kIntent_Cast`
+arbitrate PER (actor, hand): two concurrent claims — LEFT (`kCastFlag_LeftHand`
+set) and RIGHT (unset) — can now both stand on one actor, and
+`kCastFlag_DualCast` claims both and is mutually exclusive with either single-
+hand claim. **No API change** — MFO just calls `RequestCast` twice and holds
+two handles. This section covers MFO's side of that contract.
+
+**1 — the firing-gambit lock is now PER-HAND.** `Actuation.cpp`'s `g_castLock`
+is `unordered_map<FormID, FollowerCastLocks{CastLock hand[2]}>` (index 0=left,
+1=right) instead of one `CastLock` per follower. `CheckCastLock` is retired,
+replaced by `ResolveCastHand(follower, Loadout::HandPick, spell, target,
+HandPlan&)` — the SAME gate (checked at the SAME point, right after range/
+competence, before self-cast/concentration/owned-cast/composed-cast/legacy-
+hybrid all run), now hand-aware:
+- **Self-target, or ANY concentration spell** (self or on-target —
+  `ConcentrationCast`/`CastSelfDirect`/`CastTargetDirect` all claim LEFT
+  unconditionally, heal or offense) — forced `HandPick::Left`.
+- **A Heal/Buff spell** reaching the composed-cast branch (or falling through
+  to the legacy hybrid) — forced `HandPick::Left` (the heal-claim hard rule).
+- **An Offense spell at a real (non-self) target** — the only real decision:
+  `Loadout::PlanCastHand`'s result is passed straight through.
+
+`ResolveCastHand` implements THE JUGGLE per `HandPick`, checking `HandFree`
+(unlocked, already locked to this EXACT (spell,target) — a refresh — or gone
+live-false/stale, dropped in place):
+- `Left` — checks hand 0 only; busy → held off naming the left hand.
+- `EitherFree` — tries hand 0, then hand 1; busy on both → held off naming
+  both hands' occupants.
+- `DualCast` — requires BOTH hands free-or-refreshing-the-same-spell at once;
+  ANY contention holds the WHOLE request off (never a half-landed dual-cast —
+  CLAUDE.md principle 7, no fallback that makes a degrade look like the real
+  thing).
+
+`CastOn` resolves `handPlan` ONCE right after the gate and reuses it via a
+`lockHands` lambda at every `HoldCastLock` call site in the function (self-cast
+fork, owned-cast claim, composed-cast claim), so the lock and the actual APMF
+claim never disagree about which hand(s) they occupy. `ConcentrationCast` (a
+separate function, unchanged call sites) hardcodes hand 0 directly, matching
+its own always-LEFT delivery. `CastLockLive(follower, hand, lock)` now checks
+`APMFBridge::IsOwnedCastActiveOnHand(follower, hand)` (NEW) for that ONE
+slot — ORed with `IsHealCastActive` for hand 0 only (heals are always LEFT) —
+falling back to `APMFBridge::FacetExpiry()` exactly as before otherwise. Every
+release path (`!castSeen`, combat-end, dismissal, revert) still calls
+`ClearCastLock`/`ClearCastLocks`, which drop BOTH hands for that follower (all
+four mean "nothing wanted on this follower anymore" — a genuinely mid-flight
+single-hand release still relies on the create-or-refresh/expiry idiom, same
+as before this pass).
+
+**2 — `APMFBridge` gained a per-hand offense claim slot.** `Owned::offense` is
+now `CastClaim offense[2]` (was one flat `offenseHandle`/`offenseSpell`/…
+field set) — `CastClaim` bundles a claim's handle, spell, target, hand,
+concentration flag, stop-percent, and its own refresh timestamp, one instance
+per hand. `Owned::heal` is the SAME `CastClaim` type but stays a single
+instance (heals are LEFT always, never per-hand). `ClaimOffenseCast(a_hand)`
+routes to `offense[0]` for `kApmfHandLeft`, `offense[1]` for anything else
+(the NEW `kApmfHandRight` constant, or bare 0 — matching APMF's own "no
+LeftHand flag = right hint" default), or claims BOTH slots for
+`kApmfHandDualCast` — ONE underlying `RequestCast` call (never two for a
+single dual ask), its handle/metadata mirrored into both slots so a
+hand-availability query on either index sees it occupied. A single-hand ask
+that lands on a slot currently mirroring a stale dual claim un-mirrors the
+OTHER slot FIRST, so the shared handle is never double-released.
+`ReleaseOffenseCast(follower)` (unchanged signature — its two callers,
+`Scheduler`'s `!castSeen` and `Followers`' dismissal, both mean "nothing
+wanted on either hand anymore") releases both slots, dedupe-aware for a
+mirrored dual claim; `Tick()`'s expiry sweep is likewise dedupe-aware per
+slot. `IsOwnedCastActive(follower)` keeps its existing "is ANY hand's claim
+live" per-actor contract UNCHANGED (its two consumers, `CasterConsent`'s
+exclusivity/hard-abort standdowns and `CombatStyle`'s equip-gate standdown,
+never cared which hand); the NEW `IsOwnedCastActiveOnHand(follower, hand)`
+answers ONE slot, consumed by the per-hand cast-gambit lock above.
+
+**3 — the `[cfc]` silent-claim diagnostic is per-hand too.** `ComposedCast`'s
+`g_watch` is now `unordered_map<FormID, FollowerWatch{Watch hand[2]}>` (was
+one `Watch` per follower) — a heal claim (hand 0) and a concurrent offense
+claim (hand 0 or 1) no longer overwrite each other's watch. `WatchClaim`
+gained an `a_hand` parameter (default `kApmfHandLeft`, so every existing
+heal-adjacent call site — the two concentration-offense claims in
+`Actuation_Direct.cpp`, both hardcoded LEFT — needed no edit); `CastOn`'s
+owned-cast branch calls it once per hand `handPlan` actually granted (both,
+for a DualCast plan). `ExpectingCast`/`NoteObservedCast` keep their existing
+`(follower, spell)` signature (`Diagnostics.cpp`'s sink has no hand to report)
+but now check/mark BOTH hand slots internally. `ComposedCast::End()` (and a
+refused heal claim inside `Try()`) clear ONLY hand 0's watch slot, so a
+concurrent right-hand offense watch survives a heal ending; `ClearWatch`
+(no hand param) still clears both, reserved for the same two "nothing wanted
+at all" callers as `ReleaseOffenseCast`.
+
+**4 — THE HARD RULE IS UNCHANGED AND STILL ABSOLUTE.** `Loadout::PlanCastHand`
+checks `a_weaponHandActive` FIRST, unconditionally, before Dual/EitherFree are
+even considered — a weapon owning the right hand always forces `HandPick::
+Left`, no matter what. `ResolveCastHand` therefore only ever sees `Right` or
+`DualCast` as CANDIDATES when `PlanCastHand` has ALREADY established the
+follower's right hand is genuinely free; there is no path in this pass's code
+that requests `kApmfHandRight`/`kApmfHandDualCast` from `APMFBridge` while a
+weapon is active, because `PlanCastHand`'s own gate runs first and produces
+`Left` in that case. The per-hand claim/lock machinery is a pure ROUTING
+layer on top of that decision — it does not re-derive or second-guess it.
+
+**Open item, flagged not fixed by this pass.** `Loadout::Prepare`'s own
+`EquipSpell` call (`Actuation.cpp`, in `CastOn`'s equip step, unchanged by this
+pass) still ALWAYS equips into `LeftHandSlot()` unconditionally, regardless of
+`handPlan`. Before this pass that was provably correct (the offense claim was
+ALSO always LEFT, so the claimed hand and the physically-equipped hand could
+never disagree — see the OFFENSE CAST PORT section's HAND POLICY above). Now
+that a claim can resolve to Right or DualCast, this pass does NOT verify (nor
+change) what physically happens on the follower's right hand when APMF's
+seats try to arm it — whether the AI's own equip-scoring independently arms a
+spell there once the seat hint permits it (per [[ai-scoring-controls-equip-
+too]]), or whether a Right/DualCast claim currently has nothing to actually
+cast from. This needs a field observation (CLAUDE.md principle 5:
+disassembly/design proves a path exists, not that it runs) before it is
+trusted; flagged here rather than silently assumed correct.
 
 ### CastBounds — the HARD-ABORT fix (§2)
 
