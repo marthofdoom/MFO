@@ -511,6 +511,31 @@ namespace MFO::Logistics {
             return a_entry && a_entry->IsQuestObject();
         }
 
+        // Loose-ref analog of IsQuestObjectInstance, for route 2b (a loose
+        // world item has no InventoryEntryData to ask). A CONTAINED item's
+        // quest status is read off the copy of its extra data the container
+        // holds; a LOOSE ref carries that SAME extra data directly on itself
+        // (RE::TESObjectREFR::extraList) -- HasQuestObjectAlias() is the exact
+        // signal IsQuestObject() ultimately reads, just asked of the ref
+        // instead of an inventory entry.
+        bool IsQuestObjectRef(RE::TESObjectREFR* a_ref) {
+            return a_ref && a_ref->extraList.HasQuestObjectAlias();
+        }
+
+        // NEVER-LOOT gate for the route-2b whitelist below: mirrors the
+        // two-part guard every dibs-tier container looter runs (quest-instance
+        // check + bLootSpecialItems catalog exclusion) -- rebased onto a loose
+        // ref via IsQuestObjectRef just above. Used by every loose category
+        // that also carries this guard in its container form (Jewelry/
+        // SoulGems/Ingredients/Equipment/Valuables); Arrows/Bolts/Potions/
+        // Lockpicks/Gold have no such gate in their container form either, so
+        // none is added for their loose path.
+        bool LooseSpecialItemBlocked(RE::TESObjectREFR* a_ref, RE::FormID a_formId) {
+            if (IsQuestObjectRef(a_ref)) return true;
+            if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(a_formId)) return true;
+            return false;
+        }
+
         // The ARMO currently WORN in a logical mage-apparel slot (MageClothingSlot
         // order: 0 head[head/hair/circlet], 1 body, 2 hands, 3 feet, 4 ring, 5
         // amulet), or nullptr if that slot is bare. Worker-safe read of a loaded
@@ -624,346 +649,6 @@ namespace MFO::Logistics {
             // No-op if the old item had no gems (fromUid == 0) or MEO is absent.
             MEOBridge::QueueGemMove(a_follower, fromBase, fromUid, a_item->GetFormID());
             return equipIt;
-        }
-
-        bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek) {
-            // Generalized by CATEGORY, never by item (§4.8.2). One better piece
-            // per CALL (one action per tick, §4.3; StripCorpse drains by calling
-            // again -- each take raises the inventory baseline). We TRANSFER,
-            // then EQUIP IN PLACE (see the equipIt gate below) -- a real person
-            // who finds a better cuirass puts it on, they do not just
-            // carry it (marth: the follower is a thinking person). Safe here
-            // because logistics runs OUT of combat, where Loadout is not holding
-            // a hand for a cast, and MFO has no equip-event sink to loop on;
-            // armor slots are independent of the (left-hand) spell hand.
-            auto* equippedWeap = a_follower->GetEquippedObject(false);
-            auto* myWeap       = equippedWeap ? equippedWeap->As<RE::TESObjectWEAP>() : nullptr;
-            using WT = RE::WEAPON_TYPE;
-
-            // THE ROLE WE LOOT/KEEP is a STABLE signal, never the momentarily
-            // WIELDED weapon (#69, ComputeWeaponRoles above): a gambit-driven
-            // role first, else whatever the follower actually CARRIES. Loot and
-            // ShedOffRoleWeapon judge the SAME roles from the SAME helper, so
-            // they can no longer disagree about what's "off-role" -- that
-            // disagreement was the Gauldurbow bug (a custom follower's own
-            // weapon, drawn only sometimes, read as off-role and got handed to
-            // the player) and the hybrid-1h-gets-shed bug. WHAT gets force-
-            // EQUIPPED over a drawn weapon is still decided below by the
-            // equipIt gate, UNCHANGED -- roles only decide what's looted/kept.
-            const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
-            const bool wantsMelee  = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
-            const WeaponRoles roles = g_svc ? ComputeWeaponRoles(a_follower, *g_svc) : WeaponRoles{};
-            // Base class (#65 combatClassOverride; 1=Melee 2=Ranged 3=Mage, 0=Auto)
-            // read here, BEFORE mageMode, so mageMode can gate on it directly --
-            // no circular dependency on the roles derived further down.
-            const std::uint8_t baseClass = g_svc ? g_svc->combatClassOverride : 0;
-
-            // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
-            // Gambit-driven magic-user detection. A magic user gets two loot
-            // paths: (1) SCHOOL-SCORED APPAREL on the mage slots (bypasses
-            // ArmorIsBetter's rating>0 gate, which can never judge a robe); and
-            // (2) ONE one-handed melee BACKUP (daggers by default) his AI draws
-            // at zero magicka. Detected BEFORE the role below, because a pure
-            // caster must be kept OUT of the general weapon-upgrade role.
-            int castGambits = 0;
-            RE::ActorValue school = RE::ActorValue::kNone;
-            if (Config::g_magicLoadout.load() && g_svc)
-                school = TargetMagicSchool(*g_svc, castGambits);
-            // mageMode requires the follower be PRIMARILY a caster, not just
-            // carrying a secondary cast gambit (marth: a Ranged/Melee follower
-            // with a cast gambit must keep his class loadout, not flip to
-            // school-scored mage apparel). The CLASS is the authority here
-            // (matching meleeTargetClass's !baseWeaponUser gate just below):
-            // a base Ranged/Melee follower (baseClass 1/2) is NEVER mageMode,
-            // no matter what gambits she carries -- an act.attack-only Ranged
-            // follower has no equip_ranged GAMBIT, so a gambit-composition
-            // test alone (no equip-melee/equip-ranged gambit) would wrongly
-            // call her mageMode. "Primarily a caster" = base class Mage (3),
-            // OR -- for Auto/no explicit class (0) only -- no melee/ranged
-            // attack gambit at all (a pure caster who never picked a class).
-            const bool classIsMage          = baseClass == 3;
-            const bool hasNoWeaponAttackRole = !wantsMelee && !wantsRanged;
-            const bool mageMode    = castGambits > 0 &&
-                (classIsMage || (baseClass == 0 && hasNoWeaponAttackRole));
-            const bool daggersOnly = Config::g_mageDaggersOnly.load();
-            // #21 bMageWearRobes (default ON): the mage school-clothing dress-up gate.
-            // When OFF, a magic user is treated like any other class for APPAREL and
-            // falls through to the plain rating armor judge below (marth). It gates
-            // ONLY apparel selection -- the mage still keeps the backup-weapon /
-            // no-melee-role contract (mageMode) and still buys/learns tomes.
-            const bool useMageApparel = mageMode && Config::g_mageWearRobes.load();
-            // #21 UNIFIED mage-apparel ranking (loot side; shared with the buy side).
-            // Same MEO-aware model: value-primary when MEO carries gems, else school-
-            // enchant primary; villain blacklist with a necromancer exception; all
-            // clothing + jewelry slots (MageClothingSlot). See MageApparelBuyKey.
-            const std::uint8_t mageTop2      = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
-            const bool mageSchoolPrimary     = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
-            const bool mageAllowVillain      = useMageApparel && g_svc && IsNecromancerFollower(*g_svc);
-
-            // The MELEE class we loot/upgrade, or Other = "no melee role at all".
-            // #69: ComputeWeaponRoles hands a role to ANY carried melee/ranged
-            // weapon, but a non-battlemage magic user must NOT take the general
-            // weapon-upgrade path -- his melee is the ONE-sidearm backup contract
-            // (#52/#54: daggers-only, never an armory), not a role, and he loots
-            // no bow either. Only an explicit equip-melee/equip-ranged gambit (a
-            // battlemage/spellbow) earns him the real role. Pre-#69 this fell out
-            // for free -- the role was WIELD-based and a caster wields spells/
-            // staff, never his carried sidearm -- so the stable carries-based
-            // signal has to say it explicitly. (Shed still KEEPS his carried gear;
-            // this only bars LOOTING new weapon upgrades for a pure caster.)
-            // marth: the BASE CLASS decides the melee-loot contract, NOT the mere
-            // presence of an equip-melee gambit. A base MAGE (Cast class, #65
-            // combatClassOverride==3) keeps the daggers-only sidearm even when he
-            // melees via a gambit -- "a base mage who melees", not a spellsword.
-            // A base WARRIOR/ARCHER who casts (Melee/Ranged class == a spellsword)
-            // earns the full weapon-upgrade role. Auto (0, no explicit class)
-            // keeps the old gambit heuristic (mageMode && !wantsMelee). Ordinals
-            // match CombatStyle::Stance by construction (State.h:82).
-            // baseClass read earlier now (mageMode gates on it directly, above).
-            const bool baseCaster          = baseClass == 3;
-            const bool baseWeaponUser      = baseClass == 1 || baseClass == 2;
-            const WepClass meleeTargetClass =
-                (mageMode && !baseWeaponUser && (baseCaster || !wantsMelee))
-                    ? WepClass::Other : roles.melee;
-            // Ranged is a primary if a gambit wants it OR they carry one.
-            const bool doRanged =
-                (mageMode && !wantsRanged) ? false           : roles.doRanged;
-            const bool wantBackup  = mageMode && meleeTargetClass == WepClass::Other;
-
-            // Baseline the MELEE/RANGED upgrade must beat: the best in-role
-            // weapon anywhere in the follower's OWN INVENTORY (the equipped one
-            // is part of it). Equipped-only was the residual thrash hole: a
-            // follower HOLDING HIS BOW with an equip-melee gambit baselined
-            // melee at 0, so every corpse's iron dagger "beat" the good sword
-            // already in his pack -- looted a duplicate and force-equipped it
-            // over the bow, corpse after corpse (the in-AND-out-of-combat half
-            // of "Erik switches weapons for no reason": the combat gambit put
-            // the bow back, the next corpse knocked it out again). BOW vs
-            // CROSSBOW is decided by ComputeWeaponRoles now (#69, shared with
-            // the shed side); this pass only baselines the follower's best
-            // ALREADY-CARRIED weapon of that kind. Creature/excluded weapons
-            // are unusable gear -- they never set a baseline.
-            const bool wantCrossbow = roles.wantCrossbow;
-            std::uint16_t baseDmg      = 0;
-            std::uint16_t myRangedDmg  = 0;
-            std::uint16_t myBackupDmg  = 0;       // best qualifying sidearm the mage already OWNS (not the wielded hand)
-            for (auto& [obj, data] : a_follower->GetInventory()) {
-                if (!obj || data.first <= 0) continue;
-                auto* w = obj->As<RE::TESObjectWEAP>();
-                if (!w || IsCreatureWeapon(w) ||
-                    (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID()))) continue;
-                if (meleeTargetClass != WepClass::Other &&
-                    WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
-                    baseDmg = std::max(baseDmg, w->GetAttackDamage());
-                // ONE sidearm is the mage-backup contract: he restocks only
-                // when he carries NONE, never accumulates an armory (creature/
-                // excluded weapons already skipped above -- an unusable weapon
-                // is not a backup).
-                if (wantBackup && WeaponClassOf(w->GetWeaponType()) == WepClass::OneHand &&
-                    (!daggersOnly || w->GetWeaponType() == WT::kOneHandDagger))
-                    myBackupDmg = std::max(myBackupDmg, w->GetAttackDamage());
-                if (doRanged && w->GetWeaponType() == (wantCrossbow ? WT::kCrossbow : WT::kBow))
-                    myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
-            }
-
-            RE::TESBoundObject* bestArmor     = nullptr;
-            float               bestArmorRat  = 0.0f;   // best-first, like bestWeapDmg (marth's rule)
-            RE::TESBoundObject* bestWeap      = nullptr;
-            std::uint16_t       bestWeapDmg   = baseDmg;
-            RE::TESBoundObject* bestRanged    = nullptr;
-            std::uint16_t       bestRangedDmg = myRangedDmg;
-            RE::TESBoundObject* bestMage      = nullptr;   // clothing/jewelry apparel (magic user) -- unified MEO-aware judge
-            int                 bestMageTier  = 0;         // 2 top-2 school, 1 plain, 0 off-school (see MageApparelBuyKey)
-            std::int32_t        bestMageMetric= 0;         // value (+fortify mag for a school piece); higher = fancier
-            RE::TESBoundObject* bestBackup    = nullptr;   // the mage's melee sidearm (upgrade past best owned)
-            std::uint16_t       bestBackupDmg = myBackupDmg;   // beat his best-OWNED sidearm, not the wielded hand
-
-            for (auto& [obj, data] : a_src->GetInventory()) {
-                if (!obj || data.first <= 0) continue;
-                // NEVER-LOOT: quest items stay engine-protected regardless of
-                // bLootSpecialItems (per-instance alias check). The catalog
-                // artifact/unique/no-drop exclusion below is what the toggle
-                // governs; default ON lifts it -- leave the rest for the player.
-                if (IsQuestObjectInstance(data.second.get())) continue;
-                if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
-
-                if (auto* armo = obj->As<RE::TESObjectARMO>()) {
-                    // Never loot a NON-PLAYABLE creature "skin" armor (MNC's
-                    // BearBrownSoft et al.): armor-rated but the creature's own
-                    // invisible body, useless/broken on a follower. Same flag as
-                    // IsCreatureWeapon -- this is what BearBrownSoft slipped past.
-                    if (IsCreatureArmor(armo)) continue;
-                    // #61 FASHIONRIM: armor-only dolls mode -- skip EVERY armor
-                    // candidate (plain-rated AND mage school-robe) so MFO never
-                    // loots or swaps a follower's armor; the player dresses them
-                    // by hand. Weapons fall to the else-branch below, untouched.
-                    if (Config::g_dollsMode.load()) continue;
-                    // A SHIELD needs a free off-hand: only a ONE-HAND melee role can
-                    // use one. A 2H, ranged, or no-melee-role follower has no hand
-                    // for it -- dead weight (marth: Farkas, a two-hander, picked up
-                    // a shield).
-                    const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
-                        & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
-                    const bool shieldUseless = isShield && !(meleeTargetClass == WepClass::OneHand && !doRanged);
-                    // MAGE APPAREL + JEWELRY (#21 unified with the buy side): a magic
-                    // user's dress-up is judged by the shared MEO-aware ranking
-                    // (MageApparelBuyKey: value-primary with MEO, else school-enchant
-                    // primary), across ALL clothing slots AND jewelry (ring/amulet),
-                    // never by armor rating. A candidate must BEAT what he currently
-                    // WEARS in that logical slot, then beat the running best pick.
-                    // Shields are skipped -- rated armor, never dress-up.
-                    if (useMageApparel && !isShield) {
-                        LogMageApparelDiag(armo, school);   // one dump per form+school (deduped inside)
-                        int cTier = 0; std::int32_t cMetric = 0;
-                        const int slot = MageClothingSlot(armo);
-                        // CLOTHING slots only here (0 head .. 3 feet). JEWELRY (ring/
-                        // amulet, slots 4/5) is NOT acquired via the Equipment loot
-                        // category -- it stays on the Valuables tier (LootJewelry, its
-                        // stricter dibs preserved). EquipBestOwnedGear still WEARS the
-                        // best owned ring/amulet (looted-as-valuable, bought, handed).
-                        if (slot >= 0 && slot <= 3 &&
-                            MageApparelBuyKey(armo, mageTop2, mageSchoolPrimary, mageAllowVillain, cTier, cMetric)) {
-                            // Beats what he wears in this slot?
-                            int wTier = 0; std::int32_t wMetric = 0;
-                            if (auto* worn = WornInLogicalSlot(a_follower, slot))
-                                MageApparelBuyKey(worn, mageTop2, mageSchoolPrimary, /*allowVillain*/true, wTier, wMetric);
-                            const bool beatsWorn = cTier > wTier || (cTier == wTier && cMetric > wMetric);
-                            const bool beatsBest = cTier > bestMageTier ||
-                                                   (cTier == bestMageTier && cMetric > bestMageMetric);
-                            if (beatsWorn && beatsBest) {
-                                bestMageTier   = cTier;
-                                bestMageMetric = cMetric;
-                                bestMage       = obj;
-                            }
-                        }
-                    }
-                    // The PLAIN rating path is for NON-magic users ONLY
-                    // (marth, v1.0.31: PURE CASTER). v1.0.29 ran it for mages
-                    // too and let their "no school match but rated" pieces
-                    // fall through to it -- which is exactly how Marcurio, a
-                    // detected Destruction user, looted a Dwarven Heavy
-                    // Cuirass and Chitin Heavy Boots by raw rating. Skipping
-                    // the whole path means a magic user can never LOOT armor
-                    // at all; armor he already wears stays on (nothing here
-                    // strips gear) until a school robe displaces it on equip.
-                    // This also retires the WouldStripSchoolGear guard: with
-                    // no rating path for mages there is nothing left to
-                    // thrash against their robes.
-                    // Best-first: among the armour upgrades this body offers, keep the
-                    // HIGHEST-rated (not the first enumerated), so a carry-weight cutoff
-                    // can't strand the actually-best piece.
-                    if (!useMageApparel &&
-                        !shieldUseless && ArmorIsBetter(a_follower, armo) &&
-                        armo->GetArmorRating() > bestArmorRat &&
-                        !CarriesSlotArmorAtLeast(a_follower, armo)) {   // #3: don't re-take/equip a worse same-slot piece already in the pack (strip double-take)
-                        bestArmorRat = armo->GetArmorRating();
-                        bestArmor    = obj;
-                    }
-                } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
-                    if (IsCreatureWeapon(weap)) continue;   // never equip automaton/creature gear
-                    const WepClass wc = WeaponClassOf(weap->GetWeaponType());
-                    // MELEE upgrade: ONLY the target melee class -- the equip-melee
-                    // gambit's best-skill class, or the class they already wield. Never
-                    // cross-class, and never skill-forced onto a ranged user (that was
-                    // the thrash bug). meleeTargetClass == Other means no melee role.
-                    if (meleeTargetClass != WepClass::Other && wc == meleeTargetClass &&
-                        weap->GetAttackDamage() > bestWeapDmg) {
-                        bestWeapDmg = weap->GetAttackDamage();
-                        bestWeap    = obj;
-                    }
-                    // Ranged pickup -- ONLY the follower's kind (bow XOR crossbow).
-                    if (doRanged) {
-                        const auto wt = weap->GetWeaponType();
-                        const bool kindMatch = wantCrossbow ? (wt == WT::kCrossbow) : (wt == WT::kBow);
-                        if (kindMatch && weap->GetAttackDamage() > bestRangedDmg) {
-                            bestRangedDmg = weap->GetAttackDamage();
-                            bestRanged    = obj;
-                        }
-                    }
-                    // MAGE BACKUP (v1.0.29): the sidearm a caster's own AI draws
-                    // when his magicka is gone. Daggers only by default
-                    // (bMageDaggersOnly); the toggle opens it to the best of any
-                    // one-hander. Baselined on his BEST-OWNED sidearm (bestBackupDmg
-                    // = myBackupDmg), not the momentarily wielded hand: a caster
-                    // dual-wielding SPELLS reads an empty weapon hand, so the old
-                    // carries-none gate skipped every better dagger while he cast
-                    // (marth field: "ignores better daggers while casting"). Now he
-                    // restocks when he carries none (myBackupDmg==0) AND upgrades to
-                    // a STRICTLY better sidearm -- one at a time (§4.3), and NEVER
-                    // force-equipped (equipIt=false below), so it stays a stocked
-                    // backup he switches to, not an armory or a per-corpse equip thrash.
-                    if (wantBackup && wc == WepClass::OneHand &&
-                        (!daggersOnly || weap->GetWeaponType() == WT::kOneHandDagger) &&
-                        weap->GetAttackDamage() > bestBackupDmg) {
-                        bestBackupDmg = weap->GetAttackDamage();
-                        bestBackup    = obj;
-                    }
-                }
-            }
-
-            // Prefer the in-class weapon upgrade; then a ranged weapon they need
-            // for their equip-ranged gambit; then the mage's missing sidearm
-            // (safety before wardrobe); then school apparel over plain armor
-            // (the point of the magic loadout). One item this tick (§4.3).
-            RE::TESBoundObject* best = bestWeap   ? bestWeap
-                                     : bestRanged ? bestRanged
-                                     : bestBackup ? bestBackup
-                                     : bestMage   ? bestMage
-                                                  : bestArmor;
-            // Peek: an upgrade exists AND the follower can actually carry it. Without
-            // the weight gate an overencumbered follower walks a whole excursion leg,
-            // takes nothing at arrival (the real take IS weight-gated below), and the
-            // corpse gets marked DONE -- a wasted trip.
-            if (a_peek) return best != nullptr && FitsCarryWeight(a_follower, best->GetWeight());
-            if (!best) return false;
-            if (!FitsCarryWeight(a_follower, best->GetWeight())) return false;
-
-            // ACQUIRE + EQUIP through the shared v1.0.38 safe step: transfers from
-            // a_src, captures + carries MEO gems, equips IN PLACE on the main thread
-            // (MainThread::Post EquipObject, never DoReset3D -- #62), queues the gem
-            // move. The mage BACKUP stays STOCK-ONLY (a caster's hand belongs to his
-            // spells; his own AI draws the sidearm at zero magicka). The buy / owned-
-            // upgrade pass calls the SAME AcquireEquip with a_src=nullptr.
-            const bool equipped = AcquireEquip(a_follower, best, a_src, myWeap, best == bestBackup);
-
-            // [equip] DIAGNOSTIC: log WHAT we put on, over WHAT, and the reasoning.
-            if (auto* nw = best->As<RE::TESObjectWEAP>()) {
-                spdlog::info("[equip] {:08X}: LOOT-{} weapon '{}' dmg={} class={} <- held '{}' "
-                             "dmg={} class={} | meleeTgt={} wantsMelee={} wantsRanged={} baseDmg={}",
-                             a_follower->GetFormID(), equipped ? "EQUIP" : "STOCK",
-                             nw->GetFullName() ? nw->GetFullName() : "?", nw->GetAttackDamage(),
-                             static_cast<int>(WeaponClassOf(nw->GetWeaponType())),
-                             myWeap && myWeap->GetFullName() ? myWeap->GetFullName() : "(none)",
-                             myWeap ? myWeap->GetAttackDamage() : 0,
-                             myWeap ? static_cast<int>(WeaponClassOf(myWeap->GetWeaponType())) : -1,
-                             static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseDmg);
-            } else {
-                spdlog::info("[equip] {:08X}: LOOT armor/apparel '{}' -> equip {}", a_follower->GetFormID(),
-                             best->As<RE::TESFullName>() && best->As<RE::TESFullName>()->GetFullName()
-                                 ? best->As<RE::TESFullName>()->GetFullName() : "?",
-                             MainThread::IsInstalled() ? "queued to main thread" : "direct (VR/no-pump)");
-            }
-
-            // MAGIC-LOADOUT diagnostics: WHY the mage item won (logged on a TAKE only).
-            if (best == bestMage || best == bestBackup) {
-                spdlog::info("[loot] {:08X} '{}' magic-user: target school {} (from {} cast gambit(s))",
-                             a_follower->GetFormID(),
-                             a_follower->GetName() ? a_follower->GetName() : "?",
-                             SchoolName(school), castGambits);
-            }
-            if (best == bestMage) {
-                spdlog::info("[loot] apparel {:08X} '{}' tier={} metric={} (schoolPrimary={}) -> best",
-                             best->GetFormID(), best->GetName() ? best->GetName() : "?",
-                             bestMageTier, bestMageMetric, mageSchoolPrimary);
-            }
-            if (best == bestBackup) {
-                auto* mw = best->As<RE::TESObjectWEAP>();
-                spdlog::info("[loot] mage backup {} {:08X} '{}' dmg={} -- stocked; his own AI draws it when the magicka runs out",
-                             daggersOnly ? "dagger" : "1h", best->GetFormID(),
-                             best->GetName() ? best->GetName() : "?",
-                             mw ? mw->GetAttackDamage() : 0);
-            }
-            return true;
         }
 
         // COIN-PURSE / LOOSE-COIN detection (marth field: coin purses count as
@@ -1629,6 +1314,29 @@ namespace MFO::Logistics {
                 ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) {
                 return false;
             }
+            // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
+            // immediately cancel a loot excursion and pull followers back").
+            // A follower must never BEGIN or CONTINUE a loot action while the
+            // player is fighting -- looting is an out-of-combat errand and it
+            // does not get to keep running the tick the player needs him
+            // back for. Deliberately the PLAYER's IsInCombat(), never this
+            // follower's own: a follower can sit a full room away from the
+            // fight for several ticks before his OWN combat state flips,
+            // which is exactly the "wanders off looting mid-fight" gap this
+            // closes. The engine-side claim/alias itself is released by the
+            // fast global backstop in ServiceFollower (Logistics.cpp,
+            // ~133 ms-scale -- runs on every out-of-combat service call for
+            // ANY follower, not gated on this follower's own 1 s logistics
+            // cadence); returning false HERE, at every loot call site (the
+            // per-tick dispatch loop and RunExcursionScan both route through
+            // this one function), stops the loot judge from re-arming or
+            // continuing a leg in the meantime -- so the cancel and the loot
+            // system's own re-evaluation never fight each other on the next
+            // tick. No blacklist, no state left behind: when combat ends the
+            // very next service tick re-evaluates from a clean slate and can
+            // resume the SAME corpse immediately.
+            if (auto* pcCombat = RE::PlayerCharacter::GetSingleton(); pcCombat && pcCombat->IsInCombat())
+                return false;
             // BEHAVIOUR LAYER: hold looting while the player is ACTIVELY stealthing,
             // not merely crouched. A stealth build spends most of the dungeon in
             // sneak; a blanket block there means logistics looting effectively never
@@ -1725,6 +1433,13 @@ namespace MFO::Logistics {
                 addCell(tp.get());
             }
 
+            // Lazily built ONCE per LootNearby(Category::Equipment) call (the
+            // Equipment loose-item test needs it; every other category
+            // ignores it). Built from the follower's own gear, so it does not
+            // change ref-to-ref within this one scan -- see BuildEquipmentContext.
+            bool             equipCtxBuilt = false;
+            EquipmentContext equipCtx;
+
             auto scanOne =
                 [&](RE::TESObjectREFR& a_ref) {
                     if (candidates.size() >= kMaxCandidates) return RE::BSContainer::ForEachResult::kStop;
@@ -1738,69 +1453,85 @@ namespace MFO::Logistics {
                     // things we TRANSFER an inventory out of. Living actors are
                     // never touched (that is pickpocketing).
                     //
-                    // LOOSE world items are DELIBERATELY excluded here. Picking a
-                    // loose ref up is PickUpObject, which tears down the ref's 3D
-                    // and mutates the cell -- and this whole tick runs on a BSJobs
-                    // JOB WORKER (§0.30), overlapping the streaming threads, the
-                    // crash4 class. Re-queuing via SKSE AddTask does NOT escape it:
-                    // the task queue itself is drained inside Job_Post_process on a
-                    // worker (§0.30, INVARIANTS #72), so there is no main-thread hop
-                    // to be had from here. Loose-item pickup is the package-
-                    // acquisition feature (ROADMAP "Option A"): the ENGINE walks the
-                    // follower to the item and grabs it natively, no PickUpObject on
-                    // our side at all. Until then, loose items are simply not looted
-                    // -- EXCEPT the route-2b ACQUIRE PROBE whitelist below.
+                    // LOOSE world items are excluded from the plain lootable
+                    // test above for the ACQUIRE MECHANISM's sake, never by
+                    // item type. Picking a loose ref up natively is
+                    // PickUpObject, which tears down the ref's 3D and mutates
+                    // the cell -- and this whole tick runs on a BSJobs JOB
+                    // WORKER (§0.30), overlapping the streaming threads, the
+                    // crash4 class. Re-queuing via SKSE AddTask does NOT
+                    // escape it: the task queue itself is drained inside
+                    // Job_Post_process on a worker (§0.30, INVARIANTS #72), so
+                    // there is no main-thread hop to be had from here. Route
+                    // 2b sidesteps the mechanism problem entirely -- the
+                    // ENGINE does the pickup via ObjectReference.ActivateRef,
+                    // marshalled to the MAIN thread (Logistics.cpp's excursion
+                    // arrival), which works identically for ANY object type.
+                    // So the whitelist below is a PER-CATEGORY ELIGIBILITY
+                    // test, generalized (marth: "act.loot_soul_gems should
+                    // pick up a loose soul gem" etc, same rule as a
+                    // container, one decision path, two sources): every
+                    // branch calls the EXACT predicate the matching
+                    // HasLoot/Loot* container function already runs on a
+                    // single item, so a loose item and a contained one are
+                    // judged identically. NEVER-LOOT quest/catalog gating
+                    // (LooseSpecialItemBlocked, just above LootNearby) applies
+                    // wherever the container version applies it; categories
+                    // whose container form has no such gate (Arrows/Bolts/
+                    // Potions/Lockpicks/Gold) get none here either.
                     bool lootable = false;
                     bool loose    = false;   // route 2b: a loose WORLD item, not an inventory
                     if (auto* actor = ref->As<RE::Actor>()) {
                         lootable = actor->IsDead();
                     } else if (auto* base = ref->GetBaseObject()) {
                         lootable = base->Is(RE::FormType::Container);
-                        // ACQUIRE PROBE (route 2b) WHITELIST: for the Arrows /
-                        // Bolts / Gold / Potions / Valuables scans ONLY, a loose
-                        // world ref of exactly that thing is a candidate too. It
-                        // rides the SAME excursion machinery (walk to it; every gate below
-                        // still applies) and the acquire happens at ARRIVAL via
-                        // a VM-dispatched ObjectReference.Activate in the
+                        // ACQUIRE PROBE (route 2b) WHITELIST: a loose world
+                        // ref that HasLoot's matching category would have
+                        // taken out of a container is a candidate too. It
+                        // rides the SAME excursion machinery (walk to it;
+                        // every gate below still applies) and the acquire
+                        // happens at ARRIVAL via a native ActivateRef in the
                         // excursion driver -- NEVER an in-place PickUpObject
                         // (the worker trap the comment above describes).
                         if (!lootable) {
-                            if (a_cat == Category::Arrows || a_cat == Category::Bolts) {
+                            constexpr RE::FormID kGold001Ref  = 0x0000000F;   // see LootGold
+                            constexpr RE::FormID kLockpickRef = 0x0000000A;   // see LootLockpicks
+                            switch (a_cat) {
+                            case Category::Arrows:
+                            case Category::Bolts:
                                 if (auto* ammo = base->As<RE::TESAmmo>();
                                     ammo && AmmoIsBolt(ammo) == (a_cat == Category::Bolts))
                                     lootable = loose = true;
-                            } else if (a_cat == Category::Gold || a_cat == Category::Valuables) {
-                                // Gold folds into Valuables (marth 2026-09-05):
-                                // a loose Gold001 pile qualifies for a Valuables
-                                // rule too, via the same proven walk-and-Activate
-                                // excursion.
-                                constexpr RE::FormID kGold001 = 0x0000000F;   // see LootGold
-                                if (base->GetFormID() == kGold001) {
+                                break;
+                            case Category::Gold:
+                                // Gold001 OR an OCF coin/purse -- same test
+                                // LootGold runs per inventory item.
+                                if (base->GetFormID() == kGold001Ref || IsCoinLoot(base))
                                     lootable = loose = true;
-                                } else if (a_cat == Category::Valuables && IsValuableMisc(base)) {
-                                    // Loose gems / value-dense MISC (marth
-                                    // 2026-09-05 scope addition: "very loose
-                                    // item variation, just gems for now").
-                                    // Same eligibility test the container take
-                                    // (LootValuables/IsValuableMisc, the
-                                    // value/weight-ratio rule) already uses --
-                                    // a loose ref qualifies iff a container
-                                    // holding it would have been looted. Soul
-                                    // gems/jewelry/ingredients/equipment as
-                                    // loose refs stay out of scope; loose isn't
-                                    // generalized to every item type yet.
+                                break;
+                            case Category::Valuables:
+                                // Gold folds into Valuables (marth 2026-09-05)
+                                // plus any value-dense loose MISC (the
+                                // LootValuables/IsValuableMisc rule) -- a
+                                // loose ref qualifies iff a container holding
+                                // it would have been looted. The MISC branch
+                                // is quest/catalog-gated like its container
+                                // form (LootValuables); gold is not, matching
+                                // LootGold.
+                                if (base->GetFormID() == kGold001Ref || IsCoinLoot(base)) {
+                                    lootable = loose = true;
+                                } else if (IsValuableMisc(base) &&
+                                           !LooseSpecialItemBlocked(ref, base->GetFormID())) {
                                     lootable = loose = true;
                                 }
-                            } else if (a_cat == Category::Potions) {
+                                break;
+                            case Category::Potions:
                                 // Loose potion on a surface (marth field: Stenvar
-                                // walked past a health potion on a table). Same
-                                // route-2b acquire as loose gold -- walk to it,
-                                // ActivateRef at arrival, never an in-place
-                                // PickUpObject. The ownership gate below
-                                // (ref->GetOwner) still skips inn/shop/home stock.
-                                // Match LootPotions' item test (want + low-power
-                                // floor) so a loose potion qualifies iff the loot
-                                // would take it.
+                                // walked past a health potion on a table). The
+                                // ownership gate below (ref->GetOwner) still
+                                // skips inn/shop/home stock. Match LootPotions'
+                                // item test (want + low-power floor) so a loose
+                                // potion qualifies iff the loot would take it.
                                 if (auto* alc = base->As<RE::AlchemyItem>()) {
                                     const bool wantOk =
                                         a_potionWant == RE::ActorValue::kNone
@@ -1811,6 +1542,58 @@ namespace MFO::Logistics {
                                     if (wantOk && !(fl > 0.0f && mag > 0.0f && mag < fl))
                                         lootable = loose = true;
                                 }
+                                break;
+                            case Category::Lockpicks:
+                                // FormID match, same as LootLockpicks -- Free
+                                // tier, weightless, nobody competes for it.
+                                if (base->GetFormID() == kLockpickRef)
+                                    lootable = loose = true;
+                                break;
+                            case Category::Jewelry:
+                                // Same predicate LootJewelry runs per item
+                                // (IsJewelryPiece), plus its quest/catalog gate.
+                                if (auto* armo = base->As<RE::TESObjectARMO>();
+                                    armo && IsJewelryPiece(armo) &&
+                                    !LooseSpecialItemBlocked(ref, armo->GetFormID()))
+                                    lootable = loose = true;
+                                break;
+                            case Category::SoulGems:
+                                // Same predicate LootSoulGems runs per item
+                                // (IsSoulGemItem), plus its quest/catalog gate.
+                                if (IsSoulGemItem(base) &&
+                                    !LooseSpecialItemBlocked(ref, base->GetFormID()))
+                                    lootable = loose = true;
+                                break;
+                            case Category::Ingredients:
+                                // Same predicate LootIngredients runs per item
+                                // (IsIngredientItem), plus its quest/catalog gate.
+                                if (IsIngredientItem(base) &&
+                                    !LooseSpecialItemBlocked(ref, base->GetFormID()))
+                                    lootable = loose = true;
+                                break;
+                            case Category::Equipment:
+                                // GENERALIZED (marth): a bare weapon/armor
+                                // lying on the ground is judged by the EXACT
+                                // rule LootEquipment applies inside a
+                                // container scan -- LooseEquipmentQualifies
+                                // shares LootEquipment's context builder and
+                                // per-item predicate (both just above
+                                // LootHere), so the two never drift apart.
+                                // IsCreatureWeapon/IsCreatureArmor (checked
+                                // inside LooseEquipmentQualifies) preserve the
+                                // exact protection that stopped a follower
+                                // looting a creature's own weapon.
+                                if ((base->As<RE::TESObjectWEAP>() || base->As<RE::TESObjectARMO>()) &&
+                                    !LooseSpecialItemBlocked(ref, base->GetFormID())) {
+                                    if (!equipCtxBuilt) {
+                                        equipCtx      = BuildEquipmentContext(a_follower);
+                                        equipCtxBuilt = true;
+                                    }
+                                    if (LooseEquipmentQualifies(a_follower, base, equipCtx))
+                                        lootable = loose = true;
+                                }
+                                break;
+                            default: break;
                             }
                         }
                     }

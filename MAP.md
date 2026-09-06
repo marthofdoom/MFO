@@ -14,8 +14,8 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (ProgAllocator 2333, Board 2190, Logistics_Loot 2227,
-   Packages 1657, Logistics 1700, CasterConsent 1066) should never sit in context — grep to a
+   whole files. Big files (ProgAllocator 2333, Board 2190, Logistics_Loot 2201,
+   Packages 1657, Logistics 1798, CasterConsent 1066) should never sit in context — grep to a
    symbol, read a narrow window.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
    changing a subsystem, re-read its "What breaks" entry *against current code*
@@ -803,47 +803,89 @@ Out-of-combat supply/upkeep. `Logistics::ServiceFollower` + its whole loot/heal/
 economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
 `MainThread::Post`. Owns the serialized `g_stockGear` ('MSTK') map.
 
-### Logistics family: Logistics.cpp / _Cast / _Economy / _Loot / _internal.h / Logistics.h
-**MODULE SPLIT (mechanical, v1.1 split pass):** one TU became four + a shared
-internal header. Cross-module state/types/small helpers live as `inline` members
-of `namespace MFO::Logistics` in `Logistics_internal.h` (ONE instance across the
-TUs — it replaces the old single anonymous namespace; big cross-module helpers
-are declared there and defined in their home module). Layout:
-- `Logistics.cpp` (1700) — core tick: `ServiceFollower` (`:625`, INCLUDING the
+### Logistics family: Logistics.cpp / _Cast / _Economy / _Loot / _Loot_Equipment / _internal.h / Logistics.h
+**MODULE SPLIT (mechanical, v1.1 split pass; +1 module 2026-09-06 — the
+2500-line hard rule crossed again after the route-2b generalization pass, see
+below).** One TU became five + a shared internal header. Cross-module
+state/types/small helpers live as `inline` members of `namespace
+MFO::Logistics` in `Logistics_internal.h` (ONE instance across the TUs — it
+replaces the old single anonymous namespace; big cross-module helpers are
+declared there and defined in their home module). Layout:
+- `Logistics.cpp` (1798) — core tick: `ServiceFollower` (`:625`, INCLUDING the
   OOC cast dispatch `:~1080-1320` — concentration direct-force `:~1210`,
   fire-and-forget `:~1300`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
   `ShedOffRoleWeapon`, sinks, lifecycle + MSTK API, evaluator pure reads.
+  **PLAYER-COMBAT LOOT INTERRUPT (2026-09-06):** the GLOBAL travel-intent
+  backstop (`:664-728`, runs on EVERY out-of-combat service call, ANY
+  follower, ~133 ms-scale — not gated on the 1 s logistics cadence) now also
+  clears every active loot-travel slot when `RE::PlayerCharacter::IsInCombat()`
+  is true (`playerInCombat:~700`), same mechanism as the existing cap/
+  subsystem-off exits (`Packages::LootTravelClear`, reason `"player combat"`,
+  no `MarkTravelFailed` — the corpse isn't penalized). Distinct from THIS
+  follower's own combat yield (`ReleaseTravelOnCombat`, Scheduler's in-combat
+  branch, unchanged) — a traveller can sit a room away from a fight for
+  several ticks before his own `IsInCombat()` flips, which is the gap this
+  closes.
 - `Logistics_Cast.cpp` (269) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
   `TopTwoSchoolMask`, `LearnCarriedTomes:137`, school name/keyword helpers.
 - `Logistics_Economy.cpp` (1034) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
   `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
-- `Logistics_Loot.cpp` (2419) — the loot judge + per-category looters,
-  claim-and-release, navmesh reach, `AcquireEquip:550`, `LootEquipment:629`,
-  `LootGold:1026`, `LootValuables:1230`, `HasLoot:1525`, `LootNearby:1622`,
-  `StripCorpse:2282`, `RunExcursionScan:2346`.
-  **GOLD + LOOSE GEMS FOLD INTO VALUABLES (2026-09-05):** `Category::Valuables`
-  (`Logistics_internal.h:256`) now also matches gold — `LootValuables`
-  (`Logistics_Loot.cpp:1230`) peeks/takes gold by calling `LootGold` (`:1026`)
-  directly rather than re-deriving a gold count (never `Actor::GetGoldAmount`,
-  which null-derefs — `LootGold` sums `Gold001`/OCF-coin off `GetInventory`).
-  The route-2b loose-ref whitelist inside `LootNearby` (`:1773`) accepts a
-  loose `Gold001` ref for `Category::Valuables` the same as it always has for
-  `Category::Gold`, AND a loose value-dense MISC ref (a dropped gem etc.) for
-  `Category::Valuables`, gated by the same `IsValuableMisc` (`:1203`,
-  value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:489`) the
-  container take already uses — a loose ref qualifies iff a container holding
-  it would have been looted. `act.loot_gold` is UNCHANGED, still a gold-only
-  rule. Loose soul gems/jewelry/ingredients/equipment are still NOT
-  whitelisted — loose-item pickup (route 2b) isn't generalized to every item
-  type yet; that generalization is a documented follow-up, not built here.
-  BEHAVIOUR CHANGE: an existing `act.loot_valuables` rule now also picks up
-  coin and loose gems.
-- `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state
+- `Logistics_Loot.cpp` (2201) — the loot judge + per-category looters,
+  claim-and-release, navmesh reach, `AcquireEquip:575`, `LootGold:711`,
+  `LootValuables:915`, `HasLoot:1210`, `LootNearby:1307`, `StripCorpse:2064`,
+  `RunExcursionScan:2128`. `LootEquipment` itself now lives in
+  `Logistics_Loot_Equipment.cpp` (see below); everything else that was here
+  (Jewelry/SoulGems/Ingredients/Valuables/Gold/Ammo/Potions/Lockpicks judges)
+  is unmoved.
+  **ROUTE 2b GENERALIZED TO EVERY CATEGORY (2026-09-06):** the loose-ref
+  whitelist inside `LootNearby` (`:~1988`, a `switch (a_cat)` now, was an
+  if/else chain) covers ALL ten `Category` values, each via the SAME
+  predicate its container-side `Loot*`/`Is*Item` function already runs on one
+  item — `IsCoinLoot`/`kGold001` (Gold, and Valuables which also still takes
+  `IsValuableMisc`), `IsJewelryPiece` (Jewelry), `IsSoulGemItem` (SoulGems),
+  `IsIngredientItem` (Ingredients), a `kLockpick` FormID match (Lockpicks),
+  and `LooseEquipmentQualifies` (Equipment, see the new module below) — so
+  `act.loot_soul_gems`/`_ingredients`/`_equipment`/`_jewelry`/`_lockpicks` now
+  all pick up a loose item exactly like a container one. Quest/catalog
+  NEVER-LOOT gating for the loose path is `LooseSpecialItemBlocked`
+  (`:533`, wraps `IsQuestObjectRef:521` — the loose-ref analog of
+  `IsQuestObjectInstance:510`, since a bare world ref has no
+  `InventoryEntryData` to ask; reads `TESObjectREFR::extraList.HasQuestObjectAlias()`
+  directly) + the same `Catalog::IsExcluded`/`bLootSpecialItems` toggle —
+  applied to every category whose container form also gates on it
+  (Jewelry/SoulGems/Ingredients/Equipment/the Valuables-MISC branch); Arrows/
+  Bolts/Potions/Lockpicks/Gold get none, matching their container form. The
+  acquire MECHANISM is unchanged and untouched by this pass — every loose
+  category still transfers via the engine's own `ActivateRef`
+  (`Logistics.cpp`'s excursion arrival, MainThread-posted), never
+  `PickUpObject`/AddTask (crash4 class); the whitelist only decides
+  ELIGIBILITY. Nothing was deliberately excluded from the generalization —
+  every `Category` ordinal now has a loose-ref path.
+- `Logistics_Loot_Equipment.cpp` (461, NEW 2026-09-06) — split out of
+  `Logistics_Loot.cpp` purely to stay under the 2500-line hard rule (pure
+  mechanical move, no logic change). Owns the equipment judge:
+  `BuildEquipmentContext:26` (the role/mage-mode gate + the follower's-own-
+  gear baselines, extracted verbatim from `LootEquipment`'s old inline setup),
+  `LootEquipment:221` (container scan, unchanged besides reading its context
+  via `ctx.*` aliases instead of computing it inline), and the route-2b twin
+  `LooseEquipmentQualifies:174` — mirrors `LootEquipment`'s armor/weapon
+  branches for a SINGLE loose candidate (the container loop's "beats the
+  running best" collapses to "beats the follower's baseline" for a lone
+  item — same initial-value thresholds, so no separate rule to drift out of
+  sync). `EquipmentContext` itself is a shared type declared in
+  `Logistics_internal.h` (WeaponRoles-adjacent), since `LootNearby`
+  (`Logistics_Loot.cpp`) constructs/holds one too (lazily, once per
+  `LootNearby(Category::Equipment)` call, not per candidate ref).
+  `IsCreatureWeapon`/`IsCreatureArmor` (still defined in `Logistics_Loot.cpp`,
+  declared in the internal header) gate the loose path exactly like the
+  container one — the creature-gear protection is not weakened.
+- `Logistics_internal.h` (~750) — shared substrate: all `g_*` maps/state
   (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
-  `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/`Claim`,
-  inline small helpers, cross-module declarations. NOT public API.
+  `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/
+  `EquipmentContext`/`Claim`, inline small helpers, cross-module declarations.
+  NOT public API.
 Adding shared state? Put it in `_internal.h` as `inline` (never a per-TU
 anonymous-namespace copy — that silently forks the instance).
 - **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics_internal.h:569`, guarded
@@ -881,8 +923,10 @@ anonymous-namespace copy — that silently forks the instance).
   (after `Catalog::Load`).
 - **Alias/travel:** `g_travelSlots` (`Logistics_internal.h:323`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
-  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `Logistics.cpp:1655` ←
-  `Scheduler.cpp:328`; cap/leash/dismissal/revert). Leash hysteresis guards
+  `Packages::LootTravelClear` (this follower's own combat via `ReleaseTravelOnCombat`
+  `Logistics.cpp:1753` ← `Scheduler.cpp:328`; the PLAYER's combat via the global
+  backstop `Logistics.cpp:~664-728`, see the PLAYER-COMBAT LOOT INTERRUPT note
+  above; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
   **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `Logistics.cpp:~700`) detects an EXTERNAL package
   holding a claimed follower (scene/framework; onTravelPkg=false mid-walk), pauses
@@ -910,7 +954,7 @@ anonymous-namespace copy — that silently forks the instance).
   every slot) and the one-time `EvaluatePackage` on engage/retarget/release are
   untouched — only the per-tick re-assert nudge inside the theft-guard was
   redundant.
-- **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1477`; cell set built just below it):
+- **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1307`; cell set built at `:1417`):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
   (crash4). Dropping back to one cell re-blinds exterior scans across cell borders
@@ -921,7 +965,7 @@ anonymous-namespace copy — that silently forks the instance).
   first, then the dibs items later in the runs, no pauses").** Both gambit-
   table dispatch loops that pick a loot action — the normal per-tick loop
   (`Logistics.cpp:~1114-1512`) and the excursion leg-boundary dispatcher
-  (`RunExcursionScan`, `Logistics_Loot.cpp:2314`) — now run the follower's
+  (`RunExcursionScan`, `Logistics_Loot.cpp:2128`) — now run the follower's
   gambit table TWICE: pass 0 defers any dibs-tier loot op (Equipment/Gold/
   Jewelry/SoulGems/Valuables — `IsDibsTierLootOp`, `Logistics_internal.h:308`)
   so free-tier categories (arrows/bolts/potions/lockpicks/ingredients —
@@ -930,7 +974,7 @@ anonymous-namespace copy — that silently forks the instance).
   gambit-table priority order; pass 1 is the original unrestricted walk, so a
   released/cleared dibs item still loots normally once nothing free-tier
   fired. `StripCorpse` (arm's-reach full drain once already at a body,
-  `Logistics_Loot.cpp:2250`) is UNCHANGED — it already skips a still-dibs'd
+  `Logistics_Loot.cpp:2064`) is UNCHANGED — it already skips a still-dibs'd
   category per visit without stalling (leaves the body eligible for a future
   revisit), so reordering it can't remove a pause that doesn't exist there.
   Also removed: the excursion `Holding`-phase linger-and-re-scan hold that
@@ -946,7 +990,7 @@ anonymous-namespace copy — that silently forks the instance).
   (`OfferPackage`/quiet-hold, `Packages.cpp`), the combat-eviction, the
   excursion cap, and the leash are all untouched.
 - **UNIFIED LOOT-FAILURE MODEL + in-reach drain (perf/stall pass, 2026-09):**
-  (a) candidate sort (`LootNearby`, `Logistics_Loot.cpp:~1830`) is failed-recently-
+  (a) candidate sort (`LootNearby`, `Logistics_Loot.cpp:~1769`) is failed-recently-
   LAST then closest-first — a path-troubled target is DEPRIORITIZED, never removed;
   (b) a NON-LOOSE in-reach source is DRAINED whole (`StripCorpse` from inside
   `LootNearby`) and the normal-mode loop keeps draining further in-reach sources
@@ -956,7 +1000,7 @@ anonymous-namespace copy — that silently forks the instance).
   no-progress stall) widens that ref's from-range grab radius
   `kArrivalDist+100/fail` capped 600u — the PRIMARY stall cure; player-bubble +
   leash + `TierReleased` dibs still gate a grown grab, loose refs excluded;
-  (d) the off-navmesh PRE-gate (`Logistics_Loot.cpp:~1915/~2000`) is TRANSIENT-only
+  (d) the off-navmesh PRE-gate (`Logistics_Loot.cpp:~1904/~1963`) is TRANSIENT-only
   (`MarkTravelFailed`, never a sticky strike) — only a walked no-progress stall or
   the loose/unacquirable case reaches the sticky set, whose cooldown is now
   `kTravelStickyCooldown=60s` (was 5 min). Walk paths still hard-skip inside the
@@ -982,7 +1026,8 @@ anonymous-namespace copy — that silently forks the instance).
   primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
   Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
   Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
-  `mageMode` (`Logistics_Loot.cpp:~681`) requires `castGambits > 0` AND the follower is
+  `mageMode` (`Logistics_Loot_Equipment.cpp:77`, inside `BuildEquipmentContext`)
+  requires `castGambits > 0` AND the follower is
   PRIMARILY a caster (base class Mage, or — Auto/no class — no melee/ranged attack
   gambit) — a Ranged/Melee follower with a secondary cast gambit stays out of mageMode
   and keeps his class loadout (2026-09 fix; was any-cast-gambit, which flipped a
@@ -999,10 +1044,11 @@ anonymous-namespace copy — that silently forks the instance).
   `MainThread::Post` (re-resolve on-frame; GLOB values are save-persisted, so this is
   the same field vanilla writes — no co-save risk). `[college]` log on first flip.
 - **#21 equip + unified apparel judge (loot ⇄ buy).** The loot equip step is factored
-  into `AcquireEquip` (`Logistics_Loot.cpp:538`, v1.0.38 SAFE path: `MainThread::Post` +
+  into `AcquireEquip` (`Logistics_Loot.cpp:575`, v1.0.38 SAFE path: `MainThread::Post` +
   `ActorEquipManager::EquipObject`, **never DoReset3D** #62; MEO gem capture +
   `QueueGemMove`). `a_src==nullptr` ⇒ the follower already owns the item (buy / owned
-  upgrade). `LootEquipment` routes through it; the **mage apparel selection is now the
+  upgrade). `LootEquipment` (`Logistics_Loot_Equipment.cpp:221`) routes through it;
+  the **mage apparel selection is now the
   unified `MageApparelBuyKey`** (MEO-aware value/school ranking) across clothing slots
   (jewelry stays on the Valuables/`LootJewelry` path — dibs preserved). `EquipBestOwnedGear`
   (worker, `ServiceFollower` idle branch, dolls-gated) wears the single best OWNED
@@ -1336,8 +1382,9 @@ insert/resize breaks both DLLs. Threading is part of the ABI (queries main-threa
 Rides a follower's socketed gems onto looted gear on upgrade. Fully optional.
 `Acquire()` (`:61`) ← `plugin.cpp:289` (nullptr on absence/ABI-mismatch).
 `RegisterSink()` (`:73`) ← `plugin.cpp:298` (equip sink — must stay with the other
-sinks or moves never flush). `QueueGemMove`/`WornUid`/`Available` ← `Logistics_Loot.cpp`
-(`AcquireEquip:538` + `LootEquipment`, worker tick). `PreviewWithGems` (`:105`, main-thread queries) has no
+sinks or moves never flush). `QueueGemMove`/`WornUid`/`Available` ←
+`Logistics_Loot.cpp` (`AcquireEquip:575`) + `Logistics_Loot_Equipment.cpp`
+(`LootEquipment:221`), worker tick. `PreviewWithGems` (`:105`, main-thread queries) has no
 live caller (**UNVERIFIED** — check Board before removing). `g_pending` keys on
 `(followerFormID<<32|toBase)`; if `ClearTransientState` (`:100` ← `Serialization.cpp:
 616`) stops being called on revert, a reused FormID next session moves gems onto the

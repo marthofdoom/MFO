@@ -249,6 +249,33 @@ namespace MFO::Logistics {
             bool     wantCrossbow = false;              // meaningful only when doRanged
         };
 
+        // Equipment-loot judging context: the follower's combat role/mage-mode
+        // gate plus the baselines any weapon/armor candidate must beat, all
+        // computed ONCE from the follower's OWN gear (BuildEquipmentContext,
+        // Logistics_Loot_Equipment.cpp). Shared type: LootEquipment's
+        // container scan AND LooseEquipmentQualifies (route 2b, LootNearby in
+        // Logistics_Loot.cpp) build/consume it, so a bare sword on the ground
+        // is judged by the EXACT same rule as one in a corpse's pack -- ONE
+        // decision path, two call sites, two translation units.
+        struct EquipmentContext {
+            WepClass      meleeTargetClass  = WepClass::Other;
+            bool          doRanged          = false;
+            bool          wantCrossbow      = false;
+            bool          wantBackup        = false;
+            bool          daggersOnly       = false;
+            bool          useMageApparel    = false;
+            std::uint8_t  mageTop2          = 0;
+            bool          mageSchoolPrimary = true;
+            bool          mageAllowVillain  = false;
+            std::uint16_t baseDmg           = 0;   // best in-role weapon already carried
+            std::uint16_t myRangedDmg       = 0;   // best ranged weapon already carried
+            std::uint16_t myBackupDmg       = 0;   // best mage sidearm already carried
+            bool          wantsMelee        = false;   // diagnostics only
+            bool          wantsRanged       = false;   // diagnostics only
+            RE::ActorValue school           = RE::ActorValue::kNone;   // diagnostics only
+            int           castGambits       = 0;        // diagnostics only
+        };
+
         // ── the looting dispatcher ──────────────────────────────────────────
         // APPEND-ONLY (marth CLAUDE.md hard rule): existing ordinals are
         // frozen, new categories go at the end.
@@ -713,7 +740,6 @@ namespace MFO::Logistics {
     bool AcquireEquip(RE::Actor* a_follower, RE::TESBoundObject* a_item,
                       RE::TESObjectREFR* a_src, RE::TESObjectWEAP* a_myWeap,
                       bool a_forceStock);
-    bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false);
     bool IsJewelryPiece(RE::TESObjectARMO* a_armo);
     bool Po3Present();
     bool InPlayerHome();
@@ -735,6 +761,16 @@ namespace MFO::Logistics {
                           Clock::time_point a_now);
     bool IsValuableMisc(RE::TESBoundObject* a_obj);
     bool IsQuestObjectInstance(RE::InventoryEntryData* a_entry);
+    bool IsQuestObjectRef(RE::TESObjectREFR* a_ref);
+    bool LooseSpecialItemBlocked(RE::TESObjectREFR* a_ref, RE::FormID a_formId);
+
+    // defined in Logistics_Loot_Equipment.cpp (split out of Logistics_Loot.cpp,
+    // 2500-line hard rule) -- the EquipmentContext type itself lives above,
+    // WeaponRoles-adjacent, since both TUs construct/consume it by value.
+    bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false);
+    EquipmentContext BuildEquipmentContext(RE::Actor* a_follower);
+    bool LooseEquipmentQualifies(RE::Actor* a_follower, RE::TESBoundObject* a_obj,
+                                 const EquipmentContext& ctx);
 
     // defined in Logistics_Cast.cpp
     RE::ActorValue TargetMagicSchool(const FollowerState& a_state, int& a_castGambits);
