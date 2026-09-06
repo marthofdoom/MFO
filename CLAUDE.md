@@ -44,6 +44,38 @@ regressions here; the ripple notes are why the map exists.
 - Also consult `Docs/INVARIANTS.md` (49 numbered rules) and `Docs/ARCHITECTURE.md`
   before non-trivial changes; MAP.md cites both as `#N` / §N.
 
+## SCOPE DISCIPLINE — the git system only catches regressions if nobody skips it
+
+**Every regression this project has shipped recently came from UNREQUESTED SCOPE reaching the deck through
+a review nobody actually performed.** These are hard rules, for the agent doing the work AND for whoever
+dispatches and merges it.
+
+### For the worker
+1. **DO EXACTLY WHAT THE BRIEF ASKS. NOTHING ELSE.** No refactors, no file splits, no moving code between
+   files, no renames, no "while I was in there" cleanups, no new files — unless the brief asks for them by
+   name. If the work seems to *need* one, STOP and report it; do not do it and mention it afterwards.
+   (Real cost: a loot task quietly split 560 lines into a new file. The refactor rode into an integration
+   build, onto the deck, and broke loot eligibility in the field.)
+2. **NEVER GUESS AN API OR A SYMBOL.** Verify it against the real CommonLibSSE-NG header/source or the
+   disassembly before using it. "It compiles in my head" is not verification. (Real cost: two CI failures
+   in one night on invented symbols — `ExtraDataList::HasQuestObjectAlias`, `EffectSetting::Data::Flag::kHostile`.)
+3. **NEVER REPORT SUCCESS WITHOUT A VERIFIED-GREEN CI RUN.** Re-read the NEWEST run id, confirm its
+   `headSha` is YOUR commit, and accept only `success`/`failure` (`cancelled`/`pending`/`queued` mean keep
+   waiting — the workflow sets `cancel-in-progress`, so a newer run cancels older ones). A green run on
+   the wrong SHA proves nothing about your code.
+4. **DO NOT CREATE BRANCHES, TAGS, RELEASES OR INTEGRATIONS YOU WERE NOT ASKED FOR.** Push your own branch;
+   that is all.
+5. **STAY INSIDE YOUR FILE BOUNDARY.** If the brief lists files you own, touching anything else — even
+   something obviously related — must be reported, not assumed.
+
+### For whoever dispatches and merges
+6. **READ THE ACTUAL DIFF BEFORE MERGING OR TAGGING. A SUMMARY IS NOT A REVIEW.** Run `git diff --stat`
+   first and treat **any new file, deleted file, or large move as a STOP** until it is explained and
+   justified. A branch whose diffstat does not match its brief has not been reviewed just because its CI
+   is green — CI proves it compiles, not that it does what was asked.
+7. **Never deploy a branch you have not personally diffed.** CI-green plus a plausible agent summary is
+   exactly how an unreviewed refactor reaches the field.
+
 ## Engineering + design principles — HOW TO THINK HERE (read before designing anything)
 
 These are hard-won, each one paid for with a crash, a wasted deploy cycle, or a
