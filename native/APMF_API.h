@@ -247,6 +247,22 @@ namespace APMF_API {
         kCastFlag_LeftHand      = 1u << 1,   // hand hint (default right). Scopes the per-hand deny AND the
                                              //   0x0F equip seat (core/CastSeats.cpp / core/EquipGate.cpp).
         kCastFlag_Concentration = 1u << 2,   // client says the executed cast is a held stream (TTL floor applies).
+        kCastFlag_DualCast      = 1u << 3,   // HINT: cast this spell with BOTH hands (dual-cast/empowered),
+                                             //   not one. The engine seats (core/EquipGate.cpp, core/CastGate.cpp)
+                                             //   admit the claimed spell/proxy as eligible on EITHER hand and deny
+                                             //   every competing spell/staff item on BOTH hands while the claim
+                                             //   stands, instead of scoping to the single hand kCastFlag_LeftHand
+                                             //   would select. It is still only a HINT: the engine's own scoring/
+                                             //   magicka/hand-readiness gates decide whether the AI actually arms
+                                             //   both hands, and APMF never forces a second hand open -- a follower
+                                             //   that cannot afford (or otherwise fails) the second hand simply
+                                             //   casts single-hand, exactly as an unclaimed dual-cast attempt would
+                                             //   degrade natively (composition, not substitution -- CLAUDE.md
+                                             //   principle 3; never masked, principle 7). A client MUST NOT set
+                                             //   kCastFlag_LeftHand alongside this bit -- dual-cast already claims
+                                             //   both hands, so a hand hint is meaningless and unspecified; if both
+                                             //   are set, DualCast takes priority (the seats' hand check is skipped
+                                             //   entirely) rather than picking one hand arbitrarily.
 
         // ── Bits 8-15: STOP PERCENT (added in-place; the word is byte-frozen) ────
         // The seat that owns a concentration channel's duration is
