@@ -840,6 +840,18 @@ are declared there and defined in their home module). Layout:
   type yet; that generalization is a documented follow-up, not built here.
   BEHAVIOUR CHANGE: an existing `act.loot_valuables` rule now also picks up
   coin and loose gems.
+  **[L] GLYPH RELIABILITY FIX (2026-09-05, marth):** `IsLooting` (`:626`,
+  `SlotOf(id) != nullptr`) is a pure travel-slot proxy — true the whole walk-
+  there and even on an arrival that finds nothing, false for arm's-reach loot
+  that never claims a slot. The board's "Looting" signal now reads
+  `JustLooted` (`:657`) instead, stamped by `MarkJustLooted` (`:651`) at the
+  THREE confirmed-acquisition points in `Logistics.cpp` — the arm's-reach
+  fall-through (`:1563`, gated `IsLootOp` — `Logistics_internal.h:318`), the
+  loose-item Activate readback (`:790`), and the `StripCorpse` call (`:946`).
+  Window sized off the round-robin cadence (`partySize * kPumpMs`, #9), not a
+  guessed constant — see `Logistics.h`'s `JustLooted` doc. `IsLooting` itself
+  is UNCHANGED and still used by other callers; don't re-wire the board back
+  to it.
 - `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state
   (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
   `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/`Claim`,
@@ -1285,6 +1297,11 @@ main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not re
   overload) + a synthesized `tooltip` (`SpellTooltip`, effect name+mag/dur/area) —
   all filled in `PublishSnapshot` (main). The gambit spell-picker renders the hover
   tooltip via `DrawSpellHoverTooltip` from those cached values.
+- **`DrawHud`'s `[C][L][T]` strip (`:1463`, marth 2026-09-06)** — persistent
+  bracket SLOTS: the bracket is always drawn (`TextDisabled("[ ]")` when idle),
+  only the letter+colour comes and goes, so the strip's width never shifts.
+  `r.looting` is fed by `Logistics::JustLooted`, not `IsLooting` — see the
+  Logistics-family entry's "[L] GLYPH RELIABILITY FIX" for why.
 - **#78 Followers-tab MFO toggle** — the tab's FIRST column is a per-row checkbox
   bound to `FollowerRow.mfoEnabled` (mirrored from `FollowerState::mfoEnabled` in
   `PublishSnapshot`, both the active + retained builders). The `##followers` table
