@@ -271,11 +271,35 @@ namespace MFO::APMFBridge {
             req.spell  = wantSpell;
             req.proxy  = 0;   // APMF mints its own delivery-flip proxy for kSelf-delivery (core/CastProxy.h)
             req.target = wantTarget;
-            req.flags  = (wantHand == kApmfHandLeft ? APMF_API::kCastFlag_LeftHand : 0u) |
+            // kCastFlag_DualCast and kCastFlag_LeftHand are mutually exclusive (APMF_API.h:
+            // "do NOT set kCastFlag_LeftHand alongside it") -- kApmfHandDualCast (Loadout::
+            // HandPick::DualCast, via HandFor above) claims BOTH hands and never also sets
+            // the single-hand hint.
+            const bool wantDual = (wantHand == kApmfHandDualCast);
+            req.flags  = (wantDual                    ? APMF_API::kCastFlag_DualCast :
+                          wantHand == kApmfHandLeft    ? APMF_API::kCastFlag_LeftHand : 0u) |
                          (wantConc ? APMF_API::kCastFlag_Concentration : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
             req.ttlMs  = kHealCastTtlMs;
             handle = api->RequestCast(follower, kOwnBasis, &req);
+            // [cfc] dual-cast ask vs. observed outcome (marth 2026-09-06): the flag is a
+            // HINT (APMF_API.h) -- APMF may still only arm one hand, and never reports which.
+            // This distinguishes "asked for dual, claim granted" (engine may still degrade to
+            // one hand silently downstream) from "asked for dual, claim REFUSED outright" from
+            // "never asked" (no log at all) -- so the field can tell a refused second hand from
+            // a policy that never requested one. Fires only on a claim CREATE/CHANGE (the
+            // unchanged-claim fast path above already skips repeat ticks), so this is
+            // inherently rate-limited, not spammy.
+            if (wantDual) {
+                if (handle != APMF_API::kInvalidHandle)
+                    spdlog::info("[cfc] {:08X} asked for dual-cast (spell {:08X}) -- claim "
+                                 "granted; engine may still arm only one hand (hint only)",
+                                 follower, wantSpell);
+                else
+                    spdlog::warn("[cfc] {:08X} asked for dual-cast (spell {:08X}) -- claim "
+                                 "REFUSED outright, not just downgraded to one hand",
+                                 follower, wantSpell);
+            }
             if (handle != APMF_API::kInvalidHandle) {
                 curSpell = wantSpell; curTarget = wantTarget; curHand = wantHand;
                 curConc  = wantConc;  curStopPct = wantStopPct;

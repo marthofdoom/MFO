@@ -384,20 +384,29 @@ one.
    `fMagicDualCastingCostMult`) — eligible plans `DualCast`, otherwise
    `EitherFree` (the caller may assign either hand, including giving a
    second, different wanted spell the other hand — the "juggle" case).
-   **Not wired to any live caller.** Two things are still missing to fire
-   it: (1) offense's `ClaimCasting` (`Actuation.cpp`, ch.8,
-   `kIntent_SelectSpell`) carries no hand parameter at all today — MFO lets
-   the AI's own scored equip pick the hand there, so a caller would need a
-   hand argument added to consume this. (2) `DualCast` specifically has NO
-   claim shape to express it: one `kIntent_Cast` claim (`APMF_CastRequest`)
-   carries exactly one `kCastFlag_LeftHand` hint for ONE hand, and
-   `kIntent_Cast` is a single per-follower facet — a second concurrent claim
-   on the same follower's cast slot would REPLACE the first handle, not add
-   a second hand, and no `CastFlags` bit exists for "equip this spell into
-   BOTH hands, empowered" (`APMF_API.h`'s `CastFlags` enum is append-only,
-   not MFO's to extend unilaterally). Firing `DualCast` for real needs either
-   a new APMF-side cast-flag + seat behavior, or downgrading that outcome to
-   `EitherFree` until one exists.
+   **`DualCast` IS NOW EXPRESSIBLE (2026-09-06, `APMF_API::kCastFlag_DualCast`,
+   bit 3, append-only mirror of APMF's own header) — the claim SHAPE gap is
+   closed.** `APMFBridge::HandFor(Loadout::HandPick)` translates
+   `PlanCastHand`'s decision into the bridge's own `a_hand` encoding
+   (`kApmfHandLeft` / the new `kApmfHandDualCast` / 0 for either-hand), and
+   `EnsureHealClaimLocked`'s `req.flags` build sets `kCastFlag_DualCast`
+   INSTEAD OF `kCastFlag_LeftHand` for `kApmfHandDualCast` — never both (APMF's
+   header: "do NOT set `kCastFlag_LeftHand` alongside it"). It is still only a
+   HINT: the engine seats decide whether both hands actually arm, and a
+   follower who can't afford it (or the engine otherwise won't) simply casts
+   single-hand — no retry, no re-claim, no fallback that would make that
+   degrade look like a real dual-cast. A `[cfc]` log line distinguishes
+   "asked for dual, claim granted" from "asked for dual, claim REFUSED
+   outright" (silence = never asked), so the field can tell a refused second
+   hand from a policy that never requested one.
+   **Still NOT wired to any live caller**: offense's `ClaimCasting`
+   (`Actuation.cpp`, ch.8, `kIntent_SelectSpell`) carries no hand parameter at
+   all today, and `kIntent_SelectSpell`'s payload cannot carry `CastFlags` in
+   the first place (only `kIntent_Cast`/`APMF_CastRequest` can) — MFO lets the
+   AI's own scored equip pick the hand there. Wiring offense through needs a
+   caller (on `kIntent_Cast`, e.g. a future `ClaimOffenseCast`) that calls
+   `Loadout::PlanCastHand` and passes `HandFor`'s result — deliberately out of
+   this file's scope; owned by a separate branch (`feat/offense-cast-api`).
 
    **STOP-PERCENT (feat/mfo-cast-port, Task 3).** Bits 8-15 of `flags`
    (`APMF_API::MakeStopPct`) tell seat 0x07 `CheckStopCast` to end a
