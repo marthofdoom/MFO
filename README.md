@@ -5,10 +5,15 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v1.1.1, released** (see [`VERSION`](VERSION) and the
+**Status: v2.0.0, released** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
-release is in `VERSION`). Gambits execute in both tables and the mod is playable
-end to end. Follower detection, Rapport, the in-game board, and combat and
+release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
+a required control-layer framework of mine that lets several mods drive the same
+follower without clobbering each other. MFO routes a follower's casting, combat
+target, packages, and gear through it, so a follower another mod keeps parked
+still loots, casts, and retreats cleanly. Without Harbinger MFO falls back to its
+older paths and reminds you it is missing. Gambits execute in both tables and the
+mod is playable end to end. Follower detection, Rapport, the in-game board, and combat and
 logistics actuation are built and field-tested. Followers cast (their own AI,
 animated, at chosen targets), attack, drink, restock, loot, and *walk* to loot,
 up to **four followers sweeping a battlefield at once**, and fall back to your
