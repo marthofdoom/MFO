@@ -77,8 +77,11 @@ namespace MFO::ComposedCast {
         // never fires must not spam the log every Try() tick.
         constexpr auto kSilentWarnEvery = std::chrono::milliseconds(5000);
 
-        // Called from Try() on every successful claim. Caller passes the fid
-        // already resolved.
+        // Called from Try() on every successful HEAL claim, and (feat/offense-
+        // cast-seats, 2026-09-05) from the public WatchClaim() below for the
+        // offense kIntent_Cast claim (Actuation::CastOn, via ClaimOffenseCast) --
+        // GENERIC over which claim armed it, hence the message below no longer
+        // says "heal-cast" specifically. Caller passes the fid already resolved.
         void WatchArmed(RE::FormID a_fid, RE::FormID a_spell) {
             auto& w = g_watch[a_fid];
             if (w.spell != a_spell) { w = Watch{}; w.spell = a_spell; w.since = Clock::now(); return; }
@@ -86,7 +89,7 @@ namespace MFO::ComposedCast {
             const auto now = Clock::now();
             if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
             if (now - w.lastWarn < kSilentWarnEvery) return;  // rate-limited
-            spdlog::warn("[cfc] {:08X} heal-cast claim live {} ms with NO observed cast "
+            spdlog::warn("[cfc] {:08X} kIntent_Cast claim live {} ms with NO observed cast "
                          "(spell {:08X}) -- APMF's engine seats may not be firing it; "
                          "check APMF.log for the seat state",
                          a_fid,
@@ -168,6 +171,9 @@ namespace MFO::ComposedCast {
         auto it = g_watch.find(a_follower);
         if (it != g_watch.end() && it->second.spell == a_spell) it->second.observed = true;
     }
+
+    void WatchClaim(RE::FormID a_follower, RE::FormID a_spell) { WatchArmed(a_follower, a_spell); }
+    void ClearWatch(RE::FormID a_follower) { g_watch.erase(a_follower); }
 
     void Reset() {
         // APMFBridge::ClearTransientState (kPreLoadGame) drops the claim;

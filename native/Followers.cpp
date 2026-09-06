@@ -6,7 +6,8 @@
 #include "CombatStyle.h"     // v1.0.33: dismissal drops weapon-stance ownership
 #include "Actuation.h"       // #76: dismissal releases the equip force-hold too
 #include "Packages.h"
-#include "APMFBridge.h"   // ReleaseHealCast -- drop a dismissed follower's live heal-cast claim
+#include "APMFBridge.h"   // ReleaseHealCast/ReleaseOffenseCast -- drop a dismissed follower's live claims
+#include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside the offense claim
 #include "CastBounds.h"   // Disarm -- drop his MFO-executed-cast bound (§2 registry)
 #include "Logistics.h"
 #include "Forms.h"
@@ -322,6 +323,15 @@ namespace MFO::Followers {
         // holds none. (Replaced the deleted Packages::HealAnimEvictIf.)
         APMFBridge::ReleaseHealCast(id);
         CastBounds::Disarm(id);
+        // The offense-cast claim (ch.8b kIntent_Cast, feat/offense-cast-seats,
+        // 2026-09-05): same runtime-only, no-serialized-tail shape as the heal
+        // claim above -- a dismissed follower's live claim must not outlive him
+        // either (Tick()'s expiry sweep would eventually drop it, but a dismissal
+        // is a crisp release point, same discipline as every other claim here).
+        // ClearWatch drops the shared [cfc] silent-claim diagnostic this claim
+        // may have armed (Actuation::CastOn's ComposedCast::WatchClaim call).
+        APMFBridge::ReleaseOffenseCast(id);
+        ComposedCast::ClearWatch(id);
     }
 
     void Refresh() {

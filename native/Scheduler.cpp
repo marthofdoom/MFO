@@ -6,6 +6,7 @@
 #include "Config.h"
 #include "Loadout.h"
 #include "APMFBridge.h"   // crisp release of owned-cast claims when no cast rule holds
+#include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside it
 #include "CasterConsent.h"
 #include "CombatStyle.h"
 #include "Packages.h"
@@ -887,14 +888,22 @@ namespace MFO::Scheduler {
         // and their AI cannot cast what they are not holding either way.
         if (!castSeen) {
             Loadout::ReleaseSpell(id);
-            // Crisp release of the APMF casting facet-CLAIM (per-cast) the moment no cast
-            // rule's condition holds -- the same "the cast gambit stopped wanting it"
-            // signal that releases the spell in hand. This releases ONLY the casting
-            // claim; the combat-TARGET claim is per-COMBAT and is deliberately NOT dropped
-            // here (kept alive by RefreshCombatTarget above, released only at combat end),
-            // so a cast->melee transition keeps the target facet claimed rather than
-            // releasing it. No-op when APMF is absent / no casting claim held.
-            APMFBridge::ReleaseCasting(id);
+            // Crisp release of the APMF offense-cast facet-CLAIM (per-cast, ch.8b
+            // kIntent_Cast, PORTED feat/offense-cast-seats off the retired ch.8
+            // kIntent_SelectSpell claim this call used to release) the moment no
+            // cast rule's condition holds -- the same "the cast gambit stopped
+            // wanting it" signal that releases the spell in hand. This releases
+            // ONLY the offense-cast claim; the combat-TARGET claim is per-COMBAT
+            // and is deliberately NOT dropped here (kept alive by
+            // RefreshCombatTarget above, released only at combat end), so a
+            // cast->melee transition keeps the target facet claimed rather than
+            // releasing it. No-op when APMF is absent / no offense-cast claim held.
+            APMFBridge::ReleaseOffenseCast(id);
+            // Clear the shared [cfc] silent-claim watch this claim armed
+            // (Actuation::CastOn's ComposedCast::WatchClaim call) -- a no-op if
+            // nothing was armed (heal claims clear their own watch via
+            // ComposedCast::End instead).
+            ComposedCast::ClearWatch(id);
         }
 
         const char* name = f->GetName() ? f->GetName() : "?";   // flair #11

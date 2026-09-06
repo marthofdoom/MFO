@@ -36,15 +36,21 @@ problem was that its deterministic route did it via the rooting **UseMagic packa
 `Packages::CastAt`), which stopped locomotion and took the package slot. The owned model keeps the
 real cast and DROPS that cost.
 
-- **APMF ARBITRATES; MFO EXECUTES (the moderator split).** `Actuation::CastOn`'s FF-non-self hostile
-  branch CLAIMS two facets via APMF (`APMFBridge::ClaimCasting` + `ClaimCombatTarget` — APMF records
-  the owner + suppresses competitors, it executes NOTHING), then MFO makes the AI decide to cast with
-  its OWN mechanisms: writes the follower's own `selectedSpells` (`SelectCasterSpell`), commands the
-  target via `Targeting::Command` → `currentCombatTarget`, grants `CasterConsent::Want` (permit our
-  spell + deny competing), and the **Cast-biased combat style** (`Scheduler` applies `MFO_CastStyle`
-  when a cast is wanted — raises the magic score so the AI CHOOSES to cast; the inverse of a deny).
-  The AI then casts our spell at our target, **full animation, still MOBILE**. Resolves the
-  long-deferred cast-animation gap ([[cast-animations-deferred-to-post-town-polish]]).
+- **APMF DRIVES the exact spell; MFO EXECUTES the equip/target/consent half (PORTED
+  feat/offense-cast-seats, 2026-09-05, off the earlier ch.8 `kIntent_SelectSpell` gate-only claim —
+  see the OFFENSE CAST PORT section below).** `Actuation::CastOn`'s FF-non-self hostile branch CLAIMS
+  the `kIntent_Cast` facet (`APMFBridge::ClaimOffenseCast` — the SAME ch.8b facet `ClaimHealCast`
+  uses) + `ClaimCombatTarget` (ch.6, unchanged), then MFO makes the equip/target/consent half true
+  with its OWN mechanisms: `Loadout::Prepare`'s `EquipSpell` puts the spell in the LEFT hand, commands
+  the target via `Targeting::Command` → `currentCombatTarget`, and grants `CasterConsent::Want` (a
+  veto-removal, not an invented consent). While the `kIntent_Cast` claim stands, APMF's FIVE engine
+  vfunc seats (the SAME seats `ClaimHealCast` drives) select/equip/charge/aim/fire/channel EXACTLY the
+  claimed spell at EXACTLY the claimed target — so (unlike the retired gate-only claim, which only
+  ARBITRATEd + DENIED a competitor's own selection and let the AI pick its own spell) **the gambit's
+  named spell is now the one that actually fires.** The AI then casts our spell at our target, **full
+  animation, still MOBILE**. Resolves the long-deferred cast-animation gap
+  ([[cast-animations-deferred-to-post-town-polish]]) AND the long-standing "target right, spell wrong"
+  defect ([[cast-gambit-spell-choice-not-enforced]]).
 - **GRANULAR — movement is NOT touched.** The owned path claims ONLY the cast + combat-target facets;
   it does NOT claim/block the movement facet (no `SetDontMove`, no package). The follower keeps
   kiting/repositioning under its own control WHILE its AI casts. That granular non-interruption is
@@ -56,15 +62,16 @@ real cast and DROPS that cost.
 - **Concentration is untouched.** A concentration spell never enters this branch — its bounded
   direct-force fork (`ConcentrationCast` → `CastTargetDirect`/`CastSelfDirect`) returns earlier,
   because an AI-channeled concentration cannot be exact-bounded (the freeze). Exact-bounding holds.
-- **Claim lifecycles + scope + degrade.** casting-claim = per-cast (released crisply on `!castSeen`);
-  combat-target-claim = per-combat (re-pointed via APMF `Repoint` on a foe change, kept alive each
-  in-combat tick, released at combat end; APMF's `CombatTarget::Release` relinquishes). Owned model is
-  HOSTILE-only (`CasterConsent::ClassifySpell == Offense`), foe-only. Active iff
-  `APMFBridge::Available() && bApmfCast && !bLegacyCastHybrid`. Turn on the MCM **bLegacyCastHybrid**,
-  or run without APMF, and CastOn uses the ORIGINAL AI-first-wait + force-on-miss package hybrid
-  (byte-identical to pre-APMF — the only place the rooting package + `CastSpellImmediate` force live).
-  No save/co-save state; claims auto-expire via `APMFBridge::Tick` and drop at kPreLoadGame. See
-  MAP.md `APMFBridge`.
+- **Claim lifecycles + scope + degrade.** offense-cast-claim (`kIntent_Cast`, TTL-bounded) = per-cast
+  (released crisply on `!castSeen`); combat-target-claim = per-combat (re-pointed via APMF `Repoint`
+  on a foe change, kept alive each in-combat tick, released at combat end; APMF's
+  `CombatTarget::Release` relinquishes). Owned model is HOSTILE-only (`CasterConsent::ClassifySpell ==
+  Offense`), foe-only. Active iff `APMFBridge::Available() && bApmfCast && !bLegacyCastHybrid`. A
+  REFUSED offense claim (APMF lost arbitration / ABI < 5 / toggle off) falls through to the SAME
+  legacy hybrid below, never a silent cast drop. Turn on the MCM **bLegacyCastHybrid**, or run without
+  APMF, and CastOn uses the ORIGINAL AI-first-wait + force-on-miss package hybrid (byte-identical to
+  pre-APMF — the only place the rooting package + `CastSpellImmediate` force live). No save/co-save
+  state; claims auto-expire via `APMFBridge::Tick` and drop at kPreLoadGame. See MAP.md `APMFBridge`.
 
 **STANDING PRINCIPLE (marth, 2026-09-03): MFO is an APMF showpiece.** With APMF present, MFO
 ROUTES THROUGH APMF and COMMITS to it — a legacy/pre-APMF path is the APMF-ABSENT degrade ONLY,
@@ -471,18 +478,25 @@ ClaimHealCast` UNCHANGED in every case -- MFO does not inspect delivery, does
 not proxy, does not substitute; APMF resolves delivery entirely on its side
 (mismatch → its proxy, match → the raw spell).
 
-**Flagged then, RESOLVED by feat/mfo-cast-port:** offense's own "owned cast"
-gambit (`Actuation.cpp:522`, `APMFBridge::ClaimCasting`) used to ride the SAME
-`kIntent_SelectSpell` channel the heal claim rode under the (since-retired)
-+ACT drive, raising a real cross-talk risk if a live feat/cast-act APMF build
-started driving both. APMF's `feat/ai-cast-seats-impl` mooted the concern from
-both directions: the heal claim moved OFF `kIntent_SelectSpell` entirely, onto
-its own `kIntent_Cast` (ch.8b) facet, and the +ACT drive that would have made
-`kIntent_SelectSpell` do anything beyond gate-only is retired — a client that
-still sets its `ival` hand-mode bits (offense's `ClaimCasting` never did) gets
-byte-compatible gate-only behaviour, never a drive. Heal and offense are now on
-two structurally separate facets with no shared drive mechanism at all; MFO's
-own offense dispatch logic remains untouched.
+**Flagged then, RESOLVED by feat/mfo-cast-port, then FURTHER PORTED by
+feat/offense-cast-seats (2026-09-05):** offense's own "owned cast" gambit
+(`Actuation.cpp`'s `ownedCast` branch, `APMFBridge::ClaimCasting` at the time)
+used to ride the SAME `kIntent_SelectSpell` channel the heal claim rode under
+the (since-retired) +ACT drive, raising a real cross-talk risk if a live
+feat/cast-act APMF build started driving both. APMF's `feat/ai-cast-seats-impl`
+mooted the concern from both directions: the heal claim moved OFF
+`kIntent_SelectSpell` entirely, onto its own `kIntent_Cast` (ch.8b) facet, and
+the +ACT drive that would have made `kIntent_SelectSpell` do anything beyond
+gate-only is retired. At that point offense's `ClaimCasting` stayed on the
+now-inert `kIntent_SelectSpell` gate-only channel — safe, but still exposed the
+long-standing "target right, spell wrong" defect (offense's own AI still
+picked its own spell; the channel only arbitrates/denies). **feat/offense-
+cast-seats ported offense fully onto `kIntent_Cast` too** (`ClaimOffenseCast`,
+its own DISTINCT claim slot — see the OFFENSE CAST PORT section below), closing
+that defect the same way `ClaimHealCast` already did for heals. Heal and
+offense are two structurally separate facet CLAIMS sharing one underlying
+`kIntent_Cast`/`RequestCast` mechanism — never merged, never cross-talking
+(`IsHealCastActive` vs `IsOwnedCastActive`, distinct `Owned` struct fields).
 
 ### Task 1/3 audit (`feat/mfo-claim-only-heal`, 2026-09-05) — already claim-only
 
@@ -566,6 +580,98 @@ claim that stays un-observed for 2s+ logs a `[cfc]` warning (rate-limited to
 once per 5s) naming the follower/spell so the deck log shows "claim stands, no
 cast landed" as a legible signal — it never re-claims, re-fires, or falls back.
 
+### OFFENSE CAST PORT (feat/offense-cast-seats, 2026-09-05) — ch.8 → ch.8b
+
+Ports offense's own "owned cast" gambit (`Actuation::CastOn`'s `ownedCast` branch)
+off the retired ch.8 `kIntent_SelectSpell` gate-only claim onto the SAME `kIntent_
+Cast`/`RequestCast` mechanism `ClaimHealCast` uses — closing the long-standing
+"target right, spell wrong" defect ([[cast-gambit-spell-choice-not-enforced]]):
+`kIntent_SelectSpell` only ever ARBITRATEd + DENIED a competing framework's own
+spell selection, so the follower's own AI still picked whichever spell IT wanted.
+`kIntent_Cast`'s five engine seats instead DRIVE the AI's OWN cast decision
+directly (the same seats already proven for heals), so the gambit's named spell
+is now the one that actually fires.
+
+**New/changed symbols (`native/APMFBridge.h`/`.cpp`):**
+- `ClaimOffenseCast(follower, spell, target, hand, concentration, stopPct)` —
+  replaces `ClaimCasting` (retired, along with `ReleaseCasting`). Same
+  create-or-refresh/RequestCast shape as `ClaimHealCast`, sharing its
+  implementation via the renamed `EnsureCastClaimLocked` helper (was
+  `EnsureHealClaimLocked` — the function was already fully generic over its
+  handle/out-params, only the name was heal-specific).
+- `ReleaseOffenseCast(follower)` — replaces `ReleaseCasting`.
+- `IsOwnedCastActive(follower)` — SAME name, REPOINTED: now backed by
+  `Owned::offenseHandle` (a `kIntent_Cast` handle) instead of the retired
+  `Owned::spellHandle` (a `kIntent_SelectSpell` handle). Every existing call
+  site (`CasterConsent.cpp`'s exclusivity/hard-abort standdowns, `CombatStyle.
+  cpp`'s equip-gate standdown) is unchanged and remains correct, since a live
+  `kIntent_Cast` claim ALSO answers the 0x0F `CheckShouldEquip` seat — covering
+  exactly what those standdowns relied on ch.8 for.
+- `Owned::offenseHandle`/`offenseSpell`/`offenseTarget`/`offenseHand`/
+  `offenseConc`/`offenseStopPct`/`offenseRefreshed` — a DISTINCT claim slot
+  from `Owned::healHandle`'s heal-cast fields (Task 3's "heal and offense stay
+  two distinct claims" invariant, preserved). Uses the SAME round-robin-aware
+  `FacetExpiry()` backstop the heal/combat-target/equipment claims already use.
+
+**HAND POLICY.** `ClaimOffenseCast` always passes `hand = APMFBridge::
+kApmfHandLeft` — this is not a new conditional rule, it matches PHYSICAL
+REALITY: `Loadout::Prepare`'s `EquipSpell` (`Actuation.cpp`, unchanged by this
+pass) has ALWAYS targeted `LeftHandSlot()` unconditionally, whether or not a
+weapon is held in the right hand. Since the claimed hand and the
+physically-equipped hand must never disagree (the deck-proven heal-path
+failure this exact rule already fixed once — see the HAND FIX entry above),
+LEFT-always is simply the correct value here too; there was no scenario where
+"no weapon held → free/auto" would differ from LEFT in practice, so no new
+weapon-state branching was added.
+
+**CONCENTRATION / STOP-PERCENT.** `ClaimOffenseCast`'s sole call site
+(`CastOn`'s `ownedCast` branch) never reaches it for a concentration spell —
+`CastOn` forks concentration off EARLIER, to `ConcentrationCast` →
+`CastTargetDirect`/`CastSelfDirect`'s direct-force stream (a deliberately
+DIFFERENT, pre-existing delivery model, untouched by this pass — see "DIRECT
+FORCE is THE delivery" above). So this call site always passes
+`concentration=false`. The parameter and its `kCastFlag_Concentration` wiring
+exist end-to-end (shared with `ClaimHealCast` via `EnsureCastClaimLocked`) for
+a FUTURE AI-driven concentration-offense call site, not invented here.
+`stopPct` is always `0` — it is a HEAL-ONLY concept (a client restore
+threshold read by seat 0x07 `CheckStopCast`); no offense gambit has an
+analogous threshold in scope.
+
+**DEGRADE PATH.** A refused claim (APMF absent, `bApmfCast` off, ABI < 5, or
+APMF declines arbitration) makes `ClaimOffenseCast` return `false`; `CastOn`
+does NOT return early in that case — it falls through to the SAME
+AI-first-grace + force-on-miss legacy hybrid that already runs when `ownedCast`
+is false (APMF absent / `bLegacyCastHybrid` on / self or player target /
+non-offense spell), byte-identical to the pre-port behaviour. A refused claim
+therefore never silently drops the cast.
+
+**`CasterConsent.cpp`'s `ClientCastClaimed` standdown, extended.** The
+generalized early-pass (`ConcUnboundedDeny`, the `CheckStartCast` thunk's
+early-pass, `CheckCastThunk`'s early-pass all call it first) now ORs in
+`APMFBridge::IsOwnedCastActive(fid)` alongside `CastBounds::Live` and
+`IsHealCastActive` — the SAME HARD-ABORT protection heal's port needed
+(2026-09-05 S1 field HARD-ABORT) now covers offense's kIntent_Cast claim too:
+once APMF's seats drive the AI's own cast decision for an offense claim, MFO's
+globally-installed consent hook (which also intercepts APMF's seat-answered
+CheckStartCast/CheckCast on the same Restore caster vtable) must stand down for
+it exactly as it does for heal, or it could hard-abort a cast MFO itself
+claimed. The two now-redundant standalone `IsOwnedCastActive` checks
+(`CasterConsent.cpp`'s exclusivity-deny standdown and `CheckCastThunk`'s
+exclusivityDeny guard) are UNREACHABLE in practice once the early-pass already
+returns — left in place as defense-in-depth, not removed, per their own updated
+comments.
+
+**Reused, not duplicated:** the `[cfc]`-style silent-claim diagnostic
+(`ComposedCast.cpp`'s `g_watch`/`WatchArmed`, previously private to `Try()`) is
+now exposed as `ComposedCast::WatchClaim`/`ClearWatch` — generic over WHICH
+claim armed it (heal via `Try()`, or offense via `Actuation::CastOn` calling
+`WatchClaim` directly, since offense does not go through `Try()` — `Try()`
+stays HEAL-ONLY-gated, unchanged). `Actuation::CastOn` arms it on a successful
+`ClaimOffenseCast`; `Scheduler.cpp`'s `!castSeen` release and
+`Followers::OnFollowerRemoved`'s dismissal teardown both clear it alongside
+`ReleaseOffenseCast`. No watchdog, no re-fire, no fallback — a claim that
+stands with no observed cast only logs (principle #7).
+
 ### CastBounds — the HARD-ABORT fix (§2)
 
 `CasterConsent::ConcUnboundedDeny` hard-aborts a tracked follower's own
@@ -626,7 +732,7 @@ changed here this pass.
 | path | trigger | animated | target reach | status |
 |---|---|---|---|---|
 | kInstant force-apply | `CastSpellImmediate` | no | any actor | baseline, always on |
-| APMF owned cast | the follower's own AI decides | yes | hostile foe only | default when APMF is present |
+| APMF owned cast | `APMFBridge::ClaimOffenseCast` (`kIntent_Cast`/`RequestCast`, ch.8b — ported feat/offense-cast-seats off ch.8) drives the follower's OWN AI to cast the EXACT gambit spell | yes | hostile foe only | default when APMF is present. A refused claim falls through to the legacy AI-first-grace + force-on-miss hybrid, byte-identical to APMF-absent |
 | Composed Forced Cast (CFC) | `ComposedCast::Try` → `APMFBridge::ClaimHealCast` (`kIntent_Cast`/`RequestCast`, ch.8b) | the follower's OWN AI, via APMF's five engine seats — real native animated cast, ZERO engine-cast call from either mod | any actor (explicit target rides the claim, LOAD-BEARING at seats 0x0A/0x0D) | opt-in (`bHealAnimPackage`), HEAL-ONLY. A refused claim degrades to kInstant every time — heal always lands. A claim that stands with no observed cast logs a rate-limited diagnostic (Task 6) instead of falling back — no delivery watchdog |
 
 `native/APMFBridge.h`'s `kHealCastTtlMs` (6 s) sizes BOTH the `RequestCast`

@@ -6,6 +6,8 @@
 // ResolveCastTarget. Shared concentration numbers: Actuation_internal.h.
 #include "Actuation_internal.h"
 #include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
+#include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
+                          // (feat/offense-cast-seats: reused here, NOT routed through Try())
 
 namespace MFO::Actuation {
 
@@ -469,27 +471,33 @@ namespace MFO::Actuation {
                     // legacy force route) -- so we drop the package entirely and the follower
                     // keeps kiting while it casts.
                     //
-                    // DIVISION OF LABOUR (the whole point of routing through APMF):
-                    //   * APMF ARBITRATES the facets -- MFO CLAIMS the cast + combat-target
-                    //     facets so APMF is the single arbiter (and can suppress competitors).
-                    //     APMF executes NOTHING; it makes no cast/combat call.
-                    //   * MFO EXECUTES the behaviour with its OWN proven mechanisms:
-                    //       - SELECT our spell: Loadout::Prepare's EquipSpell into the LEFT
-                    //         hand slot (above, §0.28) -- selection comes from the equip, NOT a
-                    //         hand-written selectedSpells/currentSpell (ENGINE_NOTES §585: never
-                    //         write currentSpell by hand, it desyncs the engine's own select/
-                    //         deselect bookkeeping -- the per-tick raw write that regressed this
-                    //         model was doing exactly that, on the WRONG hand, resetting the
-                    //         charge before it could release; fixed 2026-09-02);
+                    // DIVISION OF LABOUR (the whole point of routing through APMF; UPDATED
+                    // feat/offense-cast-seats, 2026-09-05 -- the offense claim moved off
+                    // ch.8 kIntent_SelectSpell onto ch.8b kIntent_Cast, the SAME facet
+                    // ClaimHealCast uses, so APMF now does more than arbitrate):
+                    //   * MFO EXECUTES the equip/target/consent half with its OWN proven
+                    //     mechanisms, same as before:
+                    //       - PUT the spell in hand: Loadout::Prepare's EquipSpell into the
+                    //         LEFT hand slot (above, §0.28) -- this is what physically makes
+                    //         the spell castable at all, and is why the claim below also
+                    //         always passes hand=LEFT (the claimed hand and the
+                    //         physically-equipped hand must never disagree);
                     //       - COMMAND our target: Targeting::Command -> currentCombatTarget
                     //         (its UpdateCombat hook re-asserts it);
-                    //       - CONSENT + deny competing spells: CasterConsent::Want (granted
-                    //         just above) -- the AI is permitted to cast OUR spell and denied
-                    //         its others;
-                    //       - DECIDE to cast: the Cast-biased combat style (Scheduler applies
-                    //         MFO_CastStyle each combat tick a cast is wanted -- raises the
-                    //         magic score so the AI CHOOSES to cast; the INVERSE of a deny,
-                    //         never a force).
+                    //       - CONSENT: CasterConsent::Want (granted just above) -- lets the
+                    //         AI consider casting OUR spell at all (a veto-removal, never an
+                    //         invented consent).
+                    //   * APMF CLAIMS + DRIVES the cast + combat-target facets: MFO claims
+                    //     kIntent_Cast (ClaimOffenseCast, below) naming the exact spell and
+                    //     target, and while that claim stands APMF's five engine vfunc seats
+                    //     drive the follower's OWN combat AI to select/equip/charge/aim/
+                    //     fire/channel EXACTLY that spell at EXACTLY that target -- so
+                    //     (unlike the retired gate-only claim, which only ARBITRATEd+DENIED
+                    //     a competitor's own selection) the gambit's named spell is now the
+                    //     one that actually fires, not whatever the AI would have picked.
+                    //     APMF still fires NOTHING itself -- no EquipSpell/CastSpell/
+                    //     CastSpellImmediate/anim-graph write of any kind; every engine call
+                    //     is the AI's own, from its own behavior tree.
                     // GRANULAR: we claim ONLY the cast + combat-target facets -- we do NOT
                     // touch the movement facet (no SetDontMove, no block), so the follower
                     // keeps moving under its own control WHILE its AI casts. That granular
@@ -509,37 +517,76 @@ namespace MFO::Actuation {
                         CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
 
                     if (ownedCast) {
-                        // ARBITRATION: claim the two facets via APMF EVERY tick this branch
-                        // wins. Not wasted work -- EnsureClaimLocked (APMFBridge.cpp:70)
-                        // already no-ops an unchanged claim, and critically each call stamps
-                        // spellRefreshed/targetRefreshed (APMFBridge.cpp:144/173) regardless,
-                        // which is what keeps the claim alive: a claim not refreshed within
-                        // FacetExpiry() is dropped (APMFBridge.cpp's Tick() sweep). This call
-                        // site is itself the reason that expiry is round-robin-aware, not the
-                        // flat 500ms it used to be: "EVERY tick this branch wins" means this
-                        // follower's own Scheduler::Tick round-robin lap, ONE follower serviced
-                        // per ~133ms, so the real refresh gap scales with party size (proven by
-                        // the Cicero deck capture on the sibling equipment claim, 2026-09-05). A
-                        // per-follower dedupe latch here (tried 2026-09-02, reverted same day
-                        // per Fable review) skipped these calls on an unchanged tick and starved
-                        // the claim mid-cast -- "casting facet released" while the AI was still
-                        // charging. Movement is NOT claimed.
-                        APMFBridge::ClaimCasting(a_follower->GetFormID(), spell->GetFormID());
-                        APMFBridge::ClaimCombatTarget(a_follower->GetFormID(),
-                                                      a_target->GetFormID(), /*create=*/true);
+                        // CLAIM the cast-EXECUTION facet FIRST (kIntent_Cast/RequestCast,
+                        // ch.8b -- PORTED feat/offense-cast-seats, 2026-09-05, off the
+                        // retired ch.8 kIntent_SelectSpell gate-only claim this site used
+                        // to make: that channel only ARBITRATEd+DENIED a competing
+                        // framework's own selection, so the follower's own AI still picked
+                        // WHATEVER SPELL IT WANTED -- the long-standing "target right,
+                        // spell wrong" defect. This claim instead rides the SAME
+                        // kIntent_Cast facet ClaimHealCast uses: while it stands, APMF's
+                        // five engine seats drive the follower's OWN combat AI to
+                        // select/equip/charge/aim/fire/channel THIS spell at THIS target
+                        // natively, closing the defect. Call EVERY tick this branch wins,
+                        // same "the claim call also refreshes" idiom every other APMF
+                        // claim here uses (EnsureCastClaimLocked, APMFBridge.cpp, no-ops
+                        // an unchanged claim but always stamps offenseRefreshed, which is
+                        // what keeps it alive against the round-robin-aware FacetExpiry()
+                        // backstop -- a per-follower dedupe latch here would starve the
+                        // claim mid-cast exactly like the 2026-09-02 attempt did for the
+                        // old claim, reverted same day per Fable review).
+                        //
+                        // hand = LEFT, always: matches Loadout::Prepare's own EquipSpell
+                        // target (LeftHandSlot(), just above) exactly, so the claimed hand
+                        // and the physically-equipped hand never disagree. concentration =
+                        // false: this branch never sees one (concentration forked off to
+                        // ConcentrationCast's direct-force stream, above, before the equip/
+                        // ownedCast machinery runs at all). stopPct = 0: a heal-only
+                        // concept (a client restore threshold); offense has no such
+                        // threshold in scope.
+                        //
+                        // REFUSED (APMF lost arbitration / ABI < 5 / toggle off): fall
+                        // through to the legacy AI-first-grace + force-on-miss hybrid
+                        // below, exactly as when ownedCast is false -- a refused claim
+                        // must never silently drop the cast (the AI would otherwise just
+                        // pick its own spell again, reintroducing the defect this claim
+                        // exists to close).
+                        if (APMFBridge::ClaimOffenseCast(a_follower->GetFormID(), spell->GetFormID(),
+                                                         a_target->GetFormID(), APMFBridge::kApmfHandLeft,
+                                                         /*concentration=*/false, /*stopPct=*/0)) {
+                            // ARBITRATE the combat-target facet too (ch.6, unchanged) --
+                            // separate from the cast claim's own `target` field (which only
+                            // feeds the magic-target/aim seats): this keeps APMF the single
+                            // arbiter of currentCombatTarget against a competing framework
+                            // while the AI is casting.
+                            APMFBridge::ClaimCombatTarget(a_follower->GetFormID(),
+                                                          a_target->GetFormID(), /*create=*/true);
 
-                        // EXECUTION (MFO's own): our spell is already selected via the equip
-                        // above (Loadout::Prepare); command our target every tick too --
-                        // Targeting::Command (Targeting.h:37-41) itself dedupes on an unchanged
-                        // latch and only reports a real change, so this is equally cheap.
-                        // Consent was granted above; the Cast combat style (Scheduler) supplies
-                        // the AI's DECISION. The follower's own AI then casts our spell at our
-                        // target -- full animation, still mobile.
-                        Targeting::Command(a_follower->GetFormID(), a_target->GetHandle());
+                            // EXECUTION (MFO's own): command our target every tick too --
+                            // Targeting::Command (Targeting.h:37-41) itself dedupes on an
+                            // unchanged latch and only reports a real change, so this is
+                            // equally cheap. Consent was granted above; APMF's engine seats
+                            // now supply the AI's DECISION+SPELL+TARGET directly. The
+                            // follower's own AI then casts our spell at our target -- full
+                            // animation, still mobile.
+                            Targeting::Command(a_follower->GetFormID(), a_target->GetHandle());
 
-                        // OPAQUE hold: the AI is deciding+casting; firing lower rules now risks
-                        // disturbing that decision (the §0.6 confound). No force, ever, here.
-                        return { Result::NoOp, "owned cast: AI deciding (animated, mobile)" };
+                            // Reuse the SAME [cfc]-style silent-claim diagnostic the heal
+                            // path arms via ComposedCast::Try -- if this claim stands but
+                            // the SpellSink never observes it actually firing, a
+                            // rate-limited [cfc] warning names the follower/spell (no
+                            // watchdog, no re-fire, no fallback -- silence is the signal).
+                            ComposedCast::WatchClaim(a_follower->GetFormID(), spell->GetFormID());
+
+                            // OPAQUE hold: the AI is deciding+casting; firing lower rules
+                            // now risks disturbing that decision (the §0.6 confound). No
+                            // force, ever, here.
+                            return { Result::NoOp, "owned cast: AI deciding (animated, mobile)" };
+                        }
+                        spdlog::info("[cast] {:08X} offense-cast claim refused -- "
+                                     "legacy AI-first-grace hybrid runs instead",
+                                     a_follower->GetFormID());
+                        // fall through to the legacy hybrid below
                     }
 
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
@@ -1286,7 +1333,7 @@ namespace MFO::Actuation {
             // force-hold holds the hands. ClaimEquipment both ENGAGES it (the
             // first reconcile tick after EquipWeapon sets g_forcedWeapon) and
             // REFRESHES it (every tick after, same "the claim call also
-            // refreshes" idiom ClaimCasting uses) -- so there is never a tick
+            // refreshes" idiom ClaimOffenseCast uses) -- so there is never a tick
             // where the hold survives but the claim is left to expire under
             // APMFBridge's expiry backstop. That backstop is FacetExpiry()
             // (round-robin-aware), not the flat kExpiry -- this reconcile call is
