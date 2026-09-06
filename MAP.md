@@ -1024,15 +1024,35 @@ load — no co-save record.
 - Five deliberately-separate main-thread-only maps (`:9-57`): `g_debt`, `g_lastStow`,
   `g_equipClock`, `g_coolUntil`, `g_mfoSpell` — merging them re-introduces named
   regressions.
-- `Prepare` (`:156`) → `Actuation.cpp:447-538`. `StartCooldown` (`:309`) → Actuation
-  + Diagnostics; **mirrors into `CasterConsent::NoteCooldown`** (`:321`) so the combat
-  thread reads the mirror, never these non-atomic maps. `Tick` (`:361`) ←
-  `Diagnostics.cpp:256` (settles debts). `Reconcile` (`:457`) ← `plugin.cpp:361`
+- `Prepare` (`:240`) → `Actuation.cpp:447-538`. `StartCooldown` (`:413`) → Actuation
+  + Diagnostics; **mirrors into `CasterConsent::NoteCooldown`** (`:425`) so the combat
+  thread reads the mirror, never these non-atomic maps. `Tick` (`:465`) ←
+  `Diagnostics.cpp:256` (settles debts). `Reconcile` (`:561`) ← `plugin.cpp:361`
   (undo a save taken mid-cast; iterates `g_active`, main-thread). `ClearTransientState`
-  (`:521`) ← `Serialization.cpp:595`.
-- **Collect-then-act** (`:381`): `EquipObject` dispatches synchronous events;
+  (`:625`) ← `Serialization.cpp:595`.
+- **Collect-then-act** (`:485`): `EquipObject` dispatches synchronous events;
   mutating `g_debt` mid-iteration is the MEO use-after-free shape. `DeselectSpell`
   (not `UnequipObject`) is load-bearing for spells.
+- **`HandPick`/`PlanCastHand`/`CanDualCast` (2026-09-06, `:157-238` in `Loadout.h`,
+  impl `:156-238` here) — the intelligent hand-selection POLICY (marth's "MFO
+  decides WHICH hand(s) to claim" pass).** Pure decision, no engine writes, no
+  APMF dependency (this module stays framework-agnostic). `PlanCastHand(actor,
+  spell, weaponHandActive)`: weapon-hand-active → `Left`; else both hands free
+  → `CanDualCast` (real HasPerk-or-base-template-perk check against the vanilla
+  Skyrim.esm Dual Casting perk for the spell's OWN school, `0x000153CD`..
+  `0x000153D1`, `DualCastPerkForSchool` anon-ns `:168`, + `CalculateMagickaCost
+  x 2.8` affordability, the vanilla `fMagicDualCastingCostMult` hardcoded the
+  same way `fBarterMax`/`fBarterMin` already are in `Logistics_Economy.cpp`) →
+  `DualCast` or `EitherFree`. **NOT wired to any live caller today** — heals
+  bypass it entirely (heal is LEFT, unconditionally, see `APMFBridge.h`'s
+  `ClaimHealCast` doc), and offense's `ClaimCasting` (`Actuation.cpp`) carries
+  no hand parameter to consume it with. `APMFBridge::WeaponHandActive`
+  (`APMFBridge.cpp`, combines this file's `Read().grip` with
+  `IsEquipmentClaimActive`) is the intended `a_weaponHandActive` producer for
+  the APMF-owned path. **What breaks:** none yet (dead code, no call sites) —
+  but `DualCastPerkForSchool`'s FormIDs are hardcoded (no INI override, unlike
+  `Config::g_merchantPerkID`); a perk-overhaul that relocates the vanilla dual-
+  cast perks would need one added before this is wired live.
 
 ### ItemCatalog.cpp / ItemCatalog.h — patcher JSON lookup (pure read, no save)
 Loads `Data/SKSE/Plugins/MFO/mfo_items.json` (written by the MFO.Synthesis patcher)
@@ -1474,8 +1494,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   kept as history because the doc-comment trail (`APMFBridge.h`/`.cpp`,
   `Docs/CAST-DELIVERY.md`) still narrates it.
 - **PASS F (ch.8b `kIntent_Cast`/`RequestCast`, feat/mfo-cast-port, 2026-09-05):
-  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`** (`APMFBridge.cpp:472,
-  504,516`, decls `APMFBridge.h:308,317,327`) — the heal-cast facet
+  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`** (`APMFBridge.cpp:487,
+  519,531`, decls `APMFBridge.h:344,353,363`) — the heal-cast facet
   `ComposedCast` claims, PORTED BACK to the same ch.8b Intent PASS D used (the
   Intent was always declared in `APMF_API.h`, just unused by MFO between PASS D
   and PASS F) now that APMF's `feat/ai-cast-seats-impl` answers FIVE engine
@@ -1500,7 +1520,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   g_healAnimPackage` + APMF present + `api->abiVersion >= 5` (`RequestCast` is
   a v5 slot — logged-once warn + clean degrade to kInstant on an older
   APMF.dll, never a crash). `a_hand` is always `kApmfHandLeft` (2,
-  `APMFBridge.h:295`) — see the HAND FIX below, unchanged in policy from PASS
+  `APMFBridge.h:331`) — see the HAND FIX below, unchanged in policy from PASS
   E/D, just re-expressed as `APMF_API::kCastFlag_LeftHand` in `req.flags`
   instead of `ival` bits (which are gone with the retired drive). NEW this
   pass: `a_concentration` sets `kCastFlag_Concentration` (TTL floor for a held
@@ -1508,7 +1528,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `CheckStopCast` where to end a concentration channel instead of always full
   restoration — see `Actuation_Direct.cpp`'s `CastAuto` entry below for the one
   real threshold source. `req.ttlMs` is `APMFBridge::kHealCastTtlMs`
-  (`APMFBridge.h:306`, 6000) — the SAME constant `ComposedCast.cpp`'s
+  (`APMFBridge.h:342`, 6000) — the SAME constant `ComposedCast.cpp`'s
   `kHealBoundsTtlMs` now aliases, so the `RequestCast` window and the
   `CastBounds::Arm` window can never drift apart.
 - **HAND FIX (2026-09-05, deck: heal driven right hand, then displaced by the
@@ -1525,10 +1545,33 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   fallback with no weapon held (heals are left-hand almost always regardless).
   `ComposedCast::Try` (`ComposedCast.cpp`) now passes `APMFBridge::
   kApmfHandLeft` unconditionally, forwarded into `req.flags` as
-  `kCastFlag_LeftHand` — a default, not the full picture: an intelligent
-  per-perk/loadout-aware hand pass (both-hands-free → dual-cast or juggle,
-  melee → left, mage → auto) is tracked separately as future work
-  ([[mage-dualcast-diff-hands-perk-gated-todo]]), not built here.
+  `kCastFlag_LeftHand` — UNCHANGED, on purpose: heals bypass the intelligent
+  hand pass below entirely (heal is left, regardless).
+- **`WeaponHandActive`** (`APMFBridge.cpp:423`, decl `APMFBridge.h:184`,
+  2026-09-06) — the canonical "does a weapon own this hand" signal for cast
+  hand-selection: `Loadout::Read(follower, nullptr).grip` (a weapon equipped
+  RIGHT NOW) OR `IsEquipmentClaimActive` (an equip gambit about to reassert
+  one — the race the HAND FIX above closes). Works with or without APMF
+  present (the `Read()` half needs no claim). Not yet called from this
+  file's own `ClaimHealCast` (heal's hand is unconditional, see above); the
+  intended consumer is a future offense hand-claim.
+- **`Loadout::HandPick`/`PlanCastHand`/`CanDualCast`** (`Loadout.h`/`.cpp`, see
+  that file's MAP entry, §4) — marth's full intelligent hand-selection POLICY
+  now EXISTS (weapon-active → Left; both-hands-free single-spell → DualCast
+  when the follower's REAL dual-cast perk + magicka afford it, else
+  EitherFree for the caller to assign, including a second "juggle" spell).
+  **NOT wired to any live caller** — offense's `ClaimCasting` (`Actuation.cpp`,
+  ch.8) carries no hand parameter to consume it with, and `DualCast` is not
+  expressible through today's `kIntent_Cast` claim shape anyway (one
+  `APMF_CastRequest` carries exactly one hand hint; a second concurrent claim
+  on the same follower's cast-select facet would REPLACE the first, not add a
+  second hand — no `kCastFlag_*` bit exists for "equip both hands" either).
+  Wiring this live needs (a) `ClaimCasting`/a sibling to accept a hand
+  parameter (`Actuation.cpp`, out of this pass's scope) and (b) either a new
+  APMF-side cast-flag + seat behavior for `DualCast`, or dropping that
+  outcome to `EitherFree` until one exists. Supersedes
+  ([[mage-dualcast-diff-hands-perk-gated-todo]]) as the design; that backlog
+  note's WIRING half is still open.
 - **FIELD BUG FOUND + FIXED (2026-09-05, deck: claim/release every ~530ms,
   caster stuck at rest forever — `feat/heal-claim-hold`; RE-PROVEN the SAME day
   on the weapon-order equipment claim, Cicero deck capture, `feat/facet-expiry`).**
@@ -1558,7 +1601,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   the physical equip (only the claim) between `EquipWeapon`'s one-shot fires,
   a follower stuck in that gap the moment reads as "standing around unarmed
   until the next fight re-fires the equip gambit." Fixed with a dedicated
-  `FacetExpiry()` (`APMFBridge.cpp:144`, anon ns, renamed from `HealExpiry()`)
+  `FacetExpiry()` (`APMFBridge.cpp:145`, anon ns, renamed from `HealExpiry()`)
   sized the SAME way `TargetCastReconcile`/`SelfCastReconcile` already size
   their own round-robin-aware release windows (`suppress*1.12 +
   0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s (`:523`)
