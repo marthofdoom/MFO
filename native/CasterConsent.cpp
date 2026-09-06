@@ -176,13 +176,14 @@ namespace MFO::CasterConsent {
         //  1. `CastBounds::Live(a_fid, a_spell)` -- an MFO-side executor (today:
         //     ComposedCast::Try) armed exactly this (actor, spell) pair as a cast
         //     it already vetted. Narrow (per-spell), lock-free.
-        //  2. `APMFBridge::IsHealCastActive(a_fid)` -- a live declarative heal-
-        //     cast claim exists for this actor at all. BROADER (per-actor, any
-        //     spell) -- deliberately so: APMF's own drive (or its guaranteed-
-        //     delivery CastSpellImmediate fallback) is not guaranteed to land
-        //     through the EXACT FormID CastBounds was armed for (2026-09-05 S1
-        //     field HARD-ABORT: `CastBounds::Live` alone proved fragile). A live
-        //     claim on this actor is proof enough MFO already wants this cast.
+        //  2. `APMFBridge::IsHealCastActive(a_fid)` -- a live heal-cast claim
+        //     exists for this actor at all (kIntent_Cast, ch.8b). BROADER
+        //     (per-actor, any spell) -- deliberately so: APMF's own driven cast
+        //     (its engine seats, or -- pre-port -- its guaranteed-delivery
+        //     CastSpellImmediate fallback) is not guaranteed to land through the
+        //     EXACT FormID CastBounds was armed for (2026-09-05 S1 field
+        //     HARD-ABORT: `CastBounds::Live` alone proved fragile). A live claim
+        //     on this actor is proof enough MFO already wants this cast.
         // (1) is therefore always implied by (2) whenever both exist for the
         // SAME window -- `ComposedCast::Try` only ever Arms CastBounds in the
         // same call that succeeds a heal claim -- so today (1) adds no coverage
@@ -193,6 +194,31 @@ namespace MFO::CasterConsent {
         // standdown (`APMFBridge::IsOwnedCastActive`) is a SEPARATE predicate,
         // checked independently where offense-specific denies live -- it is not
         // folded in here (Task 3: heal and offense stay two distinct claims).
+        //
+        // INSTALL-ORDER SAFETY (feat/mfo-cast-port, Task 5, re-verified
+        // 2026-09-05). APMF's feat/ai-cast-seats-impl now ALSO answers 0x06
+        // CheckStartCast on VTABLE_CombatMagicCasterRestore (its seat for the
+        // AI's own cast-decision advisory), the SAME vtable slot MFO hooks
+        // globally here. SKSE plugin load order (alphabetical by filename,
+        // "APMF.dll" before "MFO.dll") means APMF installs its kDataLoaded hook
+        // before MFO's -- so MFO's thunk ends up OUTER (last write to the vtable
+        // slot; `g_orig[vt]` captures APMF's chain as "the original"). That
+        // ordering is SAFE ONLY because this predicate is checked BEFORE any
+        // deny logic in BOTH hooked thunks: the 0x06 thunk (`thunk` below, its
+        // ClientCastClaimed call) calls `original()` FIRST -- so `aiSaysYes`
+        // already reflects whatever APMF's inner seat decided -- then hits this
+        // early-pass before touching the latch, ConcUnboundedDeny,
+        // CtrlUnlatchedDeny, the concentration-never-force-yes deny, or the
+        // pacing deny, and returns `aiSaysYes` UNCHANGED; the 0x0A
+        // CheckCastThunk's own ClientCastClaimed call is identical in shape,
+        // early-passing `aiOK` ahead of ConcUnboundedDeny, the exclusive-control
+        // deny, the continuous-cast-control deny, and the friendly-fire deny.
+        // Neither thunk can act on a deny verdict it never computes, so
+        // MFO's own logic cannot deny a cast this predicate says is claimed --
+        // REGARDLESS of which install order SKSE actually produces at runtime.
+        // If a future edit ever moves a deny check ABOVE either early-pass, this
+        // safety breaks silently -- re-verify this ordering before touching
+        // either thunk.
         bool ClientCastClaimed(RE::FormID a_fid, RE::MagicItem* a_mi) {
             return (a_mi && CastBounds::Live(a_fid, a_mi->GetFormID())) ||
                    APMFBridge::IsHealCastActive(a_fid);

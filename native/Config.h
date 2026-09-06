@@ -222,29 +222,36 @@ namespace MFO::Config {
     // through the M9 forced-casting PACKAGE (that package-substitution route --
     // HealAnimFill + the two UseMagic PACKs -- is DELETED; §0/§3 of the spec). It
     // is now the master enable for routing a HEAL-ONLY forced cast through APMF's
-    // declarative SelectSpell +ACT contract (feat/cast-act, S1 2026-09-05):
-    // ComposedCast (native/ComposedCast.cpp) claims the facet naming spell/hand/
-    // target, and APMF ITSELF equips the hand, drives the animated cast, and
-    // guarantees delivery -- MFO makes no engine call. This graduated from an
+    // kIntent_Cast claim (ch.8b, ported feat/mfo-cast-port 2026-09-05, from an
+    // interim kIntent_SelectSpell +ACT drive that APMF's own feat/ai-cast-seats-
+    // impl retired in turn): ComposedCast (native/ComposedCast.cpp) claims the
+    // facet naming spell/hand/target/stop-percent, and APMF answers five engine
+    // vfunc seats so the follower's OWN AI equips, drives, and delivers the
+    // animated cast natively -- MFO makes no engine call, and APMF fires nothing
+    // either (no EquipSpell/CastSpell/CastSpellImmediate). This graduated from an
     // earlier OBSERVE-ONLY MFO-side hand-drive (DriveObservedCast) that force-
     // equipped the SAME hand APMF/the AI could touch and caused a cross-thread
     // use-after-free CTD in the field; that drive is fully retired.
     //
     // DEFAULT OFF (still experimental -- proving cast+heal on APMF). ON: a
     // follower's forced heal (self or at an ally) is claimed via APMFBridge::
-    // ClaimHealCast; a refused claim (APMF absent/too old) degrades to the
-    // existing kInstant apply so a heal never vanishes. Offense and buff casts
-    // are UNTOUCHED by this toggle -- ComposedCast is HEAL-ONLY-gated
+    // ClaimHealCast; a refused claim (APMF absent/ABI too old) degrades to the
+    // existing kInstant apply so a heal never vanishes -- and if a claim stands
+    // but the AI's seats never actually fire it, ComposedCast.cpp logs a
+    // rate-limited diagnostic rather than falling back (no delivery watchdog;
+    // silence is the correct signal, not a bug to paper over). Offense and buff
+    // casts are UNTOUCHED by this toggle -- ComposedCast is HEAL-ONLY-gated
     // (CasterConsent::SpellKind::Heal), they stay on the legacy AI-fired /
     // kInstant paths regardless. Wholly INERT without APMF and on SE/VR. No
     // save state. See native/ComposedCast.cpp.
     inline std::atomic<bool>  g_healAnimPackage{ false };
 
     // Composed Forced Cast per-follower DEGRADE backoff, ms (SPEC-FORCED-CAST.md
-    // §1.6). VESTIGIAL as of the feat/cast-act S1 pass (2026-09-05): the retired
+    // §1.6). VESTIGIAL as of the feat/cast-act S1 pass (2026-09-05) and still
+    // vestigial under the feat/mfo-cast-port RequestCast port: the retired
     // MFO-side hand-drive used this to avoid hammering a repeatedly-failing
-    // executor; the new declarative claim (APMFBridge::ClaimHealCast) is a cheap
-    // create-or-repoint every tick with no backoff of its own. Left declared and
+    // executor; the declarative claim (APMFBridge::ClaimHealCast) is a cheap
+    // create-or-refresh every tick with no backoff of its own. Left declared and
     // still parsed (INI-only, kCfcBackoffMs; no MCM control) rather than removed,
     // since the key name is a persisted MCM-Helper identity (#5) -- it is simply
     // no longer read by ComposedCast.cpp.

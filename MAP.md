@@ -636,19 +636,21 @@ them clobbers unrelated engine vtables).
   facet #2 in the APMF repo, not updated here per the shelving brief's
   do-not-touch-APMF-repo constraint).
 - **`ClientCastClaimed(fid, magicItem)` — THE GENERALIZED CLIENT-CAST-CLAIM
-  STANDDOWN (`:196`, anon ns; 2026-09-05, Task 2 audit of `Docs/CAST-ON-FRIENDLY.md`'s
-  "let the AI cast it, don't drive it" architecture).** Consolidates what used to be
-  three hand-duplicated OR-expressions (the 2026-09-04 `CastBounds` HARD-ABORT fix,
+  STANDDOWN (`:222`, anon ns; 2026-09-05, Task 2 audit of `Docs/CAST-ON-FRIENDLY.md`'s
+  "let the AI cast it, don't drive it" architecture; RE-VERIFIED feat/mfo-cast-port
+  Task 5, incl. the 0x06 install-order finding documented in this same comment
+  block in the source).** Consolidates what used to be three hand-duplicated
+  OR-expressions (the 2026-09-04 `CastBounds` HARD-ABORT fix,
   `Docs/SPEC-FORCED-CAST.md` §2/ENGINE_NOTES §0.40/INVARIANTS #76, then BROADENED
   2026-09-05 by the S1 field fix) into one helper, called FIRST — ahead of every
   other gate — at all three sites that must never hard-abort, deny, or force a
-  claimed cast: `ConcUnboundedDeny` (`:218`, folded into its `Packages::StreamLive ||
-  ClientCastClaimed` OR at `:245`), the `CheckStartCast` thunk's early-pass (`:553`),
-  and `CheckCastThunk`'s early-pass (`:922`). Two independent proofs, either
+  claimed cast: `ConcUnboundedDeny` (`:244`, folded into its `Packages::StreamLive ||
+  ClientCastClaimed` OR at `:271`), the `CheckStartCast` thunk's early-pass (`:579`),
+  and `CheckCastThunk`'s early-pass (`:947`). Two independent proofs, either
   sufficient: (1) `CastBounds::Live(fid, spell)` — an MFO-side executor (today:
   `ComposedCast::Try`) armed exactly this (actor, spell) as a cast it already
   vetted; narrow, lock-free. (2) `APMFBridge::IsHealCastActive(fid)` — a live
-  declarative heal-cast claim exists for this actor at all; BROADER (per-actor, any
+  heal-cast claim exists for this actor at all; BROADER (per-actor, any
   spell) because APMF's own drive (or its guaranteed-delivery `CastSpellImmediate`
   fallback) is not guaranteed to land through the EXACT FormID `CastBounds` was
   armed for (the 2026-09-05 S1 field HARD-ABORT, "HARD-ABORTED cast of 0004D3F2
@@ -664,7 +666,7 @@ them clobbers unrelated engine vtables).
   one) until the TTL/expiry lapses — treat both as carrying the same weight the
   legacy `Packages::Begin` alias fill did. Deliberately does NOT fold in
   `IsOwnedCastActive` (offense's own, separate exclusivity standdown, checked
-  independently at `:661`/`:949` — heal and offense stay two distinct claims, Task 3).
+  independently at `:687`/`:975` — heal and offense stay two distinct claims, Task 3).
   `ConcProxy`'s plain `kInstant` `CastSpellImmediate` direct force skips the
   `MagicCaster` state machine entirely (ENGINE_NOTES §0.13: `RequestCastImpl →
   StartChargeImpl → StartReadyImpl → StartCastImpl → FinishCastImpl`), so it never
@@ -1459,37 +1461,59 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   DECLARES `kIntent_Cast`/`APMF_API_v5::RequestCast`/`APMF_CastRequest` (it is
   APMF's byte-shared header, mirrored verbatim — MFO never edits it locally),
   but MFO no longer calls any of it.
-- **PASS E (ch.8 `kIntent_SelectSpell` +ACT, feat/cast-act, 2026-09-05,
-  `Docs/SPEC-FORCED-CAST.md`): `ClaimHealCast`/`ReleaseHealCast`/
-  `IsHealCastActive`** (`APMFBridge.cpp:460,477,487`, decls `APMFBridge.h:281,
-  289,298`) — the DECLARATIVE heal-cast facet `ComposedCast` claims, superseding
-  PASS D. Rides the SAME `kIntent_SelectSpell` channel offense's `ClaimCasting`
-  uses (PER-CAST, refresh-or-expire), but a SEPARATE `g_owned` slot
-  (`healHandle`/`healSpell`/`healTarget`/`healHand`/`healRefreshed`) — heal and
-  hostile casts are mutually exclusive per tick by `CasterConsent::SpellKind`,
-  never concurrent on one follower, but kept distinct to avoid cross-talk.
-  `EnsureHealClaimLocked` (`:217`, anon ns) is `EnsureClaimLocked`'s triple-key
-  twin: the claim's identity is `(spell, target, hand)` all riding the SAME
-  `APMF_Param` (`p.form`/`p.ival`/`p.target`), so a change in ANY of the three
-  re-points the SAME handle in place via `Repoint` (v3+; release+reclaim only on
-  a v2 fallback) — NO release/re-engage churn on a mid-stream target switch,
-  unlike PASS D's rich-request claim which needed a release-then-reclaim for a
-  spell change. `ClaimHealCast` requires only `Config::g_healAnimPackage` (the
-  repurposed executor master toggle) + APMF present — no ABI-version floor
-  beyond `RequestEx` (v2), since `target`/`pos` were appended to the ALREADY-
-  frozen `APMF_Param` at its end (APMF_API.h's own append-only contract: a
-  zero-init caller reads `target=0`, byte-identical to before these fields
-  existed; no `APMF_API_vN` bump, no `abiVersion` change). Driven by APMF's own
-  `core/CastExecutor.cpp` (feat/cast-act): APMF itself EQUIPS the resolved
-  hand(s), drives the observed animated cast sequence, and GUARANTEES delivery
-  (its own `CastSpellImmediate` fallback if the drive can't animate, VR
-  included) — **MFO makes NO engine call for this path at all**, which is the
-  structural fix for the PASS D force-equip race. `a_hand` (0 auto / 1 right /
-  2 left / 3 dual) is always passed `kApmfHandLeft` (2, `APMFBridge.h:279`) by
-  MFO today (2026-09-05 fix, see below) — never auto; `a_target` (0 = self) is
-  the ally/player FormID for heal-other.
+- **PASS E — RETIRED (ch.8 `kIntent_SelectSpell` +ACT, feat/cast-act,
+  2026-09-05; superseded by PASS F below, feat/mfo-cast-port, same day-ish).**
+  Named the heal-cast facet a DECLARATIVE `kIntent_SelectSpell` claim
+  (`p.form`/`p.ival`/`p.target`, `Repoint`-in-place on a change), driven by
+  APMF's own `core/CastExecutor.cpp` force-equipping the hand and replaying the
+  observed cast sequence. APMF's `feat/ai-cast-seats-impl` retired that whole
+  drive in turn: `kIntent_SelectSpell`'s `ival`/`target`/`pos` are now
+  accepted-and-ignored (gate-only again, exactly PASS E's own offense sibling
+  `ClaimCasting` always was) — so PASS E's mechanism no longer does anything to
+  a heal claim built on it. Nothing of PASS E's CODE survives here (see PASS F);
+  kept as history because the doc-comment trail (`APMFBridge.h`/`.cpp`,
+  `Docs/CAST-DELIVERY.md`) still narrates it.
+- **PASS F (ch.8b `kIntent_Cast`/`RequestCast`, feat/mfo-cast-port, 2026-09-05):
+  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`** (`APMFBridge.cpp:472,
+  504,516`, decls `APMFBridge.h:308,317,327`) — the heal-cast facet
+  `ComposedCast` claims, PORTED BACK to the same ch.8b Intent PASS D used (the
+  Intent was always declared in `APMF_API.h`, just unused by MFO between PASS D
+  and PASS F) now that APMF's `feat/ai-cast-seats-impl` answers FIVE engine
+  vfunc seats — `CheckShouldEquip` (0x0F), `CheckStartCast` (0x06),
+  `GetMagicTarget` (0x0A), `CheckStopCast` (0x07), `SetupAimController` (0x0D)
+  — while the claim stands, so the follower's OWN AI equips/aims/charges/fires/
+  channels the spell natively. Unlike PASS D, **APMF fires NOTHING itself**
+  (no `EquipSpell`/`CastSpell`/`CastSpellImmediate`/anim-graph write) — every
+  engine call is the AI's own; MFO's force-equip-and-hand-drive race that
+  killed PASS D never reappears because MFO STILL makes no engine call either.
+  Own `g_owned` slot (`healHandle`/`healSpell`/`healTarget`/`healHand`/
+  `healConc`/`healStopPct`/`healRefreshed`) — heal and hostile casts are
+  mutually exclusive per tick by `CasterConsent::SpellKind`, never concurrent
+  on one follower, but kept distinct to avoid cross-talk; also structurally
+  separate from offense's `ClaimCasting` (still `kIntent_SelectSpell`, ch.8) —
+  the two facets share NO channel any more, unlike PASS E's brief overlap.
+  `EnsureHealClaimLocked` (`:226`, anon ns) create-or-REFRESHES: unlike PASS
+  E's `Repoint`, `RequestCast`'s rich payload has NO in-place re-point, so a
+  CHANGE in `(spell, target, hand, concentration, stopPct)` releases the old
+  claim and requests a fresh one (a new bounded window); the SAME values are
+  still a cheap no-op refresh. `ClaimHealCast` requires `Config::
+  g_healAnimPackage` + APMF present + `api->abiVersion >= 5` (`RequestCast` is
+  a v5 slot — logged-once warn + clean degrade to kInstant on an older
+  APMF.dll, never a crash). `a_hand` is always `kApmfHandLeft` (2,
+  `APMFBridge.h:295`) — see the HAND FIX below, unchanged in policy from PASS
+  E/D, just re-expressed as `APMF_API::kCastFlag_LeftHand` in `req.flags`
+  instead of `ival` bits (which are gone with the retired drive). NEW this
+  pass: `a_concentration` sets `kCastFlag_Concentration` (TTL floor for a held
+  stream) and `a_stopPct` (0..100, `APMF_API::MakeStopPct`) tells seat 0x07
+  `CheckStopCast` where to end a concentration channel instead of always full
+  restoration — see `Actuation_Direct.cpp`'s `CastAuto` entry below for the one
+  real threshold source. `req.ttlMs` is `APMFBridge::kHealCastTtlMs`
+  (`APMFBridge.h:306`, 6000) — the SAME constant `ComposedCast.cpp`'s
+  `kHealBoundsTtlMs` now aliases, so the `RequestCast` window and the
+  `CastBounds::Arm` window can never drift apart.
 - **HAND FIX (2026-09-05, deck: heal driven right hand, then displaced by the
-  equip gambit's own re-equip ~500ms later, cast never left "rest").**
+  equip gambit's own re-equip ~500ms later, cast never left "rest").** Still
+  the live policy under PASS F, just re-expressed on the new payload.
   `ClaimHealCast` used to pass `a_hand=0` (auto); APMF's auto resolution prefers
   the RIGHT hand when it reads free, and while a follower was transiently
   unarmed (the SAME facet-expiry bug below briefly drops the equip claim) auto
@@ -1499,10 +1523,11 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   (`APMFBridge::IsEquipmentClaimActive`), that weapon owns the RIGHT hand, so a
   spell must claim LEFT rather than contest it; LEFT is also the correct
   fallback with no weapon held (heals are left-hand almost always regardless).
-  `ComposedCast::Try` (`ComposedCast.cpp:~78`) now passes `APMFBridge::
-  kApmfHandLeft` unconditionally — a default, not the full picture: an
-  intelligent per-perk/loadout-aware hand pass (both-hands-free → dual-cast or
-  juggle, melee → left, mage → auto) is tracked separately as future work
+  `ComposedCast::Try` (`ComposedCast.cpp`) now passes `APMFBridge::
+  kApmfHandLeft` unconditionally, forwarded into `req.flags` as
+  `kCastFlag_LeftHand` — a default, not the full picture: an intelligent
+  per-perk/loadout-aware hand pass (both-hands-free → dual-cast or juggle,
+  melee → left, mage → auto) is tracked separately as future work
   ([[mage-dualcast-diff-hands-perk-gated-todo]]), not built here.
 - **FIELD BUG FOUND + FIXED (2026-09-05, deck: claim/release every ~530ms,
   caster stuck at rest forever — `feat/heal-claim-hold`; RE-PROVEN the SAME day
@@ -1533,11 +1558,11 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   the physical equip (only the claim) between `EquipWeapon`'s one-shot fires,
   a follower stuck in that gap the moment reads as "standing around unarmed
   until the next fight re-fires the equip gambit." Fixed with a dedicated
-  `FacetExpiry()` (`APMFBridge.cpp:140`, anon ns, renamed from `HealExpiry()`)
+  `FacetExpiry()` (`APMFBridge.cpp:144`, anon ns, renamed from `HealExpiry()`)
   sized the SAME way `TargetCastReconcile`/`SelfCastReconcile` already size
   their own round-robin-aware release windows (`suppress*1.12 +
-  0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s
-  spellHandle/targetHandle/equipHandle/healHandle checks (`:505-519`) all
+  0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s (`:523`)
+  spellHandle/targetHandle/equipHandle/healHandle checks (`:534-549`) all
   compare against `FacetExpiry()` now, not the flat `kExpiry`. package-offer
   (`packageHandle`) stays on the flat `kExpiry` — VERIFIED (not assumed) it is
   genuinely refreshed every ~133ms flat, unconditionally, for every active
@@ -1701,8 +1726,8 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   Lock-free (relaxed/acquire atomic loads only, no engine call); a torn, cleared,
   or expired slot reads false (fail-safe toward deny, never toward a false
   permit). Consulted (via `CasterConsent.cpp`'s `ClientCastClaimed` helper,
-  `:196`) by `ConcUnboundedDeny` (`:218`), the `CheckStartCast` thunk's
-  early-pass (`:553`), and `CheckCastThunk`'s early-pass (`:922`, 0x0A).
+  `:222`) by `ConcUnboundedDeny` (`:244`), the `CheckStartCast` thunk's
+  early-pass (`:579`), and `CheckCastThunk`'s early-pass (`:947`, 0x0A).
 - `Reset()` (`:104`) — clears every slot. `kPreLoadGame`/revert, called from
   `Actuation_Direct.cpp:928` beside `ConcProxy::Reset()`, NOT independently wired
   into `plugin.cpp` (folded into `ClearSelfCasts`'s existing teardown call site).
@@ -1712,12 +1737,12 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   ENGINE_NOTES §0.13) and so reaches the hooked `CheckStartCast`/`CheckCast`
   thunks — a plain `kInstant` `CastSpellImmediate` apply (`ConcProxy`'s direct
   force) never reaches them and needs no `Arm` at all (ENGINE_NOTES §0.40). As of
-  feat/cast-act (2026-09-05) the deliberated cast IS live: APMF's own
-  `core/CastExecutor.cpp` equips + drives the follower's hand caster on
-  `ComposedCast`'s behalf, calling into the SAME globally-hooked
-  `CheckStartCast`/`CheckCast` thunks regardless of which DLL's code is
-  driving — so `ComposedCast::Try` still `Arm`s BEFORE claiming (it makes no
-  engine call itself any more, but APMF's drive does). A claim without a
+  feat/mfo-cast-port (2026-09-05, PASS F) the deliberated cast IS live: APMF's
+  engine seats drive the follower's OWN AI through the SAME globally-hooked
+  `CheckStartCast`/`CheckCast` thunks regardless of which DLL's seat is
+  answering — so `ComposedCast::Try` still `Arm`s BEFORE claiming (neither MFO
+  nor APMF makes an engine cast call itself; the AI's own deliberation is what
+  reaches the thunks). A claim without a
   matching `Arm`, or an `Arm` without a matching `Disarm` on every exit path, is
   vetoed by `ConcUnboundedDeny`/`CheckCastThunk` exactly as the pre-fix
   HARD-ABORT was (`0002F3B8`/`FF001BA4` deck crash, ENGINE_NOTES §0.40,
@@ -1745,126 +1770,106 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   of dead-weight-today code is the wrong trade (`CLAUDE.md`: "do not delete it
   reflexively"). No code changed here this pass.
 
-### ComposedCast.cpp / ComposedCast.h — the Composed Forced Cast (CFC) shim (S1, 2026-09-05)
-THIN SHIM as of the feat/cast-act pass — replaces the deleted `HealAnimFill` package
-route AND its own former MFO-side hand-drive. Composes an APMF declarative heal-cast
-claim (`APMFBridge::ClaimHealCast`, PASS E above) + a `CastBounds` arm; APMF itself
-equips/drives/guarantees the cast, so this module makes NO engine call at all. See
-`Docs/CAST-DELIVERY.md` "COMPOSED FORCED CAST (CFC)" and ENGINE_NOTES §0.40 for the
-full history (the OBSERVE-AND-REPLICATE drive this superseded, and why it raced).
+### ComposedCast.cpp / ComposedCast.h — the Composed Forced Cast (CFC) shim (feat/mfo-cast-port, 2026-09-05)
+THIN SHIM, now over PASS F (`APMFBridge.cpp`'s entry above) — replaces the deleted
+`HealAnimFill` package route AND its own former MFO-side hand-drive. Composes a
+`kIntent_Cast` claim (`APMFBridge::ClaimHealCast`) + a `CastBounds` arm; APMF's
+engine seats drive the follower's OWN AI to equip/animate/deliver the cast
+natively, so this module makes NO engine call at all (nor does APMF — see the
+PASS F entry). See `Docs/CAST-DELIVERY.md`'s "COMPOSED FORCED CAST (CFC)" section
+for the full history (PASS D's raced hand-drive → PASS E's +ACT drive → PASS F's
+native seats) and ENGINE_NOTES §0.40.
 - `Try(RE::Actor* follower, RE::SpellItem* spell, RE::Actor* target,
-  CasterConsent::SpellKind kind)` (`ComposedCast.cpp`) ← `Actuation_Direct.cpp:763`
-  (`CastSelfDirect`) and `:980` (`CastTargetDirect`) — call sites UNCHANGED (same
-  signature; only the internals below changed), replacing the two deleted
-  `Packages::HealAnimFill` call sites historically. Gated `Enabled()`: AE-only (`#67`
-  mirror), **HEAL-ONLY** (`kind != SpellKind::Heal` → immediate false — offense/buff
-  never enter this module, they stay on the byte-identical AI-fired/kInstant paths;
-  this kind-gate is NEW in this pass — the prior `Enabled()` had no kind check, so
-  re-verify this before assuming ComposedCast was always heal-scoped), `Config::
+  CasterConsent::SpellKind kind, std::uint32_t stopPct = 0)` (`ComposedCast.cpp:99`)
+  ← `Actuation_Direct.cpp:764` (`CastSelfDirect`) and `:983` (`CastTargetDirect`) —
+  call sites now forward an extra `a_stopPct` (see below); otherwise unchanged,
+  replacing the two deleted `Packages::HealAnimFill` call sites historically.
+  Gated `Enabled()`: AE-only (`#67` mirror), **HEAL-ONLY** (`kind !=
+  SpellKind::Heal` → immediate false — offense/buff never enter this module,
+  they stay on the byte-identical AI-fired/kInstant paths), `Config::
   g_healAnimPackage` (repurposed toggle), `APMFBridge::Available()`. Sequence:
-  `APMFBridge::ClaimHealCast(fid, spellID, targetID, hand=0)` — spellID/targetID
-  FORWARDED UNCHANGED (a_spell always the gambit's own configured spell; MFO
-  does not inspect delivery, does not proxy, does not substitute) → refused →
-  `CastBounds::Disarm` + log + return false (degrade to kInstant); claimed →
-  `CastBounds::Arm(fid, spellID, 0, 6000ms)` → return true (caller skips its
-  kInstant apply). `target` is 0 for a self-cast, else `a_target`'s FormID. A
-  Self-delivery spell gambited at a non-self target is APMF's OWN problem: its
-  feat/cast-act drive mints its own delivery-flip proxy synchronously on ITS
-  confirmed-main thread (`core/CastExecutor.cpp`'s `proxy::Acquire`, called from
-  `StartHandDrive`) and drives that instead — field-proven (deck APMF.log:
-  `driving left hand -- spell 0002F3B8 cast-as FF001A7D target 0009BCB0`, Fast
-  Healing/Self correctly proxied onto an ally). **An earlier revision of this
-  function (2026-09-05) DECLINED that mismatch instead, reasoning MFO would
-  need to build its own proxy from this WORKER-context function -- WRONG (no
-  such proxy is MFO's to build) and a REGRESSION (silently killed animated
-  heal-other for every Self-delivery gambit spell); reverted same day, marth.**
-  Separately AUDITED (2026-09-05, marth: "healing hands is not gambited"): no
-  code path from gambit resolution (`Board.cpp`'s `actionParamForm` write)
-  through `CastOn`/`ConcentrationCast`/`CastAuto`/`CastSelfDirect`/
-  `CastTargetDirect` down to this function EVER substitutes a spell — every one
-  forwards the gambit's own configured FormID unchanged. The ONLY fallthrough
-  found: an unresolvable/unknown-to-the-follower spell DECLINES that rule and
-  falls to the NEXT rule in the list (`Logistics.cpp:1188` et al.) — never a
-  substitution, just evaluation moving to a DIFFERENT rule with its OWN
-  configured spell. If two different spells fire for one follower, two
-  different RULES name them; that is a config question for marth, not a code bug.
-- `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`.
-  Call the instant the gambit stops wanting the heal; the `APMFBridge` `HealExpiry()`
-  backstop (`Tick()`, `Diagnostics.cpp` — round-robin/party-size-aware since the
-  2026-09-05 claim/release fix, NOT the flat 500ms `kExpiry` the other facets use)
-  covers a caller that forgets —
-  **there is no per-tick reconcile wired to call `End` explicitly** (Try short-
-  circuits `CastSelfDirect`/`CastTargetDirect` before their own `g_selfCast`/
-  `g_targetCast` bookkeeping runs), so release relies on the SAME "stop refreshing
-  → expire" idiom `ClaimCombatTarget`/`ClaimCasting` already use — not a new pattern.
-- `ExpectingCast`/`NoteObservedCast` — PERMANENT NO-OPS (return false / do nothing).
-  Kept only so `Diagnostics.cpp`'s `SpellSink` call site (`CFC-fired` log line)
-  keeps compiling unchanged; APMF owns its own cast observation now.
-- `Reset()` — now genuinely empty (no local state left to clear): `APMFBridge::
+  computes `isConcentration` from `spell->GetCastingType()` →
+  `APMFBridge::ClaimHealCast(fid, spellID, targetID, kApmfHandLeft,
+  isConcentration, stopPct)` — spellID/targetID FORWARDED UNCHANGED (a_spell
+  always the gambit's own configured spell; MFO does not inspect delivery,
+  does not proxy, does not substitute) → refused → `CastBounds::Disarm` +
+  drop the diagnostic watch + log + return false (degrade to kInstant);
+  claimed → `CastBounds::Arm(fid, spellID, 0, kHealBoundsTtlMs)` (aliases
+  `APMFBridge::kHealCastTtlMs`, 6000ms — the SAME window `req.ttlMs` carries)
+  → arms the silent-claim diagnostic watch (`WatchArmed`, below) → return true
+  (caller skips its kInstant apply). `target` is 0 for a self-cast, else
+  `a_target`'s FormID — now LOAD-BEARING on APMF's side (seats 0x0A/0x0D read
+  it directly), was RECORD ONLY under PASS E. A Self-delivery spell gambited
+  at a non-self target is still APMF's OWN problem to solve (its own
+  delivery-flip proxy, `core/CastProxy.h`) — MFO forwards `proxy=0` and never
+  inspects/substitutes, same discipline as PASS E, field-proven under it (deck
+  APMF.log: `driving left hand -- spell 0002F3B8 cast-as FF001A7D target
+  0009BCB0`, Fast Healing/Self correctly proxied onto an ally).
+- **STOP-PERCENT (`a_stopPct`, NEW this pass).** Forwarded into
+  `ClaimHealCast`'s `a_stopPct` → `req.flags`'s `APMF_API::MakeStopPct` bits —
+  tells seat 0x07 `CheckStopCast` to end a CONCENTRATION channel at a whole
+  percent (1..100) of the target's PERMANENT actor value, not always full
+  restoration. `Actuation_Direct.cpp`'s `CastAuto` (its conc-heal branch,
+  `:1154`) is the ONE call site with a real per-gambit threshold in scope
+  (the firing rule's own `conditionParam`, already used there to pick the
+  neediest target) and converts it to a whole percent; every other
+  `CastSelfDirect`/`CastTargetDirect` caller passes the default 0 (stop at
+  full), byte-identical to pre-port behaviour.
+- **SILENT-CLAIM DIAGNOSTIC (`WatchArmed`/`g_watch`, anon ns, Task 6).** NOT a
+  delivery watchdog — logs only, never re-fires/re-claims/falls back
+  (APMF's INVARIANTS.md #0). `Try()` arms/refreshes a per-follower `{spell, since,
+  observed, lastWarn}` record on every successful claim; if 2s+ pass with no
+  observed cast (rate-limited to once per 5s), logs a `[cfc]` warning naming
+  the follower/spell. `ExpectingCast(follower, spell)` (REVIVED from a
+  permanent no-op under PASS E) returns true when the watch's spell matches;
+  `Diagnostics.cpp`'s `SpellSink` (its `TESSpellCastEvent` handler, ALREADY
+  calling both for every tracked follower's own-AI cast) then calls
+  `NoteObservedCast` to mark it observed and logs its own `CFC-fired ... THE
+  ANIMATED PATH` line. Both are worker-serial, no lock — `Try`/`End` and the
+  sink's call site are the SAME serialized AddTask job-worker queue (mirrors
+  `Actuation_Direct.cpp`'s unlocked `g_selfCast`/`g_targetCast`).
+- `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`
+  + drops the diagnostic watch (`g_watch.erase`). Call the instant the gambit
+  stops wanting the heal; the `APMFBridge` `FacetExpiry()` backstop (`Tick()`,
+  `Diagnostics.cpp` — round-robin/party-size-aware) AND the claim's own TTL (on
+  APMF's side) cover a caller that forgets — **there is no per-tick reconcile
+  wired to call `End` explicitly** (Try short-circuits `CastSelfDirect`/
+  `CastTargetDirect` before their own `g_selfCast`/`g_targetCast` bookkeeping
+  runs), so release relies on the SAME "stop refreshing → expire" idiom
+  `ClaimCombatTarget`/`ClaimCasting` already use — not a new pattern.
+- `Reset()` — clears `g_watch` (the diagnostic's only local state): `APMFBridge::
   ClearTransientState` drops the claim on `kPreLoadGame`, `CastBounds::Reset` drops
   the bound. Kept as the seam `Actuation_Direct.cpp`'s `ClearSelfCasts` already calls.
-- **RETIRED from this file (2026-09-05): `DriveObservedCast`/`PhaseSelect`/
-  `PhaseFire`/`DriveTeardown`/`HealProxy` (the force-equip hand-drive), `g_streams`/
-  `g_backoff`/`g_expect` (their bookkeeping), `StreamLive` (was already fully
-  unreferenced dead code before this pass — verify before assuming any "consult
-  StreamLive" comment elsewhere is live).** The drive force-equipped the SAME hand
-  APMF/the AI could touch — a cross-thread use-after-free that CTD'd in the field;
-  APMF's own `core/CastExecutor.cpp` (feat/cast-act) now owns equip+drive+delivery
-  entirely, under its own per-hand deny, so that race is gone structurally.
 - **Threading:** `Try`/`End` run on the AddTask job worker (#4), matching every other
   `Actuation_Direct` entry point. No main-thread posting left in this module — APMF's
-  own drive runs on ITS confirmed-main seat inside APMF.dll. `CastBounds` is
-  lock-free; `APMFBridge` calls are any-thread-safe.
+  own seats run inside APMF.dll's driven engine calls. `CastBounds` is lock-free;
+  `APMFBridge` calls are any-thread-safe; `g_watch` is worker-serial-unlocked (see
+  the diagnostic bullet above for why that's safe).
 - **`CasterConsent.cpp`'s standdown is now BROADER than `CastBounds::Live` alone**
-  (2026-09-05, S1 field fix) — all three of its hard-abort sites also check
-  `APMFBridge::IsHealCastActive(fid)` (see `CasterConsent.cpp`'s own entry above),
-  because a live claim here does not guarantee the exact FormID APMF ends up
-  running through those hooks (its animated drive or its `CastSpellImmediate`
-  fallback) still matches what `CastBounds::Arm` was given.
-- **What breaks:** if `Enabled()`'s kind-gate is ever removed/loosened, offense casts
-  would ALSO route through the declarative APMF claim — this pass's explicit
-  "offense stays on the legacy AI-fired path" boundary depends on that one check.
-  Separately: offense's OWN `ClaimCasting`/`kIntent_SelectSpell` claim (PASS 1
-  above, `Actuation.cpp:522`) rides the SAME APMF channel as `ClaimHealCast` here;
-  APMF's feat/cast-act `core/CastExecutor.cpp` now drives EVERY winning
-  `kIntent_SelectSpell` claim on that channel, not just heal-cast ones — so the
-  offense "owned cast" gambit may ALSO start being equipped/driven by APMF once a
-  feat/cast-act APMF build is actually loaded, independent of anything in THIS
-  file. That is an APMF-side architectural change outside MFO's control; flagged
-  here rather than worked around, since MFO's own dispatch logic for offense is
-  untouched and CI never links a live APMF.dll to exercise it.
+  (2026-09-05, S1 field fix, RE-VERIFIED under PASS F/Task 5) — all hard-abort/
+  deny/veto sites in BOTH hooked thunks (0x06 `thunk`, 0x0A `CheckCastThunk`)
+  early-pass on `ClientCastClaimed` (which ORs `CastBounds::Live` with
+  `APMFBridge::IsHealCastActive(fid)`) BEFORE any deny logic runs — safe even
+  though APMF now ALSO answers 0x06 on the SAME vtable MFO hooks globally,
+  regardless of SKSE's plugin install order. See `CasterConsent.cpp`'s
+  `ClientCastClaimed` doc comment for the full write-up.
+- **What breaks:** if `Enabled()`'s kind-gate is ever removed/loosened, offense
+  casts would ALSO route through this claim — this pass's explicit "offense
+  stays on the legacy AI-fired path" boundary depends on that one check.
+  Offense's OWN `ClaimCasting`/`kIntent_SelectSpell` claim (PASS 1 above,
+  `Actuation.cpp:522`) no longer shares ANY channel with the heal claim here
+  (PASS F moved heal to its own `kIntent_Cast` facet) — the PASS E-era
+  cross-talk risk this bullet used to flag is structurally gone.
 - **TASK 1 VERDICT (feat/mfo-claim-only-heal, 2026-09-05): already claim-only —
-  audited, not reworked.** The brief for this pass asked for MFO to become
-  claim-only (issue + release, no equip/drive/proxy/`CastSpellImmediate` of its
-  own). Line-by-line audit found `Try`/`End` already satisfy this exactly, as
-  shipped by the PASS E + facet-expiry work above: `Try` calls only
-  `APMFBridge::ClaimHealCast` + `CastBounds::Arm`, `End` calls only
-  `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm` — no engine call, no
-  equip, no hand touch anywhere in this file. No functional change made; see
-  the calling task's report for the full audit trail.
-- **FORWARD LOOK — the "let the native AI cast it" design is RE'd, NOT built
-  (2026-09-05).** A parallel research pass (see the coordinating session's
-  `cast-on-friendly.md`/`fable-cast-re-findings.md` notebooks) worked out a
-  DIFFERENT, more native mechanism than today's PASS E: instead of APMF's
-  `core/CastExecutor.cpp` equipping+driving the hand caster on MFO's behalf,
-  APMF would patch five vfunc seats (`CheckShouldEquip` 0x0F, `CheckStartCast`
-  0x06, `GetMagicTarget` 0x0A, `CheckStopCast` 0x07, `SetupAimController` 0x0D)
-  so the FOLLOWER'S OWN AI equips, charges, aims, and fires the heal at the
-  claimed ally with zero engine-cast call from ANY mod. **This is a genuine
-  research conclusion with an implementation plan, not yet implemented
-  anywhere in the APMF tree** (verified 2026-09-05: every APMF branch with this
-  work is OBSERVE-ONLY — passive seat probes, no seat answers written). The
-  natural channel for it is the EXISTING, already-declared-but-currently-UNUSED
-  `kIntent_Cast`/`RequestCast`/`APMF_CastRequest` (ABI v5, `APMF_API.h`) — but
-  that Intent's OWN doc comment still describes the RETIRED PASS D contract
-  ("APMF fires NO cast: the CLIENT executes its own animated cast"), i.e. the
-  exact MFO-drives-the-hand design that raced and was pulled. Switching
-  `ComposedCast::Try` to `RequestCast` TODAY, ahead of APMF actually
-  implementing the 5-seat answers, would be a regression: nothing would equip
-  or cast the heal at all. **Do not make that switch until APMF's seat-answering
-  implementation lands and its `APMF_API.h` comments are updated to match** —
-  at that point `ComposedCast`'s two-line `Try`/`End` shape is expected to stay
-  exactly as thin, just pointed at a different Intent.
+  audited, not reworked.** Superseded in mechanism by PASS F, but the VERDICT
+  still holds: `Try`/`End` issue+release a claim only, no equip/drive/proxy/
+  `CastSpellImmediate` of MFO's own, under either PASS E or PASS F.
+- **feat/mfo-cast-port (this pass): the "let the native AI cast it" design,
+  previously RE'd-but-not-built, is SHIPPED.** MAP's own former "FORWARD LOOK"
+  entry here predicted exactly this shape once APMF answered the five seats —
+  see the PASS F bullet in `APMFBridge.cpp`'s entry above for the mechanism,
+  and `Docs/CAST-DELIVERY.md`'s "Native-AI seat-answering — SHIPPED" section
+  for the full narrative closing that loop.
 
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`

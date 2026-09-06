@@ -214,87 +214,116 @@ namespace MFO::APMFBridge {
     // Worker-safe. Release the combat-action-deny claim.
     void ReleaseCombatActionDeny(RE::FormID a_follower);
 
-    // ── heal-cast +ACT facet CLAIM: PER-CAST, declarative (ch.8, feat/cast-act) ─
+    // ── heal-cast facet CLAIM: PER-CAST, TTL-bounded (ch.8b, APMF v5) ───────────
     // MFO's Composed Forced Cast (Docs/SPEC-FORCED-CAST.md) makes a follower cast
     // a spell his AI would not choose -- the canonical case a heal at an ally.
-    // SUPERSEDES the old TTL-bounded kIntent_Cast/RequestCast facet (retired
-    // 2026-09-05): APMF's feat/cast-act graduated the existing kIntent_SelectSpell
-    // channel into a DECLARATIVE contract -- name the spell, hand, and an EXPLICIT
-    // target, and APMF itself equips the resolved hand(s), drives the observed
-    // animated cast sequence, and GUARANTEES delivery (falls back to its own
-    // CastSpellImmediate if the drive can't animate -- VR included). MFO makes NO
-    // engine call at all for this path: the old force-equip hand-drive (this
-    // bridge's retired ClaimCast + ComposedCast.cpp's DriveObservedCast/
-    // PhaseSelect/PhaseFire/HealProxy) raced APMF/the AI for the SAME hand and
-    // caused a cross-thread use-after-free CTD in the field -- this pass removes
-    // that race structurally by never touching the hand from MFO's side again.
+    // PORTED (feat/mfo-cast-port, 2026-09-05) from the kIntent_SelectSpell +ACT
+    // drive back to kIntent_Cast/RequestCast: APMF's feat/ai-cast-seats-impl
+    // RETIRED the +ACT drive entirely (`ival`/`target`/`pos` on kIntent_SelectSpell
+    // are now accepted-and-ignored -- see APMF_API.h) and replaced it with FIVE
+    // engine vfunc seats answered on the Restore caster vtable: while a kIntent_Cast
+    // claim stands, the NPC's OWN combat AI selects/equips/charges/aims/fires/
+    // channels `spell` at `target` -- a real native animated cast. APMF fires
+    // NOTHING itself (no EquipSpell/CastSpell/CastSpellImmediate/anim-graph write);
+    // every engine call is the AI's own, from its own behavior tree. `target` is
+    // now LOAD-BEARING (seat 0x0A hands it to the engine as the magic target, seat
+    // 0x0D as the aim override) -- it was RECORD ONLY under the retired +ACT drive.
     //
-    //     RequestEx(actor, kIntent_SelectSpell, basis,
-    //               {form = spell, ival = hand, target = castTarget})
-    //     Repoint(handle, {form, ival, target})   -- same values while mid-cast is
-    //                                      a no-op; same values once parked fires
-    //                                      again (HoT cadence); a changed
-    //                                      form/hand/target switches in place
-    //     Release(handle)                 -- ends the cast, restores the hand
+    //     RequestCast(actor, basis, {spell, proxy, target, flags, ttlMs})
+    //     (repeat call, same values)   -- cheap refresh, no release/re-engage churn
+    //     (repeat call, changed values) -- a NEW bounded claim (release + re-
+    //                                      request; the rich payload has no
+    //                                      in-place re-point, unlike SelectSpell's
+    //                                      Repoint)
+    //     Release(handle)              -- ends the claim, restores the AI's own
+    //                                      cast deliberation
     //
-    // Rides the SAME kIntent_SelectSpell channel offense's ClaimCasting (above)
-    // uses, but a SEPARATE claim slot -- heal and hostile casts are mutually
-    // exclusive per tick by CasterConsent::SpellKind, never concurrent on one
-    // follower, but keeping distinct state avoids any accidental cross-talk.
+    // A kSelf-delivery spell aimed at a non-self target needs `proxy` (or APMF
+    // mints one itself -- core/CastProxy.h), because the engine's Self branch
+    // always lands on the caster; MFO forwards `proxy = 0` and lets APMF mint it
+    // (Try() does not inspect delivery, does not proxy, and does not substitute --
+    // ComposedCast.cpp's own comment on this still applies verbatim).
     //
-    // a_hand: 0 auto (APMF picks a free hand, prefers right) / 1 right / 2 left /
-    // 3 dual (mirrors apmf::castexec::HandMode). THE RULE (marth 2026-09-05,
-    // deck-proven): whenever an equip gambit is actively force-holding a weapon
-    // (APMFBridge::IsEquipmentClaimActive), that weapon owns the RIGHT hand, so a
-    // spell must claim LEFT (kApmfHandLeft below) rather than auto -- auto
-    // prefers the right hand when it reads free, and a follower briefly unarmed
-    // (e.g. the facet-expiry bug this same file fixed 2026-09-05) let auto grab
-    // the right hand, only for the equip gambit's own re-equip to shove the spell
-    // right back out ~500ms later (deck: "driving right hand" -> re-equipped
-    // 'Elven Dagger' -> "never left rest -- degrading"). LEFT is also the correct
-    // fallback with no weapon held: heals are left-hand almost always regardless.
-    // MFO always passes kApmfHandLeft today (a full per-perk/loadout-aware hand
-    // pass -- both-hands-free dual-cast/juggle, melee-vs-caster balance -- is
-    // tracked separately as future work, not built here). a_target: 0 = self
-    // (APMF's own fallback order: explicit target -> a winning combat-target
-    // claim -> self); an ally/player FormID for heal-other.
+    // Rides its OWN kIntent_Cast channel (ch.8b) -- separate from offense's
+    // ClaimCasting (kIntent_SelectSpell, ch.8, above); heal and hostile casts are
+    // mutually exclusive per tick by CasterConsent::SpellKind, never concurrent on
+    // one follower, but keeping distinct facets avoids any accidental cross-talk.
     //
-    // The .cpp ORs a_hand with the +ACT opt-in bit (APMF_API.h kIntent_
-    // SelectSpell: ival bit 2, kApmfCastActDrive here) before sending it as
-    // param.ival -- a heal-cast claim ALWAYS wants APMF to equip+drive (nothing
-    // else will ever make the AI choose to cast it), unlike offense's
-    // ClaimCasting (above), which stays gate-only (bit clear) so the follower's
-    // OWN AI keeps deciding whether/when to cast.
+    // a_hand: LEFT, ALWAYS (THE RULE, marth 2026-09-05, deck-proven): whenever an
+    // equip gambit is actively force-holding a weapon (APMFBridge::
+    // IsEquipmentClaimActive), that weapon owns the RIGHT hand, so a spell must
+    // claim LEFT (kApmfHandLeft below) rather than auto -- auto prefers the right
+    // hand when it reads free, and a follower briefly unarmed (e.g. the
+    // facet-expiry bug this same file fixed 2026-09-05) let auto grab the right
+    // hand, only for the equip gambit's own re-equip to shove the spell right back
+    // out ~500ms later (deck: "driving right hand" -> re-equipped 'Elven Dagger'
+    // -> "never left rest -- degrading"). LEFT is also the correct fallback with
+    // no weapon held: heals are left-hand almost always regardless. MFO always
+    // passes kApmfHandLeft today (a full per-perk/loadout-aware hand pass -- both-
+    // hands-free dual-cast/juggle, melee-vs-caster balance -- is tracked
+    // separately as future work, not built here) -- there is no more auto/right/
+    // dual hand-mode plumbing on this path; the retired +ACT drive's ival hand
+    // bits are gone with it (APMF_API.h's kCastFlag_LeftHand carries the SAME
+    // policy on the new payload). a_target: 0 = self; an ally/player FormID for
+    // heal-other.
     //
-    // Worker-safe. CREATE-OR-REPOINT: call every tick the gambit still wants the
-    // heal -- a repeat call with the SAME (spell, target, hand) is a cheap
-    // refresh; a CHANGE in any of the three re-points the SAME handle in place
-    // (no release/re-engage churn). Returns whether a_follower now holds a LIVE
-    // claim (false -> caller degrades to kInstant, a heal must never vanish).
-    // No-op (returns false) when APMF is absent or Config::g_healAnimPackage is
-    // off.
+    // a_concentration: pass true when a_spell->GetCastingType() ==
+    // kConcentration -- sets APMF_API::kCastFlag_Concentration so the claim's TTL
+    // floor applies (a held stream is never cut mid-channel by an early TTL).
+    //
+    // a_stopPct: 0 = no client threshold (the seat stops the channel at FULL
+    // restoration, same as before this claim carried the bit); 1..100 = a whole
+    // percent of the TARGET's PERMANENT actor value at which seat 0x07
+    // CheckStopCast ends the channel -- lets a "Health < N% -> Heal" gambit's own
+    // configured threshold stop the native channel exactly where the gambit says,
+    // not always at 100%. Built into the claim via APMF_API::MakeStopPct(pct);
+    // see that header for the exact semantics. Ignored (harmless) on an instant
+    // (non-concentration) heal -- there is no channel to stop early.
+    //
+    // Worker-safe. CREATE-OR-REFRESH: call every tick the gambit still wants the
+    // heal -- a repeat call with the SAME (spell, target, hand, concentration,
+    // stopPct) is a cheap refresh; a CHANGE in any of them releases and
+    // re-requests (a new bounded claim -- RequestCast has no in-place re-point).
+    // Returns whether a_follower now holds a LIVE claim (false -> caller degrades
+    // to kInstant, a heal must never vanish). No-op (returns false) when APMF is
+    // absent, its resolved interface has no RequestCast slot (ABI < 5 -- an older
+    // APMF.dll degrades cleanly rather than crashing), or Config::g_healAnimPackage
+    // is off.
     // Hand-mode constant for a_hand below (2 = left, per APMF's ival encoding --
     // see the a_hand doc comment above for the weapon-hand-exclusion rule this
     // implements). Named so a call site reads as policy, not a bare magic 2.
     inline constexpr std::int32_t kApmfHandLeft = 2;
 
+    // The heal-cast claim's TTL, ms (APMF_CastRequest::ttlMs). A SINGLE named
+    // constant so ComposedCast.cpp's CastBounds::Arm window (the MFO-side consent
+    // standdown, native/CastBounds.h) and APMF's own claim TTL (the auto-release
+    // backstop if MFO ever forgets to release) never drift apart -- both windows
+    // exist to bound the SAME thing (a heal claim MFO already vetted), so one
+    // value serves both call sites. 6s: long enough to outlast one HoT tick + the
+    // round-robin refresh gap (FacetExpiry() below sizes the SAME margin for the
+    // local backstop), short enough a crashed/forgetful caller's claim
+    // self-releases quickly (SPEC-FORCED-CAST.md §1.4's Heal case).
+    inline constexpr std::uint32_t kHealCastTtlMs = 6000;
+
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
-                       std::int32_t a_hand = kApmfHandLeft);
+                       std::int32_t a_hand = kApmfHandLeft, bool a_concentration = false,
+                       std::uint32_t a_stopPct = 0);
 
     // Worker-safe. Release ONLY the heal-cast claim now (every other facet left
     // alone). Call the instant the gambit stops wanting the heal (target lost /
-    // spell/rule no longer wins) so APMF restores the hand immediately -- the
-    // round-robin-aware FacetExpiry() backstop (Tick()) covers a caller that
-    // forgets.
+    // spell/rule no longer wins) so APMF restores the AI's own cast deliberation
+    // immediately -- the round-robin-aware FacetExpiry() backstop (Tick()) AND the
+    // claim's own TTL (on APMF's side) cover a caller that forgets.
     void ReleaseHealCast(RE::FormID a_follower);
 
     // Worker- AND combat-thread-safe (mutex-guarded read; the SAME g_mx every
     // other accessor here takes). Does a_follower currently hold a LIVE heal-cast
     // claim? NOTE: MFO's OWN CasterConsent hook is installed globally, so it also
-    // intercepts APMF's driven CheckCast/RequestCastImpl on the SAME hand caster
-    // -- that hook stands down via CastBounds (native/CastBounds.h), NOT this
-    // accessor. This exists for parity/observability with the other IsXActive
-    // queries above.
+    // intercepts APMF's seat-answered CheckStartCast/CheckCast on the SAME
+    // Restore caster vtable -- that hook stands down via CastBounds
+    // (native/CastBounds.h) OR'd with this very accessor (CasterConsent.cpp's
+    // ClientCastClaimed), NOT this accessor alone. This also exists for parity/
+    // observability with the other IsXActive queries above.
     bool IsHealCastActive(RE::FormID a_follower);
 
     // Release every claim and clear the map. kPreLoadGame / revert, AFTER the pump is

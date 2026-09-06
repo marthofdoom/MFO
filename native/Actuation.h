@@ -73,8 +73,18 @@ namespace MFO::Actuation {
     //   Refreshed — the rule is winning and the channel is kept alive, but no
     //               effect/magicka was applied this tick (fCastCooldown pacing).
     //   Applied   — the effect landed and magicka was spent this tick.
+    // a_stopPct (default 0 = unused): a whole percent 1..100 of the target's
+    // (here, the follower's own) PERMANENT actor value at which a claimed
+    // APMF-driven concentration heal's native channel should stop -- forwarded
+    // to ComposedCast::Try -> APMFBridge::ClaimHealCast (APMF_API::MakeStopPct).
+    // ONLY meaningful on the ComposedCast (APMF-claimed) path; the kInstant
+    // fallback below is unaffected -- its own re-selection each tick already
+    // stops targeting an ally once above the calling rule's threshold. Callers
+    // with no numeric threshold in scope pass the default (matches the prior
+    // full-restoration behaviour byte-for-byte).
     enum class SelfCast : std::uint8_t { Declined, Refreshed, Applied };
-    SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell);
+    SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                            std::uint32_t a_stopPct = 0);
 
     // ON-TARGET DIRECT FORCE — CastSelfDirect generalized to a NON-self target
     // (player / ally / foe). The KNOWN-WORKING, package-lock-proof delivery for a
@@ -92,8 +102,11 @@ namespace MFO::Actuation {
     // cast dispatch AND combat ConcentrationCast -- BOTH primary; concentration
     // delivery touches no package anywhere. A self target is refused (use
     // CastSelfDirect). Worker-serial state; the engine apply posts to main.
+    // a_stopPct: see CastSelfDirect's doc above -- same forwarding, same
+    // default, but here it is a percent of a_target's permanent actor value
+    // (the ally being healed), not the follower's own.
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                              RE::Actor* a_target);
+                              RE::Actor* a_target, std::uint32_t a_stopPct = 0);
 
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any

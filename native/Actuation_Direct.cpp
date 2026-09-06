@@ -729,7 +729,7 @@ namespace MFO::Actuation {
         return false;
     }
 
-    SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+    SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell, std::uint32_t a_stopPct) {
         // AE-only, mirroring CastOn (the SE crash path #67). Off AE -> transparent.
         if (!REL::Module::IsAE())    return SelfCast::Declined;
         if (!a_follower || !a_spell) return SelfCast::Declined;
@@ -752,16 +752,17 @@ namespace MFO::Actuation {
         }
 
         // COMPOSED FORCED CAST (OPT-IN bHealAnimPackage, default OFF): try to
-        // claim this SELF cast as a declarative APMF SelectSpell +ACT cast (APMF
-        // equips + animates + fires it, movement kept) instead of the kInstant
-        // force-apply below. Placed AFTER the competence gate so an unaffordable
-        // cast declines exactly as today. ComposedCast::Try is fully self-gating
-        // (HEAL-ONLY; AE + APMF + toggle) and DEGRADES on any failure: it returns
-        // false (this path BYTE-IDENTICAL to today, kInstant apply) for offense/
-        // buff or when the claim is refused. Returns true only once APMF OWNS
-        // the cast, so the caller returns Applied without its own engine call.
+        // claim this SELF cast as an APMF kIntent_Cast claim (APMF's engine seats
+        // drive the AI to equip+animate+fire it natively, movement kept) instead
+        // of the kInstant force-apply below. Placed AFTER the competence gate so
+        // an unaffordable cast declines exactly as today. ComposedCast::Try is
+        // fully self-gating (HEAL-ONLY; AE + APMF + toggle) and DEGRADES on any
+        // failure: it returns false (this path BYTE-IDENTICAL to today, kInstant
+        // apply) for offense/buff or when the claim is refused. Returns true
+        // only once APMF OWNS the cast, so the caller returns Applied without
+        // its own engine call. a_stopPct forwards through unchanged.
         if (ComposedCast::Try(a_follower, a_spell, a_follower,
-                              CasterConsent::ClassifySpell(a_spell)))
+                              CasterConsent::ClassifySpell(a_spell), a_stopPct))
             return SelfCast::Applied;
 
         const auto now = SelfClock::now();
@@ -943,7 +944,7 @@ namespace MFO::Actuation {
     // no package anywhere on the concentration delivery. Worker-serial state;
     // the engine apply itself is posted to the MAIN thread (ApplyTargetEffect).
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                              RE::Actor* a_target) {
+                              RE::Actor* a_target, std::uint32_t a_stopPct) {
         if (!REL::Module::IsAE())            return SelfCast::Declined;   // AE-only (#67)
         if (!a_follower || !a_spell || !a_target) return SelfCast::Declined;
         if (a_target == a_follower)          return SelfCast::Declined;   // self -> CastSelfDirect
@@ -968,18 +969,18 @@ namespace MFO::Actuation {
         }
 
         // COMPOSED FORCED CAST (OPT-IN bHealAnimPackage, default OFF): try to
-        // claim this ON-TARGET cast as a declarative APMF SelectSpell +ACT cast
-        // (a heal at the player/an ally -- APMF equips + animates + fires it,
-        // movement kept, explicit target rides the claim so a follower fighting
-        // one foe can still heal a DIFFERENT ally) instead of the kInstant
-        // force-apply below. Placed AFTER the competence gate (parity with
-        // CastSelfDirect) and before the offense sightline gate -- heals are never
-        // offense, so order there is immaterial. Self-gating (HEAL-ONLY; AE + APMF
-        // + toggle) and DEGRADING: returns false (byte-identical kInstant) for
-        // offense/buff or a refused claim; a heal never vanishes. Unlike the old
-        // HealAnimFill (player-only), this targets any actor -- APMF owns its own
-        // delivery-flip proxy. `kind` is computed above.
-        if (ComposedCast::Try(a_follower, a_spell, a_target, kind))
+        // claim this ON-TARGET cast as an APMF kIntent_Cast claim (a heal at the
+        // player/an ally -- APMF's engine seats drive the AI to equip+animate+
+        // fire it natively, movement kept, explicit target rides the claim so a
+        // follower fighting one foe can still heal a DIFFERENT ally) instead of
+        // the kInstant force-apply below. Placed AFTER the competence gate
+        // (parity with CastSelfDirect) and before the offense sightline gate --
+        // heals are never offense, so order there is immaterial. Self-gating
+        // (HEAL-ONLY; AE + APMF + toggle) and DEGRADING: returns false
+        // (byte-identical kInstant) for offense/buff or a refused claim; a heal
+        // never vanishes. `kind` is computed above; a_stopPct forwards through
+        // unchanged.
+        if (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct))
             return SelfCast::Applied;
 
         // HOSTILE offense: LoS + line-of-fire gates on the direct path too (the
@@ -1201,9 +1202,21 @@ namespace MFO::Actuation {
                 }
                 if (!target)
                     return { Result::NoOp, "auto conc-heal: nobody below threshold", true };
+                // Task 3 (feat/mfo-cast-port): forward THIS firing rule's own
+                // heal-below ceiling to the APMF-claimed path as a whole-percent
+                // stop threshold (APMF_API::MakeStopPct) -- the ONE call site in
+                // the tree where a real per-gambit heal threshold is in scope at
+                // a CastSelfDirect/CastTargetDirect call (every other caller has
+                // no numeric threshold and passes the default 0, i.e. "stop at
+                // full"). `ceiling` is already clamped to Vocab::kHealFull above,
+                // so a rule with no health-below condition (ceiling == 1.0, the
+                // "Always -> Heal (Auto)" default) rounds to 100 -- same
+                // full-restoration behaviour as passing 0.
+                const std::uint32_t stopPct =
+                    static_cast<std::uint32_t>(std::clamp(ceiling, 0.0f, 1.0f) * 100.0f + 0.5f);
                 const auto r = (target == a_follower)
-                                   ? CastSelfDirect(a_follower, spell)
-                                   : CastTargetDirect(a_follower, spell, target);
+                                   ? CastSelfDirect(a_follower, spell, stopPct)
+                                   : CastTargetDirect(a_follower, spell, target, stopPct);
                 switch (r) {
                 case SelfCast::Applied:   return { Result::Fired, "auto conc-heal (most-hurt served)" };
                 case SelfCast::Refreshed: return { Result::NoOp,  "auto conc-heal (paced)", true };

@@ -130,22 +130,20 @@ namespace APMF_API {
                                      //       (the claim's spell is enforced as the actor's
                                      //       only castable choice; denying a COMPETING
                                      //       framework's own selection is a future gap).
-                                     //       Param: form (the spell FormID), ival (bits 0-1:
-                                     //       +ACT hand mode 0 auto/1 right/2 left/3 dual; bit 2
-                                     //       kActFlag_Drive: the +ACT OPT-IN, see below -- see
-                                     //       core/CastExecutor.h), target (the cast target
-                                     //       actor; 0 -> falls back to a winning
-                                     //       kIntent_CombatTarget claim, then self), pos
-                                     //       (reserved -- a world-location target for a
-                                     //       location-delivery spell; NOT yet wired, see
-                                     //       core/CastExecutor.cpp).
-                                     //       +ACT MODE is OPT-IN (feat/cast-act, the
-                                     //       offense-safety fix): `ival`'s kActFlag_Drive bit
-                                     //       CLEAR (incl. ival==0, the pre-+ACT shape) stays
-                                     //       pure gate-only -- the client's OWN AI casts, APMF
-                                     //       only narrows/denies (unchanged; MFO's offense
-                                     //       gambit uses this). Bit SET -> core/CastExecutor.cpp
-                                     //       equips + animates + fires the cast itself.
+                                     //       Param: form (the spell FormID). `ival`, `target`
+                                     //       and `pos` are ACCEPTED-AND-IGNORED on this intent.
+                                     //       RETIRED (feat/ai-cast-seats-impl): `ival` bits 0-1
+                                     //       (the +ACT hand mode) and bit 2 (kActFlag_Drive, the
+                                     //       +ACT drive opt-in) NO LONGER MEAN ANYTHING. The
+                                     //       forced cast drive they selected is gone; a cast that
+                                     //       must actually HAPPEN is now a kIntent_Cast (ch.8b)
+                                     //       claim, which makes the NPC's own AI cast natively
+                                     //       through the engine seats (see kIntent_Cast below).
+                                     //       The bits stay RESERVED and are never reused, so a
+                                     //       client that still sets them is byte-compatible and
+                                     //       simply gets this channel's original gate-only
+                                     //       behaviour: the client's OWN AI casts the selected
+                                     //       spell, APMF only narrows/denies competitors.
         kIntent_WeaponDrawn   = 5,   // ch.4  Draw/sheathe. Mode: PROMOTE (one-shot, sticky).
                                      //       Param: none.
         kIntent_Dialogue      = 6,   // ch.10 Pause the actor's own in-progress dialogue.
@@ -188,16 +186,29 @@ namespace APMF_API {
                                      //       package; graduated from a field-proven probe).
                                      //       Param: form (the TESPackage FormID).
         kIntent_Cast          = 16,  // ch.8b CLAIM the cast-EXECUTION facet for a bounded window.
-                                     //       DENY (composite). Param: see APMF_CastRequest via
-                                     //       RequestCast; RequestEx(form=spell) is the degenerate
-                                     //       form (no target/proxy/TTL -> default TTL). The CLAIM
-                                     //       fans into the SAME three ch.8/ch.7 gates that already
-                                     //       exist (0x0A CheckCast exclusivity, 0x0F re-arm deny,
-                                     //       the T1 cast leaves via kCombatActionCat_Cast) plus a
-                                     //       bounded TTL auto-release. APMF fires NO cast: the
-                                     //       CLIENT executes its own animated cast (design.md §1a;
-                                     //       MFO SPEC-FORCED-CAST.md). A cast is NEVER a package
-                                     //       (kIntent_Cast is invisible to ch.9's 0x49 offer).
+                                     //       ARBITRATE + DENY + COMPOSE (Docs/INVARIANTS.md #20).
+                                     //       Param: see APMF_CastRequest via RequestCast;
+                                     //       RequestEx(form=spell) is the degenerate form (no
+                                     //       target/proxy/TTL -> default TTL).
+                                     //       WHAT IT DOES NOW (feat/ai-cast-seats-impl): while the
+                                     //       claim stands, APMF answers the FIVE engine vfunc seats
+                                     //       that drive the combat AI's own cast decision so the
+                                     //       NPC's OWN AI selects, equips, charges, aims, fires and
+                                     //       channels `spell` at `target` -- a real native animated
+                                     //       cast (0x0F CheckShouldEquip, 0x06 CheckStartCast, 0x0A
+                                     //       GetMagicTarget, 0x07 CheckStopCast, 0x0D
+                                     //       SetupAimController; core/CastSeats.cpp +
+                                     //       core/EquipGate.cpp). APMF STILL FIRES NOTHING: it makes
+                                     //       no EquipSpell/CastSpell/CastSpellImmediate/anim-graph
+                                     //       write of any kind -- every one of those is the engine's
+                                     //       own, from the engine's own behavior tree.
+                                     //       `target` is now LOAD-BEARING (it was RECORD ONLY): seat
+                                     //       0x0A hands it to the engine as the magic target, and
+                                     //       0x0D as the aim override. A kSelf-delivery spell needs
+                                     //       `proxy` (or APMF mints one -- core/CastProxy.h),
+                                     //       because the engine's Self branch always lands on the
+                                     //       caster. Still bounded by TTL auto-release; a cast is
+                                     //       NEVER a package (invisible to ch.9's 0x49 offer).
     };
 
     // ── Combat-action CATEGORY bitmask (kIntent_CombatAction's param.ival) ──────
@@ -233,9 +244,41 @@ namespace APMF_API {
                                              //   and NEVER runs/offers/installs/evaluates the package
                                              //   (design.md §1a; the freeze half is simply never applied
                                              //   because no package is applied).
-        kCastFlag_LeftHand      = 1u << 1,   // hand hint (default right). Informational for the gates today.
+        kCastFlag_LeftHand      = 1u << 1,   // hand hint (default right). Scopes the per-hand deny AND the
+                                             //   0x0F equip seat (core/CastSeats.cpp / core/EquipGate.cpp).
         kCastFlag_Concentration = 1u << 2,   // client says the executed cast is a held stream (TTL floor applies).
+
+        // ── Bits 8-15: STOP PERCENT (added in-place; the word is byte-frozen) ────
+        // The seat that owns a concentration channel's duration is
+        // CombatMagicCaster::CheckStopCast (vfunc 0x07, core/CastSeats.cpp). Left
+        // native it stops when the TARGET's restore AV reaches
+        // lerp(0,0.5,defensiveMult)+0.25 -- so a client healing at a 60% threshold
+        // would get a ~0.25s pulse and an InterruptCast. These eight bits let the
+        // client state its OWN stop threshold as a whole percent 1..100 of the
+        // target's PERMANENT actor value; the seat stops the channel the moment the
+        // target reaches it.
+        //
+        // This is an APPEND-ONLY addition WITHIN the existing `flags` word -- no
+        // struct field was added, reordered or retyped, so APMF_CastRequest's layout
+        // is byte-identical and a client built before this reads/writes 0 here. 0
+        // means "no client threshold": the seat then stops at FULL restoration
+        // (pct >= 1.0), on target death/unresolvability, on claim release, or at the
+        // claim's TTL -- never a channel that runs forever. Build it with
+        // APMF_API::MakeStopPct(80).
+        kCastFlag_StopPctShift  = 8,
+        kCastFlag_StopPctMask   = 0xFFu << 8,
     };
+
+    // Build the bits 8-15 stop-percent field for CastFlags (see above). `pct` is a
+    // whole percent of the target's PERMANENT actor value, 1..100; 0 = "no client
+    // threshold" (stop at full restoration). Clamped, never asserts.
+    inline constexpr std::uint32_t MakeStopPct(std::uint32_t pct) {
+        return ((pct > 100u ? 100u : pct) << kCastFlag_StopPctShift) & kCastFlag_StopPctMask;
+    }
+    // Read it back. Returns 0 when the client set none.
+    inline constexpr std::uint32_t ReadStopPct(std::uint32_t flags) {
+        return (flags & kCastFlag_StopPctMask) >> kCastFlag_StopPctShift;
+    }
 
     // ABI v5: cast-window TTL bounds (kIntent_Cast is ALWAYS bounded -- never a
     // standing hold, design.md §5a). ttlMs == 0 -> kCastDefaultTtlMs; any value is
@@ -252,7 +295,11 @@ namespace APMF_API {
     struct APMF_CastRequest {
         RE::FormID    spell;    // the spell the client will fire (or the package if FromPackage)
         RE::FormID    proxy;    // runtime FF-form proxy the client fabricated for delivery (0 if none)
-        RE::FormID    target;   // intended target actor (0 = self). RECORD ONLY -- APMF never aims.
+        RE::FormID    target;   // intended target actor (0 = self). LOAD-BEARING since
+                                //   feat/ai-cast-seats-impl: the 0x0A GetMagicTarget seat hands
+                                //   this to the engine as the AI's magic target, and the 0x0D
+                                //   SetupAimController seat as its aim override, so the NPC's own
+                                //   cast lands here. (It was RECORD ONLY before the seats.)
         std::uint32_t flags;    // kCastFlag_*
         std::uint32_t ttlMs;    // bounded window; 0 -> kCastDefaultTtlMs. Clamped to kCastMaxTtlMs.
     };
@@ -285,10 +332,11 @@ namespace APMF_API {
         float        posY;    //   location-delivery cast (Rune/AoE ground-target) -- the
         float        posZ;    //   CLIENT picks the point (e.g. by enemy-count-in-radius);
                                //   APMF never selects one. Also pre-provisions a future
-                               //   move-to-point destination. NOT YET READ by any channel
-                               //   (core/CastExecutor.cpp accepts kIntent_SelectSpell's
-                               //   `target`; `pos` is documented-reserved until the rune/AoE
-                               //   pass wires the location-aim plumbing).
+                               //   move-to-point destination. NOT YET READ by any channel:
+                               //   an actor target rides kIntent_Cast's APMF_CastRequest
+                               //   (`req.target`, load-bearing at the engine seats), and
+                               //   `pos` stays documented-reserved until a rune/AoE pass
+                               //   wires location aiming.
     };
 
     // ── APMF_Param field usage, per Intent (at a glance) ────────────────────────
@@ -298,13 +346,11 @@ namespace APMF_API {
     // above for the full picture; this is the quick-scan version.
     //
     //   form   kIntent_SelectSpell     the spell FormID
-    //   ival   kIntent_SelectSpell     bits 0-1 hand mode (0 auto/1 right/2 left/3 dual);
-    //                                  bit 2 kActFlag_Drive OPT-IN (clear = gate-only,
-    //                                  the default; set = APMF equips+drives, +ACT)
-    //   target kIntent_SelectSpell     the cast target actor (0 -> a winning
-    //                                  kIntent_CombatTarget claim -> self); +ACT only
-    //   pos    kIntent_SelectSpell     RESERVED (a location-delivery target; not yet
-    //                                  read -- core/CastExecutor.cpp)
+    //   ival   kIntent_SelectSpell     RETIRED/RESERVED -- the +ACT hand mode (bits 0-1) and
+    //                                  drive opt-in (bit 2) are no longer read by any
+    //                                  channel; ch.8 is gate-only again. Use kIntent_Cast.
+    //   target kIntent_SelectSpell     RETIRED/RESERVED (it was the +ACT drive's target)
+    //   pos    kIntent_SelectSpell     RESERVED (a location-delivery target; never wired)
     //   form   kIntent_CombatTarget    the target actor
     //   form   kIntent_ShoutPower      the shout/power FormID
     //   form   kIntent_OfferPackage    the TESPackage FormID
@@ -312,6 +358,8 @@ namespace APMF_API {
     //   ival   kIntent_CombatAction    a CombatActionCategory bitmask (see below)
     //   form   kIntent_Cast            the spell (degenerate RequestEx form); RequestCast for
     //   ival   kIntent_Cast            the rich payload -- ival = CastFlags on the degenerate form
+    //                                  (req.target / req.flags' hand + stop-percent are read by
+    //                                  the engine seats, core/CastSeats.cpp)
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is not read by any channel yet (reserved for a future per-request bias

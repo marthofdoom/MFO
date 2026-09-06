@@ -82,16 +82,20 @@ namespace MFO::APMFBridge {
             // those two. Uses FacetExpiry() below, not the flat kExpiry.
             APMF_API::Handle equipHandle   = APMF_API::kInvalidHandle;  RE::FormID equip  = 0;
             std::chrono::steady_clock::time_point equipRefreshed{};
-            // heal-cast +ACT (ch.8, feat/cast-act) -- PER-CAST, declarative. Held
-            // by ComposedCast for the life of a claimed heal; refreshed every tick
-            // the gambit still wants it (create-or-repoint on a spell/target/hand
-            // change), released the instant it stops (ComposedCast::End), and
-            // auto-expired by FacetExpiry() (below) if a caller forgets -- same
+            // heal-cast (ch.8b, kIntent_Cast/RequestCast, ported feat/mfo-cast-port)
+            // -- PER-CAST, TTL-bounded. Held by ComposedCast for the life of a
+            // claimed heal; refreshed every tick the gambit still wants it
+            // (create-or-refresh on a spell/target/hand/concentration/stopPct
+            // change -- RequestCast has no in-place re-point, so a CHANGE releases
+            // and re-requests, a new bounded claim), released the instant it stops
+            // (ComposedCast::End), and auto-expired by FacetExpiry() (below) AND
+            // (on APMF's side) by the claim's own TTL if a caller forgets -- same
             // PER-CAST refresh-or-expire shape as spellHandle above, just a
             // distinct slot (heal vs. offense's arbitrate-only claim never overlap
             // on one follower, but each gets its own state to avoid any cross-talk).
             APMF_API::Handle healHandle    = APMF_API::kInvalidHandle;  RE::FormID healSpell  = 0;
             RE::FormID       healTarget    = 0;                          std::int32_t healHand = 0;
+            bool              healConc     = false;                      std::uint32_t healStopPct = 0;
             std::chrono::steady_clock::time_point healRefreshed{};
         };
         std::mutex                             g_mx;
@@ -210,36 +214,46 @@ namespace MFO::APMFBridge {
             cur = 0;
         }
 
-        // Heal-cast (+ACT) create-or-repoint: like EnsureClaimLocked, but the
-        // claim's identity is the (spell, target, hand) TRIPLE -- all three ride
-        // the SAME APMF_Param -- so a change in ANY of them is a re-point, not
-        // just the spell. Caller holds g_mx. `wantSpell == 0` releases.
-        void EnsureHealClaimLocked(const APMF_API::APMF_API_v2* api, RE::FormID follower,
+        // Heal-cast create-or-refresh (kIntent_Cast/RequestCast, ch.8b, ported
+        // feat/mfo-cast-port): unlike EnsureClaimLocked/EnsureHealClaimLocked's
+        // retired kIntent_SelectSpell Repoint, RequestCast's rich payload has NO
+        // in-place re-point -- a CHANGE in any of (spell, target, hand,
+        // concentration, stopPct) releases the old claim and requests a fresh one
+        // (a new bounded window; never two live claims on the same follower's heal
+        // slot at once). Caller holds g_mx AND must have already verified
+        // api->abiVersion >= 5 (RequestCast is a v5 slot -- see ClaimHealCast).
+        // `wantSpell == 0` releases.
+        void EnsureHealClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
                                    APMF_API::Handle& handle, RE::FormID& curSpell,
                                    RE::FormID& curTarget, std::int32_t& curHand,
-                                   RE::FormID wantSpell, RE::FormID wantTarget, std::int32_t wantHand) {
+                                   bool& curConc, std::uint32_t& curStopPct,
+                                   RE::FormID wantSpell, RE::FormID wantTarget, std::int32_t wantHand,
+                                   bool wantConc, std::uint32_t wantStopPct) {
             if (wantSpell == 0) {
                 if (handle != APMF_API::kInvalidHandle) { api->Release(handle); handle = APMF_API::kInvalidHandle; }
-                curSpell = 0; curTarget = 0; curHand = 0;
+                curSpell = 0; curTarget = 0; curHand = 0; curConc = false; curStopPct = 0;
                 return;
             }
             if (handle != APMF_API::kInvalidHandle && curSpell == wantSpell &&
-                curTarget == wantTarget && curHand == wantHand)
-                return;   // unchanged
-            APMF_API::APMF_Param p{};
-            p.form   = wantSpell;
-            p.ival   = wantHand;
-            p.target = wantTarget;
-            if (handle == APMF_API::kInvalidHandle) {                        // create
-                handle = api->RequestEx(follower, APMF_API::kIntent_SelectSpell, kOwnBasis, &p);
-            } else if (api->abiVersion >= 3) {                               // re-point in place
-                reinterpret_cast<const APMF_API::APMF_API_v3*>(api)->Repoint(handle, &p);
-            } else {                                                        // v2 fallback: release+request
-                api->Release(handle);
-                handle = api->RequestEx(follower, APMF_API::kIntent_SelectSpell, kOwnBasis, &p);
+                curTarget == wantTarget && curHand == wantHand &&
+                curConc == wantConc && curStopPct == wantStopPct)
+                return;   // unchanged -- cheap no-op, no release/re-request churn
+            if (handle != APMF_API::kInvalidHandle) { api->Release(handle); handle = APMF_API::kInvalidHandle; }
+            APMF_API::APMF_CastRequest req{};
+            req.spell  = wantSpell;
+            req.proxy  = 0;   // APMF mints its own delivery-flip proxy for kSelf-delivery (core/CastProxy.h)
+            req.target = wantTarget;
+            req.flags  = (wantHand == kApmfHandLeft ? APMF_API::kCastFlag_LeftHand : 0u) |
+                         (wantConc ? APMF_API::kCastFlag_Concentration : 0u) |
+                         APMF_API::MakeStopPct(wantStopPct);
+            req.ttlMs  = kHealCastTtlMs;
+            handle = api->RequestCast(follower, kOwnBasis, &req);
+            if (handle != APMF_API::kInvalidHandle) {
+                curSpell = wantSpell; curTarget = wantTarget; curHand = wantHand;
+                curConc  = wantConc;  curStopPct = wantStopPct;
+            } else {
+                curSpell = 0; curTarget = 0; curHand = 0; curConc = false; curStopPct = 0;
             }
-            if (handle != APMF_API::kInvalidHandle) { curSpell = wantSpell; curTarget = wantTarget; curHand = wantHand; }
-            else                                     { curSpell = 0; curTarget = 0; curHand = 0; }
         }
 
         // Drop the map entry once EVERY claim is gone. Caller holds g_mx.
@@ -447,27 +461,40 @@ namespace MFO::APMFBridge {
         EraseIfEmpty(it);
     }
 
-    // ── heal-cast +ACT (per-cast, declarative, ch.8, feat/cast-act) ─────────────
-    // ival bit 2 = APMF's +ACT opt-in (APMF_API.h kIntent_SelectSpell: bits 0-1
-    // are the hand, bit 2 is kActFlag_Drive). CLEAR (offense's ClaimCasting,
-    // above) stays pure gate-only -- the client's OWN AI casts, APMF only
-    // narrows/denies. SET -> APMF itself equips + animates + fires the cast
-    // (core/CastExecutor.cpp) -- exactly what a heal-cast claim needs, since
-    // nothing else will ever make the AI choose to cast it. A NAMED constant,
-    // never a bare magic number at the call site.
-    static constexpr std::int32_t kApmfCastActDrive = 0x4;
-
+    // ── heal-cast (per-cast, TTL-bounded, ch.8b, kIntent_Cast/RequestCast) ──────
+    // Ported feat/mfo-cast-port (2026-09-05): APMF's feat/ai-cast-seats-impl
+    // retired the kIntent_SelectSpell +ACT drive this used to ride (`ival`'s
+    // hand-mode bits and kActFlag_Drive opt-in are now accepted-and-ignored on
+    // that channel -- APMF_API.h) and replaced it with five engine vfunc seats
+    // answered while a kIntent_Cast claim stands, so the NPC's OWN AI drives the
+    // animated cast natively. See APMFBridge.h's doc comment above for the full
+    // shape; this is just the claim plumbing.
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
-                       std::int32_t a_hand) {
+                       std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         // Executor toggle = the (repurposed) bHealAnimPackage key. APMF absent /
         // toggle off / no spell -> OFF, degrade to kInstant.
         if (!api || a_follower == 0 || a_spell == 0 || !Config::g_healAnimPackage.load())
             return false;
+        // RequestCast is a v5 slot; an APMF.dll built before it (ABI < 5) has no
+        // such function pointer to call at all -- degrade cleanly to kInstant
+        // rather than reading past the end of an older, shorter interface struct
+        // (the SAME guard shape as SetSpellAllowList's `>= 4` check above).
+        // Logged ONCE (not every tick) so a stale APMF.dll is legible without
+        // spamming the log every heal attempt.
+        if (api->abiVersion < 5) {
+            static std::atomic<bool> s_warned{ false };
+            if (!s_warned.exchange(true))
+                spdlog::warn("[apmf] ABI v{} has no RequestCast (need >= 5) -- heal-cast claim "
+                             "OFF; heals apply via kInstant (degrade).", api->abiVersion);
+            return false;
+        }
+        auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
-        EnsureHealClaimLocked(api, a_follower, o.healHandle, o.healSpell, o.healTarget, o.healHand,
-                              a_spell, a_target, a_hand | kApmfCastActDrive);
+        EnsureHealClaimLocked(v5, a_follower, o.healHandle, o.healSpell, o.healTarget, o.healHand,
+                              o.healConc, o.healStopPct, a_spell, a_target, a_hand,
+                              a_concentration, a_stopPct);
         o.healRefreshed = std::chrono::steady_clock::now();
         const bool live = o.healHandle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
@@ -479,8 +506,10 @@ namespace MFO::APMFBridge {
         auto it = g_owned.find(a_follower);
         if (it == g_owned.end()) return;
         ReleaseHandleLocked(it->second.healHandle, it->second.healSpell);
-        it->second.healTarget = 0;
-        it->second.healHand   = 0;
+        it->second.healTarget  = 0;
+        it->second.healHand    = 0;
+        it->second.healConc    = false;
+        it->second.healStopPct = 0;
         EraseIfEmpty(it);
     }
 
@@ -518,7 +547,7 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.equipHandle, o.equip);
             if (o.healHandle != APMF_API::kInvalidHandle && now - o.healRefreshed >= facetExpiry) {
                 ReleaseHandleLocked(o.healHandle, o.healSpell);
-                o.healTarget = 0; o.healHand = 0;
+                o.healTarget = 0; o.healHand = 0; o.healConc = false; o.healStopPct = 0;
             }
             if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
@@ -538,7 +567,7 @@ namespace MFO::APMFBridge {
             ReleaseHandleLocked(o.actionHandle,  o.actionMask);
             ReleaseHandleLocked(o.equipHandle,   o.equip);
             ReleaseHandleLocked(o.healHandle,    o.healSpell);
-            o.healTarget = 0; o.healHand = 0;
+            o.healTarget = 0; o.healHand = 0; o.healConc = false; o.healStopPct = 0;
         }
         g_owned.clear();
     }

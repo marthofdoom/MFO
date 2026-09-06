@@ -11,11 +11,12 @@
 // stream (`Packages::StreamLive` / `g_liveStream`, written only by
 // `Packages::Begin`). Any cast driven THROUGH the caster's real CheckCast (0x0A)
 // / CheckStartCast thunks -- the (now deleted) heal-anim UseMagic PACKAGE, and
-// today APMF's own declarative SelectSpell +ACT drive (feat/cast-act) equipping
-// and firing the hand caster on ComposedCast's behalf -- passes through the SAME
-// hooked thunks (they are installed globally on the shared engine vtable, so it
-// makes no difference which DLL's code is driving the hand), but was NEVER
-// registered as ours, so exact-bounding vetoed it as an "unbounded AI stream."
+// today APMF's own kIntent_Cast claim (ch.8b, ported feat/mfo-cast-port from an
+// interim SelectSpell +ACT drive) answering the engine's own cast-decision seats
+// on ComposedCast's behalf -- passes through the SAME hooked thunks (they are
+// installed globally on the shared engine vtable, so it makes no difference
+// which DLL's seat is driving the AI), but was NEVER registered as ours, so
+// exact-bounding vetoed it as an "unbounded AI stream."
 // That was the deck HARD-ABORT of 0002F3B8 / FF001BA4. (The kInstant ConcProxy
 // direct-force path -- `CastSpellImmediate` -- does NOT deliberate through those
 // hooks, so it is never vetoed and needs no bound; it is deliberately NOT a
