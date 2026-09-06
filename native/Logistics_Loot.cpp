@@ -512,14 +512,17 @@ namespace MFO::Logistics {
         }
 
         // Loose-ref analog of IsQuestObjectInstance, for route 2b (a loose
-        // world item has no InventoryEntryData to ask). A CONTAINED item's
-        // quest status is read off the copy of its extra data the container
-        // holds; a LOOSE ref carries that SAME extra data directly on itself
-        // (RE::TESObjectREFR::extraList) -- HasQuestObjectAlias() is the exact
-        // signal IsQuestObject() ultimately reads, just asked of the ref
-        // instead of an inventory entry.
+        // world item has no InventoryEntryData to ask -- that overload only
+        // exists on a CONTAINED item). VERIFIED against the exact pinned
+        // CommonLibSSE commit this project builds against (portfile REF
+        // c4ab853d, CharmedBaryon/CommonLibSSE): TESObjectREFR itself
+        // declares `bool HasQuestObject() const` (TESObjectREFR.h) which
+        // calls straight into the engine (RELOCATION_ID 19201/19627, same
+        // relocation-call shape as InventoryEntryData::IsQuestObject) -- the
+        // real, supported, ref-level counterpart, not a guessed ExtraDataList
+        // member.
         bool IsQuestObjectRef(RE::TESObjectREFR* a_ref) {
-            return a_ref && a_ref->extraList.HasQuestObjectAlias();
+            return a_ref && a_ref->HasQuestObject();
         }
 
         // NEVER-LOOT gate for the route-2b whitelist below: mirrors the

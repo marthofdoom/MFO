@@ -852,8 +852,12 @@ declared there and defined in their home module). Layout:
   NEVER-LOOT gating for the loose path is `LooseSpecialItemBlocked`
   (`:533`, wraps `IsQuestObjectRef:521` — the loose-ref analog of
   `IsQuestObjectInstance:510`, since a bare world ref has no
-  `InventoryEntryData` to ask; reads `TESObjectREFR::extraList.HasQuestObjectAlias()`
-  directly) + the same `Catalog::IsExcluded`/`bLootSpecialItems` toggle —
+  `InventoryEntryData` to ask; calls `TESObjectREFR::HasQuestObject()`
+  directly — VERIFIED against the exact pinned CommonLibSSE commit this repo
+  builds against, portfile REF `c4ab853d`/`CharmedBaryon/CommonLibSSE`, not
+  the newer CommonLibSSE-NG fork; a first pass guessed `ExtraDataList::
+  HasQuestObjectAlias()`, which doesn't exist in the pinned version and
+  failed CI) + the same `Catalog::IsExcluded`/`bLootSpecialItems` toggle —
   applied to every category whose container form also gates on it
   (Jewelry/SoulGems/Ingredients/Equipment/the Valuables-MISC branch); Arrows/
   Bolts/Potions/Lockpicks/Gold get none, matching their container form. The
@@ -878,9 +882,11 @@ declared there and defined in their home module). Layout:
   `Logistics_internal.h` (WeaponRoles-adjacent), since `LootNearby`
   (`Logistics_Loot.cpp`) constructs/holds one too (lazily, once per
   `LootNearby(Category::Equipment)` call, not per candidate ref).
-  `IsCreatureWeapon`/`IsCreatureArmor` (still defined in `Logistics_Loot.cpp`,
-  declared in the internal header) gate the loose path exactly like the
-  container one — the creature-gear protection is not weakened.
+  `IsCreatureWeapon`/`IsCreatureArmor`/`CarriesSlotArmorAtLeast` (still
+  defined in `Logistics_Loot.cpp`, declared in the internal header —
+  `CarriesSlotArmorAtLeast` newly added there, the split's other cross-TU
+  miss CI caught) gate the loose path exactly like the container one — the
+  creature-gear protection is not weakened.
 - `Logistics_internal.h` (~750) — shared substrate: all `g_*` maps/state
   (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
   `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/

@@ -732,6 +732,7 @@ namespace MFO::Logistics {
                   bool a_peek = false);
     bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     bool ArmorIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
+    bool CarriesSlotArmorAtLeast(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     void KeepHeadClear(RE::Actor* a_actor);
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
     bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w);
