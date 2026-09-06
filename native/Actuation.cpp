@@ -690,8 +690,22 @@ namespace MFO::Actuation {
                         // must never silently drop the cast (the AI would otherwise just
                         // pick its own spell again, reintroducing the defect this claim
                         // exists to close).
+                        // HAND POLICY (integration/2026-09-06): consult Loadout::PlanCastHand
+                        // instead of hardcoding LEFT. It holds the hard, non-negotiable rule --
+                        // a weapon owning the right hand forces LEFT, unconditionally, checked
+                        // before anything else -- and only plans DualCast when the follower has
+                        // the REAL school dual-cast perk AND can afford the doubled cost. The
+                        // weapon signal must be right or the rule reopens the displaced-spell
+                        // race, so it comes from APMFBridge::WeaponHandActive (a live grip read
+                        // OR'd with a pending equip claim), never a guess. HandFor() carries the
+                        // decision into the bridge's a_hand encoding; a DualCast plan becomes
+                        // kCastFlag_DualCast (never alongside kCastFlag_LeftHand). Heals do NOT
+                        // route through here -- they are LEFT always, by design.
+                        const auto handPick =
+                            Loadout::PlanCastHand(a_follower, spell,
+                                                  APMFBridge::WeaponHandActive(a_follower));
                         if (APMFBridge::ClaimOffenseCast(a_follower->GetFormID(), spell->GetFormID(),
-                                                         a_target->GetFormID(), APMFBridge::kApmfHandLeft,
+                                                         a_target->GetFormID(), APMFBridge::HandFor(handPick),
                                                          /*concentration=*/false, /*stopPct=*/0)) {
                             // ARBITRATE the combat-target facet too (ch.6, unchanged) --
                             // separate from the cast claim's own `target` field (which only
