@@ -106,6 +106,15 @@ namespace MFO {
         }
         a_intfc->WriteRecordData(persistable);
 
+        // Record isolation: a WriteString failure below TRUNCATES this FLWR
+        // record (counts already written overstate what follows), but FLWR is
+        // ONE of FOUR independent records. Stop writing FLWR and STILL fall
+        // through to MSTK/PRGN/FWPN -- a bare `return` here silently skipped
+        // all three, so a load then lost every follower's stock gear,
+        // progression and force-hold state, not just the truncated FLWR tail.
+        // On the normal path this flag is never cleared and the write stream
+        // is byte-identical to before.
+        bool flwrOk = true;
         std::uint32_t written = 0, skippedRuntime = 0;
         for (const auto& [formID, st] : g_followers) {
             // Defence in depth. Followers::TryEnsureRecord should prevent a
@@ -146,12 +155,15 @@ namespace MFO {
                     if (!WriteString(a_intfc, g.conditionOpcode)) {
                         // The follower and gambit counts are already written, so
                         // the record is now TRUNCATED and overstates what
-                        // follows. The reader will short-read and abort. Say so
-                        // plainly rather than leaving one terse error (F3).
-                        spdlog::error("[cosave] WRITE FAILED mid-record for {:08X}. This save's MFO "
-                                      "data is TRUNCATED -- followers after this one will not load. "
-                                      "Re-save before relying on it.", formID);
-                        return;
+                        // follows. The reader will short-read and abort FLWR
+                        // only. Say so plainly rather than leaving one terse
+                        // error (F3), then break out to the sibling records.
+                        spdlog::error("[cosave] WRITE FAILED mid-record for {:08X}. This save's FLWR "
+                                      "record is TRUNCATED -- this follower and those after it will "
+                                      "not load; stock-gear/progression/force-hold records are still "
+                                      "written below. Re-save before relying on it.", formID);
+                        flwrOk = false;
+                        break;
                     }
                     a_intfc->WriteRecordData(g.conditionParam);
                     a_intfc->WriteRecordData(g.subjectSelector);
@@ -165,16 +177,20 @@ namespace MFO {
                         Followers::IsPersistableID(g.subjectActorForm) ? g.subjectActorForm : 0;
                     a_intfc->WriteRecordData(subjActorOut);
                     if (!WriteString(a_intfc, g.actionOpcode)) {
-                        spdlog::error("[cosave] WRITE FAILED mid-record for {:08X}. This save's MFO "
-                                      "data is TRUNCATED -- followers after this one will not load. "
-                                      "Re-save before relying on it.", formID);
-                        return;
+                        spdlog::error("[cosave] WRITE FAILED mid-record for {:08X}. This save's FLWR "
+                                      "record is TRUNCATED -- this follower and those after it will "
+                                      "not load; stock-gear/progression/force-hold records are still "
+                                      "written below. Re-save before relying on it.", formID);
+                        flwrOk = false;
+                        break;
                     }
                     a_intfc->WriteRecordData(g.actionParamForm);
                     const std::uint8_t flags = g.enabled ? 1u : 0u;
                     a_intfc->WriteRecordData(flags);
                 }
+                if (!flwrOk) break;   // out of the table loop
             }
+            if (!flwrOk) break;       // out of the follower loop -> MSTK/PRGN/FWPN below
 
             const size_t on = std::min<size_t>(st.overrides.size(), kMaxOverrides);
             if (st.overrides.size() > on) {
@@ -192,8 +208,10 @@ namespace MFO {
         }
 
         // Log the zero case too (INVARIANTS.md #46): "saved nothing" and
-        // "never ran" must not look identical.
-        spdlog::info("[cosave] saved {} follower record(s), schema v{}{}", written, kSchemaVersion,
+        // "never ran" must not look identical. A truncated FLWR says so here
+        // as well, so the summary line never reads as a clean save.
+        spdlog::info("[cosave] saved {} follower record(s){}, schema v{}{}", written,
+                     flwrOk ? "" : " (FLWR TRUNCATED -- see error above)", kSchemaVersion,
                      skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) record(s)", skippedRuntime)
                                     : std::string{});
 
@@ -251,146 +269,89 @@ namespace MFO {
         Actuation::CoSaveForcedWeapons(a_intfc);
     }
 
-    void LoadCallback(SKSE::SerializationInterface* a_intfc) {
-        g_followers.clear();
-        Logistics::ClearStockGear();   // #69: defence in depth -- RevertCallback already
-                                        // cleared it, same belt-and-braces as g_followers above
+    namespace {
+        // Per-record READERS. Each of the four records is loaded by its own
+        // function so that a short read / implausible count inside one record
+        // aborts THAT record only: the `return`s below leave the helper, and
+        // LoadCallback's dispatch loop continues to the next record
+        // (GetNextRecordInfo seeks past the unread remainder). PRGN and FWPN
+        // already had this shape (ProgAllocator::CoSaveLoad,
+        // Actuation::CoLoadForcedWeapons); MSTK and FLWR were inline and their
+        // `return`s left LoadCallback itself, abandoning every sibling record
+        // unread -- which the next save then wrote back EMPTY (INVARIANTS #12:
+        // SKSE does not round-trip unread records). Bodies are moved verbatim.
 
-        std::uint32_t type = 0, version = 0, length = 0;
-        std::uint32_t loaded = 0, droppedActor = 0, disabledRules = 0,
-                      droppedOverride = 0, collisions = 0;
-
-        while (a_intfc->GetNextRecordInfo(type, version, length)) {
-            if (type == kRecStock) {
-                // #69: independent of FLWR -- its own version guard, its own
-                // ResolveFormID/DROP discipline (INVARIANTS #8), never
-                // fabricates. A newer stock record this DLL can't fully parse
-                // is skipped (GetNextRecordInfo seeks past it on the next
-                // loop, same as any unknown record type below) rather than
-                // aborting the whole load -- it's a separate record, not a
-                // mid-stream desync risk like a newer FLWR would be.
-                if (version > kStockVersion) {
-                    spdlog::error("[cosave] STOCK-GEAR SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
-                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
-                                  version, kStockVersion);
-                    g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
-                    continue;
-                }
-                std::uint32_t followerCount = 0;
-                if (!a_intfc->ReadRecordData(followerCount)) {
-                    spdlog::error("[cosave] short read on stock-gear follower count -- ABORTING stock load");
+        // 'MSTK' body (after the version guard). Reads the whole record or
+        // aborts it with a log line; never touches g_followers.
+        void ReadStockRecord(SKSE::SerializationInterface* a_intfc) {
+            std::uint32_t followerCount = 0;
+            if (!a_intfc->ReadRecordData(followerCount)) {
+                spdlog::error("[cosave] short read on stock-gear follower count -- ABORTING stock load");
+                return;
+            }
+            if (followerCount > kMaxFollowers) {
+                spdlog::error("[cosave] implausible stock-gear follower count {} -- ABORTING stock load",
+                              followerCount);
+                return;
+            }
+            std::uint32_t stockLoaded = 0, stockDroppedActor = 0, stockDroppedItem = 0;
+            for (std::uint32_t i = 0; i < followerCount; ++i) {
+                RE::FormID rawID = 0;
+                if (!a_intfc->ReadRecordData(rawID)) {
+                    spdlog::error("[cosave] short read at stock-gear follower {}/{} -- ABORTING stock load",
+                                  i, followerCount);
                     return;
                 }
-                if (followerCount > kMaxFollowers) {
-                    spdlog::error("[cosave] implausible stock-gear follower count {} -- ABORTING stock load",
-                                  followerCount);
+                std::uint32_t itemCount = 0;
+                if (!a_intfc->ReadRecordData(itemCount)) {
+                    spdlog::error("[cosave] short read on stock-gear item count -- ABORTING stock load");
                     return;
                 }
-                std::uint32_t stockLoaded = 0, stockDroppedActor = 0, stockDroppedItem = 0;
-                for (std::uint32_t i = 0; i < followerCount; ++i) {
-                    RE::FormID rawID = 0;
-                    if (!a_intfc->ReadRecordData(rawID)) {
-                        spdlog::error("[cosave] short read at stock-gear follower {}/{} -- ABORTING stock load",
-                                      i, followerCount);
+                if (itemCount > kMaxStockGear) {
+                    spdlog::error("[cosave] implausible stock-gear item count {} -- ABORTING stock load",
+                                  itemCount);
+                    return;
+                }
+
+                RE::FormID resolvedID = 0;
+                const bool resolved = a_intfc->ResolveFormID(rawID, resolvedID);
+
+                std::unordered_set<RE::FormID> set;
+                for (std::uint32_t bi = 0; bi < itemCount; ++bi) {
+                    RE::FormID rawBase = 0;
+                    // NOTE: read unconditionally, even when the follower
+                    // itself won't resolve -- bailing early would desync
+                    // the byte stream for every record after this one.
+                    if (!a_intfc->ReadRecordData(rawBase)) {
+                        spdlog::error("[cosave] short read at stock-gear item {}/{} -- ABORTING stock load",
+                                      bi, itemCount);
                         return;
                     }
-                    std::uint32_t itemCount = 0;
-                    if (!a_intfc->ReadRecordData(itemCount)) {
-                        spdlog::error("[cosave] short read on stock-gear item count -- ABORTING stock load");
-                        return;
+                    if (!resolved) continue;   // actor gone -- whole set goes with it, below
+                    RE::FormID resolvedBase = 0;
+                    if (a_intfc->ResolveFormID(rawBase, resolvedBase)) {
+                        set.insert(resolvedBase);
+                    } else {
+                        ++stockDroppedItem;   // INVARIANTS #8: DROP, never fabricate
                     }
-                    if (itemCount > kMaxStockGear) {
-                        spdlog::error("[cosave] implausible stock-gear item count {} -- ABORTING stock load",
-                                      itemCount);
-                        return;
-                    }
-
-                    RE::FormID resolvedID = 0;
-                    const bool resolved = a_intfc->ResolveFormID(rawID, resolvedID);
-
-                    std::unordered_set<RE::FormID> set;
-                    for (std::uint32_t bi = 0; bi < itemCount; ++bi) {
-                        RE::FormID rawBase = 0;
-                        // NOTE: read unconditionally, even when the follower
-                        // itself won't resolve -- bailing early would desync
-                        // the byte stream for every record after this one.
-                        if (!a_intfc->ReadRecordData(rawBase)) {
-                            spdlog::error("[cosave] short read at stock-gear item {}/{} -- ABORTING stock load",
-                                          bi, itemCount);
-                            return;
-                        }
-                        if (!resolved) continue;   // actor gone -- whole set goes with it, below
-                        RE::FormID resolvedBase = 0;
-                        if (a_intfc->ResolveFormID(rawBase, resolvedBase)) {
-                            set.insert(resolvedBase);
-                        } else {
-                            ++stockDroppedItem;   // INVARIANTS #8: DROP, never fabricate
-                        }
-                    }
-
-                    if (!resolved) { ++stockDroppedActor; continue; }
-                    Logistics::LoadStockRecord(resolvedID, std::move(set));
-                    ++stockLoaded;
                 }
-                spdlog::info("[cosave] loaded stock-gear for {} follower(s); dropped {} unresolvable "
-                             "actor(s), {} unresolvable item(s)",
-                             stockLoaded, stockDroppedActor, stockDroppedItem);
-                continue;
-            }
-            if (type == kRecProgression) {
-                // Same independence contract as MSTK: own version guard, own
-                // ResolveFormID/DROP discipline; a newer PRGN skips THIS
-                // record only (GetNextRecordInfo seeks past it), never aborts
-                // the whole load.
-                if (version > kProgVersion) {
-                    spdlog::error("[cosave] PROGRESSION SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
-                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
-                                  version, kProgVersion);
-                    g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
-                    continue;
-                }
-                ProgAllocator::CoSaveLoad(a_intfc, version);
-                continue;
-            }
-            if (type == kRecForcedWeapon) {
-                // #76: same independence contract. A newer record skips (never
-                // aborts). CoLoad resolves + releases every stale force-lock.
-                if (version > kForcedWeaponVersion) {
-                    spdlog::error("[cosave] FORCED-WEAPON SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
-                                  "skipped; a mid-hold force-lock in it will NOT be cleared.",
-                                  version, kForcedWeaponVersion);
-                    g_sawNewerSave.store(true);
-                    continue;
-                }
-                Actuation::CoLoadForcedWeapons(a_intfc, version);
-                continue;
-            }
-            if (type != kRecFollowers) {
-                spdlog::warn("[cosave] unknown record type {:08X} -- skipped", type);
-                continue;
-            }
 
-            // INVARIANTS.md #12: SKSE does not round-trip unread records. A
-            // newer save read by this older DLL loses data on the next save.
-            // Warn LOUDLY -- never log a comforting falsehood.
-            //
-            // CONTINUE, not return: this record is INDEPENDENT of MSTK/PRGN/FWPN,
-            // and GetNextRecordInfo seeks past this unread FLWR body on the next
-            // loop (same as the sibling newer-version guards above). Returning
-            // here abandoned those siblings unread, so a downgraded DLL wrote them
-            // back EMPTY on the next save -- destroying stock-gear/progression/
-            // force-hold data the user could otherwise recover by re-upgrading.
-            // We read nothing from the FLWR body before this point, so there is no
-            // mid-stream desync to fear.
-            if (version > kSchemaVersion) {
-                spdlog::error("[cosave] SAVE IS NEWER (v{}) THAN THIS DLL (v{}). "
-                              "Records this build cannot read WILL BE DESTROYED on the next save. "
-                              "Do not save over this file with this version.",
-                              version, kSchemaVersion);
-                g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
-                continue;
+                if (!resolved) { ++stockDroppedActor; continue; }
+                Logistics::LoadStockRecord(resolvedID, std::move(set));
+                ++stockLoaded;
             }
+            spdlog::info("[cosave] loaded stock-gear for {} follower(s); dropped {} unresolvable "
+                         "actor(s), {} unresolvable item(s)",
+                         stockLoaded, stockDroppedActor, stockDroppedItem);
+        }
 
+        // 'FLWR' body (after the version guard). Followers parsed before an
+        // abort are KEPT (already in g_followers). a_complete is set only when
+        // the record was consumed to the end, so the caller can say which.
+        void ReadFollowersRecord(SKSE::SerializationInterface* a_intfc, std::uint32_t version,
+                                 bool& a_complete, std::uint32_t& loaded, std::uint32_t& droppedActor,
+                                 std::uint32_t& disabledRules, std::uint32_t& droppedOverride,
+                                 std::uint32_t& collisions) {
             std::uint32_t count = 0;
             if (!a_intfc->ReadRecordData(count)) {
                 spdlog::error("[cosave] short read on follower count -- ABORTING, "
@@ -600,6 +561,104 @@ namespace MFO {
                 }
                 g_followers[resolvedID] = std::move(st);
                 ++loaded;
+            }
+            a_complete = true;
+        }
+    }
+
+    void LoadCallback(SKSE::SerializationInterface* a_intfc) {
+        g_followers.clear();
+        Logistics::ClearStockGear();   // #69: defence in depth -- RevertCallback already
+                                        // cleared it, same belt-and-braces as g_followers above
+
+        std::uint32_t type = 0, version = 0, length = 0;
+        std::uint32_t loaded = 0, droppedActor = 0, disabledRules = 0,
+                      droppedOverride = 0, collisions = 0;
+
+        while (a_intfc->GetNextRecordInfo(type, version, length)) {
+            if (type == kRecStock) {
+                // #69: independent of FLWR -- its own version guard, its own
+                // ResolveFormID/DROP discipline (INVARIANTS #8), never
+                // fabricates. A newer stock record this DLL can't fully parse
+                // is skipped (GetNextRecordInfo seeks past it on the next
+                // loop, same as any unknown record type below) rather than
+                // aborting the whole load -- it's a separate record, not a
+                // mid-stream desync risk like a newer FLWR would be.
+                if (version > kStockVersion) {
+                    spdlog::error("[cosave] STOCK-GEAR SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
+                                  version, kStockVersion);
+                    g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
+                    continue;
+                }
+                ReadStockRecord(a_intfc);
+                continue;
+            }
+            if (type == kRecProgression) {
+                // Same independence contract as MSTK: own version guard, own
+                // ResolveFormID/DROP discipline; a newer PRGN skips THIS
+                // record only (GetNextRecordInfo seeks past it), never aborts
+                // the whole load.
+                if (version > kProgVersion) {
+                    spdlog::error("[cosave] PROGRESSION SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
+                                  version, kProgVersion);
+                    g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
+                    continue;
+                }
+                ProgAllocator::CoSaveLoad(a_intfc, version);
+                continue;
+            }
+            if (type == kRecForcedWeapon) {
+                // #76: same independence contract. A newer record skips (never
+                // aborts). CoLoad resolves + releases every stale force-lock.
+                if (version > kForcedWeaponVersion) {
+                    spdlog::error("[cosave] FORCED-WEAPON SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; a mid-hold force-lock in it will NOT be cleared.",
+                                  version, kForcedWeaponVersion);
+                    g_sawNewerSave.store(true);
+                    continue;
+                }
+                Actuation::CoLoadForcedWeapons(a_intfc, version);
+                continue;
+            }
+            if (type != kRecFollowers) {
+                spdlog::warn("[cosave] unknown record type {:08X} -- skipped", type);
+                continue;
+            }
+
+            // INVARIANTS.md #12: SKSE does not round-trip unread records. A
+            // newer save read by this older DLL loses data on the next save.
+            // Warn LOUDLY -- never log a comforting falsehood.
+            //
+            // CONTINUE, not return: this record is INDEPENDENT of MSTK/PRGN/FWPN,
+            // and GetNextRecordInfo seeks past this unread FLWR body on the next
+            // loop (same as the sibling newer-version guards above). Returning
+            // here abandoned those siblings unread, so a downgraded DLL wrote them
+            // back EMPTY on the next save -- destroying stock-gear/progression/
+            // force-hold data the user could otherwise recover by re-upgrading.
+            // We read nothing from the FLWR body before this point, so there is no
+            // mid-stream desync to fear.
+            if (version > kSchemaVersion) {
+                spdlog::error("[cosave] SAVE IS NEWER (v{}) THAN THIS DLL (v{}). "
+                              "Records this build cannot read WILL BE DESTROYED on the next save. "
+                              "Do not save over this file with this version.",
+                              version, kSchemaVersion);
+                g_sawNewerSave.store(true);   // surfaced on-screen at kPostLoadGame
+                continue;
+            }
+
+            bool complete = false;
+            ReadFollowersRecord(a_intfc, version, complete, loaded, droppedActor,
+                                disabledRules, droppedOverride, collisions);
+            if (!complete) {
+                // Truncated/short FLWR: the record-local abort above already
+                // logged the site. State it in terms of what SURVIVES, and
+                // CONTINUE so MSTK/PRGN/FWPN still load (they are written
+                // independently of a truncated FLWR -- SaveCallback).
+                spdlog::error("[cosave] FLWR record ABORTED mid-stream -- keeping {} follower(s) "
+                              "parsed so far; stock-gear/progression/force-hold records still "
+                              "load independently", loaded);
             }
         }
 

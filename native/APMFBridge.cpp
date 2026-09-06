@@ -52,7 +52,10 @@ namespace MFO::APMFBridge {
         //     transition RE-POINTS it, never releases it. Same round-robin caveat as
         //     cast-SELECT above -- "every in-combat tick" means this follower's own
         //     Scheduler::Tick lap, so it too now uses FacetExpiry().
-        // Each claim carries its own refresh timestamp. Guarded by g_mx (worker + main).
+        // Each claim carries its own refresh timestamp. Guarded by g_mx (worker + main
+        // + the COMBAT THREAD: Phase 2's IsOwnedCastActive/IsEquipmentClaimActive are
+        // called from CasterConsent/CombatStyle thunks). Real mutex, never nested, never
+        // held across a Post/form-table walk, so the combat thread can't stall on it.
         // package-offer (ch.9) is a PER-EXCURSION, caller-driven lifecycle wired into
         // Packages.cpp's loot-travel routing: created on the first winning dispatch,
         // refreshed by a repeat call (same form == cheap no-op via EnsureClaimLocked),
