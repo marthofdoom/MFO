@@ -476,11 +476,23 @@ namespace APMF_API {
     // mirrored byte-identically on the client side.
     struct APMF_API_v5 : APMF_API_v4 {
         // Claim the cast-EXECUTION facet (ch.8b) for actor `actor` at arbitration
-        // weight `basis`, carrying the rich APMF_CastRequest. The claim fans into
-        // the SAME three gates cast-select already rides (0x0A CheckCast, 0x0F
-        // CheckShouldEquip, the T1 cast leaves) plus a bounded TTL auto-release --
-        // NO engine cast call is ever made (design.md §1a; the CLIENT fires its own
-        // animated cast). `req` is READ AND COPIED synchronously inside the call;
+        // weight `basis`, carrying the rich APMF_CastRequest, for a bounded TTL.
+        //
+        // WHAT HAPPENS (updated for the shipped v0.9.1/v0.9.2 behaviour -- the older
+        // "the CLIENT fires its own animated cast" contract is RETIRED): while the
+        // claim stands, APMF answers the engine's own cast-decision points so the
+        // NPC's OWN combat AI selects, equips, charges, aims, fires and channels
+        // `req.spell` at `req.target`. **APMF still makes NO engine cast call of any
+        // kind** -- no EquipSpell, no CastSpell, no CastSpellImmediate, no anim-graph
+        // write. The animation is the game's own because the game is the one casting.
+        // The CLIENT brings no cast mechanism at all; it only declares what and where.
+        //
+        // This is what makes a heal-OTHER cast possible: the vanilla combat AI cannot
+        // classify a beneficial spell aimed at another actor, so it never builds one
+        // as a candidate and never considers casting it. APMF supplies that one
+        // missing classification decision and the engine does the rest.
+        //
+        // `req` is READ AND COPIED synchronously inside the call;
         // APMF never retains the pointer, so a stack temporary is fine. Returns a
         // handle to release later, or kInvalidHandle if the cast channel is not
         // registered. A kCastFlag_FromPackage request whose package carries no
