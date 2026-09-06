@@ -53,9 +53,15 @@ dispatches and merges it.
 ### For the worker
 1. **DO EXACTLY WHAT THE BRIEF ASKS. NOTHING ELSE.** No refactors, no file splits, no moving code between
    files, no renames, no "while I was in there" cleanups, no new files — unless the brief asks for them by
-   name. If the work seems to *need* one, STOP and report it; do not do it and mention it afterwards.
-   (Real cost: a loot task quietly split 560 lines into a new file. The refactor rode into an integration
-   build, onto the deck, and broke loot eligibility in the field.)
+   name. If the work seems to *need* one, **STOP and report it**; do not do it and mention it afterwards.
+   **This OVERRIDES the 2500-line rule above: crossing 2500 lines is a STOP-and-report, NOT a licence to
+   split inside an unrelated task.** A split is its own brief and its own field cycle, because a "pure
+   mechanical, CI-identical" move is exactly the change whose breakage only shows up in the field — and
+   "CI-identical" is not a claim any TU split may assert, since CI proves it compiles, not that it behaves.
+   (What actually happened, 2026-09-06: a loot task hit the 2500 cap, split 560 lines into a new file, and
+   SAID SO in its commit message — it was obeying the rule. The split then rode into an integration build
+   and onto the deck. **The failure was that nobody read the diffstat, which listed the new file in plain
+   sight.** The worker followed the rules as written; the rules and the review were at fault.)
 2. **NEVER GUESS AN API OR A SYMBOL.** Verify it against the real CommonLibSSE-NG header/source or the
    disassembly before using it. "It compiles in my head" is not verification. (Real cost: two CI failures
    in one night on invented symbols — `ExtraDataList::HasQuestObjectAlias`, `EffectSetting::Data::Flag::kHostile`.)
