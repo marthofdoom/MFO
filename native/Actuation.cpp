@@ -7,8 +7,8 @@
 #include "Actuation_internal.h"
 #include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
-#include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
+#include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
 
 namespace MFO::Actuation {
 
