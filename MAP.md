@@ -402,6 +402,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
 - `CastOn` (`Actuation.cpp:265`) escalation: AE-only gate (`:314`) → range/competence/reserve →
+  **the Task 2 firing-spell gambit lock (`CheckCastLock`, PASS H below)** →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:70`) via `Packages::CastAt`.
   Off-AE the whole path declines transparently (#67) so vanilla AI keeps casting.
@@ -416,6 +417,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   cast pipeline they sit on), so deny-the-AI + deliver-directly is coherent, never a
   lockout. No bForceCastOnMiss/bUsePackages gate, no Loadout cooldown (the channel
   self-paces; a 4 s cooldown hole would let the ~2 s stale window tear it down).
+  Both its Applied/Refreshed branches now also call `HoldCastLock` (PASS H) so a
+  live stream is protected by the SAME lock `CastOn` checks up front.
 - `CastTargetDirect` (PUBLIC, `Actuation_Direct.cpp:927`) = `CastSelfDirect` generalized to a NON-self target: the
   known-working DIRECT FORCE (`CastSpellImmediate` onto the target + magicka deduct, NO
   package → beats the `§4.6` lock). Registry `g_targetCast`; concentration re-applies
@@ -424,7 +427,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   Callers: **Logistics OOC dispatch AND combat `ConcentrationCast` — BOTH primary**
   (marth's ruling: always the known-working force). LoS+LoF gate hostile offense on
   every apply. (The c539257 `CastConcentrationAt` package wrapper was REMOVED — it
-  caused the Lucien OOC-heal regression.)
+  caused the Lucien OOC-heal regression.) **PASS H (feat/cast-gambit-concentration):**
+  right after the existing `ComposedCast::Try` call (HEAL-ONLY, unchanged), both this
+  function and `CastSelfDirect` now try `APMFBridge::ClaimOffenseCast` directly
+  (`concentration=true, stopPct=0`) for a `kind != Heal` concentration spell — the
+  engine-seat path offense/buff concentration never reached before. Refused/absent
+  falls through to the SAME direct-force stream below, unchanged.
 - `CastAuto` (PUBLIC, `Actuation_Direct.cpp:1106`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
@@ -1632,8 +1640,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `LeftHandSlot()` equip target exactly -- no weapon-state branching needed,
   since MFO's offense equip has ALWAYS targeted LEFT regardless of grip),
   `concentration=false` (concentration forks off earlier in `CastOn`, to
-  `ConcentrationCast`'s DIFFERENT direct-force delivery model, untouched by
-  this pass), `stopPct=0` (a heal-only concept). **`IsOwnedCastActive`
+  `ConcentrationCast`'s DIFFERENT direct-force delivery model -- untouched by
+  THIS pass, but see PASS H below, feat/cast-gambit-concentration: that model
+  now ALSO calls `ClaimOffenseCast` with `concentration=true` from a sibling
+  call site), `stopPct=0` (a heal-only concept). **`IsOwnedCastActive`
   REPOINTED** (same name, same call sites -- `CasterConsent.cpp`'s exclusivity
   denies, `CombatStyle.cpp`'s equip gate -- now backed by `offenseHandle`
   instead of the retired `spellHandle`) -- still correct because a live
@@ -1656,6 +1666,37 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `Followers::OnFollowerRemoved`'s dismissal teardown both clear it alongside
   `ReleaseOffenseCast`. See `Docs/CAST-DELIVERY.md`'s "OFFENSE CAST PORT"
   section for the full writeup.
+- **PASS H (feat/cast-gambit-concentration, 2026-09-06): a non-heal
+  CONCENTRATION stream now reaches the engine-seat path, + the firing-spell
+  gambit LOCK.** Two independent fixes; full writeup in `Docs/CAST-DELIVERY.md`'s
+  "CONCENTRATION CLAIM PORT + THE FIRING-SPELL GAMBIT LOCK" section.
+  (1) `CastSelfDirect`/`CastTargetDirect` (`Actuation_Direct.cpp`), right after
+  their existing `ComposedCast::Try` call (which stays HEAL-ONLY, untouched —
+  owned by a parallel change), now call `APMFBridge::ClaimOffenseCast` DIRECTLY
+  with `concentration=true, stopPct=0` when `kind != Heal` and the spell is
+  `kConcentration` -- the exact "FUTURE call site" PASS G's own doc predicted
+  and left unwired. Refused/absent/off/SE degrades to the SAME direct-force
+  stream that already ran, byte-identical. (2) `Actuation.cpp` gained a
+  per-follower `CastLock{spell,target,lastSeen}` (`g_castLock`/`g_lastLockLog`,
+  anon-namespace, file-local) that `CastOn` consults (`CheckCastLock`, called
+  right after the range/competence gates) before letting a DIFFERENT
+  `(spell,target)` than one already occupying the follower (an owned-cast claim
+  or a concentration stream) touch equip/consent/claims -- held off
+  (transparent `NoOp`, rate-limited `[eval]` log) while `CastLockLive` says the
+  old one is still live: `APMFBridge::IsOwnedCastActive`/`IsHealCastActive`
+  checked FIRST (authoritative), else `APMFBridge::FacetExpiry()` (REUSED, #9)
+  as a round-robin-aware staleness fallback for the un-claimed direct-force
+  case. Released by `Actuation::ClearCastLock(id)` -- wired into `Scheduler.
+  cpp`'s `!castSeen` release AND its out-of-combat teardown block, and
+  `Followers::ReleaseHeldState`'s dismissal teardown -- and in bulk by
+  `Actuation::ClearCastLocks()`, called from `Actuation::ClearSelfCasts()` (the
+  existing `Serialization.cpp` revert call site; no new one added).
+  `APMFBridge::FacetExpiry()` (`APMFBridge.cpp:159` was anon-namespace-private;
+  MOVED to external linkage + declared in `APMFBridge.h` for this cross-TU
+  reuse -- pure visibility change, same formula, every in-TU caller unaffected).
+  **Scope, deliberate:** the legacy AI-first-grace + force-on-miss hybrid and
+  `CastAuto`'s sequential-most-hurt heal fan are NOT covered by the lock (own
+  protections already; see the Docs section for why).
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE

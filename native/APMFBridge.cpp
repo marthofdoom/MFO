@@ -131,37 +131,47 @@ namespace MFO::APMFBridge {
         // ROUND-ROBIN service -- ONE follower serviced per ~133ms pump -- and uses
         // FacetExpiry() below instead.
         constexpr auto kExpiry = std::chrono::milliseconds(500);
+    }   // end anon namespace -- FacetExpiry (below) is now EXTERNAL LINKAGE, declared
+        // in APMFBridge.h, so feat/cast-gambit-concentration's cross-TU cast-lock
+        // staleness window (Actuation.cpp, Task 2) can reuse the SAME round-robin-
+        // aware sizing instead of inventing its own budget (#9). Purely a visibility
+        // move -- no formula change; every existing in-TU call site below still
+        // resolves it via the header declaration (included at the top of this file).
 
-        // ROUND-ROBIN-AWARE FACET EXPIRY (deck 2026-09-05, found via the heal-cast
-        // claim: claim/release every ~530ms, caster stuck at rest forever; then
-        // RE-PROVEN on the weapon-order equipment claim, Cicero deck capture: CLAIMED
-        // gate-only -> APMF-side RELEASED 919ms later, a full round-robin lap early,
-        // while MFO's own force-hold was still standing -- see ReconcileForcedWeapon's
-        // call site for the trace). An earlier version of this comment asserted the
-        // flat 500ms kExpiry was "a fine backstop" for cast-select/combat-target/
-        // equipment because "a live combat controller re-Wants every combat-thread
-        // beat" -- THAT WAS WRONG, disproven by the Cicero capture: all three are
-        // refreshed from the SAME per-follower Scheduler::Tick ROUND-ROBIN lap the
-        // heal claim uses (ClaimOffenseCast/ClaimCombatTarget <- Actuation::CastOn <-
-        // Actuation::Fire <- Scheduler.cpp's round-robin service; ClaimEquipment <-
-        // Actuation::ReconcileForcedWeapon <- the SAME service) -- ONE follower
-        // serviced per ~133ms (Scheduler.cpp), so a given follower's own gambit only
-        // re-fires (and re-Claims/Repoints/refreshes) every ~0.133s * partySize. For
-        // anything but a 1-2-follower party that gap already exceeds the flat 500ms,
-        // so the sweep in Tick() below released a live, still-wanted claim every
-        // round-robin lap. Size it the SAME way TargetCastReconcile/SelfCastReconcile
-        // already size their own round-robin-aware release windows: out-wait the
-        // worst-case suppression + round-robin gap, floored at the old kExpiry so a
-        // small party never regresses to a SLOWER release than before. Shared by
-        // offenseHandle/targetHandle/equipHandle/healHandle -- one formula, no
-        // per-facet copy-paste (none of the four need different sizing: they all
-        // share the identical round-robin service as their refresh source).
-        std::chrono::milliseconds FacetExpiry() {
-            const float suppress  = std::max(0.0f, Config::g_suppressWindow.load());
-            const float partySize = static_cast<float>(Followers::g_active.size() + 1);   // + player
-            const float sec = std::max(0.5f, suppress * 1.12f + 0.133f * partySize + 0.5f);
-            return std::chrono::milliseconds(static_cast<std::uint64_t>(sec * 1000.0f));
-        }
+    // ROUND-ROBIN-AWARE FACET EXPIRY (deck 2026-09-05, found via the heal-cast
+    // claim: claim/release every ~530ms, caster stuck at rest forever; then
+    // RE-PROVEN on the weapon-order equipment claim, Cicero deck capture: CLAIMED
+    // gate-only -> APMF-side RELEASED 919ms later, a full round-robin lap early,
+    // while MFO's own force-hold was still standing -- see ReconcileForcedWeapon's
+    // call site for the trace). An earlier version of this comment asserted the
+    // flat 500ms kExpiry was "a fine backstop" for cast-select/combat-target/
+    // equipment because "a live combat controller re-Wants every combat-thread
+    // beat" -- THAT WAS WRONG, disproven by the Cicero capture: all three are
+    // refreshed from the SAME per-follower Scheduler::Tick ROUND-ROBIN lap the
+    // heal claim uses (ClaimOffenseCast/ClaimCombatTarget <- Actuation::CastOn <-
+    // Actuation::Fire <- Scheduler.cpp's round-robin service; ClaimEquipment <-
+    // Actuation::ReconcileForcedWeapon <- the SAME service) -- ONE follower
+    // serviced per ~133ms (Scheduler.cpp), so a given follower's own gambit only
+    // re-fires (and re-Claims/Repoints/refreshes) every ~0.133s * partySize. For
+    // anything but a 1-2-follower party that gap already exceeds the flat 500ms,
+    // so the sweep in Tick() below released a live, still-wanted claim every
+    // round-robin lap. Size it the SAME way TargetCastReconcile/SelfCastReconcile
+    // already size their own round-robin-aware release windows: out-wait the
+    // worst-case suppression + round-robin gap, floored at the old kExpiry so a
+    // small party never regresses to a SLOWER release than before. Shared by
+    // offenseHandle/targetHandle/equipHandle/healHandle -- one formula, no
+    // per-facet copy-paste (none of the four need different sizing: they all
+    // share the identical round-robin service as their refresh source). NOW ALSO
+    // reused by Actuation.cpp's cast-gambit lock (Task 2) as the staleness window
+    // for its own un-claimed (direct-force concentration) fallback case.
+    std::chrono::milliseconds FacetExpiry() {
+        const float suppress  = std::max(0.0f, Config::g_suppressWindow.load());
+        const float partySize = static_cast<float>(Followers::g_active.size() + 1);   // + player
+        const float sec = std::max(0.5f, suppress * 1.12f + 0.133f * partySize + 0.5f);
+        return std::chrono::milliseconds(static_cast<std::uint64_t>(sec * 1000.0f));
+    }
+
+    namespace {
 
         // Ensure ONE channel claim tracks `want` (0 == release it). Caller holds g_mx.
         // On a CHANGE of an existing claim, RE-POINTS in place via Repoint (v3, same

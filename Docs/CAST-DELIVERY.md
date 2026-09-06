@@ -637,6 +637,13 @@ a FUTURE AI-driven concentration-offense call site, not invented here.
 threshold read by seat 0x07 `CheckStopCast`); no offense gambit has an
 analogous threshold in scope.
 
+**UPDATE (feat/cast-gambit-concentration, 2026-09-06): that future call site now
+exists — see the next section.** `ClaimOffenseCast`'s `concentration`/`stopPct`
+parameters are no longer dead wiring for offense; `CastTargetDirect`/
+`CastSelfDirect` call it directly for a non-heal concentration stream. `CastOn`'s
+`ownedCast` branch itself is UNCHANGED (a concentration spell still forks off
+before reaching it, so it still always passes `concentration=false`).
+
 **DEGRADE PATH.** A refused claim (APMF absent, `bApmfCast` off, ABI < 5, or
 APMF declines arbitration) makes `ClaimOffenseCast` return `false`; `CastOn`
 does NOT return early in that case — it falls through to the SAME
@@ -671,6 +678,103 @@ stays HEAL-ONLY-gated, unchanged). `Actuation::CastOn` arms it on a successful
 `Followers::OnFollowerRemoved`'s dismissal teardown both clear it alongside
 `ReleaseOffenseCast`. No watchdog, no re-fire, no fallback — a claim that
 stands with no observed cast only logs (principle #7).
+
+### CONCENTRATION CLAIM PORT + THE FIRING-SPELL GAMBIT LOCK (feat/cast-gambit-concentration, 2026-09-06)
+
+Two independent fixes, same branch.
+
+**1 — a non-heal CONCENTRATION stream now reaches the engine-seat path too.**
+Before this pass, `CastOn` forked EVERY concentration spell (self or target,
+any `SpellKind`) to `ConcentrationCast` → `CastTargetDirect`/`CastSelfDirect`,
+which already tried `ComposedCast::Try` for the engine-seat claim — but `Try()`
+is HEAL-ONLY gated (its whole point, per the offense-cast-seats port above: not
+widened). So a HEAL concentration stream (Healing Hands, a channelled heal
+gambit) already got the real AI-driven, animated channel; an OFFENSE or BUFF
+concentration stream (a channelled damage/drain, a channelled ward) always fell
+straight to the kInstant direct-force stream — never AI-fired, never animated,
+exactly the gap the "CONCENTRATION / STOP-PERCENT" note above called out as
+"a FUTURE call site, not invented here."
+
+That call site is now `CastSelfDirect`/`CastTargetDirect` themselves
+(`Actuation_Direct.cpp`), immediately after their existing `ComposedCast::Try`
+call: when `Try()` declines (which it always does for `kind != Heal`) AND the
+spell is `kConcentration` AND `kind != Heal`, they call `APMFBridge::
+ClaimOffenseCast` DIRECTLY with `concentration=true, stopPct=0` — the SAME
+`kIntent_Cast` facet the offense-cast port already wired concentration/stopPct
+parameters into but never called with `concentration=true`. `ComposedCast.*`
+itself is UNTOUCHED (owned by a parallel change; its `Try()` gate stays
+HEAL-ONLY by design) — this is a sibling call, not a widened one, mirroring
+`ComposedCast::Try`'s own sequence (claim, then `ComposedCast::WatchClaim` for
+the shared `[cfc]` silent-claim diagnostic, exposed for exactly this reuse) but
+without touching that module. `target=0` for self (matches `ClaimHealCast`'s
+convention); `hand=kApmfHandLeft` (matches every other claim on this path).
+
+**Degrade, preserved exactly.** APMF absent, ABI < 5 (no `RequestCast` slot),
+`bApmfCast` off, `bLegacyCastHybrid` on, or a refused claim (lost arbitration)
+all make `ClaimOffenseCast` return `false` — both call sites fall straight
+through to the SAME direct-force stream code that already ran before this pass,
+byte-identical. A concentration cast never silently vanishes: the existing
+`[cfc] claim live N ms with NO observed cast` diagnostic (`ComposedCast.cpp`)
+keeps working unchanged for this path (it is claim-generic, not heal-specific).
+
+**2 — a firing spell gambit now LOCKS until it completes.** marth: "while a
+spell gambit is actively firing, another spell gambit must not preempt or
+re-point it, even if it would otherwise win the rule evaluation." Before this
+pass, every APMF claim + concentration stream here uses a "call every tick the
+gambit wins" idiom with NO memory of what was previously firing — so a
+round-robin condition flicker (a foe's HP crossing a threshold, an ally
+becoming the new "most hurt") could hand `CastOn`/`ConcentrationCast` a
+DIFFERENT `(spell,target)` mid-charge/mid-channel, which the existing
+create-or-refresh claim logic treats as "a CHANGE" and tears down + re-requests
+— wasting an in-flight multi-second charge or channel.
+
+`Actuation.cpp` now keeps one `CastLock{spell,target,lastSeen}` slot per
+follower (worker-serial, `g_castLock`/`g_lastLockLog`, anon-namespace,
+file-local — no cross-TU exposure needed). `CastOn` checks it (`CheckCastLock`)
+right after the range/competence gates and before the self-cast fork,
+concentration fork, or owned-cast claim: a request for the SAME `(spell,target)`
+already locked proceeds normally (and refreshes the lock itself, `HoldCastLock`,
+at each of CastOn's self-cast-fork / owned-cast-claim / `ConcentrationCast`'s
+own Applied/Refreshed return points); a request for a DIFFERENT `(spell,target)`
+is held off — a transparent (GAMBIT_FLOWS §2) `NoOp` — while the lock is still
+LIVE, logged once per (follower,spell) per ~2s at `[eval]`.
+
+**Liveness, not a flat timer (marth's "must never become an unbounded hold").**
+`CastLockLive` checks `APMFBridge::IsOwnedCastActive`/`IsHealCastActive` FIRST —
+a live engine-seat claim (offense or heal) is authoritative proof the follower
+is still actively driven, so the lock tracks a claim's own bounded TTL/release
+exactly, never outliving it. Only when NEITHER claim is live (APMF absent/off,
+or the plain un-claimed direct-force concentration stream, whose registry is
+private to `Actuation_Direct.cpp`'s own TU and unqueryable from `Actuation.cpp`)
+does it fall back to a staleness window — `APMFBridge::FacetExpiry()`, REUSED
+verbatim (not a new invented budget, #9) since a still-winning gambit re-Holds
+the lock every round-robin lap, well inside that same window.
+
+**Release, every exit path:**
+- **Completion / claim release / TTL expiry** — `CastLockLive` returns false
+  the instant neither claim is live and the staleness window has elapsed;
+  `CheckCastLock` erases the stale entry on the very next differing request.
+- **The gambit stops winning entirely** — `Scheduler.cpp`'s `!castSeen` release
+  (no cast rule's condition held this tick at all) now also calls
+  `Actuation::ClearCastLock(id)`, alongside `ReleaseOffenseCast`/
+  `ComposedCast::ClearWatch`.
+- **Combat ends** — `Scheduler.cpp`'s out-of-combat teardown block now also
+  calls `Actuation::ClearCastLock(id)`, alongside `CasterConsent::Clear`.
+- **Follower dismissed** — `Followers::ReleaseHeldState` now also calls
+  `Actuation::ClearCastLock(id)`, alongside `ReleaseHealCast`/
+  `ReleaseOffenseCast`.
+- **Revert/load** — `Actuation::ClearCastLocks()` (bulk, all followers) is
+  called from `Actuation::ClearSelfCasts()`, the existing `Serialization.cpp`
+  revert call site — no new call site added there.
+
+**Scope, deliberate.** The legacy AI-first-grace + force-on-miss hybrid is NOT
+covered (it already self-protects via its own grace window + the `aiCastOther`
+miss detector, and is the degrade-when-absent path, not the primary one).
+`CastAuto`'s sequential-most-hurt heal fan is NOT covered (its own hysteresis
+is a deliberate target-cycling design, not the re-pointing bug this lock
+exists for — see [[cast-fanning-known-good-behavior]]). The out-of-combat
+Logistics dispatch never calls `CastOn`/`ConcentrationCast` at all (single-pass,
+no suppression-window rule scan to re-point from), so it needs no gate.
 
 ### CastBounds — the HARD-ABORT fix (§2)
 

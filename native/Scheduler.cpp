@@ -286,6 +286,11 @@ namespace MFO::Scheduler {
             // combat caster runs the hook, and Clear on an unlatched id is an
             // uncontended erase-miss.
             CasterConsent::Clear(id);
+            // The firing-spell gambit lock (Task 2, feat/cast-gambit-
+            // concentration) dies with the fight too, same reasoning as the
+            // cast-control latch just above -- a lock left standing from the
+            // last fight would hold off the FIRST cast rule of the next one.
+            Actuation::ClearCastLock(id);
             // Weapon-stance ownership dies with the fight too. The live CSTY
             // already reverted when the per-combat controller was destroyed;
             // this drops the stale bookkeeping so the next fight re-baselines.
@@ -904,6 +909,11 @@ namespace MFO::Scheduler {
             // nothing was armed (heal claims clear their own watch via
             // ComposedCast::End instead).
             ComposedCast::ClearWatch(id);
+            // Task 2: no cast rule's condition held this tick at all, so
+            // whatever the lock was protecting is no longer being requested
+            // either -- release it now rather than riding out its own
+            // live-check/staleness window.
+            Actuation::ClearCastLock(id);
         }
 
         const char* name = f->GetName() ? f->GetName() : "?";   // flair #11

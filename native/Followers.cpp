@@ -332,6 +332,10 @@ namespace MFO::Followers {
         // may have armed (Actuation::CastOn's ComposedCast::WatchClaim call).
         APMFBridge::ReleaseOffenseCast(id);
         ComposedCast::ClearWatch(id);
+        // The firing-spell gambit lock (Task 2, feat/cast-gambit-concentration):
+        // runtime-only, no serialized tail, same discipline as the two claims
+        // just above -- a dismissed follower's lock must not outlive him either.
+        Actuation::ClearCastLock(id);
     }
 
     void Refresh() {

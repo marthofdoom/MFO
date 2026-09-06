@@ -1,5 +1,6 @@
 #pragma once
 #include <RE/Skyrim.h>
+#include <chrono>   // FacetExpiry()'s std::chrono::milliseconds return type
 
 // ─────────────────────────────────────────────────────────────────────────────
 // APMF integration — MFO as an APMF client (Phase 3: the OWNED cast gambit). APMF
@@ -64,6 +65,19 @@ namespace MFO::APMFBridge {
 
     // Is the APMF interface live (present + ABI >= 2, so RequestEx is available)?
     bool Available();
+
+    // ROUND-ROBIN-AWARE STALENESS WINDOW (APMFBridge.cpp, 2026-09-05; moved to
+    // external linkage feat/cast-gambit-concentration so it has ONE definition
+    // shared cross-TU). Every claim in this file that is refreshed from INSIDE
+    // the per-follower Scheduler::Tick round-robin service (cast-select,
+    // combat-target, weapon-order equipment, heal-cast) is only re-touched every
+    // ~0.133s * partySize, not on a flat beat -- this returns the release window
+    // sized for that gap (worst-case suppression + round-robin lap, floored at
+    // 500ms), NOT the flat package-offer kExpiry. Reused verbatim by
+    // Actuation.cpp's firing-spell-gambit lock (Task 2, #9: a floor is safe, a
+    // guessed budget is not) as the staleness bound for the un-claimed direct-
+    // force concentration case, so both budgets can never drift apart.
+    std::chrono::milliseconds FacetExpiry();
 
     // Worker-safe (called from the pump, Diagnostics.cpp's SleeperLoop, beside
     // Tick()). No-ops instantly when Available() is true -- ZERO cost beyond

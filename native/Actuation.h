@@ -205,4 +205,24 @@ namespace MFO::Actuation {
     void CoSaveForcedWeapons(SKSE::SerializationInterface* a_intfc);
     void CoLoadForcedWeapons(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version);
 
+    // ── TASK 2 (feat/cast-gambit-concentration): firing-spell gambit lock ──────
+    // While a spell gambit is actively firing (an owned-cast claim mid-decision,
+    // or a concentration stream), CastOn/ConcentrationCast hold off a DIFFERENT
+    // cast rule from re-pointing it -- see the lock's own doc comment in
+    // Actuation.cpp (above ConcentrationCast) for the full rationale and its
+    // release conditions. These two are its EXTERNAL release points, for
+    // callers outside this TU:
+
+    // Drop a_follower's lock NOW. Idempotent (no lock -> no-op). Call the
+    // instant the follower is dismissed (Followers::ReleaseHeldState) or when
+    // no cast rule's condition holds this tick / combat ends (Scheduler,
+    // alongside ReleaseOffenseCast/ComposedCast::ClearWatch -- the same release
+    // points that claim already uses).
+    void ClearCastLock(RE::FormID a_follower);
+
+    // Revert/load: drop every follower's lock. No engine call -- the world is
+    // being replaced (mirrors ClearForcedWeapons/ClearSelfCasts). Called from
+    // ClearSelfCasts(), not wired as a separate Serialization.cpp call site.
+    void ClearCastLocks();
+
 }

@@ -10,6 +10,10 @@
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
 #include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
+#include "APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
+                            // non-heal (Offense/Buff) CONCENTRATION stream -- ComposedCast::Try
+                            // above is HEAL-ONLY by design, so offense/buff concentration needs
+                            // its OWN direct claim call here rather than a widened Try() gate.
 
 namespace MFO::Actuation {
 
@@ -761,9 +765,40 @@ namespace MFO::Actuation {
         // apply) for offense/buff or when the claim is refused. Returns true
         // only once APMF OWNS the cast, so the caller returns Applied without
         // its own engine call. a_stopPct forwards through unchanged.
-        if (ComposedCast::Try(a_follower, a_spell, a_follower,
-                              CasterConsent::ClassifySpell(a_spell), a_stopPct))
+        const auto selfKind = CasterConsent::ClassifySpell(a_spell);
+        if (ComposedCast::Try(a_follower, a_spell, a_follower, selfKind, a_stopPct))
             return SelfCast::Applied;
+
+        // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)
+        // CONCENTRATION self-cast never reached the engine-seat path above --
+        // ComposedCast::Try is HEAL-ONLY by design (ComposedCast.h; the
+        // offense-cast-seats port kept that gate rather than widen it), so a
+        // channelled self-buff/damage stream always fell straight to the
+        // kInstant direct-force beat below, never AI-fired/animated. Claim the
+        // SAME kIntent_Cast facet directly instead: APMFBridge::ClaimOffenseCast
+        // already carries an a_concentration parameter WIRED for exactly this
+        // ("a future AI-driven concentration offense call site without
+        // inventing one here" -- APMFBridge.h) and left unused until now.
+        // target=0 (self, matching ClaimHealCast's own convention), hand=LEFT,
+        // stopPct=0 (a heal-only concept -- no threshold in scope for offense/
+        // buff). Reuses the SAME [cfc] silent-claim diagnostic offense's owned-
+        // cast branch already arms (ComposedCast::WatchClaim, NOT a Try() gate
+        // widening). Refused / APMF absent / toggle off / SE -> false, falls
+        // straight through to the direct-force stream below, byte-identical to
+        // today -- a concentration cast must never silently vanish.
+        if (selfKind != CasterConsent::SpellKind::Heal &&
+            a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+            APMFBridge::Available() && Config::g_apmfCast.load() &&
+            !Config::g_legacyCastHybrid.load()) {
+            if (APMFBridge::ClaimOffenseCast(id, spellID, /*target=*/0,
+                                             APMFBridge::kApmfHandLeft,
+                                             /*concentration=*/true, /*stopPct=*/0)) {
+                ComposedCast::WatchClaim(id, spellID);
+                return SelfCast::Applied;
+            }
+            spdlog::info("[cast] {:08X} concentration offense-cast claim refused (self) -- "
+                         "direct-force stream runs instead", id);
+        }
 
         const auto now = SelfClock::now();
         auto it = g_selfCast.find(id);
@@ -928,6 +963,7 @@ namespace MFO::Actuation {
                                       // source Effect* (cross-load UAF / double-free)
         CastBounds::Reset();          // drop every MFO-executed-cast bound (§2 registry)
         ComposedCast::Reset();        // drop executor streams/backoff/expected-cast set
+        ClearCastLocks();             // Task 2: drop every firing-spell gambit lock
     }
 
     // ON-TARGET DIRECT FORCE = CastSelfDirect generalized to a NON-self target.
@@ -982,6 +1018,35 @@ namespace MFO::Actuation {
         // unchanged.
         if (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct))
             return SelfCast::Applied;
+
+        // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)
+        // CONCENTRATION cast at a player/ally/foe never reached the engine-seat
+        // path above -- ComposedCast::Try is HEAL-ONLY by design (ComposedCast.h),
+        // so a channelled damage/buff stream aimed at a target always fell
+        // straight to the kInstant direct-force beat below. Claim the SAME
+        // kIntent_Cast facet directly, mirroring CastOn's owned-cast branch
+        // exactly (hand=LEFT, stopPct=0 -- heal-only concept) and the self twin
+        // just above: APMFBridge::ClaimOffenseCast's a_concentration parameter
+        // was wired for precisely this call site and left unused until now.
+        // Placed BEFORE the LoS/line-of-fire gate below on purpose -- once
+        // APMF's engine seats own the cast, the AI's own combat sense re-checks
+        // sightline itself every charge/aim tick (the same reason the owned-cast
+        // branch in CastOn never re-derives LoS either); that gate exists for
+        // the kInstant fallback path only. Refused / absent / toggle off / SE ->
+        // false, falls straight through to the gate + direct-force stream
+        // below, byte-identical to today.
+        if (kind != CasterConsent::SpellKind::Heal &&
+            a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+            APMFBridge::Available() && Config::g_apmfCast.load() &&
+            !Config::g_legacyCastHybrid.load()) {
+            if (APMFBridge::ClaimOffenseCast(id, spellID, targetID, APMFBridge::kApmfHandLeft,
+                                             /*concentration=*/true, /*stopPct=*/0)) {
+                ComposedCast::WatchClaim(id, spellID);
+                return SelfCast::Applied;
+            }
+            spdlog::info("[cast] {:08X} concentration offense-cast claim refused (target {:08X}) -- "
+                         "direct-force stream runs instead", id, targetID);
+        }
 
         // HOSTILE offense: LoS + line-of-fire gates on the direct path too (the
         // package's ffWatch has no analog here, so re-check every tick). Held ->
