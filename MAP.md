@@ -14,8 +14,8 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (ProgAllocator 2333, Board 2190, Logistics_Loot 2227,
-   Packages 1657, Logistics 1700, CasterConsent 1066) should never sit in context — grep to a
+   whole files. Big files (ProgAllocator 2333, Board 2190, Logistics_Loot 2201,
+   Packages 1657, Logistics 1798, CasterConsent 1066) should never sit in context — grep to a
    symbol, read a narrow window.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
    changing a subsystem, re-read its "What breaks" entry *against current code*
@@ -402,6 +402,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
 - `CastOn` (`Actuation.cpp:265`) escalation: AE-only gate (`:314`) → range/competence/reserve →
+  **the Task 2 firing-spell gambit lock (`CheckCastLock`, PASS H below)** →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:70`) via `Packages::CastAt`.
   Off-AE the whole path declines transparently (#67) so vanilla AI keeps casting.
@@ -416,6 +417,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   cast pipeline they sit on), so deny-the-AI + deliver-directly is coherent, never a
   lockout. No bForceCastOnMiss/bUsePackages gate, no Loadout cooldown (the channel
   self-paces; a 4 s cooldown hole would let the ~2 s stale window tear it down).
+  Both its Applied/Refreshed branches now also call `HoldCastLock` (PASS H) so a
+  live stream is protected by the SAME lock `CastOn` checks up front.
 - `CastTargetDirect` (PUBLIC, `Actuation_Direct.cpp:927`) = `CastSelfDirect` generalized to a NON-self target: the
   known-working DIRECT FORCE (`CastSpellImmediate` onto the target + magicka deduct, NO
   package → beats the `§4.6` lock). Registry `g_targetCast`; concentration re-applies
@@ -424,7 +427,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   Callers: **Logistics OOC dispatch AND combat `ConcentrationCast` — BOTH primary**
   (marth's ruling: always the known-working force). LoS+LoF gate hostile offense on
   every apply. (The c539257 `CastConcentrationAt` package wrapper was REMOVED — it
-  caused the Lucien OOC-heal regression.)
+  caused the Lucien OOC-heal regression.) **PASS H (feat/cast-gambit-concentration):**
+  right after the existing `ComposedCast::Try` call (HEAL-ONLY, unchanged), both this
+  function and `CastSelfDirect` now try `APMFBridge::ClaimOffenseCast` directly
+  (`concentration=true, stopPct=0`) for a `kind != Heal` concentration spell — the
+  engine-seat path offense/buff concentration never reached before. Refused/absent
+  falls through to the SAME direct-force stream below, unchanged.
 - `CastAuto` (PUBLIC, `Actuation_Direct.cpp:1106`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
@@ -803,22 +811,91 @@ Out-of-combat supply/upkeep. `Logistics::ServiceFollower` + its whole loot/heal/
 economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
 `MainThread::Post`. Owns the serialized `g_stockGear` ('MSTK') map.
 
-### Logistics family: Logistics.cpp / _Cast / _Economy / _Loot / _internal.h / Logistics.h
-**MODULE SPLIT (mechanical, v1.1 split pass):** one TU became four + a shared
-internal header. Cross-module state/types/small helpers live as `inline` members
-of `namespace MFO::Logistics` in `Logistics_internal.h` (ONE instance across the
-TUs — it replaces the old single anonymous namespace; big cross-module helpers
-are declared there and defined in their home module). Layout:
-- `Logistics.cpp` (1700) — core tick: `ServiceFollower` (`:625`, INCLUDING the
+### Logistics family: Logistics.cpp / _Cast / _Economy / _Loot / _Loot_Equipment / _internal.h / Logistics.h
+**MODULE SPLIT (mechanical, v1.1 split pass; +1 module 2026-09-06 — the
+2500-line hard rule crossed again after the route-2b generalization pass, see
+below).** One TU became five + a shared internal header. Cross-module
+state/types/small helpers live as `inline` members of `namespace
+MFO::Logistics` in `Logistics_internal.h` (ONE instance across the TUs — it
+replaces the old single anonymous namespace; big cross-module helpers are
+declared there and defined in their home module). Layout:
+- `Logistics.cpp` (1798) — core tick: `ServiceFollower` (`:625`, INCLUDING the
   OOC cast dispatch `:~1080-1320` — concentration direct-force `:~1210`,
   fire-and-forget `:~1300`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
   `ShedOffRoleWeapon`, sinks, lifecycle + MSTK API, evaluator pure reads.
+  **PLAYER-COMBAT LOOT INTERRUPT (2026-09-06):** the GLOBAL travel-intent
+  backstop (`:664-728`, runs on EVERY out-of-combat service call, ANY
+  follower, ~133 ms-scale — not gated on the 1 s logistics cadence) now also
+  clears every active loot-travel slot when `RE::PlayerCharacter::IsInCombat()`
+  is true (`playerInCombat:~700`), same mechanism as the existing cap/
+  subsystem-off exits (`Packages::LootTravelClear`, reason `"player combat"`,
+  no `MarkTravelFailed` — the corpse isn't penalized). Distinct from THIS
+  follower's own combat yield (`ReleaseTravelOnCombat`, Scheduler's in-combat
+  branch, unchanged) — a traveller can sit a room away from a fight for
+  several ticks before his own `IsInCombat()` flips, which is the gap this
+  closes.
 - `Logistics_Cast.cpp` (269) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
   `TopTwoSchoolMask`, `LearnCarriedTomes:137`, school name/keyword helpers.
 - `Logistics_Economy.cpp` (1034) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
   `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
+- `Logistics_Loot.cpp` (2201) — the loot judge + per-category looters,
+  claim-and-release, navmesh reach, `AcquireEquip:575`, `LootGold:711`,
+  `LootValuables:915`, `HasLoot:1210`, `LootNearby:1307`, `StripCorpse:2064`,
+  `RunExcursionScan:2128`. `LootEquipment` itself now lives in
+  `Logistics_Loot_Equipment.cpp` (see below); everything else that was here
+  (Jewelry/SoulGems/Ingredients/Valuables/Gold/Ammo/Potions/Lockpicks judges)
+  is unmoved.
+  **ROUTE 2b GENERALIZED TO EVERY CATEGORY (2026-09-06):** the loose-ref
+  whitelist inside `LootNearby` (`:~1988`, a `switch (a_cat)` now, was an
+  if/else chain) covers ALL ten `Category` values, each via the SAME
+  predicate its container-side `Loot*`/`Is*Item` function already runs on one
+  item — `IsCoinLoot`/`kGold001` (Gold, and Valuables which also still takes
+  `IsValuableMisc`), `IsJewelryPiece` (Jewelry), `IsSoulGemItem` (SoulGems),
+  `IsIngredientItem` (Ingredients), a `kLockpick` FormID match (Lockpicks),
+  and `LooseEquipmentQualifies` (Equipment, see the new module below) — so
+  `act.loot_soul_gems`/`_ingredients`/`_equipment`/`_jewelry`/`_lockpicks` now
+  all pick up a loose item exactly like a container one. Quest/catalog
+  NEVER-LOOT gating for the loose path is `LooseSpecialItemBlocked`
+  (`:533`, wraps `IsQuestObjectRef:521` — the loose-ref analog of
+  `IsQuestObjectInstance:510`, since a bare world ref has no
+  `InventoryEntryData` to ask; calls `TESObjectREFR::HasQuestObject()`
+  directly — VERIFIED against the exact pinned CommonLibSSE commit this repo
+  builds against, portfile REF `c4ab853d`/`CharmedBaryon/CommonLibSSE`, not
+  the newer CommonLibSSE-NG fork; a first pass guessed `ExtraDataList::
+  HasQuestObjectAlias()`, which doesn't exist in the pinned version and
+  failed CI) + the same `Catalog::IsExcluded`/`bLootSpecialItems` toggle —
+  applied to every category whose container form also gates on it
+  (Jewelry/SoulGems/Ingredients/Equipment/the Valuables-MISC branch); Arrows/
+  Bolts/Potions/Lockpicks/Gold get none, matching their container form. The
+  acquire MECHANISM is unchanged and untouched by this pass — every loose
+  category still transfers via the engine's own `ActivateRef`
+  (`Logistics.cpp`'s excursion arrival, MainThread-posted), never
+  `PickUpObject`/AddTask (crash4 class); the whitelist only decides
+  ELIGIBILITY. Nothing was deliberately excluded from the generalization —
+  every `Category` ordinal now has a loose-ref path.
+- `Logistics_Loot_Equipment.cpp` (461, NEW 2026-09-06) — split out of
+  `Logistics_Loot.cpp` purely to stay under the 2500-line hard rule (pure
+  mechanical move, no logic change). Owns the equipment judge:
+  `BuildEquipmentContext:26` (the role/mage-mode gate + the follower's-own-
+  gear baselines, extracted verbatim from `LootEquipment`'s old inline setup),
+  `LootEquipment:221` (container scan, unchanged besides reading its context
+  via `ctx.*` aliases instead of computing it inline), and the route-2b twin
+  `LooseEquipmentQualifies:174` — mirrors `LootEquipment`'s armor/weapon
+  branches for a SINGLE loose candidate (the container loop's "beats the
+  running best" collapses to "beats the follower's baseline" for a lone
+  item — same initial-value thresholds, so no separate rule to drift out of
+  sync). `EquipmentContext` itself is a shared type declared in
+  `Logistics_internal.h` (WeaponRoles-adjacent), since `LootNearby`
+  (`Logistics_Loot.cpp`) constructs/holds one too (lazily, once per
+  `LootNearby(Category::Equipment)` call, not per candidate ref).
+  `IsCreatureWeapon`/`IsCreatureArmor`/`CarriesSlotArmorAtLeast` (still
+  defined in `Logistics_Loot.cpp`, declared in the internal header —
+  `CarriesSlotArmorAtLeast` newly added there, the split's other cross-TU
+  miss CI caught) gate the loose path exactly like the container one — the
+  creature-gear protection is not weakened.
+- `Logistics_internal.h` (~750) — shared substrate: all `g_*` maps/state
 - `Logistics_Loot.cpp` (2419) — the loot judge + per-category looters,
   claim-and-release, navmesh reach, `AcquireEquip:550`, `LootEquipment:629`,
   `LootGold:1026`, `LootValuables:1230`, `HasLoot:1525`, `LootNearby:1622`,
@@ -840,10 +917,23 @@ are declared there and defined in their home module). Layout:
   type yet; that generalization is a documented follow-up, not built here.
   BEHAVIOUR CHANGE: an existing `act.loot_valuables` rule now also picks up
   coin and loose gems.
+  **[L] GLYPH RELIABILITY FIX (2026-09-05, marth):** `IsLooting` (`:626`,
+  `SlotOf(id) != nullptr`) is a pure travel-slot proxy — true the whole walk-
+  there and even on an arrival that finds nothing, false for arm's-reach loot
+  that never claims a slot. The board's "Looting" signal now reads
+  `JustLooted` (`:657`) instead, stamped by `MarkJustLooted` (`:651`) at the
+  THREE confirmed-acquisition points in `Logistics.cpp` — the arm's-reach
+  fall-through (`:1563`, gated `IsLootOp` — `Logistics_internal.h:318`), the
+  loose-item Activate readback (`:790`), and the `StripCorpse` call (`:946`).
+  Window sized off the round-robin cadence (`partySize * kPumpMs`, #9), not a
+  guessed constant — see `Logistics.h`'s `JustLooted` doc. `IsLooting` itself
+  is UNCHANGED and still used by other callers; don't re-wire the board back
+  to it.
 - `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state
   (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
-  `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/`Claim`,
-  inline small helpers, cross-module declarations. NOT public API.
+  `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/
+  `EquipmentContext`/`Claim`, inline small helpers, cross-module declarations.
+  NOT public API.
 Adding shared state? Put it in `_internal.h` as `inline` (never a per-TU
 anonymous-namespace copy — that silently forks the instance).
 - **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics_internal.h:569`, guarded
@@ -881,8 +971,10 @@ anonymous-namespace copy — that silently forks the instance).
   (after `Catalog::Load`).
 - **Alias/travel:** `g_travelSlots` (`Logistics_internal.h:323`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
-  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `Logistics.cpp:1655` ←
-  `Scheduler.cpp:328`; cap/leash/dismissal/revert). Leash hysteresis guards
+  `Packages::LootTravelClear` (this follower's own combat via `ReleaseTravelOnCombat`
+  `Logistics.cpp:1753` ← `Scheduler.cpp:328`; the PLAYER's combat via the global
+  backstop `Logistics.cpp:~664-728`, see the PLAYER-COMBAT LOOT INTERRUPT note
+  above; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
   **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `Logistics.cpp:~700`) detects an EXTERNAL package
   holding a claimed follower (scene/framework; onTravelPkg=false mid-walk), pauses
@@ -910,7 +1002,7 @@ anonymous-namespace copy — that silently forks the instance).
   every slot) and the one-time `EvaluatePackage` on engage/retarget/release are
   untouched — only the per-tick re-assert nudge inside the theft-guard was
   redundant.
-- **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1477`; cell set built just below it):
+- **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1307`; cell set built at `:1417`):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
   (crash4). Dropping back to one cell re-blinds exterior scans across cell borders
@@ -921,7 +1013,7 @@ anonymous-namespace copy — that silently forks the instance).
   first, then the dibs items later in the runs, no pauses").** Both gambit-
   table dispatch loops that pick a loot action — the normal per-tick loop
   (`Logistics.cpp:~1114-1512`) and the excursion leg-boundary dispatcher
-  (`RunExcursionScan`, `Logistics_Loot.cpp:2314`) — now run the follower's
+  (`RunExcursionScan`, `Logistics_Loot.cpp:2128`) — now run the follower's
   gambit table TWICE: pass 0 defers any dibs-tier loot op (Equipment/Gold/
   Jewelry/SoulGems/Valuables — `IsDibsTierLootOp`, `Logistics_internal.h:308`)
   so free-tier categories (arrows/bolts/potions/lockpicks/ingredients —
@@ -930,7 +1022,7 @@ anonymous-namespace copy — that silently forks the instance).
   gambit-table priority order; pass 1 is the original unrestricted walk, so a
   released/cleared dibs item still loots normally once nothing free-tier
   fired. `StripCorpse` (arm's-reach full drain once already at a body,
-  `Logistics_Loot.cpp:2250`) is UNCHANGED — it already skips a still-dibs'd
+  `Logistics_Loot.cpp:2064`) is UNCHANGED — it already skips a still-dibs'd
   category per visit without stalling (leaves the body eligible for a future
   revisit), so reordering it can't remove a pause that doesn't exist there.
   Also removed: the excursion `Holding`-phase linger-and-re-scan hold that
@@ -946,7 +1038,7 @@ anonymous-namespace copy — that silently forks the instance).
   (`OfferPackage`/quiet-hold, `Packages.cpp`), the combat-eviction, the
   excursion cap, and the leash are all untouched.
 - **UNIFIED LOOT-FAILURE MODEL + in-reach drain (perf/stall pass, 2026-09):**
-  (a) candidate sort (`LootNearby`, `Logistics_Loot.cpp:~1830`) is failed-recently-
+  (a) candidate sort (`LootNearby`, `Logistics_Loot.cpp:~1769`) is failed-recently-
   LAST then closest-first — a path-troubled target is DEPRIORITIZED, never removed;
   (b) a NON-LOOSE in-reach source is DRAINED whole (`StripCorpse` from inside
   `LootNearby`) and the normal-mode loop keeps draining further in-reach sources
@@ -956,7 +1048,7 @@ anonymous-namespace copy — that silently forks the instance).
   no-progress stall) widens that ref's from-range grab radius
   `kArrivalDist+100/fail` capped 600u — the PRIMARY stall cure; player-bubble +
   leash + `TierReleased` dibs still gate a grown grab, loose refs excluded;
-  (d) the off-navmesh PRE-gate (`Logistics_Loot.cpp:~1915/~2000`) is TRANSIENT-only
+  (d) the off-navmesh PRE-gate (`Logistics_Loot.cpp:~1904/~1963`) is TRANSIENT-only
   (`MarkTravelFailed`, never a sticky strike) — only a walked no-progress stall or
   the loose/unacquirable case reaches the sticky set, whose cooldown is now
   `kTravelStickyCooldown=60s` (was 5 min). Walk paths still hard-skip inside the
@@ -982,7 +1074,8 @@ anonymous-namespace copy — that silently forks the instance).
   primitive; `AddSpell`+`RemoveItem`, worker/edit-drain-safe, NEVER `MainThread::Post`).
   Mage-vs-armor apparel gate in the loot judge keys off `useMageApparel = mageMode &&
   Config::g_mageWearRobes` (bMageWearRobes OFF → caster loots rated armor).
-  `mageMode` (`Logistics_Loot.cpp:~681`) requires `castGambits > 0` AND the follower is
+  `mageMode` (`Logistics_Loot_Equipment.cpp:77`, inside `BuildEquipmentContext`)
+  requires `castGambits > 0` AND the follower is
   PRIMARILY a caster (base class Mage, or — Auto/no class — no melee/ranged attack
   gambit) — a Ranged/Melee follower with a secondary cast gambit stays out of mageMode
   and keeps his class loadout (2026-09 fix; was any-cast-gambit, which flipped a
@@ -999,10 +1092,11 @@ anonymous-namespace copy — that silently forks the instance).
   `MainThread::Post` (re-resolve on-frame; GLOB values are save-persisted, so this is
   the same field vanilla writes — no co-save risk). `[college]` log on first flip.
 - **#21 equip + unified apparel judge (loot ⇄ buy).** The loot equip step is factored
-  into `AcquireEquip` (`Logistics_Loot.cpp:538`, v1.0.38 SAFE path: `MainThread::Post` +
+  into `AcquireEquip` (`Logistics_Loot.cpp:575`, v1.0.38 SAFE path: `MainThread::Post` +
   `ActorEquipManager::EquipObject`, **never DoReset3D** #62; MEO gem capture +
   `QueueGemMove`). `a_src==nullptr` ⇒ the follower already owns the item (buy / owned
-  upgrade). `LootEquipment` routes through it; the **mage apparel selection is now the
+  upgrade). `LootEquipment` (`Logistics_Loot_Equipment.cpp:221`) routes through it;
+  the **mage apparel selection is now the
   unified `MageApparelBuyKey`** (MEO-aware value/school ranking) across clothing slots
   (jewelry stays on the Valuables/`LootJewelry` path — dibs preserved). `EquipBestOwnedGear`
   (worker, `ServiceFollower` idle branch, dolls-gated) wears the single best OWNED
@@ -1024,15 +1118,40 @@ load — no co-save record.
 - Five deliberately-separate main-thread-only maps (`:9-57`): `g_debt`, `g_lastStow`,
   `g_equipClock`, `g_coolUntil`, `g_mfoSpell` — merging them re-introduces named
   regressions.
-- `Prepare` (`:156`) → `Actuation.cpp:447-538`. `StartCooldown` (`:309`) → Actuation
-  + Diagnostics; **mirrors into `CasterConsent::NoteCooldown`** (`:321`) so the combat
-  thread reads the mirror, never these non-atomic maps. `Tick` (`:361`) ←
-  `Diagnostics.cpp:256` (settles debts). `Reconcile` (`:457`) ← `plugin.cpp:361`
+- `Prepare` (`:240`) → `Actuation.cpp:447-538`. `StartCooldown` (`:413`) → Actuation
+  + Diagnostics; **mirrors into `CasterConsent::NoteCooldown`** (`:425`) so the combat
+  thread reads the mirror, never these non-atomic maps. `Tick` (`:465`) ←
+  `Diagnostics.cpp:256` (settles debts). `Reconcile` (`:561`) ← `plugin.cpp:361`
   (undo a save taken mid-cast; iterates `g_active`, main-thread). `ClearTransientState`
-  (`:521`) ← `Serialization.cpp:595`.
-- **Collect-then-act** (`:381`): `EquipObject` dispatches synchronous events;
+  (`:625`) ← `Serialization.cpp:595`.
+- **Collect-then-act** (`:485`): `EquipObject` dispatches synchronous events;
   mutating `g_debt` mid-iteration is the MEO use-after-free shape. `DeselectSpell`
   (not `UnequipObject`) is load-bearing for spells.
+- **`HandPick`/`PlanCastHand`/`CanDualCast` (2026-09-06, `:157-238` in `Loadout.h`,
+  impl `:156-238` here) — the intelligent hand-selection POLICY (marth's "MFO
+  decides WHICH hand(s) to claim" pass).** Pure decision, no engine writes, no
+  APMF dependency (this module stays framework-agnostic). `PlanCastHand(actor,
+  spell, weaponHandActive)`: weapon-hand-active → `Left`; else both hands free
+  → `CanDualCast` (real HasPerk-or-base-template-perk check against the vanilla
+  Skyrim.esm Dual Casting perk for the spell's OWN school, `0x000153CD`..
+  `0x000153D1`, `DualCastPerkForSchool` anon-ns `:168`, + `CalculateMagickaCost
+  x 2.8` affordability, the vanilla `fMagicDualCastingCostMult` hardcoded the
+  same way `fBarterMax`/`fBarterMin` already are in `Logistics_Economy.cpp`) →
+  `DualCast` or `EitherFree`. **Claim shape now supports it (2026-09-06)** —
+  `APMFBridge::HandFor(HandPick)` + `kApmfHandDualCast` translate a `DualCast`
+  plan into `APMF_API::kCastFlag_DualCast` on a `kIntent_Cast` claim (see
+  `APMFBridge.h`/`.cpp`'s `EnsureHealClaimLocked`) — but **still NOT wired to
+  any live caller**: heals bypass this policy entirely by hard rule (heal is
+  LEFT, unconditionally, see `APMFBridge.h`'s `ClaimHealCast` doc), and
+  offense's `ClaimCasting` (`Actuation.cpp`) neither carries a hand parameter
+  nor uses a claim shape (`kIntent_SelectSpell`) that can carry `CastFlags` in
+  the first place. `APMFBridge::WeaponHandActive` (`APMFBridge.cpp`, combines
+  this file's `Read().grip` with `IsEquipmentClaimActive`) is the intended
+  `a_weaponHandActive` producer for the APMF-owned path. **What breaks:** none
+  yet (no live call sites) — but `DualCastPerkForSchool`'s FormIDs are
+  hardcoded (no INI override, unlike `Config::g_merchantPerkID`); a
+  perk-overhaul that relocates the vanilla dual-cast perks would need one
+  added before this is wired live.
 
 ### ItemCatalog.cpp / ItemCatalog.h — patcher JSON lookup (pure read, no save)
 Loads `Data/SKSE/Plugins/MFO/mfo_items.json` (written by the MFO.Synthesis patcher)
@@ -1285,6 +1404,11 @@ main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not re
   overload) + a synthesized `tooltip` (`SpellTooltip`, effect name+mag/dur/area) —
   all filled in `PublishSnapshot` (main). The gambit spell-picker renders the hover
   tooltip via `DrawSpellHoverTooltip` from those cached values.
+- **`DrawHud`'s `[C][L][T]` strip (`:1463`, marth 2026-09-06)** — persistent
+  bracket SLOTS: the bracket is always drawn (`TextDisabled("[ ]")` when idle),
+  only the letter+colour comes and goes, so the strip's width never shifts.
+  `r.looting` is fed by `Logistics::JustLooted`, not `IsLooting` — see the
+  Logistics-family entry's "[L] GLYPH RELIABILITY FIX" for why.
 - **#78 Followers-tab MFO toggle** — the tab's FIRST column is a per-row checkbox
   bound to `FollowerRow.mfoEnabled` (mirrored from `FollowerState::mfoEnabled` in
   `PublishSnapshot`, both the active + retained builders). The `##followers` table
@@ -1336,8 +1460,9 @@ insert/resize breaks both DLLs. Threading is part of the ABI (queries main-threa
 Rides a follower's socketed gems onto looted gear on upgrade. Fully optional.
 `Acquire()` (`:61`) ← `plugin.cpp:289` (nullptr on absence/ABI-mismatch).
 `RegisterSink()` (`:73`) ← `plugin.cpp:298` (equip sink — must stay with the other
-sinks or moves never flush). `QueueGemMove`/`WornUid`/`Available` ← `Logistics_Loot.cpp`
-(`AcquireEquip:538` + `LootEquipment`, worker tick). `PreviewWithGems` (`:105`, main-thread queries) has no
+sinks or moves never flush). `QueueGemMove`/`WornUid`/`Available` ←
+`Logistics_Loot.cpp` (`AcquireEquip:575`) + `Logistics_Loot_Equipment.cpp`
+(`LootEquipment:221`), worker tick. `PreviewWithGems` (`:105`, main-thread queries) has no
 live caller (**UNVERIFIED** — check Board before removing). `g_pending` keys on
 `(followerFormID<<32|toBase)`; if `ClearTransientState` (`:100` ← `Serialization.cpp:
 616`) stops being called on revert, a reused FormID next session moves gems onto the
@@ -1362,11 +1487,12 @@ byte-shared `APMF_API.h` (C-ABI POD; append-only, mirror APMF's copy). `Acquire(
 `plugin.cpp:289` (kDataLoaded): `GetModuleHandleA("APMF.dll")` + `GetProcAddress(
 "APMF_GetInterface")` → `fn(kABIVersion)` → cast up to `APMF_API_v2*`; **null-degrades** with one
 log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-identical.
-- **THE MODEL: APMF ARBITRATES; MFO EXECUTES.** APMF never generates behaviour (its channels are
-  arbitration-only). This bridge only ever CLAIMS facets (`ClaimCasting`/`ClaimCombatTarget` →
-  `RequestEx`/`Repoint`, basis 200); MFO executes the real cast with its OWN mechanisms.
+- **THE MODEL: APMF ARBITRATES/DRIVES; MFO EXECUTES the rest.** APMF never generates behaviour on its
+  own initiative (its channels are client-declared, arbitration/drive-only). This bridge only ever
+  CLAIMS facets (`ClaimOffenseCast`/`ClaimCombatTarget` → `RequestCast`/`RequestEx`/`Repoint`, basis
+  200); MFO executes the equip/target/consent half with its OWN mechanisms.
 - **THE OWNED CAST (default), a real AI-DECIDED animated cast — `Actuation::CastOn` FF-non-self
-  hostile branch (`Actuation.cpp` ~`:487`, worker):** SELECTION is `Loadout::Prepare`'s
+  hostile branch (`Actuation.cpp` ~`:513`, worker):** SELECTION is `Loadout::Prepare`'s
   `EquipSpell(..., LeftHandSlot())` (§0.28) — **never** a hand-written `selectedSpells`/`currentSpell`
   (ENGINE_NOTES §585: a hand-write desyncs the engine's select/deselect bookkeeping; the original
   `SelectCasterSpell` helper did exactly that, on the WRONG hand, every tick, resetting the charge
@@ -1374,49 +1500,78 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   Caster` with a DIFFERENT spell already in hand, `Loadout::Prepare` (`Loadout.cpp:191-213`) also
   **neutralizes a competing spell in the OTHER hand** (`DeselectSpell`) — but ONLY at `iCastControl`
   level 4 (exact); looser levels leave that hand to the AI (`CastExempt`). MFO then (a) CLAIMS the
-  cast + combat-target facets via APMF (`Actuation.cpp:522-523`) and (b) `Targeting::Command(follower,
-  target->GetHandle())` commands the target (its UpdateCombat hook re-asserts `currentCombatTarget`,
-  `:533`) — **every owned tick, deliberately not deduped here**: `EnsureClaimLocked`
-  (`APMFBridge.cpp:151`) already no-ops an unchanged claim but still stamps its liveness timestamp on
-  every call (`:338`/`:367`), which is what keeps the claim alive past its `FacetExpiry()` backstop
-  (round-robin-aware, `:140`; NOT the flat `kExpiry`, `:114` — see the 2026-09-05 entry below, proven
-  round-robin-bound by the Cicero equipment-claim capture) — a per-follower dedupe latch that skipped
-  these calls on an unchanged tick was tried 2026-09-02 and reverted the same day (Fable review) for
-  starving the claim mid-cast ("casting facet released" while the AI was still charging);
-  `Targeting::Command` has its own
-  unchanged-latch dedupe (`Targeting.h:37-41`) so calling it every tick is equally cheap.
-  `CasterConsent::Want` (granted at `:460`, every tick — same reasoning) permits our spell + denies
-  competing; the
-  **Cast-biased combat style** (`Scheduler.cpp:~805` sets `Stance::Cast` when a cast is wanted → raises
-  the magic score) makes the follower's own AI DECIDE to cast. Result: the vanilla AI casts our spell
-  at our target, FULL animation, still MOBILE (ENGINE_NOTES §0.15a/§0.27/§0.28). Resolves
-  [[cast-animations-deferred-to-post-town-polish]]. **GRANULAR: movement facet is NOT claimed** — the
-  follower keeps kiting while it casts. **NO force on this path** — `CastSpellImmediate` never runs
-  here; the returned `{NoOp,"owned cast: AI deciding (animated, mobile)"}` (or `"...latched
-  (unchanged)"` on a deduped tick) just lets the AI act. Concentration never enters this branch
-  (bounded direct fork returns earlier — exact-bounding intact).
-- **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** casting =
-  PER-CAST (refreshed each winning cast tick; released crisply by `ReleaseCasting` ← `Scheduler.cpp:~894`
-  on `!castSeen`). combat-target = PER-COMBAT (created by EITHER the cast directive OR the ATTACK
-  directive — both `ClaimCombatTarget(create=true)` ← `Actuation.cpp:~1009` (2026-09-03: melee-attack
-  directives now get the same arbitration a caster already had, not just a re-point of a
+  `kIntent_Cast` facet via `ClaimOffenseCast` (`Actuation.cpp:~554`, PORTED feat/offense-cast-seats
+  2026-09-05 off the retired ch.8 `kIntent_SelectSpell` gate-only claim — see PASS G below); ONLY on a
+  LIVE claim does it also (b) claim `ClaimCombatTarget(create=true)` and (c) `Targeting::Command(
+  follower, target->GetHandle())` to command the target (its UpdateCombat hook re-asserts
+  `currentCombatTarget`) — **every owned tick this branch wins, deliberately not deduped here**:
+  `EnsureCastClaimLocked` (`APMFBridge.cpp:243`, shared with `ClaimHealCast`) already no-ops an
+  unchanged claim but still stamps its liveness timestamp on every call, which is what keeps the claim
+  alive past its `FacetExpiry()` backstop (round-robin-aware, `:159`; NOT the flat `kExpiry`, `:133` —
+  proven round-robin-bound by the Cicero equipment-claim capture) — a per-follower dedupe latch that
+  skipped these calls on an unchanged tick was tried 2026-09-02 and reverted the same day (Fable
+  review) for starving the claim mid-cast ("casting facet released" while the AI was still charging);
+  `Targeting::Command` has its own unchanged-latch dedupe (`Targeting.h:37-41`) so calling it every
+  tick is equally cheap. **A REFUSED claim does NOT return early** — `ownedCast` falls through to the
+  SAME legacy AI-first-grace + force-on-miss hybrid below, byte-identical to the APMF-absent path; a
+  refused claim never silently drops the cast. `CasterConsent::Want` (granted at `:462`, every tick —
+  same reasoning) permits our spell + is the only remaining source of "deny competing" (APMF's own
+  seats now enforce exclusivity too, see `IsOwnedCastActive` below); the **Cast-biased combat style**
+  (`Scheduler.cpp:~805` sets `Stance::Cast` when a cast is wanted → raises the magic score) STILL
+  supplies motive at the fringe, but once the `kIntent_Cast` claim is live APMF's five engine seats
+  (`CheckShouldEquip` 0x0F, `CheckStartCast` 0x06, `GetMagicTarget` 0x0A, `CheckStopCast` 0x07,
+  `SetupAimController` 0x0D — the SAME seats `ClaimHealCast` drives) select/equip/charge/aim/fire/
+  channel EXACTLY the claimed spell at EXACTLY the claimed target directly — closing the
+  long-standing "target right, spell wrong" defect ([[cast-gambit-spell-choice-not-enforced]]).
+  Result: the vanilla AI casts our spell at our target, FULL animation, still MOBILE (ENGINE_NOTES
+  §0.15a/§0.27/§0.28). Resolves [[cast-animations-deferred-to-post-town-polish]]. **GRANULAR:
+  movement facet is NOT claimed** — the follower keeps kiting while it casts. **NO force on this
+  path** — `CastSpellImmediate` never runs here; the returned `{NoOp,"owned cast: AI deciding
+  (animated, mobile)"}` just lets the AI act. Concentration never enters this branch (bounded direct
+  fork returns earlier — exact-bounding intact; `a_concentration` is always passed `false` to
+  `ClaimOffenseCast` at this call site for that reason).
+- **Heal/Buff FF non-self claim (feat/castone-heal-gate, 2026-09-06, API-PORT-AUDIT.md #1):**
+  `ownedCast` above is Offense-only by its own classification check, so a fire-and-forget Heal/Buff
+  spell aimed at an ally or the player (target ≠ follower) fell through it untouched. Immediately
+  after `ownedCast`'s block (whether or not it ran — it never fires for a non-Offense spell), `CastOn`
+  now also calls `ComposedCast::Try(a_follower, spell, a_target, ClassifySpell(spell), /*stopPct=*/0)`
+  — the SAME `kIntent_Cast` claim `CastSelfDirect`/`CastTargetDirect` already make for a heal, reused
+  verbatim (HEAL-ONLY internal gate in `ComposedCast::Enabled`, so a Buff kind degrades to `false`
+  immediately). On success: `HoldCastLock` + `{NoOp,"composed cast: AI deciding (animated, mobile)"}`,
+  same OPAQUE-hold shape as `ownedCast`'s own success return. On refusal (Buff kind, AE/APMF/
+  `bHealAnimPackage` off, or a lost claim): falls straight through to the unchanged AI-first-grace +
+  `ForceCast` hybrid below — byte-identical degrade, a heal never silently vanishes. Explicitly guards
+  `a_target != a_follower` (self-target CAN reach this far when `bCastSelf`, dev-only default off,
+  never forked it off earlier in `CastOn` — self-cast stays `CastSelfDirect`'s own gated mechanism,
+  not annexed here). **IN-COMBAT ONLY** — `CastOn` only runs from `Actuation::Fire`'s combat dispatch;
+  the OOC mirror (`Logistics.cpp`'s FF beneficial direct-apply) is deliberately untouched (open
+  question: whether `kIntent_Cast`'s engine seats function without a live `CombatController`).
+- **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** offense-cast =
+  PER-CAST, TTL-bounded (`kIntent_Cast`; refreshed each winning cast tick; released crisply by
+  `ReleaseOffenseCast` ← `Scheduler.cpp:~901` on `!castSeen`, which also clears the shared `[cfc]`
+  watch, `ComposedCast::ClearWatch`). combat-target = PER-COMBAT (created by EITHER the cast directive
+  OR the ATTACK directive — both `ClaimCombatTarget(create=true)` ← `Actuation.cpp:~1064` (2026-09-03:
+  melee-attack directives now get the same arbitration a caster already had, not just a re-point of a
   pre-existing claim) — re-pointed via APMF `Repoint` when the foe changes; `RefreshCombatTarget` ←
   `Scheduler.cpp:~330` keeps it alive every in-combat tick; released only at combat end via the
-  expiry sweep). `Tick()` ← `Diagnostics.cpp` (~`:334`) is the per-claim expiry sweep — casting/
+  expiry sweep). `Tick()` ← `Diagnostics.cpp` (~`:334`) is the per-claim expiry sweep — offense-cast/
   combat-target/weapon-order-equipment/heal-cast compare against `FacetExpiry()` (round-robin-
   aware, see the 2026-09-05 entry below), package-offer alone against the flat 500 ms `kExpiry`.
 - **Gating:** owned model active iff `Available() && bApmfCast (INI, default ON) && !bLegacyCastHybrid
-  (MCM, default OFF)`. Toggle ON, or APMF absent → the ORIGINAL AI-first-wait + force-on-miss package
-  hybrid (unchanged legacy branch below the owned block — the ONLY place `CastSpellImmediate` force
-  and the rooting UseMagic package survive).
-- **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7):** worker- AND
-  combat-thread-safe read (the same `g_mx` every other accessor takes) — true iff the
-  follower holds a LIVE cast-select claim (`g_owned[id].spellHandle` valid).
-  `CasterConsent.cpp`'s two exclusivity denies and `CombatStyle.cpp`'s equip gate all
-  consult it to stand down for that follower once APMF's own T2 hooks (a separate
-  APMF.dll) enforce the identical exclusivity via the SAME claim — avoiding two
-  independently-configured deny mechanisms disagreeing. Does NOT touch consent
-  (`CasterConsent::Want`'s veto-removal stays MFO's alone, called unconditionally).
+  (MCM, default OFF)`. Toggle ON, or APMF absent, or a refused `ClaimOffenseCast` (ABI < 5 / arbitration
+  loss) → the ORIGINAL AI-first-wait + force-on-miss package hybrid (unchanged legacy branch below the
+  owned block — the ONLY place `CastSpellImmediate` force and the rooting UseMagic package survive).
+- **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7; REPOINTED feat/offense-cast-seats
+  2026-09-05):** worker- AND combat-thread-safe read (the same `g_mx` every other accessor takes) —
+  true iff the follower holds a LIVE `kIntent_Cast` offense claim (`g_owned[id].offenseHandle` valid —
+  was `spellHandle`/`kIntent_SelectSpell` before this port; same accessor name, same call sites, new
+  backing store). `CasterConsent.cpp`'s two exclusivity denies AND (new this pass) `ClientCastClaimed`'s
+  generalized early-pass, plus `CombatStyle.cpp`'s equip gate, all consult it to stand down for that
+  follower once APMF's own seats/T2 hooks (a separate APMF.dll) enforce the identical exclusivity via
+  the SAME claim — avoiding two independently-configured deny mechanisms disagreeing, and (via
+  `ClientCastClaimed`) preventing a HARD-ABORT of a claimed offense cast the same way the S1 fix
+  protects heal. Does NOT touch consent (`CasterConsent::Want`'s veto-removal stays MFO's alone,
+  called unconditionally).
 - **Runtime-only — NO save/co-save state**; `ClearTransientState()` ← `plugin.cpp` kPreLoadGame
   (after `StopPump`). `g_apmf` is `std::atomic`. APMF holds ZERO MFO code; this bridge is the ONLY
   MFO code aware of APMF.
@@ -1448,9 +1603,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `Followers.cpp`, `Scheduler.cpp` — funnels through). `CombatStyle.cpp`'s `EquipGateThunk`
   consults `IsEquipmentClaimActive(fid)` right after the existing `IsOwnedCastActive` check
   (independent of it) and stands its own weapon-order deny down when true — APMF's hook
-  replicates the SAME `kIntent_SelectSpell` off-hand-loan exemption
-  (`APMF_API.h`'s `kIntent_Equipment` comment). False whenever APMF is absent/off or no claim
-  was made → byte-identical native enforcement on that path.
+  replicates the SAME off-hand-loan exemption `IsOwnedCastActive`'s own kIntent_Cast claim
+  protects (`APMF_API.h`'s `kIntent_Equipment` comment; PRE-PORT this was
+  `kIntent_SelectSpell`'s exemption — see PASS G below). False whenever APMF is absent/off or
+  no claim was made → byte-identical native enforcement on that path.
 - **PASS D — RETIRED (2026-09-05, superseded by PASS E below).** The original
   ch.8b `kIntent_Cast`/`RequestCast` TTL-bounded cast-EXECUTION facet
   (`ClaimCast`/`ReleaseCast`/`IsCastClaimActive`, `APMF_API_v5::RequestCast`)
@@ -1474,8 +1630,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   kept as history because the doc-comment trail (`APMFBridge.h`/`.cpp`,
   `Docs/CAST-DELIVERY.md`) still narrates it.
 - **PASS F (ch.8b `kIntent_Cast`/`RequestCast`, feat/mfo-cast-port, 2026-09-05):
-  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`** (`APMFBridge.cpp:472,
-  504,516`, decls `APMFBridge.h:308,317,327`) — the heal-cast facet
+  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`** (`APMFBridge.cpp:519,
+  551,563`, decls `APMFBridge.h:364,373,383`) — the heal-cast facet
+  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`** (`APMFBridge.cpp:487,
+  519,531`, decls `APMFBridge.h:344,353,363`) — the heal-cast facet
   `ComposedCast` claims, PORTED BACK to the same ch.8b Intent PASS D used (the
   Intent was always declared in `APMF_API.h`, just unused by MFO between PASS D
   and PASS F) now that APMF's `feat/ai-cast-seats-impl` answers FIVE engine
@@ -1489,10 +1647,16 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   Own `g_owned` slot (`healHandle`/`healSpell`/`healTarget`/`healHand`/
   `healConc`/`healStopPct`/`healRefreshed`) — heal and hostile casts are
   mutually exclusive per tick by `CasterConsent::SpellKind`, never concurrent
-  on one follower, but kept distinct to avoid cross-talk; also structurally
-  separate from offense's `ClaimCasting` (still `kIntent_SelectSpell`, ch.8) —
-  the two facets share NO channel any more, unlike PASS E's brief overlap.
-  `EnsureHealClaimLocked` (`:226`, anon ns) create-or-REFRESHES: unlike PASS
+  on one follower, but kept distinct to avoid cross-talk. AT THE TIME (2026-09-05,
+  same day): also structurally separate from offense's `ClaimCasting` (still
+  `kIntent_SelectSpell`, ch.8) — the two facets shared NO channel, unlike PASS
+  E's brief overlap. **SUPERSEDED shortly after by PASS G below (feat/offense-
+  cast-seats, same day): offense ALSO moved onto `kIntent_Cast`**, riding the
+  SAME facet as this heal claim via its OWN distinct `offenseHandle` slot —
+  still never concurrent, never cross-talking, just sharing one underlying
+  mechanism instead of two.
+  `EnsureCastClaimLocked` (`:243`, anon ns, RENAMED from `EnsureHealClaimLocked`
+  by PASS G — it was always generic) create-or-REFRESHES: unlike PASS
   E's `Repoint`, `RequestCast`'s rich payload has NO in-place re-point, so a
   CHANGE in `(spell, target, hand, concentration, stopPct)` releases the old
   claim and requests a fresh one (a new bounded window); the SAME values are
@@ -1500,7 +1664,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   g_healAnimPackage` + APMF present + `api->abiVersion >= 5` (`RequestCast` is
   a v5 slot — logged-once warn + clean degrade to kInstant on an older
   APMF.dll, never a crash). `a_hand` is always `kApmfHandLeft` (2,
-  `APMFBridge.h:295`) — see the HAND FIX below, unchanged in policy from PASS
+  `APMFBridge.h:87`) — see the HAND FIX below, unchanged in policy from PASS
+  `APMFBridge.h:331`) — see the HAND FIX below, unchanged in policy from PASS
   E/D, just re-expressed as `APMF_API::kCastFlag_LeftHand` in `req.flags`
   instead of `ival` bits (which are gone with the retired drive). NEW this
   pass: `a_concentration` sets `kCastFlag_Concentration` (TTL floor for a held
@@ -1508,7 +1673,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `CheckStopCast` where to end a concentration channel instead of always full
   restoration — see `Actuation_Direct.cpp`'s `CastAuto` entry below for the one
   real threshold source. `req.ttlMs` is `APMFBridge::kHealCastTtlMs`
-  (`APMFBridge.h:306`, 6000) — the SAME constant `ComposedCast.cpp`'s
+  (`APMFBridge.h:362`, 6000) — the SAME constant `ComposedCast.cpp`'s
+  (`APMFBridge.h:342`, 6000) — the SAME constant `ComposedCast.cpp`'s
   `kHealBoundsTtlMs` now aliases, so the `RequestCast` window and the
   `CastBounds::Arm` window can never drift apart.
 - **HAND FIX (2026-09-05, deck: heal driven right hand, then displaced by the
@@ -1525,10 +1691,38 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   fallback with no weapon held (heals are left-hand almost always regardless).
   `ComposedCast::Try` (`ComposedCast.cpp`) now passes `APMFBridge::
   kApmfHandLeft` unconditionally, forwarded into `req.flags` as
-  `kCastFlag_LeftHand` — a default, not the full picture: an intelligent
-  per-perk/loadout-aware hand pass (both-hands-free → dual-cast or juggle,
-  melee → left, mage → auto) is tracked separately as future work
-  ([[mage-dualcast-diff-hands-perk-gated-todo]]), not built here.
+  `kCastFlag_LeftHand` — UNCHANGED, on purpose: heals bypass the intelligent
+  hand pass below entirely (heal is left, regardless).
+- **`WeaponHandActive`** (`APMFBridge.cpp:423`, decl `APMFBridge.h:184`,
+  2026-09-06) — the canonical "does a weapon own this hand" signal for cast
+  hand-selection: `Loadout::Read(follower, nullptr).grip` (a weapon equipped
+  RIGHT NOW) OR `IsEquipmentClaimActive` (an equip gambit about to reassert
+  one — the race the HAND FIX above closes). Works with or without APMF
+  present (the `Read()` half needs no claim). Not yet called from this
+  file's own `ClaimHealCast` (heal's hand is unconditional, see above); the
+  intended consumer is a future offense hand-claim.
+- **`Loadout::HandPick`/`PlanCastHand`/`CanDualCast`** (`Loadout.h`/`.cpp`, see
+  that file's MAP entry, §4) — marth's full intelligent hand-selection POLICY
+  now EXISTS (weapon-active → Left; both-hands-free single-spell → DualCast
+  when the follower's REAL dual-cast perk + magicka afford it, else
+  EitherFree for the caller to assign, including a second "juggle" spell).
+  **The claim SHAPE gap is closed (2026-09-06):** `APMF_API::kCastFlag_DualCast`
+  (bit 3) exists, `APMFBridge::HandFor(HandPick)` (`APMFBridge.h`) translates a
+  `PlanCastHand` result into this bridge's `a_hand` encoding (`kApmfHandLeft`
+  / new `kApmfHandDualCast` / 0), and `EnsureHealClaimLocked`'s `req.flags`
+  build sets `kCastFlag_DualCast` INSTEAD OF `kCastFlag_LeftHand` for
+  `kApmfHandDualCast` (never both bits together). A `[cfc]` log line
+  distinguishes "asked for dual, claim granted" from "asked for dual, claim
+  REFUSED outright" (silence = never asked). **Still NOT wired to any live
+  caller**: offense's `ClaimCasting` (`Actuation.cpp`, ch.8,
+  `kIntent_SelectSpell`) carries no hand parameter, and `kIntent_SelectSpell`'s
+  payload cannot carry `CastFlags` at all (only `kIntent_Cast`/
+  `APMF_CastRequest` can) — a live offense wire needs a `kIntent_Cast`-based
+  caller (e.g. a future `ClaimOffenseCast`) that calls `PlanCastHand` and
+  passes `HandFor`'s result; deliberately out of this pass's scope, owned by
+  `feat/offense-cast-api`. Supersedes
+  ([[mage-dualcast-diff-hands-perk-gated-todo]]) as the design; that backlog
+  note's WIRING half is still open.
 - **FIELD BUG FOUND + FIXED (2026-09-05, deck: claim/release every ~530ms,
   caster stuck at rest forever — `feat/heal-claim-hold`; RE-PROVEN the SAME day
   on the weapon-order equipment claim, Cicero deck capture, `feat/facet-expiry`).**
@@ -1558,12 +1752,14 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   the physical equip (only the claim) between `EquipWeapon`'s one-shot fires,
   a follower stuck in that gap the moment reads as "standing around unarmed
   until the next fight re-fires the equip gambit." Fixed with a dedicated
-  `FacetExpiry()` (`APMFBridge.cpp:144`, anon ns, renamed from `HealExpiry()`)
+  `FacetExpiry()` (`APMFBridge.cpp:159`, anon ns, renamed from `HealExpiry()`)
+  `FacetExpiry()` (`APMFBridge.cpp:145`, anon ns, renamed from `HealExpiry()`)
   sized the SAME way `TargetCastReconcile`/`SelfCastReconcile` already size
   their own round-robin-aware release windows (`suppress*1.12 +
-  0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s (`:523`)
-  spellHandle/targetHandle/equipHandle/healHandle checks (`:534-549`) all
-  compare against `FacetExpiry()` now, not the flat `kExpiry`. package-offer
+  0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s (`:570`)
+  offenseHandle/targetHandle/equipHandle/healHandle checks (RENAMED from
+  spellHandle by PASS G below) all compare against `FacetExpiry()` now, not
+  the flat `kExpiry`. package-offer
   (`packageHandle`) stays on the flat `kExpiry` — VERIFIED (not assumed) it is
   genuinely refreshed every ~133ms flat, unconditionally, for every active
   loot slot, by `Packages::Pump()` (not gated by the round-robin cursor).
@@ -1588,6 +1784,85 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   call (so it got the `FacetExpiry()` fix for free) but never had the
   double-fire bug — its scan has no pass-0/pass-1 wrapper, `stopped=true;
   break;` ends it after one Fire.
+- **PASS G (ch.8b `kIntent_Cast`/`RequestCast`, feat/offense-cast-seats,
+  2026-09-05): offense PORTED off ch.8 `kIntent_SelectSpell` onto the SAME
+  facet PASS F ported heal onto.** `ClaimOffenseCast`/`ReleaseOffenseCast`
+  (`APMFBridge.cpp:369,399`, decls `APMFBridge.h:150,157`) REPLACE the retired
+  `ClaimCasting`/`ReleaseCasting` (`kIntent_SelectSpell`, ARBITRATE+DENY only --
+  the follower's own AI still picked whichever spell IT wanted, the
+  long-standing "target right, spell wrong" defect,
+  [[cast-gambit-spell-choice-not-enforced]]). Now, while the claim stands,
+  APMF's FIVE engine seats (the SAME ones PASS F wired for heal) drive the
+  AI's own selection/equip/charge/aim/fire/channel of EXACTLY the claimed
+  spell at EXACTLY the claimed target -- closing the defect. Own `g_owned`
+  slot (`offenseHandle`/`offenseSpell`/`offenseTarget`/`offenseHand`/
+  `offenseConc`/`offenseStopPct`/`offenseRefreshed`, `APMFBridge.cpp:111-114`)
+  -- a DISTINCT claim slot from `healHandle`'s (Task 3's invariant preserved),
+  sharing its create-or-refresh plumbing via the RENAMED, now-generic
+  `EnsureCastClaimLocked` (`:243`, was `EnsureHealClaimLocked` -- the function
+  was always generic over its handle/out-params). Sole call site:
+  `Actuation::CastOn`'s `ownedCast` branch (`Actuation.cpp:~554`) always
+  passes `hand=kApmfHandLeft` (matches `Loadout::Prepare`'s own
+  `LeftHandSlot()` equip target exactly -- no weapon-state branching needed,
+  since MFO's offense equip has ALWAYS targeted LEFT regardless of grip),
+  `concentration=false` (concentration forks off earlier in `CastOn`, to
+  `ConcentrationCast`'s DIFFERENT direct-force delivery model -- untouched by
+  THIS pass, but see PASS H below, feat/cast-gambit-concentration: that model
+  now ALSO calls `ClaimOffenseCast` with `concentration=true` from a sibling
+  call site), `stopPct=0` (a heal-only concept). **`IsOwnedCastActive`
+  REPOINTED** (same name, same call sites -- `CasterConsent.cpp`'s exclusivity
+  denies, `CombatStyle.cpp`'s equip gate -- now backed by `offenseHandle`
+  instead of the retired `spellHandle`) -- still correct because a live
+  `kIntent_Cast` claim ALSO answers the 0x0F `CheckShouldEquip` seat, covering
+  what those standdowns relied on ch.8 for. **`CasterConsent.cpp`'s
+  `ClientCastClaimed` EXTENDED** (`:231`) to OR in `IsOwnedCastActive` alongside
+  `CastBounds::Live`/`IsHealCastActive` -- the SAME HARD-ABORT protection
+  heal's port needed now covers offense too (its two now-redundant standalone
+  `IsOwnedCastActive` checks, `:704` and `:999`, are UNREACHABLE in practice
+  once the early-pass returns first -- left as defense-in-depth, not removed).
+  **DEGRADE:** a refused claim (APMF absent / ABI < 5 / arbitration loss /
+  `bApmfCast` off) makes `CastOn` fall through to the legacy AI-first-grace +
+  force-on-miss hybrid, byte-identical to the APMF-absent path -- never a
+  silent cast drop. **Diagnostic reused, not duplicated:** the `[cfc]`
+  silent-claim watch (`ComposedCast.cpp`'s `g_watch`/`WatchArmed`, previously
+  private to `Try()`) is exposed as `ComposedCast::WatchClaim`/`ClearWatch`
+  (`ComposedCast.h:~116-131`) so `Actuation::CastOn` can arm the SAME watch on
+  a live offense claim without routing through `Try()` (which stays
+  HEAL-ONLY-gated, unchanged) -- `Scheduler.cpp`'s `!castSeen` release and
+  `Followers::OnFollowerRemoved`'s dismissal teardown both clear it alongside
+  `ReleaseOffenseCast`. See `Docs/CAST-DELIVERY.md`'s "OFFENSE CAST PORT"
+  section for the full writeup.
+- **PASS H (feat/cast-gambit-concentration, 2026-09-06): a non-heal
+  CONCENTRATION stream now reaches the engine-seat path, + the firing-spell
+  gambit LOCK.** Two independent fixes; full writeup in `Docs/CAST-DELIVERY.md`'s
+  "CONCENTRATION CLAIM PORT + THE FIRING-SPELL GAMBIT LOCK" section.
+  (1) `CastSelfDirect`/`CastTargetDirect` (`Actuation_Direct.cpp`), right after
+  their existing `ComposedCast::Try` call (which stays HEAL-ONLY, untouched —
+  owned by a parallel change), now call `APMFBridge::ClaimOffenseCast` DIRECTLY
+  with `concentration=true, stopPct=0` when `kind != Heal` and the spell is
+  `kConcentration` -- the exact "FUTURE call site" PASS G's own doc predicted
+  and left unwired. Refused/absent/off/SE degrades to the SAME direct-force
+  stream that already ran, byte-identical. (2) `Actuation.cpp` gained a
+  per-follower `CastLock{spell,target,lastSeen}` (`g_castLock`/`g_lastLockLog`,
+  anon-namespace, file-local) that `CastOn` consults (`CheckCastLock`, called
+  right after the range/competence gates) before letting a DIFFERENT
+  `(spell,target)` than one already occupying the follower (an owned-cast claim
+  or a concentration stream) touch equip/consent/claims -- held off
+  (transparent `NoOp`, rate-limited `[eval]` log) while `CastLockLive` says the
+  old one is still live: `APMFBridge::IsOwnedCastActive`/`IsHealCastActive`
+  checked FIRST (authoritative), else `APMFBridge::FacetExpiry()` (REUSED, #9)
+  as a round-robin-aware staleness fallback for the un-claimed direct-force
+  case. Released by `Actuation::ClearCastLock(id)` -- wired into `Scheduler.
+  cpp`'s `!castSeen` release AND its out-of-combat teardown block, and
+  `Followers::ReleaseHeldState`'s dismissal teardown -- and in bulk by
+  `Actuation::ClearCastLocks()`, called from `Actuation::ClearSelfCasts()` (the
+  existing `Serialization.cpp` revert call site; no new one added).
+  `APMFBridge::FacetExpiry()` (`APMFBridge.cpp:159` was anon-namespace-private;
+  MOVED to external linkage + declared in `APMFBridge.h` for this cross-TU
+  reuse -- pure visibility change, same formula, every in-TU caller unaffected).
+  **Scope, deliberate:** the legacy AI-first-grace + force-on-miss hybrid and
+  `CastAuto`'s sequential-most-hurt heal fan are NOT covered by the lock (own
+  protections already; see the Docs section for why).
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE

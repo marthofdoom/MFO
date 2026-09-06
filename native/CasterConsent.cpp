@@ -16,7 +16,8 @@
                             // NOT deliberate through these hooks, so it is never vetoed
                             // and needs no bound.
 #include "APMFBridge.h"    // IsOwnedCastActive -- stand down the exclusivity deny where
-                            // APMF's T2 allowance hooks now own it (Phase 2)
+                            // APMF's T2 allowance hooks now own it (Phase 2); also folded
+                            // into ClientCastClaimed's early-pass (feat/offense-cast-seats)
 
 namespace MFO::CasterConsent {
 
@@ -190,10 +191,18 @@ namespace MFO::CasterConsent {
         // (2) doesn't already give; it stays because `CastBounds` is the general,
         // reusable "this is an MFO-executed bounded cast" primitive (see
         // CastBounds.h) and a future MFO-side executor other than ComposedCast
-        // could one day be the (1)-only case again. Offense's own exclusivity
-        // standdown (`APMFBridge::IsOwnedCastActive`) is a SEPARATE predicate,
-        // checked independently where offense-specific denies live -- it is not
-        // folded in here (Task 3: heal and offense stay two distinct claims).
+        // could one day be the (1)-only case again.
+        //
+        // THIRD leg (feat/offense-cast-seats, 2026-09-05): `APMFBridge::
+        // IsOwnedCastActive` -- offense's own kIntent_Cast claim, PORTED off the
+        // retired ch.8 kIntent_SelectSpell gate-only claim onto the SAME
+        // kIntent_Cast facet ClaimHealCast uses (`APMFBridge.cpp`'s
+        // `Owned::offenseHandle`). Once APMF's engine seats drive the AI's own
+        // cast decision for an OFFENSE claim too, the identical HARD-ABORT risk
+        // (2) exists to prevent for heal applies to it -- so it gets the
+        // identical standdown here. Heal and offense still stay two distinct
+        // claim SLOTS (`IsHealCastActive` vs `IsOwnedCastActive`, Task 3) -- only
+        // the STANDDOWN reach was unified, not the claim state itself.
         //
         // INSTALL-ORDER SAFETY (feat/mfo-cast-port, Task 5, re-verified
         // 2026-09-05). APMF's feat/ai-cast-seats-impl now ALSO answers 0x06
@@ -221,7 +230,8 @@ namespace MFO::CasterConsent {
         // either thunk.
         bool ClientCastClaimed(RE::FormID a_fid, RE::MagicItem* a_mi) {
             return (a_mi && CastBounds::Live(a_fid, a_mi->GetFormID())) ||
-                   APMFBridge::IsHealCastActive(a_fid);
+                   APMFBridge::IsHealCastActive(a_fid) ||
+                   APMFBridge::IsOwnedCastActive(a_fid);
         }
 
         // ── THE CONCENTRATION BOUND, latch-independent (v1.0.53 follow-up) ──
@@ -675,15 +685,22 @@ namespace MFO::CasterConsent {
             // from pacing. LOG mode still only observes. NOTE: this is only the
             // ADVISORY half -- the SpellCast hook hard-aborts what slips through.
             if (!isWanted) {
-                // Phase 2 (APMF ALLOWANCE-TEMPLATE.md §7): the owned-cast model
-                // claims this facet via APMF ch.8, and APMF's OWN CheckCast (0x0A,
-                // hard gate) hook now enforces this exact exclusivity -- deny any
-                // spell that isn't the claimed one. MFO's advisory CheckStartCast
-                // deny is redundant there and would only fight it (two
-                // independently-configured deny paths, different slider level vs.
-                // hard claim); stand down and let APMF own it for this follower.
-                // Consent (the isWanted==true path below) is untouched -- that is
-                // MFO's own mechanism, not a facet APMF ever provides.
+                // Phase 2 (APMF ALLOWANCE-TEMPLATE.md §7), ch.8b since feat/
+                // offense-cast-seats (2026-09-05): the owned-cast model claims
+                // this facet via APMF's kIntent_Cast, and APMF's OWN CheckCast
+                // (0x0A, hard gate) hook now enforces this exact exclusivity --
+                // deny any spell that isn't the claimed one. MFO's advisory
+                // CheckStartCast deny is redundant there and would only fight it
+                // (two independently-configured deny paths, different slider
+                // level vs. hard claim); stand down and let APMF own it for this
+                // follower. Consent (the isWanted==true path below) is untouched
+                // -- that is MFO's own mechanism, not a facet APMF ever provides.
+                // NOTE: `thunk`'s own early-pass (`ClientCastClaimed`, above)
+                // already returns `aiSaysYes` before this branch is ever reached
+                // whenever `IsOwnedCastActive(fid)` is true, so this check is
+                // unreachable in practice today -- kept as defense-in-depth
+                // against a future reordering of the gates ahead of it, not
+                // because it does independent work right now.
                 if (APMFBridge::IsOwnedCastActive(fid)) return aiSaysYes;
                 if (Config::g_casterMode.load() == 0) return aiSaysYes;   // dev observe-only
                 if (castLvl < 4) {
@@ -966,10 +983,17 @@ namespace MFO::CasterConsent {
             // the friendly-fire exemption and the #59 gate below both need) --
             // but on the APMF owned-cast path, do NOT ACT on the verdict: APMF's
             // own CheckCast (0x0A) hook already enforces this exact exclusivity
-            // via the ch.8 claim (Phase 2, ALLOWANCE-TEMPLATE.md §7). Running
-            // MFO's OWN deny here too would be a second, independently-configured
-            // (iCastControl slider) enforcement of the SAME decision -- redundant,
-            // and it fights APMF rather than deferring to it.
+            // via the ch.8b kIntent_Cast claim (Phase 2, ALLOWANCE-TEMPLATE.md
+            // §7; ported from ch.8 by feat/offense-cast-seats, 2026-09-05).
+            // Running MFO's OWN deny here too would be a second,
+            // independently-configured (iCastControl slider) enforcement of the
+            // SAME decision -- redundant, and it fights APMF rather than
+            // deferring to it. NOTE: `CheckCastThunk`'s own early-pass
+            // (`ClientCastClaimed`, above) already returns `aiOK` before this
+            // line is ever reached whenever `IsOwnedCastActive(fid)` is true, so
+            // the `!APMFBridge::IsOwnedCastActive(fid)` guard below is
+            // unreachable in practice today -- kept as defense-in-depth, same as
+            // the mirror check in `thunk` above.
             RE::FormID want = 0;
             const bool exclusivityDeny = ShouldDeny(fid, a_spell, want);
             if (exclusivityDeny && !APMFBridge::IsOwnedCastActive(fid)) {

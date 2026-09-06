@@ -290,15 +290,17 @@ namespace MFO::CombatStyle {
             if (!actor) return aiSaysYes;
             const auto fid = actor->GetFormID();
 
-            // Phase 2 (APMF ALLOWANCE-TEMPLATE.md §7): while this follower's cast
-            // is APMF-owned, APMF's OWN CheckShouldEquip hook (T2a, EquipGate.cpp)
-            // already denies any spell/staff that isn't the ch.8-claimed one --
-            // covering exactly what this gate's WantedSpell exemption protects,
-            // sourced from the SAME claim (ClaimCasting passes the identical
-            // spell). Standing down here avoids two independently-sourced equip
-            // denies (MFO's own weapon-equip-order gate vs. APMF's claim gate)
-            // disagreeing; APMF's hook keeps the gambit spell equippable even
-            // while an unrelated weapon equip-order is held on this follower.
+            // Phase 2 (APMF ALLOWANCE-TEMPLATE.md §7), ch.8b since feat/offense-
+            // cast-seats (2026-09-05): while this follower's cast is APMF-owned,
+            // APMF's OWN CheckShouldEquip hook (0x0F, one of the kIntent_Cast
+            // engine seats, EquipGate.cpp) already denies any spell/staff that
+            // isn't the claimed one -- covering exactly what this gate's
+            // WantedSpell exemption protects, sourced from the SAME claim
+            // (ClaimOffenseCast passes the identical spell). Standing down here
+            // avoids two independently-sourced equip denies (MFO's own
+            // weapon-equip-order gate vs. APMF's claim gate) disagreeing; APMF's
+            // hook keeps the gambit spell equippable even while an unrelated
+            // weapon equip-order is held on this follower.
             if (APMFBridge::IsOwnedCastActive(fid)) return aiSaysYes;
 
             // Phase 2 (APMF ch.15, kIntent_Equipment): while this follower's OWN

@@ -631,6 +631,34 @@ namespace MFO::Logistics {
         return it != g_econTrade.end() && Clock::now() < it->second;
     }
 
+    // [L] glyph reliability fix (marth 2026-09-06, replaces the IsLooting proxy
+    // for the board's "Looting" signal): stamp g_justLooted at the THREE call
+    // sites in this file that observe a CONFIRMED acquisition -- LootNearby's own
+    // true return (arm's-reach, no excursion), the loose-item Activate readback's
+    // inventory delta, and StripCorpse's `moved` -- never at the travel-slot
+    // claim (SlotOf/IsLooting), which is neither necessary (arm's-reach loot
+    // never claims a slot) nor sufficient (a slot is held the whole walk-there,
+    // and an arrival that finds "nothing to take" still held one) for a real
+    // pickup.
+    //
+    // Window sizing (#9 -- a floor, not a guessed expiry): the board snapshot
+    // that reads this (PublishSnapshot) drains on this same worker in the
+    // Scheduler's round-robin, so a given follower is only revisited every
+    // ~partySize * kPumpMs(133ms) -- the same cadence math APMFBridge/
+    // Actuation_Direct already use for their suppress windows. The stamp must
+    // outlive that gap or a fast pickup between two of THIS follower's own
+    // snapshot drains would never be seen lit.
+    void MarkJustLooted(RE::FormID a_id, Clock::time_point a_now) {
+        const float partySize = static_cast<float>(Followers::g_active.size() + 1);   // + player
+        const float windowSec = std::max(1.0f, 0.133f * partySize + 0.5f);
+        g_justLooted[a_id] = a_now + std::chrono::milliseconds(
+                                          static_cast<long long>(windowSec * 1000.0f));
+    }
+    bool JustLooted(RE::FormID a_id) {
+        auto it = g_justLooted.find(a_id);
+        return it != g_justLooted.end() && Clock::now() < it->second;
+    }
+
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
         // #78: per-follower MFO master switch. The Scheduler already gates the
@@ -676,10 +704,31 @@ namespace MFO::Logistics {
         // Keyed to the whole-EXCURSION cap, not the per-leg deadline: during a
         // Hold the leg deadline is stale and would wrongly fire this. The cap
         // catches an excursion whose traveller is no longer being serviced.
-        // (Combat yield is NOT here -- ServiceFollower is skipped for in-combat
-        // followers, so this backstop never runs for the one who matters. The
-        // yield lives in the Scheduler's combat branch, ReleaseTravelOnCombat.)
+        // (THIS follower's OWN combat yield is NOT here -- ServiceFollower is
+        // skipped for in-combat followers, so this backstop never runs for
+        // the traveller himself once he's personally fighting; that yield
+        // lives in the Scheduler's combat branch, ReleaseTravelOnCombat. The
+        // PLAYER's combat is a DIFFERENT signal, checked below -- see
+        // playerInCombat.)
         const bool off = !Config::g_logistics.load() || !Config::g_lootTravel.load();
+        // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
+        // immediately cancel a loot excursion and pull followers back").
+        // Read once per sweep, not per slot -- one PlayerCharacter, one
+        // combat state. A traveller can be a full room away from the fight
+        // for several ticks before his OWN IsInCombat() flips (the gap
+        // ReleaseTravelOnCombat can't close, since it only fires off THIS
+        // follower's combat transition) -- this backstop already sweeps
+        // EVERY active slot on EVERY out-of-combat service call, so as long
+        // as at least one follower isn't yet personally fighting, checking
+        // the PLAYER's state here catches every live excursion within that
+        // same fast (~133 ms-scale) cadence, not the ~1 s logistics cadence
+        // the per-follower branch below runs at. LootNearby (Logistics_Loot.cpp)
+        // separately refuses to arm or continue any loot action while the
+        // player is in combat, so the two can never fight over the same tick.
+        const bool playerInCombat = [] {
+            auto* pcc = RE::PlayerCharacter::GetSingleton();
+            return pcc && pcc->IsInCombat();
+        }();
         // P7: sweep EVERY slot -- each traveller has his own excursion cap, and a
         // subsystem toggle-off must free them all. (Global backstop, keyed to no
         // follower in particular; runs once per serviced follower, idempotent.)
@@ -688,13 +737,18 @@ namespace MFO::Logistics {
             if (!tr.active) continue;
             const bool capped = now > tr.startTime + std::chrono::seconds(
                                           static_cast<int>(Config::g_excursionMax.load()));
-            if (capped || off) {
+            if (capped || off || playerInCombat) {
                 // On a cap hit blacklist the current target so it isn't re-picked
-                // immediately. NOT on toggle-off (that corpse never "failed").
-                if (!off) {
+                // immediately. NOT on toggle-off or a player-combat interrupt --
+                // neither one means the corpse "failed"; it is still there,
+                // un-penalized, the moment the player is done fighting (or the
+                // subsystem comes back on).
+                if (!off && !playerInCombat) {
                     if (auto tp = tr.target.get()) MarkTravelFailed(tp->GetFormID(), now);
                 }
-                Packages::LootTravelClear(off ? "subsystem off" : "excursion cap", nullptr, i);
+                Packages::LootTravelClear(playerInCombat ? "player combat"
+                                          : (off ? "subsystem off" : "excursion cap"),
+                                          nullptr, i);
                 tr = TravelIntent{};
             }
         }
@@ -755,11 +809,12 @@ namespace MFO::Logistics {
                 for (auto& [obj, n] : a_follower->GetInventoryCounts())
                     if (obj && obj->GetFormID() == tr.acquireBase) { post = n; break; }
                 const std::int32_t delta = post - tr.acquirePre;
-                if (refGone || delta != 0)
+                if (refGone || delta != 0) {
                     spdlog::info("[acquire] {:08X}: TOOK {:08X} -- ref {}, inv {:+}",
                                  id, tr.acquireRefID,
                                  refGone ? "gone" : "persists", delta);
-                else
+                    MarkJustLooted(id, now);   // [L] glyph: CONFIRMED pickup, not the travel-slot proxy
+                } else
                     spdlog::info("[acquire] {:08X}: ACTIVATE NO-OP -- ref persists, inv unchanged",
                                  id);
                 // Either way this leg is DONE: blocklist the ref (a persisting
@@ -914,6 +969,7 @@ namespace MFO::Logistics {
                     // DONE, so the linger revisits it once the claim releases.
                     bool leftWaiting = false;
                     const bool moved = StripCorpse(a_follower, a_state, tref, now, &leftWaiting);
+                    if (moved) MarkJustLooted(id, now);   // [L] glyph: CONFIRMED pickup
                     if (moved || !leftWaiting)
                         g_grabGrow.erase(tref->GetFormID());   // handled -> stale grow verdict
                     if (!leftWaiting)
@@ -1527,6 +1583,11 @@ namespace MFO::Logistics {
                 continue;
             }
 
+            // [L] glyph: a CONFIRMED arm's-reach pickup (LootNearby's own true
+            // return, no travel excursion involved) -- exactly the acquisition
+            // IsLooting's slot-only proxy could never see (#activity-glyph-fix).
+            if (acted && IsLootOp(op)) MarkJustLooted(id, now);
+
             if (acted) break;                  // did something real -> done this tick
             start = choice.ruleIndex + 1;      // matched but no-op -> try the next rule
         }
@@ -1710,6 +1771,7 @@ namespace MFO::Logistics {
         g_econScan.clear();   // #21 econ cadence clocks -- save-scoped (Fable audit #7)
         g_econTrade.clear();
         g_econPair.clear();
+        g_justLooted.clear();   // [L] glyph stamp -- save-scoped, live-session only
         // Drop any in-flight travel intent and release the engine alias so a
         // revert/load never leaves a follower latched (#55).
         for (int i = 0; i < Packages::kMaxLootSlots; ++i) {

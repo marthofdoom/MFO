@@ -64,10 +64,12 @@ namespace MFO::Board {
         bool          commanded = false;
         bool          inCombat = false;
         // Activity glyphs for the HUD [C][L][T] strip + the Followers-tab status
-        // word. Precomputed on the worker (Logistics::IsLooting/IsTrading) so the
-        // render thread reads only these plain bools (#4). Mutually exclusive in
-        // practice -- looting/trading are out-of-combat only, and a follower never
-        // trades mid-loot excursion.
+        // word. Precomputed on the worker (Logistics::JustLooted/IsTrading) so
+        // the render thread reads only these plain bools (#4). `looting` is a
+        // brief true-on-confirmed-acquisition pulse (marth 2026-09-06), NOT
+        // "currently on a loot excursion" -- see Logistics.h's JustLooted doc.
+        // Mutually exclusive in practice -- looting/trading are out-of-combat
+        // only, and a follower never trades mid-loot excursion.
         bool          looting = false;
         bool          trading = false;
         float         healthPct = 1.0f;

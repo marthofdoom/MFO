@@ -153,6 +153,90 @@ namespace MFO::Loadout {
         return h;
     }
 
+    namespace {
+
+        // Vanilla Skyrim.esm Dual Casting perks, one per school (verified
+        // against the shipped ESM's own FormIDs -- a contiguous authoring
+        // block 000153CD..000153D1: Alteration, Conjuration, Destruction,
+        // Illusion, Restoration, immediately followed by Impact 000153D2).
+        // No INI override: unlike Config::g_merchantPerkID (Logistics_
+        // Economy.cpp), which was made overridable because something already
+        // consumed it, PlanCastHand/CanDualCast have no live executing
+        // caller yet (see Loadout.h's HandPick::DualCast doc) -- add one if
+        // a perk-overhaul's relocated forms ever need it, matching that
+        // exact idiom.
+        RE::TESForm* DualCastPerkForSchool(RE::ActorValue a_school) {
+            using AV = RE::ActorValue;
+            std::uint32_t id = 0;
+            switch (a_school) {
+            case AV::kAlteration:  id = 0x000153CD; break;
+            case AV::kConjuration: id = 0x000153CE; break;
+            case AV::kDestruction: id = 0x000153CF; break;
+            case AV::kIllusion:    id = 0x000153D0; break;
+            case AV::kRestoration: id = 0x000153D1; break;
+            default: return nullptr;
+            }
+            return RE::TESForm::LookupByID(id);
+        }
+
+    }
+
+    bool CanDualCast(RE::Actor* a_actor, RE::SpellItem* a_spell) {
+        if (!a_actor || !a_spell) return false;
+
+        // The spell's OWN school (same read as Logistics_Cast.cpp's
+        // TargetMagicSchool: the costliest effect's base MGEF "Magic Skill").
+        // A spell with no school (kNone) never dual-casts.
+        const auto* eff  = a_spell->GetCostliestEffectItem();
+        const auto* mgef = eff ? eff->baseEffect : nullptr;
+        const auto school = mgef ? mgef->data.associatedSkill : RE::ActorValue::kNone;
+
+        auto* perk = DualCastPerkForSchool(school);
+        auto* perkForm = perk ? perk->As<RE::BGSPerk>() : nullptr;
+        if (!perkForm) return false;
+
+        // Followers can carry a perk on their base TESNPC template (shared by
+        // multiple NPCs) as well as their own runtime perk list -- HasPerk
+        // alone under-reports the template case (the OwnsExactPerk idiom
+        // already used for the merchant-perk-bypass check, Logistics_
+        // Economy.cpp / ProgAllocator.cpp).
+        auto* base = a_actor->GetActorBase();
+        const bool owns = a_actor->HasPerk(perkForm) ||
+                          (base && base->GetPerkIndex(perkForm).has_value());
+        if (!owns) return false;
+
+        auto* avo = a_actor->AsActorValueOwner();
+        if (!avo) return false;
+
+        // Dual-casting's real cost is CalculateMagickaCost's single-hand
+        // figure (skill-discounted, per-actor, the SAME call every other
+        // affordability gate in this codebase uses) times the vanilla GMST
+        // fMagicDualCastingCostMult -- hardcoded to Skyrim.esm's shipped
+        // value (2.8, not the Creation Kit's 1.5 default) rather than read
+        // live, matching how fBarterMax/fBarterMin are already hardcoded to
+        // their vanilla GMST values elsewhere (Logistics_Economy.cpp) instead
+        // of introducing a new live-GMST-read pattern for one call site.
+        constexpr float kDualCastCostMult = 2.8f;
+        const float singleCost = a_spell->CalculateMagickaCost(a_actor);
+        const float have       = avo->GetActorValue(RE::ActorValue::kMagicka);
+        return have >= singleCost * kDualCastCostMult;
+    }
+
+    HandPick PlanCastHand(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_weaponHandActive) {
+        // HARD RULE, non-negotiable: a weapon (or an equip gambit about to
+        // reassert one) owns the right hand -- spells claim LEFT ONLY,
+        // always. See Loadout.h's HandPick::Left / APMFBridge::
+        // kApmfHandLeft's doc for the deck-proven failure this closes.
+        if (a_weaponHandActive) return HandPick::Left;
+
+        // Both hands genuinely free: a pure caster. One spell wanted -> a
+        // free off-hand with the real dual-cast perk and pool to back it is
+        // the wrong case to default to a single-hand cast in -- assume
+        // dual-cast. Otherwise either hand serves (a second, different
+        // spell wanted the same tick takes the other -- the caller's call).
+        return CanDualCast(a_actor, a_spell) ? HandPick::DualCast : HandPick::EitherFree;
+    }
+
     Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why) {
         if (!a_actor || !a_spell) { a_why = "no actor or spell"; return Ready::Failed; }
 

@@ -2,6 +2,7 @@
 #include "APMF_API.h"
 #include "Config.h"
 #include "Followers.h"   // g_active.size() -- round-robin-aware expiry sizing (FacetExpiry)
+#include "Loadout.h"     // WeaponHandActive's live-grip read
 #include "MainThread.h"
 #include "Rapport.h"
 
@@ -30,10 +31,14 @@ namespace MFO::APMFBridge {
         std::atomic<const APMF_API::APMF_API_v2*> g_apmf{ nullptr };
 
         // Per-follower owned-cast claims -- TWO INDEPENDENT LIFECYCLES:
-        //   * cast-SELECT (spell): PER-CAST. Refreshed each winning cast tick; released
-        //     CRISPLY the moment no cast rule holds (ReleaseCasting <- Scheduler
-        //     !castSeen); the expiry is only a backstop. IMPORTANT (2026-09-05,
-        //     corrects an earlier false assumption): "each winning cast tick" is a
+        //   * offense-cast (kIntent_Cast, ch.8b): PER-CAST. Refreshed each winning
+        //     cast tick; released CRISPLY the moment no cast rule holds
+        //     (ReleaseOffenseCast <- Scheduler !castSeen); the expiry is only a
+        //     backstop. PORTED feat/offense-cast-seats (2026-09-05) off the retired
+        //     ch.8 kIntent_SelectSpell gate-only claim this field used to back --
+        //     see Owned::offenseHandle below and APMFBridge.h's ClaimOffenseCast
+        //     doc for the full port rationale. IMPORTANT (2026-09-05, corrects an
+        //     earlier false assumption): "each winning cast tick" is a
         //     Scheduler::Tick ROUND-ROBIN lap for this follower's OWN service, not a
         //     tight combat-thread beat -- ONE follower is serviced per ~133ms pump
         //     (Scheduler.cpp), so the real refresh gap is ~0.133s * partySize. See
@@ -64,8 +69,6 @@ namespace MFO::APMFBridge {
         // unexercised rather than proven; revisit sizing WHEN it is actually wired,
         // based on whatever actually drives it then.
         struct Owned {
-            APMF_API::Handle spellHandle  = APMF_API::kInvalidHandle;  RE::FormID spell  = 0;
-            std::chrono::steady_clock::time_point spellRefreshed{};
             APMF_API::Handle targetHandle = APMF_API::kInvalidHandle;  RE::FormID target = 0;
             std::chrono::steady_clock::time_point targetRefreshed{};
             APMF_API::Handle packageHandle = APMF_API::kInvalidHandle;  RE::FormID package = 0;
@@ -90,13 +93,26 @@ namespace MFO::APMFBridge {
             // and re-requests, a new bounded claim), released the instant it stops
             // (ComposedCast::End), and auto-expired by FacetExpiry() (below) AND
             // (on APMF's side) by the claim's own TTL if a caller forgets -- same
-            // PER-CAST refresh-or-expire shape as spellHandle above, just a
-            // distinct slot (heal vs. offense's arbitrate-only claim never overlap
-            // on one follower, but each gets its own state to avoid any cross-talk).
+            // PER-CAST refresh-or-expire shape as offenseHandle below, just a
+            // distinct slot (heal and offense claims never overlap on one
+            // follower -- CasterConsent::SpellKind makes them mutually exclusive
+            // per tick -- but each gets its own state to avoid any cross-talk).
             APMF_API::Handle healHandle    = APMF_API::kInvalidHandle;  RE::FormID healSpell  = 0;
             RE::FormID       healTarget    = 0;                          std::int32_t healHand = 0;
             bool              healConc     = false;                      std::uint32_t healStopPct = 0;
             std::chrono::steady_clock::time_point healRefreshed{};
+            // offense-cast (ch.8b, kIntent_Cast/RequestCast, PORTED feat/offense-
+            // cast-seats, 2026-09-05, off the retired ch.8 kIntent_SelectSpell
+            // gate-only claim this slot used to back -- see APMFBridge.h's
+            // ClaimOffenseCast doc) -- PER-CAST, TTL-bounded, same shape/lifecycle
+            // as healHandle above, just a DISTINCT slot: heal and offense casts
+            // are mutually exclusive per tick by CasterConsent::SpellKind, never
+            // concurrent on one follower, but each keeps its own state so neither
+            // claim's release/refresh ever cross-talks with the other's.
+            APMF_API::Handle offenseHandle = APMF_API::kInvalidHandle;  RE::FormID offenseSpell = 0;
+            RE::FormID       offenseTarget = 0;                          std::int32_t offenseHand = 0;
+            bool              offenseConc  = false;                      std::uint32_t offenseStopPct = 0;
+            std::chrono::steady_clock::time_point offenseRefreshed{};
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
@@ -116,37 +132,47 @@ namespace MFO::APMFBridge {
         // ROUND-ROBIN service -- ONE follower serviced per ~133ms pump -- and uses
         // FacetExpiry() below instead.
         constexpr auto kExpiry = std::chrono::milliseconds(500);
+    }   // end anon namespace -- FacetExpiry (below) is now EXTERNAL LINKAGE, declared
+        // in APMFBridge.h, so feat/cast-gambit-concentration's cross-TU cast-lock
+        // staleness window (Actuation.cpp, Task 2) can reuse the SAME round-robin-
+        // aware sizing instead of inventing its own budget (#9). Purely a visibility
+        // move -- no formula change; every existing in-TU call site below still
+        // resolves it via the header declaration (included at the top of this file).
 
-        // ROUND-ROBIN-AWARE FACET EXPIRY (deck 2026-09-05, found via the heal-cast
-        // claim: claim/release every ~530ms, caster stuck at rest forever; then
-        // RE-PROVEN on the weapon-order equipment claim, Cicero deck capture: CLAIMED
-        // gate-only -> APMF-side RELEASED 919ms later, a full round-robin lap early,
-        // while MFO's own force-hold was still standing -- see ReconcileForcedWeapon's
-        // call site for the trace). An earlier version of this comment asserted the
-        // flat 500ms kExpiry was "a fine backstop" for cast-select/combat-target/
-        // equipment because "a live combat controller re-Wants every combat-thread
-        // beat" -- THAT WAS WRONG, disproven by the Cicero capture: all three are
-        // refreshed from the SAME per-follower Scheduler::Tick ROUND-ROBIN lap the
-        // heal claim uses (ClaimCasting/ClaimCombatTarget <- Actuation::CastOn <-
-        // Actuation::Fire <- Scheduler.cpp's round-robin service; ClaimEquipment <-
-        // Actuation::ReconcileForcedWeapon <- the SAME service) -- ONE follower
-        // serviced per ~133ms (Scheduler.cpp), so a given follower's own gambit only
-        // re-fires (and re-Claims/Repoints/refreshes) every ~0.133s * partySize. For
-        // anything but a 1-2-follower party that gap already exceeds the flat 500ms,
-        // so the sweep in Tick() below released a live, still-wanted claim every
-        // round-robin lap. Size it the SAME way TargetCastReconcile/SelfCastReconcile
-        // already size their own round-robin-aware release windows: out-wait the
-        // worst-case suppression + round-robin gap, floored at the old kExpiry so a
-        // small party never regresses to a SLOWER release than before. Shared by
-        // spellHandle/targetHandle/equipHandle/healHandle -- one formula, no
-        // per-facet copy-paste (none of the four need different sizing: they all
-        // share the identical round-robin service as their refresh source).
-        std::chrono::milliseconds FacetExpiry() {
-            const float suppress  = std::max(0.0f, Config::g_suppressWindow.load());
-            const float partySize = static_cast<float>(Followers::g_active.size() + 1);   // + player
-            const float sec = std::max(0.5f, suppress * 1.12f + 0.133f * partySize + 0.5f);
-            return std::chrono::milliseconds(static_cast<std::uint64_t>(sec * 1000.0f));
-        }
+    // ROUND-ROBIN-AWARE FACET EXPIRY (deck 2026-09-05, found via the heal-cast
+    // claim: claim/release every ~530ms, caster stuck at rest forever; then
+    // RE-PROVEN on the weapon-order equipment claim, Cicero deck capture: CLAIMED
+    // gate-only -> APMF-side RELEASED 919ms later, a full round-robin lap early,
+    // while MFO's own force-hold was still standing -- see ReconcileForcedWeapon's
+    // call site for the trace). An earlier version of this comment asserted the
+    // flat 500ms kExpiry was "a fine backstop" for cast-select/combat-target/
+    // equipment because "a live combat controller re-Wants every combat-thread
+    // beat" -- THAT WAS WRONG, disproven by the Cicero capture: all three are
+    // refreshed from the SAME per-follower Scheduler::Tick ROUND-ROBIN lap the
+    // heal claim uses (ClaimOffenseCast/ClaimCombatTarget <- Actuation::CastOn <-
+    // Actuation::Fire <- Scheduler.cpp's round-robin service; ClaimEquipment <-
+    // Actuation::ReconcileForcedWeapon <- the SAME service) -- ONE follower
+    // serviced per ~133ms (Scheduler.cpp), so a given follower's own gambit only
+    // re-fires (and re-Claims/Repoints/refreshes) every ~0.133s * partySize. For
+    // anything but a 1-2-follower party that gap already exceeds the flat 500ms,
+    // so the sweep in Tick() below released a live, still-wanted claim every
+    // round-robin lap. Size it the SAME way TargetCastReconcile/SelfCastReconcile
+    // already size their own round-robin-aware release windows: out-wait the
+    // worst-case suppression + round-robin gap, floored at the old kExpiry so a
+    // small party never regresses to a SLOWER release than before. Shared by
+    // offenseHandle/targetHandle/equipHandle/healHandle -- one formula, no
+    // per-facet copy-paste (none of the four need different sizing: they all
+    // share the identical round-robin service as their refresh source). NOW ALSO
+    // reused by Actuation.cpp's cast-gambit lock (Task 2) as the staleness window
+    // for its own un-claimed (direct-force concentration) fallback case.
+    std::chrono::milliseconds FacetExpiry() {
+        const float suppress  = std::max(0.0f, Config::g_suppressWindow.load());
+        const float partySize = static_cast<float>(Followers::g_active.size() + 1);   // + player
+        const float sec = std::max(0.5f, suppress * 1.12f + 0.133f * partySize + 0.5f);
+        return std::chrono::milliseconds(static_cast<std::uint64_t>(sec * 1000.0f));
+    }
+
+    namespace {
 
         // Ensure ONE channel claim tracks `want` (0 == release it). Caller holds g_mx.
         // On a CHANGE of an existing claim, RE-POINTS in place via Repoint (v3, same
@@ -214,16 +240,18 @@ namespace MFO::APMFBridge {
             cur = 0;
         }
 
-        // Heal-cast create-or-refresh (kIntent_Cast/RequestCast, ch.8b, ported
-        // feat/mfo-cast-port): unlike EnsureClaimLocked/EnsureHealClaimLocked's
-        // retired kIntent_SelectSpell Repoint, RequestCast's rich payload has NO
-        // in-place re-point -- a CHANGE in any of (spell, target, hand,
-        // concentration, stopPct) releases the old claim and requests a fresh one
-        // (a new bounded window; never two live claims on the same follower's heal
-        // slot at once). Caller holds g_mx AND must have already verified
-        // api->abiVersion >= 5 (RequestCast is a v5 slot -- see ClaimHealCast).
-        // `wantSpell == 0` releases.
-        void EnsureHealClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
+        // kIntent_Cast create-or-refresh (kIntent_Cast/RequestCast, ch.8b) -- SHARED
+        // by both ClaimHealCast and ClaimOffenseCast (renamed from
+        // EnsureHealClaimLocked, feat/offense-cast-seats, 2026-09-05: the function
+        // was already fully generic over its handle/curX out-params, only the name
+        // was heal-specific). Unlike EnsureClaimLocked's retired kIntent_SelectSpell
+        // Repoint, RequestCast's rich payload has NO in-place re-point -- a CHANGE
+        // in any of (spell, target, hand, concentration, stopPct) releases the old
+        // claim and requests a fresh one (a new bounded window; never two live
+        // claims on the same follower's slot at once). Caller holds g_mx AND must
+        // have already verified api->abiVersion >= 5 (RequestCast is a v5 slot --
+        // see ClaimHealCast/ClaimOffenseCast). `wantSpell == 0` releases.
+        void EnsureCastClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
                                    APMF_API::Handle& handle, RE::FormID& curSpell,
                                    RE::FormID& curTarget, std::int32_t& curHand,
                                    bool& curConc, std::uint32_t& curStopPct,
@@ -243,11 +271,35 @@ namespace MFO::APMFBridge {
             req.spell  = wantSpell;
             req.proxy  = 0;   // APMF mints its own delivery-flip proxy for kSelf-delivery (core/CastProxy.h)
             req.target = wantTarget;
-            req.flags  = (wantHand == kApmfHandLeft ? APMF_API::kCastFlag_LeftHand : 0u) |
+            // kCastFlag_DualCast and kCastFlag_LeftHand are mutually exclusive (APMF_API.h:
+            // "do NOT set kCastFlag_LeftHand alongside it") -- kApmfHandDualCast (Loadout::
+            // HandPick::DualCast, via HandFor above) claims BOTH hands and never also sets
+            // the single-hand hint.
+            const bool wantDual = (wantHand == kApmfHandDualCast);
+            req.flags  = (wantDual                    ? APMF_API::kCastFlag_DualCast :
+                          wantHand == kApmfHandLeft    ? APMF_API::kCastFlag_LeftHand : 0u) |
                          (wantConc ? APMF_API::kCastFlag_Concentration : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
             req.ttlMs  = kHealCastTtlMs;
             handle = api->RequestCast(follower, kOwnBasis, &req);
+            // [cfc] dual-cast ask vs. observed outcome (marth 2026-09-06): the flag is a
+            // HINT (APMF_API.h) -- APMF may still only arm one hand, and never reports which.
+            // This distinguishes "asked for dual, claim granted" (engine may still degrade to
+            // one hand silently downstream) from "asked for dual, claim REFUSED outright" from
+            // "never asked" (no log at all) -- so the field can tell a refused second hand from
+            // a policy that never requested one. Fires only on a claim CREATE/CHANGE (the
+            // unchanged-claim fast path above already skips repeat ticks), so this is
+            // inherently rate-limited, not spammy.
+            if (wantDual) {
+                if (handle != APMF_API::kInvalidHandle)
+                    spdlog::info("[cfc] {:08X} asked for dual-cast (spell {:08X}) -- claim "
+                                 "granted; engine may still arm only one hand (hint only)",
+                                 follower, wantSpell);
+                else
+                    spdlog::warn("[cfc] {:08X} asked for dual-cast (spell {:08X}) -- claim "
+                                 "REFUSED outright, not just downgraded to one hand",
+                                 follower, wantSpell);
+            }
             if (handle != APMF_API::kInvalidHandle) {
                 curSpell = wantSpell; curTarget = wantTarget; curHand = wantHand;
                 curConc  = wantConc;  curStopPct = wantStopPct;
@@ -259,9 +311,10 @@ namespace MFO::APMFBridge {
         // Drop the map entry once EVERY claim is gone. Caller holds g_mx.
         void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
             const auto& o = it->second;
-            if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
+            if (o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
-                o.equipHandle == APMF_API::kInvalidHandle && o.healHandle == APMF_API::kInvalidHandle)
+                o.equipHandle == APMF_API::kInvalidHandle && o.healHandle == APMF_API::kInvalidHandle &&
+                o.offenseHandle == APMF_API::kInvalidHandle)
                 g_owned.erase(it);
         }
     }
@@ -339,25 +392,54 @@ namespace MFO::APMFBridge {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
-        return it != g_owned.end() && it->second.spellHandle != APMF_API::kInvalidHandle;
+        return it != g_owned.end() && it->second.offenseHandle != APMF_API::kInvalidHandle;
     }
 
-    // ── cast-SELECT (per-cast) ──────────────────────────────────────────────────
-    void ClaimCasting(RE::FormID a_follower, RE::FormID a_spell) {
+    // ── offense-cast (per-cast, TTL-bounded, ch.8b, kIntent_Cast/RequestCast) ───
+    // PORTED feat/offense-cast-seats (2026-09-05) off the retired ch.8
+    // kIntent_SelectSpell gate-only claim (ClaimCasting/ReleaseCasting, removed)
+    // this call site used to make -- see APMFBridge.h's ClaimOffenseCast doc for
+    // the full port rationale; this is just the claim plumbing, mirroring
+    // ClaimHealCast's shape exactly via the shared EnsureCastClaimLocked helper.
+    bool ClaimOffenseCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
+                         std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api || a_follower == 0 || a_spell == 0 || !Config::g_apmfCast.load()) return;
+        if (!api || a_follower == 0 || a_spell == 0 || !Config::g_apmfCast.load())
+            return false;
+        // RequestCast is a v5 slot; an APMF.dll built before it (ABI < 5) has no
+        // such function pointer to call at all -- degrade cleanly to the legacy
+        // AI-first-grace + force-on-miss hybrid rather than reading past the end
+        // of an older, shorter interface struct. Logged ONCE (own flag, separate
+        // from ClaimHealCast's -- a session may exercise only one of the two
+        // paths and both deserve their own visibility).
+        if (api->abiVersion < 5) {
+            static std::atomic<bool> s_warnedOffense{ false };
+            if (!s_warnedOffense.exchange(true))
+                spdlog::warn("[apmf] ABI v{} has no RequestCast (need >= 5) -- offense-cast claim "
+                             "OFF; the legacy AI-first-grace hybrid runs instead (degrade).", api->abiVersion);
+            return false;
+        }
+        auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
-        EnsureClaimLocked(api, a_follower, APMF_API::kIntent_SelectSpell, o.spellHandle, o.spell, a_spell);
-        o.spellRefreshed = std::chrono::steady_clock::now();
+        EnsureCastClaimLocked(v5, a_follower, o.offenseHandle, o.offenseSpell, o.offenseTarget, o.offenseHand,
+                              o.offenseConc, o.offenseStopPct, a_spell, a_target, a_hand,
+                              a_concentration, a_stopPct);
+        o.offenseRefreshed = std::chrono::steady_clock::now();
+        const bool live = o.offenseHandle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
+        return live;
     }
 
-    void ReleaseCasting(RE::FormID a_follower) {
+    void ReleaseOffenseCast(RE::FormID a_follower) {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
         if (it == g_owned.end()) return;
-        ReleaseHandleLocked(it->second.spellHandle, it->second.spell);   // cast-select only; leave combat-target
+        ReleaseHandleLocked(it->second.offenseHandle, it->second.offenseSpell);   // offense-cast only; leave combat-target
+        it->second.offenseTarget  = 0;
+        it->second.offenseHand    = 0;
+        it->second.offenseConc    = false;
+        it->second.offenseStopPct = 0;
         EraseIfEmpty(it);
     }
 
@@ -417,6 +499,20 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
         return it != g_owned.end() && it->second.equipHandle != APMF_API::kInvalidHandle;
+    }
+
+    bool WeaponHandActive(RE::Actor* a_follower) {
+        if (!a_follower) return false;
+        // Live read FIRST -- cheap, and correct even when APMF is absent (a
+        // legacy-hybrid follower with a sword out is still weapon-active with
+        // no equip-gambit claim in the picture at all).
+        const auto grip = Loadout::Read(a_follower, nullptr).grip;
+        if (grip == Loadout::Grip::OneHanded || grip == Loadout::Grip::TwoHanded) return true;
+        // Momentarily-empty-handed race guard: an equip gambit holding a live
+        // force-equip claim will reassert the weapon shortly even though the
+        // hand reads free THIS tick (the deck-proven failure this exists to
+        // close -- see this function's header doc).
+        return IsEquipmentClaimActive(a_follower->GetFormID());
     }
 
     // ── package-offer (per-excursion) ───────────────────────────────────────────
@@ -492,7 +588,7 @@ namespace MFO::APMFBridge {
         auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
-        EnsureHealClaimLocked(v5, a_follower, o.healHandle, o.healSpell, o.healTarget, o.healHand,
+        EnsureCastClaimLocked(v5, a_follower, o.healHandle, o.healSpell, o.healTarget, o.healHand,
                               o.healConc, o.healStopPct, a_spell, a_target, a_hand,
                               a_concentration, a_stopPct);
         o.healRefreshed = std::chrono::steady_clock::now();
@@ -531,8 +627,10 @@ namespace MFO::APMFBridge {
         const auto facetExpiry = FacetExpiry();
         for (auto it = g_owned.begin(); it != g_owned.end();) {
             auto& o = it->second;
-            if (o.spellHandle  != APMF_API::kInvalidHandle && now - o.spellRefreshed  >= facetExpiry)
-                ReleaseHandleLocked(o.spellHandle,  o.spell);
+            if (o.offenseHandle != APMF_API::kInvalidHandle && now - o.offenseRefreshed >= facetExpiry) {
+                ReleaseHandleLocked(o.offenseHandle, o.offenseSpell);
+                o.offenseTarget = 0; o.offenseHand = 0; o.offenseConc = false; o.offenseStopPct = 0;
+            }
             if (o.targetHandle != APMF_API::kInvalidHandle && now - o.targetRefreshed >= facetExpiry)
                 ReleaseHandleLocked(o.targetHandle, o.target);
             // package-offer: genuinely flat-refreshed every ~133ms regardless of party
@@ -549,9 +647,10 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.healHandle, o.healSpell);
                 o.healTarget = 0; o.healHand = 0; o.healConc = false; o.healStopPct = 0;
             }
-            if (o.spellHandle == APMF_API::kInvalidHandle && o.targetHandle == APMF_API::kInvalidHandle &&
+            if (o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
-                o.equipHandle == APMF_API::kInvalidHandle && o.healHandle == APMF_API::kInvalidHandle)
+                o.equipHandle == APMF_API::kInvalidHandle && o.healHandle == APMF_API::kInvalidHandle &&
+                o.offenseHandle == APMF_API::kInvalidHandle)
                 it = g_owned.erase(it);
             else
                 ++it;
@@ -561,13 +660,14 @@ namespace MFO::APMFBridge {
     void ClearTransientState() {
         std::scoped_lock lock(g_mx);
         for (auto& [id, o] : g_owned) {
-            ReleaseHandleLocked(o.spellHandle,  o.spell);
             ReleaseHandleLocked(o.targetHandle, o.target);
             ReleaseHandleLocked(o.packageHandle, o.package);
             ReleaseHandleLocked(o.actionHandle,  o.actionMask);
             ReleaseHandleLocked(o.equipHandle,   o.equip);
             ReleaseHandleLocked(o.healHandle,    o.healSpell);
             o.healTarget = 0; o.healHand = 0; o.healConc = false; o.healStopPct = 0;
+            ReleaseHandleLocked(o.offenseHandle, o.offenseSpell);
+            o.offenseTarget = 0; o.offenseHand = 0; o.offenseConc = false; o.offenseStopPct = 0;
         }
         g_owned.clear();
     }

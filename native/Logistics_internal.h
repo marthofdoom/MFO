@@ -249,6 +249,33 @@ namespace MFO::Logistics {
             bool     wantCrossbow = false;              // meaningful only when doRanged
         };
 
+        // Equipment-loot judging context: the follower's combat role/mage-mode
+        // gate plus the baselines any weapon/armor candidate must beat, all
+        // computed ONCE from the follower's OWN gear (BuildEquipmentContext,
+        // Logistics_Loot_Equipment.cpp). Shared type: LootEquipment's
+        // container scan AND LooseEquipmentQualifies (route 2b, LootNearby in
+        // Logistics_Loot.cpp) build/consume it, so a bare sword on the ground
+        // is judged by the EXACT same rule as one in a corpse's pack -- ONE
+        // decision path, two call sites, two translation units.
+        struct EquipmentContext {
+            WepClass      meleeTargetClass  = WepClass::Other;
+            bool          doRanged          = false;
+            bool          wantCrossbow      = false;
+            bool          wantBackup        = false;
+            bool          daggersOnly       = false;
+            bool          useMageApparel    = false;
+            std::uint8_t  mageTop2          = 0;
+            bool          mageSchoolPrimary = true;
+            bool          mageAllowVillain  = false;
+            std::uint16_t baseDmg           = 0;   // best in-role weapon already carried
+            std::uint16_t myRangedDmg       = 0;   // best ranged weapon already carried
+            std::uint16_t myBackupDmg       = 0;   // best mage sidearm already carried
+            bool          wantsMelee        = false;   // diagnostics only
+            bool          wantsRanged       = false;   // diagnostics only
+            RE::ActorValue school           = RE::ActorValue::kNone;   // diagnostics only
+            int           castGambits       = 0;        // diagnostics only
+        };
+
         // ── the looting dispatcher ──────────────────────────────────────────
         // APPEND-ONLY (marth CLAUDE.md hard rule): existing ordinals are
         // frozen, new categories go at the end.
@@ -308,6 +335,20 @@ namespace MFO::Logistics {
         inline bool IsDibsTierLootOp(const std::string& a_op) {
             return a_op == Vocab::kActLootEquipment || a_op == Vocab::kActLootGold  ||
                    a_op == Vocab::kActLootJewelry   || a_op == Vocab::kActLootSoulGems ||
+                   a_op == Vocab::kActLootValuables;
+        }
+
+        // Every opcode that names a LOOT action (as opposed to drink/torch/cast,
+        // which share the same per-tick fall-through in Logistics.cpp). Used to
+        // gate the [L] glyph's real-acquisition stamp (g_justLooted) onto loot
+        // opcodes only -- a successful drink/torch/cast must not light "Looting".
+        inline bool IsLootOp(const std::string& a_op) {
+            return a_op == Vocab::kActLootArrows        || a_op == Vocab::kActLootBolts    ||
+                   a_op == Vocab::kActLootPotions        || a_op == Vocab::kActLootHealthPotion ||
+                   a_op == Vocab::kActLootStaminaPotion  || a_op == Vocab::kActLootMagickaPotion ||
+                   a_op == Vocab::kActLootEquipment      || a_op == Vocab::kActLootGold     ||
+                   a_op == Vocab::kActLootJewelry        || a_op == Vocab::kActLootSoulGems ||
+                   a_op == Vocab::kActLootLockpicks      || a_op == Vocab::kActLootIngredients ||
                    a_op == Vocab::kActLootValuables;
         }
 
@@ -693,6 +734,15 @@ namespace MFO::Logistics {
         inline std::unordered_map<RE::FormID,   Clock::time_point> g_econTrade;   // per-follower 8 s
         inline std::unordered_map<std::uint64_t, Clock::time_point> g_econPair;   // per-(follower,vendor) 12 s
 
+        // [L] glyph reliability fix (marth 2026-09-06): stamped ONLY at a confirmed
+        // acquisition (LootNearby's own true return, the loose-item Activate
+        // readback's inventory delta, StripCorpse's `moved`) -- never at the
+        // travel-slot claim, which is neither necessary nor sufficient for a real
+        // pickup. Holds an "expires at" time_point exactly like g_econTrade above;
+        // Logistics::JustLooted (Logistics.cpp) sizes the window from the real
+        // round-robin cadence (partySize * kPumpMs), not a guessed constant.
+        inline std::unordered_map<RE::FormID, Clock::time_point> g_justLooted;
+
     // ── cross-module helper declarations ────────────────────────────────
     // Defined at namespace scope in the named module; every other module
     // calls through these. Default arguments live HERE (the definitions
@@ -705,6 +755,7 @@ namespace MFO::Logistics {
                   bool a_peek = false);
     bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     bool ArmorIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
+    bool CarriesSlotArmorAtLeast(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     void KeepHeadClear(RE::Actor* a_actor);
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
     bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w);
@@ -713,7 +764,6 @@ namespace MFO::Logistics {
     bool AcquireEquip(RE::Actor* a_follower, RE::TESBoundObject* a_item,
                       RE::TESObjectREFR* a_src, RE::TESObjectWEAP* a_myWeap,
                       bool a_forceStock);
-    bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false);
     bool IsJewelryPiece(RE::TESObjectARMO* a_armo);
     bool Po3Present();
     bool InPlayerHome();
@@ -735,6 +785,16 @@ namespace MFO::Logistics {
                           Clock::time_point a_now);
     bool IsValuableMisc(RE::TESBoundObject* a_obj);
     bool IsQuestObjectInstance(RE::InventoryEntryData* a_entry);
+    bool IsQuestObjectRef(RE::TESObjectREFR* a_ref);
+    bool LooseSpecialItemBlocked(RE::TESObjectREFR* a_ref, RE::FormID a_formId);
+
+    // defined in Logistics_Loot_Equipment.cpp (split out of Logistics_Loot.cpp,
+    // 2500-line hard rule) -- the EquipmentContext type itself lives above,
+    // WeaponRoles-adjacent, since both TUs construct/consume it by value.
+    bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false);
+    EquipmentContext BuildEquipmentContext(RE::Actor* a_follower);
+    bool LooseEquipmentQualifies(RE::Actor* a_follower, RE::TESBoundObject* a_obj,
+                                 const EquipmentContext& ctx);
 
     // defined in Logistics_Cast.cpp
     RE::ActorValue TargetMagicSchool(const FollowerState& a_state, int& a_castGambits);

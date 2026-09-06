@@ -48,6 +48,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Logistics_Cast.cpp
     Logistics_Economy.cpp
     Logistics_Loot.cpp
+    Logistics_Loot_Equipment.cpp
     Loadout.cpp
     Papyrus.cpp
     TradeBridge.cpp

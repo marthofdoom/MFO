@@ -166,11 +166,15 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_forceCastOnMiss{ true };
 
     // APMF CAST ASSIST (APMFBridge, Phase 3). When APMF.dll is present, the OWNED
-    // cast model routes a HOSTILE cast gambit through APMF: it OWNS the follower's
-    // spell selection AND HOLDs the combat target, so the follower's own AI fires the
-    // right spell at the right target ANIMATED (Docs/CAST-DELIVERY.md). ON by default
-    // but wholly INERT unless APMF is in the load order (APMFBridge::Available());
-    // this INI kill-switch (bApmfCast) exists for A/B field testing. No save state.
+    // cast model routes a HOSTILE cast gambit through APMF: it DRIVES the follower's
+    // OWN combat AI to select/equip/charge/aim/fire/channel the gambit's EXACT spell
+    // at the claimed target (kIntent_Cast/RequestCast, ch.8b -- ported feat/offense-
+    // cast-seats, 2026-09-05, off an earlier ch.8 kIntent_SelectSpell claim that only
+    // arbitrated/denied and let the AI pick its own spell) AND holds the combat
+    // target, so the follower's own AI fires the right spell at the right target
+    // ANIMATED (Docs/CAST-DELIVERY.md). ON by default but wholly INERT unless APMF is
+    // in the load order (APMFBridge::Available()); this INI kill-switch (bApmfCast)
+    // exists for A/B field testing. No save state.
     inline std::atomic<bool>  g_apmfCast{ true };
 
     // LEGACY CAST HYBRID (MCM bLegacyCastHybrid). The owned cast model (above) is the

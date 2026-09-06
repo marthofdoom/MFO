@@ -6,6 +6,9 @@
 // ResolveCastTarget. Shared concentration numbers: Actuation_internal.h.
 #include "Actuation_internal.h"
 #include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
+#include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
+                          // (feat/offense-cast-seats: reused here, NOT routed through Try())
+#include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
 
 namespace MFO::Actuation {
 
@@ -137,6 +140,118 @@ namespace MFO::Actuation {
             return std::nullopt;
         }
 
+        // ── TASK 2 (feat/cast-gambit-concentration): THE FIRING-SPELL GAMBIT LOCK ──
+        // marth: "while a spell gambit is actively firing, another spell gambit
+        // must not preempt or re-point it, even if it would otherwise win the
+        // rule evaluation." Both the OWNED-CAST claim (APMF's engine seats
+        // mid-charge/mid-decision on the offense or heal facet) and a
+        // CONCENTRATION stream (claimed via Task 1, or the plain direct-force
+        // fallback) are genuinely multi-tick: the round-robin combat scan can
+        // swing to a DIFFERENT winning cast rule between services before either
+        // finishes, and every one of those paths re-Claims/re-registers on ITS
+        // OWN (spell,target) the instant it is asked to -- so a flip mid-cast
+        // silently tears down the in-flight charge/channel and starts a new
+        // one, wasting it (the bug this closes).
+        //
+        // SCOPE (deliberate, not an oversight): the legacy AI-first-grace +
+        // force-on-miss hybrid is NOT covered -- it already self-protects via
+        // its own grace window + the aiCastOther miss detector, and it is the
+        // degrade-when-absent path, not the primary one. CastAuto is likewise
+        // out of scope -- its own sequential-most-hurt hysteresis is a
+        // DELIBERATE target-cycling design ([[cast-fanning-known-good-behavior]]),
+        // not the re-pointing bug this lock exists for. The out-of-combat
+        // Logistics dispatch never calls CastOn/ConcentrationCast at all (it
+        // calls CastSelfDirect/CastTargetDirect/CastAuto directly, single-pass,
+        // no suppression-window rule scan to re-point FROM), so it needs no gate.
+        //
+        // STATE: one slot per follower, worker-serial (#4 discipline, same as
+        // g_forcedWeapon above) -- the (spell,target) currently occupying the
+        // follower's cast attention, and the last tick it was reaffirmed.
+        // target == 0 means self.
+        struct CastLock {
+            RE::FormID spell  = 0;
+            RE::FormID target = 0;
+            std::chrono::steady_clock::time_point lastSeen{};
+        };
+        std::unordered_map<RE::FormID, CastLock> g_castLock;
+
+        // Rate-limited [eval] log -- one line per (follower, spell) per ~2s
+        // window, the SAME dedup shape as CasterConsent.cpp's g_lastDenied/
+        // g_lastConcDeny, so a rule held off every tick it keeps losing does
+        // not spam the log at scan rate.
+        std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> g_lastLockLog;
+
+        void LogCastLockHold(RE::FormID a_follower, RE::FormID a_wantedSpell, RE::FormID a_lockedSpell) {
+            const auto now = std::chrono::steady_clock::now();
+            auto& entry = g_lastLockLog[a_follower];
+            if (entry.first == a_wantedSpell &&
+                std::chrono::duration<float>(now - entry.second).count() < 2.0f)
+                return;
+            entry.first = a_wantedSpell; entry.second = now;
+            spdlog::info("[eval] {:08X} cast gambit HELD OFF -- spell {:08X} wants the "
+                         "follower, spell {:08X} is still firing", a_follower, a_wantedSpell,
+                         a_lockedSpell);
+        }
+
+        // Establish/refresh the lock -- call whenever CastOn/ConcentrationCast
+        // commits to an outcome that occupies the follower ACROSS ticks: a live
+        // APMF cast claim (offense or heal), or a genuine concentration stream
+        // (claimed via Task 1, or plain direct-force). a_target == 0 for self.
+        void HoldCastLock(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target) {
+            auto& lock = g_castLock[a_follower];
+            lock.spell = a_spell; lock.target = a_target;
+            lock.lastSeen = std::chrono::steady_clock::now();
+        }
+
+        // Is the lock still LIVE, i.e. is the follower still genuinely
+        // occupied by it right now? "release on completion, on claim release/
+        // TTL expiry" (marth): a live APMF cast claim -- offense OR heal,
+        // either facet's engine seats mid-cast -- is authoritative proof by
+        // itself, checked FIRST so a claim that ends EARLY (a heal topping off
+        // well inside the window, or APMF's own TTL elapsing) frees the
+        // follower immediately rather than riding out a timer. Absent that
+        // (APMF off/absent, or a plain un-claimed direct-force concentration
+        // stream -- its registry is private to Actuation_Direct.cpp's own TU
+        // and not queryable from here), fall back to the SAME round-robin-
+        // aware staleness window every other facet in this codebase already
+        // sizes against (#9: a floor is safe, a guessed budget is not) --
+        // reused via APMFBridge::FacetExpiry(), never separately invented. A
+        // still-winning gambit re-fires (and re-Holds the lock) every
+        // round-robin lap, well inside this window, so the SAME gambit never
+        // sees its own lock go stale; only a gambit that stopped being
+        // requested at all does.
+        bool CastLockLive(RE::FormID a_follower, const CastLock& a_lock) {
+            if (APMFBridge::IsOwnedCastActive(a_follower) || APMFBridge::IsHealCastActive(a_follower))
+                return true;
+            const float elapsed = std::chrono::duration<float>(
+                std::chrono::steady_clock::now() - a_lock.lastSeen).count();
+            return elapsed <= std::chrono::duration<float>(APMFBridge::FacetExpiry()).count();
+        }
+
+        // THE GATE: does a DIFFERENT (spell,target) than the one currently
+        // locked want the follower this tick? Returns the hold-off Outcome
+        // (transparent -- GAMBIT_FLOWS §2, a held gambit is not a wall for the
+        // rules below it) while the lock is still live; std::nullopt when the
+        // request may proceed -- nothing is locked, the SAME gambit is
+        // refreshing its own lock (handled by its own call site below), or the
+        // lock has gone stale/completed and is released right here.
+        std::optional<Outcome> CheckCastLock(RE::Actor* a_follower, RE::FormID a_spell,
+                                             RE::FormID a_target) {
+            const auto id = a_follower->GetFormID();
+            auto it = g_castLock.find(id);
+            if (it == g_castLock.end()) return std::nullopt;
+            if (it->second.spell == a_spell && it->second.target == a_target)
+                return std::nullopt;   // the SAME gambit -- proceeds and refreshes its own lock
+            if (!CastLockLive(id, it->second)) {
+                g_castLock.erase(it);
+                return std::nullopt;   // stale/completed -- the new request may proceed
+            }
+            LogCastLockHold(id, a_spell, it->second.spell);
+            return Outcome{ Result::NoOp,
+                            std::format("cast gambit locked -- spell {:08X} still firing", it->second.spell),
+                            true };
+        }
+
         // ── CONCENTRATION: the BOUNDED DIRECT-FORCE STREAM ───────────────────
         // A concentration spell has no "one cast" for the fire-and-forget
         // machinery to observe: force-YESing it to the AI made a PERMANENT
@@ -184,8 +299,10 @@ namespace MFO::Actuation {
                 if (Config::g_castSelf.load()) {
                     switch (CastSelfDirect(a_follower, a_spell)) {
                     case SelfCast::Applied:
+                        HoldCastLock(id, a_spell->GetFormID(), 0);   // TASK 2
                         return { Result::Fired, "self-cast (direct trigger)" };
                     case SelfCast::Refreshed:
+                        HoldCastLock(id, a_spell->GetFormID(), 0);   // TASK 2
                         return { Result::NoOp, "self-cast refresh (paced)", true };
                     case SelfCast::Declined:
                     default:
@@ -243,10 +360,12 @@ namespace MFO::Actuation {
                 // concentration deny keeps the AI's own unbounded attempt at
                 // this spell off. The direct stream is unaffected (above).
                 CasterConsent::Want(id, a_spell->GetFormID());
+                HoldCastLock(id, a_spell->GetFormID(), a_target->GetFormID());   // TASK 2
                 return { Result::Fired, "concentration (direct force)" };
             case SelfCast::Refreshed:
                 // Live stream, paced out this tick -- the wait IS the action;
                 // transparent like the FF form.
+                HoldCastLock(id, a_spell->GetFormID(), a_target->GetFormID());   // TASK 2
                 return { Result::NoOp, "concentration direct refresh (paced)", true };
             case SelfCast::Declined:
             default:
@@ -371,6 +490,22 @@ namespace MFO::Actuation {
                 }
             }
 
+            // TASK 2 (feat/cast-gambit-concentration): THE FIRING-SPELL GAMBIT
+            // LOCK. Checked here -- after range/competence (a request that
+            // could not run anyway is not "held off", it simply fails as
+            // before) and BEFORE every branch below that would touch equip/
+            // consent/claims for a possibly-DIFFERENT spell. See CheckCastLock's
+            // own doc (above ConcentrationCast) for the full rationale; in
+            // short, a DIFFERENT (spell,target) than one already occupying this
+            // follower across ticks (an owned-cast claim or a concentration
+            // stream) is held off, transparently, until that lock goes
+            // live-false or stale.
+            const auto id = a_follower->GetFormID();
+            const RE::FormID lockTargetKey =
+                (!a_target || a_target == a_follower) ? 0 : a_target->GetFormID();
+            if (auto held = CheckCastLock(a_follower, a_spellID, lockTargetKey))
+                return *held;
+
             // SELF-CAST forks off FIRST (SPEC-self-cast-forced): a bCastSelf-
             // armed cast_self -- concentration OR fire-and-forget -- fires
             // through the UNIVERSAL direct trigger (CastSelfDirect), BEFORE the
@@ -393,8 +528,14 @@ namespace MFO::Actuation {
                 // no-op tick.
                 switch (CastSelfDirect(a_follower, spell)) {
                 case SelfCast::Applied:
+                    // TASK 2: hold the lock -- a claimed (heal/instant) or
+                    // concentration self-cast is multi-tick; an FF instant apply
+                    // with no live claim self-releases within one round-robin
+                    // lap via CastLockLive's staleness fallback (harmless).
+                    HoldCastLock(id, a_spellID, 0);
                     return { Result::Fired, "self-cast channel (direct trigger)" };
                 case SelfCast::Refreshed:
+                    HoldCastLock(id, a_spellID, 0);
                     // Channel kept alive, no effect/magicka this tick -- fall past.
                     return { Result::NoOp, "self-cast refresh (paced)", true };
                 case SelfCast::Declined:
@@ -469,27 +610,33 @@ namespace MFO::Actuation {
                     // legacy force route) -- so we drop the package entirely and the follower
                     // keeps kiting while it casts.
                     //
-                    // DIVISION OF LABOUR (the whole point of routing through APMF):
-                    //   * APMF ARBITRATES the facets -- MFO CLAIMS the cast + combat-target
-                    //     facets so APMF is the single arbiter (and can suppress competitors).
-                    //     APMF executes NOTHING; it makes no cast/combat call.
-                    //   * MFO EXECUTES the behaviour with its OWN proven mechanisms:
-                    //       - SELECT our spell: Loadout::Prepare's EquipSpell into the LEFT
-                    //         hand slot (above, §0.28) -- selection comes from the equip, NOT a
-                    //         hand-written selectedSpells/currentSpell (ENGINE_NOTES §585: never
-                    //         write currentSpell by hand, it desyncs the engine's own select/
-                    //         deselect bookkeeping -- the per-tick raw write that regressed this
-                    //         model was doing exactly that, on the WRONG hand, resetting the
-                    //         charge before it could release; fixed 2026-09-02);
+                    // DIVISION OF LABOUR (the whole point of routing through APMF; UPDATED
+                    // feat/offense-cast-seats, 2026-09-05 -- the offense claim moved off
+                    // ch.8 kIntent_SelectSpell onto ch.8b kIntent_Cast, the SAME facet
+                    // ClaimHealCast uses, so APMF now does more than arbitrate):
+                    //   * MFO EXECUTES the equip/target/consent half with its OWN proven
+                    //     mechanisms, same as before:
+                    //       - PUT the spell in hand: Loadout::Prepare's EquipSpell into the
+                    //         LEFT hand slot (above, §0.28) -- this is what physically makes
+                    //         the spell castable at all, and is why the claim below also
+                    //         always passes hand=LEFT (the claimed hand and the
+                    //         physically-equipped hand must never disagree);
                     //       - COMMAND our target: Targeting::Command -> currentCombatTarget
                     //         (its UpdateCombat hook re-asserts it);
-                    //       - CONSENT + deny competing spells: CasterConsent::Want (granted
-                    //         just above) -- the AI is permitted to cast OUR spell and denied
-                    //         its others;
-                    //       - DECIDE to cast: the Cast-biased combat style (Scheduler applies
-                    //         MFO_CastStyle each combat tick a cast is wanted -- raises the
-                    //         magic score so the AI CHOOSES to cast; the INVERSE of a deny,
-                    //         never a force).
+                    //       - CONSENT: CasterConsent::Want (granted just above) -- lets the
+                    //         AI consider casting OUR spell at all (a veto-removal, never an
+                    //         invented consent).
+                    //   * APMF CLAIMS + DRIVES the cast + combat-target facets: MFO claims
+                    //     kIntent_Cast (ClaimOffenseCast, below) naming the exact spell and
+                    //     target, and while that claim stands APMF's five engine vfunc seats
+                    //     drive the follower's OWN combat AI to select/equip/charge/aim/
+                    //     fire/channel EXACTLY that spell at EXACTLY that target -- so
+                    //     (unlike the retired gate-only claim, which only ARBITRATEd+DENIED
+                    //     a competitor's own selection) the gambit's named spell is now the
+                    //     one that actually fires, not whatever the AI would have picked.
+                    //     APMF still fires NOTHING itself -- no EquipSpell/CastSpell/
+                    //     CastSpellImmediate/anim-graph write of any kind; every engine call
+                    //     is the AI's own, from its own behavior tree.
                     // GRANULAR: we claim ONLY the cast + combat-target facets -- we do NOT
                     // touch the movement facet (no SetDontMove, no block), so the follower
                     // keeps moving under its own control WHILE its AI casts. That granular
@@ -509,37 +656,143 @@ namespace MFO::Actuation {
                         CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
 
                     if (ownedCast) {
-                        // ARBITRATION: claim the two facets via APMF EVERY tick this branch
-                        // wins. Not wasted work -- EnsureClaimLocked (APMFBridge.cpp:70)
-                        // already no-ops an unchanged claim, and critically each call stamps
-                        // spellRefreshed/targetRefreshed (APMFBridge.cpp:144/173) regardless,
-                        // which is what keeps the claim alive: a claim not refreshed within
-                        // FacetExpiry() is dropped (APMFBridge.cpp's Tick() sweep). This call
-                        // site is itself the reason that expiry is round-robin-aware, not the
-                        // flat 500ms it used to be: "EVERY tick this branch wins" means this
-                        // follower's own Scheduler::Tick round-robin lap, ONE follower serviced
-                        // per ~133ms, so the real refresh gap scales with party size (proven by
-                        // the Cicero deck capture on the sibling equipment claim, 2026-09-05). A
-                        // per-follower dedupe latch here (tried 2026-09-02, reverted same day
-                        // per Fable review) skipped these calls on an unchanged tick and starved
-                        // the claim mid-cast -- "casting facet released" while the AI was still
-                        // charging. Movement is NOT claimed.
-                        APMFBridge::ClaimCasting(a_follower->GetFormID(), spell->GetFormID());
-                        APMFBridge::ClaimCombatTarget(a_follower->GetFormID(),
-                                                      a_target->GetFormID(), /*create=*/true);
+                        // CLAIM the cast-EXECUTION facet FIRST (kIntent_Cast/RequestCast,
+                        // ch.8b -- PORTED feat/offense-cast-seats, 2026-09-05, off the
+                        // retired ch.8 kIntent_SelectSpell gate-only claim this site used
+                        // to make: that channel only ARBITRATEd+DENIED a competing
+                        // framework's own selection, so the follower's own AI still picked
+                        // WHATEVER SPELL IT WANTED -- the long-standing "target right,
+                        // spell wrong" defect. This claim instead rides the SAME
+                        // kIntent_Cast facet ClaimHealCast uses: while it stands, APMF's
+                        // five engine seats drive the follower's OWN combat AI to
+                        // select/equip/charge/aim/fire/channel THIS spell at THIS target
+                        // natively, closing the defect. Call EVERY tick this branch wins,
+                        // same "the claim call also refreshes" idiom every other APMF
+                        // claim here uses (EnsureCastClaimLocked, APMFBridge.cpp, no-ops
+                        // an unchanged claim but always stamps offenseRefreshed, which is
+                        // what keeps it alive against the round-robin-aware FacetExpiry()
+                        // backstop -- a per-follower dedupe latch here would starve the
+                        // claim mid-cast exactly like the 2026-09-02 attempt did for the
+                        // old claim, reverted same day per Fable review).
+                        //
+                        // hand = LEFT, always: matches Loadout::Prepare's own EquipSpell
+                        // target (LeftHandSlot(), just above) exactly, so the claimed hand
+                        // and the physically-equipped hand never disagree. concentration =
+                        // false: this branch never sees one (concentration forked off to
+                        // ConcentrationCast's direct-force stream, above, before the equip/
+                        // ownedCast machinery runs at all). stopPct = 0: a heal-only
+                        // concept (a client restore threshold); offense has no such
+                        // threshold in scope.
+                        //
+                        // REFUSED (APMF lost arbitration / ABI < 5 / toggle off): fall
+                        // through to the legacy AI-first-grace + force-on-miss hybrid
+                        // below, exactly as when ownedCast is false -- a refused claim
+                        // must never silently drop the cast (the AI would otherwise just
+                        // pick its own spell again, reintroducing the defect this claim
+                        // exists to close).
+                        // HAND POLICY (integration/2026-09-06): consult Loadout::PlanCastHand
+                        // instead of hardcoding LEFT. It holds the hard, non-negotiable rule --
+                        // a weapon owning the right hand forces LEFT, unconditionally, checked
+                        // before anything else -- and only plans DualCast when the follower has
+                        // the REAL school dual-cast perk AND can afford the doubled cost. The
+                        // weapon signal must be right or the rule reopens the displaced-spell
+                        // race, so it comes from APMFBridge::WeaponHandActive (a live grip read
+                        // OR'd with a pending equip claim), never a guess. HandFor() carries the
+                        // decision into the bridge's a_hand encoding; a DualCast plan becomes
+                        // kCastFlag_DualCast (never alongside kCastFlag_LeftHand). Heals do NOT
+                        // route through here -- they are LEFT always, by design.
+                        const auto handPick =
+                            Loadout::PlanCastHand(a_follower, spell,
+                                                  APMFBridge::WeaponHandActive(a_follower));
+                        if (APMFBridge::ClaimOffenseCast(a_follower->GetFormID(), spell->GetFormID(),
+                                                         a_target->GetFormID(), APMFBridge::HandFor(handPick),
+                                                         /*concentration=*/false, /*stopPct=*/0)) {
+                            // ARBITRATE the combat-target facet too (ch.6, unchanged) --
+                            // separate from the cast claim's own `target` field (which only
+                            // feeds the magic-target/aim seats): this keeps APMF the single
+                            // arbiter of currentCombatTarget against a competing framework
+                            // while the AI is casting.
+                            APMFBridge::ClaimCombatTarget(a_follower->GetFormID(),
+                                                          a_target->GetFormID(), /*create=*/true);
 
-                        // EXECUTION (MFO's own): our spell is already selected via the equip
-                        // above (Loadout::Prepare); command our target every tick too --
-                        // Targeting::Command (Targeting.h:37-41) itself dedupes on an unchanged
-                        // latch and only reports a real change, so this is equally cheap.
-                        // Consent was granted above; the Cast combat style (Scheduler) supplies
-                        // the AI's DECISION. The follower's own AI then casts our spell at our
-                        // target -- full animation, still mobile.
-                        Targeting::Command(a_follower->GetFormID(), a_target->GetHandle());
+                            // EXECUTION (MFO's own): command our target every tick too --
+                            // Targeting::Command (Targeting.h:37-41) itself dedupes on an
+                            // unchanged latch and only reports a real change, so this is
+                            // equally cheap. Consent was granted above; APMF's engine seats
+                            // now supply the AI's DECISION+SPELL+TARGET directly. The
+                            // follower's own AI then casts our spell at our target -- full
+                            // animation, still mobile.
+                            Targeting::Command(a_follower->GetFormID(), a_target->GetHandle());
 
-                        // OPAQUE hold: the AI is deciding+casting; firing lower rules now risks
-                        // disturbing that decision (the §0.6 confound). No force, ever, here.
-                        return { Result::NoOp, "owned cast: AI deciding (animated, mobile)" };
+                            // Reuse the SAME [cfc]-style silent-claim diagnostic the heal
+                            // path arms via ComposedCast::Try -- if this claim stands but
+                            // the SpellSink never observes it actually firing, a
+                            // rate-limited [cfc] warning names the follower/spell (no
+                            // watchdog, no re-fire, no fallback -- silence is the signal).
+                            ComposedCast::WatchClaim(a_follower->GetFormID(), spell->GetFormID());
+
+                            // TASK 2: this IS the multi-tick "actively firing"
+                            // case the gambit lock exists for -- hold it so a
+                            // different cast rule cannot re-point APMF's engine
+                            // seats mid-charge/mid-decision.
+                            HoldCastLock(id, a_spellID, a_target->GetFormID());
+
+                            // OPAQUE hold: the AI is deciding+casting; firing lower rules
+                            // now risks disturbing that decision (the §0.6 confound). No
+                            // force, ever, here.
+                            return { Result::NoOp, "owned cast: AI deciding (animated, mobile)" };
+                        }
+                        spdlog::info("[cast] {:08X} offense-cast claim refused -- "
+                                     "legacy AI-first-grace hybrid runs instead",
+                                     a_follower->GetFormID());
+                        // fall through to the legacy hybrid below
+                    }
+
+                    // COMPOSED CAST for a Heal/Buff spell aimed at an ally or the player,
+                    // fire-and-forget (API-PORT-AUDIT.md #1). `ownedCast` above is
+                    // Offense-only by its own classification check, so it never fires for
+                    // a Heal/Buff spell -- without this, that case fell straight into the
+                    // AI-first-grace + force-on-miss hybrid below even with APMF present,
+                    // even though the SAME kIntent_Cast claim (`ComposedCast::Try`) already
+                    // handles the identical spell/target pair when it arrives via
+                    // `CastSelfDirect`/`CastTargetDirect` (concentration, or self-target FF).
+                    // This call mirrors those two exactly -- same signature, same
+                    // HEAL-ONLY internal gate (`ComposedCast::Enabled`, ComposedCast.cpp),
+                    // so a Buff kind here degrades to false immediately, byte-identical to
+                    // not calling it at all.
+                    //
+                    // IN-COMBAT ONLY: CastOn only runs from Actuation::Fire, the combat-
+                    // rule dispatch (this file's own header comment) -- a live
+                    // CombatController is already guaranteed here. The out-of-combat
+                    // mirror (Logistics.cpp's FF beneficial direct-apply) is deliberately
+                    // untouched: whether kIntent_Cast's engine seats function without a
+                    // live CombatController is an open question (API-PORT-AUDIT.md §5.1).
+                    //
+                    // stopPct = 0 (stop at full restoration): no per-gambit numeric
+                    // threshold is in scope here, matching every ComposedCast::Try call
+                    // site except CastAuto's own (CAST-DELIVERY.md's STOP-PERCENT note).
+                    //
+                    // REFUSED (Buff kind, AE/APMF/toggle absent, or a lost claim) falls
+                    // straight through to the SAME grace/ForceCast hybrid below,
+                    // byte-identical to today -- a heal must never silently vanish.
+                    //
+                    // `a_target != a_follower` scopes this to ally/player targets only,
+                    // matching the audit's own framing -- a self-target CAN reach this far
+                    // when bCastSelf (dev-only, default off) never forked it off at :522,
+                    // and self-cast is a separate, already-gated mechanism (CastSelfDirect)
+                    // this fix must not silently annex.
+                    if (a_target != a_follower &&
+                        ComposedCast::Try(a_follower, spell, a_target,
+                                          CasterConsent::ClassifySpell(spell), /*stopPct=*/0)) {
+                        // TASK 2: same multi-tick "actively firing" reasoning as the
+                        // ownedCast branch above -- hold the lock so a different cast rule
+                        // cannot re-point APMF's engine seats mid-charge/mid-decision.
+                        HoldCastLock(id, a_spellID, a_target->GetFormID());
+
+                        // OPAQUE hold: the AI is deciding+casting; firing lower rules now
+                        // risks disturbing that decision (the §0.6 confound). No force,
+                        // ever, here.
+                        return { Result::NoOp, "composed cast: AI deciding (animated, mobile)" };
                     }
 
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
@@ -1286,7 +1539,7 @@ namespace MFO::Actuation {
             // force-hold holds the hands. ClaimEquipment both ENGAGES it (the
             // first reconcile tick after EquipWeapon sets g_forcedWeapon) and
             // REFRESHES it (every tick after, same "the claim call also
-            // refreshes" idiom ClaimCasting uses) -- so there is never a tick
+            // refreshes" idiom ClaimOffenseCast uses) -- so there is never a tick
             // where the hold survives but the claim is left to expire under
             // APMFBridge's expiry backstop. That backstop is FacetExpiry()
             // (round-robin-aware), not the flat kExpiry -- this reconcile call is
@@ -1300,6 +1553,28 @@ namespace MFO::Actuation {
     void ClearForcedWeapons() {
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
+    }
+
+    // TASK 2 (feat/cast-gambit-concentration): drop ONE follower's firing-spell
+    // gambit lock now -- the exit paths the lock's own doc comment (above
+    // ConcentrationCast) enumerates beyond its own live-check/staleness release:
+    // dismissal (Followers::ReleaseHeldState) and combat ending / no cast rule
+    // holding (Scheduler's out-of-combat teardown + its !castSeen release,
+    // alongside ReleaseOffenseCast/ComposedCast::ClearWatch -- the SAME two
+    // spots the offense-cast claim itself is crisply released from). Idempotent
+    // (erase-miss -> no-op), worker-serial, no lock (#4).
+    void ClearCastLock(RE::FormID a_follower) {
+        g_castLock.erase(a_follower);
+        g_lastLockLog.erase(a_follower);
+    }
+
+    // Revert/load: drop every follower's lock. No engine call -- the world is
+    // being replaced (mirrors ClearForcedWeapons/ClearSelfCasts). Called from
+    // ClearSelfCasts() (Actuation_Direct.cpp), the existing Serialization.cpp
+    // revert call site, rather than adding a new one.
+    void ClearCastLocks() {
+        g_castLock.clear();
+        g_lastLockLog.clear();
     }
 
     // #76 force-hold co-save. Persist the force-equip locks so a load clears the

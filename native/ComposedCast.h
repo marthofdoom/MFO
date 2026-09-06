@@ -113,6 +113,23 @@ namespace MFO::ComposedCast {
     bool ExpectingCast(RE::FormID a_follower, RE::FormID a_spell);
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell);
 
+    // ── generic claim-observed diagnostic (feat/offense-cast-seats, 2026-09-05) ─
+    // Arm/clear the SAME "[cfc]-style, claim live N ms with NO observed cast"
+    // watch Try() arms for a heal, for a caller that claims kIntent_Cast through
+    // a DIFFERENT path -- today: Actuation::CastOn's owned-cast branch, via
+    // APMFBridge::ClaimOffenseCast, which does not go through Try() (Try() stays
+    // HEAL-ONLY-gated, see Enabled() above; this is reuse of the diagnostic, NOT
+    // a widening of the claim gate). Keyed only by follower -- heal and offense
+    // claims are mutually exclusive per tick (CasterConsent::SpellKind), so one
+    // shared watch slot per follower is safe; ExpectingCast/NoteObservedCast
+    // above are already generic over (follower, spell) and need no change.
+    // WatchClaim: call every tick the caller's OWN claim call (ClaimOffenseCast)
+    // returns live. ClearWatch: call the instant that claim releases (mirrors
+    // End()'s own g_watch.erase for a caller that manages its own APMFBridge
+    // release directly rather than through End()/Try()).
+    void WatchClaim(RE::FormID a_follower, RE::FormID a_spell);
+    void ClearWatch(RE::FormID a_follower);
+
     // kPreLoadGame / revert -- beside CastBounds::Reset(). Drops this module's
     // own silent-cast diagnostic watch map (APMFBridge::ClearTransientState
     // drops the claim; CastBounds::Reset drops the bound); kept as the one seam
