@@ -896,6 +896,40 @@ declared there and defined in their home module). Layout:
   miss CI caught) gate the loose path exactly like the container one — the
   creature-gear protection is not weakened.
 - `Logistics_internal.h` (~750) — shared substrate: all `g_*` maps/state
+- `Logistics_Loot.cpp` (2419) — the loot judge + per-category looters,
+  claim-and-release, navmesh reach, `AcquireEquip:550`, `LootEquipment:629`,
+  `LootGold:1026`, `LootValuables:1230`, `HasLoot:1525`, `LootNearby:1622`,
+  `StripCorpse:2282`, `RunExcursionScan:2346`.
+  **GOLD + LOOSE GEMS FOLD INTO VALUABLES (2026-09-05):** `Category::Valuables`
+  (`Logistics_internal.h:256`) now also matches gold — `LootValuables`
+  (`Logistics_Loot.cpp:1230`) peeks/takes gold by calling `LootGold` (`:1026`)
+  directly rather than re-deriving a gold count (never `Actor::GetGoldAmount`,
+  which null-derefs — `LootGold` sums `Gold001`/OCF-coin off `GetInventory`).
+  The route-2b loose-ref whitelist inside `LootNearby` (`:1773`) accepts a
+  loose `Gold001` ref for `Category::Valuables` the same as it always has for
+  `Category::Gold`, AND a loose value-dense MISC ref (a dropped gem etc.) for
+  `Category::Valuables`, gated by the same `IsValuableMisc` (`:1203`,
+  value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:489`) the
+  container take already uses — a loose ref qualifies iff a container holding
+  it would have been looted. `act.loot_gold` is UNCHANGED, still a gold-only
+  rule. Loose soul gems/jewelry/ingredients/equipment are still NOT
+  whitelisted — loose-item pickup (route 2b) isn't generalized to every item
+  type yet; that generalization is a documented follow-up, not built here.
+  BEHAVIOUR CHANGE: an existing `act.loot_valuables` rule now also picks up
+  coin and loose gems.
+  **[L] GLYPH RELIABILITY FIX (2026-09-05, marth):** `IsLooting` (`:626`,
+  `SlotOf(id) != nullptr`) is a pure travel-slot proxy — true the whole walk-
+  there and even on an arrival that finds nothing, false for arm's-reach loot
+  that never claims a slot. The board's "Looting" signal now reads
+  `JustLooted` (`:657`) instead, stamped by `MarkJustLooted` (`:651`) at the
+  THREE confirmed-acquisition points in `Logistics.cpp` — the arm's-reach
+  fall-through (`:1563`, gated `IsLootOp` — `Logistics_internal.h:318`), the
+  loose-item Activate readback (`:790`), and the `StripCorpse` call (`:946`).
+  Window sized off the round-robin cadence (`partySize * kPumpMs`, #9), not a
+  guessed constant — see `Logistics.h`'s `JustLooted` doc. `IsLooting` itself
+  is UNCHANGED and still used by other callers; don't re-wire the board back
+  to it.
+- `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state
   (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
   `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/
   `EquipmentContext`/`Claim`, inline small helpers, cross-module declarations.
@@ -1365,6 +1399,11 @@ main-thread-drained edit queue. **ImGui/`imgui_impl_win32` = vendored, do not re
   overload) + a synthesized `tooltip` (`SpellTooltip`, effect name+mag/dur/area) —
   all filled in `PublishSnapshot` (main). The gambit spell-picker renders the hover
   tooltip via `DrawSpellHoverTooltip` from those cached values.
+- **`DrawHud`'s `[C][L][T]` strip (`:1463`, marth 2026-09-06)** — persistent
+  bracket SLOTS: the bracket is always drawn (`TextDisabled("[ ]")` when idle),
+  only the letter+colour comes and goes, so the strip's width never shifts.
+  `r.looting` is fed by `Logistics::JustLooted`, not `IsLooting` — see the
+  Logistics-family entry's "[L] GLYPH RELIABILITY FIX" for why.
 - **#78 Followers-tab MFO toggle** — the tab's FIRST column is a per-row checkbox
   bound to `FollowerRow.mfoEnabled` (mirrored from `FollowerState::mfoEnabled` in
   `PublishSnapshot`, both the active + retained builders). The `##followers` table

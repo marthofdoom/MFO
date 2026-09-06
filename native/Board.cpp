@@ -1456,15 +1456,18 @@ namespace MFO::Board {
                     ImGui::Text("%-16s", r.name.c_str());
                     ImGui::SameLine();
                     // Activity strip: red C combat, green L looting, blue T trading.
-                    // Each glyph lit when active, dim otherwise, butted into [C][L][T].
+                    // Persistent bracket slots (marth 2026-09-06): the bracket is
+                    // ALWAYS drawn -- only the letter comes and goes -- so the strip's
+                    // width never shifts as state changes. Empty slot = dim "[ ]",
+                    // live slot = coloured "[C]"/"[L]"/"[T]", butted into [ ][ ][ ].
                     if (r.inCombat) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "[C]");
-                    else            ImGui::TextDisabled("[C]");
+                    else            ImGui::TextDisabled("[ ]");
                     ImGui::SameLine(0.0f, 0.0f);
                     if (r.looting)  ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "[L]");
-                    else            ImGui::TextDisabled("[L]");
+                    else            ImGui::TextDisabled("[ ]");
                     ImGui::SameLine(0.0f, 0.0f);
                     if (r.trading)  ImGui::TextColored(ImVec4(0.45f, 0.6f, 1.0f, 1.0f), "[T]");
-                    else            ImGui::TextDisabled("[T]");
+                    else            ImGui::TextDisabled("[ ]");
                     ImGui::SameLine();
                     ImGui::Text("R%u %u total", r.rank, r.rapport);
 
@@ -2267,7 +2270,12 @@ namespace MFO::Board {
             r.commanded = a->IsCommandedActor();
             r.inCombat  = a->IsInCombat();
             // Activity glyphs (worker-domain reads; this drain IS the worker, #4).
-            r.looting   = Logistics::IsLooting(r.id);
+            // r.looting reads JustLooted, NOT IsLooting: IsLooting is a travel-
+            // slot proxy (true the whole walk-there, even on an arrival that
+            // finds nothing; false for arm's-reach loot that never claims a
+            // slot at all) -- neither necessary nor sufficient for a real
+            // pickup. JustLooted stamps only at a confirmed acquisition.
+            r.looting   = Logistics::JustLooted(r.id);
             r.trading   = Logistics::IsTrading(r.id);
 
             // ONE formula, shared with the evaluator. These bars are how the

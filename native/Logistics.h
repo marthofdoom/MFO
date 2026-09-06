@@ -124,15 +124,25 @@ namespace MFO::Logistics {
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state);
 
     // HUD ACTIVITY GLYPHS (the board's [C][L][T] strip + the Followers-tab status
-    // word). Both read worker-owned state (g_travelSlots / g_econTrade), so the
-    // ONLY safe caller is the board snapshot drain, which runs on the same task
-    // worker as ServiceFollower (#4) -- never call these off that domain.
+    // word). All read worker-owned state (g_travelSlots / g_econTrade /
+    // g_justLooted), so the ONLY safe caller is the board snapshot drain, which
+    // runs on the same task worker as ServiceFollower (#4) -- never call these
+    // off that domain.
     //   IsLooting: the follower currently holds a loot-travel excursion slot
-    //     (APMF-routed or legacy alias -- g_travelSlots tracks both).
+    //     (APMF-routed or legacy alias -- g_travelSlots tracks both). Kept for
+    //     other callers; NOT used for the board's "Looting" signal any more --
+    //     it's a travel-slot proxy, true the whole walk-there and even on an
+    //     arrival that finds nothing, and false for arm's-reach loot that never
+    //     claims a slot at all.
+    //   JustLooted: the board's real "Looting" source. True for a short window
+    //     (sized off the round-robin cadence, #9) after one of the three
+    //     CONFIRMED-acquisition points in Logistics.cpp actually moved an item --
+    //     never at the travel-slot claim. See MarkJustLooted (Logistics.cpp).
     //   IsTrading: the follower dispatched a vendor trade within the last 8 s
     //     (the g_econTrade settle window). A placeholder signal for the richer
     //     town-update trade/errand excursions to come.
     bool IsLooting(RE::FormID a_id);
+    bool JustLooted(RE::FormID a_id);
     bool IsTrading(RE::FormID a_id);
 
     // Drink the best restore potion of a_which the follower carries, if any and

@@ -338,6 +338,20 @@ namespace MFO::Logistics {
                    a_op == Vocab::kActLootValuables;
         }
 
+        // Every opcode that names a LOOT action (as opposed to drink/torch/cast,
+        // which share the same per-tick fall-through in Logistics.cpp). Used to
+        // gate the [L] glyph's real-acquisition stamp (g_justLooted) onto loot
+        // opcodes only -- a successful drink/torch/cast must not light "Looting".
+        inline bool IsLootOp(const std::string& a_op) {
+            return a_op == Vocab::kActLootArrows        || a_op == Vocab::kActLootBolts    ||
+                   a_op == Vocab::kActLootPotions        || a_op == Vocab::kActLootHealthPotion ||
+                   a_op == Vocab::kActLootStaminaPotion  || a_op == Vocab::kActLootMagickaPotion ||
+                   a_op == Vocab::kActLootEquipment      || a_op == Vocab::kActLootGold     ||
+                   a_op == Vocab::kActLootJewelry        || a_op == Vocab::kActLootSoulGems ||
+                   a_op == Vocab::kActLootLockpicks      || a_op == Vocab::kActLootIngredients ||
+                   a_op == Vocab::kActLootValuables;
+        }
+
         // OPTION A travel state -- up to kMaxLootSlots travellers AT ONCE (one loot
         // quest, four alias pairs; see g_travelSlots below). Worker-tick-only, NOT
         // serialized: this just remembers the intent; the engine-side alias fill is
@@ -719,6 +733,15 @@ namespace MFO::Logistics {
         inline std::unordered_map<RE::FormID,   Clock::time_point> g_econScan;    // per-follower 2 s
         inline std::unordered_map<RE::FormID,   Clock::time_point> g_econTrade;   // per-follower 8 s
         inline std::unordered_map<std::uint64_t, Clock::time_point> g_econPair;   // per-(follower,vendor) 12 s
+
+        // [L] glyph reliability fix (marth 2026-09-06): stamped ONLY at a confirmed
+        // acquisition (LootNearby's own true return, the loose-item Activate
+        // readback's inventory delta, StripCorpse's `moved`) -- never at the
+        // travel-slot claim, which is neither necessary nor sufficient for a real
+        // pickup. Holds an "expires at" time_point exactly like g_econTrade above;
+        // Logistics::JustLooted (Logistics.cpp) sizes the window from the real
+        // round-robin cadence (partySize * kPumpMs), not a guessed constant.
+        inline std::unordered_map<RE::FormID, Clock::time_point> g_justLooted;
 
     // ── cross-module helper declarations ────────────────────────────────
     // Defined at namespace scope in the named module; every other module
