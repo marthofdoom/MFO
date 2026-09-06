@@ -38,6 +38,65 @@ namespace MFO::Loadout {
     // Read what the follower is holding. Pure reads.
     Hands Read(RE::Actor* a_actor, RE::SpellItem* a_spell);
 
+    // ── intelligent hand selection (marth's hand policy, 2026-09-06) ───────────
+    // WHICH hand(s) a cast should claim, decided from the follower's REAL, LIVE
+    // loadout + perks + magicka pool -- never a class/build guess (the same
+    // governing rule DESIGN §4.5b already holds this whole file to). This is a
+    // PURE decision: no engine writes, no APMF dependency (this module knows
+    // nothing about APMF -- see the header banner above). A caller executes it.
+    //
+    // HEALS ARE NOT DECIDED HERE. A heal is LEFT, always, regardless of
+    // anything below -- marth's hard, non-negotiable rule (the deck-proven
+    // failure: a cast took the right hand while the follower was momentarily
+    // unarmed, then an equip gambit's own re-equip displaced it ~500ms later).
+    // See APMFBridge::kApmfHandLeft / ClaimHealCast's doc. A heal caller never
+    // needs PlanCastHand at all.
+    enum class HandPick : std::uint8_t {
+        Left,        // a weapon owns the right hand (or will, imminently) --
+                     // claim LEFT ONLY, leave the weapon hand's own combat
+                     // equip AI untouched. Never rip a weapon out to force a
+                     // spell (the same "compose, don't substitute" rule the
+                     // weapon-hand-exclusion HARD RULE encodes).
+        DualCast,    // BOTH hands genuinely free, ONE spell wanted, and the
+                     // follower has the REAL dual-casting perk for that
+                     // spell's school AND can afford the doubled cost from
+                     // CURRENT magicka -- claim BOTH hands for the SAME
+                     // spell, empowered. NOTE: today's kIntent_Cast claim
+                     // shape (APMF_CastRequest) carries exactly ONE hand hint
+                     // per claim -- this outcome is a DECISION, not yet an
+                     // executable claim; see APMFBridge.h's ClaimHealCast doc
+                     // and CAST-DELIVERY.md for what is missing to fire it.
+        EitherFree,  // both hands free, no dual-cast (no perk, or can't
+                     // afford it) -- the caller may claim either hand for
+                     // THIS spell. When a second, DIFFERENT spell is also
+                     // wanted the same tick (the "juggle" case), give that
+                     // one the OTHER hand -- PlanCastHand only ever plans ONE
+                     // spell's hand at a time; orchestrating two is the
+                     // caller's job (it alone knows what else is wanted).
+    };
+
+    // a_weaponHandActive: true iff a weapon currently owns (or an equip
+    // gambit is about to reassert into) a_actor's right hand -- callers
+    // combine a live Read(a_actor, nullptr).grip check with their own
+    // "an equip claim is about to re-arm" signal (the APMF-owned path uses
+    // APMFBridge::WeaponHandActive, which does exactly that combination; the
+    // legacy hybrid path already IS this signal via its own Read() call in
+    // Actuation.cpp). Passing false when a weapon claim is actually pending
+    // reopens the exact race the hard rule exists to close -- get this bit
+    // right before calling.
+    HandPick PlanCastHand(RE::Actor* a_actor, RE::SpellItem* a_spell,
+                          bool a_weaponHandActive);
+
+    // Does a_actor have the REAL dual-casting perk for a_spell's OWN magic
+    // school (read from its costliest effect's Magic Skill, the same read
+    // Logistics_Cast.cpp's TargetMagicSchool uses), AND enough CURRENT
+    // magicka to afford the doubled cost? Pure read (HasPerk + the base
+    // template's own perk list + CalculateMagickaCost) -- reflects exactly
+    // what the follower has, never a class/build assumption (the standing
+    // "player agency over rigid classes" rule). false for a non-school spell,
+    // an unreadable effect, or a follower/spell that is null.
+    bool CanDualCast(RE::Actor* a_actor, RE::SpellItem* a_spell);
+
     enum class Ready : std::uint8_t {
         AlreadyReady,   // spell is in hand -- cast now
         Equipped,       // we just put it in hand

@@ -365,11 +365,39 @@ one.
    actively force-holding a weapon (`APMFBridge::IsEquipmentClaimActive`), that
    weapon owns the RIGHT hand, so a spell must claim LEFT rather than contest
    it; LEFT is also the correct fallback with no weapon held (heals are
-   left-hand almost always regardless). Still the ONLY hand policy MFO passes —
-   there is no more auto/right/dual hand-mode plumbing on this path at all (the
-   retired +ACT drive's `ival` hand bits are gone with it); an intelligent
-   per-perk/loadout-aware hand pass (dual-cast when both hands are free, etc.)
-   is tracked separately as future work, not built here.
+   left-hand almost always regardless). Still the ONLY hand policy a heal
+   passes — there is no more auto/right/dual hand-mode plumbing on THIS path
+   at all (the retired +ACT drive's `ival` hand bits are gone with it), and a
+   heal deliberately bypasses the general policy below.
+
+   **THE GENERAL INTELLIGENT HAND POLICY (`Loadout::PlanCastHand`/
+   `CanDualCast`, `native/Loadout.h`/`.cpp`, 2026-09-06) NOW EXISTS, for
+   offense's future use.** A pure decision, no engine writes, no APMF
+   dependency: a weapon owning the right hand (`APMFBridge::
+   WeaponHandActive` — a live grip read OR'd with `IsEquipmentClaimActive`,
+   closing the SAME race the HAND FIX above does) still forces LEFT; with
+   both hands genuinely free and one spell wanted, `CanDualCast` checks the
+   follower's REAL dual-casting perk for that spell's own school (HasPerk +
+   the base template's perk list, the vanilla Skyrim.esm perks
+   `0x000153CD`..`0x000153D1`) and whether current magicka affords the
+   doubled cost (`CalculateMagickaCost x 2.8`, the vanilla
+   `fMagicDualCastingCostMult`) — eligible plans `DualCast`, otherwise
+   `EitherFree` (the caller may assign either hand, including giving a
+   second, different wanted spell the other hand — the "juggle" case).
+   **Not wired to any live caller.** Two things are still missing to fire
+   it: (1) offense's `ClaimCasting` (`Actuation.cpp`, ch.8,
+   `kIntent_SelectSpell`) carries no hand parameter at all today — MFO lets
+   the AI's own scored equip pick the hand there, so a caller would need a
+   hand argument added to consume this. (2) `DualCast` specifically has NO
+   claim shape to express it: one `kIntent_Cast` claim (`APMF_CastRequest`)
+   carries exactly one `kCastFlag_LeftHand` hint for ONE hand, and
+   `kIntent_Cast` is a single per-follower facet — a second concurrent claim
+   on the same follower's cast slot would REPLACE the first handle, not add
+   a second hand, and no `CastFlags` bit exists for "equip this spell into
+   BOTH hands, empowered" (`APMF_API.h`'s `CastFlags` enum is append-only,
+   not MFO's to extend unilaterally). Firing `DualCast` for real needs either
+   a new APMF-side cast-flag + seat behavior, or downgrading that outcome to
+   `EitherFree` until one exists.
 
    **STOP-PERCENT (feat/mfo-cast-port, Task 3).** Bits 8-15 of `flags`
    (`APMF_API::MakeStopPct`) tell seat 0x07 `CheckStopCast` to end a

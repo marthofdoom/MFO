@@ -2,6 +2,7 @@
 #include "APMF_API.h"
 #include "Config.h"
 #include "Followers.h"   // g_active.size() -- round-robin-aware expiry sizing (FacetExpiry)
+#include "Loadout.h"     // WeaponHandActive's live-grip read
 #include "MainThread.h"
 #include "Rapport.h"
 
@@ -474,6 +475,20 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
         return it != g_owned.end() && it->second.equipHandle != APMF_API::kInvalidHandle;
+    }
+
+    bool WeaponHandActive(RE::Actor* a_follower) {
+        if (!a_follower) return false;
+        // Live read FIRST -- cheap, and correct even when APMF is absent (a
+        // legacy-hybrid follower with a sword out is still weapon-active with
+        // no equip-gambit claim in the picture at all).
+        const auto grip = Loadout::Read(a_follower, nullptr).grip;
+        if (grip == Loadout::Grip::OneHanded || grip == Loadout::Grip::TwoHanded) return true;
+        // Momentarily-empty-handed race guard: an equip gambit holding a live
+        // force-equip claim will reassert the weapon shortly even though the
+        // hand reads free THIS tick (the deck-proven failure this exists to
+        // close -- see this function's header doc).
+        return IsEquipmentClaimActive(a_follower->GetFormID());
     }
 
     // ── package-offer (per-excursion) ───────────────────────────────────────────

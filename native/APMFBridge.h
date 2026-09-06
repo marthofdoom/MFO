@@ -241,6 +241,20 @@ namespace MFO::APMFBridge {
     // never made, or it already expired.
     bool IsEquipmentClaimActive(RE::FormID a_follower);
 
+    // Worker-safe (no lock of its own beyond IsEquipmentClaimActive's;
+    // Loadout::Read is a plain form/equipped-object read, the same
+    // discipline every other Loadout call already runs under on this tick).
+    // Does a WEAPON currently own a_follower's RIGHT hand -- either because
+    // Loadout::Read sees one equipped there RIGHT NOW (Grip::OneHanded/
+    // TwoHanded), or because IsEquipmentClaimActive says an equip gambit holds a live
+    // force-equip claim on one and will reassert it shortly even if the hand
+    // reads momentarily empty (the exact race ClaimHealCast's hand rule, and
+    // Loadout::PlanCastHand's a_weaponHandActive parameter, exist to close --
+    // see both docs). The canonical "does a weapon own this hand" signal for
+    // ANY cast hand-selection on the APMF-owned path; a_follower == nullptr
+    // returns false.
+    bool WeaponHandActive(RE::Actor* a_follower);
+
     // ── package-offer facet CLAIM: PER-EXCURSION (ch.9, T3 0x49) ────────────────
     // Worker-safe. CLAIM the package-offer facet for a_follower, naming a_packageForm
     // (kIntent_OfferPackage, param.form). While this claim is held, APMF's 0x49 hook
@@ -332,14 +346,36 @@ namespace MFO::APMFBridge {
     // hand, only for the equip gambit's own re-equip to shove the spell right back
     // out ~500ms later (deck: "driving right hand" -> re-equipped 'Elven Dagger'
     // -> "never left rest -- degrading"). LEFT is also the correct fallback with
-    // no weapon held: heals are left-hand almost always regardless. MFO always
-    // passes kApmfHandLeft today (a full per-perk/loadout-aware hand pass -- both-
-    // hands-free dual-cast/juggle, melee-vs-caster balance -- is tracked
-    // separately as future work, not built here) -- there is no more auto/right/
-    // dual hand-mode plumbing on this path; the retired +ACT drive's ival hand
-    // bits are gone with it (APMF_API.h's kCastFlag_LeftHand carries the SAME
-    // policy on the new payload). a_target: 0 = self; an ally/player FormID for
-    // heal-other.
+    // no weapon held: heals are left-hand almost always regardless, UNCONDITIONALLY
+    // -- a heal never routes through the dual-cast/juggle policy below, so
+    // ClaimHealCast always passes kApmfHandLeft (unchanged, 2026-09-06).
+    //
+    // THE GENERAL HAND POLICY NOW EXISTS (2026-09-06), for offense's future use --
+    // NOT wired to any live caller here (heal's own rule above always overrides
+    // it). `Loadout::PlanCastHand` (native/Loadout.h/.cpp) decides, from the
+    // follower's REAL live loadout + perks + magicka: weapon-hand-active (see
+    // WeaponHandActive below) -> Left; both hands free + one spell wanted +
+    // the follower's own dual-casting perk (`Loadout::CanDualCast`, HasPerk +
+    // CalculateMagickaCost x the vanilla fMagicDualCastingCostMult, 2.8) can
+    // afford it -> DualCast; otherwise -> EitherFree (the caller's to assign,
+    // including the "juggle two spells" case -- PlanCastHand decides ONE
+    // spell's hand at a time). **DualCast is not expressible through this
+    // claim shape today**: one `RequestCast`/`APMF_CastRequest` claim carries
+    // exactly one `kCastFlag_LeftHand` hint for one hand, kIntent_Cast is a
+    // single per-follower facet (a second concurrent claim on the same
+    // follower's cast slot would not add a second hand, it would replace the
+    // first), and there is no `kCastFlag_*` bit an engine seat interprets as
+    // "equip this same spell into BOTH hands, apply the dual-cast cost/
+    // empower" (APMF_API.h's CastFlags enum -- append-only, not MFO's to add
+    // to unilaterally). Wiring `HandPick::DualCast` into an actual cast needs
+    // either a new APMF-side cast-flag + seat behavior for it, or two
+    // followers' worth of engineering this bridge does not attempt here.
+    // Offense's OWN hand-claim wiring (Actuation.cpp's ClaimCasting call
+    // site, out of this pass's file scope) is the other missing piece --
+    // ClaimCasting carries no hand parameter at all today (offense lets the
+    // AI's own scored equip pick the hand); consuming PlanCastHand there
+    // would need ClaimCasting (or a new sibling) to accept one.
+    // a_target: 0 = self; an ally/player FormID for heal-other.
     //
     // a_concentration: pass true when a_spell->GetCastingType() ==
     // kConcentration -- sets APMF_API::kCastFlag_Concentration so the claim's TTL
