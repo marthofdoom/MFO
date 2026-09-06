@@ -24,11 +24,23 @@ python3 tools/audit_mcm.py          # #55 gate: every MFO MCM toggle wired in al
 python3 tools/audit_mcm.py out/MCM/Config/MFO_Progression/config.json
 echo
 
-# 2. DLL from the latest successful CI run.
-RUN_ID="$($GH run list --workflow=native --status=success --limit 1 --json databaseId -q '.[0].databaseId')"
+# 2. DLL from the successful CI run FOR THIS EXACT COMMIT.
+#    It used to take `--limit 1` of ANY successful native run on ANY branch, so
+#    packaging could ship a DLL built from a completely different branch than the
+#    tree being packaged -- the zip and the binary would silently disagree, which
+#    is the same class of failure the release script's stamp check exists to stop.
+#    Pin it to HEAD and fail loudly rather than guessing.
+HEAD_SHA="$(git rev-parse HEAD)"
+RUN_ID="$($GH run list --workflow=native --status=success --commit "$HEAD_SHA" --limit 1 --json databaseId -q '.[0].databaseId')"
 if [ -z "$RUN_ID" ]; then
-    echo "FAIL: no successful 'native' run to download a DLL from." >&2
-    echo "      Check: $GH run list --workflow=native" >&2
+    echo "FAIL: no successful 'native' run for THIS commit (${HEAD_SHA})." >&2
+    echo "      A green run on another commit is NOT a substitute -- the DLL would" >&2
+    echo "      not match this tree." >&2
+    echo "      Check:  $GH run list --workflow=native --commit ${HEAD_SHA}" >&2
+    echo "      If this commit is docs-only, native/ was not rebuilt and no run" >&2
+    echo "      exists (the workflow has a paths: filter). Confirm the last green" >&2
+    echo "      commit is native-identical before packaging from it:" >&2
+    echo "        git diff --quiet <green-sha> ${HEAD_SHA} -- native/ && echo IDENTICAL" >&2
     exit 1
 fi
 echo "Downloading MFO.dll from run ${RUN_ID}"
