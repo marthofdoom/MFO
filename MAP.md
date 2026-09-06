@@ -1043,16 +1043,21 @@ load — no co-save record.
   `0x000153D1`, `DualCastPerkForSchool` anon-ns `:168`, + `CalculateMagickaCost
   x 2.8` affordability, the vanilla `fMagicDualCastingCostMult` hardcoded the
   same way `fBarterMax`/`fBarterMin` already are in `Logistics_Economy.cpp`) →
-  `DualCast` or `EitherFree`. **NOT wired to any live caller today** — heals
-  bypass it entirely (heal is LEFT, unconditionally, see `APMFBridge.h`'s
-  `ClaimHealCast` doc), and offense's `ClaimCasting` (`Actuation.cpp`) carries
-  no hand parameter to consume it with. `APMFBridge::WeaponHandActive`
-  (`APMFBridge.cpp`, combines this file's `Read().grip` with
-  `IsEquipmentClaimActive`) is the intended `a_weaponHandActive` producer for
-  the APMF-owned path. **What breaks:** none yet (dead code, no call sites) —
-  but `DualCastPerkForSchool`'s FormIDs are hardcoded (no INI override, unlike
-  `Config::g_merchantPerkID`); a perk-overhaul that relocates the vanilla dual-
-  cast perks would need one added before this is wired live.
+  `DualCast` or `EitherFree`. **Claim shape now supports it (2026-09-06)** —
+  `APMFBridge::HandFor(HandPick)` + `kApmfHandDualCast` translate a `DualCast`
+  plan into `APMF_API::kCastFlag_DualCast` on a `kIntent_Cast` claim (see
+  `APMFBridge.h`/`.cpp`'s `EnsureHealClaimLocked`) — but **still NOT wired to
+  any live caller**: heals bypass this policy entirely by hard rule (heal is
+  LEFT, unconditionally, see `APMFBridge.h`'s `ClaimHealCast` doc), and
+  offense's `ClaimCasting` (`Actuation.cpp`) neither carries a hand parameter
+  nor uses a claim shape (`kIntent_SelectSpell`) that can carry `CastFlags` in
+  the first place. `APMFBridge::WeaponHandActive` (`APMFBridge.cpp`, combines
+  this file's `Read().grip` with `IsEquipmentClaimActive`) is the intended
+  `a_weaponHandActive` producer for the APMF-owned path. **What breaks:** none
+  yet (no live call sites) — but `DualCastPerkForSchool`'s FormIDs are
+  hardcoded (no INI override, unlike `Config::g_merchantPerkID`); a
+  perk-overhaul that relocates the vanilla dual-cast perks would need one
+  added before this is wired live.
 
 ### ItemCatalog.cpp / ItemCatalog.h — patcher JSON lookup (pure read, no save)
 Loads `Data/SKSE/Plugins/MFO/mfo_items.json` (written by the MFO.Synthesis patcher)
@@ -1560,16 +1565,21 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   now EXISTS (weapon-active → Left; both-hands-free single-spell → DualCast
   when the follower's REAL dual-cast perk + magicka afford it, else
   EitherFree for the caller to assign, including a second "juggle" spell).
-  **NOT wired to any live caller** — offense's `ClaimCasting` (`Actuation.cpp`,
-  ch.8) carries no hand parameter to consume it with, and `DualCast` is not
-  expressible through today's `kIntent_Cast` claim shape anyway (one
-  `APMF_CastRequest` carries exactly one hand hint; a second concurrent claim
-  on the same follower's cast-select facet would REPLACE the first, not add a
-  second hand — no `kCastFlag_*` bit exists for "equip both hands" either).
-  Wiring this live needs (a) `ClaimCasting`/a sibling to accept a hand
-  parameter (`Actuation.cpp`, out of this pass's scope) and (b) either a new
-  APMF-side cast-flag + seat behavior for `DualCast`, or dropping that
-  outcome to `EitherFree` until one exists. Supersedes
+  **The claim SHAPE gap is closed (2026-09-06):** `APMF_API::kCastFlag_DualCast`
+  (bit 3) exists, `APMFBridge::HandFor(HandPick)` (`APMFBridge.h`) translates a
+  `PlanCastHand` result into this bridge's `a_hand` encoding (`kApmfHandLeft`
+  / new `kApmfHandDualCast` / 0), and `EnsureHealClaimLocked`'s `req.flags`
+  build sets `kCastFlag_DualCast` INSTEAD OF `kCastFlag_LeftHand` for
+  `kApmfHandDualCast` (never both bits together). A `[cfc]` log line
+  distinguishes "asked for dual, claim granted" from "asked for dual, claim
+  REFUSED outright" (silence = never asked). **Still NOT wired to any live
+  caller**: offense's `ClaimCasting` (`Actuation.cpp`, ch.8,
+  `kIntent_SelectSpell`) carries no hand parameter, and `kIntent_SelectSpell`'s
+  payload cannot carry `CastFlags` at all (only `kIntent_Cast`/
+  `APMF_CastRequest` can) — a live offense wire needs a `kIntent_Cast`-based
+  caller (e.g. a future `ClaimOffenseCast`) that calls `PlanCastHand` and
+  passes `HandFor`'s result; deliberately out of this pass's scope, owned by
+  `feat/offense-cast-api`. Supersedes
   ([[mage-dualcast-diff-hands-perk-gated-todo]]) as the design; that backlog
   note's WIRING half is still open.
 - **FIELD BUG FOUND + FIXED (2026-09-05, deck: claim/release every ~530ms,

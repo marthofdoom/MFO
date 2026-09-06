@@ -1,5 +1,6 @@
 #pragma once
 #include <RE/Skyrim.h>
+#include "Loadout.h"   // Loadout::HandPick -- HandFor's argument type below
 
 // ─────────────────────────────────────────────────────────────────────────────
 // APMF integration — MFO as an APMF client (Phase 3: the OWNED cast gambit). APMF
@@ -285,22 +286,26 @@ namespace MFO::APMFBridge {
     // CalculateMagickaCost x the vanilla fMagicDualCastingCostMult, 2.8) can
     // afford it -> DualCast; otherwise -> EitherFree (the caller's to assign,
     // including the "juggle two spells" case -- PlanCastHand decides ONE
-    // spell's hand at a time). **DualCast is not expressible through this
-    // claim shape today**: one `RequestCast`/`APMF_CastRequest` claim carries
-    // exactly one `kCastFlag_LeftHand` hint for one hand, kIntent_Cast is a
-    // single per-follower facet (a second concurrent claim on the same
-    // follower's cast slot would not add a second hand, it would replace the
-    // first), and there is no `kCastFlag_*` bit an engine seat interprets as
-    // "equip this same spell into BOTH hands, apply the dual-cast cost/
-    // empower" (APMF_API.h's CastFlags enum -- append-only, not MFO's to add
-    // to unilaterally). Wiring `HandPick::DualCast` into an actual cast needs
-    // either a new APMF-side cast-flag + seat behavior for it, or two
-    // followers' worth of engineering this bridge does not attempt here.
-    // Offense's OWN hand-claim wiring (Actuation.cpp's ClaimCasting call
-    // site, out of this pass's file scope) is the other missing piece --
-    // ClaimCasting carries no hand parameter at all today (offense lets the
-    // AI's own scored equip pick the hand); consuming PlanCastHand there
-    // would need ClaimCasting (or a new sibling) to accept one.
+    // spell's hand at a time).
+    //
+    // DualCast IS NOW EXPRESSIBLE through this claim shape (2026-09-06,
+    // APMF_API::kCastFlag_DualCast, bit 3, append-only mirror of APMF's own
+    // header): `EnsureHealClaimLocked`'s flags build translates a_hand ==
+    // kApmfHandDualCast into kCastFlag_DualCast INSTEAD OF kCastFlag_LeftHand
+    // (never both -- see APMF_API.h's own "do NOT set kCastFlag_LeftHand
+    // alongside it" rule) -- see `HandFor` below, which does the
+    // `Loadout::HandPick` -> a_hand translation a caller should use rather
+    // than hand-rolling the int mapping. It is still just a HINT: the engine
+    // seats decide whether both hands actually arm, and a follower who can't
+    // (or the engine otherwise won't) simply casts single-hand -- no retry,
+    // no re-claim, no fallback that would make that degrade look like a real
+    // dual-cast (CLAUDE.md principle 7). What is STILL missing is a live
+    // caller: offense's OWN hand-claim wiring (Actuation.cpp's ClaimCasting
+    // call site, out of this pass's file scope -- owned by a separate branch)
+    // carries no hand parameter at all today (offense lets the AI's own
+    // scored equip pick the hand); consuming PlanCastHand there would need
+    // ClaimCasting (or a new sibling built on kIntent_Cast, the only facet
+    // shape that can carry CastFlags at all) to accept the `HandFor` result.
     // a_target: 0 = self; an ally/player FormID for heal-other.
     //
     // a_concentration: pass true when a_spell->GetCastingType() ==
@@ -329,6 +334,37 @@ namespace MFO::APMFBridge {
     // see the a_hand doc comment above for the weapon-hand-exclusion rule this
     // implements). Named so a call site reads as policy, not a bare magic 2.
     inline constexpr std::int32_t kApmfHandLeft = 2;
+
+    // a_hand value meaning "claim BOTH hands for one spell, empowered" --
+    // EnsureHealClaimLocked (APMFBridge.cpp) maps this to APMF_API::
+    // kCastFlag_DualCast rather than kCastFlag_LeftHand. This is MFO's OWN
+    // encoding for a_hand (a plain std::int32_t, distinct from kApmfHandLeft
+    // and the implicit "right/auto" of 0) -- it has no meaning to APMF
+    // itself, which only ever sees the resulting CastFlags bit. Produce this
+    // value via `HandFor` below (from a real `Loadout::PlanCastHand` result),
+    // never by hand -- PlanCastHand alone holds the weapon-hand-exclusion
+    // guard (Loadout.cpp: `a_weaponHandActive -> HandPick::Left`, unconditional,
+    // checked before anything else) that keeps this from ever firing over a
+    // held weapon.
+    inline constexpr std::int32_t kApmfHandDualCast = 3;
+
+    // Translate a `Loadout::PlanCastHand` decision into this bridge's a_hand
+    // encoding (kApmfHandLeft / kApmfHandDualCast / 0 for "either hand" --
+    // EnsureHealClaimLocked treats 0 as no hand hint, engine auto-prefers
+    // right). Pure -- no engine writes, no re-checking of PlanCastHand's own
+    // weapon-hand-exclusion guard (it already ran inside PlanCastHand; this
+    // function only carries its answer forward). A caller still owns getting
+    // `a_weaponHandActive` right when it calls PlanCastHand in the first
+    // place (see WeaponHandActive below) -- this function cannot fix a wrong
+    // input, it only forwards a correct one faithfully.
+    inline std::int32_t HandFor(Loadout::HandPick a_pick) {
+        switch (a_pick) {
+        case Loadout::HandPick::Left:      return kApmfHandLeft;
+        case Loadout::HandPick::DualCast:  return kApmfHandDualCast;
+        case Loadout::HandPick::EitherFree:
+        default:                           return 0;
+        }
+    }
 
     // The heal-cast claim's TTL, ms (APMF_CastRequest::ttlMs). A SINGLE named
     // constant so ComposedCast.cpp's CastBounds::Arm window (the MFO-side consent
