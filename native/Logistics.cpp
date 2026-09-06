@@ -676,10 +676,31 @@ namespace MFO::Logistics {
         // Keyed to the whole-EXCURSION cap, not the per-leg deadline: during a
         // Hold the leg deadline is stale and would wrongly fire this. The cap
         // catches an excursion whose traveller is no longer being serviced.
-        // (Combat yield is NOT here -- ServiceFollower is skipped for in-combat
-        // followers, so this backstop never runs for the one who matters. The
-        // yield lives in the Scheduler's combat branch, ReleaseTravelOnCombat.)
+        // (THIS follower's OWN combat yield is NOT here -- ServiceFollower is
+        // skipped for in-combat followers, so this backstop never runs for
+        // the traveller himself once he's personally fighting; that yield
+        // lives in the Scheduler's combat branch, ReleaseTravelOnCombat. The
+        // PLAYER's combat is a DIFFERENT signal, checked below -- see
+        // playerInCombat.)
         const bool off = !Config::g_logistics.load() || !Config::g_lootTravel.load();
+        // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
+        // immediately cancel a loot excursion and pull followers back").
+        // Read once per sweep, not per slot -- one PlayerCharacter, one
+        // combat state. A traveller can be a full room away from the fight
+        // for several ticks before his OWN IsInCombat() flips (the gap
+        // ReleaseTravelOnCombat can't close, since it only fires off THIS
+        // follower's combat transition) -- this backstop already sweeps
+        // EVERY active slot on EVERY out-of-combat service call, so as long
+        // as at least one follower isn't yet personally fighting, checking
+        // the PLAYER's state here catches every live excursion within that
+        // same fast (~133 ms-scale) cadence, not the ~1 s logistics cadence
+        // the per-follower branch below runs at. LootNearby (Logistics_Loot.cpp)
+        // separately refuses to arm or continue any loot action while the
+        // player is in combat, so the two can never fight over the same tick.
+        const bool playerInCombat = [] {
+            auto* pcc = RE::PlayerCharacter::GetSingleton();
+            return pcc && pcc->IsInCombat();
+        }();
         // P7: sweep EVERY slot -- each traveller has his own excursion cap, and a
         // subsystem toggle-off must free them all. (Global backstop, keyed to no
         // follower in particular; runs once per serviced follower, idempotent.)
@@ -688,13 +709,18 @@ namespace MFO::Logistics {
             if (!tr.active) continue;
             const bool capped = now > tr.startTime + std::chrono::seconds(
                                           static_cast<int>(Config::g_excursionMax.load()));
-            if (capped || off) {
+            if (capped || off || playerInCombat) {
                 // On a cap hit blacklist the current target so it isn't re-picked
-                // immediately. NOT on toggle-off (that corpse never "failed").
-                if (!off) {
+                // immediately. NOT on toggle-off or a player-combat interrupt --
+                // neither one means the corpse "failed"; it is still there,
+                // un-penalized, the moment the player is done fighting (or the
+                // subsystem comes back on).
+                if (!off && !playerInCombat) {
                     if (auto tp = tr.target.get()) MarkTravelFailed(tp->GetFormID(), now);
                 }
-                Packages::LootTravelClear(off ? "subsystem off" : "excursion cap", nullptr, i);
+                Packages::LootTravelClear(playerInCombat ? "player combat"
+                                          : (off ? "subsystem off" : "excursion cap"),
+                                          nullptr, i);
                 tr = TravelIntent{};
             }
         }
