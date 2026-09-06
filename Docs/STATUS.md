@@ -905,6 +905,32 @@
 
 ---
 
+
+## ✅ SHIPPED 2026-09-05 -- v2.0.1 (beta prerelease). FOLLOWERS CAST HEALS FOR REAL.
+
+**FIELD-PROVEN on the deck** (marth: "fully functional, real animated casting with proper
+animation style on myself and another follower"). Release:
+https://github.com/marthofdoom/MFO/releases/tag/v2.0.1 -- **requires Harbinger v0.9.1**
+(https://github.com/marthofdoom/APMF/releases/tag/v0.9.1). main = the field-proven tree.
+
+**What changed:** MFO's heal path is fully ported off the retired `kIntent_SelectSpell` +ACT
+drive onto APMF's `kIntent_Cast`/`RequestCast` (declarative: spell + target + LEFT hand +
+stop-percent). MFO makes NO engine cast call on this path -- APMF answers the engine's own
+cast-decision seats and the follower's OWN combat AI equips, charges, aims, fires and channels
+the spell. Also shipped: heals run to the gambit's own threshold instead of stopping early, the
+round-robin-aware facet expiry fix (which also cured followers standing around unarmed), gold +
+loose gems folded into "loot valuables", and the MCM `bLegacyCastHybrid` default that was never
+registering (#55, caught by release.sh's audit).
+
+**Degrade paths intact:** APMF absent, claim refused, or an APMF older than ABI v5 -> the legacy
+kInstant apply, byte-identical to before. `bHealAnimPackage` (MCM) gates the whole path.
+
+**NEXT: transition OFFENSE casts** from gate-only `kIntent_SelectSpell` (ch.8, where APMF only
+narrows/denies and the AI still picks its own spell) onto the same proven ch.8b seats. That is
+what finally makes a gambit's NAMED spell the one that fires. Then narrow the both-hands equip
+deny to one hand (the equip slot is per-SET, disasm-confirmed), then the intelligent hand policy
+(dual-cast with both hands free, left hand when a weapon is held).
+
 ## Continue in one screen
 
 - **v1.0.41 — DEPLOYED TO TUXBORN + TAG PUSHED (`v1.0.41`), field-test PENDING; NO
