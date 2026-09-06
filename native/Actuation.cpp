@@ -734,6 +734,53 @@ namespace MFO::Actuation {
                         // fall through to the legacy hybrid below
                     }
 
+                    // COMPOSED CAST for a Heal/Buff spell aimed at an ally or the player,
+                    // fire-and-forget (API-PORT-AUDIT.md #1). `ownedCast` above is
+                    // Offense-only by its own classification check, so it never fires for
+                    // a Heal/Buff spell -- without this, that case fell straight into the
+                    // AI-first-grace + force-on-miss hybrid below even with APMF present,
+                    // even though the SAME kIntent_Cast claim (`ComposedCast::Try`) already
+                    // handles the identical spell/target pair when it arrives via
+                    // `CastSelfDirect`/`CastTargetDirect` (concentration, or self-target FF).
+                    // This call mirrors those two exactly -- same signature, same
+                    // HEAL-ONLY internal gate (`ComposedCast::Enabled`, ComposedCast.cpp),
+                    // so a Buff kind here degrades to false immediately, byte-identical to
+                    // not calling it at all.
+                    //
+                    // IN-COMBAT ONLY: CastOn only runs from Actuation::Fire, the combat-
+                    // rule dispatch (this file's own header comment) -- a live
+                    // CombatController is already guaranteed here. The out-of-combat
+                    // mirror (Logistics.cpp's FF beneficial direct-apply) is deliberately
+                    // untouched: whether kIntent_Cast's engine seats function without a
+                    // live CombatController is an open question (API-PORT-AUDIT.md §5.1).
+                    //
+                    // stopPct = 0 (stop at full restoration): no per-gambit numeric
+                    // threshold is in scope here, matching every ComposedCast::Try call
+                    // site except CastAuto's own (CAST-DELIVERY.md's STOP-PERCENT note).
+                    //
+                    // REFUSED (Buff kind, AE/APMF/toggle absent, or a lost claim) falls
+                    // straight through to the SAME grace/ForceCast hybrid below,
+                    // byte-identical to today -- a heal must never silently vanish.
+                    //
+                    // `a_target != a_follower` scopes this to ally/player targets only,
+                    // matching the audit's own framing -- a self-target CAN reach this far
+                    // when bCastSelf (dev-only, default off) never forked it off at :522,
+                    // and self-cast is a separate, already-gated mechanism (CastSelfDirect)
+                    // this fix must not silently annex.
+                    if (a_target != a_follower &&
+                        ComposedCast::Try(a_follower, spell, a_target,
+                                          CasterConsent::ClassifySpell(spell), /*stopPct=*/0)) {
+                        // TASK 2: same multi-tick "actively firing" reasoning as the
+                        // ownedCast branch above -- hold the lock so a different cast rule
+                        // cannot re-point APMF's engine seats mid-charge/mid-decision.
+                        HoldCastLock(id, a_spellID, a_target->GetFormID());
+
+                        // OPAQUE hold: the AI is deciding+casting; firing lower rules now
+                        // risks disturbing that decision (the §0.6 confound). No force,
+                        // ever, here.
+                        return { Result::NoOp, "composed cast: AI deciding (animated, mobile)" };
+                    }
+
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
                     //
                     // This is the whole point and it is easy to destroy. The

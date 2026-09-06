@@ -1413,6 +1413,22 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   (animated, mobile)"}` just lets the AI act. Concentration never enters this branch (bounded direct
   fork returns earlier — exact-bounding intact; `a_concentration` is always passed `false` to
   `ClaimOffenseCast` at this call site for that reason).
+- **Heal/Buff FF non-self claim (feat/castone-heal-gate, 2026-09-06, API-PORT-AUDIT.md #1):**
+  `ownedCast` above is Offense-only by its own classification check, so a fire-and-forget Heal/Buff
+  spell aimed at an ally or the player (target ≠ follower) fell through it untouched. Immediately
+  after `ownedCast`'s block (whether or not it ran — it never fires for a non-Offense spell), `CastOn`
+  now also calls `ComposedCast::Try(a_follower, spell, a_target, ClassifySpell(spell), /*stopPct=*/0)`
+  — the SAME `kIntent_Cast` claim `CastSelfDirect`/`CastTargetDirect` already make for a heal, reused
+  verbatim (HEAL-ONLY internal gate in `ComposedCast::Enabled`, so a Buff kind degrades to `false`
+  immediately). On success: `HoldCastLock` + `{NoOp,"composed cast: AI deciding (animated, mobile)"}`,
+  same OPAQUE-hold shape as `ownedCast`'s own success return. On refusal (Buff kind, AE/APMF/
+  `bHealAnimPackage` off, or a lost claim): falls straight through to the unchanged AI-first-grace +
+  `ForceCast` hybrid below — byte-identical degrade, a heal never silently vanishes. Explicitly guards
+  `a_target != a_follower` (self-target CAN reach this far when `bCastSelf`, dev-only default off,
+  never forked it off earlier in `CastOn` — self-cast stays `CastSelfDirect`'s own gated mechanism,
+  not annexed here). **IN-COMBAT ONLY** — `CastOn` only runs from `Actuation::Fire`'s combat dispatch;
+  the OOC mirror (`Logistics.cpp`'s FF beneficial direct-apply) is deliberately untouched (open
+  question: whether `kIntent_Cast`'s engine seats function without a live `CombatController`).
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** offense-cast =
   PER-CAST, TTL-bounded (`kIntent_Cast`; refreshed each winning cast tick; released crisply by
   `ReleaseOffenseCast` ← `Scheduler.cpp:~901` on `!castSeen`, which also clears the shared `[cfc]`

@@ -314,6 +314,26 @@ below), otherwise unchanged. It is **HEAL-ONLY-gated** (`kind != SpellKind::Heal
 the byte-identical AI-fired / kInstant paths. It composes two things, no hand
 touch at all:
 
+**Third call site (feat/castone-heal-gate, 2026-09-06, API-PORT-AUDIT.md #1):**
+`Actuation.cpp`'s `CastOn` — the FF (non-concentration) non-self dispatch —
+now also calls `Try` directly, immediately after its `ownedCast` (Offense-only)
+block and before the AI-first-grace wait, with `stopPct=0` (no per-gambit
+threshold in scope there, same as every site but `CastAuto`'s). This closes the
+one gap the ownedCast port left: a fire-and-forget Heal/Buff spell aimed at an
+ally or the player never reached `ComposedCast::Try` at all, so it fell into the
+legacy grace+`ForceCast` hybrid even with APMF present. `a_target != a_follower`
+is required explicitly (a self-target can still reach this far when `bCastSelf`,
+dev-only default off, never forked it off earlier — self-cast stays
+`CastSelfDirect`'s own gated mechanism). On success: the same `HoldCastLock` +
+OPAQUE-hold return shape `ownedCast`'s own success path uses. On refusal
+(Buff kind, AE/APMF/`bHealAnimPackage` absent, or a lost claim): falls straight
+through to the same legacy hybrid, byte-identical. **In-combat only** — `CastOn`
+runs only from `Actuation::Fire`'s combat dispatch. The identical OOC gap
+(`Logistics.cpp:1394-1436`) is deliberately untouched: it is not established that
+`kIntent_Cast`'s engine seats function without a live `CombatController` (see
+API-PORT-AUDIT.md §5.1) — do not port that leg on the assumption it mirrors this
+one.
+
 1. `APMFBridge::ClaimHealCast(fid, spellID, targetID, APMFBridge::kApmfHandLeft,
    isConcentration, stopPct)` — the `kIntent_Cast` claim:
 
