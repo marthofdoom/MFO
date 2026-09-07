@@ -41,16 +41,29 @@ break a `#N` citation, and both are fixed here:
   comments alike. `T#75` is the equip gate; `#75` is the subrecord-order rule.
 - Task numbers themselves are indexed in `Docs/STATUS.md`, not here.
 
-**Residue, stated honestly:** the `T#` prefix has been applied to `T#55`,
-`T#67`, `T#69`, `T#75`, `T#76` and `T#78` — the six the audit convicted — across
-`native/` and the canonical docs, **except `Logistics.cpp` and `Packages.cpp`**,
-which were owned by a concurrent branch while this pass ran and were left alone.
-Those two still carry bare task citations (`#69` ×5 and `#78` ×1 in
-`Logistics.cpp`; `#48` in `Packages.cpp`) and are the queued follow-up. Bare `#N` task citations written before
-2026-09-07 still exist for `#17`, `#21`, `#31`, `#48`, `#59`, `#62`–`#65`, `#74`
-and for the un-numbered "field fix #N" / "Fable audit #N" families. Where an old
-comment's `#N` does not match the rule of that number, read it as a task number
-and re-tag it as `T#N` when you next touch that line.
+**Residue, stated exactly (counts verified 2026-09-07):** the `T#` prefix has been
+applied to `T#55`, `T#67`, `T#69`, `T#75`, `T#76` and `T#78` — the six the audit
+convicted — at 87 sites across `native/`, plus `MAP.md` and `Docs/TOOLING.md`.
+It is NOT applied everywhere. What is still bare:
+
+- **`native/Logistics.cpp`** — `#69` ×5 (`:32, :527, :580, :683, :2045`) and
+  `#78` ×1 (`:676`), all task-sense. **`native/Packages.cpp`** — `#48` ×9
+  (`:787, :793, :1019, :1057, :1395, :1505, :1799, :1833, :2075`) plus `#48b` ×8.
+  Both files were owned by a concurrent branch while this pass ran. **Careful:
+  three of the `#48b` sites are inside STRING LITERALS** (`" (the PLAYER, #48b)"`
+  at `Packages.cpp:1447, :1479, :1529`) — those are log text, so re-tagging them
+  is a behaviour change, not a comment edit, and needs its own decision.
+- **`Docs/STATUS.md`** — 19 lines still carry bare task-sense `#55` (×8), `#67`
+  (×5), `#69` (×3) and `#75` (×5), all inside the append-only HISTORY ledger,
+  which is banner-marked as not current. Left as historical text.
+- **`CHANGELOG.md`** — released version blocks are immutable, so their bare `#N`
+  citations stay as shipped.
+
+Bare `#N` task citations written before 2026-09-07 also exist for `#17`, `#21`,
+`#31`, `#48`, `#59`, `#62`–`#65` and `#74`, and for the un-numbered "field fix
+#N" / "Fable audit #N" families. Where an old comment's `#N` does not match the
+rule of that number, read it as a task number and re-tag it as `T#N` when you
+next touch that line.
 
 ---
 

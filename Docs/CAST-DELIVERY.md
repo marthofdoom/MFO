@@ -87,16 +87,22 @@ real cast and DROPS that cost.
   stream now reaches the engine-seat path too" (search that phrase), `CastSelfDirect` and
   `CastTargetDirect` call `APMFBridge::ClaimOffenseCast` DIRECTLY with `concentration=true`,
   so an OOC concentration heal IS an APMF claim path. *(The log label that made this
-  invisible is FIXED on `main`: `Logistics.cpp:1576` now prints `"APMF claimed"` vs
+  invisible is FIXED on `main`: `Logistics.cpp:1583` now prints `"APMF claimed"` vs
   `"direct force, bounded"` conditionally instead of always claiming direct force —
   `Docs/DIAG-2026-09-06-deny-heal-failures.md` RC1 is closed on that point.)*
 - **Claim lifecycles + scope + degrade.** offense-cast-claim (`kIntent_Cast`, TTL-bounded) = per-cast
   (released crisply on `!castSeen`); combat-target-claim = per-combat (re-pointed via APMF `Repoint`
   on a foe change, kept alive each in-combat tick, released at combat end; APMF's
   `CombatTarget::Release` relinquishes). Owned model is HOSTILE-only (`CasterConsent::ClassifySpell ==
-  Offense`), foe-only. Active iff `APMFBridge::Available() && bApmfCast && !bLegacyCastHybrid`. A
-  REFUSED offense claim (APMF lost arbitration / ABI < 5 / toggle off) falls through to the SAME
-  legacy hybrid below, never a silent cast drop. Turn on the MCM **bLegacyCastHybrid**, or run without
+  Offense`), foe-only. Active iff `APMFBridge::Available() && bApmfCast && !bLegacyCastHybrid`.
+  **A REFUSED offense claim FAILS CLOSED** (corrected 2026-09-07 — this bullet used to say it
+  "falls through to the SAME legacy hybrid"; `fix/mfo-no-decline-fallback` removed that):
+  when APMF is present AND capable (`APMFBridge::OffenseCastClaimSupported()`) and it still says
+  no, `Actuation.cpp:1051-1058` returns `{FailedSkill, "APMF refused the cast claim", transparent}`
+  and logs `[apmf] … APMF REFUSED …`. Nothing routes around APMF. The cast does not happen this
+  tick, the rules BELOW it still run (transparent, not paralysis), and a refusal is a bug to fix in
+  APMF rather than a condition to degrade through. Only the ABSENCE of the channel degrades:
+  turn on the MCM **bLegacyCastHybrid**, or run without
   APMF, and CastOn uses the ORIGINAL AI-first-wait + force-on-miss package hybrid (byte-identical to
   pre-APMF — the only place the rooting package + `CastSpellImmediate` force live). No save/co-save
   state; claims auto-expire via `APMFBridge::Tick` and drop at kPreLoadGame. See MAP.md `APMFBridge`.
@@ -758,13 +764,26 @@ parameters are no longer dead wiring for offense; `CastTargetDirect`/
 `ownedCast` branch itself is UNCHANGED (a concentration spell still forks off
 before reaching it, so it still always passes `concentration=false`).
 
-**DEGRADE PATH.** A refused claim (APMF absent, `bApmfCast` off, ABI < 5, or
-APMF declines arbitration) makes `ClaimOffenseCast` return `false`; `CastOn`
-does NOT return early in that case — it falls through to the SAME
-AI-first-grace + force-on-miss legacy hybrid that already runs when `ownedCast`
-is false (APMF absent / `bLegacyCastHybrid` on / self or player target /
-non-offense spell), byte-identical to the pre-port behaviour. A refused claim
-therefore never silently drops the cast.
+**DEGRADE PATH — REWRITTEN 2026-09-07 (`fix/mfo-no-decline-fallback`).** This
+block used to say a refused claim "falls through to the SAME AI-first-grace +
+force-on-miss legacy hybrid … byte-identical to the pre-port behaviour". It does
+not, and it must not: that was the decline-fallback the showpiece principle
+forbids. `ClaimOffenseCast` returning `false` now splits into two halves:
+
+- **DEGRADE-WHEN-ABSENT** — the channel is not there at all
+  (`APMFBridge::OffenseCastClaimSupported()` false: APMF absent, `bApmfCast` off,
+  ABI < 5), or `bLegacyCastHybrid` is ON → the ORIGINAL AI-first-grace +
+  force-on-miss hybrid, byte-identical to pre-APMF. This is the ONLY surviving
+  legacy route and it is a documented contract, not a mask.
+- **FAIL CLOSED** — APMF is present AND capable AND it REFUSED →
+  `Actuation.cpp:1051-1058` returns
+  `{FailedSkill, "APMF refused the cast claim", transparent}` with a rate-limited
+  `[apmf] … APMF REFUSED …` line (`LogApmfRefusal`). The cast does not happen and
+  nothing routes around APMF. `transparent` means the rules below still run — the
+  follower is not frozen out of its whole table, it visibly does not cast.
+
+So a refusal no longer "never drops the cast": it drops the cast DELIBERATELY and
+loudly, which is the point (CLAUDE.md principle 7).
 
 **`CasterConsent.cpp`'s `ClientCastClaimed` standdown, extended.** The
 generalized early-pass (`ConcUnboundedDeny`, the `CheckStartCast` thunk's
@@ -1110,7 +1129,7 @@ changed here this pass.
 | path | trigger | animated | target reach | status |
 |---|---|---|---|---|
 | kInstant force-apply | `CastSpellImmediate` | no | any actor | baseline, always on |
-| APMF owned cast | `APMFBridge::ClaimOffenseCast` (`kIntent_Cast`/`RequestCast`, ch.8b — ported feat/offense-cast-seats off ch.8) drives the follower's OWN AI to cast the EXACT gambit spell | yes | hostile foe only | default when APMF is present. A refused claim falls through to the legacy AI-first-grace + force-on-miss hybrid, byte-identical to APMF-absent |
+| APMF owned cast | `APMFBridge::ClaimOffenseCast` (`kIntent_Cast`/`RequestCast`, ch.8b — ported feat/offense-cast-seats off ch.8) drives the follower's OWN AI to cast the EXACT gambit spell | yes | hostile foe only | default when APMF is present. A refused claim **FAILS CLOSED** (`{FailedSkill, "APMF refused the cast claim", transparent}`, `Actuation.cpp:1051-1058`) — only the channel being ABSENT/`bLegacyCastHybrid` degrades to the AI-first-grace + force-on-miss hybrid |
 | Composed Forced Cast (CFC) | `ComposedCast::Try` → `APMFBridge::ClaimHealCast` (`kIntent_Cast`/`RequestCast`, ch.8b) | the follower's OWN AI, via APMF's five engine seats — real native animated cast, ZERO engine-cast call from either mod | any actor (explicit target rides the claim, LOAD-BEARING at seats 0x0A/0x0D) | opt-in (`bHealAnimPackage`), HEAL-ONLY. A refused claim degrades to kInstant every time — heal always lands. A claim that stands with no observed cast logs a rate-limited diagnostic (Task 6) instead of falling back — no delivery watchdog |
 
 `native/APMFBridge.h`'s `kHealCastTtlMs` (6 s) sizes BOTH the `RequestCast`
@@ -1131,10 +1150,16 @@ which aliases it) the `CastBounds::Arm` ceiling.
 > inside which foreign spells equip and charge on the "claimed" hand. It IS a
 > real cap on a continuous heal (CLAUDE.md principle 9, and see ENGINE_NOTES
 > §0.45).
-> **PENDING, NOT SHIPPED:** the renewal (F2 — `Repoint` renews the TTL, plus an
-> MFO-side heartbeat) is on the UNMERGED APMF branch
-> `fix/apmf-claim-renew-denyhand-spellsteer`. Do not restore the old wording
-> until that branch has landed AND been field-verified. `Config::g_cfcBackoffMs` is now VESTIGIAL (the retired
+> **PENDING, NOT SHIPPED — corrected 2026-09-07 after checking BOTH repos.** The
+> APMF half of F2 (`Repoint` renews the TTL) IS merged to APMF `main`
+> (`fix/apmf-claim-renew-denyhand-spellsteer` = `ed637fe`, 2026-09-07 10:08 PDT),
+> but it is **in no tagged APMF release** — the newest is `v0.9.2` (2026-09-06),
+> which predates it, and MFO ships against a release. **The MFO half — the
+> heartbeat — does not exist at all:** `APMFBridge.h:670` says "MFO never Repoints
+> a `kIntent_Cast` claim" and `APMFBridge.cpp:313-360` performs no renew. A
+> renewing APMF that is never asked to renew changes nothing, so the 6 s gap is
+> still open. Do not restore the old wording until a newer APMF release ships AND
+> MFO heartbeats, and both have been field-verified. `Config::g_cfcBackoffMs` is now VESTIGIAL (the retired
 MFO-side drive's degrade backoff; the claim is a cheap create-or-refresh every
 tick with no backoff of its own — a CHANGE releases and re-requests rather than
 repointing, since `RequestCast` has no in-place re-point) — left declared/parsed

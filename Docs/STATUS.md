@@ -10,7 +10,8 @@
 
 ## ▶ YOU ARE HERE (2026-09-07)
 
-**Shipped:** `main` = `fb69cda` = **v2.0.1** plus the 2026-09-07 fix wave and docs.
+**Shipped:** `main` = `2553f20` = **v2.0.1** plus the 2026-09-07 fix wave and the
+doc-coherence pass.
 v2.0.1 is a beta prerelease and **requires Harbinger (APMF) v0.9.1**; the next cut will
 need a newer APMF (see "What is still unmerged" below). Everything under the "HISTORY"
 line further down is an append-only ledger, kept for the reasoning trail; it is NOT
@@ -56,18 +57,24 @@ Field-test instance: **Tuxbornrc1** on the deck
 
 | repo | branch | what it fixes | state |
 |---|---|---|---|
-| MFO | `fix/mfo-doc-coherence` | this doc-coherence pass | in progress |
-| APMF | `fix/apmf-offerpackage-nudge-ordering` | Publish/drain BEFORE the 0x49 nudge (loot DIAG RC#1's other half) | unmerged |
-| APMF | `fix/apmf-claim-renew-denyhand-spellsteer` | F2 TTL renew, F3 deny-hand, F5 spell steer, F6 log throttle | unmerged |
+| APMF | `fix/apmf-offerpackage-nudge-ordering` (`8daa27f`) | Publish/drain BEFORE the 0x49 nudge (loot DIAG RC#1's other half) | **merged to APMF `main`**, in NO release tag |
+| APMF | `fix/apmf-claim-renew-denyhand-spellsteer` (`ed637fe`, 10:08 PDT) | F2 TTL renew, F3 deny-hand, F5 spell steer, F6 log throttle | **merged to APMF `main`**, in NO release tag |
 
-**v2.0.2 will require a NEWER APMF release than v0.9.1.** MFO's half of the loot-travel
-nudge ordering is on `main`, but APMF's half is not; and **F2 (claim renewal) has NOT
-shipped on either side** — the 6 s claim still hard-expires unrenewed
-(`ENGINE_NOTES` §0.45). **Do not describe F2 as done anywhere.** F1 and F4 ARE done.
+**v2.0.2 will require a NEWER APMF RELEASE than v0.9.1.** Both APMF branches are on
+APMF `main`, but **neither is in a tagged release** — `git tag --contains ed637fe` is
+empty and the newest tag `v0.9.2` (2026-09-06) predates both. MFO ships against a
+release, not against APMF `main`.
+**F2 is still NOT done end to end:** APMF's `ApplyRepoint` renews on APMF `main`, but
+**MFO never Repoints a `kIntent_Cast` claim** (`APMFBridge.h:670`; the unchanged fast
+path `APMFBridge.cpp:313-360` performs no renew), so nothing asks it to. The 6 s claim
+still hard-expires (`ENGINE_NOTES` §0.45). **Do not describe F2 as done.** F1 and F4
+ARE done.
 
 ### Next actions
 
-1. Land APMF's nudge-ordering + claim-renew branches; cut the matching APMF release.
+1. Cut the APMF release that carries `ed637fe` + `8daa27f` (both are already on APMF
+   `main`; neither is tagged), and add the MFO-side cast-claim heartbeat that F2 needs
+   to mean anything.
 2. Deploy the pair together (one deck cycle — see memory `stack-tests-reduce-reboot-churn`).
    The whole 2026-09-07 MFO wave is untested in game, so this is its first field cycle too.
 3. Test against the pass criteria in loot DIAG §6 and heal DIAG §2 (F1..F7 order).
@@ -81,8 +88,9 @@ shipped on either side** — the 6 s claim still hard-expires unrenewed
 
 - Heal DIAG RC1: why one concentration start ended within a second is UNKNOWN.
 - Loot DIAG §5 items 1-3 remain open.
-- The 6 s cast-claim TTL is still not renewed (F2, APMF side, unmerged) — the recurring
-  0.3-1.2 s unclaimed gap is open. `ENGINE_NOTES` §0.45.
+- The 6 s cast-claim TTL is still not renewed end to end (F2): APMF `main` renews, but
+  it is in no release AND MFO never Repoints, so the recurring 0.3-1.2 s unclaimed gap
+  is open. `ENGINE_NOTES` §0.45.
 - ~~`Board.cpp` breaches the 2500-line HARD RULE~~ — **RESOLVED 2026-09-07** by
   `refactor/board-split` (2577 → 1346 + `Board_FieldKit.cpp` 1135). Not field-tested.
 - ~~The cast path's decline-fallback on a REFUSED `ClaimOffenseCast`~~ — **RESOLVED

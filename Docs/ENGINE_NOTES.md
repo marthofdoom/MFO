@@ -1882,7 +1882,7 @@ trigger as implemented until that happens.
 
 ---
 
-### 0.41 `CombatMagicCasterRestore` is a caster the engine builds rarely, and did not build AT ALL before the seats were widened (2026-09-05/06)
+### 0.41 `CombatMagicCasterRestore` is a caster the engine builds rarely, and built NONE until APMF's seat-0 classify keyed the spell into the Restore row (2026-09-05/06)
 
 **Status: PROVEN (MFO).** AE 1.6.1170, deck (Tuxbornrc1). **Read the census by
 DATE and by SEAT CONFIGURATION — the three counts below are from different
@@ -1897,18 +1897,31 @@ sessions with different code, and reading them as one number produces a false
 | **2026-09-06 (`APMF.log`, re-counted 2026-09-07)** | **Restore + Offensive** | **120** | **5** | **3** |
 
 **What the three rows together say.** Restore is a caster the engine builds
-**rarely** — 3 constructions against 120 Offensive in an 8-minute session, ~2.4%.
-It is NOT one it "never" builds: the two zero rows are from BEFORE the seats were
-widened to Restore+Offensive, so they measure a period when the observation
-machinery on that vtable was itself inert, and part of that zero is an artefact of
-the instrument rather than a fact about the engine. **Do not quote the 0-Restore
-figures as current, and do not say "never".**
+**rarely but really**: **3 Restore constructions for every 120 Offensive in one
+8-minute session — 2.5% of the Offensive count (3 ÷ 120; as a share of the 123
+Restore+Offensive constructions together it is 2.4%).** Name the denominator when
+you quote it.
+
+**Why the two zero rows are zero — ONE explanation, not two (corrected 2026-09-07).**
+An earlier draft of this section said they "measure a period when the observation
+machinery on that vtable was itself inert … an artefact of the instrument". **That
+is WRONG and is retracted.** In those runs the seats were installed on Restore
+**ONLY**, so the Restore vtable was precisely the thing being watched, and the same
+probes still counted Offensive at 69 and 56 — the instrument was working. The real
+explanation is the one under "Minting the ITEM is not sufficient" below: **the
+engine genuinely constructed no Restore caster until APMF's seat-0 classify forced
+the claimed spell's effect to key into the Restore row `(Health, self=1,
+hostile=0)`.** Before that the engine never considered a Restore caster warranted,
+so there was nothing to observe. **Do not quote the 0-Restore figures as current,
+and do not say "never".**
 
 **Why it matters more than the number.** Five cast seats were designed, written,
-reviewed, CI-green and DEPLOYED onto the Restore caster's vtable — and in those
-sessions they executed ZERO times. The lesson survives the corrected count intact,
-and is if anything sharper: a 2.4% construction rate is still far too thin to hang
-a mechanism on, and it was invisible until somebody counted. That is the incident behind CLAUDE.md principle 5,
+reviewed, CI-green and DEPLOYED onto the Restore caster's vtable — and in the two
+sessions that followed they executed ZERO times, because the engine built no such
+caster to seat. The lesson survives the corrected count intact and is if anything
+sharper: even once the classify makes the caster appear, a 2.5%-of-Offensive
+construction rate is far too thin to hang a mechanism on, and none of it was
+visible until somebody counted. That is the incident behind CLAUDE.md principle 5,
 *"disassembly proves a path EXISTS, not that it RUNS"*, and it is the reason
 this file's PROVEN-vs-RESEARCHED distinction is load-bearing rather than
 bureaucratic.
@@ -2075,20 +2088,38 @@ that gap, because there is no claim to enforce.
 you can hold by doing nothing (CLAUDE.md principle 9: *a floor is safe, an expiry
 is not*). Size it against the REAL re-request cadence, or renew it. On `main`
 today MFO does neither: `EnsureCastClaimLocked`
-(`native/APMFBridge.cpp:296-318`) returns early on an unchanged claim that
+(`native/APMFBridge.cpp:306-345`; the unchanged fast path is `:313-360`) returns early on an unchanged claim that
 `IsClaimLive` reports as still live, and that early return performs no renewal —
 so the claim runs out its 6 s and MFO only notices on the tick AFTER expiry.
 The ABI v6 `IsClaimLive` check does close the worse bug it was added for (MFO
 believing a long-dead handle was still in force for 23 s), but it converts a
 silent permanent failure into a periodic gap; it does not remove the gap.
 
-**Pending, NOT shipped (re-checked 2026-09-07 against `main` `fb69cda`):** the
-renewal (F2 — `Repoint` renews the TTL, plus an MFO-side heartbeat) is on the
-**UNMERGED APMF branch** `fix/apmf-claim-renew-denyhand-spellsteer`. The gap is
-still open. What DID land on the MFO side is only the detection of a dead handle
-(ABI v6 `IsClaimLive` on the unchanged fast path) plus F1/F4 — none of which
-renews anything. Do not describe the gap as closed until that APMF branch has
-landed AND been field-verified.
+**Pending, NOT SHIPPED — corrected 2026-09-07 after checking BOTH repos.** The
+earlier wording here called the APMF work "unmerged"; that was wrong, and it was
+wrong because the re-check only looked at the MFO repo. The facts, from
+`ai-package-management-framework`:
+
+- `fix/apmf-claim-renew-denyhand-spellsteer` **IS merged to APMF `main`**
+  (`ed637fe`, 2026-09-07 10:08 PDT) and `fix/apmf-offerpackage-nudge-ordering`
+  (`8daa27f`) is an ancestor of APMF `main` too. APMF's `ApplyRepoint` renews on
+  `main`.
+- **Neither is in any tagged APMF release.** `git tag --contains ed637fe` is
+  empty; the newest release tag is `v0.9.2`, dated 2026-09-06, which predates
+  both. MFO ships against a RELEASE, not against APMF `main`.
+- **The MFO side of F2 — the heartbeat — does not exist at all.**
+  `native/APMFBridge.h:670` states it plainly: *"MFO never Repoints a
+  `kIntent_Cast` claim"*, and the unchanged fast path in `EnsureCastClaimLocked`
+  (`native/APMFBridge.cpp:313-360`) performs no renew. A renewing APMF that is
+  never asked to renew changes nothing.
+
+**So the 6 s gap is still open**, and stays open until BOTH a newer APMF release
+ships AND MFO heartbeats its live cast claims. Do not describe it as closed
+before both.
+
+What DID land on the MFO side is only the DETECTION of a dead handle (ABI v6
+`IsClaimLive` on the unchanged fast path) plus F1/F4 — none of which renews
+anything.
 
 ---
 

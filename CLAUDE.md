@@ -146,8 +146,13 @@ of a given change.
 5. **DISASSEMBLY PROVES A PATH EXISTS, NOT THAT IT RUNS.** Before building on a code
    path, OBSERVE IT EXECUTING (a passive probe, a log line, a field capture). Cost of
    ignoring this: five engine seats were implemented, reviewed, CI-green and deployed
-   onto `CombatMagicCasterRestore` — a caster the engine never runs (0 occurrences in
-   a whole session vs 69 Offensive). Everything was correct except the assumption.
+   onto `CombatMagicCasterRestore` — a caster the engine builds so rarely it is useless
+   as a seat site: **3 constructions against 120 Offensive in one 8-minute session —
+   2.5% of the Offensive count** — and 0 in the two sessions before that, because the
+   engine built none at all until APMF's seat-0 classify keyed the spell into the
+   Restore row. Everything was correct except the assumption. (Figures + seat configurations: `Docs/ENGINE_NOTES.md` §0.41.
+   Do NOT quote the 0-Restore runs as current, and do not say "never" — that older
+   phrasing was this file's, and §0.41 now forbids it.)
 6. **COMMONLIB DECLARATIONS ARE NOT ABI-TRUSTWORTHY.** Verify every vfunc signature
    against the DISASSEMBLED target binary, never against CommonLib's header. Cost of
    ignoring this: a wrong `GetMagicTarget` signature (a hidden sret out-slot CommonLib
