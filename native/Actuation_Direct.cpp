@@ -62,21 +62,51 @@ namespace MFO::Actuation {
         // of granting and refuses anyway is a BUG IN APMF, so the cast fails closed
         // and this line is the whole diagnosis (CLAUDE.md principle 7). Rate-limited
         // (principle 8) because these call sites run at the ~133 ms service cadence.
+        //
+        // ONE ENTRY PER KEY, NOT ONE SLOT PER FOLLOWER (F2-2, deploy-gate review
+        // 2026-09-07) -- see the twin's fuller note in Actuation.cpp. A single
+        // last-value slot thrashed between two refused rules on the same follower
+        // every tick (failing closed is transparent, so the scan reaches both), so
+        // the 5 s window never matched and the throttle emitted two error lines per
+        // 133 ms tick. Expired entries are swept on every touch and the vector is
+        // capped, reusing the OLDEST slot at the cap -- degrading toward MORE
+        // logging, never a silent diagnostic.
+        constexpr float       kApmfRefusalEverySec = 5.0f;
+        constexpr std::size_t kApmfRefusalMaxKeys  = 8;   // >> the realistic cast-rule count
+
         struct ApmfRefusalLog {
             RE::FormID            spell  = 0;
             RE::FormID            target = 0;
             SelfClock::time_point when{};
         };
-        std::unordered_map<RE::FormID, ApmfRefusalLog> g_lastApmfRefusal;   // worker-serial
+        std::unordered_map<RE::FormID, std::vector<ApmfRefusalLog>> g_lastApmfRefusal;   // worker-serial
+
+        // True = this exact (follower, spell, target) was already logged inside the
+        // window, so the caller stays quiet. Otherwise stamps it and returns false.
+        bool ApmfRefusalThrottled(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
+                                  SelfClock::time_point a_now) {
+            auto& keys = g_lastApmfRefusal[a_follower];
+            std::erase_if(keys, [&](const ApmfRefusalLog& e) {
+                return std::chrono::duration<float>(a_now - e.when).count() >= kApmfRefusalEverySec;
+            });
+            for (auto& e : keys) {
+                if (e.spell == a_spell && e.target == a_target) return true;
+            }
+            if (keys.size() >= kApmfRefusalMaxKeys) {
+                auto oldest = std::min_element(keys.begin(), keys.end(),
+                                               [](const ApmfRefusalLog& l, const ApmfRefusalLog& r) {
+                                                   return l.when < r.when;
+                                               });
+                *oldest = ApmfRefusalLog{ a_spell, a_target, a_now };
+            } else {
+                keys.push_back(ApmfRefusalLog{ a_spell, a_target, a_now });
+            }
+            return false;
+        }
 
         void LogApmfRefusal(RE::FormID a_follower, const char* a_what, RE::FormID a_spell,
                             RE::FormID a_target, const char* a_hand) {
-            const auto now = SelfClock::now();
-            auto& e = g_lastApmfRefusal[a_follower];
-            if (e.spell == a_spell && e.target == a_target &&
-                std::chrono::duration<float>(now - e.when).count() < 5.0f)
-                return;
-            e.spell = a_spell; e.target = a_target; e.when = now;
+            if (ApmfRefusalThrottled(a_follower, a_spell, a_target, SelfClock::now())) return;
             spdlog::error("[apmf] {:08X} APMF REFUSED the {} claim -- spell {:08X}, target {:08X}, "
                           "{} hand. APMF is the COMMITTED route: NOT falling back to the direct-"
                           "force/kInstant path, this cast does NOT happen this tick. Fix the "

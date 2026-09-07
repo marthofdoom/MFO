@@ -255,29 +255,70 @@ namespace MFO::Actuation {
         // ONE field cycle; a masked one hides indefinitely).
         //
         // spdlog::error, not info: this is a contract breach, not a decision.
-        // Rate-limited to one line per (follower, spell, target) per ~5 s, the
-        // SAME dedup shape as LogCastLockHold above (principle 8: a rule that
-        // keeps losing is loud by construction and must not bury the log at the
-        // 133 ms service cadence). The key deliberately omits the intent string:
-        // the intents that can collide on ONE (follower, spell, target) triple
-        // are mutually exclusive by construction (offense vs heal split on
-        // CasterConsent::ClassifySpell; the self-concentration stream is the only
-        // one with target == 0), so no distinct refusal is ever swallowed.
+        // Rate-limited to one line per (follower, spell, target) per ~5 s
+        // (principle 8: a rule that keeps losing is loud by construction and must
+        // not bury the log at the 133 ms service cadence). The key deliberately
+        // omits the intent string: the intents that can collide on ONE
+        // (follower, spell, target) triple are mutually exclusive by construction
+        // (offense vs heal split on CasterConsent::ClassifySpell; the
+        // self-concentration stream is the only one with target == 0), so no
+        // distinct refusal is ever swallowed.
+        //
+        // ONE ENTRY PER KEY, NOT ONE SLOT PER FOLLOWER (F2-2, deploy-gate review
+        // 2026-09-07). This held a single last-value slot, the same shape as
+        // LogCastLockHold above -- and that shape is WRONG here for a reason that
+        // does not apply there. Failing closed is TRANSPARENT, so the rule scan
+        // does not stop at the first refusal: a follower with two refused cast
+        // rules reaches BOTH every tick, each call overwrote the other's key, the
+        // 5 s window never matched, and the throttle degraded to 2 error lines
+        // per 133 ms tick -- the exact log burial the throttle exists to prevent.
+        // A small per-follower vector keyed on the full (spell, target) pair
+        // fixes it. Expired entries are swept on every touch and the vector is
+        // capped, so it cannot grow: at the cap the OLDEST entry is reused, which
+        // degrades toward MORE logging, never less (a silent diagnostic is the
+        // failure mode that must not happen). Worker-serial, no lock (#4), same
+        // as every other map in this anon namespace.
+        constexpr float       kApmfRefusalEverySec = 5.0f;
+        constexpr std::size_t kApmfRefusalMaxKeys  = 8;   // >> the realistic cast-rule count
+
         struct ApmfRefusalLog {
             RE::FormID spell  = 0;
             RE::FormID target = 0;
             std::chrono::steady_clock::time_point when{};
         };
-        std::unordered_map<RE::FormID, ApmfRefusalLog> g_lastApmfRefusal;
+        std::unordered_map<RE::FormID, std::vector<ApmfRefusalLog>> g_lastApmfRefusal;
+
+        // True = this exact (follower, spell, target) was already logged inside the
+        // window, so the caller stays quiet. Otherwise stamps it and returns false.
+        bool ApmfRefusalThrottled(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
+                                  std::chrono::steady_clock::time_point a_now) {
+            auto& keys = g_lastApmfRefusal[a_follower];
+            // Sweep expired entries first -- they carry no information and this is
+            // what keeps the vector small without an unbounded-growth guard.
+            std::erase_if(keys, [&](const ApmfRefusalLog& e) {
+                return std::chrono::duration<float>(a_now - e.when).count() >= kApmfRefusalEverySec;
+            });
+            for (auto& e : keys) {
+                if (e.spell == a_spell && e.target == a_target) return true;   // still inside the window
+            }
+            if (keys.size() >= kApmfRefusalMaxKeys) {
+                // Every key is live and we are at the cap: reuse the oldest slot.
+                auto oldest = std::min_element(keys.begin(), keys.end(),
+                                               [](const ApmfRefusalLog& l, const ApmfRefusalLog& r) {
+                                                   return l.when < r.when;
+                                               });
+                *oldest = ApmfRefusalLog{ a_spell, a_target, a_now };
+            } else {
+                keys.push_back(ApmfRefusalLog{ a_spell, a_target, a_now });
+            }
+            return false;
+        }
 
         void LogApmfRefusal(RE::FormID a_follower, const char* a_what, RE::FormID a_spell,
                             RE::FormID a_target, const char* a_hand) {
-            const auto now = std::chrono::steady_clock::now();
-            auto& e = g_lastApmfRefusal[a_follower];
-            if (e.spell == a_spell && e.target == a_target &&
-                std::chrono::duration<float>(now - e.when).count() < 5.0f)
+            if (ApmfRefusalThrottled(a_follower, a_spell, a_target,
+                                     std::chrono::steady_clock::now()))
                 return;
-            e.spell = a_spell; e.target = a_target; e.when = now;
             spdlog::error("[apmf] {:08X} APMF REFUSED the {} claim -- spell {:08X}, target {:08X}, "
                           "{} hand. APMF is the COMMITTED route: NOT falling back to the legacy "
                           "hybrid, this cast does NOT happen this tick. Fix the refusal in APMF.",
