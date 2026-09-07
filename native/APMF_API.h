@@ -263,6 +263,135 @@ namespace APMF_API {
                                              //   both hands, so a hand hint is meaningless and unspecified; if both
                                              //   are set, DualCast takes priority (the seats' hand check is skipped
                                              //   entirely) rather than picking one hand arbitrarily.
+                                             //   The mutual exclusivity above is between claims that DRIVE
+                                             //   something. A kCastFlag_DenyHandOnly claim drives nothing, so it is
+                                             //   outside this collision in both directions: it neither refuses nor
+                                             //   is refused by a dual claim, and a dual claim never evicts one. See
+                                             //   that flag's own text.
+
+        // ── DENY-ONLY HAND CLAIM (added 2026-09-06; bits 4-7 were free) ──────────
+        kCastFlag_DenyHandOnly  = 1u << 4,   // Claim the hand purely to DENY it. The client drives
+                                             //   NOTHING here and APMF asks the engine to arm nothing:
+                                             //   this is the missing half of the per-hand cast deny.
+                                             //
+                                             //   THE PROBLEM IT SOLVES. A single-hand kIntent_Cast claim
+                                             //   scopes its deny to its OWN hand by design, so the other
+                                             //   hand stays fully AI-governed -- and the field showed the
+                                             //   AI using it: 25 Stone Runes, 6 Poison Sprays and 8 Raise
+                                             //   Zombies all charged on the UNCLAIMED hand while the claim
+                                             //   held the other one (2026-09-06 diagnosis, RC3 / audit rows
+                                             //   P3-P4). A client that wants the follower to cast ONLY what
+                                             //   it asked for had no way to say so, because there is no
+                                             //   spell it wants on that second hand -- only silence.
+                                             //
+                                             //   WHAT APMF DOES WITH IT. The claim stands on exactly the
+                                             //   hand kCastFlag_LeftHand selects (default right), with its
+                                             //   DRIVEN FORM FORCED TO NONE: APMF zeroes spell, proxy and
+                                             //   target on this claim regardless of what the request
+                                             //   carried, so no seat can ever seat, drive or classify for
+                                             //   it, and no delivery-flip proxy is minted. Every OTHER
+                                             //   spell/staff competing for that hand is then denied through
+                                             //   the SAME per-hand deny path a real claim already uses
+                                             //   (core/CastGate.cpp 0x0A, core/EquipGate.cpp 0x0F). It
+                                             //   fabricates no intent (CLAUDE.md principle 4): the client
+                                             //   declared "nothing else here", and that is precisely and
+                                             //   only what is enforced.
+                                             //
+                                             //   IT IS STILL A BOUNDED CAST CLAIM. Same TTL rules as any
+                                             //   other kIntent_Cast claim (kCastDefaultTtlMs / ttlMs,
+                                             //   clamped to kCastMaxTtlMs), and Repoint renews the window
+                                             //   the same way -- so a crashed client's deny-only claim
+                                             //   expires on its own, exactly like a driving one. A Repoint
+                                             //   on THIS claim renews the TTL and nothing else: its
+                                             //   `param.form` is forced back to 0, so a heartbeat can never
+                                             //   put a driven form onto a hand the client declared closed
+                                             //   (see Repoint in APMF_API_v3 below).
+                                             //
+                                             //   *** BASIS: THE TIE IS ENFORCED FOR YOU. ***
+                                             //   A deny-only claim is an ordinary claim in APMF's ordinary
+                                             //   arbitration -- highest basis owns -- with ONE rule added,
+                                             //   and APMF enforces it rather than asking the client to
+                                             //   remember it: AT AN EQUAL BASIS A DENY-ONLY CLAIM LOSES TO A
+                                             //   DRIVING CAST CLAIM. (Elsewhere a tie still keeps the
+                                             //   earliest claim; this is the one exception, and it applies
+                                             //   at EVERY winner-selection APMF makes for the cast channel,
+                                             //   so the channel OWNER and the per-hand gates can never
+                                             //   disagree about which claim won.)
+                                             //   The practical consequence, and the reason it is enforced
+                                             //   instead of documented: a client that issues every claim at
+                                             //   ONE uniform basis can put the floor down FIRST and still
+                                             //   have its own next gambit take the hand the instant that
+                                             //   gambit publishes -- no release/re-request gap, no
+                                             //   self-deny -- with the floor still standing underneath when
+                                             //   the gambit ends. This is enforcement of a fact the CLIENT
+                                             //   declared (this flag says the claim drives nothing), not a
+                                             //   precedence APMF invented.
+                                             //   What is still the client's call is a STRICT inversion: a
+                                             //   floor requested at a basis genuinely ABOVE a driving cast
+                                             //   claim wins, because there the client really did say the
+                                             //   hand must stay shut. Nothing is re-ranked or refused, but
+                                             //   it IS reported loudly at claim time ("[ch.8b] ...
+                                             //   DENY-ONLY FLOOR OUTRANKS A LIVE CAST ...",
+                                             //   core/ControlMap.cpp), because a follower holding a hand and
+                                             //   casting nothing is the hardest failure to read from a log
+                                             //   (CLAUDE.md principles 5 and 7).
+                                             //
+                                             //   *** IT COEXISTS WITH A DUAL-CAST CLAIM, BOTH WAYS. ***
+                                             //   kCastFlag_DualCast and a single-hand claim are mutually
+                                             //   exclusive on one actor (see that flag) -- the loser of that
+                                             //   collision is refused outright. A DENY-ONLY claim is OUTSIDE
+                                             //   that collision entirely, in both directions: it asks the
+                                             //   engine to arm nothing, so there is nothing for a dual claim
+                                             //   to collide with. A floor may be requested while a dual
+                                             //   claim stands, a dual claim may be requested while a floor
+                                             //   stands, neither is refused, and a dual claim NEVER evicts a
+                                             //   floor -- so the hand does not reopen for a client tick each
+                                             //   time a dual cast starts or ends. On the hands the dual
+                                             //   claim occupies it outranks the floor (or, at an equal
+                                             //   basis, displaces it by the tie rule above); when it ends
+                                             //   the floor is still there, with no gap.
+                                             //
+                                             //   *** WHAT A FLOORED HAND ADMITS: NOTHING. ***
+                                             //   Not "nothing except the client's own spells" -- NOTHING.
+                                             //   While the floor stands, core/CastGate.cpp (0x0A CheckCast)
+                                             //   and core/EquipGate.cpp (0x0F CheckShouldEquip) deny every
+                                             //   spell and staff on that hand, INCLUDING the claiming
+                                             //   client's own, because the floor names no form to admit. So
+                                             //   the rule is: CLAIM BEFORE YOU EXPECT THE AI TO ARM
+                                             //   ANYTHING ON A FLOORED HAND -- a driving kIntent_Cast claim
+                                             //   (which, per the tie rule above, takes the hand at an equal
+                                             //   basis) is how you reopen it, not an unclaimed cast.
+                                             //   VERIFIED, 2026-09-06, because the natural worry is that a
+                                             //   client's own DIRECT force-cast would be denied by its own
+                                             //   floor: it is NOT. A direct
+                                             //   `GetMagicCaster(kInstant)->CastSpellImmediate(...)` force
+                                             //   does not consult CheckCast at all, so this gate cannot see
+                                             //   it -- MagicCaster::CastSpellImmediate is vtable slot 0x01
+                                             //   and CheckCast is 0x0A, and the engine's CastSpellImmediate
+                                             //   never calls it. Two independent pieces of field evidence,
+                                             //   not a reading of the header: (1) MFO hooks CheckCast on the
+                                             //   SAME ActorMagicCaster vtable[0] slot 0x0A and records, in
+                                             //   its own source, that "the kInstant ConcProxy direct force
+                                             //   (CastSpellImmediate) does NOT deliberate through these
+                                             //   hooks, so it is never vetoed and needs no bound"
+                                             //   (MFO CasterConsent.cpp); (2) MFO's ENGINE_NOTES 0.9
+                                             //   measured a follower with ZERO magicka casting through
+                                             //   CastSpellImmediate forever -- a CheckCast consult would
+                                             //   have refused it with kMagickaInsufficient on the first
+                                             //   try. A floor therefore closes the hand to the AI's
+                                             //   deliberation, which is exactly and only what it claims to
+                                             //   do; it does not close the client's own direct force.
+                                             //
+                                             //   COMPATIBILITY. This is an APPEND-ONLY bit inside the
+                                             //   already-frozen `flags` word -- no struct field added,
+                                             //   reordered or retyped, no vtable slot, so kABIVersion is
+                                             //   NOT bumped (a bump would make a client asking for the new
+                                             //   version get a null interface from an older APMF.dll --
+                                             //   APMF_GetInterface refuses anything above its own
+                                             //   kABIVersion). The consequence a client must know: an APMF
+                                             //   built before this bit existed IGNORES it, and the claim
+                                             //   then stands as a degenerate no-form claim that denies
+                                             //   nothing. Ship the pair together.
 
         // ── Bits 8-15: STOP PERCENT (added in-place; the word is byte-frozen) ────
         // The seat that owns a concentration channel's duration is
@@ -300,6 +429,18 @@ namespace APMF_API {
     // standing hold, design.md §5a). ttlMs == 0 -> kCastDefaultTtlMs; any value is
     // clamped to kCastMaxTtlMs. A crashed/forgetful client can never leave a
     // standing cast hold: the claim auto-releases at expiry (ControlMap TTL pass).
+    //
+    // REPOINT RENEWS THE WINDOW (added 2026-09-06; no ABI change -- no slot, no
+    // field, no flag). Calling Repoint(handle, &param) on a live kIntent_Cast claim
+    // moves its deadline to now + the SAME (already-clamped) ttlMs it was granted,
+    // in addition to updating the stored param. A client that wants to hold a cast
+    // longer than one window therefore HEARTBEATS with Repoint instead of letting
+    // the claim die and re-requesting: the release/re-request cycle left the actor
+    // measurably UNCLAIMED for 0.26-0.61 s every window, and foreign spells equipped
+    // and charged inside that gap (2026-09-06 field diagnosis, RC2). The bound is
+    // unchanged for a client that stops asking -- the claim still dies ttlMs after
+    // its LAST RequestCast/Repoint -- so this is a renewable FLOOR, not a standing
+    // hold: crash-safety identical, live state no longer killed mid-cast.
     inline constexpr std::uint32_t kCastDefaultTtlMs = 4000;
     inline constexpr std::uint32_t kCastMaxTtlMs     = 15000;
 
@@ -446,6 +587,30 @@ namespace APMF_API {
         // no-op. No-op on an unknown/stale handle. Thread-safe (enqueues; applied on
         // the game thread). Its NON-owning-claim behavior: the stored param is updated
         // so it takes effect if/when the claim later becomes the owner.
+        //
+        // -- ON A kIntent_Cast CLAIM, REPOINT IS A HEARTBEAT, NOT A RE-AIM ---------
+        // (pinned 2026-09-06.) For the cast channel specifically, Repoint has two
+        // jobs and one hard limit:
+        //   * IT RENEWS THE TTL. The deadline moves to now + the SAME (already
+        //     clamped) ttlMs the claim was granted, so a client that wants a cast
+        //     window longer than one ttlMs HEARTBEATS with Repoint instead of letting
+        //     the claim lapse and re-requesting. See kCastDefaultTtlMs below. This is
+        //     the intended, invited use.
+        //   * IT UPDATES THE NON-FORM PARAM FIELDS, exactly as on every other channel.
+        //   * IT CANNOT CHANGE WHAT THE CLAIM CASTS. A `param.form` different from the
+        //     claim's current spell is REFUSED (the claim keeps the spell it was
+        //     requested with) and the refusal is logged loudly -- never silently
+        //     honoured, never silently dropped. A cast claim's delivery-flip proxy,
+        //     its resolved target handle and its CastFlags were all resolved AGAINST
+        //     its original spell inside RequestCast, and Repoint re-runs none of that,
+        //     so honouring a form swap would leave the claim NAMED for spell B while
+        //     DRIVING A's proxy at A's target. To cast something else: Release the
+        //     handle and RequestCast the new spell.
+        //   * ON A kCastFlag_DenyHandOnly CLAIM `param.form` IS ALWAYS FORCED TO 0,
+        //     for the same reason RequestCast forces it: that claim drives nothing for
+        //     its whole life. A Repoint carrying a form is logged and ignored.
+        // A same-form heartbeat -- the shape a client should be sending -- hits none
+        // of those limits and behaves exactly as documented above.
         void (*Repoint)(Handle handle, const APMF_Param* param);
     };
 
