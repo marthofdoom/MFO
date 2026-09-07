@@ -71,7 +71,7 @@ namespace MFO::Followers {
     // (INVARIANTS #46).
     void Refresh();
 
-    // #78: release every bit of engine/session state MFO holds on a follower
+    // T#78: release every bit of engine/session state MFO holds on a follower
     // (forced equip, AI-package aliases, cast/retreat/target latches, stance,
     // MFO-equipped gear) so he reverts to a vanilla/engine-default follower.
     // WORKER-thread only, idempotent. Shared by dismissal (Refresh) and the

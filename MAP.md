@@ -4,20 +4,32 @@ A **blast-radius map**, not a symbol index. Its job is to tell you what a change
 *breaks* before you make it. Every non-trivial claim carries a `file:line`
 citation so you can re-check it against the live code.
 
-Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
-`Docs/INVARIANTS.md` (the 49 numbered rules — cited here as `#N`),
-`Docs/ENGINE_NOTES.md` (proven engine mechanisms). This map is the
-"what-depends-on-what" layer those don't carry.
+Complements the prose docs: `Docs/INVARIANTS.md` (94 rules — 80 numbered `#1`–
+`#80` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
+engine mechanisms). This map is the "what-depends-on-what" layer those don't
+carry. `Docs/ARCHITECTURE.md` is HISTORICAL (2026-09-07 banner): it describes a
+pre-implementation design and contradicts shipped code; do not use it as intent.
+
+**Citation namespace (2026-09-07):** `#N` here always means an INVARIANT.
+A task / issue / feature number is written **`T#N`** (`T#75` the equip gate,
+`T#76` the equip force-hold, `T#78` `mfoEnabled`, `T#67` the SE cast-crash gate).
+They shared one namespace until 2026-09-07 and five task numbers collided with
+real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 ---
 
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (ProgAllocator 2333, Board 1346 + Board_Progression 1234 +
-   Board_FieldKit 1135, Logistics_Loot 2201,
-   Packages 1657, Logistics 1798, CasterConsent 1066) should never sit in context — grep to a
-   symbol, read a narrow window.
+   whole files. Sizes verified against `main` 2026-09-07 after the Board split:
+   ProgAllocator 2333, Logistics_Loot 2186, Packages 2153, Logistics 2065,
+   Actuation 2034, Actuation_Direct 1659, Board 1346, CasterConsent 1243,
+   Board_Progression 1234, Board_FieldKit 1135. None of these should sit in
+   context — grep to a symbol, read a narrow window.
+   *(`Board.cpp` had breached the 2500-line HARD RULE at 2577 lines — it crossed
+   at the overlay-swapchain merge `924f3a9`. `refactor/board-split` resolved that
+   by moving the Field Kit panel into `native/Board_FieldKit.cpp`; the cap now
+   holds codebase-wide again.)*
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
    changing a subsystem, re-read its "What breaks" entry *against current code*
    and **update this map if the structure moved.** A stale impact note is worse
@@ -26,7 +38,7 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
    `native/` — **do not read it.** No `extern/`; ImGui itself comes via vcpkg.
 4. **When unsure a ripple is real,** entries say "UNVERIFIED — check before
    relying." Treat those as leads, not facts.
-5. 28 real translation units + headers; ~24k lines. Startup wiring lives in
+5. 39 real translation units + headers; ~38k lines (verified 2026-09-07). Startup wiring lives in
    `plugin.cpp` (read it first for the load order).
 
 ---
@@ -35,12 +47,12 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:7-90`). FLWR v5 (#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:8-134`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
-| **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:302-322`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
+| **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
 | **The worker pump** | `Diagnostics.cpp` | One sleeper thread (`SleeperLoop`, 133 ms) drives the *entire* per-follower tick (`Scheduler::Tick`/`Loadout::Tick`/`Probe::Tick`) via `AddTask`. `kPumpMs` is the evaluator deadline, not a HUD constant. StopPump-before-clear is the linchpin invariant. |
-| **Combat vfunc hooks** | `Targeting.cpp`, `CasterConsent.cpp`, `CombatStyle.cpp` | Three engine vtable hooks, install-once at `plugin.cpp:293-295`, VR-refused. Run on the **combat thread**. Any `CombatController` member touched there must be `< 0x68` (AE +8 layout bug; static_asserts). Signature mismatch corrupts every actor's combat/cast call. |
+| **Combat vfunc hooks** | `Targeting.cpp`, `CasterConsent.cpp`, `CombatStyle.cpp` | Three engine vtable hooks, install-once at `plugin.cpp:299-301`, VR-refused. Run on the **combat thread**. Any `CombatController` member touched there must be `< 0x68` (AE +8 layout bug; static_asserts). Signature mismatch corrupts every actor's combat/cast call. |
 | **Frozen FormID / ESP contract** | `Forms.h` | Local FormIDs (`0x800`+) are a frozen contract with `MFO_GenerateESP.py`, audited by `tools/audit_esp.py` (#41). Changing one orphans every save that saw it; `0x802` stays reserved. |
 | **Config INI keys** | `Config.cpp/.h` | Each key is wired in ~6 coupled places; the key **name** is the MCM-Helper persistence identity. Renaming unbinds the control; changing a key's *semantics* without renaming reinterprets the persisted value (the MEO ~100x-XP class of bug). |
 | **External ABIs** | `MEO_API.h`, `APMF_API.h`, `TradeBridge.cpp`, `Papyrus.cpp` | `MEO_API.h` is a wire ABI shared byte-for-byte with a *separate* shipped MEO.dll (append-only). `APMF_API.h` is likewise byte-shared with a *separate* APMF.dll (append-only, C-ABI POD; consumed by `APMFBridge`) — mirror APMF's copy exactly, never edit it locally. `TradeBridge`'s 10 Papyrus natives + `Papyrus.cpp`'s 3 method-name strings are called by shipped `.pex` — renaming breaks scripts silently. |
@@ -51,15 +63,15 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 
 The single source of truth for ordering. Everything below depends on it.
 
-- **`SKSEPluginLoad`** (`plugin.cpp:377`): logs version (stale-binary guard #44,
-  `:387`), registers the 3
-  serialization callbacks (`:397-399`), the message listener (`:401`), and
-  `TradeBridge::RegisterFuncs` via the Papyrus interface (`:406` — must be here,
+- **`SKSEPluginLoad`** (`plugin.cpp:392`): logs version (stale-binary guard #44,
+  `:404`), registers the unique id + the 3
+  serialization callbacks (`:411-414`), the message listener (`:416`), and
+  `TradeBridge::RegisterFuncs` via the Papyrus interface (`:422` — must be here,
   runs each VM init).
-- **`kInputLoaded`** (`:262`): `Config::EnsureMcmDefaults()` — seeds the MCM
+- **`kInputLoaded`** (`:263`): `Config::EnsureMcmDefaults()` — seeds the MCM
   store *before* MCM Helper reads it at its own kDataLoaded (bind-on-first-load).
-- **`kDataLoaded`** (`:275`) — the once-per-launch install order (comment
-  `:276`): `EnsureMcmDefaults` → `Config::Read` → `Forms::Resolve` →
+- **`kDataLoaded`** (`:276`) — the once-per-launch install order (comment
+  `:277`): `EnsureMcmDefaults` → `Config::Read` → `Forms::Resolve` →
   `Gait::Apply` → `Catalog::Load` → `Progression::Init` → `ProgAllocator::Init`
   → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
   `APMFBridge::Acquire` (APMF cast-select client; null-degrades if APMF absent) →
@@ -67,14 +79,14 @@ The single source of truth for ordering. Everything below depends on it.
   → `CasterConsent::InstallHook` → `CombatStyle::InstallEquipGate` →
   **sinks LAST** (`Rapport::RegisterSinks`, `Logistics::RegisterSinks`,
   `MEOBridge::RegisterSink`) → `Diagnostics::Install` → `Board::Install`
-  (overlay: swapchain-vtable hooks + input sink, VR-refused, `:299`). **Sinks
+  (overlay: swapchain-vtable hooks + input sink, VR-refused, `:306`). **Sinks
   must follow form resolution or they fire against unresolved forms.**
-- **`kPreLoadGame`** (`:302`): `Diagnostics::StopPump()` then
+- **`kPreLoadGame`** (`:313`): `Diagnostics::StopPump()` then
   `Packages::ReleaseAll("kPreLoadGame")` — release the alias the engine would
   otherwise serialize into the outgoing `.ess` — then
   `APMFBridge::ClearTransientState()` (drop runtime-only cast-select claims once the
   pump is drained).
-- **`kPostLoadGame`/`kNewGame`** (`:324`): warn if newer save (`:338`) →
+- **`kPostLoadGame`/`kNewGame`** (`:339`): warn if newer save (`:353`) →
   `Probe::ReleaseAll` → `Packages::EnsureEvictMarker` (**before** the reconcile)
   → `Packages::ReleaseAll("post-load reconcile")` → `Forms::EnsurePlayerSetup`
   → `Followers::Refresh` → seeds → `Logistics::SweepBeastHeadsOnLoad` →
@@ -91,7 +103,7 @@ independent co-save records. `State.h` defines the authoritative in-memory
 state (`g_followers`, `Gambit`, `FollowerState`).
 
 **Four records (`Serialization.h`), each with its own version + reader:**
-- **`'FLWR'` / `kSchemaVersion=5`** (`Serialization.h:8,50`) — per-follower
+- **`'FLWR'` / `kSchemaVersion=5`** (`Serialization.h:8,134`) — per-follower
   `{rapport, rank, combatClassOverride(v4), mfoEnabled(v5), tables[Combat,Logistics][], overrides[]}`.
   Written `SaveCallback` `Serialization.cpp:86`; read by `LoadCallback` `:569`
   dispatching into the per-record helper `ReadFollowersRecord` `:351` (a short
@@ -99,15 +111,15 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   MSTK/PRGN/FWPN — the same isolation contract as `CoSaveLoad`/`CoLoadForcedWeapons`;
   on the write side a `WriteString` failure sets `flwrOk` and BREAKS to the
   sibling records instead of returning — never let either side skip the siblings).
-  Version history v1→v5 documented `Serialization.h:31-50`; v1 tutored-block
-  reader kept forever (`Serialization.cpp:499`). **v5 (#78) APPENDS `mfoEnabled`
+  Version history v1→v5 documented `Serialization.h:113-133`; v1 tutored-block
+  reader kept forever (`Serialization.cpp:499`). **v5 (T#78) APPENDS `mfoEnabled`
   as one u8 right after `combatClassOverride`, read gated `if(version>=5)`; a
   pre-v5 record has none and defaults `true` — every existing follower stays
   MFO-enabled, v1–v4 byte-identical.**
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:223-254`, read `ReadStockRecord` `:286-346`. Owner: `Logistics.cpp`.
-- **`'PRGN'` / `kProgVersion=6`** (`Serialization.h:16`) — GENERAL per-follower
+- **`'PRGN'` / `kProgVersion=6`** (`Serialization.h:96`) — GENERAL per-follower
   **follower-allocation-state slot** (host machinery, v1.1 Phase 8 reframe): all
   fields are general allocation-engine state (enrolled flag, an OPAQUE plugin-
   qualified class-def reference, allocated perks/skills, HMS pools, battle
@@ -131,7 +143,7 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   target + recomputes it, defaults the new fields (streak 0, remainder 0). A v4
   record read has no block → `hmsCaptured=false` → first `RecomputeHMS` adopts the
   live base. All floats finite-guarded; streak clamped 0..2.
-- **`'FWPN'` / `kForcedWeaponVersion=1`** (`Serialization.h:59`) — #76 force-hold:
+- **`'FWPN'` / `kForcedWeaponVersion=1`** (`Serialization.h:105-106`) — T#76 force-hold:
   the weapons MFO force-equipped for an active equip gambit. Owner
   `Actuation.cpp` (`CoSaveForcedWeapons`/`CoLoadForcedWeapons`); **CoLoad
   RELEASES the locks, never repopulates** (a session starts with no force-hold,
@@ -149,20 +161,20 @@ ingestion (`kMaxFollowers=4096`, `kMaxOpcodeLen=64`, `kMaxOverrides=64`,
 `subjectActorForm` gated `version>=3` (`:424`). A newer FLWR aborts the whole
 load (`:338`, mid-stream desync risk); a newer MSTK/PRGN skips only that record
 (`:247,320`). `g_sawNewerSave` → on-screen warning at kPostLoadGame
-(`ConsumeNewerSaveWarning` `:555`, `plugin.cpp:338`).
+(`ConsumeNewerSaveWarning` `:673`, `plugin.cpp:353`).
 
 **Load-time migrations to preserve:** `"act.equip_torch"` in the combat table is
-redirected to logistics (#35, `:466`); an empty board is backfilled with
-`Followers::ApplyDefaultKit` (`:538`); over-cap gambits are fully *consumed* but
-not stored (`:473`, #22f) or the stream desyncs.
+redirected to logistics (#35, `:486`); an empty board is backfilled with
+`Followers::ApplyDefaultKit` (`:559`); over-cap gambits are fully *consumed* but
+not stored (`:491`, #22f) or the stream desyncs.
 
-**`ResetAllState()` (`:562`) — the teardown-order contract (⚠️).** RevertCallback
+**`ResetAllState()` (`:680`) — the teardown-order contract (⚠️).** RevertCallback
 and the load window both funnel here. Order is load-bearing:
-`Diagnostics::StopPump()` **first** (`:568`, drains the worker) → `MainThread::Clear`
+`Diagnostics::StopPump()` **first** (`:686`, drains the worker) → `MainThread::Clear`
 → `g_followers.clear()` → `Followers::g_active.clear()` → each subsystem's
 `ClearTransientState`/`ClearAll` (Followers, Scheduler, Logistics, +`ClearStockGear`,
 ProgAllocator, Loadout, Targeting, CasterConsent, CombatStyle, Sightline, Board,
-Packages `ReleaseAll("revert")`, Papyrus, TradeBridge, MEOBridge, Probe, Rapport)
+Packages `ReleaseAll("revert")` (`:733`), Papyrus, TradeBridge, MEOBridge, Probe, Rapport)
 → `Board::SetHud(false)`. **What breaks:** move any clear out, or run it while the
 pump is live, and you race a worker insert (UB). `Packages::ReleaseAll` here
 re-reads the alias from the quest even when the module believes it holds nothing
@@ -172,18 +184,18 @@ re-reads the alias from the quest even when the module believes it holds nothing
 - `Gambit` (`State.h:28`): `conditionOpcode`/`actionOpcode` (strings, serialized),
   `conditionParam`, `actionParamForm` (FormID, ResolveFormID on load),
   `subjectSelector`, `subjectActorForm` (#68, v3). `uid` is **runtime-only, never
-  serialized** (`:23,29`) — the board keys edits on it, not row index.
+  serialized** (`:29`) — the board keys edits on it, not row index.
   `lastFired*` display-only, never read back by the evaluator.
 - `FollowerState` (`State.h:72`): `rapport`, `rank` (clamped [1,5]),
   `combatClassOverride` (v4; ordinals == `CombatStyle::Stance`),
-  `mfoEnabled` (v5, #78; the per-follower MFO master switch, default true),
+  `mfoEnabled` (v5, T#78; the per-follower MFO master switch, default true),
   `tables[kCount]`, `overrides`.
-- `g_followers` (`State.h:116`) — **MAIN-THREAD-ONLY, takes no lock (#4).** Keyed
+- `g_followers` (`State.h:126`) — **MAIN-THREAD-ONLY, takes no lock (#4).** Keyed
   on persistent FormID; dismissed followers stay. Off-thread access must snapshot.
-- Slot caps `kCombatSlotsByRank`/`kLogisticsSlotsByRank` (`:102-103`) — the
+- Slot caps `kCombatSlotsByRank`/`kLogisticsSlotsByRank` (`:112-113`) — the
   default kit must fit Rank I (3 combat / 4 logistics) or a round-trip truncates it.
-- **`overrides` / `PackageOverride` (`State.h:57,84`) is vestigial:** the only
-  writer is the co-save loader (`Serialization.cpp:533`); no runtime code
+- **`overrides` / `PackageOverride` (`State.h:57,94`) is vestigial:** the only
+  writer is the co-save loader (`Serialization.cpp:532`); no runtime code
   populates it (grep-confirmed). It round-trips but is inert — MFO drives packages
   via alias fills, not PapyrusUtil overrides (banned #18/#19).
 
@@ -195,7 +207,7 @@ The most engine-dangerous cluster: force-fills quest aliases (serialized into th
 `.ess`), mutates shared `TESPackage` records, and pumps a state machine off engine
 observation. All five files are **main-thread / serialized-queue only; none is
 thread-safe.** `Scheduler::Tick` and `Packages::Pump` run on the **SKSE AddTask
-job worker** (dispatched `Diagnostics.cpp:247`), the same serialized queue as
+job worker** (dispatched `Diagnostics.cpp:343`), the same serialized queue as
 `Packages::NotifyCast` — which is why `g_holder` needs no lock.
 
 ### Packages.cpp / Packages.h — the alias/marker engine
@@ -374,7 +386,7 @@ releases **by eviction** with a non-actor XMarker.
   The full per-follower teardown (Loadout/Targeting/CombatStyle/ForcedWeapon/
   CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
   `Followers::ReleaseHeldState(id)` (`Followers.cpp`, worker-only, idempotent) —
-  shared by the dismissal sweep (`Refresh`) and the #78 MFO-OFF toggle (Scheduler).
+  shared by the dismissal sweep (`Refresh`) and the T#78 MFO-OFF toggle (Scheduler).
 - `ForceRefToNative` (`:266`) = `REL::ID(25052)` `TESQuest::ForceRefTo`, AE-only
   (VM path off AE). Two-class layout offsets (`kPointerOffFromIPackageData=0x10`,
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
@@ -384,7 +396,7 @@ releases **by eviction** with a non-actor XMarker.
 Only module that mutates actor state; main-thread only. **Split mechanically
 2026-08-31 (no logic change):** `Actuation.cpp` (1244) = the combat-rule
 dispatch — `Fire` + verbs, `CastOn`/`ConcentrationCast`/`ForceCast`,
-`EquipWeapon`, `NearestAlly`/`ResolveCastTarget` (`:856`), the #76 force-hold
+`EquipWeapon`, `NearestAlly`/`ResolveCastTarget` (`:856`), the T#76 force-hold
 map + FWPN co-save; `Actuation_Direct.cpp` (1309) = the direct-delivery
 streams (`CastSelfDirect`/`CastTargetDirect` + reconciles/`ClearSelfCasts`,
 `CastAuto`) + their apply substrate (`ConcProxy`/`DeliverySpell`,
@@ -420,7 +432,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   below in the SAME function so the lock and the actual APMF claim never disagree)** →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:70`) via `Packages::CastAt`.
-  Off-AE the whole path declines transparently (#67) so vanilla AI keeps casting.
+  Off-AE the whole path declines transparently (T#67) so vanilla AI keeps casting.
   **The FF silent cast (and every other `CastSpellImmediate` on a live path) is now
   `MainThread::Post`ed** — CastOn runs on the job worker and the old inline engine call
   was the prime suspect for the queued 1.5.x `act.cast_target` AV reports (#14).
@@ -554,7 +566,7 @@ teardown. Runs on the AddTask worker.
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`.
 - Casts `combatClassOverride` directly to `CombatStyle::Stance` (`:378,578`) — the
   ordinal-equality contract.
-- **#78 per-follower MFO master switch** — gate right after the `g_followers.find`
+- **T#78 per-follower MFO master switch** — gate right after the `g_followers.find`
   in the per-follower service (`ServiceFollower`-caller path, `Scheduler.cpp`): if
   `!it->second.mfoEnabled`, SKIP the whole tick (combat + logistics) and `return`,
   so the follower stays vanilla. On the ON→OFF edge (`g_mfoDisabledSwept` latch,
@@ -718,7 +730,7 @@ them clobbers unrelated engine vtables).
   g_ctrlCount==0` (`:516`). `WouldHitTeammate`'s `highActorHandles` walk is
   main-thread-gated (`:763,818`), fails open off-main (§0.30 crash).
 
-### CombatStyle.cpp — weapon stance + equip gate (#75)
+### CombatStyle.cpp — weapon stance + equip gate (T#75)
 Owns a follower's live per-combat `CombatController::combatStyle` (0x38); gates
 `CombatInventoryItem::CheckShouldEquip` (idx `0x0F`, 30 template vtables, `:311`) so
 the AI can't re-arm magic over a forced weapon.
@@ -1484,7 +1496,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   panel (which renders them) and Board.cpp's `ApplyEdits`/`FillRuleViews` (which
   resolve an opcode back to a label/ParamKind) scan them; their opcode strings are
   a FROZEN co-save contract (#10).
-- `Install()` (`Board.h`) — caller `plugin.cpp:299` (kDataLoaded) only, VR-refused.
+- `Install()` (`Board.h`) — caller `plugin.cpp:306` (kDataLoaded) only, VR-refused.
   Installs AFTER the renderer is up (the vtable path needs the swapchain LIVE and
   polls for it) — the OPPOSITE of the old trampoline, which had to patch before
   renderer init. No `AllocTrampoline`, no `RelocationID`/offset pairs, so there is
@@ -1502,7 +1514,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   only the letter+colour comes and goes, so the strip's width never shifts.
   `r.looting` is fed by `Logistics::JustLooted`, not `IsLooting` — see the
   Logistics-family entry's "[L] GLYPH RELIABILITY FIX" for why.
-- **#78 Followers-tab MFO toggle** — the tab's FIRST column is a per-row checkbox
+- **T#78 Followers-tab MFO toggle** — the tab's FIRST column is a per-row checkbox
   bound to `FollowerRow.mfoEnabled` (mirrored from `FollowerState::mfoEnabled` in
   `PublishSnapshot`, both the active + retained builders). The `##followers` table
   is now 8 columns. On toggle it `QueueEdit`s `EditKind::SetMfoEnabled` (param 0/1);
@@ -2283,7 +2295,7 @@ native seats) and ENGINE_NOTES §0.40.
   branch — a third call site, MISSING from this entry until 2026-09-06).
   Call sites forward an extra `a_stopPct` (see below);
   replacing the two deleted `Packages::HealAnimFill` call sites historically.
-  Gated `Enabled()`: AE-only (`#67` mirror), **HEAL-ONLY** (`kind !=
+  Gated `Enabled()`: AE-only (`T#67` mirror), **HEAL-ONLY** (`kind !=
   SpellKind::Heal` → immediate false — offense/buff never enter this module,
   they stay on the byte-identical AI-fired/kInstant paths), `Config::
   g_healAnimPackage` (repurposed toggle), `APMFBridge::Available()`. Sequence:
@@ -2497,7 +2509,7 @@ native seats) and ENGINE_NOTES §0.40.
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`
 (native `GetInventory`/`GetGoldAmount` CTD on merchant chests). `RegisterFuncs()`
-(`:207`) ← `plugin.cpp:407`, registers **10 Papyrus natives** on class `MFO_Trade`
+(`:365`) ← `plugin.cpp:422`, registers **10 Papyrus natives** on class `MFO_Trade`
 (`:209-218`) called by the shipped `MFO_Trade.pex` — renaming/re-signing any breaks
 trading silently. `VendorTrade` (`:223`) ← `Logistics_Economy.cpp` (`EconomyProbe:488`). `SellRow`/`NeedCat::
 Kind` (`TradeBridge.h:25,35`) are the wire vocabulary with Logistics. Cross-save
@@ -2528,14 +2540,14 @@ a fresh order.
 
 ### Diagnostics.cpp / Diagnostics.h — event sinks + THE WORKER PUMP ⚠️ RACE LINCHPIN
 Owns the one persistent sleeper thread driving the per-follower tick, four event
-sinks, and `DumpReport`. `Install()` (`:394`) ← `plugin.cpp:299` (registers
+sinks, and `DumpReport`. `Install()` (`:503`) ← `plugin.cpp:305` (registers
 SpellSink/HitSink/MenuSink + Probe crosshair sink). `SleeperLoop` (`:236`, `kPumpMs=
 133`, `kDiagEveryNth=4`) never touches game state directly — only `AddTask`s a lambda
 that re-checks the epoch, sets `TickActiveGuard`, then runs `Followers::Refresh`
 (diag turn), `Scheduler::Tick`, `Loadout::Tick`, `Probe::Tick` (diag turn),
 `Board::PublishSnapshot` (`:247-263`).
 - **StopPump-before-clear invariant:** `StopPump()` (`:409`) is the FIRST statement
-  in `ResetAllState` (`Serialization.cpp:568`) and runs at kPreLoadGame
+  in `ResetAllState` (`Serialization.cpp:686`) and runs at kPreLoadGame
   (`plugin.cpp:320`). It clears `g_pumpRunning`, bumps `g_pumpEpoch` (strands mid-
   sleep threads), then spin-waits ≤2000 ms on `g_tickActive` (`:413`) so any in-
   flight tick finishes before the maps are wiped (concurrent map insert+clear = UB).
@@ -2559,11 +2571,13 @@ that re-checks the epoch, sets `TickActiveGuard`, then runs `Followers::Refresh`
 
 ### Probe.cpp / Probe.h — M4 debug/research harness
 Fires one engine primitive at a follower and records emergent behavior; nothing
-outlives a session. `ReleaseAll()` (`:445`) ← `plugin.cpp:344`, `Serialization.cpp:617`
+outlives a session. `ReleaseAll()` (`:445`) ← `plugin.cpp:359`, `Serialization.cpp:741`
 — must keep calling `Targeting::ClearAll()`+`Stop()` or a stale latch/watch handle
-survives. `Tick()` (`:368`) ← `Diagnostics.cpp:258` (main-thread task). **Real
-gameplay dependency (not debug-only):** `CrosshairTarget()` (`:307`) ← `Logistics.cpp:
-1897` (QuickLoot-aware player-claim signal). `FocusOnCrosshair()` ← `Board.cpp:622`.
+survives. `Tick()` (`:368`) ← `Diagnostics.cpp:350` (main-thread task). **Real
+gameplay dependency (not debug-only):** `CrosshairTarget()` (`:307`) ←
+`Logistics_Loot.cpp:1066` (QuickLoot-aware player-claim signal; it moved out of
+`Logistics.cpp` in the 2026-08-31 split). `FocusOnCrosshair()` (`:309`) ←
+`Board.cpp:622`.
 `StartCombatOn` uses po3 RelocationID(37608,38561), VR-refused. Most `Fire`/`GetLast`/
 enum entry points have **no in-tree C++ caller** (the ImGui probe panel isn't wired) —
 **UNVERIFIED — check Board before assuming dead.**
@@ -2647,13 +2661,14 @@ un-gating was friendly-fire).
 
 ### Vocabulary.h — the serialized opcode contract ⚠️
 The gambit opcode **strings are a frozen co-save contract (#10)** — written verbatim
-(`Serialization.cpp:128,149`), read (`:414,439`); there's even a hard literal
-`"act.equip_torch"` (`:466`) tracking `kActEquipTorch`. Renaming any `kCond*`/`kAct*`
+(`Serialization.cpp:155,179`), read (`:434,459`); there's even a hard literal
+`"act.equip_torch"` (`Serialization.cpp:486`) tracking `kActEquipTorch`
+(`Vocabulary.h:136`). Renaming any `kCond*`/`kAct*`
 is a **schema migration, not an edit** (old saves carry the old string; the `==`
 compares silently stop matching). Adding an opcode requires wiring in Evaluator +
 Actuation + Board's picker or it's inert. **`Subject` enum** (Self=0/Player=1/
 NearestAlly=2, `:37`) is serialized as the raw `subject` byte (read `Actuation.cpp:73`,
-`Board.cpp:857`) — reordering reinterprets every saved byte (a specific follower is
+`Board.cpp:850,858-863`) — reordering reinterprets every saved byte (a specific follower is
 carried as `subjectActorForm`, NOT an enum value, precisely to keep the enum frozen).
 `Pct`/`HealthPct`/etc. (`:214`) use permanent+temporary AV — changing the max formula
 re-times every "HP below X%" rule + Confidence.
@@ -2691,16 +2706,16 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 
 | Registration | Site | Notes |
 |---|---|---|
-| Serialization Save/Load/Revert callbacks | `plugin.cpp:397-399` | `kSerID='MFO0'` |
-| Message listener | `plugin.cpp:401` | drives the whole lifecycle |
-| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + InputSink + WndProc | `plugin.cpp:299` → `Board::Install` (`Board.cpp:1313`, end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
-| `MainThread::Install` (player Update vfunc 0x0AD) | `plugin.cpp:291` | true main-thread pump |
-| `Targeting::InstallHook` (Character::UpdateCombat 0xE4) | `plugin.cpp:293` | also drives CombatStyle |
-| `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:294` | 14 + 1 vtables |
-| `CombatStyle::InstallEquipGate` (CheckShouldEquip 0x0F) | `plugin.cpp:295` | 30 template vtables |
-| `Rapport::RegisterSinks` (TESDeath, TESCombat) | `plugin.cpp:296` → `Rapport.cpp:511` | sinks LAST |
+| Serialization Save/Load/Revert callbacks | `plugin.cpp:412-414` | `kSerID='MFO0'` |
+| Message listener | `plugin.cpp:416` | drives the whole lifecycle |
+| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + InputSink + WndProc | `plugin.cpp:306` → `Board::Install` (`Board.cpp:1313`, end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
+| `MainThread::Install` (player Update vfunc 0x0AD) | `plugin.cpp:297` | true main-thread pump |
+| `Targeting::InstallHook` (Character::UpdateCombat 0xE4) | `plugin.cpp:299` | also drives CombatStyle |
+| `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:300` | 14 + 1 vtables |
+| `CombatStyle::InstallEquipGate` (CheckShouldEquip 0x0F) | `plugin.cpp:301` | 30 template vtables |
+| `Rapport::RegisterSinks` (TESDeath, TESCombat) | `plugin.cpp:302` → `Rapport.cpp:521` | sinks LAST |
 | `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:297` → `Logistics.cpp:1495` | direction filter mandatory |
 | `MEOBridge::RegisterSink` (TESEquip) | `plugin.cpp:298` → `MEOBridge.cpp:75` | optional |
-| `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:299` → `Diagnostics.cpp:397` | + the worker pump |
-| `TradeBridge::RegisterFuncs` (10 Papyrus natives) | `plugin.cpp:407` → `TradeBridge.cpp:209` | script ABI |
+| `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:305` → `Diagnostics.cpp:503` | + the worker pump |
+| `TradeBridge::RegisterFuncs` (10 Papyrus natives) | `plugin.cpp:422` → `TradeBridge.cpp:365-376` | script ABI |
 | `MEOBridge::Acquire` (MEO interface) | `plugin.cpp:289` | external ABI |

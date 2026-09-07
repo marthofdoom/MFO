@@ -408,7 +408,7 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_quashAllyCombat{ true };
 
     // WEAPON-STANCE OWNERSHIP (v1.0.33), DEFAULT ON -- a standard feature, not a
-    // probe, so no MCM toggle (#55); INI-only as a debug kill-switch. When an
+    // probe, so no MCM toggle (T#55); INI-only as a debug kill-switch. When an
     // equip gambit wins a follower's hand, the DLL swaps their LIVE
     // CombatController::combatStyle (0x38 -- below the §0.29 AE divergence,
     // never the base record) to a stance-matched MFO CSTY, applied on the

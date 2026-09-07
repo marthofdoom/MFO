@@ -178,7 +178,7 @@ namespace MFO::Actuation {
     // Logistics dispatch calls CastTargetDirect directly. Same channel registry,
     // same 1 s concentration beat, same bounds, both contexts.)
 
-    // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
+    // ── T#76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     // While an equip-melee/ranged gambit's condition holds TRUE, the fired
     // weapon is FORCE-equipped (ActorEquipManager forceEquip=true = the engine's
     // prevent-removal lock) so the follower's own combat AI cannot auto-unequip
@@ -207,7 +207,7 @@ namespace MFO::Actuation {
     // the world is being replaced (mirrors CombatStyle::ClearAll).
     void ClearForcedWeapons();
 
-    // #76 force-hold co-save (kRecForcedWeapon/'FWPN'): persist the force-equip
+    // T#76 force-hold co-save (kRecForcedWeapon/'FWPN'): persist the force-equip
     // locks so a load can clear stale ones. CoLoad releases (never repopulates) —
     // a session starts with no force-hold; the gambit re-forces if still true.
     void CoSaveForcedWeapons(SKSE::SerializationInterface* a_intfc);

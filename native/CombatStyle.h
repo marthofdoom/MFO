@@ -41,7 +41,7 @@ namespace MFO::CombatStyle {
     // Persists until Clear (battle end) or the next Want (melee<->ranged
     // handoff) -- exactly "hold until battle end or another equip triggers".
     //
-    // a_equipOrder (#75): true iff this stance is an EQUIP ORDER -- an
+    // a_equipOrder (T#75): true iff this stance is an EQUIP ORDER -- an
     // act.equip_melee / act.equip_ranged gambit won (or stands satisfied as)
     // the hand claim this tick. While an equip order owns the stance, the
     // equip gate below DENIES the follower's combat AI re-arming spells or
@@ -60,7 +60,7 @@ namespace MFO::CombatStyle {
     void Clear(RE::FormID a_follower);
     void ClearAll();
 
-    // #76: release the stance ownership IFF it is currently an EQUIP ORDER. The
+    // T#76: release the stance ownership IFF it is currently an EQUIP ORDER. The
     // equip-gambit stance clamp's duration is now tied to the gambit's CONDITION
     // (held while true, released when it goes false) rather than "until battle
     // end" -- the scheduler calls this on every combat tick where no equip gambit
@@ -71,7 +71,7 @@ namespace MFO::CombatStyle {
     // or a non-equip-order owner -> no-op). MAIN / worker thread.
     void ReleaseEquipOrder(RE::FormID a_follower);
 
-    // #76: does this follower CURRENTLY hold an equip-order stance? The scheduler
+    // T#76: does this follower CURRENTLY hold an equip-order stance? The scheduler
     // uses it to PRESERVE the melee/ranged clamp across a tick where a HIGHER-
     // priority rule stopped the gambit scan before the equip rule (an ordered
     // cast/heal fires): the equip gambit's truth is unknown that tick, so the
@@ -93,7 +93,7 @@ namespace MFO::CombatStyle {
     bool AnyActive();
     std::size_t OwnedCount();   // diagnostics
 
-    // ── THE EQUIP GATE (#75) ─────────────────────────────────────────────────
+    // ── THE EQUIP GATE (T#75) ─────────────────────────────────────────────────
     // The CSTY swap above is a score BIAS, not a prohibition: MFO_MeleeStyle
     // starves magic at 0.1x, but a spell-heavy caster's magic score can still
     // beat her weapon's, and the engine RE-DERIVES the style mid-combat (the

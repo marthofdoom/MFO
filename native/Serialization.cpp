@@ -10,7 +10,7 @@
 #include "Targeting.h"
 #include "CasterConsent.h"
 #include "CombatStyle.h"
-#include "Actuation.h"   // #76: revert drops the equip force-hold records
+#include "Actuation.h"   // T#76: revert drops the equip force-hold records
 #include "Sightline.h"
 #include "Packages.h"
 #include "Papyrus.h"
@@ -20,7 +20,7 @@
 #include "Probe.h"
 #include "Board.h"
 #include "ProgAllocator.h"
-#include <unordered_set>   // #69: stock-gear per-follower sets (kRecStock)
+#include <unordered_set>   // T#69: stock-gear per-follower sets (kRecStock)
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
 //
@@ -39,7 +39,7 @@
 //     v4  #65: combatClassOverride (per-follower forced combat stance)
 //         added right after st.rank. Read gated on version >= 4; an older
 //         record simply has none (defaults to 0 -- Auto, no override).
-//     v5  #78: mfoEnabled (per-follower MFO master switch) added as one u8
+//     v5  T#78: mfoEnabled (per-follower MFO master switch) added as one u8
 //         right after combatClassOverride. Read gated on version >= 5; an
 //         older record has none (defaults to true -- MFO enabled).
 //
@@ -55,7 +55,7 @@ namespace MFO {
         constexpr std::uint32_t kMaxOpcodeLen = 64;
         constexpr std::uint16_t kMaxOverrides = 64;
         constexpr std::uint16_t kMaxTutoredV1 = 512;
-        constexpr std::uint32_t kMaxStockGear = 512;   // #69: generous headroom over any real loadout
+        constexpr std::uint32_t kMaxStockGear = 512;   // T#69: generous headroom over any real loadout
 
         std::atomic<bool> g_sawNewerSave{ false };   // v1 only, consumed and discarded
 
@@ -126,7 +126,7 @@ namespace MFO {
             a_intfc->WriteRecordData(st.rank);
             // v4 (#65): the per-follower combat class override, right after rank.
             a_intfc->WriteRecordData(st.combatClassOverride);
-            // v5 (#78): the per-follower MFO master switch, one explicit u8 (0/1)
+            // v5 (T#78): the per-follower MFO master switch, one explicit u8 (0/1)
             // right after combatClassOverride. Written unconditionally at the
             // current schema (v5); the READ is version-gated so pre-v5 saves
             // (which never wrote it) never try to consume the byte.
@@ -215,7 +215,7 @@ namespace MFO {
                      skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) record(s)", skippedRuntime)
                                     : std::string{});
 
-        // #69: stock gear (kRecStock/'MSTK') -- a SECOND, INDEPENDENT record.
+        // T#69: stock gear (kRecStock/'MSTK') -- a SECOND, INDEPENDENT record.
         // Never bumps or touches kSchemaVersion/FLWR above. CopyStockGear()
         // takes the lock once and hands back a copy; everything below runs
         // lock-free over that copy (a lock must never be held across an
@@ -263,7 +263,7 @@ namespace MFO {
         // owner (ProgAllocator.cpp). The 'PRGN' fourCC + name are historical/frozen.
         ProgAllocator::CoSaveSave(a_intfc);
 
-        // #76 force-hold (kRecForcedWeapon/'FWPN') -- a FOURTH independent record,
+        // T#76 force-hold (kRecForcedWeapon/'FWPN') -- a FOURTH independent record,
         // same isolation contract. Persists the force-equip locks so a load can
         // clear stale ones (Actuation owns the layout + bounds).
         Actuation::CoSaveForcedWeapons(a_intfc);
@@ -390,7 +390,7 @@ namespace MFO {
                     st.combatClassOverride = std::clamp<std::uint8_t>(st.combatClassOverride, 0, 3);
                 }
 
-                // v5 (#78): the per-follower MFO master switch, STRICTLY version-
+                // v5 (T#78): the per-follower MFO master switch, STRICTLY version-
                 // gated -- same discipline as v3/v4 above. A v1-v4 record never
                 // wrote this byte, so reading it unconditionally would consume the
                 // next field's bytes and desync the stream. st.mfoEnabled already
@@ -568,7 +568,7 @@ namespace MFO {
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
         g_followers.clear();
-        Logistics::ClearStockGear();   // #69: defence in depth -- RevertCallback already
+        Logistics::ClearStockGear();   // T#69: defence in depth -- RevertCallback already
                                         // cleared it, same belt-and-braces as g_followers above
 
         std::uint32_t type = 0, version = 0, length = 0;
@@ -577,7 +577,7 @@ namespace MFO {
 
         while (a_intfc->GetNextRecordInfo(type, version, length)) {
             if (type == kRecStock) {
-                // #69: independent of FLWR -- its own version guard, its own
+                // T#69: independent of FLWR -- its own version guard, its own
                 // ResolveFormID/DROP discipline (INVARIANTS #8), never
                 // fabricates. A newer stock record this DLL can't fully parse
                 // is skipped (GetNextRecordInfo seeks past it on the next
@@ -610,7 +610,7 @@ namespace MFO {
                 continue;
             }
             if (type == kRecForcedWeapon) {
-                // #76: same independence contract. A newer record skips (never
+                // T#76: same independence contract. A newer record skips (never
                 // aborts). CoLoad resolves + releases every stale force-lock.
                 if (version > kForcedWeaponVersion) {
                     spdlog::error("[cosave] FORCED-WEAPON SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
@@ -698,7 +698,7 @@ namespace MFO {
         Followers::ClearTransientState();   // streak map is save-scoped (F1)
         Scheduler::ClearTransientState();   // suppression + round-robin cursor likewise
         Logistics::ClearTransientState();   // logistics cadence clocks + loot LRUs (#22h)
-        // #69: g_stockGear IS serialized (kRecStock), unlike everything
+        // T#69: g_stockGear IS serialized (kRecStock), unlike everything
         // ClearTransientState owns -- kept as its own call so that contract
         // stays true. A load right after this repopulates it; a main-menu
         // revert with no load leaves it empty, same as g_followers above.
@@ -717,7 +717,7 @@ namespace MFO {
         CasterConsent::ClearTransientState();
         CombatStyle::ClearAll();            // owned stances are this-session,
                                             // per-combat controller identities
-        Actuation::ClearForcedWeapons();    // #76: equip force-hold records are
+        Actuation::ClearForcedWeapons();    // T#76: equip force-hold records are
                                             // this-session too, exactly like the
                                             // owned stances above -- the world is
                                             // being replaced, no engine call

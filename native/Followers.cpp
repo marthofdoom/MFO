@@ -4,7 +4,7 @@
 #include "Targeting.h"
 #include "CasterConsent.h"   // v1.0.30: dismissal releases the cast latch too
 #include "CombatStyle.h"     // v1.0.33: dismissal drops weapon-stance ownership
-#include "Actuation.h"       // #76: dismissal releases the equip force-hold too
+#include "Actuation.h"       // T#76: dismissal releases the equip force-hold too
 #include "Packages.h"
 #include "APMFBridge.h"   // ReleaseHealCast/ReleaseOffenseCast -- drop a dismissed follower's live claims
 #include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside the offense claim
@@ -279,7 +279,7 @@ namespace MFO::Followers {
     void ReleaseHeldState(RE::FormID id) {
         // Hand back every bit of engine/session state MFO was holding on this
         // follower, so he reverts to a vanilla/engine-default follower. Called on
-        // the WORKER: from dismissal (Refresh, above) and from the #78 board
+        // the WORKER: from dismissal (Refresh, above) and from the T#78 board
         // MFO-OFF toggle (Scheduler's per-follower tick, same thread). Every call
         // here is idempotent (erase-miss / no-record -> no-op), so re-running it
         // is safe. ORDER is the dismissal order, unchanged.
@@ -295,7 +295,7 @@ namespace MFO::Followers {
         // combatant paying the ApplyTick lookup and could re-swap a style we no
         // longer own. Idempotent erase-miss when unowned.
         CombatStyle::Clear(id);
-        // The #76 equip force-hold: its prevent-removal LOCK is on the
+        // The T#76 equip force-hold: its prevent-removal LOCK is on the
         // ActorEquipManager, not the controller, so a follower left force-held
         // stays stuck with the weapon, unable to cast. Resolve the actor (the
         // handle may have merely flickered) and force-unequip; if it will not
@@ -401,7 +401,7 @@ namespace MFO::Followers {
                 g_missStreak.erase(id);
                 // Give back everything MFO was holding on this follower BEFORE we
                 // stop tracking him (#55). The exact same release is needed when a
-                // follower is toggled MFO-OFF on the board (#78) -- one helper, one
+                // follower is toggled MFO-OFF on the board (T#78) -- one helper, one
                 // source of truth (see ReleaseHeldState).
                 ReleaseHeldState(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport

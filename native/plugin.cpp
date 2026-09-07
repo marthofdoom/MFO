@@ -298,7 +298,7 @@ namespace {
                                              // road to main; AddTask drains on a worker here
             MFO::Targeting::InstallHook();   // vfunc hook: once, never per-load
             MFO::CasterConsent::InstallHook();   // the influence hook, likewise
-            MFO::CombatStyle::InstallEquipGate();  // #75: equip orders own the hands, likewise
+            MFO::CombatStyle::InstallEquipGate();  // T#75: equip orders own the hands, likewise
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
             MFO::Logistics::RegisterSinks();   // the player-looted waiver sink (§4.8.3)
             MFO::MEOBridge::RegisterSink();  // equip sink: flush follower gem moves onto worn loot

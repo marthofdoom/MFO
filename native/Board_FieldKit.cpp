@@ -278,7 +278,7 @@ namespace MFO::Board {
                                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                           ImGuiTableFlags_ScrollY,
                                           ImVec2(0.0f, -footer))) {
-                        // #78: the per-follower MFO master switch, FIRST column.
+                        // T#78: the per-follower MFO master switch, FIRST column.
                         // ON = MFO manages him; OFF = MFO leaves him vanilla.
                         ImGui::TableSetupColumn("MFO",     ImGuiTableColumnFlags_WidthFixed, 34.0f);
                         ImGui::TableSetupColumn("Follower", ImGuiTableColumnFlags_WidthStretch);
@@ -293,7 +293,7 @@ namespace MFO::Board {
                         for (const auto& r : snap.rows) {
                             ImGui::TableNextRow();
 
-                            // #78: FIRST column -- the per-follower MFO toggle.
+                            // T#78: FIRST column -- the per-follower MFO toggle.
                             // A local mirror + QueueEdit on change: the render
                             // thread NEVER writes g_followers; the edit rides the
                             // main-thread ApplyEdits path like every other board

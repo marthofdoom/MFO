@@ -1,7 +1,7 @@
 #pragma once
 #include "PCH.h"
 #include "State.h"
-#include <unordered_set>   // #69: stock-gear sets (CopyStockGear/LoadStockRecord)
+#include <unordered_set>   // T#69: stock-gear sets (CopyStockGear/LoadStockRecord)
 
 // The logistics table's actuation. DESIGN.md §4.8.
 //
@@ -188,7 +188,7 @@ namespace MFO::Logistics {
     // call for any id -- a no-op unless a_id is the active traveller.
     void OnFollowerRemoved(RE::FormID a_id);
 
-    // ── #69: co-save companions for g_stockGear ──────────────────────────────
+    // ── T#69: co-save companions for g_stockGear ──────────────────────────────
     // A follower's OWN weapon/armor gear, snapshotted the first time MFO
     // manages them (ServiceFollower's EnsureStockSnapshot) and never touched
     // by ShedOffRoleWeapon again (the Gauldurbow fix). This map is a REAL

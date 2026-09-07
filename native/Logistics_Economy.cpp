@@ -845,7 +845,7 @@ namespace MFO::Logistics {
                     }
                     continue;
                 }
-                if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // #69 own signature gear
+                if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // T#69 own signature gear
                 // CONVERGENCE (marth): a WORN piece that is NOT its slot's best (a strictly
                 // kept-better exists) is a redundant inferior. The engine keeps re-applying
                 // it from the follower's DEFAULT OUTFIT, so unequip-and-wait never wins the

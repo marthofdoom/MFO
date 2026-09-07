@@ -7,7 +7,7 @@ namespace MFO {
     inline constexpr std::uint32_t kSerID       = 'MFO0';
     inline constexpr std::uint32_t kRecFollowers = 'FLWR';
 
-    // #69: a follower's OWN gear (Logistics::g_stockGear), SEPARATE from FLWR
+    // T#69: a follower's OWN gear (Logistics::g_stockGear), SEPARATE from FLWR
     // -- its own record type and its own version, so it can evolve (or fail to
     // parse on a downgrade) without touching the FLWR schema at all.
     inline constexpr std::uint32_t kRecStock    = 'MSTK';
@@ -96,7 +96,7 @@ namespace MFO {
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
     inline constexpr std::uint32_t kProgVersion    = 6;   // v6: §HMS fixed-stat grant (drop target, add streak/remainder/playerHms)
 
-    // #76 force-hold: a FOURTH independent record — the weapons MFO force-equipped
+    // T#76 force-hold: a FOURTH independent record — the weapons MFO force-equipped
     // (prevent-removal) for an active equip gambit. The engine's forceEquip lock
     // serializes into the .ess, but g_forcedWeapon does not, so without this a
     // save made mid-hold reloads with a latent lock and no record to release it
@@ -120,7 +120,7 @@ namespace MFO {
     //        forced combat stance: 0=Auto, 1=Melee, 2=Ranged, 3=Cast),
     //        written right after st.rank. Read ONLY when version >= 4; older
     //        records simply have none (defaults to 0 -- Auto, no override).
-    //   v5 - #78: FollowerState gains mfoEnabled (the per-follower MFO master
+    //   v5 - T#78: FollowerState gains mfoEnabled (the per-follower MFO master
     //        switch), written as one u8 (0/1) right after combatClassOverride.
     //        Read ONLY when version >= 5; a pre-v5 record never wrote it, so it
     //        defaults to true (FollowerState{}) -- every existing follower stays

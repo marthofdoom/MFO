@@ -100,7 +100,7 @@ A slider's `valueOptions.sourceType` decides where its value lives:
   MCM Helper persists the value to `Data/MCM/Settings/<mod>.ini`, and the DLL
   reads that INI. This is a **five-place wiring** (config.json, the defaults
   `settings.ini`, the seed user store, `Config.cpp kMcmDefaults[]`, and the
-  `Config.cpp` parse switch) — all five must agree or the control is dead (#55).
+  `Config.cpp` parse switch) — all five must agree or the control is dead (T#55).
   `tools/audit_mcm.py` (no args) is the gate that enforces it.
 - **`GlobalValue`** (the progression addon's menu): the slider binds directly to
   a `GLOB` record by `sourceForm: "<Plugin>|0xLOCALID"` (e.g.
@@ -203,7 +203,7 @@ to its SEQ set if it's such a quest.
 
 ### `tools/audit_mcm.py` — MCM consistency
 
-- **No args** → the MFO.esp five-place ModSetting audit (the #55 gate): every
+- **No args** → the MFO.esp five-place ModSetting audit (the T#55 gate): every
   `config.json` control must exist in the defaults `settings.ini`, the seed user
   store, `Config.cpp kMcmDefaults[]`, and the `Config.cpp` parse switch, with
   type-aware default agreement across all four.

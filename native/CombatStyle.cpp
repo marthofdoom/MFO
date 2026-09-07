@@ -1,6 +1,6 @@
 #include "PCH.h"
 #include "CombatStyle.h"
-#include "CasterConsent.h"   // the equip gate exempts the latched gambit spell (#75)
+#include "CasterConsent.h"   // the equip gate exempts the latched gambit spell (T#75)
 #include "Config.h"
 #include "Forms.h"
 #include "APMFBridge.h"      // IsOwnedCastActive -- stand the gate down where APMF's
@@ -29,7 +29,7 @@ namespace MFO::CombatStyle {
             RE::CombatController*  cc       = nullptr;        // identity ONLY -- never dereferenced
             RE::TESCombatStyle*    saved    = nullptr;        // engine-derived style this fight
             std::uint32_t          rederives = 0;             // engine re-derived under us, times
-            bool                   equipOrder = false;        // #75: stance came from an EQUIP gambit
+            bool                   equipOrder = false;        // T#75: stance came from an EQUIP gambit
         };
 
         // Written by Want/Clear (worker) AND ApplyTick (combat thread), so a
@@ -40,7 +40,7 @@ namespace MFO::CombatStyle {
         std::unordered_map<RE::FormID, Owned> g_owned;
         std::atomic<std::size_t> g_count{ 0 };
 
-        // #75: how many owned stances are EQUIP ORDERS. Relaxed-atomic mirror
+        // T#75: how many owned stances are EQUIP ORDERS. Relaxed-atomic mirror
         // so the equip-gate thunk's fast-out never takes g_mx while no order
         // is live -- the same shape as g_count / CasterConsent's g_wantCount.
         // Recomputed under g_mx on every mutation; the map is party-sized.
@@ -87,7 +87,7 @@ namespace MFO::CombatStyle {
         // is a handoff, not a re-baseline.
         auto& o = g_owned[a_follower];
         o.stance = a_stance;
-        // #75: only a WEAPON stance can be an equip order, and a later Want
+        // T#75: only a WEAPON stance can be an equip order, and a later Want
         // that is not one (a cast latch flipping the stance to Cast, the class
         // override) RELEASES the hold -- the flag always tracks the most
         // recent real signal, never latches on its own.
@@ -113,7 +113,7 @@ namespace MFO::CombatStyle {
 
     void ReleaseEquipOrder(RE::FormID a_follower) {
         std::lock_guard<std::mutex> lk(g_mx);
-        // #76: ONLY an equip-order stance releases here -- a cast latch (which
+        // T#76: ONLY an equip-order stance releases here -- a cast latch (which
         // Want re-asserts every tick with equipOrder=false), the class override,
         // and the magicka-dry melee fallback all set equipOrder=false and so are
         // left standing. This scopes the release exactly to the equip gambit's
@@ -219,7 +219,7 @@ namespace MFO::CombatStyle {
         }
     }
 
-    // ── THE EQUIP GATE (#75) ─────────────────────────────────────────────────
+    // ── THE EQUIP GATE (T#75) ─────────────────────────────────────────────────
     // See the header for the why: the CSTY swap is a score bias (MFO_MeleeStyle
     // starves magic at 0.1x, it does not forbid it), and the engine re-derives
     // the style mid-combat, so a spell-heavy caster still re-arms a spell over

@@ -17,6 +17,39 @@ with a borrowed one, because the next person will believe it.
 symptom.** A rule with a local scar outranks the same rule with a borrowed
 one, because the next person will believe it.
 
+## CITATION NAMESPACE (2026-09-07) — `#N` is an INVARIANT, `T#N` is a TASK
+
+**94 rules: 80 numbered (`#1`–`#80`, each used exactly once) plus 14 lettered
+sub-rules (`#22a`–`#22j`, `#42a`, `#45a`, `#66a`, `#67a`).** Two things used to
+break a `#N` citation, and both are fixed here:
+
+1. **Numbers 46–49 were used twice** — section G's `**#46**`–`**#49**` and an
+   appended `### 46.`–`### 49.` block. Section G keeps 46–49 (live code cites
+   them); the appended four were renumbered `#77`–`#80` in section H, 2026-09-07.
+2. **A second, undeclared namespace of TASK/issue numbers** (`#17` MEO gems,
+   `#21` economy, `#31` town errands, `#55` five-place MCM wiring, `#65` class
+   override, `#67` the SE cast-crash gate, `#69` stock gear, `#74` progression,
+   `#75` the equip gate, `#76` the equip force-hold, `#78` `mfoEnabled`) collided
+   with real invariants of the same number — `#67` pointed a reader at a REVOKED
+   rule and `#75` at the xEdit subrecord-order rule.
+
+**The convention, from 2026-09-07 on:**
+
+- An invariant is cited `#N`, or `INVARIANTS #N` outside this file. It never
+  carries a prefix.
+- A task / issue / feature number is cited **`T#N`** — in docs and in source
+  comments alike. `T#75` is the equip gate; `#75` is the subrecord-order rule.
+- Task numbers themselves are indexed in `Docs/STATUS.md`, not here.
+
+**Residue, stated honestly:** the `T#` prefix has been applied to `T#55`,
+`T#67`, `T#69`, `T#75`, `T#76` and `T#78` — the six the audit convicted — across
+`native/` (except `Logistics.cpp` and `Packages.cpp`, owned by another branch at
+the time) and the canonical docs. Bare `#N` task citations written before
+2026-09-07 still exist for `#17`, `#21`, `#31`, `#48`, `#59`, `#62`–`#65`, `#74`
+and for the un-numbered "field fix #N" / "Fable audit #N" families. Where an old
+comment's `#N` does not match the rule of that number, read it as a task number
+and re-tag it as `T#N` when you next touch that line.
+
 ---
 
 ## A. Threading and concurrency
@@ -487,43 +520,6 @@ surface of the mechanism.
 this basis — controller support (shipped in MEO, undocumented) and the entire
 Tier-B action vocabulary (one `Actor.psc` read away).
 `INHERITED` — **and the only rule here MFO has already broken.**
-
-### 46. The evaluator's cadence is the evaluator's constant
-
-M5 rode the diagnostics pump's refresh interval. That interval existed to
-decide how often a HUD redraws; when it moved 2000 ms -> 500 ms for the Field
-Kit, it silently quadrupled how fast gambits fire, and the `133 ms` constant in
-`Scheduler.cpp` was dead code the whole time because the caller never arrived
-faster than it. A display constant must never set behaviour. The pump now wakes
-at the response deadline and DIAGNOSTICS subsample it, not the reverse.
-
-*Caught in the M5 pre-CI review, before the first field session.*
-
-### 47. A percentage is over the TRUE maximum, temporary modifiers included
-
-`GetPermanentActorValue` is base + permanent and OMITS the temporary modifier,
-which is exactly where fortify-health from gear and potions lives. Using it as
-"max" makes a buffed follower read full while wounded, so `HP < 40%` fires near
-27% of real maximum. In a heavily-modded order every follower wears that gear.
-One shared helper (`Vocab::Pct`) computes it, and the Field Kit's bars call the
-same helper -- a HUD that disagreed with the evaluator would lie at exactly the
-moment the player consults it to ask why a rule did not fire.
-
-### 48. A repeating failure logs on transition, never per tick
-
-A permanently failing rule is the WINNING rule every tick, because failures
-correctly do not buy suppression. Logging it unconditionally is ~7.5 lines per
-second per follower, each with a synchronous flush on the main thread: a frame
-cost and a flood that drowns the signal #22j protects. Log on change of
-(rule, reason); the board carries the per-tick truth.
-
-### 49. One pump thread, enforced by generation token
-
-`StopPump` clears a flag and `StartPump` sets it. A thread mid-`sleep_for`
-across a fast revert -> load wakes, re-reads a flag that is true again, and
-keeps looping alongside its own replacement -- doubling the tick rate, once per
-fast load, permanently. A boolean cannot express "you specifically should
-stop". An epoch counter can.
 
 ### 50. Every path out of the round-robin advances the cursor
 
@@ -1053,3 +1049,51 @@ touches the hand without ever arming is vetoed by `ConcUnboundedDeny`/
 (all slots) runs beside
 `ConcProxy::Reset()` at `kPreLoadGame`, as a backstop, not a substitute for the
 per-stream Disarm.
+
+
+## H. Field lessons renumbered 2026-09-07 (were #46-#49)
+
+These four were appended as `### 46.`-`### 49.` while section G already held
+`**#46**`-`**#49**`, so the file numbered four rules twice and a bare `#46`
+resolved to two different rules. Section G keeps 46-49 because live code cites
+it (`INVARIANTS #46`/`#47` in `Followers.h`, `Forms.cpp`, `Serialization.cpp`,
+`ProgAllocator.cpp`, `Progression.cpp`, `ProgProbe.cpp`, `Rapport.cpp`,
+`Probe.cpp`); these four had no code citations at all. They are chronologically
+M5-era rules, NOT the newest: the number says identity, not date.
+
+### 77. The evaluator's cadence is the evaluator's constant
+
+M5 rode the diagnostics pump's refresh interval. That interval existed to
+decide how often a HUD redraws; when it moved 2000 ms -> 500 ms for the Field
+Kit, it silently quadrupled how fast gambits fire, and the `133 ms` constant in
+`Scheduler.cpp` was dead code the whole time because the caller never arrived
+faster than it. A display constant must never set behaviour. The pump now wakes
+at the response deadline and DIAGNOSTICS subsample it, not the reverse.
+
+*Caught in the M5 pre-CI review, before the first field session.*
+
+### 78. A percentage is over the TRUE maximum, temporary modifiers included
+
+`GetPermanentActorValue` is base + permanent and OMITS the temporary modifier,
+which is exactly where fortify-health from gear and potions lives. Using it as
+"max" makes a buffed follower read full while wounded, so `HP < 40%` fires near
+27% of real maximum. In a heavily-modded order every follower wears that gear.
+One shared helper (`Vocab::Pct`) computes it, and the Field Kit's bars call the
+same helper -- a HUD that disagreed with the evaluator would lie at exactly the
+moment the player consults it to ask why a rule did not fire.
+
+### 79. A repeating failure logs on transition, never per tick
+
+A permanently failing rule is the WINNING rule every tick, because failures
+correctly do not buy suppression. Logging it unconditionally is ~7.5 lines per
+second per follower, each with a synchronous flush on the main thread: a frame
+cost and a flood that drowns the signal #22j protects. Log on change of
+(rule, reason); the board carries the per-tick truth.
+
+### 80. One pump thread, enforced by generation token
+
+`StopPump` clears a flag and `StartPump` sets it. A thread mid-`sleep_for`
+across a fast revert -> load wakes, re-reads a flag that is true again, and
+keeps looping alongside its own replacement -- doubling the tick rate, once per
+fast load, permanently. A boolean cannot express "you specifically should
+stop". An epoch counter can.

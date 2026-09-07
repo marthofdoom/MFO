@@ -2,7 +2,7 @@
 // no logic change; the direct-delivery streams + apply substrate live in
 // Actuation_Direct.cpp): Fire and its verbs, ForceCast, the bounded
 // concentration stream entry (ConcentrationCast), CastOn, EquipWeapon +
-// the #76 force-hold bookkeeping and its FWPN co-save, NearestAlly and
+// the T#76 force-hold bookkeeping and its FWPN co-save, NearestAlly and
 // ResolveCastTarget. Shared concentration numbers: Actuation_internal.h.
 #include "Actuation_internal.h"
 #include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
@@ -12,7 +12,7 @@
 
 namespace MFO::Actuation {
 
-    // #76: the weapon a follower is being force-held on, keyed by FormID. Written
+    // T#76: the weapon a follower is being force-held on, keyed by FormID. Written
     // by EquipWeapon (the fire) and cleared by ReleaseForcedWeapon/Reconcile/
     // ClearForcedWeapons -- ALL on the job-worker serial tick, the same thread
     // the scheduler already drives Fire on, so no lock (the g_followers
@@ -596,7 +596,7 @@ namespace MFO::Actuation {
         // this (unchanged -- they are not part of the #68 ladder at all).
         Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target,
                        bool a_rangeGate = false) {
-            // #67 SE/VR GUARD (mirrors the CasterConsent hook guards). The mage
+            // T#67 SE/VR GUARD (mirrors the CasterConsent hook guards). The mage
             // cast-control path CRASHES on Skyrim SE 1.5.97: a reporter's crash log
             // pinned an EXCEPTION_ACCESS_VIOLATION to Scheduler::Tick -> Actuation::
             // Fire -> CastOn on the SKSE job worker (byte read off a poisoned
@@ -1436,7 +1436,7 @@ namespace MFO::Actuation {
         // ledger -- acceptable because equip and cast are alternative gambits
         // (first-match-wins fires only one per tick).
         Outcome EquipWeapon(RE::Actor* a_follower, bool a_ranged) {
-            // BOTH HANDS decide "already holding" (#75). The old guard read only
+            // BOTH HANDS decide "already holding" (T#75). The old guard read only
             // the RIGHT hand -- but a caster keeps a SPELL there, so the melee
             // weapon her off-hand still held was invisible to it and a
             // persistently-winning equip rule re-equipped the SAME weapon every
@@ -1490,7 +1490,7 @@ namespace MFO::Actuation {
                                 true };   // transparent -- cannot act, rules below run (§2)
             if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
                 if (Config::g_weaponStyleControl.load()) {
-                    // #76 FORCE-HOLD. forceEquip=true (7th arg, after extraData,
+                    // T#76 FORCE-HOLD. forceEquip=true (7th arg, after extraData,
                     // count, slot, queueEquip) sets the engine's prevent-removal
                     // lock so the follower's OWN combat AI cannot auto-unequip the
                     // weapon to re-arm a spell -- the both-hands caster thrash
@@ -1842,7 +1842,7 @@ namespace MFO::Actuation {
         return { Result::FailedOther, std::format("unknown action '{}'", op), true };
     }
 
-    // ── #76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
+    // ── T#76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     void ReleaseForcedWeapon(RE::Actor* a_follower) {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();
@@ -1945,7 +1945,7 @@ namespace MFO::Actuation {
         g_lastApmfRefusal.clear();
     }
 
-    // #76 force-hold co-save. Persist the force-equip locks so a load clears the
+    // T#76 force-hold co-save. Persist the force-equip locks so a load clears the
     // stale ones the .ess carried (the engine's forceEquip serializes; the map
     // does not). INDEPENDENT record — its own version guard + ResolveFormID/DROP.
     constexpr std::uint32_t kMaxForcedWeapons = 64;   // party is tiny; a generous cap

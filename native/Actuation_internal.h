@@ -17,8 +17,8 @@
 #include "Targeting.h"
 #include "Logistics.h"
 #include "Followers.h"   // #68: g_active -- NearestAlly walks the maintained teammate list
-#include "Serialization.h" // #76: FWPN record ids for the force-hold co-save
-#include "MainThread.h"   // #76: defer the load-time force-lock release to the main thread
+#include "Serialization.h" // T#76: FWPN record ids for the force-hold co-save
+#include "MainThread.h"   // T#76: defer the load-time force-lock release to the main thread
 #include <limits>        // #68: std::numeric_limits for NearestAlly's distance seed
 #include "Packages.h"    // #35: act.flee reuses the retreat package; hybrid forced cast
 #include "Sightline.h"   // LoS gate on the forced cast -- no firebolts into walls

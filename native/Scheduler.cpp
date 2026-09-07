@@ -19,7 +19,7 @@
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
 #include "ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
-#include <unordered_set>   // #78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
+#include <unordered_set>   // T#78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
 
 namespace MFO::Scheduler {
 
@@ -65,10 +65,10 @@ namespace MFO::Scheduler {
         // end), so it re-arms per fight. Wall-clock, not ticks: large parties
         // (already serviced every N x 133 ms) never stack extra delay.
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_combatEnteredAt;
-        // #76: consecutive out-of-combat services, to debounce the force-hold
+        // T#76: consecutive out-of-combat services, to debounce the force-hold
         // release against an IsInCombat flap (SEV-2, Fable 2026-08-17).
         std::unordered_map<RE::FormID, int> g_outOfCombatTicks;
-        // #76 HYSTERESIS (marth: "hysteresis makes it seem human"): the last tick
+        // T#76 HYSTERESIS (marth: "hysteresis makes it seem human"): the last tick
         // the equip clamp was actively TRUE. The clamp releases only after a
         // per-follower dwell of SUSTAINED known-false, so a foe bobbing at the
         // gambit's range threshold does not re-sheathe the follower every tick.
@@ -115,7 +115,7 @@ namespace MFO::Scheduler {
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
 
-        // #78: followers we have already swept on their MFO-OFF transition. The
+        // T#78: followers we have already swept on their MFO-OFF transition. The
         // gate below skips every disabled follower each tick, but the one-time
         // release (Followers::ReleaseHeldState) must fire ONCE per OFF edge, not
         // every tick -- membership here is that latch. Erased the moment a
@@ -137,9 +137,9 @@ namespace MFO::Scheduler {
 
     void ClearTransientState() {
         g_retreatNotes.clear();
-        g_mfoDisabledSwept.clear();   // #78: revert/load re-arms the OFF-edge release
+        g_mfoDisabledSwept.clear();   // T#78: revert/load re-arms the OFF-edge release
         g_outOfCombatTicks.clear();
-        g_meleeClampTrueAt.clear();   // #76 hysteresis dwell
+        g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
@@ -225,13 +225,13 @@ namespace MFO::Scheduler {
             // controller without an equip win. The live CSTY already died with
             // the controller. Idempotent erase-miss when unowned.
             CombatStyle::Clear(id);
-            // #76: and the equip force-hold. Unlike the CSTY (which died with the
+            // T#76: and the equip force-hold. Unlike the CSTY (which died with the
             // per-combat controller), the prevent-removal LOCK lives on the
             // ActorEquipManager, so it must be explicitly force-unequipped or a
             // resurrected follower comes back stuck with the weapon, unable to
             // cast. Idempotent (no record -> no-op).
             Actuation::ReleaseForcedWeapon(f);
-            g_meleeClampTrueAt.erase(id);   // #76 hysteresis dwell dies with the follower
+            g_meleeClampTrueAt.erase(id);   // T#76 hysteresis dwell dies with the follower
             return;
         }
 
@@ -243,7 +243,7 @@ namespace MFO::Scheduler {
         const auto it = g_followers.find(id);
         if (it == g_followers.end()) return;          // no record -> nothing to run
 
-        // #78: THE PER-FOLLOWER MFO MASTER SWITCH. When OFF, MFO leaves this
+        // T#78: THE PER-FOLLOWER MFO MASTER SWITCH. When OFF, MFO leaves this
         // follower completely untouched -- no combat gambits, no logistics /
         // economy, no cast / equip / loot -- so he behaves as a vanilla /
         // engine-default follower. The check is a plain bool read on the worker
@@ -296,7 +296,7 @@ namespace MFO::Scheduler {
             // this drops the stale bookkeeping so the next fight re-baselines.
             // Idempotent out of combat (uncontended erase-miss when unowned).
             CombatStyle::Clear(id);
-            // #76: the equip force-hold dies with the fight too -- combat end is
+            // T#76: the equip force-hold dies with the fight too -- combat end is
             // one of its release points. The prevent-removal LOCK is on the
             // ActorEquipManager (it did NOT die with the controller), so this
             // force-unequips to clear it. DEBOUNCED over 2 consecutive out-of-
@@ -305,7 +305,7 @@ namespace MFO::Scheduler {
             // Idempotent (no record -> no-op).
             if (++g_outOfCombatTicks[id] >= 2) {
                 Actuation::ReleaseForcedWeapon(f);
-                // #76 hysteresis dwell erased on the SAME 2-tick debounce (Fable
+                // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable
                 // SEV-3): an un-debounced erase on a 1-tick IsInCombat flap would
                 // drop the dwell, and the flap-back tick at the gambit's false edge
                 // would then release instantly, skipping the commit window.
@@ -318,7 +318,7 @@ namespace MFO::Scheduler {
             return;
         }
 
-        g_outOfCombatTicks.erase(id);   // #76: back in combat -> re-arm the debounce
+        g_outOfCombatTicks.erase(id);   // T#76: back in combat -> re-arm the debounce
         // POST-BATTLE SHED GATE: stamp "seen fighting" so Logistics only drops
         // off-role weapons once this follower has been stably out of combat for a
         // dwell -- never during a mid-fight IsInCombat() lull. This in-combat
@@ -541,7 +541,7 @@ namespace MFO::Scheduler {
         bool castSeen   = false;   // H3: some cast rule's condition held this tick
         int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
         int  wantStance = 0;       // combat-style ownership: the equip stance that won
-        // #76: the equip gambit's CONDITION held this tick (0=none,1=melee,
+        // T#76: the equip gambit's CONDITION held this tick (0=none,1=melee,
         // 2=ranged). Drives the force-hold / stance-clamp release lifecycle.
         // Superset of wantStance: like castSeen (H3) it is ALSO set when the
         // suppression window stops the scan AT the equip rule -- so the ticks
@@ -578,7 +578,7 @@ namespace MFO::Scheduler {
             // dying follower's rule-1 heal preempts exactly as before.
             if (windowActive && choice.ruleIndex >= firedRuleNow) {
                 if (isCast) castSeen = true;   // its condition held: keep the loan (H3)
-                // #76: same shape for the equip force-hold -- the equip rule's
+                // T#76: same shape for the equip force-hold -- the equip rule's
                 // condition held this tick (that is why Evaluate returned it),
                 // the scan just stopped at it inside its own suppression window.
                 // Keep the force-hold; do NOT read this as "condition false".
@@ -700,7 +700,7 @@ namespace MFO::Scheduler {
         // is ENFORCED over the class override AND the cast latch for the true
         // duration, reverting to the resting override the tick it goes false.
         // Without this, a CASTER-class override (or a Cast/Melee override vs an
-        // equip_ranged order) defeated the #76 clamp for exactly the mages it
+        // equip_ranged order) defeated the T#76 clamp for exactly the mages it
         // was built for -- Lucien: cast override held, dagger<->spell thrash,
         // the equip gate never armed (equipOrder stayed false).
         // Re-find the record (same INVARIANTS #2 discipline as `rec` above:
@@ -709,7 +709,7 @@ namespace MFO::Scheduler {
         // general GetBaseClass primitive (byte-identical; still the same #2 re-find).
         const std::uint8_t classOverride = Followers::GetBaseClass(id);
 
-        // #76: is the equip gambit's condition KNOWN false this tick? Two ways:
+        // T#76: is the equip gambit's condition KNOWN false this tick? Two ways:
         //  (a) the scan ran to COMPLETION without firing (nothing matched) --
         //      classic condKnownFalse; OR
         //  (b) POSITIONAL (Fable SEV-2 2026-08-17): Eval returns the FIRST match
@@ -743,7 +743,7 @@ namespace MFO::Scheduler {
             }
         }
 
-        // #76 HYSTERESIS: gate the RELEASE on MeleeClampDwell(id) of SUSTAINED
+        // T#76 HYSTERESIS: gate the RELEASE on MeleeClampDwell(id) of SUSTAINED
         // known-false so a foe crossing the gambit's range threshold back and
         // forth doesn't re-sheathe the follower every tick (marth: reads human).
         // equipHeld != 0 (clamp true this tick) resets the dwell; a genuinely
@@ -758,7 +758,7 @@ namespace MFO::Scheduler {
         // dwell measures SUSTAINED known-false -- not time-since-last-true. Without
         // the unknown-tick refresh (Fable SEV-3), a higher-rule burst (e.g. a heal)
         // longer than the dwell pre-expires it, and the first known-false tick after
-        // it releases instantly -- the very first-tick twitch #76 exists to remove.
+        // it releases instantly -- the very first-tick twitch T#76 exists to remove.
         // heldOrder is reused by preserve branch 2 below (stable across the block:
         // only worker Want/Release mutate the equipOrder flag, none run between).
         const bool heldOrder = CombatStyle::HoldsEquipOrder(id);
@@ -829,7 +829,7 @@ namespace MFO::Scheduler {
         if (stance != CombatStyle::Stance::None)
             CombatStyle::Want(id, stance, stanceIsEquipOrder);
 
-        // #76: EQUIP FORCE-HOLD / STANCE-CLAMP LIFECYCLE (gambit TRUE -> FALSE).
+        // T#76: EQUIP FORCE-HOLD / STANCE-CLAMP LIFECYCLE (gambit TRUE -> FALSE).
         // While the equip gambit's condition held this tick, `equipHeld` names
         // its category (superset of wantStance: also set inside the equip's own
         // suppression window, so the ticks right after a swap are NOT read as
@@ -847,13 +847,13 @@ namespace MFO::Scheduler {
         //    order: if a cast latch or the #65 override set a stance this tick,
         //    the Want above already flipped equipOrder off, so their hold stands.
         // SEV-2 (Fable 2026-08-17): release only when the equip condition is
-        // KNOWN false -- AND the #76 hysteresis dwell has expired (`equipReleaseOK`
+        // KNOWN false -- AND the T#76 hysteresis dwell has expired (`equipReleaseOK`
         // = equipCondKnownFalse && dwellExpired, computed above the stance block).
         // equipCondKnownFalse is true when the scan ran to completion (nothing
         // matched) OR the equip rule sat ABOVE the stop and did not hold
         // (positional known-false); a scan stopped by a higher rule with the equip
         // rule BELOW it leaves the truth UNKNOWN, and releasing then yanks the
-        // weapon out mid-fight the tick a higher rule fires (the re-oscillation #76
+        // weapon out mid-fight the tick a higher rule fires (the re-oscillation T#76
         // exists to close). Keep the hold on an unknown tick OR within the commit
         // dwell; combat-end / death / dismissal / revert still release
         // unconditionally elsewhere.

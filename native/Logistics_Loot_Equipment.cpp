@@ -28,7 +28,7 @@ namespace MFO::Logistics {
             using WT = RE::WEAPON_TYPE;
 
             // THE ROLE WE LOOT/KEEP is a STABLE signal, never the momentarily
-            // WIELDED weapon (#69, ComputeWeaponRoles above): a gambit-driven
+            // WIELDED weapon (T#69, ComputeWeaponRoles above): a gambit-driven
             // role first, else whatever the follower actually CARRIES. Loot and
             // ShedOffRoleWeapon judge the SAME roles from the SAME helper, so
             // they can no longer disagree about what's "off-role" -- that
@@ -92,12 +92,12 @@ namespace MFO::Logistics {
             ctx.mageAllowVillain  = ctx.useMageApparel && g_svc && IsNecromancerFollower(*g_svc);
 
             // The MELEE class we loot/upgrade, or Other = "no melee role at all".
-            // #69: ComputeWeaponRoles hands a role to ANY carried melee/ranged
+            // T#69: ComputeWeaponRoles hands a role to ANY carried melee/ranged
             // weapon, but a non-battlemage magic user must NOT take the general
             // weapon-upgrade path -- his melee is the ONE-sidearm backup contract
             // (#52/#54: daggers-only, never an armory), not a role, and he loots
             // no bow either. Only an explicit equip-melee/equip-ranged gambit (a
-            // battlemage/spellbow) earns him the real role. Pre-#69 this fell out
+            // battlemage/spellbow) earns him the real role. Pre-T#69 this fell out
             // for free -- the role was WIELD-based and a caster wields spells/
             // staff, never his carried sidearm -- so the stable carries-based
             // signal has to say it explicitly. (Shed still KEEPS his carried gear;
@@ -130,7 +130,7 @@ namespace MFO::Logistics {
             // over the bow, corpse after corpse (the in-AND-out-of-combat half
             // of "Erik switches weapons for no reason": the combat gambit put
             // the bow back, the next corpse knocked it out again). BOW vs
-            // CROSSBOW is decided by ComputeWeaponRoles now (#69, shared with
+            // CROSSBOW is decided by ComputeWeaponRoles now (T#69, shared with
             // the shed side); this pass only baselines the follower's best
             // ALREADY-CARRIED weapon of that kind. Creature/excluded weapons
             // are unusable gear -- they never set a baseline.

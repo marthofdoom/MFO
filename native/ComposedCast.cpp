@@ -28,7 +28,7 @@ namespace MFO::ComposedCast {
         // (built inside APMFBridge::ClaimHealCast) can never drift apart.
         constexpr std::uint32_t kHealBoundsTtlMs = APMFBridge::kHealCastTtlMs;
 
-        // Master gate: AE-only (mirrors CastSelfDirect #67); HEAL-ONLY (offense
+        // Master gate: AE-only (mirrors CastSelfDirect T#67); HEAL-ONLY (offense
         // and buff stay on the byte-identical AI-fired / kInstant paths -- the
         // kIntent_Cast claim is reserved for the case the AI would never choose
         // to cast on its own); needs APMF present (the claim keeps the AI/other

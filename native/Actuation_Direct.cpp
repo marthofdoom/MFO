@@ -824,7 +824,7 @@ namespace MFO::Actuation {
     }
 
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell, std::uint32_t a_stopPct) {
-        // AE-only, mirroring CastOn (the SE crash path #67). Off AE -> transparent.
+        // AE-only, mirroring CastOn (the SE crash path T#67). Off AE -> transparent.
         if (!REL::Module::IsAE())    return SelfCast::Declined;
         if (!a_follower || !a_spell) return SelfCast::Declined;
         const auto id      = a_follower->GetFormID();
@@ -1121,7 +1121,7 @@ namespace MFO::Actuation {
     // the engine apply itself is posted to the MAIN thread (ApplyTargetEffect).
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                               RE::Actor* a_target, std::uint32_t a_stopPct) {
-        if (!REL::Module::IsAE())            return SelfCast::Declined;   // AE-only (#67)
+        if (!REL::Module::IsAE())            return SelfCast::Declined;   // AE-only (T#67)
         if (!a_follower || !a_spell || !a_target) return SelfCast::Declined;
         if (a_target == a_follower)          return SelfCast::Declined;   // self -> CastSelfDirect
         const auto id       = a_follower->GetFormID();
@@ -1368,7 +1368,7 @@ namespace MFO::Actuation {
     // (deferred project-wide). Friendly fire is structurally impossible: the
     // effect is placed on the CHOSEN actor, never launched as a projectile.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold) {
-            // AE-only, mirroring CastOn / CastSelfDirect (the SE crash path #67).
+            // AE-only, mirroring CastOn / CastSelfDirect (the SE crash path T#67).
             if (!REL::Module::IsAE())
                 return { Result::FailedOther,
                          "cast control is AE-only (SE/VR use the follower's own AI casting)", true };

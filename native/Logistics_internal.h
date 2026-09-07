@@ -35,7 +35,7 @@
 #include <functional>     // #62 self-reposting on-load sweep closure
 #include <memory>         // std::shared_ptr for that closure
 #include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
-#include <mutex>          // #69: g_stockMx -- g_stockGear is a real cross-thread map (worker + co-save)
+#include <mutex>          // T#69: g_stockMx -- g_stockGear is a real cross-thread map (worker + co-save)
 
 // <windows.h> is BANNED outside Board.cpp (it #defines GetObject and hijacks
 // BGSDefaultObjectManager::GetObject<T>) -- so declare the one Win32 call we
@@ -229,7 +229,7 @@ namespace MFO::Logistics {
             return false;
         }
 
-        // ── #69: the STABLE weapon-role signal ──────────────────────────────
+        // ── T#69: the STABLE weapon-role signal ──────────────────────────────
         // LootEquipment (what to loot/keep) and ShedOffRoleWeapon (what to hand
         // back) used to each infer "melee" / "ranged" from whatever weapon was
         // MOMENTARILY WIELDED -- but loot and shed run at DIFFERENT times, so
@@ -652,7 +652,7 @@ namespace MFO::Logistics {
         constexpr float kTickSecs = 1.0f;   // ~kLogisticsInterval, the fair-chance accrual step
         constexpr float kDepartRelease = 3.0f;   // player near then gone this long -> release Valuables (P3)
 
-        // ── #69: a follower's OWN gear, snapshotted ONCE at first management ──
+        // ── T#69: a follower's OWN gear, snapshotted ONCE at first management ──
         // ShedOffRoleWeapon's exemption list: the Gauldurbow fix. Part C above
         // makes role inference stable; this is the belt -- whatever a follower
         // already owned the moment MFO started managing them (recruit, or an

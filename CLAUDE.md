@@ -50,8 +50,16 @@ regressions here; the ripple notes are why the map exists.
   re-verify it against current code (line numbers drift). **If the structure
   moved, update MAP.md as part of the change.** A stale map misleads the next
   session.
-- Also consult `Docs/INVARIANTS.md` (49 numbered rules) and `Docs/ARCHITECTURE.md`
-  before non-trivial changes; MAP.md cites both as `#N` / §N.
+- Also consult `Docs/INVARIANTS.md` (**94 rules: 80 numbered `#1`–`#80` plus 14
+  lettered**) before non-trivial changes; MAP.md cites it as `#N`.
+  **`Docs/ARCHITECTURE.md` is HISTORICAL** (banner-marked 2026-09-07; it describes
+  a pre-implementation design and contradicts shipped code on hooks, records,
+  threads and Papyrus) — read `MAP.md` for the real architecture.
+- **CITATION NAMESPACE (2026-09-07): `#N` is an INVARIANT; `T#N` is a TASK/issue
+  number.** They used to share one namespace and five task numbers collided with
+  real rules (`T#67` pointed at a REVOKED invariant, `T#75` at the xEdit
+  subrecord-order rule). See `Docs/INVARIANTS.md` "CITATION NAMESPACE" for the
+  convention and for the pre-2026-09-07 residue that is still bare.
 
 ## SCOPE DISCIPLINE — the git system only catches regressions if nobody skips it
 
@@ -167,14 +175,14 @@ of a given change.
    reader, renaming a serialized opcode string, or renumbering the `Subject` /
    `Stance` / `combatClassOverride` enums corrupts live saves. Keep readers for
    every shipped version forever (#12).
-2. **`ResetAllState` order** (`Serialization.cpp:562`): `StopPump()` first, then
+2. **`ResetAllState` order** (`Serialization.cpp:680`, `StopPump()` at `:686`): `StopPump()` first, then
    clears. Reordering, or mutating save-scoped maps off the drained worker, is UB.
 3. **Alias fills** (`Packages.cpp`): persist into the `.ess`. Never skip/reorder
    `ReleaseAll` (kPreLoadGame / post-load / revert). Evict marker must stay a
    non-actor XMarker (base `0x3B`) or furniture-eject re-breaks. `EvaluatePackage`
    `resetAI` must stay `false`.
 4. **Combat vfunc hooks** (`Targeting`/`CasterConsent`/`CombatStyle`): install-once
-   at `plugin.cpp:293-295`, VR-refused, run on the combat thread. Any
+   at `plugin.cpp:299-301`, VR-refused, run on the combat thread. Any
    `CombatController` member touched there must be `< 0x68` (AE +8 layout bug).
 5. **Frozen external contracts:** `Forms.h` FormIDs (↔ `MFO_GenerateESP.py`);
    `MEO_API.h` (byte-shared with a separate MEO.dll, append-only); `APMF_API.h`

@@ -990,7 +990,7 @@ namespace MFO::Board {
                 continue;
             }
 
-            // #78: the per-follower MFO master switch. A per-FOLLOWER edit like
+            // T#78: the per-follower MFO master switch. A per-FOLLOWER edit like
             // SetClassOverride above (uid/table unused, keyed on c.fid). This
             // ONLY flips the bool. ApplyEdits drains on the SAME task worker that
             // owns g_followers and runs Scheduler::Tick (MAP: the Board.h
@@ -1221,7 +1221,7 @@ namespace MFO::Board {
                 r.rapport        = it->second.rapport;
                 r.rank           = it->second.rank;
                 r.combatClassOverride = it->second.combatClassOverride;
-                r.mfoEnabled     = it->second.mfoEnabled;   // #78
+                r.mfoEnabled     = it->second.mfoEnabled;   // T#78
                 r.combatRules    = static_cast<std::uint8_t>(it->second.combat().size());
                 r.logisticsRules = static_cast<std::uint8_t>(it->second.logistics().size());
                 r.combatSlots    = SlotsForRank(it->second.rank, Table::Combat);
@@ -1296,7 +1296,7 @@ namespace MFO::Board {
             r.rapport        = st.rapport;
             r.rank           = st.rank;
             r.combatClassOverride = st.combatClassOverride;
-            r.mfoEnabled     = st.mfoEnabled;   // #78
+            r.mfoEnabled     = st.mfoEnabled;   // T#78
             r.combatRules    = static_cast<std::uint8_t>(st.combat().size());
             r.logisticsRules = static_cast<std::uint8_t>(st.logistics().size());
             r.combatSlots    = SlotsForRank(st.rank, Table::Combat);
