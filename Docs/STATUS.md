@@ -10,9 +10,22 @@
 
 ## ▶ YOU ARE HERE (2026-09-07)
 
-**Shipped:** `main` = `c95a13f` = **v2.0.1** plus docs. v2.0.1 is a beta prerelease and
-**requires Harbinger (APMF) v0.9.1**. Everything below the "HISTORY" line further down is
-an append-only ledger, kept for the reasoning trail; it is NOT current.
+**Shipped:** `main` = `fb69cda` = **v2.0.1** plus the 2026-09-07 fix wave and docs.
+v2.0.1 is a beta prerelease and **requires Harbinger (APMF) v0.9.1**; the next cut will
+need a newer APMF (see "What is still unmerged" below). Everything under the "HISTORY"
+line further down is an append-only ledger, kept for the reasoning trail; it is NOT
+current.
+
+**Landed on `main` 2026-09-07, after the field session and NOT yet field-tested:**
+`refactor/board-split` (Board.cpp 2577 → 1346, the Field Kit panel moved to
+`native/Board_FieldKit.cpp`; the 2500-line cap holds again),
+`fix/mfo-loot-travel-client` (the QUIET HOLD bypass is now observation-gated on
+`legEngaged`, plus the `TRAVEL PKG ENGAGED/NOT ENGAGED/DISPLACED` and
+`DEADLINE EXPIRED` diagnostics), `fix/mfo-heal-slot-and-proxy` (F1 heal-slot lock →
+`ComposedCast::TryResult::Held`; F4 live proxy re-read), the `APMF_API.h` mirror, and
+`fix/mfo-no-decline-fallback` (`TryResult` widened to four states; an APMF REFUSAL now
+FAILS CLOSED instead of falling through to the legacy hybrid). **All of it is
+code-complete and CI-green; none of it has been in the game yet.**
 
 **Deployed pair that produced the 2026-09-06 field logs** (tag `deployed/mfo-2026-09-06`):
 MFO.dll `843490ac` (MFO `aae6df64`) + APMF.dll `84872e0d` (APMF `69c57bde`). Shared
@@ -39,41 +52,44 @@ Field-test instance: **Tuxbornrc1** on the deck
   carries the CORRECTED pass criterion — the old `[ch.9-redirect]`-within-one-frame test
   is WRONG (it dedups on transition) and must not be used.
 
-### Unmerged branches (nothing here is on `main`)
+### What is still unmerged
 
 | repo | branch | what it fixes | state |
 |---|---|---|---|
-| MFO | `fix/mfo-heal-slot-and-proxy` | F1 heal-slot lock + F4 proxy re-read | code `2d034e6` CI-green; carries review amendments |
-| MFO | `fix/mfo-loot-travel-client` | the nudge-ordering client fix (loot DIAG RC#1) | in progress |
 | MFO | `fix/mfo-doc-coherence` | this doc-coherence pass | in progress |
-| APMF | `fix/apmf-offerpackage-nudge-ordering` | Publish/drain before the nudge | unmerged |
+| APMF | `fix/apmf-offerpackage-nudge-ordering` | Publish/drain BEFORE the 0x49 nudge (loot DIAG RC#1's other half) | unmerged |
 | APMF | `fix/apmf-claim-renew-denyhand-spellsteer` | F2 TTL renew, F3 deny-hand, F5 spell steer, F6 log throttle | unmerged |
 
-**v2.0.2 will require the matching APMF release.** APMF v0.9.1 is what v2.0.1 needs; the
-two APMF branches above are what the F1-F7 plan depends on, and neither has shipped.
-**Do not describe F2 (claim renewal) or F4 (proxy re-read) as done anywhere.**
+**v2.0.2 will require a NEWER APMF release than v0.9.1.** MFO's half of the loot-travel
+nudge ordering is on `main`, but APMF's half is not; and **F2 (claim renewal) has NOT
+shipped on either side** — the 6 s claim still hard-expires unrenewed
+(`ENGINE_NOTES` §0.45). **Do not describe F2 as done anywhere.** F1 and F4 ARE done.
 
 ### Next actions
 
-1. Land F1 + F4 (`fix/mfo-heal-slot-and-proxy`) and the loot-travel client fix.
-2. Land APMF's nudge-ordering + claim-renew branches; cut the matching APMF release.
-3. Deploy the pair together (one deck cycle — see memory `stack-tests-reduce-reboot-churn`)
-   and test against the pass criteria in loot DIAG §6 and heal DIAG §2 (F1..F7 order).
+1. Land APMF's nudge-ordering + claim-renew branches; cut the matching APMF release.
+2. Deploy the pair together (one deck cycle — see memory `stack-tests-reduce-reboot-churn`).
+   The whole 2026-09-07 MFO wave is untested in game, so this is its first field cycle too.
+3. Test against the pass criteria in loot DIAG §6 and heal DIAG §2 (F1..F7 order).
 4. Grep the deck logs for: `[ch.9-nudge] ... curPkg now 0x<pkg>` equal to the claim form;
-   MFO's `onTravelPkg=true` on the first WALK line with no `TRAVEL PKG NOT ENGAGED`;
-   `[cfc]` warnings only where a claim genuinely produced no cast.
+   `TRAVEL PKG ENGAGED` on a dispatch with no `TRAVEL PKG NOT ENGAGED`;
+   `[cfc]` warnings only where a claim genuinely produced no cast; and
+   `[apmf] … APMF REFUSED the … claim` — a refusal is now a fail-closed bug to fix in
+   APMF, never a silent degrade.
 
 ### Still UNKNOWN after 2026-09-06 (do not close these by assumption)
 
 - Heal DIAG RC1: why one concentration start ended within a second is UNKNOWN.
 - Loot DIAG §5 items 1-3 remain open.
-- `Board.cpp` is **2577 lines** on `main`, over the 2500 HARD RULE (it crossed at the
-  overlay-swapchain merge `924f3a9`). A split is its own brief and its own field cycle.
-- `MAP.md` records an **OPEN QUESTION for marth**: the cast path falls through to the
-  legacy hybrid on a REFUSED `ClaimOffenseCast` (`Actuation.cpp:913-916`), which is a
-  decline-fallback, while the APMF showpiece principle says legacy is the APMF-ABSENT
-  degrade only. Either the cast path fails closed (code change) or the principle is
-  narrowed to loot-travel with the exception recorded.
+- The 6 s cast-claim TTL is still not renewed (F2, APMF side, unmerged) — the recurring
+  0.3-1.2 s unclaimed gap is open. `ENGINE_NOTES` §0.45.
+- ~~`Board.cpp` breaches the 2500-line HARD RULE~~ — **RESOLVED 2026-09-07** by
+  `refactor/board-split` (2577 → 1346 + `Board_FieldKit.cpp` 1135). Not field-tested.
+- ~~The cast path's decline-fallback on a REFUSED `ClaimOffenseCast`~~ — **RESOLVED
+  2026-09-07** by `fix/mfo-no-decline-fallback`: a refusal now returns
+  `{FailedSkill, "APMF refused the … claim", transparent}` and logs
+  `[apmf] … APMF REFUSED …`; nothing routes around APMF into the legacy hybrid. The
+  APMF-ABSENT degrade is untouched. Not field-tested.
 
 ---
 

@@ -39,7 +39,7 @@ APMF-absent delivery (`Docs/CAST-DELIVERY.md`; `MAP.md` "known-working DIRECT FO
 main-thread-posted with a hand-computed magicka deduct, and with APMF present the
 follower's OWN AI performs a real animated cast driven by APMF's `CombatMagicCaster`
 seats. `DoCombatSpellApply` is likewise not "removed": it is still dispatched at
-`native/Actuation.cpp:1068` behind the default-OFF `bCommandCast`, kept for the
+`native/Actuation.cpp:1264` behind the default-OFF `bCommandCast`, kept for the
 magicka-deduct measurement. `Projectile::LaunchSpell` remains genuinely refused for a
 self-targeted spell (INVARIANTS `#56`).
 

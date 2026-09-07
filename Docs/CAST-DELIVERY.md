@@ -7,7 +7,7 @@ the dead-ends, see "REJECTED APPROACHES" at the bottom (they exist so nobody ret
 **WHICH PATH IS PRIMARY (corrected 2026-09-07 — read this before the section below).**
 With **APMF present** — the normal case, and what MFO ships as its showpiece — the primary
 cast path is **`ComposedCast::Try` → `APMFBridge::ClaimHealCast` / `ClaimOffenseCast` →
-`RequestCast`** (`native/ComposedCast.cpp:129-191`, `native/APMFBridge.cpp:296-340`). The
+`RequestCast`** (`native/ComposedCast.cpp:198-460`, `native/APMFBridge.cpp:550`/`:764`). The
 follower's OWN AI performs a real animated cast, driven by APMF's four `CombatMagicCaster`
 seats plus `CheckShouldEquip`; neither mod calls an engine cast verb. The `CastSpellImmediate`
 model described in the next section is the **APMF-ABSENT DEGRADE** plus the legacy hybrid —
@@ -86,10 +86,10 @@ real cast and DROPS that cost.
   said both things.** Since the 2026-09-05 pass documented at "a non-heal CONCENTRATION
   stream now reaches the engine-seat path too" (search that phrase), `CastSelfDirect` and
   `CastTargetDirect` call `APMFBridge::ClaimOffenseCast` DIRECTLY with `concentration=true`,
-  so an OOC concentration heal IS an APMF claim path. `Logistics.cpp`'s log label for it still
-  prints "(direct force, bounded)", which is WRONG whenever APMF is present
-  (`Docs/DIAG-2026-09-06-deny-heal-failures.md` RC1); that label is owned by
-  `fix/mfo-loot-travel-client`'s file boundary and is queued, not fixed here.
+  so an OOC concentration heal IS an APMF claim path. *(The log label that made this
+  invisible is FIXED on `main`: `Logistics.cpp:1576` now prints `"APMF claimed"` vs
+  `"direct force, bounded"` conditionally instead of always claiming direct force —
+  `Docs/DIAG-2026-09-06-deny-heal-failures.md` RC1 is closed on that point.)*
 - **Claim lifecycles + scope + degrade.** offense-cast-claim (`kIntent_Cast`, TTL-bounded) = per-cast
   (released crisply on `!castSeen`); combat-target-claim = per-combat (re-pointed via APMF `Repoint`
   on a foe change, kept alive each in-combat tick, released at combat end; APMF's
@@ -848,8 +848,12 @@ keeps working unchanged for this path (it is claim-generic, not heal-specific).
 via `Actuation.cpp`'s `g_castLock`. **HEALS WERE NOT COVERED**, and RC1 of
 `Docs/DIAG-2026-09-06-deny-heal-failures.md` is exactly that hole: two heal rules
 thrash MFO's single heal slot every 1-3 s, each swap releasing the claim before
-the engine's ~2.5 s equip+charge finishes — 1 heal landed in ~15 attempts. The
-heal-side lock (F1) is on the UNMERGED branch `fix/mfo-heal-slot-and-proxy`.)*
+the engine's ~2.5 s equip+charge finishes — 1 heal landed in ~15 attempts.
+**The heal-side lock (F1) has since LANDED on `main`** (`fix/mfo-heal-slot-and-proxy`,
+merged 2026-09-07): `ComposedCast::Try` now reports an incumbent heal as
+`TryResult::Held` instead of silently thrashing it, and `HeldOffBy`
+(`ComposedCast.cpp:499`) names the holder in the log. The hole described here is
+CLOSED in code and awaits its field cycle.)*
 marth: "while a
 spell gambit is actively firing, another spell gambit must not preempt or
 re-point it, even if it would otherwise win the rule evaluation." Before this
@@ -1117,8 +1121,8 @@ which aliases it) the `CastBounds::Arm` ceiling.
 > tick `Try()` succeeds, so it is only the guardrail on a crashed/forgotten
 > claim, never a real cap on a continuous heal". That is FALSE on `main`.**
 > The `CastBounds::Arm` ceiling IS re-armed each successful `Try()`
-> (`native/ComposedCast.cpp:183`). **The APMF CLAIM's `req.ttlMs` is NOT.**
-> `EnsureCastClaimLocked` (`native/APMFBridge.cpp:296-318`) returns early when
+> (`native/ComposedCast.cpp:453`). **The APMF CLAIM's `req.ttlMs` is NOT.**
+> `EnsureCastClaimLocked` (`native/APMFBridge.cpp:306-345`) returns early when
 > the claim is unchanged AND `IsClaimLive` says it still holds — and that early
 > return performs no renew, no `Repoint`, nothing. So the claim runs out its
 > 6 s on APMF's own clock and MFO only re-requests on the tick AFTER expiry.
@@ -1166,17 +1170,25 @@ fact, fired.
 > so a handle that has not been DRAINED yet returns **0** — and MFO fetches the
 > proxy exactly once, synchronously, immediately after `RequestCast`, i.e.
 > always before the drain. The 0 is then cached at two layers:
-> `native/ComposedCast.cpp:114` sets `w.proxy` **only** on the
+> `native/ComposedCast.cpp:114` (pre-fix numbering) set `w.proxy` **only** on the
 > `w.spell != a_spell` branch (a same-spell re-request never updates it), and
 > `:183` passes a hard-coded `0` as `CastBounds::Arm`'s proxy argument. The
 > proxy is also NOT stable across re-mints (APMF's `CastProxy.cpp` 4-slot pool),
 > so a cached value can go stale as well as start wrong.
-> **PENDING, NOT SHIPPED:** F4 (re-read the proxy on the live path; only
-> overwrite when non-zero) is on the UNMERGED MFO branch
-> `fix/mfo-heal-slot-and-proxy`. Read the paragraph below as the INTENT of that
-> branch, not as `main`'s behaviour.
+> **FIXED ON `main` 2026-09-07** (`fix/mfo-heal-slot-and-proxy`, merged): F4 landed.
+> `EnsureCastClaimLocked` now re-reads `GetCastProxy` on the LIVE path
+> (`APMFBridge.cpp:418`, not only once at request time), `ComposedCast.cpp:140`
+> guards the cache with `if (a_proxy != 0) w.proxy = a_proxy;` so a same-spell
+> re-request can still fill in a proxy minted later and a re-mint cannot blank it,
+> and `CastBounds::Arm` is passed the real proxy
+> (`ComposedCast.cpp:453 … APMFBridge::GetHealCastProxy(fid) …`) instead of a
+> hard-coded `0`. **The line numbers quoted in this warning are the PRE-FIX ones**
+> and are kept only to show what the defect looked like. Still true, and still the
+> reason the fix is a workaround rather than a cure: `GetCastProxy` walks the
+> PUBLISHED snapshot, so the proxy is 0 until APMF's next Drain — a call-and-response
+> API should return the proxy rather than make the client poll for it.
 
-Fix (as designed; see the warning above for what `main` actually does):
+Fix (as designed, and as it now behaves on `main`):
 `EnsureCastClaimLocked` fetches `GetCastProxy(c.handle)` right after a
 successful `RequestCast` (ABI < 6 → `0`, same as a claim that minted none) and
 stores it on the `CastClaim` (`native/APMFBridge.cpp`'s `CastClaim::proxy`).

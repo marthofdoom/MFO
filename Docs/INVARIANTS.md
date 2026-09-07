@@ -43,8 +43,10 @@ break a `#N` citation, and both are fixed here:
 
 **Residue, stated honestly:** the `T#` prefix has been applied to `T#55`,
 `T#67`, `T#69`, `T#75`, `T#76` and `T#78` — the six the audit convicted — across
-`native/` (except `Logistics.cpp` and `Packages.cpp`, owned by another branch at
-the time) and the canonical docs. Bare `#N` task citations written before
+`native/` and the canonical docs, **except `Logistics.cpp` and `Packages.cpp`**,
+which were owned by a concurrent branch while this pass ran and were left alone.
+Those two still carry bare task citations (`#69` ×5 and `#78` ×1 in
+`Logistics.cpp`; `#48` in `Packages.cpp`) and are the queued follow-up. Bare `#N` task citations written before
 2026-09-07 still exist for `#17`, `#21`, `#31`, `#48`, `#59`, `#62`–`#65`, `#74`
 and for the un-numbered "field fix #N" / "Fable audit #N" families. Where an old
 comment's `#N` does not match the rule of that number, read it as a task number
@@ -663,7 +665,7 @@ It is the Papyrus twin of `CastSpellImmediate`. An entire mechanism was designed
 and shipped default-ON around a verb whose own documentation, present on disk in
 the installed SKSE scripts, refuted it in one line.
 
-*(Where it stands, 2026-09-07: the verb was NOT removed. `Actuation.cpp:1067-1068`
+*(Where it stands, 2026-09-07: the verb was NOT removed. `Actuation.cpp:1249-1264`
 still dispatches `Papyrus::DoCombatSpellApply` behind `Config::g_commandCast`,
 **default OFF**, kept for the magicka-deduct measurement. So "refuted" means
 "refuted as the animated-cast mechanism it was sold as", not "deleted". Docs that
