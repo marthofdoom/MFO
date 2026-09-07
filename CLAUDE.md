@@ -58,10 +58,18 @@ dispatches and merges it.
    split inside an unrelated task.** A split is its own brief and its own field cycle, because a "pure
    mechanical, CI-identical" move is exactly the change whose breakage only shows up in the field — and
    "CI-identical" is not a claim any TU split may assert, since CI proves it compiles, not that it behaves.
-   (What actually happened, 2026-09-06: a loot task hit the 2500 cap, split 560 lines into a new file, and
-   SAID SO in its commit message — it was obeying the rule. The split then rode into an integration build
-   and onto the deck. **The failure was that nobody read the diffstat, which listed the new file in plain
-   sight.** The worker followed the rules as written; the rules and the review were at fault.)
+   (What actually happened, 2026-09-06 — CORRECTED 2026-09-06 after a transcript audit, because the first
+   version of this note was WRONG in three ways and a rules file teaching a false lesson is worse than no
+   rule. A loot task hit the 2500 cap, split 560 lines into a new file, and SAID SO in its commit message:
+   it was obeying the rule as written. The coordinator then **DID run `git diff --stat` and DID see
+   `Logistics_Loot_Equipment.cpp | 461 +++++`** — and wrote that very filename into the tag message sixteen
+   seconds later. It still shipped. **The gate was not skipped; it RAN IN A MODE WHERE IT COULD NOT FIRE**,
+   because the diffstat was scanned for the things the reviewer already expected (`interrupt|loose|quest`)
+   rather than for ANOMALIES. And the split did NOT break anything: a later line-by-line audit found the
+   contained-item eligibility path **byte-for-byte unchanged**. **THE LESSON IS NOT "read the diffstat" —
+   it is "read it for what you did NOT expect."** A review that only confirms the story you arrived with is
+   not a review. Grep it for `^[ADRC]` and for files outside the brief's stated scope, and paste that output
+   verbatim before merging, tagging or deploying.)
 2. **NEVER GUESS AN API OR A SYMBOL.** Verify it against the real CommonLibSSE-NG header/source or the
    disassembly before using it. "It compiles in my head" is not verification. (Real cost: two CI failures
    in one night on invented symbols — `ExtraDataList::HasQuestObjectAlias`, `EffectSetting::Data::Flag::kHostile`.)
