@@ -1165,14 +1165,15 @@ filed as `"their own spell, not ours"` and the `[cfc] ... claim live N ms with
 NO observed cast` diagnostic fired a false alarm on a claim that had, in
 fact, fired.
 
-> **⚠ THE FIX BELOW DOES NOT ACTUALLY CLOSE THE BLIND SPOT ON `main`
-> (found 2026-09-06, RC4).** `GetCastProxy` walks APMF's **PUBLISHED** snapshot,
-> so a handle that has not been DRAINED yet returns **0** — and MFO fetches the
+> **⚠ AS FIRST WRITTEN, THE FIX BELOW DID NOT CLOSE THE BLIND SPOT
+> (found 2026-09-06, RC4; CLOSED on `main` 2026-09-07 — see the end of this box).**
+> `GetCastProxy` walks APMF's **PUBLISHED** snapshot,
+> so a handle that has not been DRAINED yet returns **0** — and MFO fetched the
 > proxy exactly once, synchronously, immediately after `RequestCast`, i.e.
-> always before the drain. The 0 is then cached at two layers:
+> always before the drain. The 0 was then cached at two layers:
 > `native/ComposedCast.cpp:114` (pre-fix numbering) set `w.proxy` **only** on the
 > `w.spell != a_spell` branch (a same-spell re-request never updates it), and
-> `:183` passes a hard-coded `0` as `CastBounds::Arm`'s proxy argument. The
+> `:183` passed a hard-coded `0` as `CastBounds::Arm`'s proxy argument. The
 > proxy is also NOT stable across re-mints (APMF's `CastProxy.cpp` 4-slot pool),
 > so a cached value can go stale as well as start wrong.
 > **FIXED ON `main` 2026-09-07** (`fix/mfo-heal-slot-and-proxy`, merged): F4 landed.
