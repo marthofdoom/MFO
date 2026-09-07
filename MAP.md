@@ -1693,11 +1693,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   kept as history because the doc-comment trail (`APMFBridge.h`/`.cpp`,
   `Docs/CAST-DELIVERY.md`) still narrates it.
 - **PASS F (ch.8b `kIntent_Cast`/`RequestCast`, feat/mfo-cast-port, 2026-09-05):
-  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`** (`APMFBridge.cpp:519,
-  551,563`, decls `APMFBridge.h:364,373,383`) — the heal-cast facet
-  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`** (`APMFBridge.cpp:487,
-  519,531`, decls `APMFBridge.h:344,353,363`) — the heal-cast facet
-  `ComposedCast` claims, PORTED BACK to the same ch.8b Intent PASS D used (the
+  `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`/`GetHealCastProxy`/
+  `RefreshHealCastClaim`** (`APMFBridge.cpp:750,781,789,796,810`, decls
+  `APMFBridge.h:556,565,575,584,639`; the last two ADDED 2026-09-06 by
+  feat/consume-cast-observability + `fix/mfo-heal-slot-and-proxy` — see the F1
+  hold bullet under `ComposedCast.cpp` below for what they are for) — the
+  heal-cast facet `ComposedCast` claims, PORTED BACK to the same ch.8b Intent PASS D used (the
   Intent was always declared in `APMF_API.h`, just unused by MFO between PASS D
   and PASS F) now that APMF's `feat/ai-cast-seats-impl` answers FIVE engine
   vfunc seats — `CheckShouldEquip` (0x0F), `CheckStartCast` (0x06),
@@ -2172,9 +2173,12 @@ PASS F entry). See `Docs/CAST-DELIVERY.md`'s "COMPOSED FORCED CAST (CFC)" sectio
 for the full history (PASS D's raced hand-drive → PASS E's +ACT drive → PASS F's
 native seats) and ENGINE_NOTES §0.40.
 - `Try(RE::Actor* follower, RE::SpellItem* spell, RE::Actor* target,
-  CasterConsent::SpellKind kind, std::uint32_t stopPct = 0)` (`ComposedCast.cpp:99`)
-  ← `Actuation_Direct.cpp:764` (`CastSelfDirect`) and `:983` (`CastTargetDirect`) —
-  call sites now forward an extra `a_stopPct` (see below); otherwise unchanged,
+  CasterConsent::SpellKind kind, std::uint32_t stopPct = 0)` → **`TryResult`, a
+  TRI-STATE** (`ComposedCast.cpp:198`, enum `ComposedCast.h:75-88`)
+  ← `Actuation_Direct.cpp:810` (in `CastSelfDirect`, `:765`), `:1076` (in
+  `CastTargetDirect`, `:1036`) **and `Actuation.cpp:992`** (`CastOn`'s ally/player
+  branch — a third call site, MISSING from this entry until 2026-09-06).
+  Call sites forward an extra `a_stopPct` (see below);
   replacing the two deleted `Packages::HealAnimFill` call sites historically.
   Gated `Enabled()`: AE-only (`#67` mirror), **HEAL-ONLY** (`kind !=
   SpellKind::Heal` → immediate false — offense/buff never enter this module,
@@ -2185,18 +2189,27 @@ native seats) and ENGINE_NOTES §0.40.
   isConcentration, stopPct)` — spellID/targetID FORWARDED UNCHANGED (a_spell
   always the gambit's own configured spell; MFO does not inspect delivery,
   does not proxy, does not substitute) → refused → `CastBounds::Disarm` +
-  drop the diagnostic watch + log + return false (degrade to kInstant);
-  claimed → `CastBounds::Arm(fid, spellID, 0, kHealBoundsTtlMs)` (aliases
-  `APMFBridge::kHealCastTtlMs`, 6000ms — the SAME window `req.ttlMs` carries)
-  → arms the silent-claim diagnostic watch (`WatchArmed`, below) → return true
-  (caller skips its kInstant apply). `target` is 0 for a self-cast, else
+  drop hand 0's diagnostic watch + log + **`TryResult::Refused`** (caller
+  degrades to kInstant);
+  claimed → `CastBounds::Arm(fid, spellID, APMFBridge::GetHealCastProxy(fid),
+  kHealBoundsTtlMs)` (`ComposedCast.cpp:402`) — the third argument was a literal
+  `0` until F4 (2026-09-06); passing the claim's minted delivery-flip proxy is
+  what lets the MFO-side consent standdown and the watch recognise a cast of the
+  PROXY as this claim firing. `kHealBoundsTtlMs` aliases
+  `APMFBridge::kHealCastTtlMs`, 6000ms — the SAME window `req.ttlMs` carries
+  → arms the silent-claim diagnostic watch (`WatchArmed`, below) →
+  **`TryResult::Claimed`** (caller skips its kInstant apply). The THIRD state,
+  **`TryResult::Held`**, is the F1 incumbent hold — its own bullet below. `target` is 0 for a self-cast, else
   `a_target`'s FormID — now LOAD-BEARING on APMF's side (seats 0x0A/0x0D read
   it directly), was RECORD ONLY under PASS E. A Self-delivery spell gambited
   at a non-self target is still APMF's OWN problem to solve (its own
   delivery-flip proxy, `core/CastProxy.h`) — MFO forwards `proxy=0` and never
   inspects/substitutes, same discipline as PASS E, field-proven under it (deck
   APMF.log: `driving left hand -- spell 0002F3B8 cast-as FF001A7D target
-  0009BCB0`, Fast Healing/Self correctly proxied onto an ally).
+  0009BCB0`, Fast Healing/Self correctly proxied onto an ally). MFO still SENDS
+  APMF `req.proxy = 0` (`APMFBridge.cpp`'s `EnsureCastClaimLocked`) — F4 changed
+  only what MFO READS BACK (`GetCastProxy`) and forwards to `CastBounds::Arm` /
+  `WatchArmed`, never what it asks for.
 - **STOP-PERCENT (`a_stopPct`, NEW this pass).** Forwarded into
   `ClaimHealCast`'s `a_stopPct` → `req.flags`'s `APMF_API::MakeStopPct` bits —
   tells seat 0x07 `CheckStopCast` to end a CONCENTRATION channel at a whole
@@ -2244,6 +2257,64 @@ native seats) and ENGINE_NOTES §0.40.
   — `Try`/`End` and the sink's call site are the SAME serialized AddTask
   job-worker queue (mirrors `Actuation_Direct.cpp`'s unlocked
   `g_selfCast`/`g_targetCast`).
+- **THE F1 INCUMBENT HOLD (`TryResult::Held`) — `fix/mfo-heal-slot-and-proxy`,
+  2026-09-06. NEW: nothing in MAP described this machinery before.** The heal slot
+  is ONE `CastClaim` per follower (`APMFBridge.cpp`'s `Owned::heal`), and two heal
+  rules alternating on it every 1-3s each released the live claim before the
+  engine's ~2.5s equip+charge finished, so no heal ever landed
+  (`Docs/DIAG-2026-09-06-deny-heal-failures.md` RC1). `Try()` (`:334-365`) now
+  HOLDS the incumbent instead: if hand 0's watch holds a DIFFERENT spell, is
+  `!observed`, and `APMFBridge::RefreshHealCastClaim(fid)` says the claim is still
+  live, it logs (`LogHealHoldOff`, `:186`, deduped 2s per (follower, spell)),
+  records `g_lastHold[fid]` (`HoldRecord`, `:173`) and returns `TryResult::Held` —
+  the incumbent keeps its charge window; NOTHING is claimed and NOTHING applied.
+  Pieces:
+  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:810`, decl
+    `APMFBridge.h:639`) — the hold's HEARTBEAT: bumps the same `refreshed` stamp
+    `ClaimHealCast` bumps, because the hold path deliberately never reaches
+    `ClaimHealCast` and `Tick()`'s `FacetExpiry()` sweep would otherwise release
+    the very claim the hold protects (~2.45s at the default `fSuppressWindow`,
+    ~0.77s at a legal 0). Bounded twice: APMF's `IsClaimLive` (ABI ≥ 6; **ABI < 6
+    returns false outright** — an honest degrade to the pre-F1 thrash, never a
+    hold nothing can break, #7), AND the claim-age cap below.
+  - `APMFBridge::kHealHoldNeverObservedMs` (`APMFBridge.h:554`, **3000ms**) vs
+    `CastClaim::created` (`APMFBridge.cpp:103`, stamped once at `:403`) — the
+    NEVER-OBSERVED cap. Sized from the MEASURED engine equip+charge latency
+    (2.3-2.5s, DIAG RC7), **NOT** from `kHealCastTtlMs` (6000ms), which is what it
+    read until the Fable diff review of 2026-09-06 and is 2x too long for the job:
+    every reachable hold is a PRIORITY INVERSION (only a rule that OUTRANKS the
+    incumbent can ever be held — a Claimed incumbent stops the rule scan first),
+    so a dying follower's rule-1 heal must not wait out a rule-5 claim the engine
+    is provably not going to fire. Must stay ABOVE `kSilentWarnAfter`
+    (`ComposedCast.cpp:95`) so the `[cfc]` silent-claim warning precedes the lift —
+    `static_assert`ed at `ComposedCast.cpp:101`.
+  - `HeldOffBy(follower, spell)` (`ComposedCast.cpp:448`, decl
+    `ComposedCast.h:175`) ← `Logistics.cpp:1404` — names WHICH incumbent held a
+    spell off, for the LOG ONLY. Reads `g_lastHold`, which every `Try()` erases at
+    its top (`:207`), so it needs no expiry and MUST NOT grow one (#9).
+  - **Depended-on-by:** `Actuation_Direct.cpp:812`/`:1078` map `Held` →
+    `SelfCast::Held` (`Actuation.h:93`) → `Actuation_Direct.cpp:1370` (`CastAuto`,
+    transparent NoOp) and `Logistics.cpp:1374` (transparent `continue`, log deduped
+    2s); `Actuation.cpp:1018` (`CastOn`) returns a TRANSPARENT NoOp with NO hand
+    lock.
+  - **What breaks if you change this:** (1) folding `Held` back into
+    `Applied`/`true` re-creates the Fable SEV-2 bug — the held-off spell counts as
+    FIRED, buys the `Scheduler.cpp:579-588` suppression window on a no-op,
+    re-stamps `Actuation`'s Task-2 hand lock with the wrong spell, and sets
+    `Logistics`' `acted` so every rule below it is walled off for the tick.
+    (2) Re-aliasing the cap to `kHealCastTtlMs` (or removing it) restores the
+    priority inversion; raising it past the claim TTL removes the hold's last
+    bound, since the incumbent's own rule re-requests a fresh handle — and a fresh
+    `created` — each time APMF auto-expires the old one. (3) The hold check assumes
+    AT MOST ONE heal `Try()` per follower per tick: APMF's
+    `IsClaimLive`/`GetCastProxy` read the PUBLISHED snapshot only, so a same-frame
+    check after a fresh `RequestCast` reads NOT-live and would thrash. Both sites
+    carry that dependency as a comment (`ComposedCast.cpp:340`, and
+    `EnsureCastClaimLocked`'s unchanged fast path in `APMFBridge.cpp`).
+  - `Logistics.cpp:1435` labels an `Applied` heal **"APMF claimed"**, not
+    "delivered": a live claim may sit UNOBSERVED for its whole window. The FIRING
+    signal is separate (`Diagnostics.cpp`'s SpellSink → the watch; `[cfc] ... NO
+    observed cast` when it never fires). Do not word that back to "delivered" (#7).
 - `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`
   + clears ONLY hand 0's watch slot (heal is always LEFT — a concurrent
   offense watch on hand 1 must survive a heal ending; PER-HAND, feat/per-hand-
