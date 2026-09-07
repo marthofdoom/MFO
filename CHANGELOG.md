@@ -1,3 +1,10 @@
+# MFO — Changelog
+
+Versions are immutable once released. Bump `VERSION` for every build that
+reaches the game.
+
+Newest first. Header form is `## vX.Y.Z -- Title`.
+
 ## v2.0.1 -- Followers cast heals for real
 
 - **Your followers now cast healing spells with real animations, at you and at each other.** The follower's own combat AI does the casting, so the charge, the aim and the animation style are the game's own rather than something faked on top. This is the first time a follower has been able to heal anyone but themselves through the game's own casting logic.
@@ -6,15 +13,8 @@
 - **A follower set to loot valuables now grabs gold too**, from a container or a loose pile on the ground. Loot valuables always meant "grab what is worth money" and coin is the plainest case, but it used to need its own separate "loot gold" rule that almost nobody set. If you already use loot valuables your followers will start picking up coin they did not before. "Loot gold" still works on its own if that is all you want.
 - **A loose gem lying out in the open counts as valuables too**, not just ones already sitting in a container or on a corpse.
 - Loose soul gems, jewellery, ingredients and equipment lying out in the open are still not picked up. Generalizing "loose on the ground" to every item type is a later step.
+- **Fixed an MCM toggle that could not be changed.** The legacy cast fallback switch was never registering itself with the menu, so setting it did nothing. (Shipped in v2.0.1 as commit `12962ba`; this bullet was missing from the changelog and is added 2026-09-07.)
 - Requires Harbinger (APMF) v0.9.1 or newer. This is a beta build.
-
-## Unreleased (branch feat/forced-cast, not shipped) -- Composed Forced Cast groundwork
-
-- **Not a release. This branch is not merged, not pushed, and CI has not run on it.** Nothing below changes what you see in game yet.
-- Fixed a real bug where a follower's own forced cast could get wrongly vetoed as "unbounded" at the strictest cast-control setting (Exact), and the cast would hard-abort mid-stream. That bound now recognizes every cast MFO itself is running, not just the one it used to.
-- Laid the groundwork for a real animated forced cast, the kind of thing that would let a heal actually play its cast animation instead of just landing. The one piece that triggers the animation is not built yet, so this does nothing visible for now. Heals still work exactly the way they do today.
-- Retired the old package-based animated-heal experiment. It is replaced by the groundwork above, and it was never shipped, so there is nothing for you to notice.
-- Harbinger's interface bumped a version to carry the new cast-claim contract this groundwork needs.
 
 ## v2.0.0 -- Followers cast for real, and Harbinger arrives
 
@@ -432,6 +432,22 @@
   armor itself. MFO now equips looted armor and weapons on the main thread.
   (This also removes one likely source of graphics/memory crashes.)
 
+## v1.0.37 -- mage follow-up: cast control that sticks, out-of-combat casting that works
+
+- Fix: "Cast control" now actually STOPS a follower's own spells at the level you
+  set. The wrong spell is denied BEFORE it charges (no wrong-spell cast animation),
+  and MFO keeps the gambit spell in their hand so they cast what you told them --
+  no more standing there with the wrong spell in hand doing nothing.
+- Fix: Absorb Health (and other drain/absorb spells) count as OFFENSE, not heals,
+  so they obey "ignore buffs & heals". Spell category is read from the spell's own
+  effects now, not guessed from which caster the engine happened to use.
+- Fix: cast-in-logistics (out-of-combat cast gambits) now fires. Self casts apply
+  the effect directly (the forced-package route can't deliver self-only spells);
+  a foe target uses the animated package. Candlelight/Magelight at night and
+  out-of-combat self-buffs/heals all work now, paced by the spell's own duration.
+- New: "Cast on player" logistics action -- the follower applies a spell's effect
+  to YOU (e.g. Candlelight, so the light follows the player).
+
 ## v1.0.35 -- casters obey "exact", and stop firing into your allies' backs
 
 - Fix: "Cast control: Exact spell" (and the other levels) now actually STOPS a
@@ -449,22 +465,6 @@
   was firing Fireballs into a follower's back in a corridor). A decay valve lets a
   shot through after several holds so a mage in a tight formation can't be muted.
   The gambit's own chosen spell is never held. Watch "... (friendly fire)".
-
-## v1.0.37 -- mage follow-up: cast control that sticks, out-of-combat casting that works
-
-- Fix: "Cast control" now actually STOPS a follower's own spells at the level you
-  set. The wrong spell is denied BEFORE it charges (no wrong-spell cast animation),
-  and MFO keeps the gambit spell in their hand so they cast what you told them --
-  no more standing there with the wrong spell in hand doing nothing.
-- Fix: Absorb Health (and other drain/absorb spells) count as OFFENSE, not heals,
-  so they obey "ignore buffs & heals". Spell category is read from the spell's own
-  effects now, not guessed from which caster the engine happened to use.
-- Fix: cast-in-logistics (out-of-combat cast gambits) now fires. Self casts apply
-  the effect directly (the forced-package route can't deliver self-only spells);
-  a foe target uses the animated package. Candlelight/Magelight at night and
-  out-of-combat self-buffs/heals all work now, paced by the spell's own duration.
-- New: "Cast on player" logistics action -- the follower applies a spell's effect
-  to YOU (e.g. Candlelight, so the light follows the player).
 
 ## v1.0.34 -- the mage update: full cast control, casting out of combat, spell teaching
 
@@ -1127,11 +1127,6 @@ v0.8.40 re-enabled the econ probe; it CTD'd on the main thread near a real vendo
 (Bannered Mare), a null-deref in the probe build path (NOT the Papyrus dispatch --
 Phase 0 proved that). Disabled again so testing can continue. Phase 1 returns once
 the crash is pinned with symbols (CI PDB fix pending) + per-step breadcrumbs.
-
-# MFO — Changelog
-
-Versions are immutable once released. Bump `VERSION` for every build that
-reaches the game.
 
 ## v0.8.40 — econ bridge Phase 1: read-only merchant probe (#21)
 

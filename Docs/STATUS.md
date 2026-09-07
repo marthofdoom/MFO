@@ -6,12 +6,85 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-04 (doc-only touch; see the branch note directly below —
-> the rest of this header below it is UNTOUCHED history and reads OLDER than the
-> shipped v2.0.0 / Harbinger work in CHANGELOG.md; treat the CHANGELOG top entry as
-> the more current source for what actually shipped since this header was last
-> rewritten).
->
+> **Last updated:** 2026-09-07.
+
+## ▶ YOU ARE HERE (2026-09-07)
+
+**Shipped:** `main` = `c95a13f` = **v2.0.1** plus docs. v2.0.1 is a beta prerelease and
+**requires Harbinger (APMF) v0.9.1**. Everything below the "HISTORY" line further down is
+an append-only ledger, kept for the reasoning trail; it is NOT current.
+
+**Deployed pair that produced the 2026-09-06 field logs** (tag `deployed/mfo-2026-09-06`):
+MFO.dll `843490ac` (MFO `aae6df64`) + APMF.dll `84872e0d` (APMF `69c57bde`). Shared
+`APMF_API.h` md5 `f3840a29361ed8f94f8c837cf61d89d0`, verified identical in both repos.
+Field-test instance: **Tuxbornrc1** on the deck
+(`/home/deck/Games/Tuxbornrc1/overwrite/SKSE/Plugins/MFO.log`, plus `APMF.log` beside it).
+
+### The 2026-09-06 field session, in two lines each
+
+- **HEALS — `Docs/DIAG-2026-09-06-deny-heal-failures.md` (RC1-RC7 + a 14-row cast-facet
+  deny audit P1-P14).** Headline: the gates hold, but the actor is HALF-CLAIMED and
+  periodically UNCLAIMED. **1 heal landed in ~15 attempts** (RC1: two heal rules thrash
+  MFO's single heal slot every 1-3 s, each swap releasing the claim before the engine's
+  ~2.5 s equip+charge finishes). A claim covers ONE HAND, so the other hand stays the
+  AI's (RC3), and every claim hard-expires at 6 s unrenewed, leaving a 0.3-1.2 s
+  unclaimed gap every 6 s (RC2). Offense casting through APMF **WORKS** (17 animated
+  fires). Most `[cfc]` offense warnings are FALSE ALARMS (RC7: a 2 s grace against a
+  2.5 s real latency, and it reports watch age not claim age).
+- **LOOT TRAVEL — `Docs/DIAG-2026-09-06-loot-travel.md`.** **0 of 6 dispatches engaged
+  the travel package.** RC#1: both dispatch-time nudges run BEFORE the claim is
+  published, so APMF's 0x49 hook is never consulted in the window that matters. Its §2
+  also settles the 0x49 question properly: the hook redirects **only when nudged with a
+  published claim**; the engine's own cadence contributed ZERO of the 16 wins. Its §6
+  carries the CORRECTED pass criterion — the old `[ch.9-redirect]`-within-one-frame test
+  is WRONG (it dedups on transition) and must not be used.
+
+### Unmerged branches (nothing here is on `main`)
+
+| repo | branch | what it fixes | state |
+|---|---|---|---|
+| MFO | `fix/mfo-heal-slot-and-proxy` | F1 heal-slot lock + F4 proxy re-read | code `2d034e6` CI-green; carries review amendments |
+| MFO | `fix/mfo-loot-travel-client` | the nudge-ordering client fix (loot DIAG RC#1) | in progress |
+| MFO | `fix/mfo-doc-coherence` | this doc-coherence pass | in progress |
+| APMF | `fix/apmf-offerpackage-nudge-ordering` | Publish/drain before the nudge | unmerged |
+| APMF | `fix/apmf-claim-renew-denyhand-spellsteer` | F2 TTL renew, F3 deny-hand, F5 spell steer, F6 log throttle | unmerged |
+
+**v2.0.2 will require the matching APMF release.** APMF v0.9.1 is what v2.0.1 needs; the
+two APMF branches above are what the F1-F7 plan depends on, and neither has shipped.
+**Do not describe F2 (claim renewal) or F4 (proxy re-read) as done anywhere.**
+
+### Next actions
+
+1. Land F1 + F4 (`fix/mfo-heal-slot-and-proxy`) and the loot-travel client fix.
+2. Land APMF's nudge-ordering + claim-renew branches; cut the matching APMF release.
+3. Deploy the pair together (one deck cycle — see memory `stack-tests-reduce-reboot-churn`)
+   and test against the pass criteria in loot DIAG §6 and heal DIAG §2 (F1..F7 order).
+4. Grep the deck logs for: `[ch.9-nudge] ... curPkg now 0x<pkg>` equal to the claim form;
+   MFO's `onTravelPkg=true` on the first WALK line with no `TRAVEL PKG NOT ENGAGED`;
+   `[cfc]` warnings only where a claim genuinely produced no cast.
+
+### Still UNKNOWN after 2026-09-06 (do not close these by assumption)
+
+- Heal DIAG RC1: why one concentration start ended within a second is UNKNOWN.
+- Loot DIAG §5 items 1-3 remain open.
+- `Board.cpp` is **2577 lines** on `main`, over the 2500 HARD RULE (it crossed at the
+  overlay-swapchain merge `924f3a9`). A split is its own brief and its own field cycle.
+- `MAP.md` records an **OPEN QUESTION for marth**: the cast path falls through to the
+  legacy hybrid on a REFUSED `ClaimOffenseCast` (`Actuation.cpp:913-916`), which is a
+  decline-fallback, while the APMF showpiece principle says legacy is the APMF-ABSENT
+  degrade only. Either the cast path fails closed (code change) or the principle is
+  narrowed to loot-travel with the exception recorded.
+
+---
+
+## HISTORY — append-only ledger below this line (NOT current)
+
+*Everything from here to the v2.0.1 section is dated history, kept for the reasoning
+trail. Several `▶ IN FLIGHT` blocks below describe branches that have since SHIPPED or
+been retired: `feat/forced-cast` (its CFC/CastBounds work shipped inside v2.0.1),
+`feat/apmf-cast` (shipped as v2.0.0), `perf/loot-stall-econ-pass` (shipped as v1.1.4).
+Read them as "how we got here", never as "what is in flight".*
+
 > **▶ IN FLIGHT (2026-09-04, branch `feat/forced-cast`, NOT merged, NOT pushed —
 > CI status UNVERIFIED, built locally only): the Composed Forced Cast (CFC)
 > rework.** New executor `ComposedCast::Try` (`native/ComposedCast.{h,cpp}`)
@@ -931,7 +1004,8 @@ what finally makes a gambit's NAMED spell the one that fires. Then narrow the bo
 deny to one hand (the equip slot is per-SET, disasm-confirmed), then the intelligent hand policy
 (dual-cast with both hands free, left hand when a weapon is held).
 
-## Continue in one screen
+## Continue in one screen *(SNAPSHOT — opens at v1.0.41, 2026-08-10. Superseded by
+"YOU ARE HERE" at the top of this file; kept as history.)*
 
 - **v1.0.41 — DEPLOYED TO TUXBORN + TAG PUSHED (`v1.0.41`), field-test PENDING; NO
   GitHub/Nexus release yet.** DLL `746b491a`, CI run 31401481609 green,
@@ -1035,7 +1109,8 @@ deny to one hand (the equip slot is per-SET, disasm-confirmed), then the intelli
   branches were cleaned 2026-08-05). GitHub Releases exist for every tag
   v0.7.0→v1.0.31 (the v0.8.24–v0.8.48 gap and all v1.0.x were backfilled).
 
-## Shipped this cycle (all deployed to deck + GitHub Release)
+## Shipped this cycle *(SNAPSHOT — ends at v1.0.33, August 2026. See CHANGELOG.md for
+everything since.)* (all deployed to deck + GitHub Release)
 
 | Ver | What | Field-test status |
 |---|---|---|
@@ -1048,10 +1123,14 @@ deny to one hand (the equip slot is per-SET, disasm-confirmed), then the intelli
 | v1.0.33 | **Weapon-stance ownership** — equip gambits own the follower's live per-combat `combatStyle` (melee/ranged CSTY 0x833/0x834), applied on the combat thread from the UpdateCombat hook; reverts at battle end, hands off melee↔ranged. Stance follows the winning gambit, not the class (mage-melee / mage-ranged work). Default ON, `bWeaponStyleControl` INI kill-switch. | **pending** — watch `[wstyle] … OWNED/HANDOFF`; does Auri now hold the mace and stop plinking? Does she stop the bow↔mace flicker? |
 | v1.0.32 | **Mage fixes** — forced casts actually fire (FindInput template-map fallback + static uids; CastAt only, cast_self stays barred: QNAM+t6 zero-precedent cell); cooldown-consulted permit (`permitAfter` on the latch — no more 4-casts-in-2.2s bursts); potion-exempt deny (only formType Spell is ever denied); flicker-proof latch (deny holds for the combat's duration; releases only on combat end/dismissal/revert); + INI-gated P1 combat-style probe (`bProbeCastStyle`, default OFF, new CSTY 0x832 `MFO_CastStyle`) | **pending** — watch `[cast] … FORCED … at …` (real animated force, no more `template input 'Spell'` errors), `[consent] … pacing` once per window, no suppressed combat drinking, `DENIED own spell` continuity across flickers; probe (only if armed): `[probe cstyle]` |
 
-## Open field threads (awaiting marth's deck — pull the log, then diagnose)
+## Open field threads *(SNAPSHOT — 2026-08-06. The live field threads are the two
+2026-09-06 DIAGs; see "YOU ARE HERE".)* (awaiting marth's deck — pull the log, then diagnose)
 
 The deck runs the game; MFO.log is at
-`deck@marthdeck:~/Games/custom-modlist/overwrite/SKSE/Plugins/MFO.log`.
+`deck@marthdeck:~/Games/Tuxbornrc1/overwrite/SKSE/Plugins/MFO.log`
+(APMF.log sits beside it). *(Corrected 2026-09-07 -- this said `custom-modlist`,
+which contradicted this same file 100 lines above. Tuxbornrc1 is the field-test
+instance; see memory `deploy-workflow`.)*
 **CAVEAT: MFO.log is TRUNCATED every game launch** (one file, no backup) — the
 session with a bug is gone after a relaunch. To catch something, marth must
 reproduce it in the CURRENT session, then pull the log before the next launch.
@@ -1084,7 +1163,8 @@ just retry ([[deck-sleeps-ssh-timeout]]).
    (Marcurio switching to robes; forced casts firing animated, paced, potions
    flowing, no mid-flicker leak).
 
-## Active priority list (marth 2026-08-09) — tasks #62–#67
+## Active priority list *(SNAPSHOT — 2026-08-09; tasks `T#62`-`T#67`, all since
+resolved or superseded. Not the current priority list.)*
 
 1. **#62 P1 HIGHEST — follower HEAD DISAPPEARS on armor equip. DIAGNOSED + FIXED
    (2026-08-10, in CI as of run 31350989371; field test pending).** ROOT CAUSE is
@@ -1118,7 +1198,8 @@ just retry ([[deck-sleeps-ssh-timeout]]).
 6. **#67 P6 LOWEST — spell casting CTD on SE 1.5.97.** Gate the cast path's
    AE-only/vtable bits so SE degrades gracefully (like the VR guard).
 
-## Open issues (ranked)
+## Open issues (ranked) *(SNAPSHOT — August 2026; item 0 is marked SHIPPED in v1.0.34.
+Live open items are under "YOU ARE HERE" and in the two 2026-09-06 DIAGs.)*
 
 0. **✅ SHIPPED in v1.0.34 (the mage update) — casting overhaul + full cast
    control.** Stage 2 landed as the graduated `iCastControl` SLIDER (not the
