@@ -128,6 +128,23 @@ namespace MFO::ComposedCast {
     bool ExpectingCast(RE::FormID a_follower, RE::FormID a_spell);
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell);
 
+    // ── HELD-OFF query (Fable amendment (b), 2026-09-06) ──────────────────────
+    // Try()'s incumbent lock can return TRUE (the caller treats that as Applied
+    // and skips its own kInstant apply) WITHOUT this spell having been cast at
+    // all: a different spell's claim already owns the follower's single heal
+    // slot and is still live, so the newcomer is held off rather than allowed to
+    // release/re-request it mid-charge. Callers that LOG the outcome must be
+    // able to tell that apart from a delivery -- Logistics.cpp's OOC
+    // concentration line derived "APMF delivered" from bare claim liveness and
+    // therefore asserted delivery of the WRONG spell in exactly this state.
+    // Returns the INCUMBENT spell that held a_spell off on a_follower's most
+    // recent Try(), or 0 if that Try was not a hold of a_spell (delivered,
+    // refused, non-heal, or no Try since). Cleared at the top of every Try(), so
+    // it is always "the last Try's outcome" and never a timed-out guess; read it
+    // immediately after the CastTargetDirect/CastSelfDirect call it belongs to.
+    // Worker-serial, no lock (see the THREADING note above).
+    RE::FormID HeldOffBy(RE::FormID a_follower, RE::FormID a_spell);
+
     // ── generic claim-observed diagnostic (feat/offense-cast-seats, 2026-09-05;
     // PER-HAND feat/per-hand-cast-slots, 2026-09-06) ────────────────────────────
     // Arm/clear the SAME "[cfc]-style, claim live N ms with NO observed cast"

@@ -7,6 +7,7 @@
 #include "Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
 #include "APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
+#include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -1365,17 +1366,32 @@ namespace MFO::Logistics {
                         // function, OR ComposedCast::Try's APMF kIntent_Cast claim
                         // (the heal-only engine-seat path, tried FIRST inside
                         // CastTargetDirect) -- the old unconditional "(direct
-                        // force, bounded)" label was wrong for the latter. A live
-                        // heal-cast claim right after a Heal-kind Applied can only
-                        // exist here because that claim path just delivered (any
-                        // refused/disabled claim leaves it invalid, and only
-                        // Heal-kind spells ever reach ComposedCast::Try at all).
-                        const bool apmfDelivered =
-                            CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal &&
-                            APMFBridge::IsHealCastActive(id);
-                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} ({})",
-                                     id, sp->GetFormID(), tgt->GetFormID(),
-                                     apmfDelivered ? "APMF delivered" : "direct force, bounded");
+                        // force, bounded)" label was wrong for the latter.
+                        //
+                        // THIRD CASE, and it is the one that LIED (Fable amendment
+                        // (b), 2026-09-06): Try() also returns true -- so Applied --
+                        // when it HELD this spell off because a DIFFERENT spell's
+                        // claim already owns the follower's single heal slot. Bare
+                        // claim liveness is true in that state too (it is the
+                        // INCUMBENT's claim), so this line printed "APMF delivered"
+                        // for a spell that was never delivered, and the next deck
+                        // log would have been read through that false record (#7 --
+                        // the mask was in the log). Ask ComposedCast which outcome
+                        // its last Try actually took instead.
+                        const bool isHeal =
+                            CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal;
+                        const RE::FormID heldBy =
+                            isHeal ? ComposedCast::HeldOffBy(id, sp->GetFormID()) : 0;
+                        if (heldBy != 0)
+                            spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
+                                         "(HELD OFF -- incumbent heal {:08X} owns the claim; this "
+                                         "spell was NOT delivered)",
+                                         id, sp->GetFormID(), tgt->GetFormID(), heldBy);
+                        else
+                            spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} ({})",
+                                         id, sp->GetFormID(), tgt->GetFormID(),
+                                         (isHeal && APMFBridge::IsHealCastActive(id))
+                                             ? "APMF delivered" : "direct force, bounded");
                         // acted = true (NOT just `break`): this `break` only exits the
                         // INNER start-scan; the OUTER "for (pass < 2 && !acted)" loot-
                         // ordering wrapper above (marth's dibs-tier pass 0/1 split) does

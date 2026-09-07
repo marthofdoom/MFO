@@ -116,7 +116,18 @@ namespace MFO::ComposedCast {
             // APMF mints it lazily during its own Drain, so the very first
             // WatchArmed call for a fresh claim can still see proxy==0. Learn
             // it here instead of caching that 0 forever.
-            if (w.proxy == 0 && a_proxy != 0) w.proxy = a_proxy;
+            //
+            // ADOPT ANY NON-ZERO PROXY, NOT ONLY A FIRST ONE (Fable amendment
+            // (c), 2026-09-06): the proxy FormID is NOT contractually stable
+            // across re-mints. APMF's pool is four slots, each Freed on release
+            // (APMF core/CastProxy.cpp: Acquire re-uses the slot this owner
+            // already holds, but otherwise takes whatever slot is FREE), so a
+            // same-spell RE-request after another owner took the old slot mints
+            // this claim onto a DIFFERENT form. Keeping the stale first proxy
+            // made ExpectingCast miss the new one and brought the false
+            // "not ours" + [cfc] alarm straight back. a_proxy == 0 still keeps
+            // whatever we already learned (it only means "not minted YET").
+            if (a_proxy != 0) w.proxy = a_proxy;
             if (w.observed) return;   // already confirmed firing this claim -- stay quiet
             const auto now = Clock::now();
             if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
@@ -129,10 +140,59 @@ namespace MFO::ComposedCast {
                          a_spell, a_slot == 0 ? "left" : "right");
             w.lastWarn = now;
         }
+
+        // ── the HOLD record + the HOLD log (Fable amendment (b), 2026-09-06) ────
+        // Try()'s F1 incumbent guard below returns Applied WITHOUT delivering the
+        // spell it was asked for -- the INCUMBENT's claim is what stands. Two
+        // things follow, and the first cut of that guard did neither:
+        //   1. The hold MUST be visible. Its offense twin logs every hold it
+        //      takes (Actuation.cpp's LogCastLockHold, [eval]); a silent hold is
+        //      a mechanism the field cannot see at all.
+        //   2. The caller must be able to tell a HOLD from a DELIVERY, because
+        //      Logistics.cpp's OOC-concentration label read "a live heal claim
+        //      exists on this follower" as "this spell was delivered by APMF" --
+        //      true for a claim we just made, a LIE for a spell we just held OFF
+        //      (the live claim it sees is the incumbent's, a DIFFERENT spell).
+        //      Principle #7: that mask lived in the LOG, and the next deck log
+        //      would have been diagnosed through the false record. See
+        //      HeldOffBy() for how the label is derived from this instead.
+        // Worker-serial, no lock -- the SAME discipline as g_watch above (Try()
+        // and Logistics' read of it are the same serialized AddTask job worker).
+        struct HoldRecord {
+            RE::FormID heldSpell = 0;   // the spell that was held OFF (NOT delivered)
+            RE::FormID incumbent = 0;   // the live claim that held it off
+        };
+        std::unordered_map<RE::FormID, HoldRecord> g_lastHold;
+
+        // Rate-limit: at most one line per (follower, held-off spell) per 2 s --
+        // the SAME dedup shape as Actuation.cpp's LogCastLockHold, so a rule held
+        // off on every round-robin lap cannot spam the log at scan rate.
+        constexpr auto kHoldLogEvery = std::chrono::milliseconds(2000);
+        struct HoldLog { RE::FormID spell = 0; Clock::time_point when{}; };
+        std::unordered_map<RE::FormID, HoldLog> g_lastHoldLog;
+
+        void LogHealHoldOff(RE::FormID a_fid, RE::FormID a_wanted, RE::FormID a_incumbent) {
+            const auto now = Clock::now();
+            auto& entry = g_lastHoldLog[a_fid];
+            if (entry.spell == a_wanted && now - entry.when < kHoldLogEvery) return;
+            entry.spell = a_wanted; entry.when = now;
+            spdlog::info("[cfc] {:08X} heal-cast HELD OFF -- spell {:08X} wants the heal slot, "
+                         "incumbent spell {:08X} still holds a live claim there (not observed "
+                         "firing yet); the held-off spell was NOT delivered",
+                         a_fid, a_wanted, a_incumbent);
+        }
     }
 
     bool Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
              CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct) {
+        // (b) Every Try() supersedes any earlier hold record for this follower:
+        // the record means "the outcome of the MOST RECENT Try on this follower
+        // was a hold", and Logistics reads it immediately after CastTargetDirect
+        // returns, on this SAME serialized worker -- so it needs no expiry, and
+        // must not have one (#9: a stale-by-clock record is exactly how a wrong
+        // label gets printed). Cleared BEFORE the Enabled() gate so a toggle
+        // flipped off mid-session cannot leave a record behind either.
+        if (a_follower) g_lastHold.erase(a_follower->GetFormID());
         if (!Enabled(a_follower, a_spell, a_kind)) return false;   // -> caller's kInstant apply
 
         const RE::FormID fid       = a_follower->GetFormID();
@@ -159,17 +219,48 @@ namespace MFO::ComposedCast {
         // kSelf heal) each Release the live claim and RequestCast fresh before
         // the engine's ~2.5 s equip+charge ever completes -- no heal lands.
         // Mirrors the offense per-hand cast lock (Actuation.cpp's HandFree/
-        // CastLockLive): if a DIFFERENT spell already holds this slot, hasn't
-        // been observed firing yet, and its claim is still live and within its
-        // own TTL, HOLD the incumbent instead of swapping it out -- treat this
-        // Try() as Applied (the caller skips its own kInstant apply) without
-        // touching the claim at all, so the incumbent gets its full charge
-        // window instead of being thrashed away mid-flight.
+        // CastLockLive): if a DIFFERENT spell already holds this slot and has
+        // not been observed firing yet, HOLD the incumbent instead of swapping
+        // it out -- treat this Try() as Applied (the caller skips its own
+        // kInstant apply) without releasing/re-requesting anything, so the
+        // incumbent gets its charge window instead of being thrashed mid-flight.
+        //
+        // SIZED FROM CLAIM LIVENESS ALONE (Fable amendment (a), 2026-09-06).
+        // The first cut of this guard ALSO required `now - incumbent.since <
+        // kHealCastTtlMs`, and that clause was wrong twice over:
+        //  * `since` is WATCH-ARM time, not claim age -- WatchArmed resets it
+        //    only on a spell CHANGE (RC7: "watch age, not claim age"). A claim
+        //    that goes unobserved, auto-expires at APMF's 6 s TTL and is
+        //    re-requested FRESH by its own rule keeps the OLD `since`, so at
+        //    t=6.5 s the guard measured 6500 ms against a 500 ms-old claim,
+        //    dropped the lock, and the thrash returned permanently for that
+        //    watch. With renewable claims (APMF F2) it is worse still: a LIVE
+        //    renewed claim would lose its lock at 6 s of watch age with no
+        //    re-request at all.
+        //  * The offense lock this mirrors has NO flat age cap on a live claim
+        //    either -- CastLockLive checks claim liveness FIRST and uses a
+        //    staleness window only for the UNCLAIMED direct-force fallback.
+        // Liveness alone is still BOUNDED, and by the two clocks that actually
+        // describe the claim: APMF auto-expires it at its own TTL (asked
+        // directly via RefreshHealCastClaim -> IsClaimLive, ABI >= 6), and MFO's
+        // own Tick() sweep collects any claim that stops being refreshed.
+        // Which is why RefreshHealCastClaim also HEARTBEATS the incumbent's
+        // `refreshed` stamp: the hold path deliberately never reaches
+        // ClaimHealCast, so without it the round-robin FacetExpiry() sweep
+        // released the held claim after ~2.45 s at the default fSuppressWindow
+        // (and after ~0.77 s at a legal fSuppressWindow=0) -- the lock cutting
+        // the very claim it exists to protect. It is the same heartbeat APMF's
+        // own renewing Repoint performs, not a new lifetime.
         if (auto it = g_watch.find(fid); it != g_watch.end()) {
             const auto& incumbent = it->second.hand[0];
+            // RefreshHealCastClaim LAST: it takes APMFBridge's mutex and has the
+            // heartbeat side effect, so short-circuit keeps both off every tick
+            // that is not actually a hold.
             if (incumbent.spell != 0 && incumbent.spell != spellID && !incumbent.observed &&
-                APMFBridge::IsHealCastActive(fid) &&
-                Clock::now() - incumbent.since < std::chrono::milliseconds(APMFBridge::kHealCastTtlMs)) {
+                APMFBridge::RefreshHealCastClaim(fid)) {
+                // (b) A hold is never silent, and never labelled as a delivery.
+                LogHealHoldOff(fid, spellID, incumbent.spell);
+                g_lastHold[fid] = HoldRecord{ spellID, incumbent.spell };
                 return true;   // hold the incumbent -- caller treats as Applied, no kInstant apply
             }
         }
@@ -250,6 +341,16 @@ namespace MFO::ComposedCast {
                (h1.spell == a_spell || (h1.proxy != 0 && h1.proxy == a_spell));
     }
 
+    // (b) The label signal: did the LAST Try() on a_follower hold a_spell OFF,
+    // and if so, which incumbent spell held it? 0 = no (delivered, refused, or
+    // never a heal). See the HoldRecord comment above for why this exists and
+    // why it needs no expiry. Worker-serial, same as every other query here.
+    RE::FormID HeldOffBy(RE::FormID a_follower, RE::FormID a_spell) {
+        const auto it = g_lastHold.find(a_follower);
+        if (it == g_lastHold.end() || it->second.heldSpell != a_spell) return 0;
+        return it->second.incumbent;
+    }
+
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell) {
         auto it = g_watch.find(a_follower);
         if (it == g_watch.end()) return;
@@ -268,13 +369,16 @@ namespace MFO::ComposedCast {
     // all anymore" (a full teardown, e.g. dismissal or Scheduler's !castSeen).
     // A caller releasing only ONE hand's claim uses its own targeted clear
     // instead (End() above, for the heal's always-LEFT slot).
-    void ClearWatch(RE::FormID a_follower) { g_watch.erase(a_follower); }
+    void ClearWatch(RE::FormID a_follower) { g_watch.erase(a_follower); g_lastHold.erase(a_follower); }
 
     void Reset() {
         // APMFBridge::ClearTransientState (kPreLoadGame) drops the claim;
         // CastBounds::Reset drops the bound. This shim's own state is just the
-        // silent-cast diagnostic watch.
+        // silent-cast diagnostic watch (plus (b)'s hold record and its log
+        // rate-limit dedup, both pure transient bookkeeping like the watch).
         g_watch.clear();
+        g_lastHold.clear();
+        g_lastHoldLog.clear();
     }
 
 }

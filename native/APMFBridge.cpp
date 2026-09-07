@@ -765,6 +765,25 @@ namespace MFO::APMFBridge {
         return it->second.heal.proxy;
     }
 
+    // See the header for the full rationale (why the stamp, and why holding on
+    // liveness alone is still bounded). Deliberately does NOT release a dead
+    // claim: the SAME shape EnsureCastClaimLocked uses for a handle APMF has
+    // already auto-expired -- stop treating it as live and let the normal path
+    // (here: Tick()'s sweep, which now sees a stamp that stopped moving) clear
+    // it, rather than issuing a Release against a handle APMF no longer knows.
+    bool RefreshHealCastClaim(RE::FormID a_follower) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.heal.handle == APMF_API::kInvalidHandle) return false;
+        if (api->abiVersion < 6) return true;   // cannot ask -- report the handle, do NOT heartbeat
+        if (!reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(it->second.heal.handle))
+            return false;                       // dead APMF-side: no heartbeat, Tick() sweeps it
+        it->second.heal.refreshed = std::chrono::steady_clock::now();
+        return true;
+    }
+
     void Tick() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api) return;

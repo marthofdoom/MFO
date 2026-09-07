@@ -551,6 +551,29 @@ namespace MFO::APMFBridge {
     // spell, as the claimed heal actually firing.
     RE::FormID GetHealCastProxy(RE::FormID a_follower);
 
+    // Worker-safe (the SAME g_mx as every accessor above). HEARTBEAT for a
+    // heal-cast claim a client is deliberately HOLDING instead of re-requesting
+    // (ComposedCast::Try's incumbent lock, Fable amendment (a) 2026-09-06).
+    // Returns whether a_follower's heal claim is still genuinely live, and when
+    // it is, bumps the SAME `refreshed` stamp ClaimHealCast bumps.
+    //
+    // WHY THE STAMP. The hold path never reaches ClaimHealCast by design (it
+    // must not release/re-request the incumbent), so without a heartbeat the
+    // round-robin FacetExpiry() sweep in Tick() released the very claim the lock
+    // was protecting -- after ~2.45s at the default fSuppressWindow, and after
+    // ~0.77s at a legal fSuppressWindow=0, i.e. the lock did nothing at all at a
+    // small suppression window. This is a refresh of an EXISTING claim, exactly
+    // what one more ClaimHealCast lap would have done, never a new lifetime.
+    //
+    // WHY IT IS STILL BOUNDED. Liveness is asked of APMF itself on ABI >= 6
+    // (IsClaimLive -- APMF auto-expires a claim at its own TTL with no notice,
+    // so a stored handle is not proof), and a claim that is NOT live is never
+    // heartbeaten, so it goes stale and Tick() collects it: the hold lifts.
+    // On ABI < 6 there is no way to ask; this then reports the stored handle and
+    // does NOT heartbeat, leaving the hold bounded by the sweep exactly as it
+    // was before this existed (a documented degrade, not a mask -- #7).
+    bool RefreshHealCastClaim(RE::FormID a_follower);
+
     // Release every claim and clear the map. kPreLoadGame / revert, AFTER the pump is
     // drained (so no worker tick races the map).
     void ClearTransientState();
