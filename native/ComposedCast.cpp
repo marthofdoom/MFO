@@ -93,6 +93,16 @@ namespace MFO::ComposedCast {
         // kHealBoundsTtlMs's 6s ceiling so a genuinely dead claim is flagged
         // long before it would auto-expire on its own anyway.
         constexpr auto kSilentWarnAfter = std::chrono::milliseconds(2000);
+        // The F1 hold's never-observed cap MUST sit above this warning (Fable
+        // diff review, 2026-09-06): the cap lifting a hold is the interesting
+        // event, and the "[cfc] ... NO observed cast" line is the evidence that
+        // explains it, so the warning has to reach the log FIRST. Compile-time,
+        // because the two constants live in different files and drift silently.
+        static_assert(std::chrono::milliseconds(
+                          static_cast<long long>(APMFBridge::kHealHoldNeverObservedMs)) >
+                      kSilentWarnAfter,
+                      "the never-observed hold cap must outlast kSilentWarnAfter, so the "
+                      "silent-claim warning always precedes the lift in the log");
         // Re-warn at most this often per still-silent claim -- a claim that
         // never fires must not spam the log every Try() tick.
         constexpr auto kSilentWarnEvery = std::chrono::milliseconds(5000);
@@ -242,32 +252,71 @@ namespace MFO::ComposedCast {
         // against a 500 ms-old claim, dropped the lock, and the thrash returned
         // permanently for that watch. That clause had to go, and it did.
         //
-        // (SEV-1) BUT REMOVING IT LEFT THE HOLD WITH NO BOUND OF ITS OWN, and
-        // the note here then argued -- BACKWARDS -- that a renewable claim (APMF
-        // F2) losing its lock without a re-request was a DEFECT to avoid. It is
-        // not: an expiring lock is the safety property, and F2's renewal is
-        // precisely what takes the last bound away. Trace every exit this hold
-        // has: `observed` needs the engine to REALLY cast; an incumbent CHANGE
-        // needs a successful ClaimHealCast this hold itself prevents (and End()
-        // has no caller anywhere in native/); Tick()'s FacetExpiry sweep cannot
-        // fire because RefreshHealCastClaim heartbeats `refreshed` on every held
-        // tick and the incumbent's own rule bumps it via ClaimHealCast. That
-        // leaves APMF's TTL as the ONLY bound -- and F2 renews it. A heal the
-        // engine never casts (target out of LoS, wrong hand, any §3 deny hole)
-        // keeps its own condition true, keeps winning laps, keeps renewing, and
-        // holds the slot forever: the other rule starves, the kInstant fallback
-        // is never reached, and nobody ever heals.
+        // (SEV-1) BUT REMOVING IT LEFT THE HOLD WITH NO BOUND OF ITS OWN. The
+        // note that stood here then justified the replacement bound with a
+        // MECHANISM THAT DOES NOT EXIST IN EITHER SHIPPED BINARY, and stated the
+        // wrong worst case for lifting it. Both corrections are written out here
+        // (Fable diff review, 2026-09-06) rather than quietly deleted, because a
+        // comment that teaches a false mechanism is worse than no comment.
         //
-        // So the clock is BACK, on the basis it should always have had: CLAIM
-        // AGE, not watch age. RefreshHealCastClaim refuses to heartbeat once the
-        // incumbent handle is kHealCastTtlMs old with still no observed cast
-        // (APMFBridge's CastClaim::created, stamped once at RequestCast and moved
-        // by nothing -- immune to F2's renewal, which extends the claim on APMF's
-        // side without re-requesting a handle here). The hold then lifts, this
-        // Try() falls through to its own ClaimHealCast, and the newcomer's fresh
-        // handle gets a fresh window. Worst case the two rules alternate on a 6 s
-        // beat -- slow, visible, and survivable -- instead of deadlocking. An
-        // OBSERVED claim is never capped: the `!incumbent.observed` term below
+        // NOT TRUE: THE F2-RENEWAL DEADLOCK. The old note argued APMF's renewing
+        // Repoint (F2) could keep a claim live forever and so take the hold's
+        // last bound away. It cannot, here: MFO never calls Repoint on a
+        // kIntent_Cast claim at all -- its ONLY Repoints are the non-cast
+        // EnsureClaimLocked/EnsureIvalClaimLocked (APMFBridge.cpp:238/:265), and
+        // RequestCast has no in-place re-point, so a CHANGE releases and
+        // re-requests -- and APMF **main**'s ApplyRepoint (core/ControlMap.cpp)
+        // writes `self->param` and never touches `expiresMs`. F2 lives on an
+        // unmerged APMF branch.
+        //
+        // WHAT THE BOUND IS ACTUALLY FOR, and it is a narrower job it really does
+        // do: stopping the HOLD'S HEARTBEAT from outliving the incumbent RULE's
+        // interest. Trace every exit this hold has: `observed` needs the engine to
+        // REALLY cast; an incumbent CHANGE needs a successful ClaimHealCast this
+        // hold itself prevents (and End() has no caller anywhere in native/);
+        // Tick()'s FacetExpiry sweep cannot fire because RefreshHealCastClaim
+        // heartbeats `refreshed` on every held tick, and the incumbent's own rule
+        // bumps it via ClaimHealCast for as long as its condition holds --
+        // re-requesting a fresh handle each time APMF expires the old one. A heal
+        // the engine never casts (target out of LoS, wrong hand, any §3 deny
+        // hole) can therefore keep re-arming while the held rule starves.
+        //
+        // So the clock is CLAIM AGE, not watch age: RefreshHealCastClaim refuses
+        // to heartbeat once the incumbent handle is
+        // APMFBridge::kHealHoldNeverObservedMs old with still no observed cast
+        // (APMFBridge's CastClaim::created, stamped once at RequestCast). The
+        // hold then lifts, this Try() falls through to its own ClaimHealCast, and
+        // the newcomer's fresh handle gets a fresh window.
+        //
+        // `created` IS MOVED on one path: the incumbent's own rule re-requesting
+        // after an APMF auto-expiry mints a new handle with a new stamp
+        // (APMFBridge.cpp:339-342 -> :388). That is harmless HERE, and ONLY here,
+        // because that path cannot run underneath a live hold -- the incumbent's
+        // re-request returns Claimed, which stops the rule scan before any held
+        // rule's Try() is reached (see REACHABILITY below). It is not the blanket
+        // immunity the old note claimed.
+        //
+        // REACHABILITY -- EVERY HELD RULE OUTRANKS ITS INCUMBENT, so every
+        // reachable hold is a PRIORITY INVERSION. A newcomer's Try() only runs if
+        // the rule scan reaches it, and the incumbent's own Claimed outcome
+        // always stops the scan first: CastAuto -> Fired, and Scheduler.cpp:579-
+        // 588 stops the scan COLD at any index >= the fired rule; CastOn -> an
+        // OPAQUE NoOp (Actuation.cpp:1005); Logistics -> `acted = true; break`
+        // (Logistics.cpp:1447). So the only rule that can ever be held is one
+        // ABOVE the incumbent in the table (or one that runs after the
+        // incumbent's condition went false). That is why the cap is sized from
+        // the ENGINE and not from the claim: at the old kHealCastTtlMs a rule-1
+        // `HP<30% -> Fast Healing (self)` waited out the remaining ~3 s of a
+        // rule-5 claim the engine was provably never going to fire.
+        //
+        // LIFTING THE CAP IS A ONE-TIME HANDOVER, NOT AN ALTERNATION. The old
+        // note's "worst case the two rules alternate on a 6 s beat" was wrong (in
+        // the benign direction). Because only a HIGHER-ranked rule can be held,
+        // the lift lets that rule claim -- and its own Fired window / opaque NoOp
+        // / `acted` then keeps the ex-incumbent from running at all. The slot
+        // changes hands once; it does not ping-pong.
+        //
+        // An OBSERVED claim is never capped: the `!incumbent.observed` term below
         // means a live channelled heal never reaches RefreshHealCastClaim at all.
         //
         // The offense lock this mirrors (CastLockLive) checks claim liveness
@@ -287,6 +336,21 @@ namespace MFO::ComposedCast {
             // RefreshHealCastClaim LAST: it takes APMFBridge's mutex and has the
             // heartbeat side effect, so short-circuit keeps both off every tick
             // that is not actually a hold.
+            //
+            // LATENT, AND THE DEPENDENCY IS DOCUMENTED NOWHERE ELSE (Fable diff
+            // review, 2026-09-06). RefreshHealCastClaim's liveness test bottoms
+            // out in APMF's IsClaimLive, which walks the PUBLISHED snapshot only
+            // (core/ControlMap.cpp) -- the same shape as the RC4 proxy bug F4
+            // fixed. A handle RequestCast minted in THIS frame, before APMF's
+            // next per-frame Drain publishes it, therefore reads as NOT live. So
+            // a hold check running in the same frame as the incumbent's own
+            // fresh RequestCast would LIFT the hold and thrash for that tick.
+            // Unreachable today ONLY because the rule scan never runs two heal
+            // Try()s on one follower in one tick (a Claimed incumbent stops the
+            // scan; see the REACHABILITY note above). THAT is the dependency this
+            // guard's correctness rests on -- if a future caller ever services a
+            // follower's heal twice per tick, revisit this before assuming the
+            // hold still holds.
             if (incumbent.spell != 0 && incumbent.spell != spellID && !incumbent.observed &&
                 APMFBridge::RefreshHealCastClaim(fid)) {
                 // (b) A hold is never silent, and never labelled as a delivery.

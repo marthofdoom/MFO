@@ -1372,11 +1372,37 @@ namespace MFO::Logistics {
                     // TRANSPARENTLY like a Refreshed/Declined tick. HeldOffBy still
                     // names WHICH incumbent won the slot, for the log only.
                     if (r == Actuation::SelfCast::Held) {
-                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
-                                     "(HELD OFF -- incumbent heal {:08X} owns the claim; this "
-                                     "spell was NOT delivered)",
-                                     id, sp->GetFormID(), tgt->GetFormID(),
-                                     ComposedCast::HeldOffBy(id, sp->GetFormID()));
+                        // DEDUPED at 2s per (follower, held-off spell) -- the SAME
+                        // window and shape as its [cfc] twin (ComposedCast.cpp's
+                        // LogHealHoldOff) and Actuation.cpp's [eval] LogCastLockHold
+                        // (Fable diff review, 2026-09-06: this was unthrottled). A
+                        // rule held off on every round-robin lap logged once per
+                        // service, and up to TWICE per service, since the `pass < 2
+                        // && !acted` dibs-tier wrapper above re-runs the whole scan
+                        // when nothing acted -- and a hold never sets `acted`. Kept
+                        // rather than dropped for the twin: it names the TARGET,
+                        // which the [cfc] line does not carry.
+                        //
+                        // Function-local static, read+written only from the
+                        // serialized AddTask job worker (#4) -- the same
+                        // worker-serial-unlocked discipline as ComposedCast's own
+                        // g_lastHoldLog and this file's other per-follower log
+                        // throttles (s_nextHeal, s_nextWalkDiag).
+                        static std::unordered_map<RE::FormID,
+                                                  std::pair<RE::FormID, Clock::time_point>>
+                            s_lastHeldLog;
+                        const auto heldNow  = Clock::now();
+                        const auto heldSpel = sp->GetFormID();
+                        auto&      heldSeen = s_lastHeldLog[id];
+                        if (heldSeen.first != heldSpel ||
+                            heldNow - heldSeen.second >= std::chrono::milliseconds(2000)) {
+                            heldSeen = { heldSpel, heldNow };
+                            spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
+                                         "(HELD OFF -- incumbent heal {:08X} owns the claim; this "
+                                         "spell was NOT delivered)",
+                                         id, heldSpel, tgt->GetFormID(),
+                                         ComposedCast::HeldOffBy(id, heldSpel));
+                        }
                         start = choice.ruleIndex + 1; continue;
                     }
                     if (r == Actuation::SelfCast::Applied) {
@@ -1389,12 +1415,24 @@ namespace MFO::Logistics {
                         // now means ONE of those two and never a hold (see above),
                         // so bare claim liveness is a safe read again here: the live
                         // heal claim on this follower IS this spell's.
+                        //
+                        // "APMF CLAIMED", NOT "APMF DELIVERED" (Fable diff review,
+                        // 2026-09-06). After the SEV-2 tri-state, an Applied whose
+                        // IsHealCastActive is true means exactly "a live APMF cast
+                        // claim exists for this spell" -- and a claim may sit
+                        // UNOBSERVED for its whole window while the engine never
+                        // casts it (the RC1/RC7 field failure this branch exists to
+                        // diagnose). Saying "delivered" of a claim would put that
+                        // failure mode's own log line on the wrong side of #7. The
+                        // claim FIRING is a separate, independently-logged signal:
+                        // Diagnostics.cpp's SpellSink -> ComposedCast's watch, and
+                        // the "[cfc] ... NO observed cast" warning when it does not.
                         const bool isHeal =
                             CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal;
                         spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} ({})",
                                      id, sp->GetFormID(), tgt->GetFormID(),
                                      (isHeal && APMFBridge::IsHealCastActive(id))
-                                         ? "APMF delivered" : "direct force, bounded");
+                                         ? "APMF claimed" : "direct force, bounded");
                         // acted = true (NOT just `break`): this `break` only exits the
                         // INNER start-scan; the OUTER "for (pass < 2 && !acted)" loot-
                         // ordering wrapper above (marth's dibs-tier pass 0/1 split) does

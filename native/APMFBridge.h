@@ -521,6 +521,38 @@ namespace MFO::APMFBridge {
     // self-releases quickly (SPEC-FORCED-CAST.md §1.4's Heal case).
     inline constexpr std::uint32_t kHealCastTtlMs = 6000;
 
+    // THE NEVER-OBSERVED HOLD CAP, ms -- the ceiling on how long ComposedCast::
+    // Try's F1 incumbent hold may keep a competing heal rule OFF the follower's
+    // single heal slot while the engine has NEVER been observed firing the
+    // incumbent's claim. Read RefreshHealCastClaim's doc below for the mechanism;
+    // this is only the sizing.
+    //
+    // DELIBERATELY NOT kHealCastTtlMs (Fable diff review, 2026-09-06 -- it WAS
+    // that constant, which is 2x too long). The two numbers bound different
+    // things and must not be aliased: kHealCastTtlMs is the lifetime of a claim
+    // MFO has already vetted, while THIS is the engine's own equip+charge
+    // LATENCY, and #9 says size a budget from the real cadence rather than from a
+    // convenient neighbouring number. The deck log of 2026-09-06 measured that
+    // latency at 2.3-2.5s (Docs/DIAG-2026-09-06-deny-heal-failures.md RC7: claim
+    // 19:56:56.873 -> first observed fire 19:56:59.155), so 3000ms is one full
+    // measured latency plus a small margin -- past it an unobserved incumbent is
+    // PROVABLY not going to fire.
+    //
+    // WHY THAT MATTERS AT ALL: every reachable hold is a PRIORITY INVERSION. The
+    // only rule that can ever be held is one that OUTRANKS the incumbent (the
+    // incumbent's own Claimed outcome stops the rule scan before anything below
+    // it is reached -- the reachability note in ComposedCast.cpp's hold comment
+    // spells this out with file:line). At kHealCastTtlMs a dying follower's
+    // rule-1 `HP<30% -> Fast Healing (self)` waited out the remaining ~3s of a
+    // rule-5 claim the engine was never going to cast. It no longer does.
+    //
+    // Sits ABOVE ComposedCast.cpp's kSilentWarnAfter (2000ms) -- static_asserted
+    // at that constant's definition -- so the "[cfc] NO observed cast" warning
+    // always PRECEDES the lift in the log instead of trailing it. The claim TTL
+    // is untouched: this caps only the HEARTBEAT, and only on the unobserved
+    // path, so an OBSERVED heal still runs its full kHealCastTtlMs window.
+    inline constexpr std::uint32_t kHealHoldNeverObservedMs = 3000;
+
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                        std::int32_t a_hand = kApmfHandLeft, bool a_concentration = false,
                        std::uint32_t a_stopPct = 0);
@@ -566,24 +598,35 @@ namespace MFO::APMFBridge {
     // what one more ClaimHealCast lap would have done, never a new lifetime.
     //
     // WHY IT IS STILL BOUNDED -- TWO BOUNDS, and the second one is the real one
-    // (Fable SEV-1, 2026-09-06).
+    // (Fable SEV-1 2026-09-06, sizing + rationale CORRECTED by the Fable diff
+    // review the same day).
     //  1. LIVENESS, asked of APMF itself on ABI >= 6 (IsClaimLive -- APMF
     //     auto-expires a claim at its own TTL with no notice, so a stored handle
     //     is not proof). A claim that is NOT live is never heartbeaten, so it
-    //     goes stale and Tick() collects it: the hold lifts. This bound is NOT
-    //     sufficient on its own -- APMF's renewing Repoint (F2) can keep a claim
-    //     live indefinitely while the engine never actually casts it.
-    //  2. CLAIM AGE. Past kHealCastTtlMs measured from when the handle was
-    //     REQUESTED (CastClaim::created, stamped once inside
-    //     EnsureCastClaimLocked and moved by nothing afterwards), this refuses to
-    //     heartbeat regardless of liveness. That caps how long a claim the engine
-    //     has NEVER been observed firing may hold ComposedCast's single heal slot
-    //     against a competing rule, and it is immune to any TTL renewal by
-    //     construction: renewal extends the claim on APMF's side, it does not
-    //     re-request a handle here, so `created` does not move. The cap never
-    //     applies to an OBSERVED claim, because the only caller (ComposedCast::
-    //     Try's incumbent hold) calls this only while the incumbent is unobserved
-    //     -- a live channelled heal never routes through here at all.
+    //     goes stale and Tick() collects it: the hold lifts. This bound is real
+    //     but it is not the interesting one, because the INCUMBENT'S OWN RULE
+    //     keeps re-arming: while its condition holds it calls ClaimHealCast every
+    //     lap, which re-requests a fresh handle the moment APMF expires the old
+    //     one. (It is NOT defeated by a renewing Repoint: MFO never Repoints a
+    //     kIntent_Cast claim -- see EnsureCastClaimLocked -- and APMF main's
+    //     ApplyRepoint does not touch expiresMs. The APMF-side renewal this doc
+    //     used to warn about lives on an unmerged branch.)
+    //  2. CLAIM AGE. Past kHealHoldNeverObservedMs (3000ms -- the measured engine
+    //     equip+charge latency, see that constant above; NOT the 6000ms claim
+    //     TTL) measured from when the handle was REQUESTED (CastClaim::created,
+    //     stamped once inside EnsureCastClaimLocked), this refuses to heartbeat
+    //     regardless of liveness. That caps how long a claim the engine has NEVER
+    //     been observed firing may hold ComposedCast's single heal slot against a
+    //     rule that OUTRANKS it -- the only kind of rule that can ever be held
+    //     there (ComposedCast.cpp's hold comment proves the reachability).
+    //     `created` DOES move when the incumbent's own rule re-requests after an
+    //     APMF auto-expiry (a genuinely new handle earns a fresh window, by
+    //     design); that cannot happen underneath a live hold, because the
+    //     incumbent's re-request returns Claimed and stops the rule scan before
+    //     any held rule's Try() is reached. The cap never applies to an OBSERVED
+    //     claim either, because the only caller (ComposedCast::Try's incumbent
+    //     hold) calls this only while the incumbent is unobserved -- a live
+    //     channelled heal never routes through here at all.
     //
     // ABI < 6 RETURNS FALSE. There is no IsClaimLive to ask AND no other bound in
     // play (EnsureCastClaimLocked's unchanged fast path trusts a stored handle
