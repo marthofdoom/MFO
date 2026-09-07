@@ -191,3 +191,55 @@ of a given change.
   thread in `Diagnostics.cpp`, `kPumpMs=133`). `MainThread::Post` is the *only*
   road to the true main thread (for 3D/cell mutation, physics queries).
 - Combat-thread hooks read FormIDs / atomic mirrors, never the follower lists.
+
+## LOCAL CommonLibSSE SOURCE — verify symbols here, do NOT fetch upstream
+
+Two checkouts exist on this machine. **They are not interchangeable. Using the wrong one
+re-creates the exact invented-symbol CI failures the "NEVER GUESS AN API OR A SYMBOL" rule exists
+to prevent** — a symbol can be real in one tree and absent in the other.
+
+- **`/mnt/gaming/modlists/Projects/_commonlib/pinned-3.7.0-c4ab853d/`**  ← **AUTHORITATIVE. VERIFY HERE.**
+  `CharmedBaryon/CommonLibSSE-NG` @ `c4ab853d095e81e3390b282d7ba01ab2f24ebf25` = commonlibsse-ng **3.7.0**,
+  exactly what the colorglass vcpkg registry pins (`native/vcpkg-configuration.json` baseline
+  `6309841a…`) and therefore exactly what CI compiles and links. **Every symbol/vfunc/signature claim
+  must be checked against THIS tree.** If it is not here, it does not exist for our build.
+- **`/mnt/gaming/modlists/Projects/_commonlib/live-alandtse-ng/`**  ← reference only, DO NOT verify against.
+  `alandtse/CommonLibSSE-NG` branch `ng`, currently **v7.2.0** — the actively maintained fork (the pinned
+  CharmedBaryon repo has not been pushed to since 2024-09-04). Useful for seeing how upstream solved
+  something, or for planning a migration. It has bindings 3.7.0 does NOT (e.g. more `StartCombat` /
+  `HasQuestObject` overloads), so verifying against it will produce code that fails CI.
+
+Refresh with `git -C <dir> fetch --depth 1` if ever needed; the pinned tree must stay at that exact SHA.
+**Still verify against the DISASSEMBLED binary, not the header, for anything ABI-shaped** — CommonLib
+declarations are not ABI-trustworthy (a wrong `GetMagicTarget` signature with a hidden sret out-slot once
+made a "passive" probe crash the game).
+
+**Open strategic question, not yet decided:** we are pinned four major versions behind (3.7.0 vs 7.2.0) on
+a dormant repo. Migrating to the alandtse fork is its own scoped brief with its own Fable review — changing
+the ABI source under a plugin doing vtable and offset work breaks in the FIELD, not in CI. Do not start it
+as a side effect of another task.
+
+## FIELD DIAGNOSIS + AGENT REUSE (marth 2026-09-06)
+
+**4. WHEN AN IN-GAME TEST DOES NOT DO WHAT WE EXPECT, IT GOES STRAIGHT TO FABLE.** marth: *"when a test in
+game doesnt do what we expect, immediately goes to fable."* The split is strict:
+- **The coordinator GATHERS.** Pull the deck logs; verify the deployed DLL sha against the branch that
+  produced them; check the INI switch states; build a consolidated EVIDENCE file (tag histograms, message
+  shapes, per-ACTOR and per-HAND attribution, timestamps). This works and makes Fable fast.
+- **FABLE CONCLUDES.** Do NOT arrive with a root-cause theory. Hand over the evidence and the brief.
+Measured 2026-09-06: from one 8-minute deck log the coordinator produced FOUR confident root causes and
+Fable overturned ALL FOUR using that same evidence file (a "deny hole" that was by-design chaining; a spell
+attributed to the follower that four Chaurus Reapers were casting; a "stale" proxy that was actually read
+before it was minted; a config problem that was a code problem). Also pass Fable any METHOD constraint marth
+has already given — e.g. do NOT argue from loot arrival counts or travel/arrival ratios; a follower walking
+past loot during an ordinary follow produces arrival-shaped lines that prove nothing.
+
+**5. REVIEW FINDINGS GO BACK TO THE AGENT THAT WROTE THE PATCH, via SendMessage — never a fresh agent.**
+marth: *"If the same patch has more issues it would make sense to reuse the same agent for the iterations."*
+The author already holds the file context, the symbol verifications and the reasoning; a fresh agent
+re-orients from zero over the same files (measured cost of getting this wrong: 173k / 224k / 108k subagent
+tokens re-deriving what the author already knew). This IS the sanctioned resume case under the anti-drip-feed
+rule above — applying review findings is "fixing a real error", not adding scope. A resumed agent does NOT
+re-read its original brief, so the message must still carry the hard rules (verify symbols, CI-green on your
+own SHA, no merge/tag/force-push, the file boundary). Spawn a NEW agent only for a genuinely different patch,
+a different repo/tree, or work the author was never briefed on — and never two agents in one build tree.
