@@ -1846,16 +1846,21 @@ namespace MFO::Packages {
         spdlog::info("[loot] travel released ({}) -- slot {} evicted (marker)", a_why, a_slot);
     }
 
-    // QUIET HOLD (field-proven 2026-09-03): true while a_slot's excursion is
-    // APMF-routed and the claim hasn't released yet -- the SAME flag
-    // LootTravelClear's APMF branch above tests. Exposed (g_apmfSlotActive
-    // itself is anonymous-namespace file-local) so Logistics.cpp's theft-guard
-    // can tell an APMF-held leg apart from a legacy-alias one: a runtime probe
-    // proved APMF's 0x49 hook (CheckForCurrentAliasPackage) already holds the
-    // package on its own for a framework-locked follower, so the theft-guard's
-    // strike/grace/re-assert machinery is redundant -- and actively harmful --
-    // for these legs; it now early-outs here instead of fighting a hold that
-    // doesn't need fighting.
+    // ROUTE FLAG: true while a_slot's excursion is APMF-routed and the claim
+    // hasn't released yet -- the SAME flag LootTravelClear's APMF branch above
+    // tests. Exposed (g_apmfSlotActive itself is anonymous-namespace file-local)
+    // so Logistics.cpp can tell an APMF-held leg apart from a legacy-alias one.
+    //
+    // WHAT THIS DOES AND DOES NOT MEAN (corrected 2026-09-07,
+    // Docs/DIAG-2026-09-06-loot-travel.md). It used to be read as "the 0x49 hook
+    // is holding the travel package for this leg, so the theft-guard's
+    // strike/grace/re-assert machinery is redundant and Logistics.cpp may skip it
+    // wholesale". That inference is DEAD. This flag says only that MFO REQUESTED
+    // the claim; the field session had 0 of 6 requested claims ever reach the
+    // engine. Whether the package is actually running is a separate OBSERVATION
+    // (Forms::IsTravelPackage(GetCurrentPackage()), recorded per leg as
+    // TravelIntent::legEngaged), and that observation -- not this flag -- is what
+    // now gates the theft-guard bypass.
     bool IsAPMFTravelHeld(int a_slot) {
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
         return g_apmfSlotActive[a_slot];
