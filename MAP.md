@@ -447,8 +447,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   right after the existing `ComposedCast::Try` call (HEAL-ONLY, unchanged), both this
   function and `CastSelfDirect` now try `APMFBridge::ClaimOffenseCast` directly
   (`concentration=true, stopPct=0`) for a `kind != Heal` concentration spell — the
-  engine-seat path offense/buff concentration never reached before. Refused/absent
-  falls through to the SAME direct-force stream below, unchanged.
+  engine-seat path offense/buff concentration never reached before. **Split by
+  `fix/mfo-no-decline-fallback` (2026-09-07):** APMF ABSENT for the facet
+  (`APMFBridge::OffenseCastClaimSupported()` false — ABI < 5 / `bApmfCast` off) falls through
+  to the SAME direct-force stream below, unchanged; APMF present + capable + REFUSED now
+  **FAILS CLOSED** (`SelfCast::Declined`, one rate-limited `[apmf]` error, no direct-force
+  stream) — with APMF present there is no fallback.
 - `CastAuto` (PUBLIC, `Actuation_Direct.cpp:1106`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
@@ -1626,14 +1630,19 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   now also calls `ComposedCast::Try(a_follower, spell, a_target, ClassifySpell(spell), /*stopPct=*/0)`
   — the SAME `kIntent_Cast` claim `CastSelfDirect`/`CastTargetDirect` already make for a heal, reused
   verbatim (HEAL-ONLY internal gate in `ComposedCast::Enabled`, so a Buff kind degrades to
-  `TryResult::Refused` immediately — `Try` returns the TRI-STATE `ComposedCast::TryResult
-  {Refused,Claimed,Held}`, not a bool, since Fable SEV-2 2026-09-06). On `Claimed`: `HoldCastLock` +
+  `TryResult::NotApplicable` immediately — `Try` returns the FOUR-STATE `ComposedCast::TryResult
+  {NotApplicable,Claimed,Held,ApmfRefused}`, not a bool: `Held` since Fable SEV-2 2026-09-06, and the
+  `NotApplicable`/`ApmfRefused` split — the old `Refused` RENAMED and halved — since
+  `fix/mfo-no-decline-fallback` 2026-09-07). On `Claimed`: `HoldCastLock` +
   `{NoOp,"composed cast: AI deciding (animated, mobile)"}`, same OPAQUE-hold shape as `ownedCast`'s
   own success return. On `Held` (a different spell's live claim owns the heal slot): NO lock, a
   TRANSPARENT `{NoOp,"composed cast: held off (another heal owns the claim)"}` — never `Fired`, and
-  never a fall-through to the force hybrid. On refusal (Buff kind, AE/APMF/
-  `bHealAnimPackage` off, or a lost claim): falls straight through to the unchanged AI-first-grace +
-  `ForceCast` hybrid below — byte-identical degrade, a heal never silently vanishes. Explicitly guards
+  never a fall-through to the force hybrid. On `NotApplicable` (Buff kind, AE/APMF/
+  `bHealAnimPackage` off, ABI < 5): falls straight through to the unchanged AI-first-grace +
+  `ForceCast` hybrid below — byte-identical **degrade-when-absent**, a heal never silently vanishes.
+  On `ApmfRefused` (APMF present, capable, and it said NO): **FAILS CLOSED** —
+  `{FailedSkill,"APMF refused the heal claim",transparent}` + one rate-limited `[apmf]` error, and
+  explicitly NOT the force hybrid (`fix/mfo-no-decline-fallback`). Explicitly guards
   `a_target != a_follower` (self-target CAN reach this far when `bCastSelf`, dev-only default off,
   never forked it off earlier in `CastOn` — self-cast stays `CastSelfDirect`'s own gated mechanism,
   not annexed here). **IN-COMBAT ONLY** — `CastOn` only runs from `Actuation::Fire`'s combat dispatch;
@@ -1688,10 +1697,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     APMF REFUSED the … claim` names actor/spell/target/hand, rate-limited to one line per
     (follower, spell, target) per ~5s (`LogApmfRefusal`, `Actuation.cpp` anon ns; a twin lives in
     `Actuation_Direct.cpp`). A refusal is a bug to fix in APMF, never a condition to degrade through
-    (`CLAUDE.md` principle 7). The heal twin (`ComposedCast::Try`, now TRI-STATE
-    `Owned`/`NotApplicable`/`Refused`) and the two concentration `ClaimOffenseCast` sites in
-    `Actuation_Direct.cpp` (`CastSelfDirect`/`CastTargetDirect` → `SelfCast::Declined` on a refusal)
-    follow the identical split. **This bullet no longer contradicts the FAILS-CLOSED principle stated
+    (`CLAUDE.md` principle 7). The heal twin (`ComposedCast::TryResult`, widened from three values
+    to FOUR by this branch — see the ComposedCast entry below) and the two concentration
+    `ClaimOffenseCast` sites in `Actuation_Direct.cpp` (`CastSelfDirect`/`CastTargetDirect` →
+    `SelfCast::Declined` on a refusal) follow the identical split. **This bullet no longer contradicts the FAILS-CLOSED principle stated
     for `Packages.cpp` below.**
 - **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7; REPOINTED feat/offense-cast-seats
   2026-09-05; backing store re-shaped feat/per-hand-cast-slots 2026-09-06):** worker- AND
@@ -1979,8 +1988,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   owned by a parallel change), now call `APMFBridge::ClaimOffenseCast` DIRECTLY
   with `concentration=true, stopPct=0` when `kind != Heal` and the spell is
   `kConcentration` -- the exact "FUTURE call site" PASS G's own doc predicted
-  and left unwired. Refused/absent/off/SE degrades to the SAME direct-force
-  stream that already ran, byte-identical. (2) `Actuation.cpp` gained a
+  and left unwired. Absent/off/SE/ABI < 5 degrades to the SAME direct-force
+  stream that already ran, byte-identical; a REFUSAL from a present, capable APMF fails
+  closed instead (`fix/mfo-no-decline-fallback`, 2026-09-07). (2) `Actuation.cpp` gained a
   cast-gambit lock (`g_castLock`/`g_lastLockLog`, anon-namespace, file-local)
   that `CastOn` consults right after the range/competence gates before letting
   a DIFFERENT `(spell,target)` than one already occupying the follower touch
@@ -2261,7 +2271,13 @@ for the full history (PASS D's raced hand-drive → PASS E's +ACT drive → PASS
 native seats) and ENGINE_NOTES §0.40.
 - `Try(RE::Actor* follower, RE::SpellItem* spell, RE::Actor* target,
   CasterConsent::SpellKind kind, std::uint32_t stopPct = 0)` → **`TryResult`, a
-  TRI-STATE** (`ComposedCast.cpp:198`, enum `ComposedCast.h:75-88`)
+  FOUR-STATE** (`ComposedCast.cpp:~198`, enum `ComposedCast.h:~75`) —
+  `{NotApplicable, Claimed, Held, ApmfRefused}`. TWO orthogonal splits produced it: `Held`
+  (Fable SEV-2 2026-09-06) is MFO-internal slot ownership BETWEEN TWO HEALS, APMF never asked;
+  `NotApplicable` vs `ApmfRefused` (`fix/mfo-no-decline-fallback` 2026-09-07) is what APMF's
+  ARBITRATION answered. The old `Refused` was **renamed** to `NotApplicable` rather than
+  re-pointed, deliberately: re-using the name for the opposite meaning would have let every
+  call site keep compiling with inverted semantics.
   ← `Actuation_Direct.cpp:810` (in `CastSelfDirect`, `:765`), `:1076` (in
   `CastTargetDirect`, `:1036`) **and `Actuation.cpp:992`** (`CastOn`'s ally/player
   branch — a third call site, MISSING from this entry until 2026-09-06).
@@ -2276,8 +2292,12 @@ native seats) and ENGINE_NOTES §0.40.
   isConcentration, stopPct)` — spellID/targetID FORWARDED UNCHANGED (a_spell
   always the gambit's own configured spell; MFO does not inspect delivery,
   does not proxy, does not substitute) → refused → `CastBounds::Disarm` +
-  drop hand 0's diagnostic watch + log + **`TryResult::Refused`** (caller
-  degrades to kInstant);
+  drop hand 0's diagnostic watch (UNCONDITIONALLY — the F1 hold's documented invariant rests
+  on it) + **`APMFBridge::HealCastClaimSupported()` splits the outcome**: true →
+  **`TryResult::ApmfRefused`** (caller FAILS CLOSED, no kInstant apply, one rate-limited
+  `[apmf]` error at the call site), false → **`TryResult::NotApplicable`** (caller degrades to
+  kInstant, byte-identical to before). The old unconditional `[cfc] … kInstant apply` info line
+  is GONE — it asserted a fallback that no longer happens;
   claimed → `CastBounds::Arm(fid, spellID, APMFBridge::GetHealCastProxy(fid),
   kHealBoundsTtlMs)` (`ComposedCast.cpp:431`) — the third argument was a literal
   `0` until F4 (2026-09-06); passing the claim's minted delivery-flip proxy is
@@ -2285,8 +2305,8 @@ native seats) and ENGINE_NOTES §0.40.
   PROXY as this claim firing. `kHealBoundsTtlMs` aliases
   `APMFBridge::kHealCastTtlMs`, 6000ms — the SAME window `req.ttlMs` carries
   → arms the silent-claim diagnostic watch (`WatchArmed`, below) →
-  **`TryResult::Claimed`** (caller skips its kInstant apply). The THIRD state,
-  **`TryResult::Held`**, is the F1 incumbent hold — its own bullet below. `target` is 0 for a self-cast, else
+  **`TryResult::Claimed`** (caller skips its kInstant apply). **`TryResult::Held`**
+  is the F1 incumbent hold — its own bullet below. `target` is 0 for a self-cast, else
   `a_target`'s FormID — now LOAD-BEARING on APMF's side (seats 0x0A/0x0D read
   it directly), was RECORD ONLY under PASS E. A Self-delivery spell gambited
   at a non-self target is still APMF's OWN problem to solve (its own
@@ -2415,8 +2435,9 @@ native seats) and ENGINE_NOTES §0.40.
     — a `Held` outcome continues the scan at `Logistics.cpp:1405`, and the
     `pass < 2 && !acted` wrapper at `:1191` re-runs it), but **"no heal `Try()`
     runs after a same-tick `ClaimHealCast` that MINTED"** — a `Claimed` outcome
-    ends all three scans, and a `Refused` one clears `hand[0]` so no later `Try()`
-    finds an incumbent to hold. That matters because APMF's
+    ends all three scans, and a NON-claimed one out of the `ClaimHealCast` branch (either
+    half of the split `NotApplicable`/`ApmfRefused`, formerly `Refused`) clears `hand[0]`
+    UNCONDITIONALLY so no later `Try()` finds an incumbent to hold. That matters because APMF's
     `IsClaimLive`/`GetCastProxy` read the PUBLISHED snapshot only, so a check in
     the same frame as a fresh `RequestCast` reads NOT-live and would thrash. Both
     sites carry the corrected dependency as a comment (`ComposedCast.cpp`'s hold
