@@ -220,13 +220,34 @@ namespace MFO::APMFBridge {
     // in-place re-point on RequestCast's rich payload). Returns whether
     // a_follower now holds a LIVE claim on the SLOT this call resolved to
     // (false -> caller falls back to the legacy AI-first-grace + force-on-miss
-    // hybrid, byte-identical to the APMF-absent path -- a refused claim must
-    // never silently drop the cast). No-op (returns false) when APMF is
-    // absent, its resolved interface has no RequestCast slot (ABI < 5), or
-    // Config::g_apmfCast is off.
+    // hybrid). No-op (returns false) when APMF is absent, its resolved interface
+    // has no RequestCast slot (ABI < 5), or Config::g_apmfCast is off.
+    //
+    // A `false` IS AMBIGUOUS ON ITS OWN and callers must NOT treat it as one
+    // condition (fix/mfo-no-decline-fallback, marth 2026-09-07: "without APMF,
+    // it needs to just work, whatever unpolished way works. With APMF theres no
+    // fallback for it. APMF shoudl work"). Pair it with
+    // `OffenseCastClaimSupported()` below to split the two halves of that rule:
+    //   * false + NOT supported  -> APMF (or the facet, or the toggle) is ABSENT.
+    //     The legacy AI-first-grace + force-on-miss hybrid is the SUPPORTED
+    //     degrade contract -- run it, byte-identical to a world with no APMF.
+    //   * false + supported      -> APMF is PRESENT and CAPABLE and said NO.
+    //     That is a BUG TO FIX IN APMF, never a condition to degrade through:
+    //     FAIL CLOSED, log loudly, do NOT route around it into the legacy path.
     bool ClaimOffenseCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                           std::int32_t a_hand = kApmfHandLeft, bool a_concentration = false,
                           std::uint32_t a_stopPct = 0);
+
+    // Worker-safe. Is the offense-cast CLAIM CHANNEL itself available right now --
+    // i.e. would a `false` from ClaimOffenseCast above mean "APMF REFUSED" rather
+    // than "there was nothing to ask"? True iff APMF is present AND its resolved
+    // interface actually carries the v5 RequestCast slot AND Config::g_apmfCast is
+    // on. Deliberately mirrors ClaimOffenseCast's own three non-arbitration early
+    // returns (they sit beside each other in APMFBridge.cpp and read the SAME
+    // `g_apmf`/`abiVersion`/toggle, so the two cannot drift); it does NOT re-check
+    // the caller-controlled argument guards (a_follower/a_spell != 0), which every
+    // call site already satisfies by construction.
+    bool OffenseCastClaimSupported();
 
     // Worker-safe. Release the offense-cast claim(s) now (the combat-target claim, if
     // any, is left alone) on BOTH hands -- releasing one hand must never disturb the
@@ -579,9 +600,22 @@ namespace MFO::APMFBridge {
     // path, so an OBSERVED heal still runs its full kHealCastTtlMs window.
     inline constexpr std::uint32_t kHealHoldNeverObservedMs = 4000;
 
+    // Returns whether a_follower now holds a LIVE heal-cast claim. As with
+    // ClaimOffenseCast above, a `false` IS AMBIGUOUS on its own -- pair it with
+    // `HealCastClaimSupported()` to tell "APMF refused" (FAIL CLOSED, never
+    // degrade to kInstant) from "APMF/the facet/the toggle is absent" (kInstant
+    // is the supported contract). ComposedCast::Try is the only caller and does
+    // exactly that, surfacing the split to ITS callers as
+    // ComposedCast::TryResult::ApmfRefused vs ::NotApplicable.
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                        std::int32_t a_hand = kApmfHandLeft, bool a_concentration = false,
                        std::uint32_t a_stopPct = 0);
+
+    // Worker-safe. The heal twin of OffenseCastClaimSupported() above: true iff
+    // APMF is present AND its interface carries the v5 RequestCast slot AND
+    // Config::g_healAnimPackage (the heal-cast executor toggle) is on -- exactly
+    // ClaimHealCast's own three non-arbitration early returns.
+    bool HealCastClaimSupported();
 
     // Worker-safe. Release ONLY the heal-cast claim now (every other facet left
     // alone). Call the instant the gambit stops wanting the heal (target lost /

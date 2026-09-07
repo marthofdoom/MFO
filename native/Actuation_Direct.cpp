@@ -53,6 +53,37 @@ namespace MFO::Actuation {
         };
         std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
 
+        // ── APMF REFUSAL: the ONE trace a cast that did NOT happen leaves ─────────
+        // The exact twin of Actuation.cpp's own LogApmfRefusal (same wording, same
+        // ~5 s (follower, spell, target) dedup, same spdlog::error level) -- a
+        // separate copy only because the two files are separate TUs and each keeps
+        // its own worker-serial anon-namespace state. marth 2026-09-07: "With APMF
+        // theres no fallback for it. APMF shoudl work" -- a claim APMF is CAPABLE
+        // of granting and refuses anyway is a BUG IN APMF, so the cast fails closed
+        // and this line is the whole diagnosis (CLAUDE.md principle 7). Rate-limited
+        // (principle 8) because these call sites run at the ~133 ms service cadence.
+        struct ApmfRefusalLog {
+            RE::FormID            spell  = 0;
+            RE::FormID            target = 0;
+            SelfClock::time_point when{};
+        };
+        std::unordered_map<RE::FormID, ApmfRefusalLog> g_lastApmfRefusal;   // worker-serial
+
+        void LogApmfRefusal(RE::FormID a_follower, const char* a_what, RE::FormID a_spell,
+                            RE::FormID a_target, const char* a_hand) {
+            const auto now = SelfClock::now();
+            auto& e = g_lastApmfRefusal[a_follower];
+            if (e.spell == a_spell && e.target == a_target &&
+                std::chrono::duration<float>(now - e.when).count() < 5.0f)
+                return;
+            e.spell = a_spell; e.target = a_target; e.when = now;
+            spdlog::error("[apmf] {:08X} APMF REFUSED the {} claim -- spell {:08X}, target {:08X}, "
+                          "{} hand. APMF is the COMMITTED route: NOT falling back to the direct-"
+                          "force/kInstant path, this cast does NOT happen this tick. Fix the "
+                          "refusal in APMF.",
+                          a_follower, a_what, a_spell, a_target, a_hand);
+        }
+
         // ── ON-TARGET DIRECT FORCE (package-lock-proof; g_selfCast generalized) ──
         // The SAME known-working force (CastSpellImmediate straight onto the actor +
         // magicka deduct) applied to a NON-self target -- player / ally / foe. It
@@ -789,28 +820,44 @@ namespace MFO::Actuation {
         // drive the AI to equip+animate+fire it natively, movement kept) instead
         // of the kInstant force-apply below. Placed AFTER the competence gate so
         // an unaffordable cast declines exactly as today. ComposedCast::Try is
-        // fully self-gating (HEAL-ONLY; AE + APMF + toggle) and DEGRADES on any
-        // failure: Refused (this path BYTE-IDENTICAL to today, kInstant apply)
-        // for offense/buff or when the claim is refused. Claimed only once APMF
-        // OWNS the cast, so the caller returns Applied without its own engine
-        // call. a_stopPct forwards through unchanged.
+        // fully self-gating (HEAL-ONLY; AE + APMF + toggle). FOUR outcomes:
+        //   Claimed       -> APMF owns the cast, return Applied with no engine call.
+        //   NotApplicable -> offense/buff kind, SE/VR, toggle off, APMF ABSENT, or
+        //                    an APMF too old to carry the facet: the kInstant path
+        //                    below runs, BYTE-IDENTICAL to today. That is the
+        //                    declared degrade contract (marth 2026-09-07: "without
+        //                    APMF, it needs to just work, whatever unpolished way
+        //                    works"). Was called `Refused` before
+        //                    fix/mfo-no-decline-fallback split that value in two.
+        //   ApmfRefused   -> APMF is PRESENT and CAPABLE and said NO. FAIL CLOSED:
+        //                    Declined, logged loudly, NO kInstant force-apply. MFO
+        //                    never routes a cast around a live APMF (principle 7 --
+        //                    masking this would hide the APMF bug behind a heal
+        //                    that silently keeps landing unanimated).
+        //   Held          -> see below.
+        // a_stopPct forwards through unchanged.
         //
-        // HELD is the THIRD outcome (Fable SEV-2, 2026-09-06): a different
-        // spell's live claim owns this follower's single heal slot, so nothing
-        // was claimed AND nothing was applied. It used to arrive folded into
-        // Try()'s `true` and therefore came back from here as Applied -- a spell
-        // that was never cast, logged as fired, buying the suppression window and
-        // re-stamping the Task-2 hand lock. Forward it as its own SelfCast value
-        // so every caller decides about it explicitly. NOT a fall-through to the
-        // kInstant apply below: the whole point of the hold is that the incumbent
-        // claim keeps the slot for its charge window, and silently landing this
-        // spell's effect anyway would erase the very condition the incumbent is
-        // being given time to satisfy.
+        // HELD (Fable SEV-2, 2026-09-06): a different spell's live claim owns this
+        // follower's single heal slot, so nothing was claimed AND nothing was
+        // applied. It used to arrive folded into Try()'s `true` and therefore came
+        // back from here as Applied -- a spell that was never cast, logged as fired,
+        // buying the suppression window and re-stamping the Task-2 hand lock.
+        // Forward it as its own SelfCast value so every caller decides about it
+        // explicitly. NOT a fall-through to the kInstant apply below: the whole
+        // point of the hold is that the incumbent claim keeps the slot for its
+        // charge window, and silently landing this spell's effect anyway would
+        // erase the very condition the incumbent is being given time to satisfy.
+        // ORTHOGONAL to ApmfRefused: Held is MFO-internal slot ownership between
+        // two heals (APMF was never asked), ApmfRefused is APMF's own answer.
         const auto selfKind = CasterConsent::ClassifySpell(a_spell);
         switch (ComposedCast::Try(a_follower, a_spell, a_follower, selfKind, a_stopPct)) {
         case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
         case ComposedCast::TryResult::Held:    return SelfCast::Held;
-        case ComposedCast::TryResult::Refused:
+        case ComposedCast::TryResult::ApmfRefused:
+            // Heals are LEFT always (ClaimHealCast's own hard rule); target 0 = self.
+            LogApmfRefusal(id, "heal-cast (self)", spellID, /*target=*/0, "left");
+            return SelfCast::Declined;
+        case ComposedCast::TryResult::NotApplicable:
         default:                               break;
         }
 
@@ -828,9 +875,11 @@ namespace MFO::Actuation {
         // stopPct=0 (a heal-only concept -- no threshold in scope for offense/
         // buff). Reuses the SAME [cfc] silent-claim diagnostic offense's owned-
         // cast branch already arms (ComposedCast::WatchClaim, NOT a Try() gate
-        // widening). Refused / APMF absent / toggle off / SE -> false, falls
-        // straight through to the direct-force stream below, byte-identical to
-        // today -- a concentration cast must never silently vanish.
+        // widening). A false is SPLIT since fix/mfo-no-decline-fallback (marth
+        // 2026-09-07): APMF present + CAPABLE (OffenseCastClaimSupported) means it
+        // REFUSED -> FAIL CLOSED (Declined, logged loudly, no direct-force stream);
+        // otherwise the facet was never there (ABI < 5 / toggle raced off) and the
+        // direct-force stream below runs, byte-identical to today.
         if (selfKind != CasterConsent::SpellKind::Heal &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
@@ -846,8 +895,14 @@ namespace MFO::Actuation {
                                          APMFBridge::GetOffenseCastProxy(id, APMFBridge::kApmfHandLeft));
                 return SelfCast::Applied;
             }
-            spdlog::info("[cast] {:08X} concentration offense-cast claim refused (self) -- "
-                         "direct-force stream runs instead", id);
+            if (APMFBridge::OffenseCastClaimSupported()) {
+                LogApmfRefusal(id, "concentration offense-cast (self)", spellID,
+                               /*target=*/0, "left");
+                return SelfCast::Declined;
+            }
+            // APMF absent for this facet (ABI < 5 / bApmfCast off) -- APMFBridge
+            // already warns ONCE per session about a too-old ABI, so nothing is
+            // logged here. Fall through to the direct-force stream (degrade).
         }
 
         const auto now = SelfClock::now();
@@ -1018,6 +1073,7 @@ namespace MFO::Actuation {
         CastBounds::Reset();          // drop every MFO-executed-cast bound (§2 registry)
         ComposedCast::Reset();        // drop executor streams/backoff/expected-cast set
         ClearCastLocks();             // Task 2: drop every firing-spell gambit lock
+        g_lastApmfRefusal.clear();    // this file's APMF-refusal log dedup, session-scoped
     }
 
     // ON-TARGET DIRECT FORCE = CastSelfDirect generalized to a NON-self target.
@@ -1066,17 +1122,22 @@ namespace MFO::Actuation {
         // the kInstant force-apply below. Placed AFTER the competence gate
         // (parity with CastSelfDirect) and before the offense sightline gate --
         // heals are never offense, so order there is immaterial. Self-gating
-        // (HEAL-ONLY; AE + APMF + toggle) and DEGRADING: Refused
-        // (byte-identical kInstant) for offense/buff or a refused claim; a heal
-        // never vanishes. `kind` is computed above; a_stopPct forwards through
-        // unchanged. Held (Fable SEV-2, 2026-09-06) is forwarded as its own
-        // SelfCast value rather than masquerading as Applied -- see the identical
-        // note at CastSelfDirect's own Try() call site above for why it is not a
-        // fall-through to the kInstant apply either.
+        // (HEAL-ONLY; AE + APMF + toggle) -- FOUR outcomes, see the identical
+        // switch in CastSelfDirect above for the full reasoning. NotApplicable
+        // degrades to the kInstant path byte-identically (the APMF-ABSENT
+        // contract; this value was named `Refused` before
+        // fix/mfo-no-decline-fallback split it), ApmfRefused FAILS CLOSED rather
+        // than routing the heal around a live APMF, and Held (Fable SEV-2,
+        // 2026-09-06) is forwarded as its own SelfCast value rather than
+        // masquerading as Applied -- and is likewise not a fall-through to the
+        // kInstant apply. `kind` is computed above; a_stopPct forwards unchanged.
         switch (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct)) {
         case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
         case ComposedCast::TryResult::Held:    return SelfCast::Held;
-        case ComposedCast::TryResult::Refused:
+        case ComposedCast::TryResult::ApmfRefused:
+            LogApmfRefusal(id, "heal-cast", spellID, targetID, "left");
+            return SelfCast::Declined;
+        case ComposedCast::TryResult::NotApplicable:
         default:                               break;
         }
 
@@ -1093,9 +1154,11 @@ namespace MFO::Actuation {
         // APMF's engine seats own the cast, the AI's own combat sense re-checks
         // sightline itself every charge/aim tick (the same reason the owned-cast
         // branch in CastOn never re-derives LoS either); that gate exists for
-        // the kInstant fallback path only. Refused / absent / toggle off / SE ->
-        // false, falls straight through to the gate + direct-force stream
-        // below, byte-identical to today.
+        // the kInstant fallback path only. A false is SPLIT since
+        // fix/mfo-no-decline-fallback, exactly as in the self twin above: APMF
+        // present + CAPABLE means it REFUSED -> FAIL CLOSED (Declined, logged);
+        // otherwise the facet was never there and the gate + direct-force stream
+        // below runs, byte-identical to today.
         if (kind != CasterConsent::SpellKind::Heal &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
@@ -1110,8 +1173,13 @@ namespace MFO::Actuation {
                                          APMFBridge::GetOffenseCastProxy(id, APMFBridge::kApmfHandLeft));
                 return SelfCast::Applied;
             }
-            spdlog::info("[cast] {:08X} concentration offense-cast claim refused (target {:08X}) -- "
-                         "direct-force stream runs instead", id, targetID);
+            if (APMFBridge::OffenseCastClaimSupported()) {
+                LogApmfRefusal(id, "concentration offense-cast", spellID, targetID, "left");
+                return SelfCast::Declined;
+            }
+            // APMF absent for this facet (ABI < 5 / bApmfCast off) -- APMFBridge
+            // already warns ONCE per session about a too-old ABI. Fall through to
+            // the gate + direct-force stream below (degrade).
         }
 
         // HOSTILE offense: LoS + line-of-fire gates on the direct path too (the

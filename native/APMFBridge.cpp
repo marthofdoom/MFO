@@ -614,6 +614,14 @@ namespace MFO::APMFBridge {
         return live;
     }
 
+    // See APMFBridge.h. Kept RIGHT BESIDE ClaimOffenseCast on purpose: this is
+    // that function's own non-arbitration early-return set, and nothing else --
+    // if one ever gains a condition, the other is one screen away.
+    bool OffenseCastClaimSupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= 5 && Config::g_apmfCast.load();
+    }
+
     void ReleaseOffenseCast(RE::FormID a_follower) {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
@@ -782,6 +790,14 @@ namespace MFO::APMFBridge {
         const bool live = o.heal.handle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
         return live;
+    }
+
+    // See APMFBridge.h. The heal twin of OffenseCastClaimSupported, kept beside
+    // ClaimHealCast for the same reason -- it mirrors THAT function's own
+    // non-arbitration early returns (toggle = bHealAnimPackage, not bApmfCast).
+    bool HealCastClaimSupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= 5 && Config::g_healAnimPackage.load();
     }
 
     void ReleaseHealCast(RE::FormID a_follower) {

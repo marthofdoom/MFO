@@ -64,7 +64,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 namespace MFO::ComposedCast {
 
-    // ── Try()'s TRI-STATE (Fable SEV-2, 2026-09-06) ───────────────────────────
+    // ── Try()'s OUTCOME SET (Fable SEV-2 2026-09-06; widened to FOUR by
+    // fix/mfo-no-decline-fallback 2026-09-07) ─────────────────────────────────
     // Try() used to return a bool, and the F1 incumbent hold rode home inside
     // `true` -- so every caller that treats "true" as delivery reported a spell
     // that was never cast as FIRED, bought the Scheduler's suppression window on
@@ -72,10 +73,30 @@ namespace MFO::ComposedCast {
     // spell (starving BOTH rules until a TTL). A hold is not a delivery and it is
     // not a refusal either -- it is its own outcome, so it gets its own value and
     // every caller must decide about it explicitly.
+    //
+    // THE SECOND SPLIT (marth 2026-09-07, verbatim: "without APMF, it needs to
+    // just work, whatever unpolished way works. With APMF theres no fallback for
+    // it. APMF shoudl work"). The old `Refused` value ALSO conflated two
+    // asymmetric worlds -- "there was nothing to ask" and "APMF was asked and
+    // said NO" -- and collapsing them is the DECLINE-FALLBACK that rule forbids.
+    // They are now separate values. The two splits are ORTHOGONAL: `Held` is
+    // about slot ownership BETWEEN TWO HEALS (MFO-internal, APMF never asked),
+    // `NotApplicable`/`ApmfRefused` is about what APMF's ARBITRATION answered,
+    // so all four distinctions are real and none subsumes another.
+    //
+    // NAMING NOTE (deliberate, do not "tidy"): the old `Refused` was RENAMED to
+    // `NotApplicable` and the new value is `ApmfRefused`, NOT a re-pointed
+    // `Refused`. Re-using the name `Refused` for the opposite meaning would have
+    // let every existing call site keep compiling with INVERTED semantics; with
+    // the identifier gone, the compiler had to be shown every one of them.
     enum class TryResult : std::uint8_t {
-        // Not routed here at all, or APMF refused the claim: the caller MUST run
-        // its own kInstant apply (the pre-existing `false`, byte-identical).
-        Refused = 0,
+        // Not routed here at all: a non-Heal kind, SE/VR, bHealAnimPackage off,
+        // APMF ABSENT, or an APMF whose ABI predates the cast facet (< 5). APMF
+        // was never asked, so there is nothing to fail closed on -- the caller
+        // MUST run its own kInstant apply. This is the DEGRADE-WHEN-ABSENT
+        // contract ("without APMF it needs to just work"), byte-identical to the
+        // pre-existing `false`/`Refused`.
+        NotApplicable = 0,
         // APMF holds a live kIntent_Cast claim naming THIS spell: its engine
         // seats drive the follower's own AI to cast it, so the caller skips its
         // own apply (the pre-existing `true`).
@@ -86,6 +107,12 @@ namespace MFO::ComposedCast {
         // -- never Fired, never a suppression window, never a hand-lock re-stamp
         // -- and let the rules below it run. HeldOffBy() names the incumbent.
         Held,
+        // APMF is PRESENT, CAPABLE (ABI >= 5, toggle on) and it REFUSED the
+        // claim. There is NO fallback here: the caller must FAIL CLOSED -- no
+        // kInstant apply, no force, no legacy hybrid -- log loudly and let the
+        // heal visibly not happen. A refusal is a BUG TO FIX IN APMF, and
+        // masking it (CLAUDE.md principle 7) hides it indefinitely.
+        ApmfRefused,
     };
 
     // Try to CLAIM a_spell as a declarative APMF-driven cast by a_follower at
@@ -105,11 +132,15 @@ namespace MFO::ComposedCast {
     // Call every tick the gambit still wants the heal -- a repeat call with the
     // SAME (spell, target, stop-percent) is a cheap refresh; a CHANGE releases
     // and re-requests the SAME facet (a new bounded claim -- RequestCast has no
-    // in-place re-point, unlike the retired +ACT drive's Repoint). Returns
-    // Claimed only once APMF holds the claim (caller returns without applying its
-    // own effect); Refused degrades to the caller's kInstant apply; Held means a
-    // different spell's live claim owns the slot and NOTHING happened (see
-    // TryResult above).
+    // in-place re-point, unlike the retired +ACT drive's Repoint). The FOUR
+    // outcomes (TryResult above) are what the caller must decide about:
+    //   * Claimed       -> APMF holds the claim; the caller applies NOTHING.
+    //   * Held          -> a DIFFERENT spell's live claim owns the slot and
+    //                      NOTHING happened; transparent no-op (Fable SEV-2).
+    //   * NotApplicable -> there was nothing to ask; the caller's own kInstant
+    //                      apply is the SUPPORTED degrade contract.
+    //   * ApmfRefused   -> APMF is PRESENT and CAPABLE and said NO; the caller
+    //                      must FAIL CLOSED, never route around it.
     //
     // NEVER SUBSTITUTES: a_spell is always the gambit's own configured spell,
     // forwarded to APMF UNCHANGED, along with the actual a_target -- MFO does

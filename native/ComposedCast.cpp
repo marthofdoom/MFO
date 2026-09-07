@@ -205,8 +205,14 @@ namespace MFO::ComposedCast {
         // label gets printed). Cleared BEFORE the Enabled() gate so a toggle
         // flipped off mid-session cannot leave a record behind either.
         if (a_follower) g_lastHold.erase(a_follower->GetFormID());
+        // NOTHING WAS ASKED -- bad args, a non-Heal kind, SE/VR, bHealAnimPackage
+        // off, or APMF ABSENT (Enabled() is exactly those five). APMF was never
+        // consulted, so this can never be a refusal: the caller's kInstant apply
+        // is the SUPPORTED degrade contract here, not a fallback around a
+        // decline. (Was `TryResult::Refused` before fix/mfo-no-decline-fallback
+        // renamed that value to say what it actually means.)
         if (!Enabled(a_follower, a_spell, a_kind))
-            return TryResult::Refused;   // -> caller's kInstant apply
+            return TryResult::NotApplicable;   // -> caller's kInstant apply
 
         const RE::FormID fid       = a_follower->GetFormID();
         const RE::FormID spellID   = a_spell->GetFormID();
@@ -374,8 +380,11 @@ namespace MFO::ComposedCast {
             // What actually cannot happen is a heal Try() AFTER a same-tick
             // ClaimHealCast that MINTED a handle: a Claimed outcome ends all
             // three scans (Fired suppression / opaque NoOp / `acted`), and a
-            // Refused one clears hand[0] below so no later Try() finds an
-            // incumbent to hold. Every Try() that reaches THIS check therefore
+            // NON-claimed one from the ClaimHealCast branch below -- either
+            // NotApplicable or ApmfRefused, the two halves the old `Refused`
+            // was split into (fix/mfo-no-decline-fallback) -- clears hand[0]
+            // there UNCONDITIONALLY, so no later Try() finds an incumbent to
+            // hold. Every Try() that reaches THIS check therefore
             // sees only handles minted on an EARLIER tick, which APMF has long
             // since published. THAT is the dependency -- if a future caller ever
             // lets a heal Try() run after a minting claim in the same tick,
@@ -403,9 +412,8 @@ namespace MFO::ComposedCast {
         // caused). LEFT is also the right fallback with no weapon held -- heals
         // are left-hand almost always regardless. a_stopPct forwards the
         // gambit's own configured heal threshold (0 = none -> full restoration);
-        // see this file's Try() doc in ComposedCast.h. Refused (lost arbitration
-        // / APMF absent / ABI too old / toggle off) -> degrade to kInstant,
-        // byte-identical to today.
+        // see this file's Try() doc in ComposedCast.h. A `false` here is SPLIT
+        // into ApmfRefused vs NotApplicable -- see the block inside the branch.
         if (!APMFBridge::ClaimHealCast(fid, spellID, targetID, APMFBridge::kApmfHandLeft,
                                        isConcentration, a_stopPct)) {
             CastBounds::Disarm(fid);
@@ -416,8 +424,22 @@ namespace MFO::ComposedCast {
                 it->second.hand[0] = Watch{};
                 if (it->second.hand[1].spell == 0) g_watch.erase(it);
             }
-            spdlog::info("[cfc] {:08X} heal-cast claim refused -- kInstant apply", fid);
-            return TryResult::Refused;
+            // A false from ClaimHealCast is SPLIT (fix/mfo-no-decline-fallback):
+            // HealCastClaimSupported() tells "APMF is present + capable and it
+            // REFUSED" (-> ApmfRefused, the caller FAILS CLOSED, no kInstant
+            // apply) from "the channel was never there: ABI < 5, or the toggle
+            // went off between Enabled() and here" (-> NotApplicable, kInstant
+            // degrade, byte-identical to before). APMFBridge already logs the
+            // ABI < 5 case ONCE per session, and the callers now log the refusal
+            // loudly themselves, so the old `[cfc] ... kInstant apply` line is
+            // gone -- it asserted a fallback that no longer happens.
+            //
+            // EITHER WAY hand[0] was just cleared above, which is what the F1
+            // incumbent guard's documented invariant depends on ("a Refused one
+            // clears hand[0] so no later Try() finds an incumbent to hold") --
+            // splitting the value did not weaken it.
+            return APMFBridge::HealCastClaimSupported() ? TryResult::ApmfRefused
+                                                        : TryResult::NotApplicable;
         }
 
         // Register (actor, spell) so MFO's OWN CasterConsent hook -- installed
