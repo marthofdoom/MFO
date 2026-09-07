@@ -790,13 +790,29 @@ namespace MFO::Actuation {
         // of the kInstant force-apply below. Placed AFTER the competence gate so
         // an unaffordable cast declines exactly as today. ComposedCast::Try is
         // fully self-gating (HEAL-ONLY; AE + APMF + toggle) and DEGRADES on any
-        // failure: it returns false (this path BYTE-IDENTICAL to today, kInstant
-        // apply) for offense/buff or when the claim is refused. Returns true
-        // only once APMF OWNS the cast, so the caller returns Applied without
-        // its own engine call. a_stopPct forwards through unchanged.
+        // failure: Refused (this path BYTE-IDENTICAL to today, kInstant apply)
+        // for offense/buff or when the claim is refused. Claimed only once APMF
+        // OWNS the cast, so the caller returns Applied without its own engine
+        // call. a_stopPct forwards through unchanged.
+        //
+        // HELD is the THIRD outcome (Fable SEV-2, 2026-09-06): a different
+        // spell's live claim owns this follower's single heal slot, so nothing
+        // was claimed AND nothing was applied. It used to arrive folded into
+        // Try()'s `true` and therefore came back from here as Applied -- a spell
+        // that was never cast, logged as fired, buying the suppression window and
+        // re-stamping the Task-2 hand lock. Forward it as its own SelfCast value
+        // so every caller decides about it explicitly. NOT a fall-through to the
+        // kInstant apply below: the whole point of the hold is that the incumbent
+        // claim keeps the slot for its charge window, and silently landing this
+        // spell's effect anyway would erase the very condition the incumbent is
+        // being given time to satisfy.
         const auto selfKind = CasterConsent::ClassifySpell(a_spell);
-        if (ComposedCast::Try(a_follower, a_spell, a_follower, selfKind, a_stopPct))
-            return SelfCast::Applied;
+        switch (ComposedCast::Try(a_follower, a_spell, a_follower, selfKind, a_stopPct)) {
+        case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
+        case ComposedCast::TryResult::Held:    return SelfCast::Held;
+        case ComposedCast::TryResult::Refused:
+        default:                               break;
+        }
 
         // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)
         // CONCENTRATION self-cast never reached the engine-seat path above --
@@ -1050,12 +1066,19 @@ namespace MFO::Actuation {
         // the kInstant force-apply below. Placed AFTER the competence gate
         // (parity with CastSelfDirect) and before the offense sightline gate --
         // heals are never offense, so order there is immaterial. Self-gating
-        // (HEAL-ONLY; AE + APMF + toggle) and DEGRADING: returns false
+        // (HEAL-ONLY; AE + APMF + toggle) and DEGRADING: Refused
         // (byte-identical kInstant) for offense/buff or a refused claim; a heal
         // never vanishes. `kind` is computed above; a_stopPct forwards through
-        // unchanged.
-        if (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct))
-            return SelfCast::Applied;
+        // unchanged. Held (Fable SEV-2, 2026-09-06) is forwarded as its own
+        // SelfCast value rather than masquerading as Applied -- see the identical
+        // note at CastSelfDirect's own Try() call site above for why it is not a
+        // fall-through to the kInstant apply either.
+        switch (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct)) {
+        case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
+        case ComposedCast::TryResult::Held:    return SelfCast::Held;
+        case ComposedCast::TryResult::Refused:
+        default:                               break;
+        }
 
         // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)
         // CONCENTRATION cast at a player/ally/foe never reached the engine-seat
@@ -1334,6 +1357,19 @@ namespace MFO::Actuation {
                 switch (r) {
                 case SelfCast::Applied:   return { Result::Fired, "auto conc-heal (most-hurt served)" };
                 case SelfCast::Refreshed: return { Result::NoOp,  "auto conc-heal (paced)", true };
+                // Fable SEV-2 (2026-09-06): the SHIPPED DEFAULT rule ("Always ->
+                // Heal (Auto)") reached this switch with a Held folded into
+                // Applied and reported `[eval] fired: auto conc-heal (most-hurt
+                // served)` for a spell that was never delivered -- and bought the
+                // Scheduler's suppression window on that no-op. CastAuto has no
+                // ResolveCastHand/HandFree/HoldCastLock gate of its own, so the
+                // hold is fully reachable here; this is the site the field
+                // configuration under diagnosis (AUTO heal + a kSelf heal) hits.
+                // Transparent NoOp with its OWN label: nothing fired, the rules
+                // below this one get their tick, and no lock is stamped.
+                case SelfCast::Held:      return { Result::NoOp,
+                                                   "auto conc-heal (held off -- another heal owns the claim)",
+                                                   true };
                 default:                  return { Result::NoOp,  "auto conc-heal (declined)", true };
                 }
             }

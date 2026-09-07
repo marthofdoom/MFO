@@ -93,6 +93,16 @@ namespace MFO::ComposedCast {
         // kHealBoundsTtlMs's 6s ceiling so a genuinely dead claim is flagged
         // long before it would auto-expire on its own anyway.
         constexpr auto kSilentWarnAfter = std::chrono::milliseconds(2000);
+        // The F1 hold's never-observed cap MUST sit above this warning (Fable
+        // diff review, 2026-09-06): the cap lifting a hold is the interesting
+        // event, and the "[cfc] ... NO observed cast" line is the evidence that
+        // explains it, so the warning has to reach the log FIRST. Compile-time,
+        // because the two constants live in different files and drift silently.
+        static_assert(std::chrono::milliseconds(
+                          static_cast<long long>(APMFBridge::kHealHoldNeverObservedMs)) >
+                      kSilentWarnAfter,
+                      "the never-observed hold cap must outlast kSilentWarnAfter, so the "
+                      "silent-claim warning always precedes the lift in the log");
         // Re-warn at most this often per still-silent claim -- a claim that
         // never fires must not spam the log every Try() tick.
         constexpr auto kSilentWarnEvery = std::chrono::milliseconds(5000);
@@ -112,6 +122,22 @@ namespace MFO::ComposedCast {
         void WatchArmed(RE::FormID a_fid, std::size_t a_slot, RE::FormID a_spell, RE::FormID a_proxy) {
             auto& w = g_watch[a_fid].hand[a_slot];
             if (w.spell != a_spell) { w = Watch{}; w.spell = a_spell; w.proxy = a_proxy; w.since = Clock::now(); return; }
+            // F4 (RC4): same claim, proxy learned SINCE the watch was armed --
+            // APMF mints it lazily during its own Drain, so the very first
+            // WatchArmed call for a fresh claim can still see proxy==0. Learn
+            // it here instead of caching that 0 forever.
+            //
+            // ADOPT ANY NON-ZERO PROXY, NOT ONLY A FIRST ONE (Fable amendment
+            // (c), 2026-09-06): the proxy FormID is NOT contractually stable
+            // across re-mints. APMF's pool is four slots, each Freed on release
+            // (APMF core/CastProxy.cpp: Acquire re-uses the slot this owner
+            // already holds, but otherwise takes whatever slot is FREE), so a
+            // same-spell RE-request after another owner took the old slot mints
+            // this claim onto a DIFFERENT form. Keeping the stale first proxy
+            // made ExpectingCast miss the new one and brought the false
+            // "not ours" + [cfc] alarm straight back. a_proxy == 0 still keeps
+            // whatever we already learned (it only means "not minted YET").
+            if (a_proxy != 0) w.proxy = a_proxy;
             if (w.observed) return;   // already confirmed firing this claim -- stay quiet
             const auto now = Clock::now();
             if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
@@ -124,11 +150,63 @@ namespace MFO::ComposedCast {
                          a_spell, a_slot == 0 ? "left" : "right");
             w.lastWarn = now;
         }
+
+        // ── the HOLD record + the HOLD log (Fable amendment (b), 2026-09-06) ────
+        // Try()'s F1 incumbent guard below reports TryResult::Held WITHOUT
+        // delivering the spell it was asked for -- the INCUMBENT's claim is what
+        // stands. (It returned a bare `true`, indistinguishable from a delivery,
+        // until Fable SEV-2 gave the hold its own tri-state value.) Two things
+        // follow, and the first cut of that guard did neither:
+        //   1. The hold MUST be visible. Its offense twin logs every hold it
+        //      takes (Actuation.cpp's LogCastLockHold, [eval]); a silent hold is
+        //      a mechanism the field cannot see at all.
+        //   2. The caller must be able to tell a HOLD from a DELIVERY, because
+        //      Logistics.cpp's OOC-concentration label read "a live heal claim
+        //      exists on this follower" as "this spell was delivered by APMF" --
+        //      true for a claim we just made, a LIE for a spell we just held OFF
+        //      (the live claim it sees is the incumbent's, a DIFFERENT spell).
+        //      Principle #7: that mask lived in the LOG, and the next deck log
+        //      would have been diagnosed through the false record. See
+        //      HeldOffBy() for how the label is derived from this instead.
+        // Worker-serial, no lock -- the SAME discipline as g_watch above (Try()
+        // and Logistics' read of it are the same serialized AddTask job worker).
+        struct HoldRecord {
+            RE::FormID heldSpell = 0;   // the spell that was held OFF (NOT delivered)
+            RE::FormID incumbent = 0;   // the live claim that held it off
+        };
+        std::unordered_map<RE::FormID, HoldRecord> g_lastHold;
+
+        // Rate-limit: at most one line per (follower, held-off spell) per 2 s --
+        // the SAME dedup shape as Actuation.cpp's LogCastLockHold, so a rule held
+        // off on every round-robin lap cannot spam the log at scan rate.
+        constexpr auto kHoldLogEvery = std::chrono::milliseconds(2000);
+        struct HoldLog { RE::FormID spell = 0; Clock::time_point when{}; };
+        std::unordered_map<RE::FormID, HoldLog> g_lastHoldLog;
+
+        void LogHealHoldOff(RE::FormID a_fid, RE::FormID a_wanted, RE::FormID a_incumbent) {
+            const auto now = Clock::now();
+            auto& entry = g_lastHoldLog[a_fid];
+            if (entry.spell == a_wanted && now - entry.when < kHoldLogEvery) return;
+            entry.spell = a_wanted; entry.when = now;
+            spdlog::info("[cfc] {:08X} heal-cast HELD OFF -- spell {:08X} wants the heal slot, "
+                         "incumbent spell {:08X} still holds a live claim there (not observed "
+                         "firing yet); the held-off spell was NOT delivered",
+                         a_fid, a_wanted, a_incumbent);
+        }
     }
 
-    bool Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
-             CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct) {
-        if (!Enabled(a_follower, a_spell, a_kind)) return false;   // -> caller's kInstant apply
+    TryResult Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
+                  CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct) {
+        // (b) Every Try() supersedes any earlier hold record for this follower:
+        // the record means "the outcome of the MOST RECENT Try on this follower
+        // was a hold", and Logistics reads it immediately after CastTargetDirect
+        // returns, on this SAME serialized worker -- so it needs no expiry, and
+        // must not have one (#9: a stale-by-clock record is exactly how a wrong
+        // label gets printed). Cleared BEFORE the Enabled() gate so a toggle
+        // flipped off mid-session cannot leave a record behind either.
+        if (a_follower) g_lastHold.erase(a_follower->GetFormID());
+        if (!Enabled(a_follower, a_spell, a_kind))
+            return TryResult::Refused;   // -> caller's kInstant apply
 
         const RE::FormID fid       = a_follower->GetFormID();
         const RE::FormID spellID   = a_spell->GetFormID();
@@ -148,6 +226,173 @@ namespace MFO::ComposedCast {
         // under the engine seats. This is APMF's job, not MFO's: MFO has no
         // main-thread seat inside this WORKER-context function to safely mint/
         // reconfigure a proxy form itself.
+
+        // F1 (RC1, 2026-09-06 diagnosis): two heal rules alternating on this
+        // follower's single heal-claim slot every 1-3 s (Healing Hands vs a
+        // kSelf heal) each Release the live claim and RequestCast fresh before
+        // the engine's ~2.5 s equip+charge ever completes -- no heal lands.
+        // Mirrors the offense per-hand cast lock (Actuation.cpp's HandFree/
+        // CastLockLive): if a DIFFERENT spell already holds this slot and has
+        // not been observed firing yet, HOLD the incumbent instead of swapping
+        // it out -- treat this Try() as Applied (the caller skips its own
+        // kInstant apply) without releasing/re-requesting anything, so the
+        // incumbent gets its charge window instead of being thrashed mid-flight.
+        //
+        // SIZED FROM CLAIM LIVENESS **AND CLAIM AGE** (Fable amendment (a) then
+        // SEV-1, both 2026-09-06 -- read them in that order, the first is only
+        // half the story and the note that used to stand here drew the wrong
+        // conclusion from it).
+        //
+        // (a) THE FIRST CLOCK WAS THE WRONG CLOCK. The first cut of this guard
+        // required `now - incumbent.since < kHealCastTtlMs`, and `since` is
+        // WATCH-ARM time, not claim age -- WatchArmed resets it only on a spell
+        // CHANGE (RC7: "watch age, not claim age"). A claim that goes unobserved,
+        // auto-expires at APMF's 6 s TTL and is re-requested FRESH by its own
+        // rule keeps the OLD `since`, so at t=6.5 s the guard measured 6500 ms
+        // against a 500 ms-old claim, dropped the lock, and the thrash returned
+        // permanently for that watch. That clause had to go, and it did.
+        //
+        // (SEV-1) BUT REMOVING IT LEFT THE HOLD WITH NO BOUND OF ITS OWN. The
+        // note that stood here then justified the replacement bound with a
+        // MECHANISM THAT DOES NOT EXIST IN EITHER SHIPPED BINARY, and stated the
+        // wrong worst case for lifting it. Both corrections are written out here
+        // (Fable diff review, 2026-09-06) rather than quietly deleted, because a
+        // comment that teaches a false mechanism is worse than no comment.
+        //
+        // NOT TRUE: THE F2-RENEWAL DEADLOCK. The old note argued APMF's renewing
+        // Repoint (F2) could keep a claim live forever and so take the hold's
+        // last bound away. It cannot, here: MFO never calls Repoint on a
+        // kIntent_Cast claim at all -- its ONLY Repoints are the non-cast
+        // EnsureClaimLocked/EnsureIvalClaimLocked (APMFBridge.cpp:238/:265), and
+        // RequestCast has no in-place re-point, so a CHANGE releases and
+        // re-requests -- and APMF **main**'s ApplyRepoint (core/ControlMap.cpp)
+        // writes `self->param` and never touches `expiresMs`. F2 lives on an
+        // unmerged APMF branch.
+        //
+        // WHAT THE BOUND IS ACTUALLY FOR, and it is a narrower job it really does
+        // do: stopping the HOLD'S HEARTBEAT from outliving the incumbent RULE's
+        // interest. Trace every exit this hold has: `observed` needs the engine to
+        // REALLY cast; an incumbent CHANGE needs a successful ClaimHealCast this
+        // hold itself prevents (and End() has no caller anywhere in native/);
+        // Tick()'s FacetExpiry sweep cannot fire because RefreshHealCastClaim
+        // heartbeats `refreshed` on every held tick, and the incumbent's own rule
+        // bumps it via ClaimHealCast for as long as its condition holds --
+        // re-requesting a fresh handle each time APMF expires the old one. A heal
+        // the engine never casts (target out of LoS, wrong hand, any §3 deny
+        // hole) can therefore keep re-arming while the held rule starves.
+        //
+        // So the clock is CLAIM AGE, not watch age: RefreshHealCastClaim refuses
+        // to heartbeat once the incumbent handle is
+        // APMFBridge::kHealHoldNeverObservedMs old with still no observed cast
+        // (APMFBridge's CastClaim::created, stamped once at RequestCast). The
+        // hold then lifts, this Try() falls through to its own ClaimHealCast, and
+        // the newcomer's fresh handle gets a fresh window.
+        //
+        // `created` IS MOVED on one path: the incumbent's own rule re-requesting
+        // after an APMF auto-expiry mints a new handle with a new stamp
+        // (APMFBridge.cpp:360-363 -> :381/:409). That is harmless HERE, and ONLY here,
+        // because that path cannot run underneath a live hold -- the incumbent's
+        // re-request returns Claimed, which stops the rule scan before any held
+        // rule's Try() is reached (see REACHABILITY below). It is not the blanket
+        // immunity the old note claimed.
+        //
+        // REACHABILITY -- TWO CASES, and only the first is a priority inversion.
+        // A newcomer's Try() only runs if the rule scan reaches it, and the
+        // incumbent's own Claimed outcome always stops the scan first: CastAuto
+        // -> Fired, and Scheduler.cpp:579-588 stops the scan COLD at any index >=
+        // the fired rule; CastOn -> an OPAQUE NoOp (Actuation.cpp:1005);
+        // Logistics -> `acted = true; break` (Logistics.cpp:1456). So:
+        //   (i) WHILE THE INCUMBENT'S CONDITION STILL HOLDS, the only rule that
+        //       can be held is one ABOVE it in the table -- a genuine PRIORITY
+        //       INVERSION (a dying follower's rule-1 heal waiting on a rule-5
+        //       claim), which is why the cap must not be sized generously "just
+        //       in case".
+        //  (ii) ONCE THE INCUMBENT'S CONDITION GOES FALSE, its rule stops being
+        //       reached at all, so a LOWER-ranked rule is held too -- behind a
+        //       claim nobody wants any more, kept alive purely by this hold's own
+        //       heartbeat. Nothing here notices; the cap is the only thing that
+        //       ends it. Do not restate case (i) as if it were the whole story
+        //       (the round-3 review, 2026-09-07, caught exactly that).
+        //
+        // WHY THE CAP IS 4000ms AND NOT LESS. It races `observed`, not the fire:
+        // the one heal that landed on the deck was claim -> Casting 2.49 s ->
+        // MFO `[cast]` 2.95 s. The 2.3-2.5 s number that first sized this was an
+        // OFFENSE Firebolt, not a heal, and offense fires trailed their warns by
+        // up to 1.5 s (~3.9 s claim-to-fire). Lifting at 3000 ms would therefore
+        // have made the newcomer's ClaimHealCast RELEASE a heal that was already
+        // CASTING -- RC1 re-created for the exact two-rule case this hold exists
+        // to fix. There is NO "provably not going to fire" point available from
+        // this evidence; see APMFBridge.h's kHealHoldNeverObservedMs for the full
+        // trade-off (a held rule waits cap + one lap either way; cutting a firing
+        // heal is the field failure).
+        //
+        // LIFTING THE CAP IS NORMALLY A ONE-TIME HANDOVER. The old note's "worst
+        // case the two rules alternate on a 6 s beat" was wrong in the general
+        // case: in case (i) the lift lets the higher-ranked rule claim, and its
+        // own Fired window / opaque NoOp / `acted` then keeps the ex-incumbent
+        // from running at all, so the slot changes hands once. It is NOT
+        // unconditional: if the ex-incumbent's condition flaps back true after
+        // the newcomer claims, and neither claim is ever observed, the slot can
+        // ping-pong on a cap-plus-lap beat. That is bounded and loud (every swap
+        // prints a HELD OFF line), but it is not impossible.
+        //
+        // An OBSERVED claim is never capped: the `!incumbent.observed` term below
+        // means a live channelled heal never reaches RefreshHealCastClaim at all.
+        //
+        // The offense lock this mirrors (CastLockLive) checks claim liveness
+        // FIRST and uses a staleness window only for the UNCLAIMED direct-force
+        // fallback -- but it also has no F1-shaped hold that can suppress its own
+        // release path, which is why this one needs the extra age cap and that
+        // one does not.
+        //
+        // WHY THE HEARTBEAT AT ALL: the hold path deliberately never reaches
+        // ClaimHealCast, so without it the round-robin FacetExpiry() sweep
+        // released the held claim after ~2.45 s at the default fSuppressWindow
+        // (and after ~0.77 s at a legal fSuppressWindow=0) -- the lock cutting
+        // the very claim it exists to protect. It is the same refresh one more
+        // ClaimHealCast lap would have done, never a new lifetime.
+        if (auto it = g_watch.find(fid); it != g_watch.end()) {
+            const auto& incumbent = it->second.hand[0];
+            // RefreshHealCastClaim LAST: it takes APMFBridge's mutex and has the
+            // heartbeat side effect, so short-circuit keeps both off every tick
+            // that is not actually a hold.
+            //
+            // LATENT, AND THE DEPENDENCY IS DOCUMENTED NOWHERE ELSE (Fable diff
+            // review, 2026-09-06). RefreshHealCastClaim's liveness test bottoms
+            // out in APMF's IsClaimLive, which walks the PUBLISHED snapshot only
+            // (core/ControlMap.cpp) -- the same shape as the RC4 proxy bug F4
+            // fixed. A handle RequestCast minted in THIS frame, before APMF's
+            // next per-frame Drain publishes it, therefore reads as NOT live. So
+            // a hold check running in the same frame as the incumbent's own
+            // fresh RequestCast would LIFT the hold and thrash for that tick.
+            // THE INVARIANT THIS RESTS ON IS NARROWER THAN "ONE Try() PER TICK",
+            // and stating the broad version was wrong (round-3 review,
+            // 2026-09-07): Logistics DOES run several heal Try()s per follower
+            // per tick -- a Held outcome continues the scan (`start =
+            // ruleIndex + 1; continue`, Logistics.cpp:1415) and the `pass < 2 &&
+            // !acted` wrapper (:1191) re-runs the whole scan when nothing acted.
+            // What actually cannot happen is a heal Try() AFTER a same-tick
+            // ClaimHealCast that MINTED a handle: a Claimed outcome ends all
+            // three scans (Fired suppression / opaque NoOp / `acted`), and a
+            // Refused one clears hand[0] below so no later Try() finds an
+            // incumbent to hold. Every Try() that reaches THIS check therefore
+            // sees only handles minted on an EARLIER tick, which APMF has long
+            // since published. THAT is the dependency -- if a future caller ever
+            // lets a heal Try() run after a minting claim in the same tick,
+            // revisit this before assuming the hold still holds.
+            if (incumbent.spell != 0 && incumbent.spell != spellID && !incumbent.observed &&
+                APMFBridge::RefreshHealCastClaim(fid)) {
+                // (b) A hold is never silent, and never labelled as a delivery.
+                LogHealHoldOff(fid, spellID, incumbent.spell);
+                g_lastHold[fid] = HoldRecord{ spellID, incumbent.spell };
+                // TRI-STATE (Fable SEV-2): a hold is its OWN outcome, never a
+                // delivery. Returning `true` here made every caller report this
+                // spell as FIRED, buy the Scheduler suppression window on a
+                // no-op, and re-stamp Actuation's Task-2 hand lock with the
+                // held-off spell. Held says exactly what happened: nothing.
+                return TryResult::Held;
+            }
+        }
 
         // CLAIM (create) or refresh the kIntent_Cast facet: while it stands,
         // APMF's engine seats drive the follower's OWN AI to select/equip/
@@ -172,7 +417,7 @@ namespace MFO::ComposedCast {
                 if (it->second.hand[1].spell == 0) g_watch.erase(it);
             }
             spdlog::info("[cfc] {:08X} heal-cast claim refused -- kInstant apply", fid);
-            return false;
+            return TryResult::Refused;
         }
 
         // Register (actor, spell) so MFO's OWN CasterConsent hook -- installed
@@ -180,7 +425,10 @@ namespace MFO::ComposedCast {
         // CheckCast on the SAME Restore caster vtable -- stands down for the
         // window (§2 HARD-ABORT fix). Idempotent; re-Arm just refreshes the
         // expiry. Same TTL as the claim itself (APMFBridge::kHealCastTtlMs).
-        CastBounds::Arm(fid, spellID, 0, kHealBoundsTtlMs);
+        // F4 (RC4): pass the claim's minted delivery-flip proxy once known
+        // (0 on ABI < 6 or a claim that minted none -- Arm already handles a
+        // 0 fine) instead of the literal 0 this used to hard-code.
+        CastBounds::Arm(fid, spellID, APMFBridge::GetHealCastProxy(fid), kHealBoundsTtlMs);
 
         // Diagnostic only -- never gates the return value or re-fires anything
         // (Task 6: no delivery watchdog). Heal is always the LEFT slot. See
@@ -191,7 +439,7 @@ namespace MFO::ComposedCast {
         WatchArmed(fid, WatchSlot(APMFBridge::kApmfHandLeft), spellID,
                   APMFBridge::GetHealCastProxy(fid));
 
-        return true;   // APMF owns the cast: caller skips its kInstant apply.
+        return TryResult::Claimed;   // APMF owns the cast: caller skips its kInstant apply.
     }
 
     void End(RE::FormID a_follower) {
@@ -222,6 +470,16 @@ namespace MFO::ComposedCast {
                (h1.spell == a_spell || (h1.proxy != 0 && h1.proxy == a_spell));
     }
 
+    // (b) The label signal: did the LAST Try() on a_follower hold a_spell OFF,
+    // and if so, which incumbent spell held it? 0 = no (delivered, refused, or
+    // never a heal). See the HoldRecord comment above for why this exists and
+    // why it needs no expiry. Worker-serial, same as every other query here.
+    RE::FormID HeldOffBy(RE::FormID a_follower, RE::FormID a_spell) {
+        const auto it = g_lastHold.find(a_follower);
+        if (it == g_lastHold.end() || it->second.heldSpell != a_spell) return 0;
+        return it->second.incumbent;
+    }
+
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell) {
         auto it = g_watch.find(a_follower);
         if (it == g_watch.end()) return;
@@ -240,13 +498,16 @@ namespace MFO::ComposedCast {
     // all anymore" (a full teardown, e.g. dismissal or Scheduler's !castSeen).
     // A caller releasing only ONE hand's claim uses its own targeted clear
     // instead (End() above, for the heal's always-LEFT slot).
-    void ClearWatch(RE::FormID a_follower) { g_watch.erase(a_follower); }
+    void ClearWatch(RE::FormID a_follower) { g_watch.erase(a_follower); g_lastHold.erase(a_follower); }
 
     void Reset() {
         // APMFBridge::ClearTransientState (kPreLoadGame) drops the claim;
         // CastBounds::Reset drops the bound. This shim's own state is just the
-        // silent-cast diagnostic watch.
+        // silent-cast diagnostic watch (plus (b)'s hold record and its log
+        // rate-limit dedup, both pure transient bookkeeping like the watch).
         g_watch.clear();
+        g_lastHold.clear();
+        g_lastHoldLog.clear();
     }
 
 }

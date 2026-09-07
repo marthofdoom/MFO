@@ -6,6 +6,8 @@
 #include "Config.h"
 #include "Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
+#include "APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
+#include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -1490,9 +1492,88 @@ namespace MFO::Logistics {
                     if (tgt->IsHostileToActor(a_follower))
                         Sightline::Want(id, { tgt->GetFormID() });
                     const auto r = Actuation::CastTargetDirect(a_follower, sp, tgt);
+                    // HELD OFF -- its OWN outcome now (Fable SEV-2, 2026-09-06),
+                    // not a delivery wearing Applied's clothes. ComposedCast::Try
+                    // held this spell off because a DIFFERENT spell's live claim
+                    // owns the follower's single heal slot, so nothing was claimed
+                    // and nothing was applied here. Amendment (b) already stopped
+                    // this LINE from lying about it (by asking HeldOffBy), but the
+                    // return value still said Applied, so this branch still counted
+                    // a no-op as this tick's action (`acted = true; break`) and
+                    // walled off every rule below it. Log it, then fall through
+                    // TRANSPARENTLY like a Refreshed/Declined tick. HeldOffBy still
+                    // names WHICH incumbent won the slot, for the log only.
+                    if (r == Actuation::SelfCast::Held) {
+                        // DEDUPED at 2s per (follower, held-off spell) -- the SAME
+                        // window and shape as its [cfc] twin (ComposedCast.cpp's
+                        // LogHealHoldOff) and Actuation.cpp's [eval] LogCastLockHold
+                        // (Fable diff review, 2026-09-06: this was unthrottled). A
+                        // rule held off on every round-robin lap logged once per
+                        // service, and up to TWICE per service, since the `pass < 2
+                        // && !acted` dibs-tier wrapper above re-runs the whole scan
+                        // when nothing acted -- and a hold never sets `acted`. Kept
+                        // rather than dropped for the twin: it names the TARGET,
+                        // which the [cfc] line does not carry.
+                        //
+                        // KEYED ON THE PAIR, not on the follower with the spell as
+                        // a reset condition (round-3 review, 2026-09-07: the first
+                        // cut did the latter, so two rules above the incumbent
+                        // holding DIFFERENT heal spells flipped the entry on every
+                        // call, the window never applied, and it printed twice per
+                        // pass -- the spam this dedup exists to stop). One entry per
+                        // (follower, held-off spell); the key is the two FormIDs
+                        // packed into 64 bits.
+                        //
+                        // Function-local static, read+written only from the
+                        // serialized AddTask job worker (#4) -- the same
+                        // worker-serial-unlocked discipline as ComposedCast's own
+                        // g_lastHoldLog and this file's other per-follower log
+                        // throttles (s_nextHeal, s_nextWalkDiag).
+                        static std::unordered_map<std::uint64_t, Clock::time_point>
+                            s_lastHeldLog;
+                        const auto heldNow  = Clock::now();
+                        const auto heldSpel = sp->GetFormID();
+                        const auto heldKey  = (static_cast<std::uint64_t>(id) << 32) |
+                                              static_cast<std::uint64_t>(heldSpel);
+                        auto&      heldSeen = s_lastHeldLog[heldKey];
+                        if (heldNow - heldSeen >= std::chrono::milliseconds(2000)) {
+                            heldSeen = heldNow;
+                            spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
+                                         "(HELD OFF -- incumbent heal {:08X} owns the claim; this "
+                                         "spell was NOT delivered)",
+                                         id, heldSpel, tgt->GetFormID(),
+                                         ComposedCast::HeldOffBy(id, heldSpel));
+                        }
+                        start = choice.ruleIndex + 1; continue;
+                    }
                     if (r == Actuation::SelfCast::Applied) {
-                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
-                                     "(direct force, bounded)", id, sp->GetFormID(), tgt->GetFormID());
+                        // F1 label fix: CastTargetDirect's Applied return can mean
+                        // EITHER the kInstant direct-force apply below in that
+                        // function, OR ComposedCast::Try's APMF kIntent_Cast claim
+                        // (the heal-only engine-seat path, tried FIRST inside
+                        // CastTargetDirect) -- the old unconditional "(direct
+                        // force, bounded)" label was wrong for the latter. Applied
+                        // now means ONE of those two and never a hold (see above),
+                        // so bare claim liveness is a safe read again here: the live
+                        // heal claim on this follower IS this spell's.
+                        //
+                        // "APMF CLAIMED", NOT "APMF DELIVERED" (Fable diff review,
+                        // 2026-09-06). After the SEV-2 tri-state, an Applied whose
+                        // IsHealCastActive is true means exactly "a live APMF cast
+                        // claim exists for this spell" -- and a claim may sit
+                        // UNOBSERVED for its whole window while the engine never
+                        // casts it (the RC1/RC7 field failure this branch exists to
+                        // diagnose). Saying "delivered" of a claim would put that
+                        // failure mode's own log line on the wrong side of #7. The
+                        // claim FIRING is a separate, independently-logged signal:
+                        // Diagnostics.cpp's SpellSink -> ComposedCast's watch, and
+                        // the "[cfc] ... NO observed cast" warning when it does not.
+                        const bool isHeal =
+                            CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal;
+                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} ({})",
+                                     id, sp->GetFormID(), tgt->GetFormID(),
+                                     (isHeal && APMFBridge::IsHealCastActive(id))
+                                         ? "APMF claimed" : "direct force, bounded");
                         // acted = true (NOT just `break`): this `break` only exits the
                         // INNER start-scan; the OUTER "for (pass < 2 && !acted)" loot-
                         // ordering wrapper above (marth's dibs-tier pass 0/1 split) does
@@ -1509,7 +1590,8 @@ namespace MFO::Logistics {
                     }
                     // Refreshed (paced this tick) OR Declined (unaffordable / off-AE /
                     // LoS+LoF-held for offense): both TRANSPARENT -- fall to the next
-                    // rule. NEVER the FF direct-apply below (a per-second effect there
+                    // rule (Held is handled with its own log above, same fall-through).
+                    // NEVER the FF direct-apply below (a per-second effect there
                     // has no bounded channel and would stick, the old stuck-ward bug).
                     start = choice.ruleIndex + 1; continue;
                 }
@@ -1574,19 +1656,21 @@ namespace MFO::Logistics {
                     // equip/channel scaffolding was removed. It drives package-
                     // locked custom followers too. Re-fire it EVERY service so the
                     // channel stays alive while the rule wins -- no s_logiCastUntil
-                    // window here. F3: it returns Applied / Refreshed / Declined, so
-                    // a mere pacing REFRESH (no effect applied this tick) does NOT
-                    // count as this tick's action -- otherwise an "always ->
+                    // window here. F3: it returns Applied / Refreshed / Declined /
+                    // Held, so a mere pacing REFRESH (no effect applied this tick)
+                    // does NOT count as this tick's action -- otherwise an "always ->
                     // cast_self" would break the scan every tick and starve
                     // loot/drink. Only a real Applied is the action.
                     const auto r = Actuation::CastSelfDirect(a_follower, sp);
                     if (r == Actuation::SelfCast::Applied) {
                         acted = true;
                     } else {
-                        // Refreshed (channel kept alive, paced out this tick) OR
-                        // Declined (unaffordable / off-AE) -- both TRANSPARENT: the
-                        // refresh already happened inside CastSelfDirect, so just
-                        // fall through to let the rules below run this tick.
+                        // Refreshed (channel kept alive, paced out this tick),
+                        // Declined (unaffordable / off-AE), or Held (Fable SEV-2:
+                        // a different spell's live claim owns this follower's heal
+                        // slot, so NOTHING was claimed or applied -- ComposedCast
+                        // logs the [cfc] hold line itself) -- all TRANSPARENT: fall
+                        // through to let the rules below run this tick.
                         start = choice.ruleIndex + 1; continue;
                     }
                 } else if (immediate) {

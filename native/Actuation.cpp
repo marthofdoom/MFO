@@ -410,6 +410,19 @@ namespace MFO::Actuation {
                     case SelfCast::Refreshed:
                         HoldCastLock(id, kHandLeft, a_spell->GetFormID(), 0);   // TASK 2
                         return { Result::NoOp, "self-cast refresh (paced)", true };
+                    // Fable SEV-2 (2026-09-06): a HELD outcome is not a cast.
+                    // ComposedCast::Try held this spell off because a DIFFERENT
+                    // spell's live claim owns the follower's single heal slot, so
+                    // nothing was claimed and nothing was applied. It used to
+                    // arrive as Applied (the hold rode home inside Try()'s bare
+                    // `true`), which reported a fired cast that never happened AND
+                    // re-stamped the Task-2 hand lock with the HELD-OFF spell --
+                    // on any lap where no lock was live yet (fresh after
+                    // ClearCastLock, the Scheduler's no-cast-rule path, an
+                    // OOC->combat transition) that re-label starved BOTH rules
+                    // until a TTL. Transparent NoOp, its own label, NO lock.
+                    case SelfCast::Held:
+                        return { Result::NoOp, "self-cast held off (another heal owns the claim)", true };
                     case SelfCast::Declined:
                     default:
                         break;
@@ -473,6 +486,19 @@ namespace MFO::Actuation {
                 // transparent like the FF form.
                 HoldCastLock(id, kHandLeft, a_spell->GetFormID(), a_target->GetFormID());   // TASK 2
                 return { Result::NoOp, "concentration direct refresh (paced)", true };
+            // Fable SEV-2 (2026-09-06): a HELD outcome is not a cast.
+            // ComposedCast::Try held this spell off because a DIFFERENT
+            // spell's live claim owns the follower's single heal slot, so
+            // nothing was claimed and nothing was applied. It used to
+            // arrive as Applied (the hold rode home inside Try()'s bare
+            // `true`), which reported a fired cast that never happened AND
+            // re-stamped the Task-2 hand lock with the HELD-OFF spell --
+            // on any lap where no lock was live yet (fresh after
+            // ClearCastLock, the Scheduler's no-cast-rule path, an
+            // OOC->combat transition) that re-label starved BOTH rules
+            // until a TTL. Transparent NoOp, its own label, NO lock.
+            case SelfCast::Held:
+                return { Result::NoOp, "concentration held off (another heal owns the claim)", true };
             case SelfCast::Declined:
             default:
                 // Unaffordable (§5.3) / LoS or line-of-fire held (offense) /
@@ -679,6 +705,19 @@ namespace MFO::Actuation {
                     lockHands(a_spellID, 0);
                     // Channel kept alive, no effect/magicka this tick -- fall past.
                     return { Result::NoOp, "self-cast refresh (paced)", true };
+                // Fable SEV-2 (2026-09-06): a HELD outcome is not a cast.
+                // ComposedCast::Try held this spell off because a DIFFERENT
+                // spell's live claim owns the follower's single heal slot, so
+                // nothing was claimed and nothing was applied. It used to
+                // arrive as Applied (the hold rode home inside Try()'s bare
+                // `true`), which reported a fired cast that never happened AND
+                // re-stamped the Task-2 hand lock with the HELD-OFF spell --
+                // on any lap where no lock was live yet (fresh after
+                // ClearCastLock, the Scheduler's no-cast-rule path, an
+                // OOC->combat transition) that re-label starved BOTH rules
+                // until a TTL. Transparent NoOp, its own label, NO lock.
+                case SelfCast::Held:
+                    return { Result::NoOp, "self-cast held off (another heal owns the claim)", true };
                 case SelfCast::Declined:
                 default:
                     // Unaffordable / off-AE / no caster: transparent, the rules
@@ -949,20 +988,41 @@ namespace MFO::Actuation {
                     // when bCastSelf (dev-only, default off) never forked it off at :522,
                     // and self-cast is a separate, already-gated mechanism (CastSelfDirect)
                     // this fix must not silently annex.
-                    if (a_target != a_follower &&
-                        ComposedCast::Try(a_follower, spell, a_target,
-                                          CasterConsent::ClassifySpell(spell), /*stopPct=*/0)) {
-                        // TASK 2: same multi-tick "actively firing" reasoning as the
-                        // ownedCast branch above -- hold the lock (LEFT -- handPlan
-                        // resolved above, this is a Heal/Buff spell) so a different
-                        // cast rule cannot re-point APMF's engine seats mid-charge/
-                        // mid-decision.
-                        lockHands(a_spellID, a_target->GetFormID());
+                    if (a_target != a_follower) {
+                        switch (ComposedCast::Try(a_follower, spell, a_target,
+                                                  CasterConsent::ClassifySpell(spell), /*stopPct=*/0)) {
+                        case ComposedCast::TryResult::Claimed:
+                            // TASK 2: same multi-tick "actively firing" reasoning as the
+                            // ownedCast branch above -- hold the lock (LEFT -- handPlan
+                            // resolved above, this is a Heal/Buff spell) so a different
+                            // cast rule cannot re-point APMF's engine seats mid-charge/
+                            // mid-decision.
+                            lockHands(a_spellID, a_target->GetFormID());
 
-                        // OPAQUE hold: the AI is deciding+casting; firing lower rules now
-                        // risks disturbing that decision (the §0.6 confound). No force,
-                        // ever, here.
-                        return { Result::NoOp, "composed cast: AI deciding (animated, mobile)" };
+                            // OPAQUE hold: the AI is deciding+casting; firing lower rules now
+                            // risks disturbing that decision (the §0.6 confound). No force,
+                            // ever, here.
+                            return { Result::NoOp, "composed cast: AI deciding (animated, mobile)" };
+
+                        // Fable SEV-2 (2026-09-06): HELD is not a claim. A DIFFERENT
+                        // spell's live claim owns this follower's heal slot, so
+                        // nothing was claimed here. Folded into Try()'s old bare
+                        // `true`, this branch re-stamped the Task-2 lock with the
+                        // HELD-OFF spell and returned an OPAQUE NoOp that walled off
+                        // every rule below -- so on a lap with no live lock yet both
+                        // rules starved until a TTL. TRANSPARENT NoOp, no lock: the
+                        // incumbent keeps its slot, and the rules below this one still
+                        // get their tick. Deliberately NOT a fall-through to the
+                        // AI-first grace/ForceCast hybrid below -- that would force
+                        // exactly the competing cast the hold exists to prevent.
+                        case ComposedCast::TryResult::Held:
+                            return { Result::NoOp,
+                                     "composed cast: held off (another heal owns the claim)", true };
+
+                        case ComposedCast::TryResult::Refused:
+                        default:
+                            break;   // -> the AI-first grace/ForceCast hybrid below
+                        }
                     }
 
                     // GIVE THE FOLLOWER'S OWN AI A CHANCE FIRST.
