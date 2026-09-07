@@ -838,6 +838,56 @@ namespace MFO::Logistics {
                 auto* tref = tptr.get();
                 const float dist = tref ?
                     a_follower->GetPosition().GetDistance(tref->GetPosition()) : 1e9f;
+
+                // ── APMF LEG ENGAGEMENT OBSERVABLE (DIAG-2026-09-06, fixes 3 + 4).
+                // The ONE thing the field log could not answer without inference:
+                // did the engine actually ADOPT the offered travel package for this
+                // leg? `IsTravelPackage(GetCurrentPackage())` is a direct engine-state
+                // read and is exactly the signal the WALK line below already prints
+                // as onTravelPkg -- read it ONCE here, per tick, so the engagement
+                // record, the not-engaged report and the theft-guard decision below
+                // all agree on the same observation instead of three separate reads.
+                //
+                // Sticky by design: `legEngaged` records that the package HAS run for
+                // this leg, not that it is running right now. A later tick that finds
+                // it displaced is a DIFFERENT condition (RC#3) and is reported as such
+                // in the theft-guard block below.
+                auto*      curPkg      = a_follower->GetCurrentPackage();
+                const bool onTravelNow = Forms::IsTravelPackage(curPkg);
+                const bool apmfLeg     = Packages::IsAPMFTravelHeld(slot);
+                if (onTravelNow && !tr.legEngaged) {
+                    tr.legEngaged = true;
+                    spdlog::info("[loot] {:08X} leg->{:08X}: TRAVEL PKG ENGAGED -- curPkg={:08X} "
+                                 "after {:.1f}s, dist={:.0f} ({})",
+                                 id, tref ? tref->GetFormID() : 0u,
+                                 curPkg ? curPkg->GetFormID() : 0u,
+                                 tr.legStart.time_since_epoch().count() ?
+                                     std::chrono::duration<float>(now - tr.legStart).count() : -1.0f,
+                                 dist, apmfLeg ? "APMF route" : "legacy alias route");
+                }
+                // NOT ENGAGED. This is the line the diagnosis asked for: a dispatch
+                // whose package never took used to be indistinguishable from a
+                // follower who walked and failed, because the only trace either left
+                // was a stall/deadline verdict against the CORPSE. Fires on the first
+                // Walking tick of the leg (nextLegPkgDiag is zeroed at dispatch),
+                // then at most every 4 s -- the same throttle shape as the WALK
+                // diagnostic below, but stored PER LEG so a new dispatch is never
+                // swallowed by the previous leg's window. It stops entirely the
+                // moment the leg engages, so a healthy excursion prints one line at
+                // most. No re-assert, no retry, no fallback: it reports, nothing else.
+                if (tref && !tr.legEngaged &&
+                    (tr.nextLegPkgDiag.time_since_epoch().count() == 0 || now >= tr.nextLegPkgDiag)) {
+                    tr.nextLegPkgDiag = now + std::chrono::seconds(4);
+                    spdlog::warn("[loot] {:08X} leg->{:08X}: TRAVEL PKG NOT ENGAGED -- still on "
+                                 "curPkg={:08X} {:.1f}s after dispatch ({}); dist={:.0f}. The "
+                                 "offered travel package has never run for this leg -- any "
+                                 "stall/deadline verdict below is about the FOLLOWER not moving, "
+                                 "NOT about the ref being unreachable.",
+                                 id, tref->GetFormID(), curPkg ? curPkg->GetFormID() : 0u,
+                                 tr.legStart.time_since_epoch().count() ?
+                                     std::chrono::duration<float>(now - tr.legStart).count() : -1.0f,
+                                 apmfLeg ? "APMF route" : "legacy alias route", dist);
+                }
                 // DIAGNOSTIC (v0.8.6): is MFO's travel package driving him, and is
                 // he closing on the target? onTravelPkg=true + shrinking dist =
                 // working; onTravelPkg=true + flat dist = UNREACHABLE (no path).
@@ -852,7 +902,7 @@ namespace MFO::Logistics {
                     auto& nxt = s_nextWalkDiag[id];
                     if (nxt.time_since_epoch().count() == 0 || now >= nxt) {
                         nxt = now + std::chrono::seconds(4);
-                        auto* cur = a_follower->GetCurrentPackage();
+                        auto* cur = curPkg;   // one read per tick (see the engagement block above)
                         float pathSpeed = -1.0f;
                         if (auto* proc = a_follower->GetActorRuntimeData().currentProcess)
                             if (auto* high = proc->high)
@@ -1004,37 +1054,68 @@ namespace MFO::Logistics {
                 // sticky/strike. Arrival above still runs during the hold, so a
                 // steal beside the pile still grabs it.
                 //
-                // QUIET HOLD (field-proven 2026-09-03, ch.9 0x49 probe): for an
-                // APMF-routed leg this whole guard is REDUNDANT and actively
-                // harmful. The probe showed APMF's CheckForCurrentAliasPackage
-                // hook already holds the loot-travel package on its own for a
-                // framework-locked follower (Cicero: engine's own alias answer
-                // was the framework package, 0x49 overrode it back to the APMF
-                // package every tick) -- so a momentary framework curPkg here is
-                // the expected, benign gap between the engine's own re-eval and
-                // the hook's override, NOT a theft. Re-asserting (EvaluatePackage)
-                // and accruing strikes against a hold that's already self-healing
-                // is "as good as a fail" (marth): it escalates to abandon on a
-                // leg that was never actually lost. Skip the guard entirely for
-                // these legs -- 0x49 IS the re-assert. Legacy alias-route legs
-                // (APMF absent, IsAPMFTravelHeld false) run the unchanged guard
-                // below, byte-identical.
+                // QUIET HOLD -- NOW CONDITIONED ON AN OBSERVATION, NOT ON A CLAIM
+                // (DIAG-2026-09-06 fix 4). The bypass below used to fire for every
+                // APMF-routed leg on the premise that APMF's 0x49
+                // CheckForCurrentAliasPackage hook "overrode the package back every
+                // tick", so a momentary framework curPkg was a benign gap rather than
+                // a theft and the guard was redundant. That premise was true under
+                // the AliasPkgProbe and FALSE in the shipped build: the field session
+                // in Docs/DIAG-2026-09-06-loot-travel.md had 0 of 6 dispatches ever
+                // put the follower on the travel package, so the "self-healing hold"
+                // being trusted here did not exist. The follower was simply following
+                // the player, with the guard that would have noticed switched off.
+                //
+                // So the bypass now requires the hold to have been SEEN (legEngaged,
+                // set above off a direct GetCurrentPackage read) rather than merely
+                // requested. Three cases:
+                //   * APMF leg, engaged        -> bypass (0x49 genuinely IS the
+                //                                re-assert for this leg), but a later
+                //                                displacement is REPORTED (RC#3).
+                //   * APMF leg, never engaged  -> fall into the normal guard: the
+                //                                clocks and the strike/grace machinery
+                //                                apply exactly as on any other leg.
+                //   * legacy alias-route leg   -> normal guard, unchanged.
                 bool stealAbandon = false;
-                if (!gone && tref && Packages::IsAPMFTravelHeld(slot)) {
-                    // Nothing to do: the 0x49 hold self-heals. Fall through to the
-                    // arrival/stall/deadline checks below unconditionally -- a
-                    // genuinely stuck APMF leg (path fail, not a package steal)
-                    // still stalls/deadlines out the normal way.
+                if (!gone && tref && apmfLeg && tr.legEngaged) {
+                    // The hold is real for this leg: the 0x49 override has been
+                    // observed. Fall through to the arrival/stall/deadline checks
+                    // unconditionally -- a genuinely stuck APMF leg (path fail, not a
+                    // package steal) still stalls/deadlines out the normal way.
+                    //
+                    // RC#3 OBSERVABLE, not a recovery: an ENGAGED travel package that
+                    // is displaced by a runtime package (Cicero's FF001F36 in six
+                    // [obs] samples) stays displaced, and with the guard bypassed
+                    // nothing notices. Whether that is transient or permanent is the
+                    // open question the diagnosis flags as the NEXT fail mode. Say it
+                    // out loud; do NOT re-assert, strike, or abandon on it -- building
+                    // a recovery here is a separate design decision.
+                    if (!onTravelNow &&
+                        (tr.nextLegPkgDiag.time_since_epoch().count() == 0 || now >= tr.nextLegPkgDiag)) {
+                        tr.nextLegPkgDiag = now + std::chrono::seconds(4);
+                        spdlog::warn("[loot] {:08X} leg->{:08X}: TRAVEL PKG DISPLACED after "
+                                     "engaging -- curPkg={:08X}, dist={:.0f}. Theft guard is bypassed "
+                                     "for this leg (observed hold), so nothing re-asserts; if this "
+                                     "line repeats, the displacement is NOT transient.",
+                                     id, tref->GetFormID(), curPkg ? curPkg->GetFormID() : 0u, dist);
+                    }
                 } else if (!gone && tref) {
-                    if (!Forms::IsTravelPackage(a_follower->GetCurrentPackage())) {
+                    if (!onTravelNow) {
                         const auto skey = StealKey(id, tref->GetFormID());
                         if (tr.stolenSince.time_since_epoch().count() == 0) {
                             tr.stolenSince = now;
                             const int strikes = ++g_stealStrikes[skey];
-                            auto* curp = a_follower->GetCurrentPackage();
-                            spdlog::info("[loot] {:08X} travel pkg stolen mid-walk "
+                            // Say WHICH condition this is. "Stolen" is only true if
+                            // the leg was ever engaged; an APMF leg that never engaged
+                            // reaching here (fix 4) was never held in the first place,
+                            // and calling that a theft is how the last diagnosis got
+                            // pointed at the wrong subsystem.
+                            spdlog::info("[loot] {:08X} travel pkg {} "
                                          "(curPkg={:08X}) -- re-asserting claim, grace {}s (strike {}/{})",
-                                         id, curp ? curp->GetFormID() : 0u,
+                                         id,
+                                         tr.legEngaged ? "STOLEN mid-walk"
+                                                       : "NEVER ENGAGED (not a theft -- it never ran)",
+                                         curPkg ? curPkg->GetFormID() : 0u,
                                          std::chrono::duration_cast<std::chrono::seconds>(kStealGrace).count(),
                                          strikes, kStealStrikeMax);
                         }
@@ -1062,7 +1143,23 @@ namespace MFO::Logistics {
                             tr.progressAt = now;   // stolen time never counts against the ref
                             if (tr.deadline < now + std::chrono::seconds(4))
                                 tr.deadline = now + std::chrono::seconds(4);
-                            a_follower->EvaluatePackage(true, false);   // nudge; never resetAI
+                            // RE-ASSERT ON THE MAIN THREAD. This tick runs on the
+                            // AddTask job worker (CLAUDE.md threading), and
+                            // EvaluatePackage is an engine AI write -- MainThread::Post
+                            // is the only road to the true main thread. It was an
+                            // inline off-thread call here; fix 4 above additionally
+                            // routes APMF legs that never engaged into this branch, so
+                            // the hop is now load-bearing on a path it was not on
+                            // before. Look the actor up by FormID inside the lambda,
+                            // never capture the pointer. No pump (VR) -> no nudge and
+                            // the grace simply expires; the failure is not masked.
+                            if (MainThread::IsInstalled()) {
+                                const RE::FormID nid = id;
+                                MainThread::Post([nid]() {
+                                    if (auto* a = RE::TESForm::LookupByID<RE::Actor>(nid))
+                                        a->EvaluatePackage(true, false);   // never resetAI
+                                });
+                            }
                             return;   // hold the leg -- reclaim pending
                         }
                         // External claim outlasted the grace: give the LEG up, keep
@@ -1117,6 +1214,41 @@ namespace MFO::Logistics {
                     if (stalled && tref)
                         spdlog::info("[loot] {:08X} unreachable {:08X} (no progress, dist={:.0f}) -- skipping",
                                      id, tref->GetFormID(), dist);
+                    // PLAIN DEADLINE -- previously SILENT (DIAG-2026-09-06 fix 2,
+                    // CLAUDE.md principle 7). `stalled` printed "unreachable"; a leg
+                    // that simply ran out of clock printed nothing at all, so three of
+                    // the five "batch done" releases in the field session had no trace
+                    // of WHY beyond a [lootskip] blocklist on the next scan. The
+                    // decisive field is legEngaged: a deadline on a leg that never
+                    // engaged is not a statement about the ref at all.
+                    //
+                    // THROTTLE: at most one line per follower per 2 s. A leg's deadline
+                    // is TravelDeadline()-clamped to a 6 s MINIMUM, so two genuine,
+                    // consecutive deadline verdicts for one follower can never fall
+                    // inside that window -- this cannot swallow a real failure, it only
+                    // caps a pathological re-entry. (Same static-map idiom as
+                    // s_nextHeal / s_nextWalkDiag; worker-tick-only, no lock.)
+                    else if (!gone && tref) {
+                        static std::unordered_map<RE::FormID, Clock::time_point> s_nextDeadlineDiag;
+                        auto& dn = s_nextDeadlineDiag[id];
+                        if (dn.time_since_epoch().count() == 0 || now >= dn) {
+                            dn = now + std::chrono::seconds(2);
+                            const float budget = tr.legStart.time_since_epoch().count() ?
+                                std::chrono::duration<float>(tr.deadline - tr.legStart).count() : -1.0f;
+                            const float over = std::chrono::duration<float>(now - tr.deadline).count();
+                            spdlog::warn("[loot] {:08X} leg->{:08X} DEADLINE EXPIRED (cat={}, budget={:.1f}s, "
+                                         "over by {:.1f}s, dist={:.0f}, curPkg={:08X}, route={}, "
+                                         "legEngaged={}) -- transient skip. {}",
+                                         id, tref->GetFormID(), CatName(tr.cat), budget, over, dist,
+                                         curPkg ? curPkg->GetFormID() : 0u,
+                                         apmfLeg ? "APMF" : "legacy-alias", tr.legEngaged,
+                                         tr.legEngaged
+                                             ? "He was on the travel package and did not close the "
+                                               "distance in time -- a verdict about the WALK."
+                                             : "The travel package NEVER ran for this leg -- this is "
+                                               "NOT a reachability verdict about the ref.");
+                        }
+                    }
                     tr.phase = TravelPhase::Holding;
                     tr.lingerUntil = now + BatchLingerDur();
                     // no return -- fall into Holding
