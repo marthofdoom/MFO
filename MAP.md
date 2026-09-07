@@ -1671,10 +1671,28 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   expiry sweep). `Tick()` ← `Diagnostics.cpp` (~`:334`) is the per-claim expiry sweep — offense-cast/
   combat-target/weapon-order-equipment/heal-cast compare against `FacetExpiry()` (round-robin-
   aware, see the 2026-09-05 entry below), package-offer alone against the flat 500 ms `kExpiry`.
-- **Gating:** owned model active iff `Available() && bApmfCast (INI, default ON) && !bLegacyCastHybrid
-  (MCM, default OFF)`. Toggle ON, or APMF absent, or a refused `ClaimOffenseCast` (ABI < 5 / arbitration
-  loss) → the ORIGINAL AI-first-wait + force-on-miss package hybrid (unchanged legacy branch below the
-  owned block — the ONLY place `CastSpellImmediate` force and the rooting UseMagic package survive).
+- **Gating (NO DECLINE-FALLBACK, `fix/mfo-no-decline-fallback` 2026-09-07):** owned model active iff
+  `Available() && bApmfCast (INI, default ON) && !bLegacyCastHybrid (MCM, default OFF)`. A failed
+  `ClaimOffenseCast` splits into the TWO ASYMMETRIC halves of marth's rule ("without APMF, it needs to
+  just work, whatever unpolished way works. With APMF theres no fallback for it. APMF shoudl work") —
+  the SAME rule the `Packages.cpp` loot-travel entry below (§ "APMF LOOT-TRAVEL") has stated since
+  2026-09-03, now enforced here too:
+  - **DEGRADE-WHEN-ABSENT** — `bLegacyCastHybrid` ON, APMF absent, or the claim channel is not there at
+    all (`APMFBridge::OffenseCastClaimSupported()` false: ABI < 5, or `bApmfCast` off) → the ORIGINAL
+    AI-first-wait + force-on-miss package hybrid (unchanged legacy branch below the owned block — the
+    ONLY place `CastSpellImmediate` force and the rooting UseMagic package survive). Silent (APMFBridge
+    already logs a too-old ABI once per session).
+  - **FAIL CLOSED** — APMF present AND capable AND it REFUSED (`OffenseCastClaimSupported()` true) →
+    `Actuation.cpp` returns `{FailedSkill, "APMF refused the cast claim", transparent}`; the cast does
+    NOT happen and NOTHING routes around APMF into the legacy hybrid. One `spdlog::error` `[apmf] …
+    APMF REFUSED the … claim` names actor/spell/target/hand, rate-limited to one line per
+    (follower, spell, target) per ~5s (`LogApmfRefusal`, `Actuation.cpp` anon ns; a twin lives in
+    `Actuation_Direct.cpp`). A refusal is a bug to fix in APMF, never a condition to degrade through
+    (`CLAUDE.md` principle 7). The heal twin (`ComposedCast::Try`, now TRI-STATE
+    `Owned`/`NotApplicable`/`Refused`) and the two concentration `ClaimOffenseCast` sites in
+    `Actuation_Direct.cpp` (`CastSelfDirect`/`CastTargetDirect` → `SelfCast::Declined` on a refusal)
+    follow the identical split. **This bullet no longer contradicts the FAILS-CLOSED principle stated
+    for `Packages.cpp` below.**
 - **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7; REPOINTED feat/offense-cast-seats
   2026-09-05; backing store re-shaped feat/per-hand-cast-slots 2026-09-06):** worker- AND
   combat-thread-safe read (the same `g_mx` every other accessor takes) —
