@@ -186,9 +186,14 @@ leash and walk-to-loot.
   is recommended:** the *walk-to-it* behaviours — walking to loot, *Flee to
   player*, and *Auto-retreat* — ride a native alias fill that is only verified
   on AE, so on Special Edition (1.5.97) they are inactive (loot is picked up at
-  arm's reach; flee/retreat do nothing). Everything else — combat gambits
-  (cast/attack/drink), restocking, looting itself, and the merchant economy —
-  works on SE and AE alike.
+  arm's reach; flee/retreat do nothing). **Cast-control gambits are AE-only
+  too.** On Special Edition MFO declines cast control and the follower's own AI
+  casts instead, which still looks and works like normal spellcasting. Attack,
+  drink, equip, restocking, looting itself, and the merchant economy work on SE
+  and AE alike.
+- **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)** — the control-layer
+  framework MFO drives followers through. Install it for the full feature set.
+  Without it MFO degrades to its older paths and says so in the log.
 - **SKSE64**
 - **Address Library for SKSE Plugins**
 - **SkyUI** and **MCM Helper** (version 9 or newer) — the settings menu
@@ -225,19 +230,25 @@ load under ≥ 1.0.26 — automatic, one load, nothing to do.)
 
 ## Docs
 
-Start at [`Docs/INDEX.md`](Docs/INDEX.md), which sets the read order and marks
-which documents are specs versus which record proven behaviour.
+Start at [`CLAUDE.md`](CLAUDE.md), then [`MAP.md`](MAP.md).
+[`Docs/INDEX.md`](Docs/INDEX.md) sets the full read order and marks which
+documents are current and which are historical.
 
-- [`DESIGN.md`](Docs/DESIGN.md) — the spec. §4.5 splits the mod into proven
-  and unproven engine ground; read it before estimating anything.
-- [`BALANCE.md`](Docs/BALANCE.md) — the Rapport ladder and its content budget
-- [`ARCHITECTURE.md`](Docs/ARCHITECTURE.md) — subsystems, threads, co-save schema
+- [`CLAUDE.md`](CLAUDE.md) — the working rules and the engineering principles
+- [`MAP.md`](MAP.md) — the architecture and change-impact map, by `file:line`
 - [`INVARIANTS.md`](Docs/INVARIANTS.md) — read before any code change
-- [`ANTI_PATTERNS.md`](Docs/ANTI_PATTERNS.md) — the portable "never again" list
+- [`STATUS.md`](Docs/STATUS.md) — the living handoff
+- [`CAST-DELIVERY.md`](Docs/CAST-DELIVERY.md) — before touching any cast path
 - [`ENGINE_NOTES.md`](Docs/ENGINE_NOTES.md) — what is proven vs merely researched
-- [`GAMBIT_LIBRARY.md`](Docs/GAMBIT_LIBRARY.md) — the condition→action vocabulary
-- [`ROADMAP.md`](Docs/ROADMAP.md) — build order to a shippable mod
+- [`ANTI_PATTERNS.md`](Docs/ANTI_PATTERNS.md) — the portable "never again" list
+- [`GAMBIT-GUIDE.md`](Docs/GAMBIT-GUIDE.md) — the condition→action vocabulary
+- [`BALANCE.md`](Docs/BALANCE.md) — the Rapport ladder and its content budget
 - [`CHANGELOG.md`](CHANGELOG.md) — per-version history
+
+Historical, kept for the reasoning trail and banner-marked as such:
+[`DESIGN.md`](Docs/DESIGN.md) (the July 2026 spec),
+[`ARCHITECTURE.md`](Docs/ARCHITECTURE.md) (superseded by `MAP.md`),
+[`ROADMAP.md`](Docs/ROADMAP.md), and the three `GAMBIT_*` design docs.
 
 ## Building
 

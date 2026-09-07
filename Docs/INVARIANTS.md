@@ -461,8 +461,11 @@ first check before believing any in-game result — MEO was bitten twice.
 one change. Especially binding for Tier B (`DESIGN.md` §4.5).
 `INHERITED` (MRO NATIVE_REWRITE_PLAN).
 
-**#45a — Substantive code gets a FABLE CODE REVIEW before it goes to CI or
-release.** A standing family rule, not a per-project choice. Precedent: MAO's
+**#45a — EVERY COMMIT GETS A FABLE DIFF REVIEW.** *(Scope widened 2026-09-06 by
+marth; CLAUDE.md rule 8 is authoritative. The rule used to read "substantive code
+… not doc-only commits" — the narrower wording is kept below as history because
+the incidents it names are still the reason the rule exists.)* A standing family
+rule, not a per-project choice. Precedent: MAO's
 `BUILD.md` records P1d as "✅ Fable-reviewed, tag `v0.8.2-p1d`"; MEO's 1.0.7
 roadmap requires the tally-cap change to get "its own Fable review + deck
 test, not a graft into a finished release."
@@ -470,9 +473,19 @@ test, not a graft into a finished release."
 there is no MSVC or CommonLibSSE-NG on the dev machine by design — so CI is
 the first compiler that ever sees the code and an in-game test is the first
 runtime. A review is the only check that happens before either.
-*Scope:* new subsystems, engine-facing code, anything touching the co-save or
-threading. Not doc-only commits.
-`INHERITED` (MAO BUILD.md, MEO ROADMAP-1.0.7).
+*Scope (CURRENT, marth 2026-09-06 — CLAUDE.md rule 8):* **every commit, as it
+lands. No exceptions.** Not just pre-cut, not just risky ones. CI-green is not a
+review and the coordinator's own read is not a substitute: dispatch a Fable diff
+review of that SHA, give it the brief the commit was written against so it can
+catch unrequested scope, and review the BRANCH's files (`git show <branch>:<path>`),
+never the main working copy. Nothing merges, tags or deploys on a commit whose
+review has not come back and been acted on.
+*Scope (SUPERSEDED, kept as history):* "new subsystems, engine-facing code,
+anything touching the co-save or threading. Not doc-only commits." Superseded
+2026-09-06 because the failure that broke it was a reviewed, CI-green, deliberate
+change that was simply the wrong trade — exactly what a scope-limited review
+cannot catch.
+`INHERITED` (MAO BUILD.md, MEO ROADMAP-1.0.7); scope `MFO` (2026-09-06).
 
 **MFO has violated this FOUR times** — M3, then three builds in a row on
 2026-07-21: the v0.3.0 field fixes, the tutoring removal, and **the co-save

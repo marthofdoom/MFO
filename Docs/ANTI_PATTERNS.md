@@ -149,6 +149,9 @@ is a gate defined to fit whatever got built.
 **A stale binary voids every test.** Check the log's version header before
 believing any in-game result.
 
-**Substantive code gets a Fable review before CI.** `[MFO 2026-07-21]` MFO
-skipped it once for M3 and the follow-up review found two save-corruption
-paths in that same code.
+**EVERY commit gets a Fable diff review before CI.** `[MFO 2026-07-21;
+scope widened 2026-09-06]` MFO skipped it once for M3 and the follow-up review
+found two save-corruption paths in that same code. The rule originally read
+"substantive code"; marth widened it to every commit on 2026-09-06 after a
+reviewed, CI-green, deliberate change shipped the wrong trade to the deck.
+`CLAUDE.md` rule 8 is authoritative.

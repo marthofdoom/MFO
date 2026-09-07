@@ -3,40 +3,50 @@
 This project is designed so any capable model or person can continue it from
 these docs alone. Load documents on demand, not all at once.
 
-> **START HERE to continue work: [`STATUS.md`](STATUS.md)** — the living handoff
-> (latest version, what shipped, what's awaiting marth's field test, ranked open
-> issues, backlog, and the workflow in one screen). It is kept current with every
-> release/issue change; this INDEX is the map, STATUS is the "you are here."
+> **START HERE, in this order (corrected 2026-09-07):**
+> 1. [`../CLAUDE.md`](../CLAUDE.md) — the working rules, the scope discipline, the
+>    engineering principles, the five things that corrupt saves, the threading model.
+> 2. [`../MAP.md`](../MAP.md) — **the architecture and change-impact map.** Per-subsystem
+>    responsibility, key symbols at `file:line`, and "what breaks if you change this".
+>    CLAUDE.md says to consult it FIRST; this index used to not mention it at all.
+> 3. [`INVARIANTS.md`](INVARIANTS.md) — 94 rules (80 numbered `#1`-`#80` + 14 lettered).
+>    Read before ANY code change. Its "CITATION NAMESPACE" section explains `#N` vs `T#N`.
+> 4. [`STATUS.md`](STATUS.md) — the living handoff: where the work is right now, what is
+>    unmerged, what the last field session measured.
+> 5. [`CAST-DELIVERY.md`](CAST-DELIVERY.md) — before touching any cast path.
+> 6. [`ENGINE_NOTES.md`](ENGINE_NOTES.md) — before any native work.
+>
+> This INDEX is the map of the doc set. STATUS is "you are here". MAP.md is the code.
 
-**CURRENT STATE (v1.0.31, 2026-08-05).** The 1.0 line is in active field
-testing and every planned milestone through M10 has shipped: gambits execute
-on both tables, the Field Orders board and MCM are live (four skins, full
-controller parity), logistics loots/restocks/upgrades — up to four followers
-on concurrent loot excursions (P7) — the follower economy trades at real
-merchants, auto-retreat is default-on, and Rapport gates slots. The 1.0.x
-patch line is field-fix driven; read `CHANGELOG.md` newest-first for what
-changed and why.
+**CURRENT STATE (v2.0.1, 2026-09-07).** MFO is a shipped SKSE C++ plugin on the 2.0
+line. It is an **APMF (Harbinger) client**: with the framework present, MFO routes its
+cast, loot-travel and retreat behaviour through APMF's package/cast claim model, and the
+older alias/force paths remain ONLY as the APMF-absent degrade. Four co-save records
+(FLWR v5 / MSTK v1 / PRGN v6 / FWPN v1), three combat vfunc hooks plus a main-thread
+pump, a worker-thread per-follower tick, an ImGui board on the live swapchain vtable, a
+follower economy, and a progression add-on architecture (v1.1.0) with `MFO_Progression.esl`
+as the worked example.
 
-**Proven in-game** (`ENGINE_NOTES.md` §0 carries dates and observed symptoms):
-everything above, plus the claim model the walk-to behaviours ride on — alias
-fill at static priority 60 claims an actor, release is by EVICTION, and as of
-v1.0.25/26 the evicting ref is a session-minted non-actor XMarker, never the
-player (a player latched into a package-carrying alias breaks furniture; the
-v1.0.26 load sweep un-latches saves that predate the fix).
+> **THIS BLOCK WAS PINNED AT v1.0.31 (2026-08-05) UNTIL 2026-09-07** while `VERSION`
+> read `2.0.1`. Three of its claims were false and one was actively dangerous; they are
+> corrected below rather than deleted, because a front door that quietly changes its
+> story teaches nothing.
 
-**The headline finding stands: MFO does not cast.** It puts a spell in the
-follower's hand and their own AI casts it — animated, magicka-charged,
-correctly aimed, because it is the vanilla path (§0.15); where the AI declines
-a commanded action, the M9 ACTUATION LAYER (a package *is* the action) owns
-the action, never the follower. Three cast *verbs* were refuted getting there:
-`CastSpellImmediate` (§0.8/§0.10), `Projectile::LaunchSpell` (#56), and
-`DoCombatSpellApply` (§0.14).
+**HISTORICAL — the "MFO does not cast" finding is RETRACTED (2026-09-07).** This index
+used to lead with *"The headline finding stands: MFO does not cast … `CastSpellImmediate`
+(§0.8/§0.10) … refuted"*. **MFO casts.** `CastSpellImmediate` is the canonical
+APMF-absent delivery (`Docs/CAST-DELIVERY.md`; `MAP.md` "known-working DIRECT FORCE"),
+main-thread-posted with a hand-computed magicka deduct, and with APMF present the
+follower's OWN AI performs a real animated cast driven by APMF's `CombatMagicCaster`
+seats. `DoCombatSpellApply` is likewise not "removed": it is still dispatched at
+`native/Actuation.cpp:1068` behind the default-OFF `bCommandCast`, kept for the
+magicka-deduct measurement. `Projectile::LaunchSpell` remains genuinely refused for a
+self-targeted spell (INVARIANTS `#56`).
 
-**Next: town errands (#31)** — followers autonomously walking to merchants and
-doors on their own business, generalising the loot-travel machinery
-(`Packages.*` + `Logistics.*`). Deferred but designed: vocabulary tiering by
-Rapport rank (ROADMAP), and the leveling-mod interop that is blocked on the
-other mod's missing API.
+**Next work is NOT "town errands (#31)".** The current head of work is the 2026-09-06
+field diagnosis and its fixes — see `STATUS.md` and the two DIAGs
+(`DIAG-2026-09-06-deny-heal-failures.md`, `DIAG-2026-09-06-loot-travel.md`). Town errands
+(task `T#31`) sit behind the APMF Nexus package.
 
 **Source-selection rule (#64), the biggest lesson of the M5/M9 stretch:**
 *"Can I call X?"* is answered by CommonLibSSE headers. **"How does the game
@@ -58,7 +68,8 @@ open-source plugin already installed on this machine.
 | A mechanism is mapped but unrun | `ENGINE_NOTES.md` with a RESEARCHED tag |
 | A rule whose violation caused a real failure | `INVARIANTS.md`, with the incident |
 | A portable "never again" | `ANTI_PATTERNS.md`, tagged `[MFO]` + dated |
-| Symptom → cause → fix | `DEBUGGING.md`, promoted from [PREDICTED] |
+| Symptom → cause → fix | a dated `DIAG-*.md` (the live route); `DEBUGGING.md` is a July snapshot |
+| The structure of the code moved | `../MAP.md`, **in the same change** |
 | A working-practice rule | `BUILD.md` |
 | **Generic to any CommonLibSSE-NG project** | **`../Linux-Native-Tools/`, in the same session** |
 
@@ -76,78 +87,60 @@ family's one principle warns about.
 
 ## Read order
 
-1. **DESIGN.md** (always) — what MFO is: the player loop, the gambit
-   vocabulary, the evaluator, Rapport, the board. **Two rule tables per
-   follower** — combat (§3–§4) and logistics (§4.8, upkeep: potions, ammo,
-   equipment) — with separate slots, separate cadences, and no interleaving.
-   §4.5 is the one section to read before estimating anything; it splits the
-   mod into proven and unproven engine ground.
-2. **BALANCE.md** — the Rapport ladder (250/1,000/2,500/5,000), its content
-   budget, shared-kill credit, the reaction-spread curve, and the full tuning
-   surface. **Derived, not validated** — every number has a stated model and
-   is expected to move once P1 measures real kills-per-hour.
-3. **ENGINE_NOTES.md** (before any native work) — the engine mechanisms MFO
-   depends on, **each tagged with how much it is actually trusted**:
-   `PROVEN (sibling)`, `RESEARCHED` (mapped from a primary source, never run
-   by anyone here), or `UNKNOWN`. **§0 holds the first `PROVEN (MFO)` entries**
-   — detection, form resolution, the ESL band, SPIT type 3, and what the same
-   session explicitly did NOT prove. §9 is the verification queue (the real
-   research plan); §10 is the promotion protocol. Also read **MEO's copy**, the authoritative one in the family —
-   but not MAO's, which is a stale fork whose §3 lacks the cost-override fix
-   and whose §6 still contains a retracted co-save claim.
-4. **ARCHITECTURE.md** (before touching `native/plugin.cpp`) — module split,
-   subsystem map, the thread/lock model, the tick pipeline, hook and sink
-   inventories, co-save schema, generator↔DLL contracts, startup order.
-   **Planned, not built** — its `file:line` refs are placeholders tagged with
-   the phase that will fill them.
-5. **INVARIANTS.md** (before ANY code change) — 49 load-bearing rules, each
-   an imperative plus the failure mode that violating it produced. All are
-   currently tagged `INHERITED` (cited to the sibling that paid) or `DESIGN`
-   (following from MFO's own decisions). **Replace a tag with a version and
-   symptom the moment MFO earns its own scar** — a local incident outranks a
-   borrowed one because the next person will believe it.
-6. **ANTI_PATTERNS.md** (before repeating history) — the portable "never
-   again" catalog. MEO's digest trimmed to what applies, plus **MFO's own**
-   tagged `[MFO]` and dated. Most MFO entries come from Fable reviews: with no
-   local compiler, review is the only gate before CI, and it has caught two
-   save-corruption paths and a cursor-over-gameplay blocker.
-7. **MANUAL_MOD_CREATION_GUIDE.md** — the binary format reference. Copy
-   MEO's; MFO's record needs (MGEF, SPEL, QUST+VMAD, SEQ) are a strict
-   subset of what it already documents.
-8. **DYNAMIC_OR_DROP.md** — the portability ledger. MFO is structurally
-   compliant by construction (the whole action vocabulary derives from the
-   live actor), so this file may stay thin — but the ledger still gates 1.0.
-9. **BUILD.md** (before starting any milestone) — the working agreement: the
-   per-build checklist, review recording, release procedure, testing gates,
-   and the division of labour. **This file was missing for MFO's first
-   session, and every rule in it was already written down in MAO's and MRO's
-   `BUILD.md` — that gap is why the review rule went unfound.** It carries an
-   honest table of the process violations that cost real work.
-10. **ROADMAP.md** — the build order from here: M0 (CI green) through M9+
-   (Tier B). Names two targets explicitly — **M5 first playable** (gambits
-   work, console-seeded) and **M7 first shareable** (a human can author
-   them). Its M4 is the de-risking step that is deliberately *not* in
-   `DESIGN.md`'s phase table: poke each engine primitive with a stick and log
-   what happens, before building on assumptions about it.
-11. **ADDON-API.md** (when touching #74 progression / the ESL seam) — the
-   FROZEN public contract for third-party progression addons: the
-   `MFO_AddonManifest` sentinel, the manifest FLST layout, N-declared classes,
-   and suffix-matched economy GLOBs. `FOLLOWER-PROGRESSION-ESL-DESIGN.md` §18 is
-   the design rationale; ADDON-API.md is the authored contract a third party
-   builds against. `MFO_Progression.esl` is its worked example.
-12. **TOOLING.md** (before touching the build pipeline) — the consolidated
-   Linux-native toolchain end to end: Papyrus compile (`tools/compile.sh`), the
-   MCM-Helper config pattern (empty `extends MCM_ConfigBase` shim + QUST VMAD +
-   `config.json` + SEQ; GlobalValue vs ModSettingFloat binding; the DLL
-   live-reads on menu close), the ESP/ESL generator (`MFO_GenerateESP.py`,
-   FormID bands / master-index rules, record helpers, the addon-manifest seam),
-   the audits (`audit_esp.py` / `audit_mcm.py`) as merge gates, and the two-deck
-   deploy flow.
-13. **BOARD-EXTENSION-API-DESIGN.md** (SCOPING, not built) — how a third party
-   could add their own tabs/features to MFO's in-game ImGui board: Tier 1
-   declarative ESL/JSON panels (manifest + GlobalValue/Papyrus binding) and
-   Tier 2 native companion-DLL tabs (`MEO_API.h`-style versioned interface +
-   stable C draw shim). Frozen into ADDON-API.md when a tier is built.
+**Items 1-6 are the START HERE list at the top of this file.** What follows is the rest
+of the doc set, with each entry's real status. Anything marked HISTORICAL carries a
+banner on its own first lines; do not plan against it.
+
+1. **`../CLAUDE.md`** — the rules. Scope discipline, the model policy, the ten
+   engineering principles, the five save-corrupting/crashing areas, threading.
+2. **`../MAP.md`** — the architecture + change-impact map. Navigate by `file:line`;
+   re-verify before editing, and update the map in the same change if structure moved.
+3. **INVARIANTS.md** (before ANY code change) — 94 load-bearing rules, each an
+   imperative plus the failure mode that violating it produced. Tags: `INHERITED`,
+   `DESIGN`, `MFO` (earned here, with version and symptom). Read its "CITATION
+   NAMESPACE" section first: `#N` is an invariant, `T#N` is a task number.
+4. **STATUS.md** — the living handoff.
+5. **CAST-DELIVERY.md** (before touching any cast path) — the claim model, the
+   APMF-present primary path and the APMF-absent degrade, ConcProxy, CastBounds, the
+   per-hand cast lock, and the REJECTED APPROACHES list so nobody retries them.
+6. **ENGINE_NOTES.md** (before any native work) — engine mechanisms, each tagged
+   `PROVEN (MFO)` / `PROVEN (sibling)` / `RESEARCHED` / `UNKNOWN`. §0 is the proof
+   record (40+ dated entries); §10 is the promotion protocol.
+7. **The 2026-09-06 DIAGs** — `DIAG-2026-09-06-deny-heal-failures.md` (RC1-RC7 plus a
+   14-row cast-facet deny audit) and `DIAG-2026-09-06-loot-travel.md` (why 0 of 6 loot
+   dispatches engaged the travel package). These are the only documents that describe
+   the field as it actually is; read them before theorising about cast or loot travel.
+8. **ANTI_PATTERNS.md** (before repeating history) — the portable "never again" catalog,
+   MFO's own entries tagged `[MFO]` and dated.
+9. **BUILD.md** (before starting any milestone) — the working agreement: the per-build
+   checklist, review recording, release procedure, testing gates. Its release-line
+   paragraph is older than the current 2.0.x line; STATUS.md is authoritative there.
+10. **TOOLING.md** (before touching the build pipeline) — the Linux-native toolchain end
+   to end: Papyrus compile (`tools/compile.sh`), the MCM-Helper config pattern, the
+   ESP/ESL generator (`MFO_GenerateESP.py`), the audits (`audit_esp.py`/`audit_mcm.py`)
+   as merge gates, and the deploy flow.
+11. **ADDON-API.md** (when touching task `T#74` progression / the ESL seam) — the FROZEN
+   public contract for third-party progression addons. `MFO_Progression.esl` is its
+   worked example. (`FOLLOWER-PROGRESSION-ESL-DESIGN.md` §18 is the rationale; §1-§17 of
+   that file are HISTORICAL.)
+12. **BOARD-EXTENSION-API-DESIGN.md** (SCOPING, not built) — how a third party could add
+   tabs to MFO's in-game board. Frozen into ADDON-API.md when a tier is built.
+13. **BALANCE.md** — the Rapport ladder and the tuning surface. Model doc; the numbers
+   are derived, not measured.
+
+**HISTORICAL — kept for the reasoning trail, banner-marked, not to be planned against:**
+`DESIGN.md` (the Jul 2026 spec; its dated rulings are the value), `ARCHITECTURE.md`
+(contradicts shipped code on hooks, records, threads and Papyrus — `MAP.md` replaces it),
+`ROADMAP.md` (M0-M10 all shipped), `TEST_GUIDE.md` and `RUNBOOK-session1-2.md` (July test
+procedure on the wrong modlist), `DEBUGGING.md` (a July snapshot with none of the
+APMF-era log tags), `ECON_PAPYRUS_PLAN.md`, `V1.1-ADDON-ARCHITECTURE-PLAN.md`,
+`V1.1-ACCEPTANCE-AUDIT.md`, `FOLLOWER-PROGRESSION-ESL-DESIGN.md` §1-§17,
+`REVIEW-2026-08-18-comprehensive.md`, and the three `GAMBIT_*` design docs
+(`GAMBIT-GUIDE.md` is the canonical vocabulary description).
+
+**DELETED ENTRIES (2026-09-07):** this list used to include `MANUAL_MOD_CREATION_GUIDE.md`
+and `DYNAMIC_OR_DROP.md` as read-order items 7 and 8. **Neither file has ever existed in
+this repo.** `DESIGN.md` still cites them in five places; those citations are dead too.
 
 ## Sibling projects — reuse, don't re-derive
 

@@ -45,8 +45,12 @@ reversibility order.
 
 ## Review (#45a)
 
-**A commit touching `native/**` is not pushed until a Fable review of that
-change has reported.** Not "usually", not "when substantial".
+**EVERY commit is reviewed before it is pushed — not only ones touching
+`native/**`.** Not "usually", not "when substantial". *(Widened 2026-09-06 by
+marth; `CLAUDE.md` rule 8 and `INVARIANTS.md` #45a are authoritative. This line
+used to say "a commit touching `native/**`"; the narrower version let doc and
+config commits through unreviewed, and a stale doc misleads the next session as
+surely as a bad patch does.)*
 
 *Why it is stricter here than in the siblings:* there is no local compiler.
 MSVC and CommonLibSSE-NG exist only on the CI runner, so CI is the first
