@@ -132,7 +132,9 @@ Status verified 2026-08-11:
 - [x] `SynthesisMeta.json` present next to the csproj
 - [x] csproj on the current pairing net10.0 / 0.36.6 / 0.54.4
 - [ ] **NOT LISTED — root cause: MFO's GitHub dependency graph is not
-      enabled/indexed** (`gh api repos/marthofdoom/MFO/dependency-graph/sbom`
+      enabled/indexed** *(status verified 2026-08-11; NOT re-verified since —
+      re-run `gh api repos/marthofdoom/MFO/dependency-graph/sbom` and update this
+      checkbox before quoting it)* (`gh api repos/marthofdoom/MFO/dependency-graph/sbom`
       → 404, while MEO's returns `Mutagen.Bethesda.Synthesis`). Fix: enable
       Dependency graph in repo Settings → Advanced Security, confirm the SBOM
       endpoint lists `Mutagen.Bethesda.Synthesis`, then wait for an hourly

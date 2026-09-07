@@ -185,6 +185,12 @@ co-save, and reconciled against live state every load.** Package overrides
 **persist through saves**, so an unledgered one outlives the mod and breaks
 `DESIGN.md` §8.5's clean-uninstall promise. An override with no ledger entry
 is a bug and is logged as one.
+*(Status, 2026-09-07: this rule is DORMANT, not violated. Tutoring was removed
+in v0.4.0 — see #20 — and MFO writes no package overrides today: `overrides` /
+`PackageOverride` in `State.h` is vestigial, its only writer is the co-save
+loader, and no runtime code populates it (`MAP.md` §1, grep-confirmed). The rule
+stands as written and binds the moment either mechanism comes back; nothing
+currently exercises it.)*
 `DESIGN` (`DESIGN.md` §4.5 / §5.4).
 
 **#20 — Never use `AddBaseSpell` / `RemoveBaseSpell` on a follower.**
@@ -425,9 +431,14 @@ source. *Failure:* MEO shipped tooltips claiming 8–40% where the DLL did
 `INHERITED` (MEO §24, MAO §32).
 
 **#41 — FormIDs are forever. The `0x800`–`0xFFF` band is a frozen
-generator↔DLL contract**, anchored by `data/mfo_forms.frozen.json`;
-`next_fid = max+1`; never recycled; the freeze guard trips on **both** drift
-and shrink. `tools/audit_esp.py` PASS is a merge gate.
+generator↔DLL contract**; `next_fid = max+1`; never recycled; the freeze guard
+trips on **both** drift and shrink. `tools/audit_esp.py` PASS is a merge gate.
+*(Anchor corrected 2026-09-07: this rule used to name `data/mfo_forms.frozen.json`
+as the anchor. **That file does not exist** — `data/` holds only
+`follower_quirks.json`. The real freeze is `native/Forms.h:21-57` plus the
+`REQUIRED` table in `tools/audit_esp.py:90`; all 24 `Forms.h` local IDs were
+verified present in `MFO_GenerateESP.py`. The MEO/MAO siblings this rule was
+inherited from DO keep a frozen JSON; MFO never adopted one.)*
 `INHERITED` (MEO §23, MAO §31, MRO).
 
 **#42 — Before creating any new record type, dump a vanilla record that does
@@ -651,6 +662,12 @@ out of combat entirely, where no animation is possible.
 It is the Papyrus twin of `CastSpellImmediate`. An entire mechanism was designed
 and shipped default-ON around a verb whose own documentation, present on disk in
 the installed SKSE scripts, refuted it in one line.
+
+*(Where it stands, 2026-09-07: the verb was NOT removed. `Actuation.cpp:1067-1068`
+still dispatches `Papyrus::DoCombatSpellApply` behind `Config::g_commandCast`,
+**default OFF**, kept for the magicka-deduct measurement. So "refuted" means
+"refuted as the animated-cast mechanism it was sold as", not "deleted". Docs that
+say it was removed are wrong; docs that say it is the cast path are worse.)*
 
 ### 59. Only redirect when the engine already has a target
 

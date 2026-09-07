@@ -3,8 +3,12 @@
 The tuning math behind `DESIGN.md`: the Rapport ladder, its content budget,
 the reaction-spread curve, and the numbers §4 and §5 defer to this file.
 
-**STATUS: derived, not validated.** Every number here comes from a stated
-model with stated assumptions. None has been measured in play. The models are
+**STATUS: a MODEL doc. The models are validated by two months of play; the
+NUMBERS are still unmeasured (re-checked 2026-09-07).** Every number here comes
+from a stated model with stated assumptions. None has been measured
+instrumentally — the ladder has been played since July 2026 and nobody has
+reported it wrong, which is weaker evidence than a measurement and is offered as
+exactly that. The models are
 the durable part; the numbers are the first hypothesis and are expected to
 move. Where a number is a pure guess it says so.
 

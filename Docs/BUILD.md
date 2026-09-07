@@ -86,11 +86,15 @@ its failure mode), or `ENGINE_NOTES.md` (if it is an engine fact).
   are immutable, and numbering *down* would read as a downgrade and trip the
   newer-save guard. Forward-only from 0.4.x, with the discipline applied from
   here: `0.5.0` = M5 (the evaluator), then `0.5.x` patches until M6/M7.
-- **Post-1.0 (the current line):** the milestones are shipped, so `1.0.x`
-  patches are FIELD-FIX driven — one shippable fix or one coherent feature
-  slice per patch, cut when the deck needs it, not batched. The next minor
-  (`1.1.0`) is reserved for the next real capability jump (town errands #31 or
-  vocabulary tiering), same milestone rule as ever.
+- **Post-1.0:** the milestones are shipped, so patches are FIELD-FIX driven —
+  one shippable fix or one coherent feature slice per patch, cut when the deck
+  needs it, not batched. A minor is reserved for a real capability jump, same
+  milestone rule as ever.
+  *(2026-09-07: this bullet used to say "the current line" was `1.0.x` and that
+  `1.1.0` was reserved for town errands. Two capability jumps have shipped since
+  — `1.1.0` was the progression add-on architecture and `2.0.0` moved MFO onto
+  Harbinger/APMF. **`Docs/STATUS.md` is authoritative for the current release
+  line;** this file is authoritative for the release PROCESS only.)*
 - A release **must** carry its CHANGELOG entry (the script enforces it), and
   the entry must state **save compatibility** and any **upgrade action**.
 - **FormIDs are forever once a build reaches a save. Never renumber.**
@@ -127,8 +131,10 @@ its failure mode), or `ENGINE_NOTES.md` (if it is an engine fact).
 
 ## Milestone state
 
-*(Table current as of v1.0.26 — every planned milestone has shipped and been
-field-tested; the historical review/violation notes below it stand as written.)*
+*(HISTORICAL TABLE, current as of v1.0.26 — every planned milestone has shipped
+and been field-tested. It is a record of how the mod was built, not a plan; the
+review/violation notes below it stand as written and are still the reason the
+process rules above exist.)*
 
 | # | Milestone | Change class | State | Gate |
 |---|---|---|---|---|
