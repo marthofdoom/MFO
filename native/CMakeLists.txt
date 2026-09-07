@@ -34,6 +34,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Diagnostics.cpp
     Board.cpp
     Board_Progression.cpp
+    Board_FieldKit.cpp
     Probe.cpp
     ProgProbe.cpp
     Progression.cpp
