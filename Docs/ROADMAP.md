@@ -1,5 +1,13 @@
 # MFO — Roadmap to a functional build
 
+
+> # ⚠ HISTORICAL — M0 THROUGH M10 ALL SHIPPED. THIS IS NOT THE BUILD ORDER.
+>
+> **Banner added 2026-09-07.** Every milestone in this file is SHIPPED or RULED,
+> and it does not mention APMF/Harbinger, the 2.0 line, the add-on architecture,
+> or the town update. **`Docs/STATUS.md` is the current build order.** Kept for
+> the reasoning trail and for the deferred items it still names.
+
 `DESIGN.md` §10 lists the phase *gates*. This is the build order: what to
 write, in what sequence, and which unknowns could reorder it.
 

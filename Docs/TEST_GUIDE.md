@@ -1,5 +1,14 @@
 # MFO — Test Guide
 
+
+> # ⚠ HISTORICAL — ITS NEWEST SECTION IS THE v1.0.26 SOAK (AUGUST 2026).
+>
+> **Banner added 2026-09-07.** The environment section names `custom-modlist`;
+> **the live field-test target is `Tuxbornrc1`**. Two of its own sections already
+> say "Archived". For a current test pass, use the pass criteria in the dated
+> DIAGs (`Docs/DIAG-2026-09-06-*.md`) and the deploy flow in
+> `Docs/TOOLING.md` §e. Kept for the reasoning trail.
+
 This is the document you read **while the game is running**, so the thing you
 need next is at the top and the history is at the bottom.
 

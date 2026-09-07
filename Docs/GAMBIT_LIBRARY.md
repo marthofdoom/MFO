@@ -1,5 +1,29 @@
 # MFO — Gambit vocabulary to build
 
+
+> # ⚠ HISTORICAL — ITS "TO BUILD" LIST IS BUILT. USE `GAMBIT-GUIDE.md`.
+>
+> **Banner added 2026-09-07.** `Docs/GAMBIT-GUIDE.md` is the CANONICAL vocabulary
+> description; this file duplicates its subject with a two-month-old inventory
+> that is now inverted:
+> - **Everything under "Approved, needs new vocabulary" EXISTS** in
+>   `native/Vocabulary.h` on `main` — `ally_hp_pct_below`, `self_mp_pct_above`,
+>   `foe_beyond/within_range`, `equip_ranged/melee/torch`, `is_interior`,
+>   `is_night`, `foe_highest_hp`, `foe_attacking_player/me`, `foe_count_ge` (as
+>   `foe_count_at_least`), `foe_is_undead/dragon`, `foe_weak_to_element` (as
+>   `foe_weak_fire/frost/shock`), `foe_ranged` (as `foe_is_ranged`), `act.flee`.
+> - The one item recorded as "Denied / deferred", **foe highest-level, SHIPPED**
+>   as `cond.foe_highest_level` (v2.0.0, "new 'highest level' and 'stronger than
+>   me' picks").
+> - `act.keep_distance` (Tier B) was BUILT in v1.0.8 and then REMOVED
+>   (`native/Vocabulary.h:133-135` records the removal).
+> - "Two live hooks only: `UpdateCombat` and `CheckStartCast`" and "the M9
+>   alias-package route gives animated casts" are both superseded — the M9
+>   forced-casting package route is gone (`Docs/CAST-DELIVERY.md`).
+>
+> Genuinely still unbuilt: `target_has_effect`, `self_has_debuff`,
+> `self_torch_equipped`. Kept for the reasoning trail.
+
 ## Principle (marth, 2026-07-28)
 
 **A gambit is nothing but `[what determines the target/trigger] → [what the

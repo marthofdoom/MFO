@@ -1,6 +1,19 @@
 # Follower Progression ESL — Design + Feasibility
 
-**Status: DESIGN (no code). Target: the update after v1.0.61. Supersedes the town update as "next" per marth 2026-08-11.**
+> # ⚠ HISTORICAL for §1–§17 — THIS SHIPPED AS v1.1.0. **§18 IS STILL LIVE.**
+>
+> **Banner added 2026-09-07.** The status line below said "DESIGN (no code)";
+> the design was built and shipped as v1.1.0 (2026-08-31), including the
+> progression add-on `MFO_Progression.esl`, the HMS base feature and the
+> fixed-stat grant. Sections 1–17 are the pre-build design and are kept for the
+> reasoning trail — do not plan against their present tense.
+>
+> **§18 is the exception and is deliberately NOT archived:** it is the add-on
+> API rationale, it is cited from `Docs/INDEX.md`, and §18.6 says "CONTRACT
+> LOCKED". The AUTHORED contract a third party builds against is
+> `Docs/ADDON-API.md`; §18 explains why it is shaped that way.
+
+**Status (as written, 2026-08-11): DESIGN (no code). Target: the update after v1.0.61. Supersedes the town update as "next" per marth 2026-08-11.** — SHIPPED v1.1.0; see the banner above.
 
 An optional, separately-shipped ESL addon (`MFO_Progression.esl`), detected at runtime, adding: (1) real follower leveling — skill AVs + player-selectable perks from the load order's *actual* perk trees; (2) vanilla-style roster recall; (3) a gated Field Orders "Progression" tab; (4) MCM detection indicator. All heavy machinery lives in the DLL; the ESL is a switch plus a version stamp.
 

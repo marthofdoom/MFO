@@ -1,5 +1,22 @@
 # GAMBIT_FLOWS — natural combat flows, hand arbitration, and processing heuristics
 
+
+> # ⚠ HISTORICAL — A v1.0.11 DESIGN PASS. ITS "GROUND TRUTH" HAS SHIPPED PAST IT.
+>
+> **Banner added 2026-09-07.** `Docs/GAMBIT-GUIDE.md` is the CANONICAL vocabulary
+> description. Concretely wrong here now:
+> - "**Combat table has no fall-through**" (§0 ground truth and D1) — the combat
+>   fall-through SHIPPED (`native/Scheduler.cpp:512-518` "Mirrors the logistics
+>   fall-through … outcome is TRANSPARENT", `:659 if (outcome.transparent)`;
+>   CHANGELOG "COMBAT FALL-THROUGH (D1, the big correctness fix)").
+> - "Cast = equip spell into a hand … let the follower's own AI cast (consent +
+>   grace), silent fallback after `fAiCastGrace`" describes the
+>   `bLegacyCastHybrid` path only; see `Docs/CAST-DELIVERY.md`.
+> - §6 Phase 1 items 1.1–1.5 all shipped; the doc never says so.
+>
+> Still true: "rules have exactly ONE condition; there is no AND"
+> (`native/State.h:28-32`). Kept for the reasoning trail.
+
 *Design document (task #43). Analysis + recommendations only — no engine changes are
 made by this doc. Reviewed against the code as of v1.0.11 (`7d4266b`, `5e3a4ce`).*
 

@@ -1,5 +1,22 @@
 # MFO Comprehensive Fable Review — 2026-08-18
 
+> # ⚠ HISTORICAL — A CLOSED, DATED REVIEW. ITS SEV-1 IS FIXED ON `main`.
+>
+> **Banner + closing postscript added 2026-09-07.** This is a point-in-time
+> review, not a live defect list. **The one SEV-1 cluster it found — the
+> follower lists (`g_active`/`g_followers`) read from off-worker threads without
+> a lock or a mirror — IS FIXED on `main`:** `native/Followers.cpp:89` keeps a
+> `g_tracked` FormID membership mirror rebuilt under `g_mx`
+> (`:99-101`), exposed as `Followers::IsTrackedFast` (`:212-215`,
+> declared `Followers.h:132`), and the combat-thread callers use it —
+> e.g. `native/CasterConsent.cpp:252`. `Followers.h:68,122` now say in the
+> header that off-worker callers MUST use `IsTrackedFast`/`ActiveSnapshot`.
+> The rule that came out of it is INVARIANTS `#74`.
+>
+> Its `#76` citations are TASK number `T#76` (the equip force-hold), not
+> invariant #76 — see INVARIANTS "CITATION NAMESPACE". Remaining findings, if
+> any are still open, live in `Docs/STATUS.md`, not here.
+
 6 parallel Fable reviewers (coding + logic), read-only, judged against
 INVARIANTS/MAP/CLAUDE.md. Consolidated, de-duped, ranked. Tags: **[65]** =
 introduced/exercised by the v1.0.65 self-cast+AUTO work (release-relevant);

@@ -1,5 +1,15 @@
 # GAMBIT_FLAIR — low-cost texture: making gambit responses feel human and FFXII
 
+
+> # ⚠ HISTORICAL — A v1.0.11 SUGGESTION LIST. ITEMS 1–13 SHIPPED.
+>
+> **Banner added 2026-09-07.** `Docs/GAMBIT-GUIDE.md` is the canonical vocabulary
+> description. Items 1–13 of this list shipped (see the CHANGELOG entries for the
+> flair pass) and the doc carries no shipped markers. Its claim that "everything
+> is a handful of lines in existing functions **on the main thread**" is also
+> wrong now: the tick runs on the AddTask job worker (`ENGINE_NOTES` §0.30,
+> CLAUDE.md "Threading"). Kept for the reasoning trail.
+
 *Suggestion list (design lead pass). No code changed by this doc. Reviewed against
 v1.0.11 code: `Scheduler.cpp` (133 ms tick, round-robin, positional suppression),
 `Actuation.cpp` (attack latch, cast grace, equip, flee), `Vocabulary.h`,

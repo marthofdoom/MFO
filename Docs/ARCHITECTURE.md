@@ -1,5 +1,27 @@
 # MFO — Architecture
 
+
+> # ⚠ HISTORICAL — SUPERSEDED BY `MAP.md`. DO NOT PLAN AGAINST THIS FILE.
+>
+> **Banner added 2026-09-07.** This document self-declares "planned, not built"
+> and it means it. **Every load-bearing section below contradicts the shipped
+> code**, and it was still cited as normative by `CLAUDE.md` and `INDEX.md`:
+>
+> | This file says | The code and `CLAUDE.md`/`MAP.md` say |
+> |---|---|
+> | "Gameplay code hooks: ZERO" | three combat vfunc hooks + a MainThread pump, `plugin.cpp:297-301` |
+> | Board hooks are `RelocationID` trampolines | live IDXGISwapChain vtable Present(8)/ResizeBuffers(13), `Board.cpp:1548-1554` — zero game offsets |
+> | one co-save record `'FLWR'`, schema history stops at v2 | FOUR records, FLWR v5 / MSTK v1 / PRGN v6 / FWPN v1 |
+> | "No dedicated threads" | a sleeper thread drives the tick on the AddTask job worker (`Diagnostics.cpp`) |
+> | "No runtime Papyrus" | 10 TradeBridge natives + 3 `DispatchMethodCall2` method strings, called by shipped `.pex` |
+> | "No installer, no patch plugin" | a Synthesis patcher generating `mfo_items.json` |
+> | `Ledgers.cpp` | no such file; `overrides` is vestigial |
+> | a four-step `kDataLoaded` | sixteen steps (`MAP.md` "Startup / teardown wiring") |
+>
+> **Read [`../MAP.md`](../MAP.md) instead** — it carries the real subsystem,
+> thread, hook and co-save map with live `file:line` anchors. This file is kept
+> for the design reasoning that produced the project, not as a description of it.
+
 The subsystem map, thread/lock model, hook inventory, and the
 generator↔DLL contracts. Read this before touching `native/plugin.cpp`.
 

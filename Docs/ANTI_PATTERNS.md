@@ -133,7 +133,7 @@ as "no precedent" on a documentation search.
 **Verify which instance is live before writing paths into a test procedure.**
 `[MFO 2026-07-21]` A whole runbook pointed at the wrong MO2 instance because
 "LoreRim is the test list" was inherited from a sibling's playbook rather than
-checked. Testing happens in `custom-modlist`/Requiem.
+checked. Testing happens on the CURRENT field-test instance, which is named in `Docs/TOOLING.md` §e and in `Docs/STATUS.md` — **never hard-code it into a runbook**. (This line used to name `custom-modlist`/Requiem; the live target moved to `Tuxbornrc1` and every doc that hard-coded the old name went stale at once, which is the lesson this entry is about.)
 
 **Where a plugin logs is a CHOICE, not an environment fact.**
 `[MFO 2026-07-21]` Game-root-relative writes land in MO2's Overwrite beside

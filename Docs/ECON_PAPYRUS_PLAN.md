@@ -1,5 +1,17 @@
 # ECON_PAPYRUS_PLAN — the Papyrus merchant read + follower trade (#21)
 
+
+> # ⚠ HISTORICAL — THIS PLAN SHIPPED. DO NOT READ ITS PRESENT TENSE AS CURRENT.
+>
+> **Banner added 2026-09-07.** Written 2026-07-31 as a plan; delivered in the
+> v0.8.4x/v1.0.0 economy line and still live today. Its status line says
+> "PLAN (no code)" and its survey says MFO "ships NO Papyrus source and has NO
+> compiler step" and "registers none today" — **all three are false now**:
+> `tools/compile.sh` exists, `TradeBridge.cpp:365-376` registers ten natives on
+> class `MFO_Trade`, and `Docs/TOOLING.md` §a documents the compile step. Read
+> `MAP.md`'s TradeBridge/Logistics_Economy entries for the shipped design; this
+> file is the reasoning trail (its §A survey is still a useful reference).
+
 Status: PLAN (no code). Produced 2026-07-31. Supersedes the disabled native
 econ probe (`native/Logistics.cpp` `EconomyProbe`, v0.8.31) which CTD'd on the
 merchant-chest read on every thread. This document is the crash-free redesign:

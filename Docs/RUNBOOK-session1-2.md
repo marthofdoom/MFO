@@ -1,5 +1,15 @@
 # Runbook — sessions 1 & 2 (do this, in this order)
 
+
+> # ⚠ HISTORICAL — JULY 2026 (M3 BUILD). THE TEST INSTANCE IS WRONG.
+>
+> **Banner added 2026-09-07.** This runbook drives the M3 build and names
+> `custom-modlist` / profile `Requiem` as the test instance. **The live field-test
+> target is `Tuxbornrc1` on the deck** (`/home/deck/Games/Tuxbornrc1/overwrite/
+> SKSE/Plugins/MFO.log`); see `Docs/TOOLING.md` §e for the current deploy flow.
+> Following the steps below would check the wrong log on the wrong instance.
+> Kept for the reasoning trail.
+
 Companion to `TEST_GUIDE.md`, which says *what* is being proved. This says
 *what to press*.
 

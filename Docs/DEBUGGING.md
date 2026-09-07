@@ -1,5 +1,21 @@
 # MFO — Debugging Cookbook
 
+
+> # ⚠ HISTORICAL — A JULY 2026 SNAPSHOT. IT PREDATES EVERY APMF-ERA LOG TAG.
+>
+> **Banner added 2026-09-07.** Two problems, both about currency rather than
+> correctness:
+> 1. Its honesty marker says "MFO has hit none of them yet" — false for months.
+> 2. **None of the log tags a worker actually needs are in here**: `[cfc]`,
+>    `[castobs]`, `[ch.9-*]`, `[apmf]`, `[t2a]`, the existence of `APMF.log`, or
+>    the `plugin.cpp` install order that decides which hook prints first. Its
+>    environment table names `custom-modlist`; the live target is `Tuxbornrc1`.
+>
+> The dated DIAGs (`Docs/DIAG-2026-09-06-deny-heal-failures.md`,
+> `Docs/DIAG-2026-09-06-loot-travel.md`) are today's symptom→cause documents for
+> the APMF-era paths. The generic entries below are still sound; treat the
+> instance names and the tag list as stale.
+
 Symptom → cause → fix.
 
 **Honesty marker:** the sibling `DEBUGGING.md` files open with *"every entry

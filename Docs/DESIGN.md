@@ -19,8 +19,20 @@ Target: vanilla SE + SKSE core. Built with the toolchain in
 wine) plus the native layer (`native/plugin.cpp`, CommonLibSSE-NG, CI-built),
 copied from the sibling projects rather than re-derived.
 
-**STATUS (v0.0.0, pre-implementation): this is a SPEC, not a reconciliation.**
-Unlike MEO's and MAO's design docs, nothing here has shipped. Every section is
+**STATUS: HISTORICAL SPEC (July 2026). Banner corrected 2026-09-07 — it used to
+read "v0.0.0, pre-implementation … nothing here has shipped", and that has been
+false since v1.0.** Most of this document DID ship, and several of its dated
+rulings were later reversed by dated decisions elsewhere; the value of the file
+is the reasoning trail, not the present tense. Known reversals: §4.7b "MFO SHIPS
+NO PAPYRUS SCRIPT (RULED 2026-07-21)" was reversed by `ECON_PAPYRUS_PLAN.md` and
+MFO now ships `MFO_Trade.psc` plus two MCM shims (`Docs/TOOLING.md` §a); the
+co-save shape in §8.1 is one record where the code has four (`MAP.md` §1); the
+"one compile-time MCM stub, no runtime Papyrus" claim is superseded by
+TradeBridge's ten natives. It also cites three files that DO NOT EXIST —
+`tools/gen_vocab_header.py`, `tools/dump_record.py`, `data/mfo_forms.frozen.json`
+— and two docs that have never existed in this repo,
+`MANUAL_MOD_CREATION_GUIDE.md` and `DYNAMIC_OR_DROP.md`. Read `MAP.md` and
+`STATUS.md` for what is true today. Every section below remains
 a design commitment subject to the phase gates in §10. Where a mechanism has
 been *researched but not yet run*, it is marked **RESEARCHED** and cites the
 reference that maps it; where a sibling has shipped it, **PROVEN**.
