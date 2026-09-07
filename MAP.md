@@ -501,8 +501,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (instant + concentration exempt) so a light that never registers as active is not
   respammed and the recast beat looks human. A manual target
   pick keeps the single-target `CastOn` path. `CastSelfDirect` now returns
-  `SelfCast{Declined,Refreshed,Applied}` so a pacing REFRESH doesn't count as an
-  action that suppresses lower rules (logistics starvation, F3); its
+  `SelfCast{Declined,Refreshed,Applied,Held}` so a pacing REFRESH doesn't count as an
+  action that suppresses lower rules (logistics starvation, F3) — and `Held` (Fable
+  SEV-2, 2026-09-06) says `ComposedCast::Try` held this spell off behind a DIFFERENT
+  spell's live heal claim: transparent NoOp, never `Fired`, never a `HoldCastLock`
+  re-stamp. Its
   `SelfCastReconcile` release has NO time cap — an earlier 30 s cap dispelled long
   self-buffs mid-duration (~30 s re-cast beat); release is stale/follower-gone only.
   **F3 tri-state maps the SAME in BOTH combat call sites** (`CastOn` self fork +
@@ -1569,9 +1572,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   after `ownedCast`'s block (whether or not it ran — it never fires for a non-Offense spell), `CastOn`
   now also calls `ComposedCast::Try(a_follower, spell, a_target, ClassifySpell(spell), /*stopPct=*/0)`
   — the SAME `kIntent_Cast` claim `CastSelfDirect`/`CastTargetDirect` already make for a heal, reused
-  verbatim (HEAL-ONLY internal gate in `ComposedCast::Enabled`, so a Buff kind degrades to `false`
-  immediately). On success: `HoldCastLock` + `{NoOp,"composed cast: AI deciding (animated, mobile)"}`,
-  same OPAQUE-hold shape as `ownedCast`'s own success return. On refusal (Buff kind, AE/APMF/
+  verbatim (HEAL-ONLY internal gate in `ComposedCast::Enabled`, so a Buff kind degrades to
+  `TryResult::Refused` immediately — `Try` returns the TRI-STATE `ComposedCast::TryResult
+  {Refused,Claimed,Held}`, not a bool, since Fable SEV-2 2026-09-06). On `Claimed`: `HoldCastLock` +
+  `{NoOp,"composed cast: AI deciding (animated, mobile)"}`, same OPAQUE-hold shape as `ownedCast`'s
+  own success return. On `Held` (a different spell's live claim owns the heal slot): NO lock, a
+  TRANSPARENT `{NoOp,"composed cast: held off (another heal owns the claim)"}` — never `Fired`, and
+  never a fall-through to the force hybrid. On refusal (Buff kind, AE/APMF/
   `bHealAnimPackage` off, or a lost claim): falls straight through to the unchanged AI-first-grace +
   `ForceCast` hybrid below — byte-identical degrade, a heal never silently vanishes. Explicitly guards
   `a_target != a_follower` (self-target CAN reach this far when `bCastSelf`, dev-only default off,
