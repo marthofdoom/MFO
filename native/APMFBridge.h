@@ -565,13 +565,34 @@ namespace MFO::APMFBridge {
     // small suppression window. This is a refresh of an EXISTING claim, exactly
     // what one more ClaimHealCast lap would have done, never a new lifetime.
     //
-    // WHY IT IS STILL BOUNDED. Liveness is asked of APMF itself on ABI >= 6
-    // (IsClaimLive -- APMF auto-expires a claim at its own TTL with no notice,
-    // so a stored handle is not proof), and a claim that is NOT live is never
-    // heartbeaten, so it goes stale and Tick() collects it: the hold lifts.
-    // On ABI < 6 there is no way to ask; this then reports the stored handle and
-    // does NOT heartbeat, leaving the hold bounded by the sweep exactly as it
-    // was before this existed (a documented degrade, not a mask -- #7).
+    // WHY IT IS STILL BOUNDED -- TWO BOUNDS, and the second one is the real one
+    // (Fable SEV-1, 2026-09-06).
+    //  1. LIVENESS, asked of APMF itself on ABI >= 6 (IsClaimLive -- APMF
+    //     auto-expires a claim at its own TTL with no notice, so a stored handle
+    //     is not proof). A claim that is NOT live is never heartbeaten, so it
+    //     goes stale and Tick() collects it: the hold lifts. This bound is NOT
+    //     sufficient on its own -- APMF's renewing Repoint (F2) can keep a claim
+    //     live indefinitely while the engine never actually casts it.
+    //  2. CLAIM AGE. Past kHealCastTtlMs measured from when the handle was
+    //     REQUESTED (CastClaim::created, stamped once inside
+    //     EnsureCastClaimLocked and moved by nothing afterwards), this refuses to
+    //     heartbeat regardless of liveness. That caps how long a claim the engine
+    //     has NEVER been observed firing may hold ComposedCast's single heal slot
+    //     against a competing rule, and it is immune to any TTL renewal by
+    //     construction: renewal extends the claim on APMF's side, it does not
+    //     re-request a handle here, so `created` does not move. The cap never
+    //     applies to an OBSERVED claim, because the only caller (ComposedCast::
+    //     Try's incumbent hold) calls this only while the incumbent is unobserved
+    //     -- a live channelled heal never routes through here at all.
+    //
+    // ABI < 6 RETURNS FALSE. There is no IsClaimLive to ask AND no other bound in
+    // play (EnsureCastClaimLocked's unchanged fast path trusts a stored handle
+    // forever on ABI < 6, and the incumbent's own rule keeps `refreshed` moving,
+    // so Tick()'s sweep never fires either). Reporting the stored handle would
+    // hold a newcomer off behind a handle APMF may have silently expired, with
+    // nothing able to end it -- a mask (#7). Refusing degrades honestly to the
+    // pre-F1 behaviour (the two rules visibly thrash the slot) instead. Inert in
+    // practice: kABIVersion is 6 and the DLL pair ships together.
     bool RefreshHealCastClaim(RE::FormID a_follower);
 
     // Release every claim and clear the map. kPreLoadGame / revert, AFTER the pump is

@@ -44,10 +44,14 @@
 // stands silently STAYS silent; the log line is the diagnostic signal, not a
 // fix.
 //
-// Try() returns TRUE only once APMF confirms it holds the claim (the caller
-// then skips its own kInstant apply); FALSE degrades to the caller's proven
-// kInstant heal (a heal must never vanish -- APMF absent, ABI too old, toggle
-// off, SE/VR, or a refused claim all degrade cleanly, byte-identical to today).
+// Try() answers a TRI-STATE (TryResult below, Fable SEV-2 2026-09-06 -- it used
+// to be a bool, and the third state was hiding inside `true`): Claimed once APMF
+// confirms it holds the claim (the caller skips its own kInstant apply), Refused
+// to degrade to the caller's proven kInstant heal (a heal must never vanish --
+// APMF absent, ABI too old, toggle off, SE/VR, or a refused claim all degrade
+// cleanly, byte-identical to today), and Held when a DIFFERENT spell's live
+// claim owns the follower's single heal slot -- nothing was delivered and
+// nothing was applied.
 //
 // THREADING. Try()/End() run on the AddTask job WORKER (the per-follower tick),
 // matching every other Actuation_Direct entry point (#4). CastBounds is
@@ -59,6 +63,30 @@
 // g_targetCast, also worker-serial and unlocked).
 // ─────────────────────────────────────────────────────────────────────────────
 namespace MFO::ComposedCast {
+
+    // ── Try()'s TRI-STATE (Fable SEV-2, 2026-09-06) ───────────────────────────
+    // Try() used to return a bool, and the F1 incumbent hold rode home inside
+    // `true` -- so every caller that treats "true" as delivery reported a spell
+    // that was never cast as FIRED, bought the Scheduler's suppression window on
+    // that no-op, and re-stamped Actuation's Task-2 hand lock with the held-off
+    // spell (starving BOTH rules until a TTL). A hold is not a delivery and it is
+    // not a refusal either -- it is its own outcome, so it gets its own value and
+    // every caller must decide about it explicitly.
+    enum class TryResult : std::uint8_t {
+        // Not routed here at all, or APMF refused the claim: the caller MUST run
+        // its own kInstant apply (the pre-existing `false`, byte-identical).
+        Refused = 0,
+        // APMF holds a live kIntent_Cast claim naming THIS spell: its engine
+        // seats drive the follower's own AI to cast it, so the caller skips its
+        // own apply (the pre-existing `true`).
+        Claimed,
+        // HELD OFF: a DIFFERENT spell's claim already owns this follower's single
+        // heal slot and has not been observed firing, so this spell was neither
+        // claimed nor applied. The caller must treat this as a TRANSPARENT no-op
+        // -- never Fired, never a suppression window, never a hand-lock re-stamp
+        // -- and let the rules below it run. HeldOffBy() names the incumbent.
+        Held,
+    };
 
     // Try to CLAIM a_spell as a declarative APMF-driven cast by a_follower at
     // a_target (a_target == a_follower, or nullptr, -> self; wire target = 0).
@@ -77,9 +105,11 @@ namespace MFO::ComposedCast {
     // Call every tick the gambit still wants the heal -- a repeat call with the
     // SAME (spell, target, stop-percent) is a cheap refresh; a CHANGE releases
     // and re-requests the SAME facet (a new bounded claim -- RequestCast has no
-    // in-place re-point, unlike the retired +ACT drive's Repoint). Returns TRUE
-    // only once APMF holds the claim (caller returns without applying its own
-    // effect); FALSE degrades to the caller's kInstant apply.
+    // in-place re-point, unlike the retired +ACT drive's Repoint). Returns
+    // Claimed only once APMF holds the claim (caller returns without applying its
+    // own effect); Refused degrades to the caller's kInstant apply; Held means a
+    // different spell's live claim owns the slot and NOTHING happened (see
+    // TryResult above).
     //
     // NEVER SUBSTITUTES: a_spell is always the gambit's own configured spell,
     // forwarded to APMF UNCHANGED, along with the actual a_target -- MFO does
@@ -89,8 +119,8 @@ namespace MFO::ComposedCast {
     // gambited to heal an ally) is APMF's OWN problem to solve: it mints its
     // own delivery-flip proxy for the engine's Self branch (core/CastProxy.h)
     // rather than landing on the caster. MFO has no business building one here.
-    bool Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
-             CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct = 0);
+    TryResult Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
+                  CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct = 0);
 
     // Release a_follower's heal-cast claim + its CastBounds arm now. Call the
     // instant the gambit stops wanting the heal (target lost / rule no longer
@@ -129,14 +159,13 @@ namespace MFO::ComposedCast {
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell);
 
     // ── HELD-OFF query (Fable amendment (b), 2026-09-06) ──────────────────────
-    // Try()'s incumbent lock can return TRUE (the caller treats that as Applied
-    // and skips its own kInstant apply) WITHOUT this spell having been cast at
-    // all: a different spell's claim already owns the follower's single heal
-    // slot and is still live, so the newcomer is held off rather than allowed to
-    // release/re-request it mid-charge. Callers that LOG the outcome must be
-    // able to tell that apart from a delivery -- Logistics.cpp's OOC
-    // concentration line derived "APMF delivered" from bare claim liveness and
-    // therefore asserted delivery of the WRONG spell in exactly this state.
+    // WHICH incumbent held a_spell off on a_follower's last Try(). Try() itself
+    // now REPORTS the hold as TryResult::Held (Fable SEV-2 -- the hold used to
+    // ride home inside `true`, so a caller could not tell it from a delivery at
+    // all); this answers the follow-up question a LOG line needs: which spell's
+    // claim was it that won the slot. Logistics.cpp's OOC concentration line
+    // derived "APMF delivered" from bare claim liveness and therefore asserted
+    // delivery of the WRONG spell in exactly this state.
     // Returns the INCUMBENT spell that held a_spell off on a_follower's most
     // recent Try(), or 0 if that Try was not a hold of a_spell (delivered,
     // refused, non-heal, or no Try since). Cleared at the top of every Try(), so

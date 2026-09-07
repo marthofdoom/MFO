@@ -73,6 +73,14 @@ namespace MFO::Actuation {
     //   Refreshed — the rule is winning and the channel is kept alive, but no
     //               effect/magicka was applied this tick (fCastCooldown pacing).
     //   Applied   — the effect landed and magicka was spent this tick.
+    //   Held      — the APMF heal-claim path (ComposedCast::Try) HELD this spell
+    //               off: a DIFFERENT spell's live claim owns the follower's
+    //               single heal slot, so nothing was claimed, nothing was
+    //               applied, and no magicka was spent. TRANSPARENT, and it must
+    //               never be reported as Fired or re-stamp the Task-2 hand lock
+    //               with this spell (Fable SEV-2, 2026-09-06 -- it used to come
+    //               back as Applied and did exactly both). See
+    //               ComposedCast::TryResult / ComposedCast::HeldOffBy.
     // a_stopPct (default 0 = unused): a whole percent 1..100 of the target's
     // (here, the follower's own) PERMANENT actor value at which a claimed
     // APMF-driven concentration heal's native channel should stop -- forwarded
@@ -82,7 +90,7 @@ namespace MFO::Actuation {
     // stops targeting an ally once above the calling rule's threshold. Callers
     // with no numeric threshold in scope pass the default (matches the prior
     // full-restoration behaviour byte-for-byte).
-    enum class SelfCast : std::uint8_t { Declined, Refreshed, Applied };
+    enum class SelfCast : std::uint8_t { Declined, Refreshed, Applied, Held };
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                             std::uint32_t a_stopPct = 0);
 
@@ -97,7 +105,7 @@ namespace MFO::Actuation {
     // with a ~1 s kConcApplyPeriod beat deducting the per-second cost and
     // re-arming the effect's window; an FF spell keeps the fCastCooldown beat.
     // Time-bounded + released by TargetCastReconcile. Returns
-    // Applied/Refreshed/Declined (same semantics as CastSelfDirect). LoS +
+    // Applied/Refreshed/Declined/Held (same semantics as CastSelfDirect). LoS +
     // line-of-fire gate hostile offense on EVERY apply. Callers: Logistics OOC
     // cast dispatch AND combat ConcentrationCast -- BOTH primary; concentration
     // delivery touches no package anywhere. A self target is refused (use
