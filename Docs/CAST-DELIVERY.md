@@ -1,16 +1,36 @@
 # CAST DELIVERY — the single authoritative reference
 
-**Read this before touching ANY cast path.** It describes the FINAL, shipped cast-delivery
+**Read this before touching ANY cast path.** It describes the shipped cast-delivery
 model as it stands in the committed code — not the history of how it got here. If you need
 the dead-ends, see "REJECTED APPROACHES" at the bottom (they exist so nobody retries them).
-Everything lives in `native/Actuation.cpp`; the OOC dispatch is in `native/Logistics.cpp`.
+
+**WHICH PATH IS PRIMARY (corrected 2026-09-07 — read this before the section below).**
+With **APMF present** — the normal case, and what MFO ships as its showpiece — the primary
+cast path is **`ComposedCast::Try` → `APMFBridge::ClaimHealCast` / `ClaimOffenseCast` →
+`RequestCast`** (`native/ComposedCast.cpp:129-191`, `native/APMFBridge.cpp:296-340`). The
+follower's OWN AI performs a real animated cast, driven by APMF's four `CombatMagicCaster`
+seats plus `CheckShouldEquip`; neither mod calls an engine cast verb. The `CastSpellImmediate`
+model described in the next section is the **APMF-ABSENT DEGRADE** plus the legacy hybrid —
+it is not "the model", and the STANDING PRINCIPLE further down says exactly that. This
+document grew by appending a dated section per branch, so its oldest framing sits at the top;
+read the top as history and lines 272 onward as the current mechanism.
+
+**WHERE THE CODE LIVES (corrected 2026-09-07).** Not "everything in `native/Actuation.cpp`".
+`Actuation.cpp` holds the dispatch and the owned-cast branch; `native/Actuation_Direct.cpp`
+holds `ConcProxy`, `SustainConcentrationEffect`, `DrawConcCap`, `CastSelfDirect`,
+`CastTargetDirect` and the reconcilers; `native/ComposedCast.cpp` holds the composed/claimed
+path; `native/APMFBridge.cpp` holds the claim lifecycle; the OOC dispatch is in
+`native/Logistics.cpp` and `native/Logistics_Cast.cpp`.
 
 ---
 
-## THE MODEL (in one paragraph)
+## THE APMF-ABSENT / LEGACY MODEL (in one paragraph)
 
-MFO delivers **every** forced cast — self, player, ally, foe, fire-and-forget or
-concentration — with a single engine call:
+*Historical framing, still exactly correct for the degrade path. See "WHICH PATH IS PRIMARY"
+above for what runs when APMF is present.*
+
+On the legacy/degrade path MFO delivers a forced cast — self, player, ally, foe,
+fire-and-forget or concentration — with a single engine call:
 
 ```
 follower->GetMagicCaster(kInstant)->CastSpellImmediate(spell, false, target, 1.0f, false, 0.0f, follower);
@@ -59,9 +79,17 @@ real cast and DROPS that cost.
   no unanimated force. If a follower's combat style still won't DECIDE to cast, that is a magic-score
   bias question (raise it, the inverse of a deny), NOT a reason to force. Force + the rooting UseMagic
   package survive ONLY in the LEGACY hybrid.
-- **Concentration is untouched.** A concentration spell never enters this branch — its bounded
-  direct-force fork (`ConcentrationCast` → `CastTargetDirect`/`CastSelfDirect`) returns earlier,
-  because an AI-channeled concentration cannot be exact-bounded (the freeze). Exact-bounding holds.
+- **Concentration does not enter THIS branch** (the owned OFFENSE branch) — its bounded fork
+  (`ConcentrationCast` → `CastTargetDirect`/`CastSelfDirect`) returns earlier, because an
+  AI-channeled concentration cannot be exact-bounded (the freeze). Exact-bounding holds.
+  **CORRECTION (2026-09-07): "concentration is untouched" full stop is WRONG, and this doc
+  said both things.** Since the 2026-09-05 pass documented at "a non-heal CONCENTRATION
+  stream now reaches the engine-seat path too" (search that phrase), `CastSelfDirect` and
+  `CastTargetDirect` call `APMFBridge::ClaimOffenseCast` DIRECTLY with `concentration=true`,
+  so an OOC concentration heal IS an APMF claim path. `Logistics.cpp`'s log label for it still
+  prints "(direct force, bounded)", which is WRONG whenever APMF is present
+  (`Docs/DIAG-2026-09-06-deny-heal-failures.md` RC1); that label is owned by
+  `fix/mfo-loot-travel-client`'s file boundary and is queued, not fixed here.
 - **Claim lifecycles + scope + degrade.** offense-cast-claim (`kIntent_Cast`, TTL-bounded) = per-cast
   (released crisply on `!castSeen`); combat-target-claim = per-combat (re-pointed via APMF `Repoint`
   on a foe change, kept alive each in-combat tick, released at combat end; APMF's
@@ -102,7 +130,14 @@ instead sets up a *channeled* cast whose target is resolved by the spell's **del
 `kSelf` concentration binds the sustained ActiveEffect to the magic-caster's **owner** (the
 follower), so a player/ally concentration heal (e.g. Mysticism Fast Healing `0002F3B8` =
 Conc + Self) collapses onto the follower and the recipient gets nothing. **Concentration Self
-off-self is the ONLY broken case, and the proxy is the ONLY fix.**
+off-self is the ONLY broken case, and a delivery-flipped proxy is the fix.**
+
+**WHICH proxy, though — the table above is the APMF-ABSENT column (clarified 2026-09-07).**
+On the legacy/degrade path MFO builds `ConcProxy` itself, as described below. **With APMF
+present, APMF mints its own delivery-flip proxy** for a `kSelf`-delivery spell aimed at a
+non-self target (`req.proxy = 0` in `EnsureCastClaimLocked`) — MFO never inspects delivery
+and never builds one on that path. Read every row of this table as "APMF absent"; the
+APMF-present equivalent is the CAST-CLAIM OBSERVABILITY section near the bottom.
 
 ---
 
@@ -578,7 +613,16 @@ just closes the loop on the research note.
 
 APMF's `feat/ai-cast-seats-impl` answers five vfunc seats on the follower's own
 combat caster object while a `kIntent_Cast` claim stands — `CheckShouldEquip`
-(0x0F), `CheckStartCast` (0x06), `GetMagicTarget` (0x0A), `CheckStopCast` (0x07),
+(0x0F), `CheckStartCast` (0x06), `CombatMagicCaster::GetMagicTarget` (0x0A),
+`CheckStopCast` (0x07),
+
+> **VFUNC-INDEX WARNING (2026-09-07): `0x0A` names TWO DIFFERENT vfuncs on TWO
+> DIFFERENT vtables in this document, and both usages are correct.**
+> `CombatMagicCaster::GetMagicTarget` is slot `0x0A` on the combat-caster
+> vtables (APMF's seats). `MagicCaster::CheckCast` is slot `0x0A` on
+> `ActorMagicCaster` (MFO's `CasterConsent` `CheckCastThunk`). Always
+> class-qualify a vfunc index; an unqualified `0x0A` sends the next reader to
+> the wrong vtable.
 `SetupAimController` (0x0D) — so the FOLLOWER'S OWN AI equips, aims, charges, and
 fires the heal at the claimed target, with ZERO engine-cast call from either mod.
 `APMFBridge::ClaimHealCast` (`native/APMFBridge.cpp`) now calls `RequestCast`
@@ -609,7 +653,8 @@ vtables). SKSE's alphabetical plugin load order ("APMF.dll" before "MFO.dll")
 means APMF installs first, so MFO's thunk ends up OUTER (last write to the
 vtable slot) — the dangerous-sounding order, since an outer thunk could in
 principle veto the inner seat's forced YES. Read both hooked thunks
-(`CasterConsent.cpp`'s 0x06 `thunk` and the 0x0A `CheckCastThunk`) line by line:
+(`CasterConsent.cpp`'s 0x06 `thunk` and the `ActorMagicCaster::CheckCast` 0x0A
+`CheckCastThunk`) line by line:
 both call their captured `original()` FIRST (so the local `aiSaysYes`/`aiOK`
 already reflects whatever APMF's inner chain decided), THEN hit the
 `ClientCastClaimed` early-pass BEFORE any deny/veto logic (the latch check,
@@ -786,7 +831,26 @@ byte-identical. A concentration cast never silently vanishes: the existing
 `[cfc] claim live N ms with NO observed cast` diagnostic (`ComposedCast.cpp`)
 keeps working unchanged for this path (it is claim-generic, not heal-specific).
 
-**2 — a firing spell gambit now LOCKS until it completes.** marth: "while a
+> **⚠ THE `[cfc]` WATCHDOG IS MIS-SIZED — DO NOT READ ITS OFFENSE WARNINGS AS
+> FAILURES (RC7, 2026-09-06).** `kSilentWarnAfter` is **2000 ms**
+> (`native/ComposedCast.cpp:95`) against a measured engine equip+charge latency
+> of **~2.5 s**, so on the offense path it warns about casts that are simply
+> still charging: every offense `[cfc]` warning in the 2026-09-06 session was at
+> 2.0-2.4 s and every one was a FALSE ALARM. It also reports **watch age**, not
+> claim age — a watch spans many separate 6 s claims and any no-claim lull
+> between them, so a 7.7 s / 67 s figure is not "one claim held that long".
+> The Healing Hands warnings in that session (7.7-67 s) were nonetheless REAL:
+> they are RC1 (heal-slot thrash). Re-size the window before trusting it, and
+> until then read `[cfc]` as "look here", never as "this failed".
+
+**2 — a firing spell gambit now LOCKS until it completes.** *(SCOPE, added
+2026-09-07: this lock covers the OFFENSE path only — `CastOn`/`ConcentrationCast`
+via `Actuation.cpp`'s `g_castLock`. **HEALS WERE NOT COVERED**, and RC1 of
+`Docs/DIAG-2026-09-06-deny-heal-failures.md` is exactly that hole: two heal rules
+thrash MFO's single heal slot every 1-3 s, each swap releasing the claim before
+the engine's ~2.5 s equip+charge finishes — 1 heal landed in ~15 attempts. The
+heal-side lock (F1) is on the UNMERGED branch `fix/mfo-heal-slot-and-proxy`.)*
+marth: "while a
 spell gambit is actively firing, another spell gambit must not preempt or
 re-point it, even if it would otherwise win the rule evaluation." Before this
 pass, every APMF claim + concentration stream here uses a "call every tick the
@@ -989,7 +1053,7 @@ concentration cast at Exact unless MFO can prove the stream is one MFO itself is
 metering. Before this fix the only proof was the legacy alias-package stream
 (`Packages::StreamLive`, written only by `Packages::Begin`). Every other
 MFO-arranged cast, the `ConcProxy` direct force and now `ComposedCast`, passed
-through the same `CheckCast` (0x0A) thunk but was never registered as MFO's own.
+through the same `ActorMagicCaster::CheckCast` (0x0A) thunk but was never registered as MFO's own.
 Exact-bounding vetoed those as an unbounded AI stream. That was the deck
 HARD-ABORT of `0002F3B8` / `FF001BA4`.
 
@@ -1002,7 +1066,7 @@ actor owns. `Reset()` runs beside `ConcProxy::Reset()` on `kPreLoadGame`.
 
 Three call sites in `CasterConsent.cpp` now check `CastBounds::Live` before
 falling through to a deny: `ConcUnboundedDeny`, the `CheckStartCast` thunk, and
-`CheckCastThunk` (0x0A). A registered cast early-passes every one of them, the
+`CheckCastThunk` (`ActorMagicCaster::CheckCast` 0x0A). A registered cast early-passes every one of them, the
 same way the legacy package stream always did.
 
 **Why `ComposedCast::Try` is the only caller today, and that is correct, not a
@@ -1047,9 +1111,26 @@ changed here this pass.
 
 `native/APMFBridge.h`'s `kHealCastTtlMs` (6 s) sizes BOTH the `RequestCast`
 payload's `req.ttlMs` and (via `native/ComposedCast.cpp`'s `kHealBoundsTtlMs`,
-which aliases it) the `CastBounds::Arm` ceiling — re-armed every tick `Try()`
-succeeds, so it is only the guardrail on a crashed/forgotten claim, never a real
-cap on a continuous heal. `Config::g_cfcBackoffMs` is now VESTIGIAL (the retired
+which aliases it) the `CastBounds::Arm` ceiling.
+
+> **CORRECTED 2026-09-07 — this paragraph used to say the TTL is "re-armed every
+> tick `Try()` succeeds, so it is only the guardrail on a crashed/forgotten
+> claim, never a real cap on a continuous heal". That is FALSE on `main`.**
+> The `CastBounds::Arm` ceiling IS re-armed each successful `Try()`
+> (`native/ComposedCast.cpp:183`). **The APMF CLAIM's `req.ttlMs` is NOT.**
+> `EnsureCastClaimLocked` (`native/APMFBridge.cpp:296-318`) returns early when
+> the claim is unchanged AND `IsClaimLive` says it still holds — and that early
+> return performs no renew, no `Repoint`, nothing. So the claim runs out its
+> 6 s on APMF's own clock and MFO only re-requests on the tick AFTER expiry.
+> **RC2 of `Docs/DIAG-2026-09-06-deny-heal-failures.md` measured exactly that:
+> hard 6.0 s claim lives and a recurring 0.3-1.2 s UNCLAIMED gap every 6 s**,
+> inside which foreign spells equip and charge on the "claimed" hand. It IS a
+> real cap on a continuous heal (CLAUDE.md principle 9, and see ENGINE_NOTES
+> §0.45).
+> **PENDING, NOT SHIPPED:** the renewal (F2 — `Repoint` renews the TTL, plus an
+> MFO-side heartbeat) is on the UNMERGED APMF branch
+> `fix/apmf-claim-renew-denyhand-spellsteer`. Do not restore the old wording
+> until that branch has landed AND been field-verified. `Config::g_cfcBackoffMs` is now VESTIGIAL (the retired
 MFO-side drive's degrade backoff; the claim is a cheap create-or-refresh every
 tick with no backoff of its own — a CHANGE releases and re-requests rather than
 repointing, since `RequestCast` has no in-place re-point) — left declared/parsed
@@ -1080,7 +1161,23 @@ filed as `"their own spell, not ours"` and the `[cfc] ... claim live N ms with
 NO observed cast` diagnostic fired a false alarm on a claim that had, in
 fact, fired.
 
-Fix: `EnsureCastClaimLocked` fetches `GetCastProxy(c.handle)` right after a
+> **⚠ THE FIX BELOW DOES NOT ACTUALLY CLOSE THE BLIND SPOT ON `main`
+> (found 2026-09-06, RC4).** `GetCastProxy` walks APMF's **PUBLISHED** snapshot,
+> so a handle that has not been DRAINED yet returns **0** — and MFO fetches the
+> proxy exactly once, synchronously, immediately after `RequestCast`, i.e.
+> always before the drain. The 0 is then cached at two layers:
+> `native/ComposedCast.cpp:114` sets `w.proxy` **only** on the
+> `w.spell != a_spell` branch (a same-spell re-request never updates it), and
+> `:183` passes a hard-coded `0` as `CastBounds::Arm`'s proxy argument. The
+> proxy is also NOT stable across re-mints (APMF's `CastProxy.cpp` 4-slot pool),
+> so a cached value can go stale as well as start wrong.
+> **PENDING, NOT SHIPPED:** F4 (re-read the proxy on the live path; only
+> overwrite when non-zero) is on the UNMERGED MFO branch
+> `fix/mfo-heal-slot-and-proxy`. Read the paragraph below as the INTENT of that
+> branch, not as `main`'s behaviour.
+
+Fix (as designed; see the warning above for what `main` actually does):
+`EnsureCastClaimLocked` fetches `GetCastProxy(c.handle)` right after a
 successful `RequestCast` (ABI < 6 → `0`, same as a claim that minted none) and
 stores it on the `CastClaim` (`native/APMFBridge.cpp`'s `CastClaim::proxy`).
 Two new bridge accessors expose it read-only: `APMFBridge::GetHealCastProxy`
@@ -1127,7 +1224,10 @@ Both changes are entirely inside `native/APMFBridge.cpp` (`CastClaim`,
 `Actuation_Direct.cpp`/`Diagnostics.cpp` — no ABI header change, no widened
 deny, no fabricated cast.
 
-## KEY SYMBOLS (Actuation.cpp)
+## KEY SYMBOLS (`Actuation_Direct.cpp` — NOT `Actuation.cpp`; corrected 2026-09-07)
+
+*Every symbol in this list lives in `native/Actuation_Direct.cpp` on `main` (zero hits in
+`Actuation.cpp`); they moved there in the 2026-08-31 split.*
 
 `ConcProxy` (owner-keyed `Slot g_slot[2]{form,source,owner}`, `Configure`, `Acquire`,
 `FormForOwner`, `Free`, `Reset`) · `DeliverySpell` (gate; nullptr → caller skips) ·
