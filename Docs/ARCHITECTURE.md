@@ -315,7 +315,7 @@ Two compile-time contracts, both of which break silently if violated.
 `tools/audit_esp.py` must PASS as a merge gate.
 *[2026-09-07: this said `data/mfo_forms.frozen.json` anchors allocation. That
 file does not exist. The real freeze is `native/Forms.h:21-57` plus the
-`REQUIRED` table in `tools/audit_esp.py:90`.]* The DLL resolves each form at `kDataLoaded` by
+`REQUIRED` table in `tools/audit_esp.py:50`.]* The DLL resolves each form at `kDataLoaded` by
 `(localID, "MFO.esp")` and disables the dependent feature with a log line if
 one is missing — never a hard requirement.
 

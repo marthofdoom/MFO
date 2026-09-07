@@ -436,7 +436,7 @@ trips on **both** drift and shrink. `tools/audit_esp.py` PASS is a merge gate.
 *(Anchor corrected 2026-09-07: this rule used to name `data/mfo_forms.frozen.json`
 as the anchor. **That file does not exist** — `data/` holds only
 `follower_quirks.json`. The real freeze is `native/Forms.h:21-57` plus the
-`REQUIRED` table in `tools/audit_esp.py:90`; all 24 `Forms.h` local IDs were
+`REQUIRED` table in `tools/audit_esp.py:50`; all 24 `Forms.h` local IDs were
 verified present in `MFO_GenerateESP.py`. The MEO/MAO siblings this rule was
 inherited from DO keep a frozen JSON; MFO never adopted one.)*
 `INHERITED` (MEO §23, MAO §31, MRO).
