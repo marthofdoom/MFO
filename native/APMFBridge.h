@@ -528,30 +528,56 @@ namespace MFO::APMFBridge {
     // this is only the sizing.
     //
     // DELIBERATELY NOT kHealCastTtlMs (Fable diff review, 2026-09-06 -- it WAS
-    // that constant, which is 2x too long). The two numbers bound different
-    // things and must not be aliased: kHealCastTtlMs is the lifetime of a claim
-    // MFO has already vetted, while THIS is the engine's own equip+charge
-    // LATENCY, and #9 says size a budget from the real cadence rather than from a
-    // convenient neighbouring number. The deck log of 2026-09-06 measured that
-    // latency at 2.3-2.5s (Docs/DIAG-2026-09-06-deny-heal-failures.md RC7: claim
-    // 19:56:56.873 -> first observed fire 19:56:59.155), so 3000ms is one full
-    // measured latency plus a small margin -- past it an unobserved incumbent is
-    // PROVABLY not going to fire.
+    // that constant, whose 6000ms is the wrong quantity for this job). The two
+    // numbers bound different things and must not be aliased: kHealCastTtlMs is
+    // the lifetime of a claim MFO has already vetted, while THIS one must outlast
+    // the engine's own claim -> OBSERVED-CAST latency, since `observed` (set from
+    // Diagnostics.cpp's SpellSink) is the signal that takes the incumbent off
+    // this cap entirely. #9: size it from the real cadence.
     //
-    // WHY THAT MATTERS AT ALL: every reachable hold is a PRIORITY INVERSION. The
-    // only rule that can ever be held is one that OUTRANKS the incumbent (the
-    // incumbent's own Claimed outcome stops the rule scan before anything below
-    // it is reached -- the reachability note in ComposedCast.cpp's hold comment
-    // spells this out with file:line). At kHealCastTtlMs a dying follower's
-    // rule-1 `HP<30% -> Fast Healing (self)` waited out the remaining ~3s of a
-    // rule-5 claim the engine was never going to cast. It no longer does.
+    // SIZED FROM THE HEAL DATUM, NOT THE OFFENSE ONE (round-3 review, 2026-09-07
+    // -- the 3000ms this held first was sized from an offense fire and was too
+    // tight). Deck log 2026-09-06 (Docs/DIAG-2026-09-06-deny-heal-failures.md,
+    // on `main`; this branch predates that file):
+    //   * The ONE heal that landed all session: claim minted 19:59:11.158 ->
+    //     castobs Casting 19:59:13.643 -> MFO `[cast]` 19:59:14.110. That is
+    //     **2.95s claim-to-OBSERVED**, and `observed` is what this cap races.
+    //   * The 2.3-2.5s figure quoted elsewhere in that DIAG is an **OFFENSE**
+    //     Firebolt (claim 19:56:56.873 -> fire 19:56:59.155). It is NOT a heal
+    //     latency and must not be used to size a heal budget.
+    //   * The offense evidence also shows fires trailing their 2.0-2.4s [cfc]
+    //     warns by up to 1.5s -- ~3.9s claim-to-fire at the tail.
+    //   * The DIAG's own F6 recommends >= 4000ms for the mere WARNING; a LIFT is
+    //     a far more destructive action than a log line, so it cannot be tighter.
+    // 4000ms clears the measured 2.95s heal observation by ~1.05s and sits at or
+    // above the worst measured latency of ANY claimed cast in that session, while
+    // staying well inside kHealCastTtlMs (6000ms) so the cap still bites before
+    // the claim it guards dies on its own.
+    //
+    // AND THE CHECK IS LAP-GRANULAR: it runs on the OOC service lap (~1.1-1.3s,
+    // DIAG RC2), so the actual lift lands anywhere in [cap, cap + ~1.3s]. That
+    // slack is on the SAFE side and is deliberately not compensated for.
+    //
+    // NO "PROVABLY NOT GOING TO FIRE" CLAIM. The note that stood here said an
+    // unobserved incumbent past the cap was provably dead. On this DIAG's own
+    // evidence that is FALSE -- a real heal was still 2.95s from `observed`, and
+    // offense fires arrived 3.9s after their claim. The honest framing is a
+    // TRADE-OFF, not a proof:
+    //   * Cost of a LARGER cap: a competing rule (usually higher-ranked -- see
+    //     ComposedCast.cpp's REACHABILITY note) waits cap + one lap before it can
+    //     claim. Bounded, visible in the log, and it waits either way.
+    //   * Cost of a SMALLER cap: the lift makes the newcomer's ClaimHealCast
+    //     RELEASE the incumbent's handle mid-charge -- cutting the only heal path
+    //     ever observed to land, at the instant it fires. That is RC1, the exact
+    //     field failure F1 exists to fix.
+    // The asymmetry is why this is sized long rather than short.
     //
     // Sits ABOVE ComposedCast.cpp's kSilentWarnAfter (2000ms) -- static_asserted
     // at that constant's definition -- so the "[cfc] NO observed cast" warning
     // always PRECEDES the lift in the log instead of trailing it. The claim TTL
     // is untouched: this caps only the HEARTBEAT, and only on the unobserved
     // path, so an OBSERVED heal still runs its full kHealCastTtlMs window.
-    inline constexpr std::uint32_t kHealHoldNeverObservedMs = 3000;
+    inline constexpr std::uint32_t kHealHoldNeverObservedMs = 4000;
 
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                        std::int32_t a_hand = kApmfHandLeft, bool a_concentration = false,
@@ -611,14 +637,19 @@ namespace MFO::APMFBridge {
     //     kIntent_Cast claim -- see EnsureCastClaimLocked -- and APMF main's
     //     ApplyRepoint does not touch expiresMs. The APMF-side renewal this doc
     //     used to warn about lives on an unmerged branch.)
-    //  2. CLAIM AGE. Past kHealHoldNeverObservedMs (3000ms -- the measured engine
-    //     equip+charge latency, see that constant above; NOT the 6000ms claim
-    //     TTL) measured from when the handle was REQUESTED (CastClaim::created,
-    //     stamped once inside EnsureCastClaimLocked), this refuses to heartbeat
-    //     regardless of liveness. That caps how long a claim the engine has NEVER
-    //     been observed firing may hold ComposedCast's single heal slot against a
-    //     rule that OUTRANKS it -- the only kind of rule that can ever be held
-    //     there (ComposedCast.cpp's hold comment proves the reachability).
+    //  2. CLAIM AGE. Past kHealHoldNeverObservedMs (4000ms -- sized from the
+    //     MEASURED claim-to-OBSERVED latency of the one heal that landed on the
+    //     deck, 2.95s, plus the tail; see that constant above for the full
+    //     working and for why it is NOT the 6000ms claim TTL and NOT the offense
+    //     2.3-2.5s figure) measured from when the handle was REQUESTED
+    //     (CastClaim::created, stamped once inside EnsureCastClaimLocked), this
+    //     refuses to heartbeat regardless of liveness. That caps how long a claim
+    //     the engine has NEVER been observed firing may hold ComposedCast's
+    //     single heal slot against a competing rule -- USUALLY one that OUTRANKS
+    //     it, but not always: a LOWER-ranked rule is also held whenever the
+    //     incumbent's own condition has gone false since it claimed, because the
+    //     hold's heartbeat keeps that abandoned claim alive until this cap
+    //     (ComposedCast.cpp's REACHABILITY note has both cases).
     //     `created` DOES move when the incumbent's own rule re-requests after an
     //     APMF auto-expiry (a genuinely new handle earns a fresh window, by
     //     design); that cannot happen underneath a live hold, because the

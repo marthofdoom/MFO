@@ -290,31 +290,51 @@ namespace MFO::ComposedCast {
         //
         // `created` IS MOVED on one path: the incumbent's own rule re-requesting
         // after an APMF auto-expiry mints a new handle with a new stamp
-        // (APMFBridge.cpp:339-342 -> :388). That is harmless HERE, and ONLY here,
+        // (APMFBridge.cpp:360-363 -> :381/:409). That is harmless HERE, and ONLY here,
         // because that path cannot run underneath a live hold -- the incumbent's
         // re-request returns Claimed, which stops the rule scan before any held
         // rule's Try() is reached (see REACHABILITY below). It is not the blanket
         // immunity the old note claimed.
         //
-        // REACHABILITY -- EVERY HELD RULE OUTRANKS ITS INCUMBENT, so every
-        // reachable hold is a PRIORITY INVERSION. A newcomer's Try() only runs if
-        // the rule scan reaches it, and the incumbent's own Claimed outcome
-        // always stops the scan first: CastAuto -> Fired, and Scheduler.cpp:579-
-        // 588 stops the scan COLD at any index >= the fired rule; CastOn -> an
-        // OPAQUE NoOp (Actuation.cpp:1005); Logistics -> `acted = true; break`
-        // (Logistics.cpp:1447). So the only rule that can ever be held is one
-        // ABOVE the incumbent in the table (or one that runs after the
-        // incumbent's condition went false). That is why the cap is sized from
-        // the ENGINE and not from the claim: at the old kHealCastTtlMs a rule-1
-        // `HP<30% -> Fast Healing (self)` waited out the remaining ~3 s of a
-        // rule-5 claim the engine was provably never going to fire.
+        // REACHABILITY -- TWO CASES, and only the first is a priority inversion.
+        // A newcomer's Try() only runs if the rule scan reaches it, and the
+        // incumbent's own Claimed outcome always stops the scan first: CastAuto
+        // -> Fired, and Scheduler.cpp:579-588 stops the scan COLD at any index >=
+        // the fired rule; CastOn -> an OPAQUE NoOp (Actuation.cpp:1005);
+        // Logistics -> `acted = true; break` (Logistics.cpp:1456). So:
+        //   (i) WHILE THE INCUMBENT'S CONDITION STILL HOLDS, the only rule that
+        //       can be held is one ABOVE it in the table -- a genuine PRIORITY
+        //       INVERSION (a dying follower's rule-1 heal waiting on a rule-5
+        //       claim), which is why the cap must not be sized generously "just
+        //       in case".
+        //  (ii) ONCE THE INCUMBENT'S CONDITION GOES FALSE, its rule stops being
+        //       reached at all, so a LOWER-ranked rule is held too -- behind a
+        //       claim nobody wants any more, kept alive purely by this hold's own
+        //       heartbeat. Nothing here notices; the cap is the only thing that
+        //       ends it. Do not restate case (i) as if it were the whole story
+        //       (the round-3 review, 2026-09-07, caught exactly that).
         //
-        // LIFTING THE CAP IS A ONE-TIME HANDOVER, NOT AN ALTERNATION. The old
-        // note's "worst case the two rules alternate on a 6 s beat" was wrong (in
-        // the benign direction). Because only a HIGHER-ranked rule can be held,
-        // the lift lets that rule claim -- and its own Fired window / opaque NoOp
-        // / `acted` then keeps the ex-incumbent from running at all. The slot
-        // changes hands once; it does not ping-pong.
+        // WHY THE CAP IS 4000ms AND NOT LESS. It races `observed`, not the fire:
+        // the one heal that landed on the deck was claim -> Casting 2.49 s ->
+        // MFO `[cast]` 2.95 s. The 2.3-2.5 s number that first sized this was an
+        // OFFENSE Firebolt, not a heal, and offense fires trailed their warns by
+        // up to 1.5 s (~3.9 s claim-to-fire). Lifting at 3000 ms would therefore
+        // have made the newcomer's ClaimHealCast RELEASE a heal that was already
+        // CASTING -- RC1 re-created for the exact two-rule case this hold exists
+        // to fix. There is NO "provably not going to fire" point available from
+        // this evidence; see APMFBridge.h's kHealHoldNeverObservedMs for the full
+        // trade-off (a held rule waits cap + one lap either way; cutting a firing
+        // heal is the field failure).
+        //
+        // LIFTING THE CAP IS NORMALLY A ONE-TIME HANDOVER. The old note's "worst
+        // case the two rules alternate on a 6 s beat" was wrong in the general
+        // case: in case (i) the lift lets the higher-ranked rule claim, and its
+        // own Fired window / opaque NoOp / `acted` then keeps the ex-incumbent
+        // from running at all, so the slot changes hands once. It is NOT
+        // unconditional: if the ex-incumbent's condition flaps back true after
+        // the newcomer claims, and neither claim is ever observed, the slot can
+        // ping-pong on a cap-plus-lap beat. That is bounded and loud (every swap
+        // prints a HELD OFF line), but it is not impossible.
         //
         // An OBSERVED claim is never capped: the `!incumbent.observed` term below
         // means a live channelled heal never reaches RefreshHealCastClaim at all.
@@ -345,12 +365,21 @@ namespace MFO::ComposedCast {
             // next per-frame Drain publishes it, therefore reads as NOT live. So
             // a hold check running in the same frame as the incumbent's own
             // fresh RequestCast would LIFT the hold and thrash for that tick.
-            // Unreachable today ONLY because the rule scan never runs two heal
-            // Try()s on one follower in one tick (a Claimed incumbent stops the
-            // scan; see the REACHABILITY note above). THAT is the dependency this
-            // guard's correctness rests on -- if a future caller ever services a
-            // follower's heal twice per tick, revisit this before assuming the
-            // hold still holds.
+            // THE INVARIANT THIS RESTS ON IS NARROWER THAN "ONE Try() PER TICK",
+            // and stating the broad version was wrong (round-3 review,
+            // 2026-09-07): Logistics DOES run several heal Try()s per follower
+            // per tick -- a Held outcome continues the scan (`start =
+            // ruleIndex + 1; continue`, Logistics.cpp:1415) and the `pass < 2 &&
+            // !acted` wrapper (:1191) re-runs the whole scan when nothing acted.
+            // What actually cannot happen is a heal Try() AFTER a same-tick
+            // ClaimHealCast that MINTED a handle: a Claimed outcome ends all
+            // three scans (Fired suppression / opaque NoOp / `acted`), and a
+            // Refused one clears hand[0] below so no later Try() finds an
+            // incumbent to hold. Every Try() that reaches THIS check therefore
+            // sees only handles minted on an EARLIER tick, which APMF has long
+            // since published. THAT is the dependency -- if a future caller ever
+            // lets a heal Try() run after a minting claim in the same tick,
+            // revisit this before assuming the hold still holds.
             if (incumbent.spell != 0 && incumbent.spell != spellID && !incumbent.observed &&
                 APMFBridge::RefreshHealCastClaim(fid)) {
                 // (b) A hold is never silent, and never labelled as a delivery.

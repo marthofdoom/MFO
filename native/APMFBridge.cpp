@@ -331,16 +331,22 @@ namespace MFO::APMFBridge {
                 // Drain publishes it, reads as NOT live. Called in the same frame
                 // as a fresh RequestCast, this branch therefore logs "already
                 // auto-expired" and re-requests a claim that is in fact alive.
-                // Unreachable today ONLY because nothing calls ClaimHealCast
-                // twice for one follower inside a single tick (the rule scan runs
-                // at most one heal Try() per follower per service). That is the
-                // undocumented dependency this fast path's correctness rests on:
-                // if a caller ever services a follower's heal twice in one tick,
-                // it thrashes for that tick.
+                // THE INVARIANT IS NARROWER THAN "ONE heal Try() PER TICK", and
+                // the broad version stated here was wrong (round-3 review,
+                // 2026-09-07): Logistics really does run several heal Try()s per
+                // follower per tick (a Held outcome continues the scan, and the
+                // `pass < 2 && !acted` wrapper re-runs it). What cannot happen is
+                // a second ClaimHealCast on the SAME tick as one that MINTED a
+                // handle: a Claimed outcome ends every scan, and a Refused one
+                // leaves no incumbent behind for a later Try() to hold. So every
+                // call that reaches this branch is looking at a handle minted on
+                // an EARLIER tick, which APMF has long since published. THAT is
+                // the undocumented dependency this fast path's correctness rests
+                // on -- break it and this thrashes for that tick.
                 if (api->abiVersion < 6 ||
                     reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(c.handle)) {
                     // F4 (RC4, 2026-09-06): the proxy is minted lazily during
-                    // APMF's own per-frame Drain, so the read at :361-365
+                    // APMF's own per-frame Drain, so the read at :417-418
                     // below (right after RequestCast) can still see 0 even
                     // though the SAME handle now has a real proxy published.
                     // Re-read it lazily here, on the unchanged/still-live fast
@@ -841,18 +847,26 @@ namespace MFO::APMFBridge {
         // old one. So an incumbent the engine NEVER casts can re-arm indefinitely
         // while a competing rule starves behind it.
         //
-        // SIZED FROM THE MEASURED ENGINE LATENCY, NOT FROM THE CLAIM TTL (#9).
-        // kHealHoldNeverObservedMs is 3000ms -- one full measured equip+charge
-        // (2.3-2.5s, DIAG 2026-09-06 RC7) plus margin -- NOT kHealCastTtlMs's
-        // 6000ms, which is what this line used to read and is 2x too long for the
-        // job. See kHealHoldNeverObservedMs's own comment in APMFBridge.h for the
-        // full sizing argument, including why every reachable hold is a priority
-        // inversion (the held rule always OUTRANKS the incumbent).
+        // SIZED FROM THE MEASURED HEAL LATENCY, NOT FROM THE CLAIM TTL AND NOT
+        // FROM AN OFFENSE FIRE (#9). kHealHoldNeverObservedMs is 4000ms, sized
+        // from the claim-to-OBSERVED time of the one heal that landed on the deck
+        // (2.95s: minted 19:59:11.158, MFO `[cast]` 19:59:14.110) plus the
+        // measured tail. It is NOT kHealCastTtlMs's 6000ms (what this line read
+        // before the Fable diff review), and it is NOT the 2.3-2.5s equip+charge
+        // number that briefly sized it at 3000ms -- that figure is an OFFENSE
+        // Firebolt, and lifting at 3000ms would have released a heal that was
+        // already CASTING. See kHealHoldNeverObservedMs's own comment in
+        // APMFBridge.h for the full working, the lap-granularity slack, and the
+        // trade-off it is chosen on. Note there is no "provably dead" point in
+        // this evidence, and the reachable-hold cases are TWO, not one (a held
+        // rule usually outranks the incumbent, but a lower-ranked rule is held
+        // whenever the incumbent's own condition has gone false).
         //
-        // `created` is stamped once at RequestCast (:388) and is moved by no
-        // refresh, no APMF-side liveness check and not by this heartbeat -- but
-        // it IS moved when the incumbent's own rule re-requests after an APMF
-        // auto-expiry (:339-342 -> :388 mints a new handle with a new stamp).
+        // `created` is stamped once per handle (:409, right after the
+        // RequestCast at :381) and is moved by no refresh, no APMF-side liveness
+        // check and not by this heartbeat -- but it IS moved when the incumbent's
+        // own rule re-requests after an APMF auto-expiry (:360-363 falls through
+        // to :381, minting a new handle with a new :409 stamp).
         // That is harmless HERE, and only here, because that path cannot run
         // underneath a live hold: the incumbent's re-request returns Claimed,
         // which stops the rule scan before any held rule's Try() is reached. It

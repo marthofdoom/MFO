@@ -1383,20 +1383,29 @@ namespace MFO::Logistics {
                         // rather than dropped for the twin: it names the TARGET,
                         // which the [cfc] line does not carry.
                         //
+                        // KEYED ON THE PAIR, not on the follower with the spell as
+                        // a reset condition (round-3 review, 2026-09-07: the first
+                        // cut did the latter, so two rules above the incumbent
+                        // holding DIFFERENT heal spells flipped the entry on every
+                        // call, the window never applied, and it printed twice per
+                        // pass -- the spam this dedup exists to stop). One entry per
+                        // (follower, held-off spell); the key is the two FormIDs
+                        // packed into 64 bits.
+                        //
                         // Function-local static, read+written only from the
                         // serialized AddTask job worker (#4) -- the same
                         // worker-serial-unlocked discipline as ComposedCast's own
                         // g_lastHoldLog and this file's other per-follower log
                         // throttles (s_nextHeal, s_nextWalkDiag).
-                        static std::unordered_map<RE::FormID,
-                                                  std::pair<RE::FormID, Clock::time_point>>
+                        static std::unordered_map<std::uint64_t, Clock::time_point>
                             s_lastHeldLog;
                         const auto heldNow  = Clock::now();
                         const auto heldSpel = sp->GetFormID();
-                        auto&      heldSeen = s_lastHeldLog[id];
-                        if (heldSeen.first != heldSpel ||
-                            heldNow - heldSeen.second >= std::chrono::milliseconds(2000)) {
-                            heldSeen = { heldSpel, heldNow };
+                        const auto heldKey  = (static_cast<std::uint64_t>(id) << 32) |
+                                              static_cast<std::uint64_t>(heldSpel);
+                        auto&      heldSeen = s_lastHeldLog[heldKey];
+                        if (heldNow - heldSeen >= std::chrono::milliseconds(2000)) {
+                            heldSeen = heldNow;
                             spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
                                          "(HELD OFF -- incumbent heal {:08X} owns the claim; this "
                                          "spell was NOT delivered)",
