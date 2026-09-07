@@ -26,13 +26,22 @@ regressions here; the ripple notes are why the map exists.
   for genuinely bulk work. Never resume an agent that self-spins on follow-ups it
   invented (background notifications are never user input); TaskStop a looping one.
   No redundant/overlapping agents; reuse via SendMessage over respawn; one agent
-  per build tree. CHEAP model for WORKERS (Sonnet; Haiku for trivial) — the bulk
-  build/audit grind must NOT be Opus; reserve Opus/Fable for diff-REVIEWS, deep
-  research, and risky co-save/threading. Cheap = bulk-writing AND applying corrections
-  (it holds the file context); expensive = READING diffs + DIRECTING fixes back to the
-  cheap worker (which applies them in-context). Authoring a fix that needs surrounding
-  code means loading whole files into the expensive window — avoid: review the diff,
-  hand corrections back; Opus hand-edits directly only for context-free one-liners. Lean on memory summaries + file:line nav, not raw
+  per build tree. **MODEL POLICY (marth 2026-09-06 — SUPERSEDES the older "cheap
+  workers" rule, which said Sonnet should do the build grind):**
+  - **AN OPUS AGENT WRITES THE CODE — INCLUDING SMALL CHANGES.** Not Sonnet, and NOT
+    the coordinator itself. marth set the threshold LOW on purpose: "by reasonably sized
+    I mean smaller. but we cant afford the sloppy work weve been getting from teh cheap
+    agents." The driver is QUALITY, not token size. If in doubt, it is an Opus agent's job.
+  - **Cheap models (Sonnet/Haiku) are NOT for authoring code at all now.** Reserve them
+    for non-authoring mechanical grinds — log/artifact sweeps, bulk greps, collating
+    output — and even there, check their work. Their sloppiness is what cost us the
+    invented-symbol CI failures and misapplied fixes.
+  - **FABLE reviews EVERY commit's diff** (see dispatcher rule 8), plus deep research
+    and risky co-save/threading work.
+  - **The coordinator does NOT author reasonably sized additions itself.** It dispatches,
+    does small greps/reads/ssh-checks inline, READS diffs, and DIRECTS corrections back
+    to the worker that holds the file context. Hand-editing is for context-free
+    one-liners only. Lean on memory summaries + file:line nav, not raw
   crashlogs/reports/log-dumps in context. Report at real milestones, not every
   background ping.
 - **Never read vendored code:** `native/imgui_impl_win32.*` (the only vendored
@@ -89,6 +98,15 @@ dispatches and merges it.
    is green — CI proves it compiles, not that it does what was asked.
 7. **Never deploy a branch you have not personally diffed.** CI-green plus a plausible agent summary is
    exactly how an unreviewed refactor reaches the field.
+8. **EVERY COMMIT GETS A FABLE DIFF REVIEW (marth 2026-09-06). No exceptions.** Not just pre-cut, not just
+   risky ones — each commit, as it lands. CI-green is not a review and the coordinator's own read is not a
+   substitute: dispatch a Fable diff review of that SHA, give it the brief the commit was written against so
+   it can catch unrequested scope, and tell it to be adversarial and report via ReportFindings. Review the
+   BRANCH's files (`git show <branch>:<path>`), never the main working copy. Nothing merges, tags or deploys
+   on a commit whose Fable review has not come back and been acted on.
+   (Why: every regression this project shipped recently reached the deck through a review nobody performed.
+   The 2026-09-06 deny/heal failure was a reviewed, CI-green, deliberate change that was simply the wrong
+   trade — exactly what a summary-level review cannot catch. Supersedes "pre-cut = one focused review".)
 
 ## Engineering + design principles — HOW TO THINK HERE (read before designing anything)
 
