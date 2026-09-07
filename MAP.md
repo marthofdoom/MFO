@@ -1012,19 +1012,39 @@ anonymous-namespace copy — that silently forks the instance).
   blocklist (`MarkTravelFailed`, never sticky) instead of re-asserting. Reset on
   arrival (`Logistics.cpp:~820`, provably reachable) or target change (fresh key);
   erased on every give-up. Normal single-steal-then-reclaim path unchanged.
-  **QUIET HOLD (2026-09-03):** the WHOLE theft-guard above is skipped for an
-  APMF-held leg (`Packages::IsAPMFTravelHeld(slot)`, `Logistics.cpp:~948`) — a
-  runtime probe proved APMF's ch.9 0x49 hook (`CheckForCurrentAliasPackage`)
-  already re-holds the loot-travel package on its own every engine re-eval, so a
-  momentary framework `curPkg` is benign, not theft; re-asserting against a hold
-  that self-heals only escalated strikes toward a false abandon. `IsAPMFTravelHeld`
-  (`Packages.cpp`, right after `LootTravelClear`) exposes the file-local
-  `g_apmfSlotActive[slot]` flag across the TU boundary. Legacy alias-route legs
-  (APMF absent) still run the guard above, byte-identical. The ~500ms
-  `APMFBridge::OfferPackage` claim-refresh (`Packages.cpp` `Pump()`, unconditional,
-  every slot) and the one-time `EvaluatePackage` on engage/retarget/release are
-  untouched — only the per-tick re-assert nudge inside the theft-guard was
-  redundant.
+  **QUIET HOLD — NOW OBSERVATION-GATED (2026-09-03, CORRECTED 2026-09-07,
+  `Docs/DIAG-2026-09-06-loot-travel.md`):** the theft-guard above is skipped for an
+  APMF-held leg ONLY once that leg has been SEEN running the travel package.
+  `Logistics.cpp:~1080` now reads `apmfLeg && tr.legEngaged`, not
+  `Packages::IsAPMFTravelHeld(slot)` alone. The old unconditional bypass rested on a
+  probe-era premise ("0x49 re-holds the package every engine re-eval, so a momentary
+  framework `curPkg` is benign") that the 2026-09-06 field session falsified: **0 of
+  6 dispatches ever adopted the package**, so the hold being trusted did not exist,
+  and the stall/deadline clocks convicted corpses while the follower merely followed
+  the player. `IsAPMFTravelHeld` (`Packages.cpp`, right after `LootTravelClear`)
+  still exposes the file-local `g_apmfSlotActive[slot]` flag across the TU boundary.
+  - **`legEngaged` / `legStart` / `nextLegPkgDiag`** (`Logistics_internal.h`
+    `TravelIntent`, worker-tick-only, NOT serialized) are the per-leg record; all
+    three are RESET at every dispatch AND every retarget (`Logistics_Loot.cpp`, both
+    `TravelDeadline(...)` sites). `legEngaged` is set from ONE
+    `Forms::IsTravelPackage(GetCurrentPackage())` read per Walking tick, shared by
+    the engagement record, the WALK diagnostic and the guard decision.
+  - **Three new [loot] lines** (all throttled, all report-only — no retry, no
+    watchdog): `TRAVEL PKG ENGAGED` (once per leg), `TRAVEL PKG NOT ENGAGED`
+    (first Walking tick of a leg then ≤1/4s, per-leg timer so a new dispatch is
+    never swallowed), `TRAVEL PKG DISPLACED` (engaged-then-displaced = RC#3, the
+    runtime-FF-package case, ≤1/4s — deliberately OBSERVABLE ONLY, no recovery).
+  - **`DEADLINE EXPIRED`** (`Logistics.cpp`, plain-deadline branch, ≤1/2s per
+    follower) ends the silent `MarkTravelFailed` that hid three of five "batch done"
+    releases; it carries cat/budget/overrun/dist/curPkg/route/`legEngaged`.
+  - A never-engaged APMF leg now falls into the NORMAL guard: `stolenSince` pauses
+    the ref's clocks, the strike/grace machinery runs, and the leg abandons to the
+    TRANSIENT blocklist after `kStealGrace` — the ref is never stickied for a
+    package that never ran. Its log line says `NEVER ENGAGED (not a theft)`.
+  - **What breaks if you change this:** dropping `legEngaged` from the bypass
+    condition restores the false-verdict masking; setting it from anything other than
+    a live `GetCurrentPackage()` read re-introduces "claim requested == leg engaged",
+    which is the exact inference this whole entry exists to forbid.
 - **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1307`; cell set built at `:1417`):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
@@ -2021,6 +2041,22 @@ CLOSED (logged loudly, no dispatch this tick) and NEVER falls through to the ali
 alias route runs ONLY when APMF is entirely ABSENT (or `bApmfLootTravel` is off) — the sole
 reason it still exists — so it stays byte-identical **degrade-when-absent**, never a
 decline-fallback.
+- **WHO NUDGES `EvaluatePackage` ON THE APMF ROUTE (2026-09-07, fix 1):** APMF does, not MFO.
+  MFO's inline nudges on the APMF dispatch/release edges (loot `LootTravelFill`/`LootTravelClear`,
+  retreat `RetreatFill`/`RetreatClear`) are GONE: they ran BEFORE the claim was drained/published
+  to the 0x49 hook (so engage re-evaluated a claimless snapshot and release asserted the package
+  at the instant of withdrawal), and they ran on the AddTask job worker — an engine AI write off
+  the main thread. APMF's `OfferPackageChannel::Engage/OnOwnerChanged/Release` now posts the nudge
+  one hop past its own `Publish` via `apmf::mainthread::Post`. **The ONE survivor on the APMF route
+  is `LootTravelRetarget`'s** (`Packages.cpp`, in the `g_apmfSlotActive[a_slot]` branch): a leg
+  retarget offers the SAME package form, so `APMFBridge::EnsureClaimLocked` takes its
+  unchanged-claim fast path and APMF is never told anything happened — nothing but this call
+  re-plans the running package to the rewritten runtime target. It is marshalled through
+  `MFO::MainThread::Post` (FormID looked up inside the lambda); no pump (VR) → loud `spdlog::error`,
+  never an off-thread fallback. **LEGACY alias-route nudges are untouched and are still inline
+  off-worker** (`Packages.cpp` legacy branches of Fill/Retarget/Clear + `RetreatFill/Clear`) — a
+  pre-existing condition, deliberately out of scope for that fix; do not "tidy" them without a
+  field cycle, `LootTravelClear`'s legacy nudge in particular is ordered before `VerifyDetached`.
 - **RUNTIME-HANDLE TARGET (no alias to carry it):** the new packages are authored PLDT type 0
   ("Near Reference", `RE::PackageLocation::Type::kNearReference`) instead of type 8 (alias);
   `SetAPMFLootTravelTarget` (`Packages.cpp` ~`:628`) overwrites `PackageLocation::data.refHandle`

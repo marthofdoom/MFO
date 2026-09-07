@@ -390,6 +390,29 @@ namespace MFO::Logistics {
             // re-asserted (EvaluatePackage) each tick for a bounded grace.
             // Zero = currently on the travel package.
             Clock::time_point   stolenSince{};
+            // APMF LEG ENGAGEMENT (DIAG-2026-09-06 fix 3/4). An APMF-routed leg
+            // is only "walking" once the engine has actually ADOPTED the offered
+            // travel package -- i.e. IsTravelPackage(GetCurrentPackage()) has read
+            // true at least once for THIS leg. The field session that produced the
+            // diagnosis had 0 of 6 dispatches ever reach that state, yet the
+            // stall/deadline clocks (and the theft-guard bypass below) all assumed
+            // it. So the observation is recorded per leg and nothing is inferred
+            // from the claim merely having been REQUESTED.
+            //   legEngaged        -- sticky-true once observed on the travel package
+            //   legStart          -- leg dispatch time, so the deadline VALUE can be
+            //                        reported (deadline - legStart) when it expires
+            //   nextLegPkgDiag    -- throttle shared by the two per-leg package
+            //                        reports (never engaged / engaged-then-displaced;
+            //                        the two are mutually exclusive on legEngaged, so
+            //                        one timer serves both). Zero means "report on the
+            //                        next Walking tick", which is how a fresh leg gets
+            //                        its first line immediately -- same shape as the
+            //                        s_nextWalkDiag throttle, but stored per LEG so a
+            //                        new dispatch is never swallowed by the previous
+            //                        leg's window.
+            bool                legEngaged = false;
+            Clock::time_point   legStart{};
+            Clock::time_point   nextLegPkgDiag{};
             // ACQUIRE PROBE (route 2b) readback: after an Activate dispatch at a
             // LOOSE ref, the NEXT tick observes what the engine actually did
             // (dispatch is asynchronous -- Papyrus.h -- so same-tick reads lie).

@@ -1920,6 +1920,12 @@ namespace MFO::Logistics {
                         tr.lastPos    = origin;   // reset no-progress tracker
                         tr.progressAt = a_now;
                         tr.stolenSince = {};      // fresh leg -> fresh theft episode
+                        // Fresh leg -> fresh ENGAGEMENT observation (DIAG-2026-09-06):
+                        // a retarget rewrites the package's runtime target, so the
+                        // previous leg's "engaged" reading says nothing about this one.
+                        tr.legEngaged        = false;
+                        tr.legStart          = a_now;
+                        tr.nextLegPkgDiag    = {};   // -> first Walking tick reports
                         return true;   // new leg -- the excursion continues at 60
                     }
                     continue;
@@ -1982,6 +1988,11 @@ namespace MFO::Logistics {
                         g_travelSlots[s].lastPos    = origin;  // reset no-progress tracker
                         g_travelSlots[s].progressAt = a_now;
                         g_travelSlots[s].stolenSince = {};     // slots are reused -- clear stale episode
+                        // Slots are reused -- clear the stale engagement observation too,
+                        // or a new dispatch inherits the previous excursion's verdict.
+                        g_travelSlots[s].legEngaged        = false;
+                        g_travelSlots[s].legStart          = a_now;
+                        g_travelSlots[s].nextLegPkgDiag    = {};
                         return true;   // committed to the walk; transfer on arrival
                     }
                     // Travel UNAVAILABLE (off AE, records unresolved, quest not

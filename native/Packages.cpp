@@ -5,6 +5,9 @@
 #include "Forms.h"
 #include "Sightline.h"   // concentration hold: the mid-stream line-of-fire watch
 #include "APMFBridge.h"  // ch.9 0x49 loot-travel route (package-locked-follower fix)
+#include "MainThread.h"  // the only road to the true main thread (§0.37) -- an
+                         // EvaluatePackage is an engine AI write and this file's
+                         // callers run on the AddTask job worker.
 
 namespace MFO::Packages {
 
@@ -1601,7 +1604,19 @@ namespace MFO::Packages {
             }
             g_apmfSlotActive[a_slot]   = true;
             g_apmfSlotFollower[a_slot] = a_follower->GetFormID();
-            a_follower->EvaluatePackage(true, false);   // never resetAI
+            // NO NUDGE HERE (DIAG-2026-09-06 fix 1). There used to be an inline
+            // EvaluatePackage(true,false) on this line. It was wrong twice over:
+            //   * WRONG MOMENT -- OfferPackage above only ENQUEUES the claim
+            //     (APMFBridge -> APMF_RequestEx -> ControlMap::EnqueueRequest). The
+            //     claim is not published to the 0x49 hook until the next Drain, so a
+            //     nudge issued here re-evaluated against a snapshot with NO claim in
+            //     it and the engine handed back the follow package. Field: 0 of 6
+            //     dispatches ever adopted the travel package.
+            //   * WRONG THREAD -- this runs on the AddTask job worker (CLAUDE.md
+            //     threading), and EvaluatePackage is an engine AI write.
+            // APMF's OfferPackageChannel::Engage now posts the nudge one hop past
+            // its own Publish, on the main thread, and drops it if the claim changed
+            // in between. That is the correct edge and MFO must not duplicate it.
             spdlog::info("[loot] {:08X}: APMF travel dispatched to {:08X} (slot {})",
                          a_follower->GetFormID(), a_ref->GetFormID(), a_slot);
             return true;
@@ -1683,7 +1698,37 @@ namespace MFO::Packages {
                              "route; leg declined", a_follower->GetFormID(), a_slot);
                 return false;
             }
-            a_follower->EvaluatePackage(true, false);
+            // NUDGE KEPT HERE, AND ONLY HERE, ON THE APMF ROUTE (DIAG-2026-09-06
+            // fix 1). This edge is LOAD-BEARING: a leg retarget offers the SAME
+            // package form, so EnsureClaimLocked takes its unchanged-claim fast path
+            // (APMFBridge.cpp: `handle != kInvalidHandle && cur == want` -> return)
+            // and APMF is never told anything happened -- no Engage, no
+            // OnOwnerChanged, hence no deferred nudge from the framework. All that
+            // changed is the package's own runtime TARGET, written directly above by
+            // SetAPMFLootTravelTarget, and the engine will not re-plan the running
+            // package to the new destination until it is asked to. This is also the
+            // one edge the field session proved WORKS (3 of 3 leg retargets adopted
+            // the travel package), because the claim has been published for seconds
+            // by the time it fires.
+            //
+            // It must still not run here: this is the AddTask job worker.
+            // MainThread::Post is the only road to the true main thread. Look the
+            // actor up by FormID inside the lambda, never capture the pointer.
+            // If the pump is not live (VR), say so LOUDLY rather than falling back to
+            // the off-thread call -- APMF's own hooks are VR-refused, so this branch
+            // is not reachable there, and a silent off-thread engine write would be
+            // exactly the mask CLAUDE.md principle 7 forbids.
+            if (MainThread::IsInstalled()) {
+                const RE::FormID nid = a_follower->GetFormID();
+                MainThread::Post([nid]() {
+                    if (auto* a = RE::TESForm::LookupByID<RE::Actor>(nid))
+                        a->EvaluatePackage(true, false);   // never resetAI
+                });
+            } else {
+                spdlog::error("[loot] {:08X}: APMF leg retarget could NOT re-plan -- no main-thread "
+                              "pump (VR); the follower will keep walking to the PREVIOUS leg target "
+                              "until the engine re-evaluates on its own", a_follower->GetFormID());
+            }
             spdlog::info("[loot] {:08X}: APMF leg -> {:08X} (excursion, slot {})",
                          a_follower->GetFormID(), a_ref->GetFormID(), a_slot);
             return true;
@@ -1765,7 +1810,13 @@ namespace MFO::Packages {
             g_apmfSlotActive[a_slot]   = false;
             g_apmfSlotFollower[a_slot] = 0;
             if (fid) APMFBridge::ReleaseOfferPackage(fid);
-            if (a_follower) a_follower->EvaluatePackage(true, false);   // nudge; never resetAI
+            // NO NUDGE HERE (DIAG-2026-09-06 fix 1) -- same two defects as the
+            // dispatch edge, mirrored. ReleaseOfferPackage only enqueues the release,
+            // so an inline nudge re-evaluated while the claim was STILL published and
+            // asserted the travel package at the instant it was being withdrawn; and
+            // it did it on the AddTask job worker. APMF's OfferPackageChannel::Release
+            // now forgets the redirect and posts the nudge one hop past Publish, on
+            // the main thread, so the framework package resumes cleanly.
             spdlog::info("[loot] APMF travel released ({}) -- slot {}", a_why, a_slot);
             return;
         }
@@ -1795,16 +1846,21 @@ namespace MFO::Packages {
         spdlog::info("[loot] travel released ({}) -- slot {} evicted (marker)", a_why, a_slot);
     }
 
-    // QUIET HOLD (field-proven 2026-09-03): true while a_slot's excursion is
-    // APMF-routed and the claim hasn't released yet -- the SAME flag
-    // LootTravelClear's APMF branch above tests. Exposed (g_apmfSlotActive
-    // itself is anonymous-namespace file-local) so Logistics.cpp's theft-guard
-    // can tell an APMF-held leg apart from a legacy-alias one: a runtime probe
-    // proved APMF's 0x49 hook (CheckForCurrentAliasPackage) already holds the
-    // package on its own for a framework-locked follower, so the theft-guard's
-    // strike/grace/re-assert machinery is redundant -- and actively harmful --
-    // for these legs; it now early-outs here instead of fighting a hold that
-    // doesn't need fighting.
+    // ROUTE FLAG: true while a_slot's excursion is APMF-routed and the claim
+    // hasn't released yet -- the SAME flag LootTravelClear's APMF branch above
+    // tests. Exposed (g_apmfSlotActive itself is anonymous-namespace file-local)
+    // so Logistics.cpp can tell an APMF-held leg apart from a legacy-alias one.
+    //
+    // WHAT THIS DOES AND DOES NOT MEAN (corrected 2026-09-07,
+    // Docs/DIAG-2026-09-06-loot-travel.md). It used to be read as "the 0x49 hook
+    // is holding the travel package for this leg, so the theft-guard's
+    // strike/grace/re-assert machinery is redundant and Logistics.cpp may skip it
+    // wholesale". That inference is DEAD. This flag says only that MFO REQUESTED
+    // the claim; the field session had 0 of 6 requested claims ever reach the
+    // engine. Whether the package is actually running is a separate OBSERVATION
+    // (Forms::IsTravelPackage(GetCurrentPackage()), recorded per leg as
+    // TravelIntent::legEngaged), and that observation -- not this flag -- is what
+    // now gates the theft-guard bypass.
     bool IsAPMFTravelHeld(int a_slot) {
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return false;
         return g_apmfSlotActive[a_slot];
@@ -1912,7 +1968,13 @@ namespace MFO::Packages {
             // below): StopCombat() so the kIgnoreCombat travel actually wins
             // over a live combat target, not just runs alongside it.
             a_follower->StopCombat();
-            a_follower->EvaluatePackage(true, false);   // never resetAI
+            // NO NUDGE HERE (DIAG-2026-09-06 fix 1). Identical defect to the loot
+            // dispatch edge above -- pre-drain (the claim is only enqueued) and on the
+            // AddTask job worker -- and identically covered by APMF's deferred
+            // OfferPackageChannel::Engage nudge, which is per-claim and does not care
+            // which MFO intent asked for it. Removed here for the same reason and at
+            // the same time as its release twin in RetreatClear below; leaving one of
+            // the pair behind would have been worse than leaving both.
             // HARD MUTUAL-EXCLUSION GUARD: retreat and loot-travel share ONE
             // per-follower APMFBridge::OfferPackage handle (APMFBridge.cpp's
             // g_owned map is keyed by FormID alone, not by intent-plus-slot),
@@ -1999,7 +2061,9 @@ namespace MFO::Packages {
         if (g_retreatHold.viaAPMF) {
             const RE::FormID fid = a_follower ? a_follower->GetFormID() : g_retreatHold.actorID;
             if (fid) APMFBridge::ReleaseOfferPackage(fid);
-            if (a_follower) a_follower->EvaluatePackage(true, false);   // nudge; never resetAI
+            // NO NUDGE HERE (DIAG-2026-09-06 fix 1) -- see LootTravelClear's APMF
+            // branch: pre-drain, off the main thread, and now done correctly by
+            // APMF's deferred Release nudge.
             g_retreatHold = RetreatHold{};
             spdlog::info("[retreat] APMF retreat released ({})", a_why);
             return;
