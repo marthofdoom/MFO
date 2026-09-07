@@ -282,3 +282,10 @@ once in ~15 attempts; the other hand is the AI's; the actor is unclaimed ~5-20% 
 `[ch.9-redirect] ... won=true` x5 (Cicero 0x0009BCB0 twice, 0x00015D09 twice, Jesper once; H counters
 `claimedHits=16 winHits=16`). The 0x49 `CheckForCurrentAliasPackage` redirect fired and won every time it was
 claimed. That closes the multi-day "unproven" question in memory `apmf-package-deny-via-vfunc-0x49`.
+
+**QUALIFIER (added 2026-09-07, from the sibling DIAG's accounting).** "Won every time it was claimed" means
+*won every time it was NUDGED with a PUBLISHED claim*. It does NOT mean the engine re-asked on its own.
+`Docs/DIAG-2026-09-06-loot-travel.md` §2 reconciles all 16 hits, one by one, to explicit MFO/APMF nudges
+across ~75 s of cumulative claim time on three followers, and finds no room for a single hit from the
+engine's own package-evaluation cadence. The mechanism is proven; the *cadence* is not, and any design that
+assumes a published claim holds itself without re-nudging is unsupported by this session.

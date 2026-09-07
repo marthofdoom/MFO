@@ -2081,9 +2081,13 @@ THROUGH and COMMIT TO `APMFBridge::OfferPackage` whenever APMF is present (`Avai
 bApmfLootTravel`), instead of the alias/static-priority-60 race: claims the package-offer facet
 naming `Forms::APMFLootTravelPackage(slot)` (4 NEW packages, `Forms.h` `kAPMFLootTravelPackage0-3`
 = `0x836-0x839`, `MFO_GenerateESP.py make_apmf_loot_travel_package()`) so APMF's 0x49 hook hands
-the follower that package directly and unconditionally — no alias fill, no arbitration race, so a
-follower package-locked by an outranking custom AI framework (Cicero) still gets walked to the
-loot. **APMF SHOWPIECE PRINCIPLE (marth, `Docs/STATUS.md`): with APMF present, MFO is COMMITTED
+the follower that package directly **on every nudge while the claim is published** — no alias
+fill, no arbitration race, so a follower package-locked by an outranking custom AI framework
+(Cicero) still gets walked to the loot. **The hook does NOT redirect on the engine's own
+cadence** (`Docs/DIAG-2026-09-06-loot-travel.md` §2: all 16 field wins reconcile to explicit
+nudges; the engine's own re-evaluation contributed zero), so a claim that is published but never
+nudged again does nothing — and a nudge that runs BEFORE the claim is published does nothing
+either, which is exactly RC#1 of that DIAG (0 of 6 dispatches engaged the travel package). **APMF SHOWPIECE PRINCIPLE (marth, `Docs/STATUS.md`): with APMF present, MFO is COMMITTED
 to it — a decline on the APMF path (unresolved record, layout-guard, lost arbitration) FAILS
 CLOSED (logged loudly, no dispatch this tick) and NEVER falls through to the alias route.** The
 alias route runs ONLY when APMF is entirely ABSENT (or `bApmfLootTravel` is off) — the sole
@@ -2138,9 +2142,9 @@ decline-fallback.
   instead of discovered the same way).
 - **`Forms::IsTravelPackage`** now recognizes all 8 packages (4 alias + 4 APMF) — load-bearing for
   the PACKAGE-THEFT guard (`Logistics.cpp:917-974`): a follower legitimately running his
-  APMF-delivered package must read as "on the travel package", never as "stolen" (theft cannot
-  actually happen on the APMF route — 0x49 wins unconditionally for as long as the claim holds —
-  but the guard must not misfire and churn regardless).
+  APMF-delivered package must read as "on the travel package", never as "stolen" (0x49 wins on
+  every nudge while the claim is published — but NOT on the engine's own cadence, so a claim
+  nobody re-nudges can be displaced; the guard must not misfire and churn regardless).
 - **`ClaimCombatActionDeny` is NOT wired here** (see APMFBridge.cpp above) — left available, not
   scoped into this dispatch, per marth's "keep it scoped" instruction and the existing
   concede-to-combat design.
