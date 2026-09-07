@@ -81,7 +81,7 @@ namespace RE {
 
 namespace APMF_API {
 
-    inline constexpr std::uint32_t kABIVersion = 5;
+    inline constexpr std::uint32_t kABIVersion = 6;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -516,6 +516,39 @@ namespace APMF_API {
         // never runs, offers, or evaluates the package). Safe from any thread (POD
         // captured; applied on the game thread).
         Handle (*RequestCast)(RE::FormID actor, float basis, const APMF_CastRequest* req);
+    };
+
+    // The v6 interface: APMF_API_v5's members verbatim (via prefix EXTENSION, same
+    // shape as every prior revision), then two appended cast-claim OBSERVABILITY
+    // slots. Neither changes what APMF does -- both are read-only queries closing
+    // an MFO<->APMF blind spot diagnosed 2026-09-06: a client that called
+    // RequestCast had no way to learn (a) the delivery-flip proxy FormID APMF
+    // minted internally for that claim, so it could only ever match the ORIGINAL
+    // spell and never recognised its own proxy's cast, and (b) whether its claim
+    // had already auto-expired at the TTL (design.md §5a), so it kept believing a
+    // long-dead handle was still live. This header is BYTE-SHARED with MFO: the
+    // declaration below is authoritative and must be mirrored byte-identically on
+    // the client side.
+    struct APMF_API_v6 : APMF_API_v5 {
+        // Hand back the delivery-flip proxy FormID APMF minted internally for the
+        // cast claim behind `handle` (see APMF_CastRequest::proxy and
+        // RequestCast's doc comment -- APMF fabricates this substitute FormID for
+        // delivery, distinct from the client-supplied `req.proxy`). Returns 0 if
+        // `handle` is unknown/stale/released, or if that claim minted no proxy.
+        // Read-only; does not affect arbitration or claim lifetime in any way.
+        // Safe from any thread (RCU snapshot read, same discipline as
+        // TryGetCastClaim/TryGetCastSeatClaim on the APMF side).
+        RE::FormID (*GetCastProxy)(Handle handle);
+
+        // True while APMF still holds the claim behind `handle` -- i.e. it has not
+        // been released (by the client, or as the losing side of a re-arbitration)
+        // and has not auto-expired at its TTL (design.md §5a "never a standing
+        // hold"). False for an unknown/stale/already-gone handle. A client should
+        // treat `false` exactly like `kInvalidHandle` would have been treated
+        // before this existed: re-request rather than keep believing a dead handle
+        // is still in force. Read-only; safe from any thread, same discipline as
+        // GetCastProxy above.
+        bool (*IsClaimLive)(Handle handle);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
