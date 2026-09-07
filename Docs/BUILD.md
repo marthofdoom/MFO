@@ -27,7 +27,14 @@ is.
 **Granularity (marth, 2026-07-21): batch small changes; do not atomize.** "One
 change per build" is about *bisectable risk*, not literal minimalism — a
 one-function bug fix does not deserve its own review-and-release cycle. **Very
-small changes are a waste; roll them into the next substantive build.** The
+small changes are a waste; roll them into the next substantive build.**
+*(Clarified 2026-09-07, because this reads next to `CLAUDE.md`'s "AN OPUS AGENT
+WRITES THE CODE — INCLUDING SMALL CHANGES" and the two look opposed. They are
+about different things and both hold: this rule is about BUILD/RELEASE
+granularity — do not cut a build per one-liner. CLAUDE.md's is about WHO writes
+it — a small change is still authored by an Opus agent, never by a cheap model
+and never hand-edited by the coordinator unless it is a context-free one-liner.
+Batch the builds; do not cheapen the authoring.)* The
 balance: one *hook class* or one *risky mechanism* per build (so a CTD
 bisects), but a bug fix found in testing rides along with the next change and
 is reviewed as part of that change's diff. The boss-detection fix
