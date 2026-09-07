@@ -13,8 +13,9 @@
 > header that off-worker callers MUST use `IsTrackedFast`/`ActiveSnapshot`.
 > The rule that came out of it is INVARIANTS `#74`.
 >
-> Its `#76` citations are TASK number `T#76` (the equip force-hold), not
-> invariant #76 — see INVARIANTS "CITATION NAMESPACE". Remaining findings, if
+> Its `#76` citations are TASK number `T#76` (the equip force-hold) and its `#48`
+> is task `T#48` (the furniture-ejection bug), not invariants #76/#48 — see
+> INVARIANTS "CITATION NAMESPACE". Remaining findings, if
 > any are still open, live in `Docs/STATUS.md`, not here.
 
 6 parallel Fable reviewers (coding + logic), read-only, judged against
