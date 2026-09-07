@@ -822,7 +822,12 @@ namespace MFO::Actuation {
             if (APMFBridge::ClaimOffenseCast(id, spellID, /*target=*/0,
                                              APMFBridge::kApmfHandLeft,
                                              /*concentration=*/true, /*stopPct=*/0)) {
-                ComposedCast::WatchClaim(id, spellID);
+                // Fetch the SAME claim's minted delivery-flip proxy (ABI v6; 0
+                // on ABI < 6 or no proxy minted) so the watch recognises a cast
+                // of the proxy as this claim firing (cast-claim observability,
+                // 2026-09-06).
+                ComposedCast::WatchClaim(id, spellID, APMFBridge::kApmfHandLeft,
+                                         APMFBridge::GetOffenseCastProxy(id, APMFBridge::kApmfHandLeft));
                 return SelfCast::Applied;
             }
             spdlog::info("[cast] {:08X} concentration offense-cast claim refused (self) -- "
@@ -1074,7 +1079,12 @@ namespace MFO::Actuation {
             !Config::g_legacyCastHybrid.load()) {
             if (APMFBridge::ClaimOffenseCast(id, spellID, targetID, APMFBridge::kApmfHandLeft,
                                              /*concentration=*/true, /*stopPct=*/0)) {
-                ComposedCast::WatchClaim(id, spellID);
+                // Fetch the SAME claim's minted delivery-flip proxy (ABI v6; 0
+                // on ABI < 6 or no proxy minted) so the watch recognises a cast
+                // of the proxy as this claim firing (cast-claim observability,
+                // 2026-09-06).
+                ComposedCast::WatchClaim(id, spellID, APMFBridge::kApmfHandLeft,
+                                         APMFBridge::GetOffenseCastProxy(id, APMFBridge::kApmfHandLeft));
                 return SelfCast::Applied;
             }
             spdlog::info("[cast] {:08X} concentration offense-cast claim refused (target {:08X}) -- "

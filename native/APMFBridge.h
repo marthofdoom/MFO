@@ -150,6 +150,17 @@ namespace MFO::APMFBridge {
     // hand only).
     bool IsOwnedCastActiveOnHand(RE::FormID a_follower, std::int32_t a_hand);
 
+    // Worker- AND combat-thread-safe (SAME g_mx). The delivery-flip proxy FormID
+    // APMF minted internally for a_follower's LIVE offense kIntent_Cast claim on
+    // THIS hand (a_hand selects the slot exactly like IsOwnedCastActiveOnHand
+    // above), or 0 if there is no live claim on that hand, its handle minted no
+    // proxy, or the resolved APMF interface is ABI < 6 (APMF_API::GetCastProxy is
+    // a v6 slot). Cast-claim observability (2026-09-06): lets a caller that just
+    // claimed the offense facet (Actuation.cpp) hand this proxy to
+    // ComposedCast::WatchClaim so the silent-claim diagnostic recognises a cast
+    // of the proxy, not only the original spell, as this claim actually firing.
+    RE::FormID GetOffenseCastProxy(RE::FormID a_follower, std::int32_t a_hand);
+
     // ── offense-cast facet CLAIM: PER-CAST, TTL-bounded, PER-HAND (ch.8b, APMF v5) ──
     // PORTED (feat/offense-cast-seats, 2026-09-05) off the retired ch.8
     // kIntent_SelectSpell gate-only claim (`ClaimCasting`/`ReleaseCasting`,
@@ -530,6 +541,15 @@ namespace MFO::APMFBridge {
     // ClientCastClaimed), NOT this accessor alone. This also exists for parity/
     // observability with the other IsXActive queries above.
     bool IsHealCastActive(RE::FormID a_follower);
+
+    // Worker- AND combat-thread-safe (SAME g_mx). The delivery-flip proxy FormID
+    // APMF minted internally for a_follower's LIVE heal-cast claim (see
+    // GetOffenseCastProxy's doc above -- same ABI v6/no-live-claim/no-proxy 0
+    // contract, heal's own always-LEFT slot). Cast-claim observability
+    // (2026-09-06): ComposedCast::Try hands this to WatchArmed so the silent-
+    // claim diagnostic recognises a cast of the proxy, not only the original
+    // spell, as the claimed heal actually firing.
+    RE::FormID GetHealCastProxy(RE::FormID a_follower);
 
     // Release every claim and clear the map. kPreLoadGame / revert, AFTER the pump is
     // drained (so no worker tick races the map).

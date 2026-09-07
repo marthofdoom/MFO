@@ -1941,6 +1941,38 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   **Scope, deliberate:** the legacy AI-first-grace + force-on-miss hybrid and
   `CastAuto`'s sequential-most-hurt heal fan are NOT covered by the lock (own
   protections already; see the Docs section for why).
+- **CAST-CLAIM OBSERVABILITY (ABI v6, feat/consume-cast-observability, 2026-09-06):**
+  `APMF_API.h` bumped to `kABIVersion = 6` (append-only `APMF_API_v6 : APMF_API_v5`,
+  mirrored byte-identically, never hand-edited) adding two read-only queries:
+  `GetCastProxy(Handle)` (the delivery-flip proxy FormID APMF minted for a claim, or
+  0) and `IsClaimLive(Handle)` (whether APMF still holds it — it auto-expires at its
+  own TTL with no notice to the client). Closes two blind spots diagnosed the same
+  day: (a) MFO could only ever match a cast's ORIGINAL spell, so a claim whose
+  delivery APMF flipped through its own proxy (e.g. a heal-other) landed as a cast of
+  the PROXY and was filed as "their own spell, not ours" — every `[cfc] ... NO
+  observed cast` warning on that claim was a false alarm; (b) `EnsureCastClaimLocked`'s
+  unchanged-claim fast path (`APMFBridge.cpp`) trusted a stored handle blindly and
+  returned early, so once APMF auto-expired a claim MFO kept believing it was still
+  live and never re-requested (field: 23s of re-fires, zero `RequestCast` reaching
+  APMF). Fix, guarded `abiVersion >= 6` throughout (ABI < 6 = byte-identical
+  degrade): `EnsureCastClaimLocked` fetches `GetCastProxy` right after a successful
+  `RequestCast` and stores it on `CastClaim::proxy` (new field); the unchanged-claim
+  fast path now calls `IsClaimLive(c.handle)` before returning — `false` resets the
+  claim to empty and falls through to the SAME fresh-`RequestCast` code the
+  "values changed" branch already used, rather than inventing a new re-claim loop.
+  Two new accessors expose the proxy read-only: `APMFBridge::GetHealCastProxy`/
+  `GetOffenseCastProxy`. `ComposedCast`'s silent-claim `Watch` struct
+  (`ComposedCast.cpp`) gained a `proxy` field alongside `spell`;
+  `WatchArmed`/`WatchClaim` take a new `a_proxy` parameter (every call site —
+  `ComposedCast::Try`, `Actuation.cpp`'s owned-cast branch,
+  `Actuation_Direct.cpp`'s two concentration-offense claims — fetches it via the new
+  accessors and forwards it); `ExpectingCast`/`NoteObservedCast` now match on spell
+  OR proxy. `Diagnostics.cpp`'s `SpellSink` "ours" check (the `*** MFO GAMBIT
+  SPELL ***` log tag, previously `g.actionParamForm == spellID` only) now also
+  counts a hit via `ComposedCast::ExpectingCast`. **The diagnostic is not weakened**
+  — a claim that produces neither the spell's nor the proxy's cast still warns
+  exactly as before. See `Docs/CAST-DELIVERY.md`'s "CAST-CLAIM OBSERVABILITY"
+  section for the full writeup.
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE
@@ -2174,22 +2206,34 @@ native seats) and ENGINE_NOTES §0.40.
   (APMF's INVARIANTS.md #0). `g_watch` is now `unordered_map<FormID,
   FollowerWatch{Watch hand[2]}>` (was one `Watch` per follower) — a heal claim
   (always hand 0) and a concurrent offense claim on hand 1 no longer overwrite
-  each other's watch. `Try()` arms/refreshes hand 0's `{spell, since,
-  observed, lastWarn}` record on every successful HEAL claim; `WatchClaim
-  (follower, spell, a_hand = kApmfHandLeft)` (PUBLIC, `WatchSlot(a_hand)`
+  each other's watch. `Try()` arms/refreshes hand 0's `{spell, proxy, since,
+  observed, lastWarn}` record on every successful HEAL claim (`proxy` field
+  ADDED feat/consume-cast-observability, 2026-09-06 — see below); `WatchClaim
+  (follower, spell, a_hand = kApmfHandLeft, a_proxy = 0)` (PUBLIC, `WatchSlot(a_hand)`
   local to this TU, mirrors `APMFBridge`'s own `OffenseSlot` mapping — kept
   separate since this TU has no access to that anon-ns helper, but the two
   MUST agree) is the same arm for a caller claiming `kIntent_Cast` directly
-  (`Actuation::CastOn`'s `ownedCast` branch, via `ClaimOffenseCast`) — called
+  (`Actuation::CastOn`'s `ownedCast` branch, via `ClaimOffenseCast`, and
+  `Actuation_Direct.cpp`'s two concentration-offense claims) — called
   once per hand the claim actually occupies (both, for a DualCast plan). If
   2s+ pass with no observed cast on that hand (rate-limited to once per 5s),
   logs a `[cfc]` warning naming the follower/spell/hand.
-  `ExpectingCast(follower, spell)` (REVIVED from a permanent no-op under PASS
-  E; signature UNCHANGED — `Diagnostics.cpp`'s sink has no hand to report)
-  returns true when EITHER hand's watch spell matches; `NoteObservedCast`
-  likewise marks BOTH hands observed if either matches (a spell is never
-  claimed on both hands independently outside a DualCast mirror, so this
-  cannot cross-confirm two different spells). Both are worker-serial, no lock
+  **`proxy` (ABI v6, feat/consume-cast-observability, 2026-09-06):** every
+  `WatchClaim`/`WatchArmed` caller now fetches the SAME claim's delivery-flip
+  proxy FormID (`APMFBridge::GetHealCastProxy`/`GetOffenseCastProxy`; 0 on
+  ABI < 6 or a claim that minted none) and records it alongside `spell` — a
+  claim whose delivery APMF flipped lands as a cast of the PROXY, never the
+  original spell, so a spell-only match filed that landing as "not ours" and
+  fired a FALSE `[cfc]` alarm on a claim that had genuinely fired (field-
+  diagnosed 2026-09-06). `ExpectingCast(follower, spell)` (REVIVED from a
+  permanent no-op under PASS E; signature UNCHANGED — `Diagnostics.cpp`'s
+  sink has no hand to report) now returns true when EITHER hand's watch
+  `spell` **OR** `proxy` matches (`a_spell` here is the sink's OBSERVED
+  form); `NoteObservedCast` likewise marks BOTH hands observed on either
+  field matching (a spell is never claimed on both hands independently
+  outside a DualCast mirror, so this cannot cross-confirm two different
+  spells). The diagnostic is NOT weakened — a claim producing neither match
+  still warns exactly as before. Both are worker-serial, no lock
   — `Try`/`End` and the sink's call site are the SAME serialized AddTask
   job-worker queue (mirrors `Actuation_Direct.cpp`'s unlocked
   `g_selfCast`/`g_targetCast`).

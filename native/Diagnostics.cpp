@@ -193,8 +193,20 @@ namespace MFO::Diagnostics {
                             auto* form = RE::TESForm::LookupByID(spellID);
                             const char* nm = form ? form->GetName() : nullptr;
 
-                            // Was it OURS -- a spell one of their gambits named?
-                            // find(), never operator[]: that inserts (#9).
+                            // Was it OURS -- a spell one of their gambits named, OR
+                            // (cast-claim observability, 2026-09-06) the delivery-flip
+                            // PROXY of a LIVE claim ComposedCast is watching? A claim
+                            // whose delivery APMF flipped through its own minted proxy
+                            // (APMF_API::APMF_API_v6::GetCastProxy) lands as a cast of
+                            // the PROXY FormID, never the gambit's configured
+                            // actionParamForm, so the actionParamForm-only check below
+                            // filed that landing as "their own spell, not ours" even
+                            // though it was our own claimed cast firing (the exact false
+                            // alarm diagnosed 2026-09-06). ExpectingCast now matches
+                            // spell OR proxy internally (ComposedCast.h/.cpp) -- reuse it
+                            // here instead of re-deriving the proxy match, and reuse the
+                            // SAME bool below for the CFC-specific hand-off so this only
+                            // calls it once. find(), never operator[]: that inserts (#9).
                             bool ours = false;
                             if (const auto rec = g_followers.find(casterID);
                                 rec != g_followers.end()) {
@@ -202,6 +214,8 @@ namespace MFO::Diagnostics {
                                     if (g.actionParamForm == spellID) { ours = true; break; }
                                 }
                             }
+                            const bool expectingCfc = ComposedCast::ExpectingCast(casterID, spellID);
+                            ours = ours || expectingCfc;
 
                             spdlog::info("[cast] {:08X} {} CAST {} ({:08X}) formType={} -- AI-fired{}",
                                          casterID,
@@ -215,10 +229,8 @@ namespace MFO::Diagnostics {
                             // §1.3 RELEASE / §5). If the executor armed an "expected
                             // cast" for this (follower, spell) just before it triggered,
                             // THIS event is the executor's own animated cast landing --
-                            // the positive fire signal its RELEASE phase waits on. (No-op
-                            // today: the trigger seam is a stub, so nothing is ever
-                            // expected; wired and ready for when it lands.)
-                            if (ComposedCast::ExpectingCast(casterID, spellID)) {
+                            // the positive fire signal its RELEASE phase waits on.
+                            if (expectingCfc) {
                                 ComposedCast::NoteObservedCast(casterID, spellID);
                                 spdlog::info("[cast] {:08X} {} CFC-fired {} ({:08X}) "
                                              "*** THE ANIMATED PATH ***", casterID,

@@ -111,6 +111,20 @@ namespace MFO::ComposedCast {
     // stops warning for the rest of this claim's life. Both are cheap
     // worker-serial map lookups -- see the THREADING note above for why no
     // lock is needed.
+    //
+    // MATCHES ON SPELL **OR** PROXY (cast-claim observability, 2026-09-06).
+    // `a_spell` here is the event's OBSERVED spell -- for a claim whose delivery
+    // APMF flipped through its own minted proxy (APMF_API::APMF_API_v6::
+    // GetCastProxy, kSelf-delivery aimed at a non-self target), the cast that
+    // actually lands is of the PROXY FormID, never the original. Before this,
+    // the watch only ever recorded the original spell, so that landing cast
+    // was filed as "their own spell, not ours" and Try()'s silent-claim
+    // diagnostic fired a FALSE ALARM even though the claimed cast genuinely
+    // fired (the exact false alarm diagnosed 2026-09-06). WatchArmed/WatchClaim
+    // below now also record the proxy (0 on ABI < 6 or a claim that minted
+    // none) and a match on EITHER field counts as "this claim's cast landed."
+    // This does NOT weaken the diagnostic: a claim that produces neither the
+    // original spell's nor the proxy's cast still warns exactly as before.
     bool ExpectingCast(RE::FormID a_follower, RE::FormID a_spell);
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell);
 
@@ -142,8 +156,15 @@ namespace MFO::ComposedCast {
     // directly rather than through End()/Try()); a caller releasing only ONE
     // hand's claim (e.g. ComposedCast::End() for the heal, always LEFT) clears
     // only that hand's slot internally instead.
+    //
+    // a_proxy (cast-claim observability, 2026-09-06): the delivery-flip proxy
+    // FormID APMF minted for the SAME claim (APMFBridge::GetOffenseCastProxy/
+    // GetHealCastProxy, fetched by the caller right after the claim call this
+    // WatchClaim call reports) -- 0 (the default) on ABI < 6 or a claim that
+    // minted none. Recorded alongside a_spell so ExpectingCast above matches
+    // either.
     void WatchClaim(RE::FormID a_follower, RE::FormID a_spell,
-                    std::int32_t a_hand = APMFBridge::kApmfHandLeft);
+                    std::int32_t a_hand = APMFBridge::kApmfHandLeft, RE::FormID a_proxy = 0);
     void ClearWatch(RE::FormID a_follower);
 
     // kPreLoadGame / revert -- beside CastBounds::Reset(). Drops this module's

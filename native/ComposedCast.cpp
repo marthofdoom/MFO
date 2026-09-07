@@ -65,6 +65,12 @@ namespace MFO::ComposedCast {
         // SAME serialized AddTask job-worker queue).
         struct Watch {
             RE::FormID        spell    = 0;
+            // ABI v6 (cast-claim observability, 2026-09-06): the delivery-flip
+            // proxy APMF minted for this same claim (0 on ABI < 6 or a claim
+            // that minted none) -- ExpectingCast matches on EITHER `spell` OR
+            // `proxy`, since a claim whose delivery APMF flipped lands as a
+            // cast of the proxy, never the original spell (see ComposedCast.h).
+            RE::FormID        proxy    = 0;
             Clock::time_point since{};       // when this exact (follower, spell) claim began
             bool              observed = false;   // SpellSink confirmed a real cast since `since`
             Clock::time_point lastWarn{};      // rate-limit
@@ -99,10 +105,13 @@ namespace MFO::ComposedCast {
         // below no longer says "heal-cast" specifically. Caller passes the fid
         // already resolved. PER-HAND (feat/per-hand-cast-slots, 2026-09-06):
         // operates on ONE hand slot, so a concurrent claim on the OTHER hand
-        // never resets or silences this one.
-        void WatchArmed(RE::FormID a_fid, std::size_t a_slot, RE::FormID a_spell) {
+        // never resets or silences this one. a_proxy (cast-claim observability,
+        // 2026-09-06): the SAME claim's minted delivery-flip proxy (0 if none/
+        // ABI < 6) -- recorded alongside a_spell so ExpectingCast can match
+        // either (see ComposedCast.h).
+        void WatchArmed(RE::FormID a_fid, std::size_t a_slot, RE::FormID a_spell, RE::FormID a_proxy) {
             auto& w = g_watch[a_fid].hand[a_slot];
-            if (w.spell != a_spell) { w = Watch{}; w.spell = a_spell; w.since = Clock::now(); return; }
+            if (w.spell != a_spell) { w = Watch{}; w.spell = a_spell; w.proxy = a_proxy; w.since = Clock::now(); return; }
             if (w.observed) return;   // already confirmed firing this claim -- stay quiet
             const auto now = Clock::now();
             if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
@@ -175,8 +184,12 @@ namespace MFO::ComposedCast {
 
         // Diagnostic only -- never gates the return value or re-fires anything
         // (Task 6: no delivery watchdog). Heal is always the LEFT slot. See
-        // WatchArmed's own comment.
-        WatchArmed(fid, WatchSlot(APMFBridge::kApmfHandLeft), spellID);
+        // WatchArmed's own comment. Fetch the SAME claim's minted delivery-flip
+        // proxy (ABI v6; 0 on ABI < 6 or a claim that minted none) so the watch
+        // recognises a cast of the proxy, not only spellID, as this claim
+        // firing (cast-claim observability, 2026-09-06).
+        WatchArmed(fid, WatchSlot(APMFBridge::kApmfHandLeft), spellID,
+                  APMFBridge::GetHealCastProxy(fid));
 
         return true;   // APMF owns the cast: caller skips its kInstant apply.
     }
@@ -194,21 +207,34 @@ namespace MFO::ComposedCast {
         }
     }
 
+    // Matches on spell OR proxy per hand slot (cast-claim observability,
+    // 2026-09-06) -- see ComposedCast.h's doc on this function for why: a claim
+    // whose delivery APMF flipped through its own minted proxy lands as a cast
+    // of the PROXY, never the original spell, so a spell-only match filed that
+    // landing as "not ours" and fired a false-alarm [cfc] warning even though
+    // the claim genuinely fired.
     bool ExpectingCast(RE::FormID a_follower, RE::FormID a_spell) {
         const auto it = g_watch.find(a_follower);
-        return it != g_watch.end() &&
-               (it->second.hand[0].spell == a_spell || it->second.hand[1].spell == a_spell);
+        if (it == g_watch.end()) return false;
+        const auto& h0 = it->second.hand[0];
+        const auto& h1 = it->second.hand[1];
+        return (h0.spell == a_spell || (h0.proxy != 0 && h0.proxy == a_spell)) ||
+               (h1.spell == a_spell || (h1.proxy != 0 && h1.proxy == a_spell));
     }
 
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell) {
         auto it = g_watch.find(a_follower);
         if (it == g_watch.end()) return;
-        if (it->second.hand[0].spell == a_spell) it->second.hand[0].observed = true;
-        if (it->second.hand[1].spell == a_spell) it->second.hand[1].observed = true;
+        if (it->second.hand[0].spell == a_spell ||
+            (it->second.hand[0].proxy != 0 && it->second.hand[0].proxy == a_spell))
+            it->second.hand[0].observed = true;
+        if (it->second.hand[1].spell == a_spell ||
+            (it->second.hand[1].proxy != 0 && it->second.hand[1].proxy == a_spell))
+            it->second.hand[1].observed = true;
     }
 
-    void WatchClaim(RE::FormID a_follower, RE::FormID a_spell, std::int32_t a_hand) {
-        WatchArmed(a_follower, WatchSlot(a_hand), a_spell);
+    void WatchClaim(RE::FormID a_follower, RE::FormID a_spell, std::int32_t a_hand, RE::FormID a_proxy) {
+        WatchArmed(a_follower, WatchSlot(a_hand), a_spell, a_proxy);
     }
     // Clears BOTH hands -- callers mean "nothing is wanted on this follower at
     // all anymore" (a full teardown, e.g. dismissal or Scheduler's !castSeen).

@@ -87,6 +87,15 @@ namespace MFO::APMFBridge {
             bool             conc   = false;
             std::uint32_t    stopPct = 0;
             std::chrono::steady_clock::time_point refreshed{};
+            // ABI v6 observability (cast-claim observability, 2026-09-06): the
+            // delivery-flip proxy FormID APMF minted internally for `handle`
+            // (APMF_API::APMF_API_v6::GetCastProxy), fetched once right after a
+            // successful RequestCast. 0 on ABI < 6, or when this claim minted no
+            // proxy. Read-only bookkeeping -- exposed to callers (GetHealCastProxy/
+            // GetOffenseCastProxy below) so ComposedCast's silent-claim watch can
+            // recognise a cast of the PROXY, not just the original spell, as our
+            // own claim actually firing (see ComposedCast.h/.cpp).
+            RE::FormID       proxy  = 0;
         };
 
         struct Owned {
@@ -289,8 +298,24 @@ namespace MFO::APMFBridge {
             }
             if (c.handle != APMF_API::kInvalidHandle && c.spell == wantSpell &&
                 c.target == wantTarget && c.hand == wantHand &&
-                c.conc == wantConc && c.stopPct == wantStopPct)
-                return;   // unchanged -- cheap no-op, no release/re-request churn
+                c.conc == wantConc && c.stopPct == wantStopPct) {
+                // ABI v6 (cast-claim observability, 2026-09-06): do NOT trust a
+                // stored handle blindly on the unchanged fast path -- APMF
+                // auto-expires a claim at its own TTL with no notice to the
+                // client (APMF_API.h's IsClaimLive doc), so MFO could keep
+                // believing a long-dead handle is still in force (the exact
+                // field failure diagnosed 2026-09-06: the gambit re-fired for
+                // 23s while this early-return kept swallowing every re-fire and
+                // RequestCast never reached APMF again). ABI < 6 has no way to
+                // ask this and keeps today's behaviour byte-identical.
+                if (api->abiVersion < 6 ||
+                    reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(c.handle))
+                    return;   // unchanged AND still live -- cheap no-op, no release/re-request churn
+                spdlog::info("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) already auto-expired "
+                             "at APMF's own TTL -- re-requesting instead of trusting a dead handle",
+                             follower, wantSpell);
+                c = CastClaim{};   // treat as empty; fall through to the fresh RequestCast below
+            }
             if (c.handle != APMF_API::kInvalidHandle) { api->Release(c.handle); c.handle = APMF_API::kInvalidHandle; }
             APMF_API::APMF_CastRequest req{};
             req.spell  = wantSpell;
@@ -329,6 +354,16 @@ namespace MFO::APMFBridge {
             if (c.handle != APMF_API::kInvalidHandle) {
                 c.spell = wantSpell; c.target = wantTarget; c.hand = wantHand;
                 c.conc  = wantConc;  c.stopPct = wantStopPct;
+                // ABI v6: fetch the delivery-flip proxy APMF minted for this claim
+                // (0 on ABI < 6, or a claim that minted no proxy) -- recorded
+                // alongside the claimed spell so a later match on the OBSERVED
+                // cast (Diagnostics.cpp's SpellSink, via ComposedCast's watch) can
+                // recognise a cast of the proxy as our own claim actually firing,
+                // not "their own spell, not ours" (the false-alarm diagnosed
+                // 2026-09-06 -- MFO only ever matched the original spell).
+                c.proxy = (api->abiVersion >= 6)
+                    ? reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->GetCastProxy(c.handle)
+                    : 0;
             } else {
                 c = CastClaim{};
             }
@@ -440,6 +475,15 @@ namespace MFO::APMFBridge {
         const auto it = g_owned.find(a_follower);
         return it != g_owned.end() &&
                it->second.offense[OffenseSlot(a_hand)].handle != APMF_API::kInvalidHandle;
+    }
+
+    RE::FormID GetOffenseCastProxy(RE::FormID a_follower, std::int32_t a_hand) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return 0;
+        const auto& c = it->second.offense[OffenseSlot(a_hand)];
+        return c.handle != APMF_API::kInvalidHandle ? c.proxy : 0;
     }
 
     // ── offense-cast (per-cast, TTL-bounded, PER-HAND, ch.8b, kIntent_Cast/RequestCast) ──
@@ -700,6 +744,14 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
         return it != g_owned.end() && it->second.heal.handle != APMF_API::kInvalidHandle;
+    }
+
+    RE::FormID GetHealCastProxy(RE::FormID a_follower) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.heal.handle == APMF_API::kInvalidHandle) return 0;
+        return it->second.heal.proxy;
     }
 
     void Tick() {

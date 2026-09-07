@@ -880,13 +880,21 @@ namespace MFO::Actuation {
                             // PER HAND now: watch every hand this claim actually occupies
                             // (both, for a DualCast plan), so a right-hand-only offense
                             // claim gets its own watch slot instead of sharing (and
-                            // potentially losing to) a concurrent left-hand heal's.
+                            // potentially losing to) a concurrent left-hand heal's. Fetch
+                            // the SAME claim's minted delivery-flip proxy (ABI v6; 0 on
+                            // ABI < 6 or no proxy minted) so the watch recognises a cast of
+                            // the proxy, not only the original spell, as this claim firing
+                            // (cast-claim observability, 2026-09-06).
                             if (handPlan.left)
                                 ComposedCast::WatchClaim(a_follower->GetFormID(), spell->GetFormID(),
-                                                         APMFBridge::kApmfHandLeft);
+                                                         APMFBridge::kApmfHandLeft,
+                                                         APMFBridge::GetOffenseCastProxy(
+                                                             a_follower->GetFormID(), APMFBridge::kApmfHandLeft));
                             if (handPlan.right)
                                 ComposedCast::WatchClaim(a_follower->GetFormID(), spell->GetFormID(),
-                                                         APMFBridge::kApmfHandRight);
+                                                         APMFBridge::kApmfHandRight,
+                                                         APMFBridge::GetOffenseCastProxy(
+                                                             a_follower->GetFormID(), APMFBridge::kApmfHandRight));
 
                             // TASK 2: this IS the multi-tick "actively firing"
                             // case the gambit lock exists for -- hold it (on

@@ -1055,6 +1055,78 @@ tick with no backoff of its own — a CHANGE releases and re-requests rather tha
 repointing, since `RequestCast` has no in-place re-point) — left declared/parsed
 since its INI key name is a frozen MCM-Helper identity.
 
+### CAST-CLAIM OBSERVABILITY (ABI v6, feat/consume-cast-observability, 2026-09-06)
+
+Field-diagnosed the same day as the per-hand cast-slots pass: the engine layer
+above WORKS (a claimed heal genuinely cast — `CASTER[L] state=4(Casting)
+spell=0xFF001F2F` then `state=6`, concentration channel open) but MFO carried
+two blind spots that made it LOOK like a total failure. APMF's `APMF_API_v6`
+(append-only over v5, `native/APMF_API.h`, mirrored byte-identically — never
+edited on MFO's side) adds two read-only queries that close both:
+
+```
+RE::FormID (*GetCastProxy)(Handle h);  // the delivery-flip proxy APMF minted, or 0
+bool       (*IsClaimLive)(Handle h);   // true while APMF still holds that claim
+```
+
+**1. Recognise the proxy as our own cast.** APMF mints its own delivery-flip
+proxy for a `kSelf`-delivery spell aimed at a non-self target (`req.proxy = 0`
+in `EnsureCastClaimLocked`, `native/APMFBridge.cpp` — MFO never inspects
+delivery, never builds one itself). The cast that actually lands is of that
+PROXY FormID (e.g. `0xFF001F2F`), never the gambit's original spell (e.g.
+`0x0002F3B8`) — but `Diagnostics.cpp`'s `SpellSink` and `ComposedCast::
+ExpectingCast` only ever matched the original spell, so the real cast was
+filed as `"their own spell, not ours"` and the `[cfc] ... claim live N ms with
+NO observed cast` diagnostic fired a false alarm on a claim that had, in
+fact, fired.
+
+Fix: `EnsureCastClaimLocked` fetches `GetCastProxy(c.handle)` right after a
+successful `RequestCast` (ABI < 6 → `0`, same as a claim that minted none) and
+stores it on the `CastClaim` (`native/APMFBridge.cpp`'s `CastClaim::proxy`).
+Two new bridge accessors expose it read-only: `APMFBridge::GetHealCastProxy`
+and `APMFBridge::GetOffenseCastProxy` (`native/APMFBridge.h`). Every caller
+that arms `ComposedCast`'s silent-claim watch now fetches this alongside the
+spell and forwards it: `ComposedCast::Try` (heal, always LEFT) and every
+`ComposedCast::WatchClaim` call site (`Actuation.cpp`'s owned-cast branch,
+`Actuation_Direct.cpp`'s two self/target concentration-offense claims).
+`ComposedCast`'s per-hand `Watch` struct now carries a `proxy` field alongside
+`spell`; `ExpectingCast`/`NoteObservedCast` match on **either** — a claim that
+lands as the proxy now counts as this claim's cast landing, same as one that
+lands as the original spell. `Diagnostics.cpp`'s `SpellSink` "ours" check
+(the `*** MFO GAMBIT SPELL ***` vs `(their own spell, not ours)` log tag,
+previously `g.actionParamForm == spellID` only) now also counts a hit via
+`ComposedCast::ExpectingCast(casterID, spellID)`, so it stops mislabeling a
+proxied claim's own animated cast as somebody else's. **The diagnostic is not
+weakened** — a claim that produces neither the original spell's nor the
+proxy's cast still warns exactly as before (principle 7: never mask a real
+silent failure).
+
+**2. Stop trusting a dead handle.** APMF auto-expires a claim at its own TTL
+(`kHealCastTtlMs`, 6 s) with no notice to the client. `EnsureCastClaimLocked`'s
+unchanged-claim fast path used to trust a stored handle unconditionally and
+return early — so once APMF silently dropped a claim, MFO kept believing it
+was still live and never re-requested. Field-observed: the gambit re-fired
+every ~1.5 s for 23 s while this early-return swallowed every re-fire and
+`RequestCast` never reached APMF again ("claim live 26650 ms" was MFO's own
+belief, not APMF's state).
+
+Fix: on the unchanged-claim fast path, ABI ≥ 6 now calls `IsClaimLive(c.handle)`
+before returning; a `false` result resets the claim to empty and falls through
+to the SAME fresh-`RequestCast` code the "values changed" branch already used
+(no new re-claim loop, no watchdog — the gambit's own cadence keeps re-firing
+into `EnsureCastClaimLocked` every tick regardless; this only stops MFO from
+silently eating those re-fires). ABI < 6 skips the check and returns exactly
+as before — byte-identical degrade, matching every other `>= N` ABI guard in
+this file.
+
+Both changes are entirely inside `native/APMFBridge.cpp` (`CastClaim`,
+`EnsureCastClaimLocked`, the two new `GetXCastProxy` accessors),
+`native/ComposedCast.h`/`.cpp` (`Watch::proxy`, `WatchArmed`/`WatchClaim`'s new
+`a_proxy` parameter, the spell-or-proxy match in `ExpectingCast`/
+`NoteObservedCast`), and their call sites in `Actuation.cpp`/
+`Actuation_Direct.cpp`/`Diagnostics.cpp` — no ABI header change, no widened
+deny, no fabricated cast.
+
 ## KEY SYMBOLS (Actuation.cpp)
 
 `ConcProxy` (owner-keyed `Slot g_slot[2]{form,source,owner}`, `Configure`, `Acquire`,
