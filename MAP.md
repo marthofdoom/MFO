@@ -1714,6 +1714,26 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `ClaimOffenseCast` sites in `Actuation_Direct.cpp` (`CastSelfDirect`/`CastTargetDirect` →
     `SelfCast::Declined` on a refusal) follow the identical split. **This bullet no longer contradicts the FAILS-CLOSED principle stated
     for `Packages.cpp` below.**
+  - **THE ASK RUNS BEFORE THE EQUIP (F3-2, `fix/mfo-fourstate-followups` 2026-09-07).** Both asks used to
+    live INSIDE `CastOn`'s equip switch, i.e. AFTER `Loadout::Prepare` had put MFO's spell in the LEFT hand
+    and AFTER `CasterConsent::Want` had latched consent — and nothing undid either on a refusal. Against an
+    owner holding the facet with its own spell equipped, `Prepare` short-circuits only when MFO's spell is
+    already in hand, so MFO re-equipped over that owner EVERY 133 ms tick while logging "this cast does NOT
+    happen", and latched consent let the follower's own AI cast it unforced — a fallback nobody asked for,
+    wearing a refusal's clothes. Both asks now sit in a **pre-flight** (`Actuation.cpp:~850-980`), still
+    gated on `bEquipToCast`, and a refusal returns from there with nothing done. Deliberate consequence,
+    documented at the site: a claim can now be minted on a tick whose `Prepare` then debounces — correct
+    under the owned model, since APMF's seats do the equipping while the claim stands.
+  - **A DRAIN-TIME LOSS IS A REFUSAL (F3-1, same branch).** APMF's `ControlMap::EnqueueCast` returns
+    `kInvalidHandle` synchronously ONLY when no channel serves `kIntent_Cast`; every real arbitration
+    decision lands later, in `Drain()`. So an arbitration LOSS still returned a handle, reported `Claimed`,
+    took the opaque `"owned cast: AI deciding"` NoOp that walls off every rule below, read not-live next
+    tick, and was re-requested at INFO forever — the fail-closed path was nearly unreachable in the field.
+    `CastClaim` now carries **`everLive`** (`APMFBridge.cpp`, latched the first time `IsClaimLive` answers
+    true, reset with the claim): a not-live handle that WAS live aged out at APMF's TTL and re-requests as
+    before; one that was **never published** is released and NOT re-requested, so the claim comes back
+    empty, the caller fails closed, and a `spdlog::warn` names the shape. Not a latch — the next winning
+    tick asks afresh.
 - **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7; REPOINTED feat/offense-cast-seats
   2026-09-05; backing store re-shaped feat/per-hand-cast-slots 2026-09-06):** worker- AND
   combat-thread-safe read (the same `g_mx` every other accessor takes) —
@@ -2287,16 +2307,18 @@ for the full history (PASS D's raced hand-drive → PASS E's +ACT drive → PASS
 native seats) and ENGINE_NOTES §0.40.
 - `Try(RE::Actor* follower, RE::SpellItem* spell, RE::Actor* target,
   CasterConsent::SpellKind kind, std::uint32_t stopPct = 0)` → **`TryResult`, a
-  FOUR-STATE** (`ComposedCast.cpp:~198`, enum `ComposedCast.h:~75`) —
+  FOUR-STATE** (`ComposedCast.cpp:198`, enum `ComposedCast.h:104`) —
   `{NotApplicable, Claimed, Held, ApmfRefused}`. TWO orthogonal splits produced it: `Held`
   (Fable SEV-2 2026-09-06) is MFO-internal slot ownership BETWEEN TWO HEALS, APMF never asked;
   `NotApplicable` vs `ApmfRefused` (`fix/mfo-no-decline-fallback` 2026-09-07) is what APMF's
   ARBITRATION answered. The old `Refused` was **renamed** to `NotApplicable` rather than
   re-pointed, deliberately: re-using the name for the opposite meaning would have let every
   call site keep compiling with inverted semantics.
-  ← `Actuation_Direct.cpp:810` (in `CastSelfDirect`, `:765`), `:1076` (in
-  `CastTargetDirect`, `:1036`) **and `Actuation.cpp:992`** (`CastOn`'s ally/player
-  branch — a third call site, MISSING from this entry until 2026-09-06).
+  ← `Actuation_Direct.cpp:886` (in `CastSelfDirect`, `:829`), `:1183` (in
+  `CastTargetDirect`, `:1141`) **and `Actuation.cpp:965`** (`CastOn`'s ally/player
+  branch — a third call site, MISSING from this entry until 2026-09-06; MOVED by
+  F3-2 out of the equip switch into `CastOn`'s pre-flight, so the ask now precedes
+  `Loadout::Prepare`/`CasterConsent::Want` and a refusal leaves no side effects).
   Call sites forward an extra `a_stopPct` (see below);
   replacing the two deleted `Packages::HealAnimFill` call sites historically.
   Gated `Enabled()`: AE-only (`T#67` mirror), **HEAL-ONLY** (`kind !=
@@ -2315,7 +2337,7 @@ native seats) and ENGINE_NOTES §0.40.
   kInstant, byte-identical to before). The old unconditional `[cfc] … kInstant apply` info line
   is GONE — it asserted a fallback that no longer happens;
   claimed → `CastBounds::Arm(fid, spellID, APMFBridge::GetHealCastProxy(fid),
-  kHealBoundsTtlMs)` (`ComposedCast.cpp:431`) — the third argument was a literal
+  kHealBoundsTtlMs)` (`ComposedCast.cpp:453`) — the third argument was a literal
   `0` until F4 (2026-09-06); passing the claim's minted delivery-flip proxy is
   what lets the MFO-side consent standdown and the watch recognise a cast of the
   PROXY as this claim firing. `kHealBoundsTtlMs` aliases
@@ -2386,15 +2408,15 @@ native seats) and ENGINE_NOTES §0.40.
   rules alternating on it every 1-3s each released the live claim before the
   engine's equip+charge finished, so no heal ever landed
   (`Docs/DIAG-2026-09-06-deny-heal-failures.md` RC1 — that file lives on `main`,
-  `88398dd`; this branch predates it, so the path resolves only after merge). `Try()` (`:354-394`) now
+  `88398dd`; this branch predates it, so the path resolves only after merge). `Try()` (`:360-404`) now
   HOLDS the incumbent instead: if hand 0's watch holds a DIFFERENT spell, is
   `!observed`, and `APMFBridge::RefreshHealCastClaim(fid)` says the claim is still
   live, it logs (`LogHealHoldOff`, `:186`, deduped 2s per (follower, spell)),
   records `g_lastHold[fid]` (`HoldRecord`, `:173`) and returns `TryResult::Held` —
   the incumbent keeps its charge window; NOTHING is claimed and NOTHING applied.
   Pieces:
-  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:816`, decl
-    `APMFBridge.h:670`) — the hold's HEARTBEAT: bumps the same `refreshed` stamp
+  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:895`, decl
+    `APMFBridge.h:704`) — the hold's HEARTBEAT: bumps the same `refreshed` stamp
     `ClaimHealCast` bumps, because the hold path deliberately never reaches
     `ClaimHealCast` and `Tick()`'s `FacetExpiry()` sweep would otherwise release
     the very claim the hold protects (~2.45s at the default `fSuppressWindow`,
@@ -2433,8 +2455,8 @@ native seats) and ENGINE_NOTES §0.40.
     `ComposedCast.h:175`) ← `Logistics.cpp:1413` — names WHICH incumbent held a
     spell off, for the LOG ONLY. Reads `g_lastHold`, which every `Try()` erases at
     its top (`:207`), so it needs no expiry and MUST NOT grow one (#9).
-  - **Depended-on-by:** `Actuation_Direct.cpp:812`/`:1078` map `Held` →
-    `SelfCast::Held` (`Actuation.h:93`) → `Actuation_Direct.cpp:1370` (`CastAuto`,
+  - **Depended-on-by:** `Actuation_Direct.cpp:888`/`:1185` map `Held` →
+    `SelfCast::Held` (`Actuation.h:93`) → `Actuation_Direct.cpp:1488` (`CastAuto`,
     transparent NoOp) and `Logistics.cpp:1374` (transparent `continue`, log deduped
     2s); `Actuation.cpp:1018` (`CastOn`) returns a TRANSPARENT NoOp with NO hand
     lock.
@@ -2448,8 +2470,8 @@ native seats) and ENGINE_NOTES §0.40.
     bound, since the incumbent's own rule re-requests a fresh handle — and a fresh
     `created` — each time APMF auto-expires the old one. (3) The hold check rests
     on a NARROW invariant: **not** "one heal `Try()` per follower per tick" (false
-    — a `Held` outcome continues the scan at `Logistics.cpp:1405`, and the
-    `pass < 2 && !acted` wrapper at `:1191` re-runs it), but **"no heal `Try()`
+    — a `Held` outcome continues the scan at `Logistics.cpp:1547`, and the
+    `pass < 2 && !acted` wrapper at `:1323` re-runs it), but **"no heal `Try()`
     runs after a same-tick `ClaimHealCast` that MINTED"** — a `Claimed` outcome
     ends all three scans, and a NON-claimed one out of the `ClaimHealCast` branch (either
     half of the split `NotApplicable`/`ApmfRefused`, formerly `Refused`) clears `hand[0]`
