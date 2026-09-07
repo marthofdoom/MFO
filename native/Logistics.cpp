@@ -1071,9 +1071,16 @@ namespace MFO::Logistics {
                 // So the bypass now requires the hold to have been SEEN (legEngaged,
                 // set above off a direct GetCurrentPackage read) rather than merely
                 // requested. Three cases:
-                //   * APMF leg, engaged        -> bypass (0x49 genuinely IS the
-                //                                re-assert for this leg), but a later
-                //                                displacement is REPORTED (RC#3).
+                //   * APMF leg, engaged        -> bypass. NOTE the bypass rests on an
+                //                                OBSERVATION, not on a re-assert: legEngaged
+                //                                proves the package was seen running ONCE.
+                //                                0x49 redirects only when NUDGED with a
+                //                                PUBLISHED claim -- the engine never re-asks
+                //                                on its own (ENGINE_NOTES 0.44, loot DIAG
+                //                                section 2: all 16 wins reconcile to explicit
+                //                                nudges). So the hold does NOT re-assert
+                //                                itself, and a later displacement is
+                //                                REPORTED, not recovered (RC#3).
                 //   * APMF leg, never engaged  -> fall into the normal guard: the
                 //                                clocks and the strike/grace machinery
                 //                                apply exactly as on any other leg.
