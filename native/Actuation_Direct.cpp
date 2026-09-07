@@ -104,6 +104,9 @@ namespace MFO::Actuation {
             return false;
         }
 
+        // DISMISSAL DROP (F3-7, deploy-gate review 2026-09-07): the per-follower
+        // erase lives at namespace scope below (ClearApmfRefusalLog) because
+        // Actuation.cpp's ClearCastLock has to reach it across the TU boundary.
         void LogApmfRefusal(RE::FormID a_follower, const char* a_what, RE::FormID a_spell,
                             RE::FormID a_target, const char* a_hand) {
             if (ApmfRefusalThrottled(a_follower, a_spell, a_target, SelfClock::now())) return;
@@ -887,8 +890,12 @@ namespace MFO::Actuation {
             // Heals are LEFT always (ClaimHealCast's own hard rule); target 0 = self.
             LogApmfRefusal(id, "heal-cast (self)", spellID, /*target=*/0, "left");
             return SelfCast::Declined;
+        // NO `default:` (F3-6, deploy-gate review 2026-09-07): all four enumerators
+        // are listed, so adding a fifth TryResult must BREAK THE BUILD here rather
+        // than silently take the kInstant path below -- exactly the masked fallback
+        // fix/mfo-no-decline-fallback removed.
         case ComposedCast::TryResult::NotApplicable:
-        default:                               break;
+            break;
         }
 
         // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)
@@ -1106,6 +1113,18 @@ namespace MFO::Actuation {
         g_lastApmfRefusal.clear();    // this file's APMF-refusal log dedup, session-scoped
     }
 
+    // F3-7 (deploy-gate review 2026-09-07). Drop ONE follower's APMF-refusal log
+    // dedup entries. Actuation.cpp's twin map is erased per follower from
+    // ClearCastLock (dismissal / combat end) as well as wholesale on revert; this
+    // copy was only ever `.clear()`ed on revert (ClearSelfCasts above), so the two
+    // maps documented as identical twins were not identical. The effect was
+    // harmless -- a stale entry can only DELAY one error line, by at most the 5 s
+    // window, and never suppress a different (spell, target) -- but a twin that
+    // silently differs from its documented twin is how the next reader is misled.
+    // Called from ClearCastLock (Actuation.cpp) so both maps share one release
+    // point. Idempotent; worker-serial, no lock (#4), same as the map itself.
+    void ClearApmfRefusalLog(RE::FormID a_follower) { g_lastApmfRefusal.erase(a_follower); }
+
     // ON-TARGET DIRECT FORCE = CastSelfDirect generalized to a NON-self target.
     // The known-working, package-lock-proof delivery for a concentration cast at a
     // player / ally / foe: no package -> no §4.6 alias-lock decline, so a package-
@@ -1167,8 +1186,9 @@ namespace MFO::Actuation {
         case ComposedCast::TryResult::ApmfRefused:
             LogApmfRefusal(id, "heal-cast", spellID, targetID, "left");
             return SelfCast::Declined;
+        // NO `default:` -- see the twin in CastSelfDirect above (F3-6).
         case ComposedCast::TryResult::NotApplicable:
-        default:                               break;
+            break;
         }
 
         // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)

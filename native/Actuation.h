@@ -233,4 +233,11 @@ namespace MFO::Actuation {
     // ClearSelfCasts(), not wired as a separate Serialization.cpp call site.
     void ClearCastLocks();
 
+    // F3-7 (deploy-gate review 2026-09-07). Drop ONE follower's APMF-refusal log
+    // dedup entries in Actuation_Direct.cpp's anon namespace. Declared here ONLY
+    // because ClearCastLock (Actuation.cpp) has to reach across the TU boundary to
+    // keep that map and its Actuation.cpp twin -- documented as identical -- on the
+    // SAME per-follower release point. Not an outside-caller entry point.
+    void ClearApmfRefusalLog(RE::FormID a_follower);
+
 }

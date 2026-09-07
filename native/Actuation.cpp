@@ -478,8 +478,11 @@ namespace MFO::Actuation {
             // fall to the inert alias package, which equips but never fires and
             // is declined outright on package-locked custom followers.
             if (self) {
-                // F3 tri-state (mirrors Logistics.cpp:3987-3996 + CastOn's self
-                // fork): only a real Applied is this tick's action; a Refreshed
+                // F3 tri-state (mirrors Logistics.cpp's OOC cast dispatch,
+                // ~`:1500-1560`, + CastOn's self fork -- the old cite here pointed at
+                // Logistics.cpp:3987-3996, which has not existed since that file was
+                // split; it is 2065 lines): only a real Applied is this tick's action;
+                // a Refreshed
                 // (channel paced, nothing applied) is TRANSPARENT so it does not
                 // starve the rules below it, and the fired log never lies.
                 if (Config::g_castSelf.load()) {
@@ -766,8 +769,9 @@ namespace MFO::Actuation {
             // beat -- ~1 s kConcApplyPeriod for concentration, fCastCooldown
             // for FF); the reconcile releases it when the rule goes false.
             if (a_target == a_follower && Config::g_castSelf.load()) {
-                // F3 tri-state (mirrors Logistics.cpp:3987-3996): only a real
-                // Applied is THIS tick's action. A Refreshed tick (the channel is
+                // F3 tri-state (mirrors Logistics.cpp's OOC cast dispatch,
+                // ~`:1500-1560` -- see the corrected cite at the self fork above):
+                // only a real Applied is THIS tick's action. A Refreshed tick (the channel is
                 // winning but paced out -- nothing applied) is TRANSPARENT so a
                 // persistently-true combat cast_self does not starve attack/drink/
                 // heal below it, and `lastFired`/`[eval] fired` never lies on a
@@ -843,6 +847,136 @@ namespace MFO::Actuation {
             // animate is the open question this build exists to answer -- and
             // if the answer is no, behaviour is exactly what it is today rather
             // than a regression.
+            // ── ASK APMF BEFORE TOUCHING THE FOLLOWER'S HANDS (F3-2, deploy-gate
+            // review 2026-09-07) ───────────────────────────────────────────────────
+            // "Fail closed" was only half-true: both APMF asks used to live INSIDE
+            // the equip switch below, i.e. AFTER `Loadout::Prepare` had already put
+            // MFO's spell in the follower's LEFT hand and AFTER `CasterConsent::Want`
+            // had latched consent for it. Nothing undid either on a refusal, so a
+            // refused tick still left two side effects standing -- and the field shape
+            // is ugly: when another owner holds the cast facet with ITS spell equipped,
+            // `Prepare` short-circuits only if MFO's own spell is already in hand
+            // (Loadout.cpp), so MFO re-equipped over that owner EVERY 133 ms tick while
+            // logging "this cast does NOT happen", and with consent latched the
+            // follower's own AI could then cast MFO's spell unforced. That is a
+            // fallback nobody asked for, dressed as a refusal -- the exact mask
+            // fix/mfo-no-decline-fallback exists to remove (principle 7).
+            //
+            // So the ask moves AHEAD of the equip and the consent, and a refusal
+            // returns from here: no equip, no consent, no Targeting::Command, no lock --
+            // nothing to undo, because nothing was done.
+            //
+            // GATED ON bEquipToCast, exactly like the block below: both asks were
+            // inside `if (Config::g_equipToCast.load())` before this change and must
+            // stay inside it, or a toggle-off build would start claiming facets it
+            // never claimed.
+            //
+            // CONSEQUENCE, DELIBERATE AND DOCUMENTED: a claim can now be made on a tick
+            // whose `Loadout::Prepare` then returns Debounced/Failed, which could not
+            // happen before. That is correct under the owned model -- APMF's own seats
+            // do the equipping while the claim stands, so MFO declining to thrash ITS
+            // gear is not a reason to drop APMF's claim -- and the claim is refreshed
+            // every winning tick and released crisply by the Scheduler's !castSeen path
+            // either way.
+            //
+            // The SUCCESS paths are unchanged: they fall through into the switch below
+            // exactly as before and still return from their old positions.
+            const bool ownedCast =
+                APMFBridge::Available() && Config::g_apmfCast.load() &&
+                !Config::g_legacyCastHybrid.load() &&
+                a_target && a_target != a_follower &&
+                a_target != RE::PlayerCharacter::GetSingleton() &&
+                CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
+
+            // Did the offense claim STAND this tick? Consumed by the owned-cast branch
+            // below in place of the ask it used to make itself.
+            bool ownedClaimHeld = false;
+            // The heal ask's outcome, likewise consumed below. NotApplicable when the
+            // ask was never made (bEquipToCast off, self-target, or the owned-cast
+            // branch owns this spell instead).
+            auto composed = ComposedCast::TryResult::NotApplicable;
+
+            if (Config::g_equipToCast.load()) {
+                if (ownedCast) {
+                    // HAND POLICY (integration/2026-09-06, PER-HAND feat/per-hand-cast-
+                    // slots 2026-09-06): `handPlan` was already resolved by the per-hand
+                    // cast-gambit lock gate above (Loadout::PlanCastHand, juggled against
+                    // the CURRENT lock state -- the hard, non-negotiable weapon-hand-
+                    // exclusion rule lives inside PlanCastHand itself, checked before
+                    // Dual/EitherFree are even considered). Reuse it here rather than
+                    // recomputing -- the lock and the actual APMF claim must never
+                    // disagree on which hand(s) they occupy. Translate the resolved
+                    // HandPlan into the bridge's a_hand encoding directly (not `HandFor`,
+                    // which only maps a bare HandPick and cannot express an
+                    // already-juggled concrete Right).
+                    //
+                    // concentration = false: this branch never sees one (concentration
+                    // forked off to ConcentrationCast's direct-force stream, above,
+                    // before any of this runs). stopPct = 0: a heal-only concept (a
+                    // client restore threshold); offense has no such threshold in scope.
+                    const std::int32_t claimHand =
+                        (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
+                        handPlan.left                     ? APMFBridge::kApmfHandLeft :
+                                                             APMFBridge::kApmfHandRight;
+                    ownedClaimHeld =
+                        APMFBridge::ClaimOffenseCast(a_follower->GetFormID(), spell->GetFormID(),
+                                                     a_target->GetFormID(), claimHand,
+                                                     /*concentration=*/false, /*stopPct=*/0);
+                    if (!ownedClaimHeld && APMFBridge::OffenseCastClaimSupported()) {
+                        // APMF is PRESENT + CAPABLE and it REFUSED. FAIL CLOSED: no
+                        // legacy hybrid, no force, no CastSpellImmediate -- and now no
+                        // equip and no consent either. FailedSkill/transparent, NOT an
+                        // opaque NoOp: the taxonomy's transparent case is "the rule
+                        // provably cannot run this tick" (Actuation.h), which is exactly
+                        // this. Failing closed means MFO does not route the CAST around
+                        // APMF, not that the follower is frozen out of every rule below.
+                        LogApmfRefusal(a_follower->GetFormID(), "offense-cast",
+                                       spell->GetFormID(), a_target->GetFormID(),
+                                       handPlan.left && handPlan.right ? "dual"
+                                           : handPlan.left             ? "left"
+                                                                       : "right");
+                        return { Result::FailedSkill, "APMF refused the cast claim", true };
+                    }
+                    // Not held and NOT supported -> APMF is ABSENT for this facet (its
+                    // ABI predates RequestCast, or bApmfCast raced off). The DECLARED
+                    // degrade contract, not a refusal: equip/consent/legacy hybrid run
+                    // below exactly as in a world with no APMF. Silent -- APMFBridge
+                    // warns once per session about a too-old ABI itself.
+                } else if (a_target && a_target != a_follower) {
+                    // The heal twin. `ownedCast` is Offense-only by its own
+                    // classification check, so a Heal/Buff spell never took that branch
+                    // and fell straight into the AI-first-grace + force-on-miss hybrid
+                    // even with APMF present -- while the SAME kIntent_Cast claim
+                    // (`ComposedCast::Try`) already handles the identical spell/target
+                    // pair when it arrives via `CastSelfDirect`/`CastTargetDirect`.
+                    // Try() is fully self-gating (HEAL-ONLY, AE + APMF +
+                    // bHealAnimPackage), so a Buff/Offense kind degrades to
+                    // NotApplicable immediately, byte-identical to not calling it at all.
+                    //
+                    // `a_target != a_follower` scopes this to ally/player targets only,
+                    // matching the audit's own framing -- a self-target CAN reach this
+                    // far when bCastSelf (dev-only, default off) never forked it off,
+                    // and self-cast is a separate, already-gated mechanism
+                    // (`CastSelfDirect`) this must not silently annex.
+                    //
+                    // stopPct = 0 (stop at full restoration): no per-gambit numeric
+                    // threshold is in scope here, matching every ComposedCast::Try call
+                    // site except CastAuto's own (CAST-DELIVERY.md's STOP-PERCENT note).
+                    composed = ComposedCast::Try(a_follower, spell, a_target,
+                                                 CasterConsent::ClassifySpell(spell),
+                                                 /*stopPct=*/0);
+                    if (composed == ComposedCast::TryResult::ApmfRefused) {
+                        // FAIL CLOSED, same reasoning as the offense ask above and
+                        // DISTINCT from Held (which is another heal owning the slot, not
+                        // APMF's arbitration saying no). Heals are LEFT always
+                        // (ClaimHealCast's own hard rule), so the hand is not a variable.
+                        LogApmfRefusal(a_follower->GetFormID(), "heal-cast",
+                                       spell->GetFormID(), a_target->GetFormID(), "left");
+                        return { Result::FailedSkill, "APMF refused the heal claim", true };
+                    }
+                }
+            }
+
             bool equipped = false;
             if (Config::g_equipToCast.load()) {
                 std::string why;
@@ -908,14 +1042,13 @@ namespace MFO::Actuation {
                     // that is a magic-score bias question (raise it), NOT a reason to force.
                     // Concentration never reaches this branch (its bounded direct fork
                     // returned above -- exact-bounding intact).
-                    const bool ownedCast =
-                        APMFBridge::Available() && Config::g_apmfCast.load() &&
-                        !Config::g_legacyCastHybrid.load() &&
-                        a_target && a_target != a_follower &&
-                        a_target != RE::PlayerCharacter::GetSingleton() &&
-                        CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
-
-                    if (ownedCast) {
+                    //
+                    // `ownedClaimHeld` was resolved by the PRE-FLIGHT above, before the
+                    // equip and the consent (F3-2). A refusal already returned from
+                    // there, so reaching this branch means APMF HOLDS the claim; a
+                    // false here means only "APMF absent for this facet", which falls
+                    // through to the legacy hybrid exactly as it always did.
+                    if (ownedClaimHeld) {
                         // CLAIM the cast-EXECUTION facet FIRST (kIntent_Cast/RequestCast,
                         // ch.8b -- PORTED feat/offense-cast-seats, 2026-09-05, off the
                         // retired ch.8 kIntent_SelectSpell gate-only claim this site used
@@ -950,30 +1083,13 @@ namespace MFO::Actuation {
                         // all). stopPct = 0: a heal-only concept (a client restore
                         // threshold); offense has no such threshold in scope.
                         //
-                        // REFUSED (APMF lost arbitration / ABI < 5 / toggle off): fall
-                        // through to the legacy AI-first-grace + force-on-miss hybrid
-                        // below, exactly as when ownedCast is false -- a refused claim
-                        // must never silently drop the cast (the AI would otherwise just
-                        // pick its own spell again, reintroducing the defect this claim
-                        // exists to close).
-                        // HAND POLICY (integration/2026-09-06, PER-HAND feat/per-hand-
-                        // cast-slots 2026-09-06): `handPlan` was already resolved by the
-                        // per-hand cast-gambit lock gate above (Loadout::PlanCastHand,
-                        // juggled against the CURRENT lock state -- the hard,
-                        // non-negotiable weapon-hand-exclusion rule lives inside
-                        // PlanCastHand itself, checked before Dual/EitherFree are even
-                        // considered). Reuse it here rather than recomputing -- the lock
-                        // and the actual APMF claim must never disagree on which hand(s)
-                        // they occupy. Translate the resolved HandPlan into the bridge's
-                        // a_hand encoding directly (not `HandFor`, which only maps a bare
-                        // HandPick and cannot express an already-juggled concrete Right).
-                        const std::int32_t claimHand =
-                            (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
-                            handPlan.left                     ? APMFBridge::kApmfHandLeft :
-                                                                 APMFBridge::kApmfHandRight;
-                        if (APMFBridge::ClaimOffenseCast(a_follower->GetFormID(), spell->GetFormID(),
-                                                         a_target->GetFormID(), claimHand,
-                                                         /*concentration=*/false, /*stopPct=*/0)) {
+                        // FAIL CLOSED, NOT a fall-through (fix/mfo-no-decline-fallback,
+                        // marth 2026-09-07: "With APMF theres no fallback for it. APMF
+                        // shoudl work"). The ask, and the refusal that fails closed on
+                        // it, both live in the PRE-FLIGHT above so that a refusal leaves
+                        // no equip/consent side effects standing (F3-2); the hand policy
+                        // that picks `claimHand` from `handPlan` is documented there too.
+                        {
                             // ARBITRATE the combat-target facet too (ch.6, unchanged) --
                             // separate from the cast claim's own `target` field (which only
                             // feeds the magic-target/aim seats): this keeps APMF the single
@@ -1029,42 +1145,6 @@ namespace MFO::Actuation {
                             // force, ever, here.
                             return { Result::NoOp, "owned cast: AI deciding (animated, mobile)" };
                         }
-                        // THE CLAIM DID NOT STAND. Two utterly different worlds,
-                        // and until fix/mfo-no-decline-fallback (marth
-                        // 2026-09-07) this site collapsed them into one silent
-                        // fall-through to the legacy hybrid -- the exact
-                        // decline-fallback the APMF showpiece rule forbids
-                        // (MAP.md's Packages.cpp loot-travel entry has stated
-                        // the same rule for that facet since 2026-09-03).
-                        //
-                        // APMF PRESENT + CAPABLE -> it REFUSED. FAIL CLOSED: no
-                        // legacy hybrid, no force, no CastSpellImmediate. The
-                        // cast simply does not happen this tick and says so
-                        // loudly. FailedSkill/transparent, NOT an opaque NoOp:
-                        // the taxonomy's transparent case is "the rule provably
-                        // cannot run this tick" (Actuation.h), which is exactly
-                        // this -- failing closed means MFO does not route the
-                        // CAST around APMF, not that the follower is frozen out
-                        // of every rule below it (an artificial paralysis would
-                        // be a SECOND invented behaviour, and a less legible
-                        // failure than a follower who visibly never casts).
-                        if (APMFBridge::OffenseCastClaimSupported()) {
-                            LogApmfRefusal(a_follower->GetFormID(), "offense-cast",
-                                           spell->GetFormID(), a_target->GetFormID(),
-                                           handPlan.left && handPlan.right ? "dual"
-                                               : handPlan.left             ? "left"
-                                                                           : "right");
-                            return { Result::FailedSkill,
-                                     "APMF refused the cast claim", true };
-                        }
-                        // APMF is ABSENT for this facet (its ABI predates
-                        // RequestCast, or bApmfCast went off between the
-                        // `ownedCast` gate and here). That is the DECLARED
-                        // degrade contract, not a refusal -- the legacy path
-                        // must just work, however unpolished. APMFBridge warns
-                        // ONCE per session about a too-old ABI itself, so this
-                        // stays silent rather than re-logging every tick.
-                        // Fall through to the legacy hybrid below.
                     }
 
                     // COMPOSED CAST for a Heal/Buff spell aimed at an ally or the player,
@@ -1107,9 +1187,12 @@ namespace MFO::Actuation {
                     // when bCastSelf (dev-only, default off) never forked it off at :522,
                     // and self-cast is a separate, already-gated mechanism (CastSelfDirect)
                     // this fix must not silently annex.
-                    if (a_target != a_follower) {
-                        switch (ComposedCast::Try(a_follower, spell, a_target,
-                                                  CasterConsent::ClassifySpell(spell), /*stopPct=*/0)) {
+                    // `composed` was resolved by the PRE-FLIGHT above (F3-2), before the
+                    // equip and the consent, so an ApmfRefused outcome already returned
+                    // from there with nothing done. It stays NotApplicable when the ask
+                    // was never made at all.
+                    {
+                        switch (composed) {
                         case ComposedCast::TryResult::Claimed:
                             // TASK 2: same multi-tick "actively firing" reasoning as the
                             // ownedCast branch above -- hold the lock (LEFT -- handPlan
@@ -1139,24 +1222,29 @@ namespace MFO::Actuation {
                                      "composed cast: held off (another heal owns the claim)", true };
 
                         // FAIL CLOSED (fix/mfo-no-decline-fallback, marth 2026-09-07).
-                        // APMF is present AND capable AND it refused this heal claim,
-                        // so there is no fallback: NOT the AI-first grace/ForceCast
-                        // hybrid, NOT a kInstant apply. Same transparent taxonomy as
-                        // the offense branch above (the rule provably cannot run this
-                        // tick), and DISTINCT from Held above -- Held is another
-                        // heal owning the slot, this is APMF's arbitration saying no.
-                        // Heals are LEFT always (ClaimHealCast's own hard rule), so
-                        // the hand is not a variable here.
+                        // APMF is present AND capable AND it refused this heal claim, so
+                        // there is no fallback: NOT the AI-first grace/ForceCast hybrid,
+                        // NOT a kInstant apply. The PRE-FLIGHT above already returned on
+                        // this outcome (F3-2 -- so that no equip/consent side effect is
+                        // left standing), which makes this arm unreachable today. It is
+                        // kept, and kept IDENTICAL, deliberately: it is listed so the
+                        // switch stays exhaustive without a `default:` (F3-6), and if a
+                        // future edit ever lets this outcome reach here it must still
+                        // fail closed rather than silently take the hybrid below.
+                        // DISTINCT from Held above -- Held is another heal owning the
+                        // slot, this is APMF's arbitration saying no.
                         case ComposedCast::TryResult::ApmfRefused:
                             LogApmfRefusal(a_follower->GetFormID(), "heal-cast",
                                            spell->GetFormID(), a_target->GetFormID(), "left");
                             return { Result::FailedSkill,
                                      "APMF refused the heal claim", true };
 
-                        // APMF was never asked (non-Heal kind / SE / toggle off /
-                        // APMF absent / ABI < 5) -- the degrade contract, unchanged.
+                        // APMF was never asked (non-Heal kind / SE / toggle off / APMF
+                        // absent / ABI < 5) -- the degrade contract, unchanged. NO
+                        // `default:` (F3-6): all four enumerators are listed, so a fifth
+                        // TryResult value must break the build instead of silently
+                        // taking the force hybrid below.
                         case ComposedCast::TryResult::NotApplicable:
-                        default:
                             break;   // -> the AI-first grace/ForceCast hybrid below
                         }
                     }
@@ -1933,6 +2021,10 @@ namespace MFO::Actuation {
         g_castLock.erase(a_follower);
         g_lastLockLog.erase(a_follower);
         g_lastApmfRefusal.erase(a_follower);
+        // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
+        // anon namespace; drop that follower's entries here too so the two maps
+        // really do share a release point instead of only claiming to.
+        ClearApmfRefusalLog(a_follower);
     }
 
     // Revert/load: drop every follower's lock. No engine call -- the world is

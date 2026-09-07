@@ -180,9 +180,37 @@ namespace MFO::Config {
     // LEGACY CAST HYBRID (MCM bLegacyCastHybrid). The owned cast model (above) is the
     // DEFAULT. Turn this ON to force MFO's ORIGINAL AI-first-wait + force-on-miss
     // package hybrid instead (the pre-APMF behaviour, unanimated force via the cast
-    // package). OFF (default) + APMF present -> owned/animated model; ON, or APMF
-    // absent, -> the legacy hybrid, gracefully. FROZEN KEY (INVARIANTS #37): its
-    // semantics never change -- a new behaviour gets a new key, never this one.
+    // package). FROZEN KEY (INVARIANTS #37): its semantics never change -- a new
+    // behaviour gets a new key, never this one.
+    //
+    // WHAT IT ACTUALLY COVERS (corrected F3-8, marth's call 2026-09-07 -- this said
+    // "ON, or APMF absent, -> the legacy hybrid, gracefully", which reads as a
+    // fallback that exists while APMF is present. It does not). The four sites that
+    // read this key are all OFFENSE/hybrid paths: `Actuation.cpp`'s `ownedCast` gate
+    // and its melee/attack combat-target claim, and the two concentration
+    // `ClaimOffenseCast` sites in `Actuation_Direct.cpp` (`CastSelfDirect` /
+    // `CastTargetDirect`).
+    //
+    // IT DOES NOT GATE `ComposedCast::Try`, so it does not touch the APMF HEAL path
+    // at all. Deliberate: with APMF present there is NO decline-fallback anywhere
+    // (marth 2026-09-07 -- "With APMF theres no fallback for it. APMF shoudl work"),
+    // and gating Try on this key would re-introduce exactly the decline-fallback
+    // fix/mfo-no-decline-fallback removed.
+    //
+    // THE HEAL KILL SWITCH IS `bHealAnimPackage` OFF. That makes
+    // `ComposedCast::Enabled` false, so MFO never claims the facet at all, `Try`
+    // answers `NotApplicable`, and the caller runs the working kInstant heal (no
+    // follower animation). That is MFO NOT ASKING -- not a fallback from a refusal.
+    //
+    // WITH APMF PRESENT, A REFUSED CLAIM FAILS CLOSED and never degrades: the cast
+    // visibly does not happen and one rate-limited `[apmf] ... APMF REFUSED ...`
+    // error names the actor/spell/target/hand. Do not read anything here as
+    // promising a fallback in that case.
+    //
+    // COVERAGE GAP, KNOWN AND ACCEPTED (marth 2026-09-07): the APMF-ABSENT path is
+    // preserved byte-identical but is NOT part of the test plan -- marth does not
+    // plan to exercise it. Whoever next touches that path should know it is
+    // unexercised by design rather than discover it.
     inline std::atomic<bool>  g_legacyCastHybrid{ false };
 
     // APMF LOOT-TRAVEL (APMFBridge, ch.9 0x49 package-offer). When APMF.dll is

@@ -44,14 +44,26 @@
 // stands silently STAYS silent; the log line is the diagnostic signal, not a
 // fix.
 //
-// Try() answers a TRI-STATE (TryResult below, Fable SEV-2 2026-09-06 -- it used
-// to be a bool, and the third state was hiding inside `true`): Claimed once APMF
-// confirms it holds the claim (the caller skips its own kInstant apply), Refused
-// to degrade to the caller's proven kInstant heal (a heal must never vanish --
-// APMF absent, ABI too old, toggle off, SE/VR, or a refused claim all degrade
-// cleanly, byte-identical to today), and Held when a DIFFERENT spell's live
-// claim owns the follower's single heal slot -- nothing was delivered and
-// nothing was applied.
+// Try() answers FOUR outcomes (TryResult below). It was a bool; Fable SEV-2
+// (2026-09-06) split out `Held`, which had been hiding inside `true`, and
+// fix/mfo-no-decline-fallback (marth 2026-09-07) split the remaining `Refused`
+// into the two asymmetric halves it had been conflating:
+//   * Claimed       -- APMF confirms it holds the claim; the caller skips its own
+//                      kInstant apply.
+//   * Held          -- a DIFFERENT spell's live claim owns the follower's single
+//                      heal slot; nothing was delivered and nothing was applied.
+//   * NotApplicable -- APMF was NEVER ASKED (SE/VR, non-Heal kind,
+//                      bHealAnimPackage off, APMF absent, or an ABI that predates
+//                      the cast facet). The caller's proven kInstant heal runs,
+//                      byte-identical to before -- this is the DEGRADE-WHEN-ABSENT
+//                      contract, not a fallback from a decline.
+//   * ApmfRefused   -- APMF is PRESENT and CAPABLE and it said NO. There is NO
+//                      fallback: the caller FAILS CLOSED, logs loudly, and the
+//                      heal visibly does not happen. Masking it (principle 7)
+//                      would hide an APMF bug indefinitely.
+// The distinction is the whole point: "a heal must never vanish" holds only when
+// MFO never asked. Once MFO has asked and been refused, the heal SHOULD visibly
+// not happen.
 //
 // THREADING. Try()/End() run on the AddTask job WORKER (the per-follower tick),
 // matching every other Actuation_Direct entry point (#4). CastBounds is

@@ -101,6 +101,24 @@ namespace MFO::APMFBridge {
             // `c = CastClaim{}` on every release/re-request, so a genuinely new
             // claim always gets a full fresh window. See RefreshHealCastClaim.
             std::chrono::steady_clock::time_point created{};
+            // WAS THIS HANDLE EVER PUBLISHED AS LIVE? (F3-1, deploy-gate review
+            // 2026-09-07.) Set true the first time IsClaimLive(handle) answers true,
+            // and NEVER cleared while the same handle stands; reset to false with the
+            // rest of the claim by `c = CastClaim{}` on every release/re-request, so
+            // it always describes THIS handle and no earlier one.
+            //
+            // It exists to separate the only two ways a stored handle can read
+            // not-live, which look identical at the call site but mean opposite
+            // things:
+            //   * everLive == true  -> the claim WAS in force and has since AGED OUT
+            //     at APMF's own TTL. Normal, expected, and a re-request is right.
+            //   * everLive == false -> APMF minted a handle, and it has never once
+            //     been published as live. Handles are minted synchronously and
+            //     arbitration is decided later in APMF's Drain (ControlMap.cpp), so
+            //     this is the signature of an ARBITRATION LOSS: a refusal that
+            //     arrives asynchronously instead of as a kInvalidHandle. Re-requesting
+            //     it forever is what made the fail-closed path nearly unreachable.
+            bool everLive = false;
             // ABI v6 observability (cast-claim observability, 2026-09-06): the
             // delivery-flip proxy FormID APMF minted internally for `handle`
             // (APMF_API::APMF_API_v6::GetCastProxy), fetched once right after a
@@ -343,8 +361,14 @@ namespace MFO::APMFBridge {
                 // an EARLIER tick, which APMF has long since published. THAT is
                 // the undocumented dependency this fast path's correctness rests
                 // on -- break it and this thrashes for that tick.
-                if (api->abiVersion < 6 ||
-                    reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(c.handle)) {
+                // ABI < 6 cannot answer IsClaimLive at all, so it can neither observe
+                // liveness nor detect a drain-time loss -- it keeps today's behaviour
+                // byte-identical and is treated as "live", exactly as before.
+                const bool liveNow =
+                    api->abiVersion < 6 ||
+                    reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(c.handle);
+                if (liveNow) c.everLive = true;   // F3-1: latch, never cleared for this handle
+                if (liveNow) {
                     // F4 (RC4, 2026-09-06): the proxy is minted lazily during
                     // APMF's own per-frame Drain, so the read at :417-418
                     // below (right after RequestCast) can still see 0 even
@@ -357,10 +381,49 @@ namespace MFO::APMFBridge {
                         c.proxy = reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->GetCastProxy(c.handle);
                     return;   // unchanged AND still live -- cheap no-op, no release/re-request churn
                 }
-                spdlog::info("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) already auto-expired "
-                             "at APMF's own TTL -- re-requesting instead of trusting a dead handle",
-                             follower, wantSpell);
-                c = CastClaim{};   // treat as empty; fall through to the fresh RequestCast below
+                // ── NOT LIVE. WHICH KIND? (F3-1, deploy-gate review 2026-09-07) ──
+                // Until this split, both kinds took the re-request path below, and
+                // that made the whole fail-closed model nearly unreachable on the
+                // APMF that actually ships: ControlMap::EnqueueCast returns
+                // kInvalidHandle SYNCHRONOUSLY in exactly one case (no channel serves
+                // kIntent_Cast at all) -- every real ARBITRATION decision happens
+                // later, in Drain(). So a claim that LOST arbitration still came back
+                // with a handle, reported Claimed, took the opaque "AI deciding" NoOp
+                // that walls off every rule below, read not-live on the next tick, and
+                // was silently re-requested at INFO forever. A refusal that loops
+                // quietly while the follower does nothing is precisely the masked
+                // failure this work exists to remove (principle 7).
+                if (c.everLive) {
+                    // AGED OUT: this claim WAS in force and hit APMF's own TTL. Normal
+                    // and expected -- re-request, exactly as before this split.
+                    spdlog::info("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) already auto-expired "
+                                 "at APMF's own TTL -- re-requesting instead of trusting a dead handle",
+                                 follower, wantSpell);
+                    c = CastClaim{};   // treat as empty; fall through to the fresh RequestCast below
+                } else {
+                    // NEVER PUBLISHED: minted on an EARLIER tick (this branch is only
+                    // ever reached by a later call -- see the dependency note above)
+                    // and not once seen live since. That is a drain-time arbitration
+                    // LOSS. Report it as a refusal: drop the handle and leave the claim
+                    // EMPTY without re-requesting, so ClaimOffenseCast/ClaimHealCast
+                    // return false and the caller FAILS CLOSED and logs loudly, naming
+                    // the actor/spell/target/hand under its own 5 s throttle.
+                    //
+                    // NOT A LATCH: the claim is left empty, so the next winning tick
+                    // makes a genuinely fresh ask. If APMF grants it, everything
+                    // resumes; if it keeps losing, the caller keeps failing closed and
+                    // saying so. The one false positive this can produce is a stall
+                    // long enough that APMF's Drain never ran between the mint and this
+                    // check (a paused game): that costs ONE loud line and ONE skipped
+                    // cast tick, and self-corrects on the next ask. A visible,
+                    // self-correcting false alarm is the right trade against an
+                    // invisible permanent loop.
+                    spdlog::warn("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) was minted but NEVER "
+                                 "published as live -- treating as a drain-time arbitration REFUSAL, "
+                                 "not re-requesting (fail closed)", follower, wantSpell);
+                    ReleaseClaimLocked(c);
+                    return;
+                }
             }
             if (c.handle != APMF_API::kInvalidHandle) { api->Release(c.handle); c.handle = APMF_API::kInvalidHandle; }
             APMF_API::APMF_CastRequest req{};
