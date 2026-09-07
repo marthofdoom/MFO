@@ -14,7 +14,8 @@ Complements the prose docs: `Docs/ARCHITECTURE.md` (design intent),
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Big files (ProgAllocator 2333, Board 2190, Logistics_Loot 2201,
+   whole files. Big files (ProgAllocator 2333, Board 1346 + Board_Progression 1234 +
+   Board_FieldKit 1135, Logistics_Loot 2201,
    Packages 1657, Logistics 1798, CasterConsent 1066) should never sit in context — grep to a
    symbol, read a narrow window.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
@@ -727,8 +728,8 @@ the AI can't re-arm magic over a forced weapon.
   tick, as before; OFF = the A/B proof/fix mode for combat-only positioning stutter,
   `Docs/SPEC-COMBATSTYLE-SOURCEGATE.md` — one-shot stance from branch A stands, no
   per-tick fight, relies on the equip gate below to hold the weapon). Flippable live
-  via the Numpad-7 dev hotkey (`Config::g_cstyReassertKey`, `Board.cpp`'s
-  `InputDispatchHook`, mirrors the ProgProbe/ProgHarness hotkey pattern) — a bare
+  via the Numpad-7 dev hotkey (`Config::g_cstyReassertKey`, `Board.cpp:671` in
+  `InputSink`, mirrors the ProgProbe/ProgHarness hotkey pattern) — a bare
   atomic store, no `MainThread::Post` needed. Equip-gate static_asserts pin
   `combatStyle==0x38<0x68` (`:19,22`), `attackerHandle==0x28` (`:240,243`),
   `CombatInventoryItem::item==0x10` (`:250`). The 30-vtable list deliberately
@@ -1217,7 +1218,7 @@ classifier's runtime `g_verdicts[92]` at `Init` (before `BuildCatalog`) AND
 `AddonManifest::entryPointVerdicts` in `BuildGenericManifests` — NO DLL default (delete the
 add-on → all -1, `ClassifyRank` shows no effectiveness hint). The old `kEntryPoints[]` verdict
 table is gone; `kEntryPointNames[92]` (names only, a general engine fact) remains.
-**Consumers routing on:** Phase 5 (`sharedGrowthEnabled`); **Phase 6a** — `Board.cpp`
+**Consumers routing on:** Phase 5 (`sharedGrowthEnabled`); **Phase 6a** — `Board_FieldKit.cpp`
 `DrawFieldKit` iterates `Manifests()[].boardTab.declared` to decide the hosted board-tab
 count (was hardcoded `snap.prog->active`); `BuildGenericManifests` sets `boardTab.declared=true`
 + `label`. **Phase 6b** — `BoardProgSnap`/`BoardFollowerView` wrapped behind a generic
@@ -1226,8 +1227,8 @@ count (was hardcoded `snap.prog->active`); `BuildGenericManifests` sets `boardTa
 MESG (FULL "Progression", manifest entry[1] before the classes FLST; `BuildGenericManifests`
 captures its FULL, no DLL literal) — `Board_Progression.cpp:43` `BeginTabItem(hostedTabLabel)`. (2) The
 board edit queue's progression verbs collapsed to ONE generic carrier `EditKind::AddonAction`
-+ `EditCmd::verbId` (`AddonVerb` enum, `Board_internal.h:45`); the `verbId`→backend dispatch
-(`ApplyEdits`, `Board.cpp:1775`) stays progression-shaped (Phase 7/9). The tab BODY
++ `EditCmd::verbId` (`AddonVerb` enum, `Board_internal.h:48`); the `verbId`→backend dispatch
+(`ApplyEdits`, `Board.cpp:882`) stays progression-shaped (Phase 7/9). The tab BODY
 (all of Board_Progression.cpp) + view payload are still add-on-typed (Phase 7/9). `Get()` read by ProgAllocator (`:143,
 150,437,666,935,1047,1264,1554`) + `Board_Progression.cpp:202`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
@@ -1386,44 +1387,76 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 
 ### ProgProbe.cpp / ProgProbe.h — throwaway field probe (NOT serialized)
 Dev-only (`bProgProbe`, INI, default OFF) log probe. `OnPostLoad` (`:444`) ←
-`plugin.cpp:362`; `OnHotkey` (`:436`) ← `Board.cpp:1512`. Writes no save record;
+`plugin.cpp:362`; `OnHotkey` (`:436`) ← `Board.cpp:640`. Writes no save record;
 its perk/AV mutations are runtime-only. Safe to delete without touching saves; only
-`plugin.cpp:362` + `Board.cpp:1512` reference it. Idempotent reapply guarded on
+`plugin.cpp:362` + `Board.cpp:640` reference it. Idempotent reapply guarded on
 `GetPerkIndex` (`:468`).
 
 ---
 
 ## 6. Board / UI / Papyrus — `Board.*`, `Papyrus.*`
 
-### Board.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
+### Board.cpp / Board_FieldKit.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
 Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 `imgui_impl_win32` = vendored, do not read.**
-- **Overlay mechanism (v1.1 version-fragility kill, `Board.cpp` end):** replaced
+- **Overlay mechanism (v1.1 version-fragility kill, `Board.cpp:284-803`):** replaced
   the three call-site trampolines (D3DInit/DXGIPresent/InputDispatch, each keyed
   to a HARDCODED in-function byte offset that crashed on 1.5.x/1.7.x) with:
-  `PresentThunk`/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots
-  8/13** (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable`), a
+  `PresentThunk` (`:468`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable
+  slots 8/13** (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable`
+  `:542`), a
   `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` (`InputSink`, reads every
-  device incl. gamepad), the unchanged `WndProcHook` swap (WM_CHAR/WM_KILLFOCUS),
-  and `LazyInit` (ImGui context + DX11/Win32 backend on first Present). Input
-  CONSUMPTION while the board is open is done by `SyncControlBlock` (ControlMap
-  toggle, edge-driven from Present) because a sink cannot null the event array.
-  `TryInstallHooks` polls for the live swapchain then patches. **PORTABLE UNIT
+  device incl. gamepad; `:589`), the unchanged `WndProcHook` swap (`:285`,
+  WM_CHAR/WM_KILLFOCUS), and `LazyInit` (`:364`, ImGui context + DX11/Win32 backend
+  on first Present). Input
+  CONSUMPTION while the board is open is done by `SyncControlBlock` (`:443`,
+  ControlMap toggle, edge-driven from Present) because a sink cannot null the event
+  array. `TryInstallHooks` (`:564`) polls for the live swapchain then patches. **PORTABLE UNIT
   for MAO/MEO:** those functions + `Install`; only the two `Draw*` calls in
   `PresentThunk` and the hotkeys in `InputSink` are mod-specific. Greppable
   `[overlay-probe]` log lines report every component + a SUMMARY on board close.
-- **Module layout (mechanical split, 2026-08-31):** `Board.cpp` (~2385) = shell —
-  shared render state + overlay probe atomics (`:82`), input translation,
-  `PushSkin`, `DrawFieldKit` (`:397`, Followers+Gambits tabs + cascaded-B close),
-  `DrawHud`, `WndProcHook` + the overlay hook section, public API + `ApplyEdits` +
-  `PublishSnapshot` + `Install` (end). `Board_Progression.cpp` = the hosted
-  progression tab body, ONE function `DrawProgressionTab` — called from
-  `DrawFieldKit`; future progression-tab work lands here. `Board_internal.h` = the
-  shared substrate (Board TUs only): `EditKind`/`AddonVerb`/`EditCmd`, the edit
-  queue `g_editMx`/`g_edits`/`QueueEdit`, `g_fontHead`, `MenuSkin`/`kSkins`,
-  `DrawProgressionTab` decl — every definition `inline` (ODR).
+- **Module layout (mechanical splits, 2026-08-31 + 2026-09-07):** THREE draw/host
+  TUs over one shared substrate header. Board.cpp had grown to 2577 at the
+  overlay-swapchain merge (924f3a9) and the panel was cut out of it.
+  * `Board.cpp` (1346) = **shell + the overlay host**: file-local render state and
+    the overlay-probe atomics (`:85`), input translation (`:97`), `CloseBoard`
+    (`:161` — see the anon-namespace note below), `SpellTooltip` (`:185`), `DrawHud`
+    (`:204`), `WndProcHook` + the whole overlay hook section (`:284-803`), then the
+    public API: `ToggleHud` (`:809`), `Toggle` (`:816`), `FillRuleViews` (`:833`),
+    `ApplyEdits` (`:882`), `PublishSnapshot` (`:1117`), `Install` (`:1313`, end).
+  * `Board_FieldKit.cpp` (1135) = **the whole panel**, ONE public function
+    `DrawFieldKit` (`:151`, Followers+Gambits tabs, the list-picker, cascaded-B
+    close) plus the four helpers it is the SOLE caller of, in its own anonymous
+    namespace: `kClassNames` (`:46`), the picker-submenu predicates `IsFoeCond`/
+    `IsPotionLootAct`/`IsMiscLootAct` (`:56`), `PushSkin` (`:73`),
+    `DrawSpellHoverTooltip` (`:135`). Future panel work lands here, NOT in Board.cpp.
+  * `Board_Progression.cpp` (1234) = the hosted progression tab body, ONE function
+    `DrawProgressionTab` — called from `DrawFieldKit` (`Board_FieldKit.cpp:1062`);
+    future progression-tab work lands here.
+  * `Board_internal.h` (305) = the shared substrate (Board TUs only):
+    `EditKind` (`:31`)/`AddonVerb` (`:48`)/`EditCmd` (`:50`), the edit queue
+    `g_editMx`/`g_edits`/`QueueEdit` (`:69`), `g_fontHead` (`:73`), `MenuSkin`/
+    `kSkins` (`:79`), the four cross-TU state atomics `g_ioMx`/`g_open`/
+    `g_wantClose`/`g_justOpened` (`:117`), **the editor vocabulary** `ParamKind`/
+    `VocabEntry`/`kCondsCombat` (`:157`)/`kActsCombat` (`:205`)/`kCondsLogi`
+    (`:221`)/`kActsLogi` (`:241`) + `cycleIdx`/`labelFor`/`kindFor` (`:268`), and
+    the decls for `CloseBoard` (`:287`), `DrawFieldKit` (`:292`),
+    `DrawProgressionTab` (`:300`) — every definition `inline` (ODR).
+- **What breaks if you move a symbol between these TUs:** anything Board.cpp keeps
+  in its anonymous namespace is INVISIBLE to the other two — the snapshot
+  (`g_snapMx`/`g_snapshot`), the overlay-probe atomics, the D3D handles, `g_ready`/
+  `g_hud`/`g_closeGrace`, `SpellTooltip`, `DrawHud` and every hook symbol are
+  deliberately file-local. Needing one from a draw TU means promoting it to
+  `Board_internal.h` as `inline` (one instance), not re-declaring it. **Board.cpp's
+  anonymous namespace PAUSES around `CloseBoard` (`:149-178`) and resumes after it**
+  so `CloseBoard` has the external linkage `Board_FieldKit.cpp`'s [B]/Esc path
+  needs while the probe atomics it logs stay file-local — do not "tidy" that pause
+  away. The vocabulary tables are `inline constexpr` in the header because BOTH the
+  panel (which renders them) and Board.cpp's `ApplyEdits`/`FillRuleViews` (which
+  resolve an opcode back to a label/ParamKind) scan them; their opcode strings are
+  a FROZEN co-save contract (#10).
 - `Install()` (`Board.h`) — caller `plugin.cpp:299` (kDataLoaded) only, VR-refused.
   Installs AFTER the renderer is up (the vtable path needs the swapchain LIVE and
   polls for it) — the OPPOSITE of the old trampoline, which had to patch before
@@ -1437,7 +1470,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   overload) + a synthesized `tooltip` (`SpellTooltip`, effect name+mag/dur/area) —
   all filled in `PublishSnapshot` (main). The gambit spell-picker renders the hover
   tooltip via `DrawSpellHoverTooltip` from those cached values.
-- **`DrawHud`'s `[C][L][T]` strip (`:1463`, marth 2026-09-06)** — persistent
+- **`DrawHud`'s `[C][L][T]` strip (`:254`, marth 2026-09-06)** — persistent
   bracket SLOTS: the bracket is always drawn (`TextDisabled("[ ]")` when idle),
   only the letter+colour comes and goes, so the strip's width never shifts.
   `r.looting` is fed by `Logistics::JustLooted`, not `IsLooting` — see the
@@ -1449,22 +1482,22 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   `ApplyEdits` flips `it->second.mfoEnabled`. The release-on-disable runs on the
   Scheduler tick's OFF edge, not in `ApplyEdits`.
 - **Thread discipline:** `DXGIPresentHook` (render thread) copies `g_snapshot` under
-  `g_snapMx` **before** taking `g_ioMx` (`:1438`); reversing = render-thread deadlock.
+  `g_snapMx` **before** taking `g_ioMx` (`:479`); reversing = render-thread deadlock.
   The two mutexes are never nested (#6). Draw functions **never touch `g_followers`**
   — every mutation is a `QueueEdit` (`Board_internal.h:69`, sites in both draw TUs)
   drained by `ApplyEdits`
-  (`:1775`). **Rule edits key on `Gambit.uid`, not row index** (`:1889` — resolve by
+  (`:882`). **Rule edits key on `Gambit.uid`, not row index** (`:1011` — resolve by
   identity #31); applying by index misapplies a command to the wrong rule.
 - **Correction to the header:** `PublishSnapshot` (`Board.h:116` says "MAIN THREAD
   ONLY") actually drains on the **task worker**, the same context that
   owns `g_followers`/`Scheduler::Tick` — so its `g_followers` reads are safe *there*.
-  But addon edit verbs ride `MainThread::Post` (`:1803`) because `g_prog` lives on
+  But addon edit verbs ride `MainThread::Post` (`:910`) because `g_prog` lives on
   the real main/poll thread. Callers: `Diagnostics.cpp:216,263`.
 - `ClearPendingEdits` (`Board.h:124`) ← `Serialization.cpp:603` (revert) — drops
   queued edits so a command from the old save can't hit a freshly loaded one.
   `SetHud` ← `plugin.cpp:365`, `Diagnostics.cpp:94`, `Serialization.cpp:621`.
   `IsOpen`/`IsAvailable`/`Toggle` ← Diagnostics (publish cadence + Field Orders
-  power). `ToggleHud` (`Board.cpp:1702`) is **dead** (no caller).
+  power). `ToggleHud` (`Board.cpp:809`) is **dead** (no caller).
 
 ### Papyrus.cpp / Papyrus.h — outbound VM dispatch shim
 Reaches Papyrus-only natives by class-name+method-name string, async fire-and-forget.
@@ -2354,7 +2387,7 @@ outlives a session. `ReleaseAll()` (`:445`) ← `plugin.cpp:344`, `Serialization
 — must keep calling `Targeting::ClearAll()`+`Stop()` or a stale latch/watch handle
 survives. `Tick()` (`:368`) ← `Diagnostics.cpp:258` (main-thread task). **Real
 gameplay dependency (not debug-only):** `CrosshairTarget()` (`:307`) ← `Logistics.cpp:
-1897` (QuickLoot-aware player-claim signal). `FocusOnCrosshair()` ← `Board.cpp:2654`.
+1897` (QuickLoot-aware player-claim signal). `FocusOnCrosshair()` ← `Board.cpp:622`.
 `StartCombatOn` uses po3 RelocationID(37608,38561), VR-refused. Most `Fire`/`GetLast`/
 enum entry points have **no in-tree C++ caller** (the ImGui probe panel isn't wired) —
 **UNVERIFIED — check Board before assuming dead.**
@@ -2444,7 +2477,7 @@ is a **schema migration, not an edit** (old saves carry the old string; the `==`
 compares silently stop matching). Adding an opcode requires wiring in Evaluator +
 Actuation + Board's picker or it's inert. **`Subject` enum** (Self=0/Player=1/
 NearestAlly=2, `:37`) is serialized as the raw `subject` byte (read `Actuation.cpp:73`,
-`Board.cpp:2909`) — reordering reinterprets every saved byte (a specific follower is
+`Board.cpp:857`) — reordering reinterprets every saved byte (a specific follower is
 carried as `subjectActorForm`, NOT an enum value, precisely to keep the enum frozen).
 `Pct`/`HealthPct`/etc. (`:214`) use permanent+temporary AV — changing the max formula
 re-times every "HP below X%" rule + Confidence.
@@ -2484,7 +2517,7 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 |---|---|---|
 | Serialization Save/Load/Revert callbacks | `plugin.cpp:397-399` | `kSerID='MFO0'` |
 | Message listener | `plugin.cpp:401` | drives the whole lifecycle |
-| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + InputSink + WndProc | `plugin.cpp:299` → `Board::Install` (Board.cpp end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
+| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + InputSink + WndProc | `plugin.cpp:299` → `Board::Install` (`Board.cpp:1313`, end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
 | `MainThread::Install` (player Update vfunc 0x0AD) | `plugin.cpp:291` | true main-thread pump |
 | `Targeting::InstallHook` (Character::UpdateCombat 0xE4) | `plugin.cpp:293` | also drives CombatStyle |
 | `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:294` | 14 + 1 vtables |
