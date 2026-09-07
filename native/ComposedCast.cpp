@@ -112,6 +112,11 @@ namespace MFO::ComposedCast {
         void WatchArmed(RE::FormID a_fid, std::size_t a_slot, RE::FormID a_spell, RE::FormID a_proxy) {
             auto& w = g_watch[a_fid].hand[a_slot];
             if (w.spell != a_spell) { w = Watch{}; w.spell = a_spell; w.proxy = a_proxy; w.since = Clock::now(); return; }
+            // F4 (RC4): same claim, proxy learned SINCE the watch was armed --
+            // APMF mints it lazily during its own Drain, so the very first
+            // WatchArmed call for a fresh claim can still see proxy==0. Learn
+            // it here instead of caching that 0 forever.
+            if (w.proxy == 0 && a_proxy != 0) w.proxy = a_proxy;
             if (w.observed) return;   // already confirmed firing this claim -- stay quiet
             const auto now = Clock::now();
             if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
@@ -149,6 +154,26 @@ namespace MFO::ComposedCast {
         // main-thread seat inside this WORKER-context function to safely mint/
         // reconfigure a proxy form itself.
 
+        // F1 (RC1, 2026-09-06 diagnosis): two heal rules alternating on this
+        // follower's single heal-claim slot every 1-3 s (Healing Hands vs a
+        // kSelf heal) each Release the live claim and RequestCast fresh before
+        // the engine's ~2.5 s equip+charge ever completes -- no heal lands.
+        // Mirrors the offense per-hand cast lock (Actuation.cpp's HandFree/
+        // CastLockLive): if a DIFFERENT spell already holds this slot, hasn't
+        // been observed firing yet, and its claim is still live and within its
+        // own TTL, HOLD the incumbent instead of swapping it out -- treat this
+        // Try() as Applied (the caller skips its own kInstant apply) without
+        // touching the claim at all, so the incumbent gets its full charge
+        // window instead of being thrashed away mid-flight.
+        if (auto it = g_watch.find(fid); it != g_watch.end()) {
+            const auto& incumbent = it->second.hand[0];
+            if (incumbent.spell != 0 && incumbent.spell != spellID && !incumbent.observed &&
+                APMFBridge::IsHealCastActive(fid) &&
+                Clock::now() - incumbent.since < std::chrono::milliseconds(APMFBridge::kHealCastTtlMs)) {
+                return true;   // hold the incumbent -- caller treats as Applied, no kInstant apply
+            }
+        }
+
         // CLAIM (create) or refresh the kIntent_Cast facet: while it stands,
         // APMF's engine seats drive the follower's OWN AI to select/equip/
         // charge/aim/fire/channel this spell natively. hand = LEFT
@@ -180,7 +205,10 @@ namespace MFO::ComposedCast {
         // CheckCast on the SAME Restore caster vtable -- stands down for the
         // window (§2 HARD-ABORT fix). Idempotent; re-Arm just refreshes the
         // expiry. Same TTL as the claim itself (APMFBridge::kHealCastTtlMs).
-        CastBounds::Arm(fid, spellID, 0, kHealBoundsTtlMs);
+        // F4 (RC4): pass the claim's minted delivery-flip proxy once known
+        // (0 on ABI < 6 or a claim that minted none -- Arm already handles a
+        // 0 fine) instead of the literal 0 this used to hard-code.
+        CastBounds::Arm(fid, spellID, APMFBridge::GetHealCastProxy(fid), kHealBoundsTtlMs);
 
         // Diagnostic only -- never gates the return value or re-fires anything
         // (Task 6: no delivery watchdog). Heal is always the LEFT slot. See

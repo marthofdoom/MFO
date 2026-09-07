@@ -6,6 +6,7 @@
 #include "Config.h"
 #include "Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
+#include "APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -1359,8 +1360,22 @@ namespace MFO::Logistics {
                         Sightline::Want(id, { tgt->GetFormID() });
                     const auto r = Actuation::CastTargetDirect(a_follower, sp, tgt);
                     if (r == Actuation::SelfCast::Applied) {
-                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} "
-                                     "(direct force, bounded)", id, sp->GetFormID(), tgt->GetFormID());
+                        // F1 label fix: CastTargetDirect's Applied return can mean
+                        // EITHER the kInstant direct-force apply below in that
+                        // function, OR ComposedCast::Try's APMF kIntent_Cast claim
+                        // (the heal-only engine-seat path, tried FIRST inside
+                        // CastTargetDirect) -- the old unconditional "(direct
+                        // force, bounded)" label was wrong for the latter. A live
+                        // heal-cast claim right after a Heal-kind Applied can only
+                        // exist here because that claim path just delivered (any
+                        // refused/disabled claim leaves it invalid, and only
+                        // Heal-kind spells ever reach ComposedCast::Try at all).
+                        const bool apmfDelivered =
+                            CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal &&
+                            APMFBridge::IsHealCastActive(id);
+                        spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} ({})",
+                                     id, sp->GetFormID(), tgt->GetFormID(),
+                                     apmfDelivered ? "APMF delivered" : "direct force, bounded");
                         // acted = true (NOT just `break`): this `break` only exits the
                         // INNER start-scan; the OUTER "for (pass < 2 && !acted)" loot-
                         // ordering wrapper above (marth's dibs-tier pass 0/1 split) does

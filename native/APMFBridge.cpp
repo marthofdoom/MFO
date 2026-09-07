@@ -309,8 +309,19 @@ namespace MFO::APMFBridge {
                 // RequestCast never reached APMF again). ABI < 6 has no way to
                 // ask this and keeps today's behaviour byte-identical.
                 if (api->abiVersion < 6 ||
-                    reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(c.handle))
+                    reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(c.handle)) {
+                    // F4 (RC4, 2026-09-06): the proxy is minted lazily during
+                    // APMF's own per-frame Drain, so the read at :361-365
+                    // below (right after RequestCast) can still see 0 even
+                    // though the SAME handle now has a real proxy published.
+                    // Re-read it lazily here, on the unchanged/still-live fast
+                    // path this claim takes on every later Try() while nothing
+                    // changes, so the watch eventually learns it instead of
+                    // caching that 0 forever.
+                    if (c.proxy == 0 && api->abiVersion >= 6)
+                        c.proxy = reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->GetCastProxy(c.handle);
                     return;   // unchanged AND still live -- cheap no-op, no release/re-request churn
+                }
                 spdlog::info("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) already auto-expired "
                              "at APMF's own TTL -- re-requesting instead of trusting a dead handle",
                              follower, wantSpell);
