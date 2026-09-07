@@ -2,21 +2,27 @@
 
 Engine mechanisms MFO depends on, and how much each is actually trusted.
 
-**Read this before any native work.** But read it knowing what it is: in the
-sibling projects `ENGINE_NOTES.md` records mechanisms **proven in-game**, with
-dates and symptoms. **MFO has proven nothing in-game.** Writing this file in
-that voice would make it exactly the document the family's own doctrine warns
-about — *never trust format docs, including this documentation.*
+**Read this before any native work.**
 
-So this is a **research ledger** instead. Every entry carries a status, and
-the status is the most important field on it.
+**HEADER CORRECTED 2026-09-07.** This paragraph used to say *"MFO has proven
+nothing in-game"*, written in July 2026 before MFO had shipped anything. That
+statement is now false and was false for months: **more than forty `PROVEN (MFO)`
+sections follow it**, each with a date, a game version and an observed symptom,
+and two months of field sessions on the deck behind them. It stayed because
+nobody re-read the top of the file after adding to the bottom — the exact failure
+`#49`/`#68` are about. The original caution was right about one thing and it
+still stands: **the status on each entry is the most important field on it**, and
+an entry with no date and no symptom is a design note, not a proof.
+
+So this is both a **research ledger** and a proof record. Every entry carries a
+status, and the status is the most important field on it.
 
 | Status | Means | Trust |
 |---|---|---|
 | **PROVEN (sibling)** | Shipped and field-validated in MRO / MEO / MAO. Cited. | Build on it |
 | **RESEARCHED** | Mapped from a primary source (SKSE64 `Actor.psc`, PapyrusUtil, po3, a reference repo) but **never run by anyone in this family** | Design against it; verify before relying |
 | **UNKNOWN** | Named, not investigated | Do not plan around |
-| **PROVEN (MFO)** | Validated in-game by MFO, with date, game version, and observed symptom | — |
+| **PROVEN (MFO)** | Validated in-game by MFO, with date, game version, and observed symptom | Build on it — 40+ entries below, Jul–Sep 2026 |
 
 **PROVEN (MFO) — first entries below, from the 2026-07-21 session.** The
 promotion protocol is §10.
@@ -202,6 +208,13 @@ right call.
 
 ### 0.13 THE CAST FLOW — why nothing animates, from the engine side (2026-07-21)
 
+> **PARTLY SUPERSEDED (2026-09-06).** The analysis of the engine's own cast
+> flow below still holds. Its conclusion — that MFO cannot get an animated
+> cast — does NOT: with APMF's four `CombatMagicCaster` seats + `CheckShouldEquip`
+> standing, the AI's discretion is answered and animated casts fire (17 animated
+> offense fires in the 2026-09-06 deck session). See §0.41–§0.45 and
+> `Docs/CAST-DELIVERY.md`.
+
 Researched from primary sources after marth asked why this had not been done.
 It had not, and that was a process failure: the animation problem was declared
 "the biggest open problem in the mod" on the strength of guessing, without
@@ -360,6 +373,12 @@ gambit spells explicitly. And the AI is ENTHUSIASTIC -- 1000 magicka is a lot of
 casting, which is a balance question §5 will have to answer.
 
 ### 0.16 THE ANIMATED PATH IS AI-DISCRETIONARY — 2026-07-22
+
+> **SUPERSEDED as a conclusion (2026-09-06), kept as the OBSERVATION.** "It
+> cannot make them cast it" was true of MFO ALONE and is the correct reading of
+> the v0.6.0 evidence below. It is no longer true of MFO + APMF: the seat model
+> answers the AI's discretion at the point of decision instead of trying to
+> override it afterwards. See §0.41–§0.45 and `Docs/CAST-DELIVERY.md`.
 
 **MFO can put a spell in a follower's hand. It cannot make them cast it.**
 
@@ -1642,12 +1661,14 @@ measurement that pump-side vendor reads do not crash, ahead of any real barter.
 TAKEAWAY: worker → main is `MFO::MainThread::Post`, never `AddTask`. Capture
 handles and copies, not references — a frame passes before the fn runs.
 
-### NOT yet proven, despite the session
-- ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.**
-- (historical) v0.4.1 *saved* a real record twice
+### NOT yet proven, despite the session *(as of 2026-07; pruned 2026-09-07)*
+- ~~**The populated co-save ROUND-TRIP.**~~ **CLOSED — see §0.11.** *(The
+  sub-bullet below survived the strikethrough for two months and still said
+  "this is the next test" about a question §0.11 had already answered. Kept
+  only as history; it is NOT an open item.)*
+- (historical, CLOSED by §0.11) v0.4.1 *saved* a real record twice
   (`saved 1 follower record(s), schema v2`) and *loaded* empty saves cleanly,
-  but the save-with-a-record was never reloaded in-session. Save works; load
-  of a real record is still unproven. **This is the next test.**
+  but the save-with-a-record was never reloaded in-session.
 - **Boss/dragon multipliers on the right actors.** The boss test surfaced a
   bug (§0.7 / the v0.4.2 fix), so the corrected classification is untested.
 - **`TESCombatEvent` volume** at scale — no large battle occurred.
@@ -1755,13 +1776,21 @@ zero-precedent cell. `Begin()` now declines self (`Decline::SelfRoute`) and
 cast_self misses stay on the silent fallback until a dedicated probe (P4)
 clears QNAM+t6.
 
-**UNPROVEN until the next deck soak:** the fixed foe-route force actually
-casting (watch `[cast] … FORCED … at …` with no `template input` errors);
-the static-uid last resort ever running (the dump line); `[consent] …
+**UNPROVEN until the next deck soak:** *(written pre-v1.0.33; RESOLVED
+2026-09-07 — see the note under this list)* the fixed foe-route force
+actually casting (watch `[cast] … FORCED … at …` with no `template input`
+errors); the static-uid last resort ever running (the dump line); `[consent] …
 pacing` once per window; and the P1 combat-style probe (`bProbeCastStyle`,
 `MFO_CastStyle` 0x832 — `CombatController::combatStyle` at 0x38, below the
 §0.29 divergence, pinned-header-verified) answering whether a caster-forward
 style raises the CheckStartCast ask rate. Promotion waits on the log (#57).
+
+> **RESOLVED (recorded 2026-09-07, never promoted at the time).** The forced
+> foe-route cast was deck-verified in **v1.0.32** and the **P1 combat-style
+> probe was largely OBVIATED by v1.0.33** (`Docs/STATUS.md`, the v1.0.32/33
+> entries). This paragraph is retained for the reasoning trail; it is not an
+> open test. The cast question that IS open is the one in §0.45 (claim TTL)
+> and RC1 of `Docs/DIAG-2026-09-06-deny-heal-failures.md` (heal-slot thrash).
 
 ### 0.40 The CasterConsent HARD-ABORT root cause, and why the forced-cast trigger is OBSERVE-AND-REPLICATE, not the guessed TESActionData drive (2026-09-04)
 
@@ -1824,7 +1853,23 @@ guessed from static analysis. MFO's executor will then REPLICATE that captured,
 field-proven sequence in the one isolated seam `ComposedCast::DriveObservedCast`
 (`native/ComposedCast.cpp`).
 
-**Status: UNPROVEN, awaiting the observer's captured sequence.** Nothing about the
+> ## ⚠ SUPERSEDED 2026-09-06 — DO NOT PLAN AGAINST THE STATUS BELOW
+>
+> The OBSERVE-AND-REPLICATE plan above was **abandoned, not completed**.
+> `Docs/CAST-DELIVERY.md:281-289`: *"the MFO-side hand-drive is RETIRED …
+> `native/ComposedCast.cpp`'s `DriveObservedCast` family … were retired from MFO
+> entirely."* There is no `DriveObservedCast` symbol in `native/` on `main`;
+> `ComposedCast::Try` now claims through APMF (`ClaimHealCast` →
+> `APMFBridge::RequestCast`) and the animated cast is driven by **APMF's four
+> `CombatMagicCaster` seats + `CheckShouldEquip`**, not by an MFO hand-drive.
+> The animated path is FIELD-PROVEN (17 animated offense fires in the
+> 2026-09-06 deck session). Read `Docs/CAST-DELIVERY.md` and §0.41/§0.42 below
+> for the mechanism that actually shipped. The paragraphs beneath are kept for
+> the reasoning trail only.
+
+**Status: UNPROVEN, awaiting the observer's captured sequence.** *(HISTORICAL —
+see the SUPERSEDED banner above; every present-tense claim in this paragraph was
+true on 2026-09-04 and is false on `main` today.)* Nothing about the
 trigger has been field-tested. `DriveObservedCast` today is a stub that
 unconditionally returns `kNotImplemented`; `ComposedCast::Try` degrades to the
 caller's `kInstant` apply on every call. The executor scaffold around it — the
@@ -1834,6 +1879,196 @@ per-follower degrade backoff — is built and wired, but the whole module is
 runtime-inert (byte-identical to today's heal) until the captured sequence lands
 and `DriveObservedCast` is filled in against it. Do not treat any part of the
 trigger as implemented until that happens.
+
+---
+
+### 0.41 `CombatMagicCasterRestore` is a caster the engine almost never builds — this is why Restore-only seats were inert (2026-09-05/06)
+
+**Status: PROVEN (MFO).** AE 1.6.1170, deck (Tuxbornrc1), two sessions plus a
+disassembly pass. Observed symptom: a caster CENSUS taken from the passive
+`[obs]` / `[ch.8b seat 0x0A]` probes over full combat evenings read
+**`69x CombatMagicCasterOffensive`, `3x CombatMagicCasterReanimate`, `0x
+CombatMagicCasterRestore`** in the first run and **56 Offensive, 0 Reanimate,
+0 Restore** in the second. Zero. Not "rare" — never, across two whole sessions
+of live follower combat.
+
+**Why it matters more than the number.** Five cast seats were designed, written,
+reviewed, CI-green and DEPLOYED onto the Restore caster's vtable. Every line of
+them was correct. They never executed once, because the engine never constructed
+the object they were bolted to. That is the incident behind CLAUDE.md principle 5,
+*"disassembly proves a path EXISTS, not that it RUNS"*, and it is the reason
+this file's PROVEN-vs-RESEARCHED distinction is load-bearing rather than
+bureaucratic.
+
+**The mechanism, CONFIRMED (2026-09-05 disassembly, AE 1.6.1170).** There is no
+persistent "caster set". `CombatMagicCasterRestore` is minted **per cast, from
+whatever item occupies the behaviour EQUIP SLOT**:
+`CombatBehaviorThread` → equip slot → `CombatBehaviorEquipContext` →
+`CreateContextNode1<CombatBehaviorContextMagic, EquipContext::GetItem()>` →
+ctor `0x89eae0` → item vtable slot `0x15` `CreateCaster` → `0x81f710` → caster
+vtable `0x18cc890`. Restore caster vtable `0x18cc890` / Offensive `0x18cc4a0`;
+Restore ITEM vtable `0x18d0570` / Offensive twin `0x18d0ff0` (23 slots; slot
+`0x15` = `CreateCaster`, slot `0x0B` = `GetCategory`, Restore returns 1,
+Offensive 0). Two hypotheses were KILLED by this: "the caster set is built once
+at combat start" and "we hooked the wrong caster family".
+
+**Minting the ITEM is not sufficient.** A later run confirmed a Restore
+`CombatInventoryItem` present and STILL 0 Restore casters: the item table and
+the caster construction are populated by different mechanisms. Restore only
+began to be constructed once APMF's **seat 0 classify** forced the claimed
+spell's effect to key into the Restore row `(Health, self=1, hostile=0)` —
+i.e. the engine had to be persuaded a Restore caster was warranted at all.
+
+**Practical rule:** before installing a seat on ANY caster category, take a
+census first (a passive, rate-limited count of constructions per vtable,
+including the ZERO case — `#46`). A category with a zero census is not a seat
+site, it is an open research question.
+
+---
+
+### 0.42 Weapon/spell EQUIP arbitration is TWO-LEVEL: a real score compare WITHIN a category, first-come and score-BLIND ACROSS categories (2026-09-06)
+
+**Status: PROVEN (MFO).** AE 1.6.1170. Confirmed by disassembly (Opus "PASS S",
+2026-09-06) AND field-observed running the same day: 259 probe lines from the
+GROUP C `[AiCastSeats] EnableWeaponScoreProbe` on the deck caught real followers
+scoring real named weapons (`'Cicero' WEAPON-SCORE class=Melee cat=0
+item='Ebony Dagger'`, `item='Scimitar' engineScore=29`, `'Jesper the Guard' …
+item='Elven Dagger'`).
+
+**Level 1 — WITHIN a category: a real comparison.** The candidate array is
+sorted ASCENDING by `itemScore` (comparator `0x815220` on `+0x18`) and the
+selector **pops from the END** (`0x813998 dec ecx`), so the highest score wins.
+Per-class `CalculateScore` is vfunc `0x0C` at `vt+0x60` and is separately
+hookable:
+
+| class | vtable RVA | `CalculateScore` | category |
+|---|---|---|---|
+| Melee | `0x18c9028` | `0x8183e0` | **0** |
+| Ranged | `0x18c90d8` | `0x8188b0` | **0** |
+| Shield | `0x18c9188` | `0x818df0` | **3** |
+| OneHandedBlock | `0x18c9238` | `0x819250` | **6** |
+| Torch | `0x18c92e8` | `0x819480` | **3** |
+
+Melee and Ranged SHARE category 0, so a score bias DOES decide melee-vs-ranged
+and which-sword. Torch and Shield share category 3.
+
+**Level 2 — ACROSS categories: first-come-first-served, score-blind.** The walk
+is the fixed order table `[1, 2, 4, 0, 3, 5, 0, 6]` plus a slot-bitmask
+occupancy test (`0x8139b4 … test [r15+0x130],eax; jne skip`). No score is
+compared across categories at all. **Weapons (cat 0) are walked AFTER 1/2/4, so
+a weapon score can NEVER beat a spell that already claimed the hand** — and
+conversely, Restore is category 1 and therefore walked FIRST, before Offensive
+(0). Confirmed loop head `0x813970`.
+
+**Two traps this closes.**
+- **Weapon-vs-magic is NOT a score problem.** Steering the score cannot move
+  that decision; the lever is `CheckShouldEquip` (`0x0F`) admission, i.e. a
+  per-facet deny, not a bias.
+- **`+0x40` is NOT the weapon score.** Score is `itemScore` at **`+0x18`**
+  (`sizeof(CombatInventoryItem) == 0x30`, so `+0x40` is past the base object);
+  `+0x40` is a derived magic-class field written by `0x819d30`.
+
+**The pipeline is COMBAT-ONLY** (exhaustive rel32 caller scan): `0x8134c0` ←
+Init `0x80f010` / Update `0x80f380`; `0x80f380` ← ONLY `0x558a84`
+(`CombatController::Update` `0x5589b0`) ← ONLY `0x6b7042` (per-actor combat tick
+`0x6b6e70`), which at `0x6b6edc` skips the whole block when `actor+0x160`
+(the `CombatController`) is null. Out of combat, score-steering is unreachable.
+
+**Calibration warning:** real engine scores measured on the deck sit in the
+~0.08–29 range. APMF's `kScoreSteerBias` is `100000.0f` — that does not steer a
+comparison, it obliterates it. Size any bias to the observed range before
+enabling it.
+
+**Still open** (do NOT state as fact): what categories 1/2/4/5 individually are
+(only `0` = weapons, `3` = shield+torch, `6` = OneHandedBlock, and "1/2/4
+precede 0" are confirmed); the steady-state `rescoreInterval`; whether the
+duplicate cat-0 entry in the order table is an off-hand fill.
+
+---
+
+### 0.43 `0x811a10` is a DEAD TWIN with zero callers; the live rescore is inlined in `CombatInventory::Update` (2026-09-06)
+
+**Status: PROVEN (MFO)** — by exhaustive caller scan, 2026-09-06.
+
+The score pass at **`0x811a10`**, which an earlier notebook cited as the rescore
+entry point, **has ZERO CALLERS**. The LIVE rescore is **inlined in
+`CombatInventory::Update` `0x80f380`**:
+`0x80f40e call [rax+0x60]` (the per-class `CalculateScore`) →
+`0x80f415 movss [rax+0x18], xmm0` (store into `itemScore`) →
+`0x80f444 sort` → `0x80f55d call 0x8134c0` (the selector).
+
+**Hooking `0x811a10` would have shipped another dead seat**, the second time in
+one week that the same shape nearly cost a field cycle (the first was §0.41's
+Restore seats). The static analysis behind §0.42 was checked against this and
+IS on the live path — that is what the GROUP C field probe proved.
+
+**Rule: verify CALLERS before hooking anything.** A function that disassembles
+beautifully and is called by nobody is indistinguishable, in a review, from one
+the engine runs every frame.
+
+---
+
+### 0.44 APMF's `0x49` `CheckForCurrentAliasPackage` redirect fires ONLY when NUDGED with a PUBLISHED claim — the engine never re-asks on its own (2026-09-06)
+
+**Status: PROVEN (MFO).** Deck session 2026-09-06, MFO `843490ac` / APMF
+`84872e0d`. Full accounting: `Docs/DIAG-2026-09-06-loot-travel.md` §2.
+
+The hook wins when it is consulted: `claimedHits=16 winHits=16`, `won=true`
+16/16. **But every one of those 16 hits reconciles, hit by hit, to an explicit
+MFO or APMF nudge** — a `Release()`/leg/clear call that ran while a claim was
+visible. Four heartbeat checkpoints (0, 8, 14, 16) each match the nudge ledger
+EXACTLY, across roughly 75 s of cumulative claim time on three followers. There
+is no room for a single hit from the engine's own package-evaluation cadence.
+
+So the correct statement is: **`0x49` redirects on every nudge while a claim is
+published. It does not redirect on the engine's own cadence, and it says nothing
+at all about windows where it was never consulted.** Two consequences the field
+already paid for:
+
+- A claim that is published and then never re-nudged does NOT hold itself. Any
+  design that treats a standing claim as self-healing is unsupported.
+- A nudge that runs BEFORE the claim is published does nothing at all. That is
+  RC#1 of the loot DIAG: **0 of 6 loot dispatches engaged the travel package**,
+  because both dispatch-time nudges ran ahead of APMF's publish/drain.
+
+The pass criterion for the fix is NOT `[ch.9-redirect]` within one frame (it
+dedups on transition and false-negatives a repeat dispatch of the same package
+form). It is `[ch.9-nudge] … curPkg now 0x<pkg>` equal to the claim form, plus
+MFO's `onTravelPkg=true` on the first WALK line with no `TRAVEL PKG NOT ENGAGED`.
+
+---
+
+### 0.45 An APMF cast claim hard-expires at its TTL with no notice to the client — MFO's is 6 s and is NOT renewed (2026-09-06)
+
+**Status: PROVEN (MFO).** Deck session 2026-09-06;
+`Docs/DIAG-2026-09-06-deny-heal-failures.md` RC2.
+
+`MFO::APMFBridge` requests every `kIntent_Cast` claim with
+`req.ttlMs = kHealCastTtlMs` = **6000 ms** (`native/APMFBridge.h:522`,
+`native/APMFBridge.cpp:334`). APMF then expires that claim **on its own clock,
+silently** — `APMF_API.h`'s `IsClaimLive` doc is explicit that the client is
+never told.
+
+What the field measured: **6.0 s claim lives, and a recurring 0.3–1.2 s
+UNCLAIMED gap every 6 s**, inside which foreign spells equip and charge on the
+"claimed" hand. Every seat, gate and steer correctly chains to the engine during
+that gap, because there is no claim to enforce.
+
+**What a client must take from this.** A TTL is a crash guardrail, not a lease
+you can hold by doing nothing (CLAUDE.md principle 9: *a floor is safe, an expiry
+is not*). Size it against the REAL re-request cadence, or renew it. On `main`
+today MFO does neither: `EnsureCastClaimLocked`
+(`native/APMFBridge.cpp:296-318`) returns early on an unchanged claim that
+`IsClaimLive` reports as still live, and that early return performs no renewal —
+so the claim runs out its 6 s and MFO only notices on the tick AFTER expiry.
+The ABI v6 `IsClaimLive` check does close the worse bug it was added for (MFO
+believing a long-dead handle was still in force for 23 s), but it converts a
+silent permanent failure into a periodic gap; it does not remove the gap.
+
+**Pending, NOT shipped:** the renewal (F2 — `Repoint` renews the TTL, plus an
+MFO-side heartbeat) is on the UNMERGED APMF branch
+`fix/apmf-claim-renew-denyhand-spellsteer`. Do not describe the gap as closed
+until that branch has landed AND been field-verified.
 
 ---
 
