@@ -265,15 +265,28 @@ namespace MFO::ComposedCast {
         // (Fable diff review, 2026-09-06) rather than quietly deleted, because a
         // comment that teaches a false mechanism is worse than no comment.
         //
-        // NOT TRUE: THE F2-RENEWAL DEADLOCK. The old note argued APMF's renewing
-        // Repoint (F2) could keep a claim live forever and so take the hold's
-        // last bound away. It cannot, here: MFO never calls Repoint on a
-        // kIntent_Cast claim at all -- its ONLY Repoints are the non-cast
-        // EnsureClaimLocked/EnsureIvalClaimLocked (APMFBridge.cpp:238/:265), and
-        // RequestCast has no in-place re-point, so a CHANGE releases and
-        // re-requests -- and APMF **main**'s ApplyRepoint (core/ControlMap.cpp)
-        // writes `self->param` and never touches `expiresMs`. F2 lives on an
-        // unmerged APMF branch.
+        // THE F2-RENEWAL DEADLOCK: REAL MECHANISM, STILL NOT REACHABLE FROM HERE
+        // (updated F5-1, 2026-09-08). The oldest note argued APMF's renewing
+        // Repoint could keep a claim live forever and so take this hold's last
+        // bound away; the note that replaced it answered "that mechanism does not
+        // exist in either shipped binary" -- and THAT is what is now false. APMF's
+        // TTL RENEWAL is merged (core/ControlMap.cpp: a Repoint on a LIVE cast
+        // claim moves its deadline to now + the claim's own granted ttlMs), and
+        // MFO now heartbeats a live cast claim with exactly that Repoint
+        // (APMFBridge's EnsureCastClaimLocked, the CAST-CLAIM HEARTBEAT block).
+        // Kept here rather than deleted because a comment that teaches a false
+        // mechanism is worse than no comment -- and this one has now been wrong
+        // in both directions.
+        //
+        // WHY THE DEADLOCK STILL CANNOT HAPPEN. The heartbeat is sent ONLY from
+        // ClaimHealCast / ClaimOffenseCast -- a rule that WON its lap re-asking
+        // for the identical claim it already holds -- and deliberately NOT from
+        // RefreshHealCastClaim, which is this hold's own path. So a claim whose
+        // rule has gone silent is renewed by nobody and still dies at APMF's TTL,
+        // and a claim whose rule keeps asking was already being kept alive by the
+        // expire-and-re-request cycle the heartbeat replaces. The bound below is
+        // TIGHTER for it: `created` no longer gets reset every 6s by that cycle,
+        // so it now measures the claim's true age.
         //
         // WHAT THE BOUND IS ACTUALLY FOR, and it is a narrower job it really does
         // do: stopping the HOLD'S HEARTBEAT from outliving the incumbent RULE's
@@ -296,7 +309,9 @@ namespace MFO::ComposedCast {
         //
         // `created` IS MOVED on one path: the incumbent's own rule re-requesting
         // after an APMF auto-expiry mints a new handle with a new stamp
-        // (APMFBridge.cpp:360-363 -> :381/:409). That is harmless HERE, and ONLY here,
+        // (EnsureCastClaimLocked's `everLive` aged-out branch falling through to
+        // its mint -- RARE now that F5-1 renews the window instead of letting it
+        // lapse under a still-winning rule). That is harmless HERE, and ONLY here,
         // because that path cannot run underneath a live hold -- the incumbent's
         // re-request returns Claimed, which stops the rule scan before any held
         // rule's Try() is reached (see REACHABILITY below). It is not the blanket

@@ -667,10 +667,25 @@ namespace MFO::APMFBridge {
     //     but it is not the interesting one, because the INCUMBENT'S OWN RULE
     //     keeps re-arming: while its condition holds it calls ClaimHealCast every
     //     lap, which re-requests a fresh handle the moment APMF expires the old
-    //     one. (It is NOT defeated by a renewing Repoint: MFO never Repoints a
-    //     kIntent_Cast claim -- see EnsureCastClaimLocked -- and APMF main's
-    //     ApplyRepoint does not touch expiresMs. The APMF-side renewal this doc
-    //     used to warn about lives on an unmerged branch.)
+    //     one. (BOTH HALVES OF THIS PARENTHESIS USED TO BE WRONG, and are
+    //     rewritten here rather than deleted -- a comment teaching a false
+    //     mechanism is worse than no comment. It read "MFO never Repoints a
+    //     kIntent_Cast claim, and APMF main's ApplyRepoint does not touch
+    //     expiresMs; the APMF-side renewal lives on an unmerged branch." APMF's
+    //     renewal MERGED (core/ControlMap.cpp's TTL RENEWAL: a Repoint on a live
+    //     cast claim moves its deadline to now + the claim's own granted ttlMs),
+    //     and as of F5-1 MFO DOES Repoint a live cast claim -- see the CAST-CLAIM
+    //     HEARTBEAT in EnsureCastClaimLocked. THE BOUND SURVIVES ANYWAY, and is
+    //     in fact tighter now. That heartbeat fires ONLY from ClaimHealCast /
+    //     ClaimOffenseCast, i.e. only from a rule still winning its lap -- never
+    //     from THIS function, deliberately, because a hold that renewed APMF's
+    //     TTL would be exactly the deadlock the old note imagined. So bound 1 is
+    //     unchanged for a claim whose rule has gone quiet, and for a claim whose
+    //     rule keeps re-arming the heartbeat merely replaces the expire-and-
+    //     re-request cycle that was already keeping it alive -- with one real
+    //     difference in this function's favour: `created` no longer moves on
+    //     every 6s auto-expiry, so bound 2 below now measures the claim's TRUE
+    //     age instead of being reset by a re-request.)
     //  2. CLAIM AGE. Past kHealHoldNeverObservedMs (4000ms -- sized from the
     //     MEASURED claim-to-OBSERVED latency of the one heal that landed on the
     //     deck, 2.95s, plus the tail; see that constant above for the full

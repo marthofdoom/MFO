@@ -128,6 +128,44 @@ namespace MFO::APMFBridge {
             // recognise a cast of the PROXY, not just the original spell, as our
             // own claim actually firing (see ComposedCast.h/.cpp).
             RE::FormID       proxy  = 0;
+            // ── CAST-CLAIM HEARTBEAT STATE (F5-1, 2026-09-08) ──────────────
+            // WHEN APMF'S OWN TTL WINDOW LAST STARTED for this handle -- set
+            // where `created` is set (the mint), and moved forward by EVERY
+            // successful heartbeat Repoint below. This is the ONLY clock that
+            // tracks APMF's `expiresMs`, and it is deliberately none of the
+            // other three:
+            //   * `created` must NOT move (it is the never-observed hold cap's
+            //     bound -- see its comment above and RefreshHealCastClaim);
+            //   * `refreshed` is bumped by every interested party every lap
+            //     (ClaimHealCast/ClaimOffenseCast/RefreshHealCastClaim), so it
+            //     measures MFO-side interest, never time-since-renewal;
+            //   * APMF's `expiresMs` lives on APMF's side and is not readable.
+            // NOT a second expiry (#9 / the sweep must not disagree with it):
+            // nothing is ever released on this stamp. It only decides WHEN to
+            // send the next renewal; the release decisions stay exactly where
+            // they were (FacetExpiry()'s sweep on `refreshed`, the explicit
+            // Release* calls, and -- on APMF's side -- the TTL itself).
+            std::chrono::steady_clock::time_point renewed{};
+            // THE EXACT APMF_Param APMF STORED FOR THIS CLAIM, kept verbatim so
+            // a heartbeat Repoint can re-send it byte-for-byte instead of
+            // rebuilding one that is merely "the same". Built at the mint below
+            // to mirror APMF's ControlMap::EnqueueCast exactly -- that function
+            // stores `op.param.form = req->spell` and
+            // `op.param.ival = req->flags` into a zero-initialised APMF_Param
+            // and nothing else -- so this copy is what `self->param` holds on
+            // the APMF side.
+            //
+            // WHY VERBATIM AND NOT REBUILT. APMF's ApplyRepoint REFUSES (loudly)
+            // a Repoint whose `param.form` differs from the claim's current
+            // spell, because a cast claim's delivery-flip proxy, resolved target
+            // handle and CastFlags were all resolved AGAINST the original spell
+            // inside RequestCast and Repoint re-runs none of that -- honouring a
+            // form swap would leave the claim NAMED for one spell while DRIVING
+            // another's proxy at another's target. A stored copy cannot drift
+            // from what was requested; a rebuild can (the flags word is derived
+            // from hand/conc/stopPct through three conditionals, and any future
+            // edit to that derivation would silently desync the heartbeat).
+            APMF_API::APMF_Param reqParam{};
         };
 
         struct Owned {
@@ -191,6 +229,31 @@ namespace MFO::APMFBridge {
             std::chrono::steady_clock::time_point when{};
         };
         std::unordered_map<RE::FormID, NeverLiveWarn> g_lastNeverLiveWarn;
+
+        // ── cast-claim HEARTBEAT log throttle (F5-1, 2026-09-08) ────────────────
+        // A heartbeat that silently fails is WORSE than no heartbeat, because RC2
+        // would then look fixed while the gap was still open (principle 5: do not
+        // build an unobservable mechanism). So every renewal is loggable -- but at
+        // one line per renewal per claim, a party mid-fight would emit a line every
+        // few hundred ms across its live cast claims and bury the headline cast
+        // lines under its own bookkeeping (principle 8). Same shape and the same
+        // 5 s per (follower, spell) window as g_lastNeverLiveWarn above, so the two
+        // cast-claim diagnostics in this file stay in step: a NEW spell always logs
+        // its first renewal (the crossing that proves the mechanism fires at all),
+        // and a long-standing claim logs at most every 5 s thereafter.
+        //
+        // THE LINE IS SELF-PROVING, NOT A COUNT. It carries the claim's AGE since
+        // its mint, so ONE line whose age exceeds kHealCastTtlMs is by itself proof
+        // that the window was RENEWED rather than re-requested -- the throttle can
+        // drop lines without costing the field its answer. Nothing here retries or
+        // masks: a renewal that does not take shows up on the very next lap as the
+        // existing "already auto-expired -- re-requesting" line below (principle 7).
+        constexpr auto kRenewLogEvery = std::chrono::milliseconds(5000);
+        struct RenewLog {
+            RE::FormID                            spell = 0;
+            std::chrono::steady_clock::time_point when{};
+        };
+        std::unordered_map<RE::FormID, RenewLog> g_lastRenewLog;
 
         // MFO outbids APMF's mid-range test hotkeys (basis 100) so a real gambit wins
         // the hand/target over a tester's Numpad keys. Arbitrary among clients; > 100.
@@ -323,6 +386,48 @@ namespace MFO::APMFBridge {
             c = CastClaim{};
         }
 
+        // ── HOW OFTEN A LIVE kIntent_Cast CLAIM IS HEARTBEATEN (F5-1, 2026-09-08) ──
+        // Derived, never a convenient number (#9): the two inputs are the claim's
+        // OWN granted TTL (kHealCastTtlMs, the value this file passes as
+        // req.ttlMs for every cast claim it makes) and MFO's OWN worst-case refresh
+        // cadence, which is already sized ONCE in this file as FacetExpiry() -- the
+        // round-robin-aware window a claim may go un-refreshed before the Tick()
+        // sweep gives up on it. Reusing FacetExpiry() rather than inventing a
+        // second budget is the point: a heartbeat sized off a number the sweep
+        // does not share is exactly the "two budgets that can disagree" failure
+        // this codebase keeps paying for.
+        //
+        //   interval = min( TTL/2 , TTL - FacetExpiry() ), floored at 0
+        //
+        //   * TTL/2 (3000ms at kHealCastTtlMs=6000) is the ordinary heartbeat
+        //     halving: renewing at half-life means a claim survives even if ONE
+        //     scheduled renewal is missed entirely, which is the common case here
+        //     because renewals ride the round-robin lap and a lap can be skipped
+        //     (the follower's rule loses a tick, the party grows, the game stalls).
+        //   * TTL - FacetExpiry() is the hard ceiling: FacetExpiry() is this file's
+        //     own stated upper bound on the gap between two consecutive services of
+        //     one follower, so any interval above it could let the window lapse
+        //     between two renewals. At the defaults (fSuppressWindow 1.5, solo
+        //     party) FacetExpiry() is ~2446ms, so this ceiling is ~3554ms and the
+        //     TTL/2 term wins; a big party or a wide suppression window pulls the
+        //     ceiling down and it takes over -- e.g. fSuppressWindow 3.0 with 5
+        //     followers gives ~4658ms and an interval of ~1342ms.
+        //   * The floor of 0 (FacetExpiry() >= TTL) degrades honestly to "renew on
+        //     every service": if MFO tolerates a longer un-refreshed gap than APMF
+        //     grants, there is no safe interval left and the cheapest correct thing
+        //     is to renew whenever we are here. No masking either way -- a claim
+        //     that lapses regardless still takes the existing aged-out path.
+        //
+        // NOT AN EXPIRY. Nothing is released on this value; it only decides when to
+        // send a Repoint. Every release decision stays where it already was.
+        std::chrono::milliseconds CastHeartbeatInterval() {
+            const auto ttl   = std::chrono::milliseconds(kHealCastTtlMs);
+            const auto half  = ttl / 2;
+            const auto lap   = FacetExpiry();
+            const auto slack = (lap < ttl) ? (ttl - lap) : std::chrono::milliseconds(0);
+            return (half < slack) ? half : slack;
+        }
+
         // kIntent_Cast create-or-refresh (kIntent_Cast/RequestCast, ch.8b) -- SHARED
         // by both ClaimHealCast and ClaimOffenseCast (renamed from
         // EnsureHealClaimLocked, feat/offense-cast-seats, 2026-09-05: the function
@@ -394,6 +499,82 @@ namespace MFO::APMFBridge {
                     // caching that 0 forever.
                     if (c.proxy == 0 && api->abiVersion >= 6)
                         c.proxy = reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->GetCastProxy(c.handle);
+                    // ── CAST-CLAIM HEARTBEAT (F5-1, 2026-09-08; RC2 of
+                    //    Docs/DIAG-2026-09-06-deny-heal-failures.md) ─────────────
+                    // THE HALF THIS FILE WAS MISSING. A kIntent_Cast claim is
+                    // bounded by design (APMF design.md 5a -- never a standing
+                    // hold), and until now MFO let it hard-expire and then
+                    // re-requested it on the next lap. Measured cost of that
+                    // cycle in the field: the actor went UNCLAIMED for 0.3-1.2 s
+                    // every 6 s, and a foreign spell was seen equipping and
+                    // charging 110 ms into one of those gaps -- i.e. the gap is
+                    // not theoretical, the AI walks straight into it. APMF's own
+                    // half of the fix is merged (ControlMap::ApplyRepoint's TTL
+                    // RENEWAL: a Repoint on a LIVE cast claim moves its deadline
+                    // to now + the claim's OWN granted, already-clamped ttlMs),
+                    // but it was unreachable, because MFO never Repointed a cast
+                    // claim at all -- this early return was the only path a
+                    // still-wanted claim ever took, and it returned without
+                    // renewing anything. So the 6 s TTL becomes what principle 9
+                    // asks for: a renewable FLOOR that a crashed or uninterested
+                    // client still loses on the original schedule, instead of an
+                    // expiry that kills LIVE state.
+                    //
+                    // WHY IT IS STILL BOUNDED. Nothing here holds a claim open by
+                    // itself. This code only runs from ClaimHealCast /
+                    // ClaimOffenseCast -- i.e. from a rule that WON this lap and
+                    // is asking for the identical (spell,target,hand,conc,stopPct)
+                    // it already holds. The moment the rule stops winning, the
+                    // heartbeat stops with it and the claim dies at APMF's TTL,
+                    // exactly as before; MFO's own explicit releases and the
+                    // Tick()/FacetExpiry() sweep are untouched. Deliberately NOT
+                    // added to RefreshHealCastClaim: that one is ComposedCast's
+                    // incumbent HOLD, which by design keeps `refreshed` moving for
+                    // a claim whose rule may have gone quiet, and renewing APMF's
+                    // TTL from there would take away the very liveness bound that
+                    // hold documents (see RefreshHealCastClaim's bound 1).
+                    //
+                    // ABI >= 6 ONLY, and that is a correctness gate, not caution.
+                    // On ABI < 6 `liveNow` above is an ASSUMPTION (there is no
+                    // IsClaimLive to ask), so a Repoint from here could be aimed at
+                    // a handle APMF expired long ago -- and it would then log a
+                    // renewal that never happened, which is a mask (#7). With a
+                    // positive IsClaimLive answer in hand the renewal is real:
+                    // ApplyRepoint refuses to resurrect an already-lapsed claim, so
+                    // "live now" is precisely the precondition it renews under.
+                    // ABI < 6 keeps today's behaviour byte-identical, the same
+                    // discipline the liveness check itself and RefreshHealCastClaim
+                    // already follow. Inert in practice (kABIVersion is 6 and the
+                    // DLL pair ships together).
+                    //
+                    // THE PARAM IS THE STORED ONE, NEVER A REBUILD -- see
+                    // CastClaim::reqParam above for why (ApplyRepoint REFUSES a
+                    // form change on a cast claim, loudly, and a rebuilt flags word
+                    // is free to drift from what was actually requested).
+                    if (api->abiVersion >= 6) {
+                        const auto now = std::chrono::steady_clock::now();
+                        if (now - c.renewed >= CastHeartbeatInterval()) {
+                            api->Repoint(c.handle, &c.reqParam);
+                            const auto sinceRenew = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                        now - c.renewed).count();
+                            const auto age        = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                        now - c.created).count();
+                            c.renewed = now;
+                            if (auto& r = g_lastRenewLog[follower];
+                                r.spell != wantSpell || now - r.when >= kRenewLogEvery) {
+                                r.spell = wantSpell;
+                                r.when  = now;
+                                spdlog::info("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) HEARTBEAT -- "
+                                             "Repointed in place, renewing APMF's {}ms TTL (claim age {}ms, "
+                                             "{}ms since the last renewal, next in ~{}ms). A LIVE claim whose "
+                                             "age exceeds the TTL is the proof the window was RENEWED, not "
+                                             "re-requested; a renewal that did not take shows up on the next "
+                                             "lap as the 'already auto-expired' line instead.",
+                                             follower, wantSpell, kHealCastTtlMs, age, sinceRenew,
+                                             CastHeartbeatInterval().count());
+                            }
+                        }
+                    }
                     return;   // unchanged AND still live -- cheap no-op, no release/re-request churn
                 }
                 // ── NOT LIVE. WHICH KIND? (F3-1, deploy-gate review 2026-09-07) ──
@@ -518,6 +699,24 @@ namespace MFO::APMFBridge {
                 // makes it a bound (see the `created` field comment above and
                 // RefreshHealCastClaim below).
                 c.created = std::chrono::steady_clock::now();
+                // F5-1: APMF's TTL window starts HERE, at the RequestCast above, so
+                // the heartbeat clock starts here too. Unlike `created` this one DOES
+                // move -- every renewal below advances it -- which is exactly why the
+                // two are separate fields (see CastClaim::renewed).
+                c.renewed = c.created;
+                // F5-1: the param APMF now stores for this claim, captured verbatim
+                // for the heartbeat Repoint. This MUST mirror APMF's
+                // ControlMap::EnqueueCast, which builds a zero-initialised
+                // APMF_Param and writes exactly two fields from the APMF_CastRequest
+                // it was handed: `param.form = req->spell` and
+                // `param.ival = req->flags` (kept in parity with castFlags). Anything
+                // else stays zero on both sides. Re-sending this on a heartbeat is
+                // therefore a no-change param update plus a TTL renewal, which is
+                // precisely the "same-form heartbeat" APMF_API.h invites and the one
+                // shape that trips none of ApplyRepoint's refusals.
+                c.reqParam       = APMF_API::APMF_Param{};
+                c.reqParam.form  = wantSpell;
+                c.reqParam.ival  = static_cast<std::int32_t>(req.flags);
                 // ABI v6: fetch the delivery-flip proxy APMF minted for this claim
                 // (0 on ABI < 6, or a claim that minted no proxy) -- recorded
                 // alongside the claimed spell so a later match on the OBSERVED
@@ -951,16 +1150,28 @@ namespace MFO::APMFBridge {
         // The ONLY caller is ComposedCast::Try's incumbent hold, and it calls
         // this only while the incumbent has NOT been observed firing.
         //
-        // WHAT THE NOTE THAT STOOD HERE GOT WRONG. It claimed APMF's F2 makes
-        // Repoint RENEW a cast claim's TTL, so IsClaimLive could stay true
-        // forever and the hold could deadlock. Neither shipped binary can produce
-        // that: MFO never calls Repoint on a kIntent_Cast claim at all (its only
-        // Repoints are the non-cast EnsureClaimLocked/EnsureIvalClaimLocked at
-        // :238/:265 -- RequestCast has no in-place re-point, so a CHANGE releases
-        // and re-requests), and APMF **main**'s ApplyRepoint (core/ControlMap.cpp)
-        // writes `self->param` and never touches `expiresMs`. F2 is on an
-        // unmerged APMF branch. Recorded rather than quietly deleted, because a
-        // comment teaching a false mechanism is worse than no comment.
+        // THE RENEWAL MECHANISM IS REAL NOW -- AND THIS FUNCTION STILL MUST NOT
+        // USE IT (F5-1, 2026-09-08). The note that stood here said the F2 renewal
+        // could not happen at all ("MFO never Repoints a kIntent_Cast claim, and
+        // APMF main's ApplyRepoint never touches expiresMs; F2 is on an unmerged
+        // branch"). Both halves are now false: APMF's TTL RENEWAL is merged
+        // (core/ControlMap.cpp -- a Repoint on a LIVE cast claim moves its
+        // deadline to now + its own granted ttlMs), and EnsureCastClaimLocked's
+        // fast path Repoints a live cast claim on a heartbeat. Rewritten rather
+        // than deleted, because a comment teaching a false mechanism is worse
+        // than no comment.
+        //
+        // WHAT THAT MEANS HERE. The old note's fear -- a renewal keeping
+        // IsClaimLive true forever and deadlocking this hold -- is exactly why
+        // the heartbeat lives in EnsureCastClaimLocked and NOT in this function.
+        // A renewal there is sent only by a rule that WON its lap and is asking
+        // for the identical claim it already holds; this function is the opposite
+        // case, a hold kept alive for an incumbent whose own rule may have gone
+        // silent. So this function still only bumps MFO's local `refreshed` and
+        // NEVER Repoints: the moment the incumbent's rule stops asking, nothing
+        // renews APMF's window and the claim dies at its TTL, bound 1 intact.
+        // Bound 2 (below) actually gets STRONGER, because `created` is no longer
+        // reset by a 6s auto-expiry + re-request cycle that no longer happens.
         //
         // WHAT THE CAP REALLY DOES, and why it is still needed. It stops the
         // HOLD'S HEARTBEAT from outliving the incumbent RULE's interest. Every
@@ -989,11 +1200,15 @@ namespace MFO::APMFBridge {
         // rule usually outranks the incumbent, but a lower-ranked rule is held
         // whenever the incumbent's own condition has gone false).
         //
-        // `created` is stamped once per handle (:409, right after the
-        // RequestCast at :381) and is moved by no refresh, no APMF-side liveness
-        // check and not by this heartbeat -- but it IS moved when the incumbent's
-        // own rule re-requests after an APMF auto-expiry (:360-363 falls through
-        // to :381, minting a new handle with a new :409 stamp).
+        // `created` is stamped once per handle, in EnsureCastClaimLocked's mint
+        // block right after its RequestCast, and is moved by no refresh, no
+        // APMF-side liveness check, not by this heartbeat and not by F5-1's TTL
+        // heartbeat (which moves `renewed` instead, precisely so this clock stays
+        // still) -- but it IS moved when the incumbent's own rule re-requests
+        // after an APMF auto-expiry (that function's `everLive` aged-out branch
+        // falls through to the same mint, giving a new handle a new stamp; F5-1
+        // makes that path RARE while a rule keeps winning, since the window is
+        // renewed instead of being allowed to lapse).
         // That is harmless HERE, and only here, because that path cannot run
         // underneath a live hold: the incumbent's re-request returns Claimed,
         // which stops the rule scan before any held rule's Try() is reached. It
