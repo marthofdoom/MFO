@@ -377,7 +377,10 @@ legacy hybrid, byte-identical; **`ApmfRefused` (APMF present, capable, and it sa
 FAILS CLOSED** at `Actuation.cpp:1082-1089` with no hybrid and no `kInstant`; `Held`
 returns a transparent NoOp. **In-combat only** — `CastOn`
 runs only from `Actuation::Fire`'s combat dispatch. The identical OOC gap
-(`Logistics.cpp:1465-1580`) is deliberately untouched: it is not established that
+(`Logistics.cpp:1606-1690`, the FIRE-AND-FORGET beneficial direct-apply leg — `:1606`
+"FIRE-AND-FORGET from here down", `CastSelfDirect` at `:1671`, API-PORT-AUDIT §2.3; **NOT** the
+OOC concentration block at `:1465-1580`, which this same doc says above already IS an APMF claim
+path) is deliberately untouched: it is not established that
 `kIntent_Cast`'s engine seats function without a live `CombatController` (see
 API-PORT-AUDIT.md §5.1) — do not port that leg on the assumption it mirrors this
 one.
@@ -861,7 +864,24 @@ the shared `[cfc]` silent-claim diagnostic, exposed for exactly this reuse) but
 without touching that module. `target=0` for self (matches `ClaimHealCast`'s
 convention); `hand=kApmfHandLeft` (matches every other claim on this path).
 
-**Degrade, preserved exactly.** APMF absent, ABI < 5 (no `RequestCast` slot),
+**CORRECTED 2026-09-07 — the "Degrade, preserved exactly" block below used to include "or a
+refused claim (lost arbitration)" among the conditions that fall through, "byte-identical". A LOST
+ARBITRATION DOES NOT FALL THROUGH.** It was the eighth site of that error and it contradicted
+`MAP.md`, which already had it right. The concentration twin splits three ways, like the
+fire-and-forget one:
+
+- **FAIL CLOSED** — APMF present AND capable (`APMFBridge::OffenseCastClaimSupported()`) AND it
+  REFUSED → `LogApmfRefusal(..., "concentration offense-cast (self)"` / `"concentration
+  offense-cast", ...)` then **`return SelfCast::Declined`** (`Actuation_Direct.cpp:935-938` and
+  `:1226-1229`). The stream does not start and nothing routes around APMF.
+- **DEGRADE-WHEN-ABSENT** — the conditions in the original block below, minus the refusal
+  (`Actuation_Direct.cpp:940-942` and `:1230-1232`).
+
+**A concentration cast never SILENTLY vanishes** — on a refusal "silently" is the whole load-bearing
+word: it DOES vanish, deliberately, with an `[apmf] … APMF REFUSED …` line naming
+actor/spell/target/hand. Absence degrades; refusal is loud.
+
+**Degrade-when-absent, preserved exactly.** APMF absent, ABI < 5 (no `RequestCast` slot),
 `bApmfCast` off, `bLegacyCastHybrid` on, or a refused claim (lost arbitration)
 all make `ClaimOffenseCast` return `false` — both call sites fall straight
 through to the SAME direct-force stream code that already ran before this pass,
@@ -1174,7 +1194,7 @@ which aliases it) the `CastBounds::Arm` ceiling.
 > (`fix/apmf-claim-renew-denyhand-spellsteer` = `ed637fe`, 2026-09-07 10:08 PDT),
 > but it is **in no tagged APMF release** — the newest is `v0.9.2` (2026-09-06),
 > which predates it, and MFO ships against a release. **The MFO half — the
-> heartbeat — does not exist at all:** `APMFBridge.h:670` says "MFO never Repoints
+> heartbeat — does not exist at all:** `APMFBridge.h:670` says "MFO never Repoints (⚠ the REST of that comment, `:672-673`, is STALE — it still says APMF's `ApplyRepoint` does not renew and that the renewal is unmerged; both are false on APMF `main` today, and that header needs its own comment-only fix)
 > a `kIntent_Cast` claim" and `APMFBridge.cpp:346-397` performs no renew. A
 > renewing APMF that is never asked to renew changes nothing, so the 6 s gap is
 > still open. Do not restore the old wording until a newer APMF release ships AND
@@ -1222,7 +1242,8 @@ fact, fired.
 > so a cached value can go stale as well as start wrong.
 > **FIXED ON `main` 2026-09-07** (`fix/mfo-heal-slot-and-proxy`, merged): F4 landed.
 > `EnsureCastClaimLocked` now re-reads `GetCastProxy` on the LIVE path
-> (`APMFBridge.cpp:529`, not only once at request time), `ComposedCast.cpp:140`
+> (`APMFBridge.cpp:395-396`, not only once at request time — `:528-529` is the
+> request-time read it supplements), `ComposedCast.cpp:140`
 > guards the cache with `if (a_proxy != 0) w.proxy = a_proxy;` so a same-spell
 > re-request can still fill in a proxy minted later and a re-mint cannot blank it,
 > and `CastBounds::Arm` is passed the real proxy

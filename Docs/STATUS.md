@@ -66,8 +66,8 @@ APMF `main`, but **neither is in a tagged release** — `git tag --contains ed63
 empty and the newest tag `v0.9.2` (2026-09-06) predates both. MFO ships against a
 release, not against APMF `main`.
 **F2 is still NOT done end to end:** APMF's `ApplyRepoint` renews on APMF `main`, but
-**MFO never Repoints a `kIntent_Cast` claim** (`APMFBridge.h:670`; the unchanged fast
-path `APMFBridge.cpp:313-360` performs no renew), so nothing asks it to. The 6 s claim
+**MFO never Repoints a `kIntent_Cast` claim** (`APMFBridge.h:670` — ⚠ only THAT clause is still true; `:672-673` right below it is STALE and needs its own comment-only fix; the unchanged fast
+path `APMFBridge.cpp:346-397` performs no renew), so nothing asks it to. The 6 s claim
 still hard-expires (`ENGINE_NOTES` §0.45). **Do not describe F2 as done.** F1 and F4
 ARE done.
 
@@ -1019,6 +1019,8 @@ the spell. Also shipped: heals run to the gambit's own threshold instead of stop
 round-robin-aware facet expiry fix (which also cured followers standing around unarmed), gold +
 loose gems folded into "loot valuables", and the MCM `bLegacyCastHybrid` default that was never
 registering (#55, caught by release.sh's audit).
+*(Accurate for what v2.0.1 shipped. The "refused claim degrades" contract described in this
+block was SUPERSEDED 2026-09-07 by `fix/mfo-no-decline-fallback`: a refusal now fails closed.)*
 
 **Degrade paths intact:** APMF absent, claim refused, or an APMF older than ABI v5 -> the legacy
 kInstant apply, byte-identical to before. `bHealAnimPackage` (MCM) gates the whole path.

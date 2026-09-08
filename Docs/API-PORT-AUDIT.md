@@ -1,5 +1,16 @@
 # API PORT AUDIT — is MFO using APMF for everything it already claims?
 
+> **⚠ POINT-IN-TIME SNAPSHOT (`a486b8e`, 2026-09-06). ONE CONTRACT IT QUOTES IS RETIRED.**
+> Banner added 2026-09-07. The port this audit was measuring against LANDED
+> (`fix/mfo-no-decline-fallback` + `fix/mfo-fourstate-followups`), and with it the
+> contract quoted at §2.2 and §5.1 as the thing to mirror — *"a refused claim degrades
+> to the baseline `kInstant` apply — a heal always lands"* — is **RETIRED**. On `main`
+> a refused claim **fails closed**: `ComposedCast::Try` returns `TryResult::ApmfRefused`
+> and every caller drops the cast with no `kInstant` apply. **Only `NotApplicable` — the
+> channel was never there — degrades.** See `Docs/CAST-DELIVERY.md`'s DEGRADE PATH block
+> for the current three-way split. Everything else here still reads as a valid snapshot
+> of what was ported when.
+
 **Read-only audit, 2026-09-06.** Scope: `origin/main` @ `a486b8e` (verified identical to the
 local `main` checkout at audit time). Question answered (marth, verbatim): *"MFO will still
 need to use the API for all those things if it isn't already."* Cast is fully ported and

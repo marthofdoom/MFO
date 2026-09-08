@@ -2110,6 +2110,8 @@ wrong because the re-check only looked at the MFO repo. The facts, from
   empty; the newest release tag is `v0.9.2`, dated 2026-09-06, which predates
   both. MFO ships against a RELEASE, not against APMF `main`.
 - **The MFO side of F2 — the heartbeat — does not exist at all.**
+  **⚠ The rest of that header comment is STALE:** `APMFBridge.h:672-673` goes on to say "APMF main's `ApplyRepoint` does not touch expiresMs. The APMF-side renewal this doc used to warn about lives on an unmerged branch." BOTH clauses are FALSE on today's APMF `main` (`ControlMap.cpp`'s TTL RENEWAL; `ed637fe` is an ancestor). Only the "MFO never Repoints" clause quoted here is still true. That header needs its own comment-only fix.
+
   `native/APMFBridge.h:670` states it plainly: *"MFO never Repoints a
   `kIntent_Cast` claim"*, and the unchanged fast path in `EnsureCastClaimLocked`
   (`native/APMFBridge.cpp:346-397`) performs no renew. A renewing APMF that is
