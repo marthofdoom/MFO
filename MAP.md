@@ -1732,18 +1732,26 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     Deliberate consequence, documented at the site: a claim can now be minted on a tick whose `Prepare`
     then debounces — correct under the owned model, since APMF's seats do the equipping while the claim
     stands. It does NOT get released by Scheduler's `!castSeen` path in that state (the rule still holds,
-    so `castSeen` is true); it ends when the RULE stops holding. **`fCastCooldown` GOES INERT, AND THAT IS
-    CORRECT — SETTLED (marth 2026-09-07, memory `cast-cooldown-inert-is-correct`); do NOT re-raise it as a
-    regression.** `Debounced` is primarily the `fCastCooldown` case, and refreshing the claim through a
-    cooldown stretch stops `CasterConsent`'s pacing deny re-engaging, so the knob stops limiting anything.
-    marth: *"a cast can only cast as fast as a cast. No reason to be slower."* The engine's own
-    equip→charge→fire pipeline (~2.3-2.5s offense, 2.95s claim-to-observed on the one landed heal) already
-    paces casting at the fastest a cast can physically occur, so a cooldown on top can only make a follower
-    SLOWER than the engine allows — an inert `fCastCooldown` is **the absence of a redundant limiter, not a
-    lost guard**, and gating the ask on `Loadout::CoolingDown` would re-add the redundancy. Reviving the
-    knob needs a NEW justification (magicka economy, or a thrash the engine does not bound), never "it used
-    to fire". **Keep this separate from the hand lock:** the cooldown being inert is fine, a claim standing
-    without its lock was not — that was the SEV-2 defect fixed in the Debounced arm above.
+    so `castSeen` is true); it ends when the RULE stops holding. **`fCastCooldown` NO LONGER PACES AN
+    APMF-OWNED CAST, AND THAT IS CORRECT — SETTLED (marth 2026-09-07, memory
+    `cast-cooldown-inert-is-correct`); do NOT re-raise it as a regression.** Precisely one effect went away:
+    `CasterConsent::ClientCastClaimed` (`CasterConsent.cpp:231-235`) early-passes while an APMF cast claim
+    is live, so the deny thunks never compute a verdict and the pacing deny (`CasterConsent.cpp:762-775`)
+    cannot fire for a claim-holding follower; on main the claim went un-refreshed through a cooldown,
+    `FacetExpiry` swept it and that deny re-engaged for the tail. **The key is NOT inert generally** — it
+    still stamps via `Loadout::StartCooldown` (`Loadout.cpp:413`, from the `[cast]` SpellSink
+    `Diagnostics.cpp:263`) and still `ReleaseSpell`s, `Prepare` still returns `Debounced` so MFO does not
+    re-equip in the window, the pacing deny **still bites in full on the APMF-absent / `bLegacyCastHybrid` /
+    `bApmfCast`-off path**, and the direct-force FF beats (`Actuation_Direct.cpp:989`, `:1282`) and
+    `CastAuto`'s interval (`:1509`) are untouched. marth: *"a cast can only cast as fast as a cast. No
+    reason to be slower."* The engine's own equip→charge→fire pipeline (~2.3-2.5s offense, 2.95s
+    claim-to-observed on the one landed heal) already paces casting at the fastest a cast can physically
+    occur, so a cooldown on top can only make a follower SLOWER than the engine allows — losing it on the
+    owned path is **the absence of a redundant limiter, not a lost guard**, and gating the ask on
+    `Loadout::CoolingDown` would re-add the redundancy. Reviving it there needs a NEW justification (magicka
+    economy, or a thrash the engine does not bound), never "it used to fire". **Keep this separate from the
+    hand lock:** the cooldown not pacing an owned cast is fine, a claim standing without its lock was not —
+    that was the SEV-2 defect fixed in the Debounced arm above.
   - **AN OUTRIGHT REFUSAL IS A REFUSAL (F3-1, same branch).** APMF's `ControlMap::EnqueueCast` returns
     `kInvalidHandle` synchronously ONLY when no channel serves `kIntent_Cast`; everything else is decided
     later, in `Drain()`. So a request APMF ends up publishing NO claim for still returned a handle, reported
@@ -1760,8 +1768,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     unexpired claim carrying that handle, owner or not, so an ordinary **basis or tie loss reads live,
     latches `everLive`, and is invisible here** — MFO reports `Claimed` while APMF drives another client's
     spell. This catches OUTRIGHT refusals only: hand-collision loser, unloadable actor,
-    FromPackage-without-spell. Telling a tie loss apart needs a real owner query (`IsClaimOwning`), an
-    **APMF v7 ABI addition that does not exist yet**.
+    FromPackage-without-spell.
+    **FOLLOW-UP `apmf-isclaimowning-v7` (OPEN, tracked — not a note):** telling a basis/tie loss apart needs
+    a real owner query, `IsClaimOwning(handle)`, which is an **APMF v7 ABI addition that does not exist
+    yet**. It belongs to the APMF repo (append-only `APMF_API.h` + a `ControlMap` owner lookup) with an MFO
+    consumer change behind an `abiVersion >= 7` guard, exactly like the ABI-6 `IsClaimLive`/`GetCastProxy`
+    adoption. Until it lands, MFO CANNOT detect an arbitration loss and must not be documented as though it
+    can.
 - **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7; REPOINTED feat/offense-cast-seats
   2026-09-05; backing store re-shaped feat/per-hand-cast-slots 2026-09-06):** worker- AND
   combat-thread-safe read (the same `g_mx` every other accessor takes) —
