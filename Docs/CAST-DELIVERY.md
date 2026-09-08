@@ -882,12 +882,18 @@ word: it DOES vanish, deliberately, with an `[apmf] … APMF REFUSED …` line n
 actor/spell/target/hand. Absence degrades; refusal is loud.
 
 **Degrade-when-absent, preserved exactly.** APMF absent, ABI < 5 (no `RequestCast` slot),
-`bApmfCast` off, `bLegacyCastHybrid` on, or a refused claim (lost arbitration)
-all make `ClaimOffenseCast` return `false` — both call sites fall straight
-through to the SAME direct-force stream code that already ran before this pass,
-byte-identical. A concentration cast never silently vanishes: the existing
-`[cfc] claim live N ms with NO observed cast` diagnostic (`ComposedCast.cpp`)
-keeps working unchanged for this path (it is claim-generic, not heal-specific).
+`bApmfCast` off, or `bLegacyCastHybrid` on — i.e.
+`APMFBridge::OffenseCastClaimSupported()` is false — make `ClaimOffenseCast`
+return `false` and both call sites fall straight through to the SAME
+direct-force stream code that already ran before this pass, byte-identical
+(`Actuation_Direct.cpp:940-942` and `:1230-1232`). **A REFUSED claim is NOT in
+that list** — a lost arbitration fails closed instead (`:935-938` and
+`:1226-1229`; see the correction above). **A concentration cast never SILENTLY
+vanishes:** on the degrade path it still runs, and on a refusal it vanishes
+LOUDLY — an `[apmf] … APMF REFUSED …` line names actor/spell/target/hand. The
+existing `[cfc] claim live N ms with NO observed cast` diagnostic
+(`ComposedCast.cpp`) keeps working unchanged for this path either way (it is
+claim-generic, not heal-specific).
 
 > **⚠ THE `[cfc]` WATCHDOG IS MIS-SIZED — DO NOT READ ITS OFFENSE WARNINGS AS
 > FAILURES (RC7, 2026-09-06).** `kSilentWarnAfter` is **2000 ms**
