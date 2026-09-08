@@ -1732,11 +1732,18 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     Deliberate consequence, documented at the site: a claim can now be minted on a tick whose `Prepare`
     then debounces — correct under the owned model, since APMF's seats do the equipping while the claim
     stands. It does NOT get released by Scheduler's `!castSeen` path in that state (the rule still holds,
-    so `castSeen` is true); it ends when the RULE stops holding. **OPEN, marth's call:** `Debounced` is
-    primarily the `fCastCooldown` case, and refreshing the claim through a cooldown stretch stops
-    `CasterConsent`'s pacing deny re-engaging, making **`fCastCooldown` effectively inert under the owned
-    model** — flagged at the pre-flight and at `Config.h`'s `fCastCooldown` entry, deliberately not gated
-    on `Loadout::CoolingDown` pending the decision.
+    so `castSeen` is true); it ends when the RULE stops holding. **`fCastCooldown` GOES INERT, AND THAT IS
+    CORRECT — SETTLED (marth 2026-09-07, memory `cast-cooldown-inert-is-correct`); do NOT re-raise it as a
+    regression.** `Debounced` is primarily the `fCastCooldown` case, and refreshing the claim through a
+    cooldown stretch stops `CasterConsent`'s pacing deny re-engaging, so the knob stops limiting anything.
+    marth: *"a cast can only cast as fast as a cast. No reason to be slower."* The engine's own
+    equip→charge→fire pipeline (~2.3-2.5s offense, 2.95s claim-to-observed on the one landed heal) already
+    paces casting at the fastest a cast can physically occur, so a cooldown on top can only make a follower
+    SLOWER than the engine allows — an inert `fCastCooldown` is **the absence of a redundant limiter, not a
+    lost guard**, and gating the ask on `Loadout::CoolingDown` would re-add the redundancy. Reviving the
+    knob needs a NEW justification (magicka economy, or a thrash the engine does not bound), never "it used
+    to fire". **Keep this separate from the hand lock:** the cooldown being inert is fine, a claim standing
+    without its lock was not — that was the SEV-2 defect fixed in the Debounced arm above.
   - **AN OUTRIGHT REFUSAL IS A REFUSAL (F3-1, same branch).** APMF's `ControlMap::EnqueueCast` returns
     `kInvalidHandle` synchronously ONLY when no channel serves `kIntent_Cast`; everything else is decided
     later, in `Drain()`. So a request APMF ends up publishing NO claim for still returned a handle, reported
