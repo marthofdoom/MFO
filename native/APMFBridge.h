@@ -283,10 +283,17 @@ namespace MFO::APMFBridge {
     // WHAT IT DOES: replays each live claim's OWN stored (spell, target, hand,
     // concentration, stopPct, deny-only) tuple through the same create-or-refresh
     // helper every claim call uses. Because the tuple is by construction identical
-    // to what is stored, that lands on the unchanged fast path: the ABI-6 liveness
-    // check, the lazy delivery-flip proxy read, the TTL heartbeat Repoint, and the
-    // `refreshed` stamp Tick()'s FacetExpiry sweep reads. It can never mint a
-    // second claim, never change a hand mode, and never interrupt a charge.
+    // to what is stored, the identity compare matches: the TTL is renewed in place
+    // (the ABI-6 liveness check, the lazy delivery-flip proxy read, the heartbeat
+    // Repoint, and the `refreshed` stamp Tick()'s FacetExpiry sweep reads). It can
+    // never change a hand mode, never re-point a target, and never tear down a
+    // claim that is still in force.
+    //
+    // IT CAN STILL MINT A HANDLE, and saying otherwise would be false: a stored
+    // handle APMF has already auto-expired takes the aged-out branch and is
+    // RE-REQUESTED from here -- correct (the rule still wants it), and not a
+    // concurrent second claim (the dead handle is dropped first; one claim exists
+    // at every instant, and there is no live charge left to interrupt).
     //
     // a_hand: kApmfHandLeft -> the left offense slot AND the heal slot (heals are
     // LEFT always, and the two can stand together); kApmfHandDualCast -> the

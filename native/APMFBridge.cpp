@@ -938,6 +938,22 @@ namespace MFO::APMFBridge {
             // A DualCast claim is mirrored into BOTH offense slots (see
             // ClaimOffenseCast), so it reads as both hands driven with no special
             // case. Heals are LEFT always (ClaimHealCast's own hard rule).
+            //
+            // "DRIVEN" MEANS "MFO HOLDS A HANDLE HERE", NOT "APMF HAS PUBLISHED IT"
+            // -- deliberately, and with a known cost (review finding, 2026-09-08).
+            // Every other consumer of these slots defines driven the same way
+            // (IsOwnedCastActiveOnHand, IsHealCastActive, EraseIfEmpty, Tick's own
+            // sweep), and a SECOND definition of the word here is exactly the kind
+            // of drift that produces two subsystems disagreeing about which hand is
+            // busy. What it costs, stated rather than hidden: a driving claim in
+            // never-published limbo still reads as driven, so a claim APMF ends up
+            // REFUSING buys one pump's worth of floor mint-then-release; and a
+            // FLOOR whose own first liveness check misses is dropped by
+            // EnsureCastClaimLocked's fail-closed branch and re-minted on the next
+            // pump, once every ~133 ms until it publishes. Both are bounded by the
+            // refusal itself resolving, both are the SAME shape driving claims have
+            // had since the fail-closed split shipped, and the log is throttled
+            // (5 s per follower per slot) while the RequestCast traffic is not.
             const bool leftDriven  = o.offense[0].handle != APMF_API::kInvalidHandle ||
                                      o.heal.handle       != APMF_API::kInvalidHandle;
             const bool rightDriven = o.offense[1].handle != APMF_API::kInvalidHandle;
@@ -1189,12 +1205,25 @@ namespace MFO::APMFBridge {
     // See APMFBridge.h for the contract. The implementation is deliberately a
     // REPLAY of the claim's OWN stored tuple rather than a second refresh path:
     // handing EnsureCastClaimLocked exactly what it already stored guarantees the
-    // identity compare matches and the unchanged fast path is taken, so this can
-    // NEVER mint a second claim, change a hand mode, or interrupt a charge -- the
-    // three things F8 exists to stop. Everything the fast path does (the ABI-6
-    // liveness check, the lazy proxy read, the TTL heartbeat, the never-published
+    // identity compare MATCHES, so this can never change a hand mode, never
+    // re-point a target, and never tear down a claim that is still in force -- the
+    // things F8 exists to stop. Everything the fast path does (the ABI-6 liveness
+    // check, the lazy proxy read, the TTL heartbeat, the never-published
     // fail-closed split) happens here too, for free and identically, because it is
     // the same code.
+    //
+    // "THE FAST PATH IS THE ONLY PATH" WOULD BE FALSE, so it is not claimed
+    // (review fix, 2026-09-08). The identity compare matching only decides that the
+    // request is UNCHANGED; what happens next still depends on APMF. If the stored
+    // handle reads NOT live and had once been live, the aged-out branch runs and
+    // RE-REQUESTS -- a genuinely fresh handle is minted from here. That is correct
+    // and is the point (a claim APMF expired should come back while its rule still
+    // wants it), and it is NOT a concurrent second claim: the dead handle is
+    // dropped first, exactly one claim exists at every instant, and no charge is
+    // interrupted because there was no live claim left to interrupt. The two
+    // outcomes a caller must distinguish stay as documented: `true` = a live claim
+    // stands on that hand afterwards (renewed or re-minted), `false` = APMF refused
+    // it and nothing stands.
     //
     // IT DOES NOT COLLIDE WITH RefreshHealCastClaim's DELIBERATE NON-RENEWAL.
     // That function refuses to Repoint on purpose, because it is ComposedCast's

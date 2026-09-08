@@ -218,6 +218,20 @@ namespace MFO::Actuation {
             RE::FormID spell  = 0;
             RE::FormID target = 0;
             std::chrono::steady_clock::time_point lastSeen{};
+            // WHEN THE CLAIM BEHIND THIS HOLD WAS FIRST SEEN ABSENT (F8 review
+            // fix, 2026-09-08). The in-flight protection's cap CANNOT be measured
+            // from `lastSeen`: F9's in-flight path deliberately does NOT re-stamp
+            // the lock (the live claim is its own proof of liveness), so
+            // `lastSeen` freezes at the lap the rule FIRST claimed. Anchoring the
+            // cap there made the protection DEAD for any claim older than the cap
+            // -- a claim refreshed in flight for 20 s that then lapsed would fail
+            // both the staleness test and the cap on the very next lap and hand
+            // the charging spell straight to another rule, which is the exact
+            // failure F8 exists to remove. Stamped instead at the moment the third
+            // answer below is first reached, cleared whenever the claim is seen
+            // live again, and cleared by HoldCastLock (a fresh hold is a fresh
+            // cast, and its charge deserves a fresh window). Epoch == "not set".
+            std::chrono::steady_clock::time_point claimGoneAt{};
         };
         struct FollowerCastLocks { CastLock hand[kHandCount]; };
         std::unordered_map<RE::FormID, FollowerCastLocks> g_castLock;
@@ -360,6 +374,7 @@ namespace MFO::Actuation {
             auto& lock = g_castLock[a_follower].hand[a_hand];
             lock.spell = a_spell; lock.target = a_target;
             lock.lastSeen = std::chrono::steady_clock::now();
+            lock.claimGoneAt = {};   // fresh hold == fresh cast: reset F8's cap window
         }
 
         // Drop ONE hand's lock (2026-09-08). The whole-follower twin is the public
@@ -383,6 +398,25 @@ namespace MFO::Actuation {
                 : APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandRight);
         }
 
+        // THE DELIVERY-FLIP PROXY STANDING ON ONE HAND, WHICHEVER FACET MINTED IT
+        // (review fix, 2026-09-08). An offense claim's proxy lives in
+        // GetOffenseCastProxy and a HEAL claim's in GetHealCastProxy, and heals are
+        // LEFT always -- so a left-hand lookup that consults only the offense
+        // accessor silently answers 0 for every proxied heal. That 0 is not
+        // harmless at either call site: the in-flight watch re-arm would never
+        // learn the heal's proxy (WatchArmed keeps whatever it has when handed 0),
+        // so `observed` could never latch, every proxied heal would warn
+        // "[cfc] NO observed cast" forever and read as "not ours" in the SpellSink
+        // -- the RC4 false alarm, rebuilt. ONE resolver so the two sites cannot
+        // drift. Both accessors answer 0 for a claim that is already gone.
+        RE::FormID CastProxyOnHand(RE::FormID a_follower, std::size_t a_hand) {
+            const RE::FormID offense = APMFBridge::GetOffenseCastProxy(
+                a_follower, a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                : APMFBridge::kApmfHandRight);
+            if (offense != 0 || a_hand != kHandLeft) return offense;
+            return APMFBridge::GetHealCastProxy(a_follower);
+        }
+
         // ── "THE ENGINE STARTED THIS CAST AND HAS NOT FINISHED IT" (F8, 2026-09-08) ──
         // The signal that a charged cast is mid-flight on `a_hand`, read from the
         // engine itself rather than inferred: the follower's MagicCaster for that
@@ -397,14 +431,51 @@ namespace MFO::Actuation {
         // needs, not the start of it. There is no MFO-side "charge began" event
         // at all; the caster's own state IS that event.
         //
-        // SYMBOLS VERIFIED against the PINNED CommonLibSSE-NG (3.7.0 @ c4ab853d,
-        // include/RE/M/MagicCaster.h): `currentSpell` (MagicItem*, 0x28) and
-        // `state` (stl::enumeration<State, uint32_t>, 0x30) are real members;
-        // Actor::GetMagicCaster(CastingSource) is a plain pointer-returning
-        // virtual (RE/A/Actor.h:302, slot 0x5C) with no hidden out-slot. Both are
-        // already read exactly this way, from this same job worker, by the
-        // bDriveCaster probe further down this file -- this adds no new engine
-        // surface, it reuses a proven one.
+        // NO VIRTUAL CALL HERE -- THE ARRAY IS READ DIRECTLY, ON PURPOSE (review
+        // fix, 2026-09-08; CLAUDE.md principle 6). The obvious spelling is
+        // `Actor::GetMagicCaster(CastingSource)` (`RE/A/Actor.h:302`, vtable slot
+        // 0x5C), and the bDriveCaster probe further down this file does exactly
+        // that -- but that probe is DEFAULT-OFF, and this predicate runs on EVERY
+        // in-flight lap of EVERY cast gambit, on the AddTask job worker. If the
+        // engine's GetMagicCaster LAZILY ALLOCATES the ActorMagicCaster it hands
+        // back, that is an off-main allocation plus a write into
+        // `magicCasters[]`, from a thread that is not allowed to do either. That
+        // is unknowable from CommonLib: it declares the function and implements
+        // NOTHING (grep: only the `override` declaration exists in the pinned
+        // tree), so the body is the game's. It is also not checkable here --
+        // SkyrimSE.exe is Steam-DRM encrypted on disk (a `.bind` section; verified
+        // on the local 1.6.1170 copy), so a static disassembly reads garbage, and
+        // this is precisely the class of read that once turned a "passive" probe
+        // into a crash.
+        //
+        // So the question is REMOVED rather than answered: read the already-built
+        // caster out of the actor's own array and treat a null slot as "not in
+        // flight". A plain member load allocates nothing, dispatches nothing, and
+        // needs no proof beyond the layout.
+        //
+        // SYMBOLS VERIFIED against the PINNED CommonLibSSE-NG (3.7.0 @ c4ab853d):
+        //   * `ACTOR_RUNTIME_DATA::magicCasters[SlotTypes::kTotal]`, `Actor.h:667`
+        //     @0x1A0, reached through `GetActorRuntimeData()` (`Actor.h:698-706`)
+        //     which applies the 0xE0/0xE8 SE-vs-AE shift for us -- the same
+        //     accessor MFO already uses in five places, from this same worker
+        //     (e.g. `Actuation_Direct.cpp:1569`, `CasterConsent.cpp:851`).
+        //     `static_assert(sizeof(Actor) == 0x2B0)` pins the layout.
+        //   * `Actor::SlotTypes::kLeftHand == 0` / `kRightHand == 1`
+        //     (`Actor.h:139-150`) -- the same numeric values as
+        //     `MagicSystem::CastingSource`, but this indexes the ARRAY, so the
+        //     array's own enum is what it is written against.
+        //   * `ActorMagicCaster : public MagicCaster` at offset 00
+        //     (`ActorMagicCaster.h:18-21`), so the stored pointer is a MagicCaster
+        //     with no adjustment, and `currentSpell` (MagicItem*, 0x28) and
+        //     `state` (stl::enumeration<State, uint32_t>, 0x30) are its own real
+        //     members (`MagicCaster.h:80-95`).
+        //
+        // BOTH READS ARE RACY PLAIN LOADS and are meant to be: the combat thread
+        // advances this state machine while we look. A torn or stale answer only
+        // shifts the hold by one round-robin lap (~133 ms x party), which is
+        // nothing against the 2.3-4.5 s pipeline it is protecting -- and it can
+        // only ever make the lock let go one lap early or hold one lap late,
+        // never corrupt anything.
         //
         // STATES. kNone is idle; kUnk08/kUnk09 are the interrupt/deselect pair
         // (CommonLib's own annotation), i.e. a cast that is ENDING and must not
@@ -416,11 +487,14 @@ namespace MFO::Actuation {
         bool CastInFlightOnHand(RE::Actor* a_follower, std::size_t a_hand,
                                 RE::FormID a_spell, RE::FormID a_proxy) {
             if (!a_follower || a_spell == 0) return false;
-            using CS = RE::MagicSystem::CastingSource;
-            auto* caster = a_follower->GetMagicCaster(a_hand == kHandLeft ? CS::kLeftHand
-                                                                         : CS::kRightHand);
-            if (!caster || !caster->currentSpell) return false;
-            const auto cur = caster->currentSpell->GetFormID();
+            const std::size_t slot = a_hand == kHandLeft
+                ? static_cast<std::size_t>(RE::Actor::SlotTypes::kLeftHand)
+                : static_cast<std::size_t>(RE::Actor::SlotTypes::kRightHand);
+            RE::MagicCaster* caster = a_follower->GetActorRuntimeData().magicCasters[slot];
+            if (!caster) return false;                 // never built -> nothing in flight
+            auto* held = caster->currentSpell;
+            if (!held) return false;
+            const auto cur = held->GetFormID();
             if (cur != a_spell && (a_proxy == 0 || cur != a_proxy)) return false;
             const auto st = caster->state.get();
             return st != RE::MagicCaster::State::kNone &&
@@ -428,8 +502,9 @@ namespace MFO::Actuation {
                    st != RE::MagicCaster::State::kUnk09;
         }
 
-        // HOW LONG THE IN-FLIGHT EXTENSION BELOW MAY OUTLIVE THE LAST TIME THE
-        // LOCK WAS REAFFIRMED (F8). Sized from a real number, not chosen (#9):
+        // HOW LONG THE IN-FLIGHT EXTENSION BELOW MAY RUN AFTER THE CLAIM BEHIND IT
+        // WENT AWAY (F8; anchored on CastLock::claimGoneAt, NOT on `lastSeen` --
+        // see that field). Sized from a real number, not chosen (#9):
         // APMFBridge::kHealCastTtlMs is the TTL APMF grants every cast claim MFO
         // makes -- the longest window APMF itself will let one cast stand without
         // a renewal. A cast the engine has not finished inside that is not one
@@ -463,11 +538,14 @@ namespace MFO::Actuation {
         // whose ENGINE CASTER is still mid-cast of the locked spell is also live
         // -- see the block inside. It takes an RE::Actor* now (rather than a bare
         // FormID) for exactly that read; every caller already had one.
-        bool CastLockLive(RE::Actor* a_follower, std::size_t a_hand, const CastLock& a_lock) {
+        bool CastLockLive(RE::Actor* a_follower, std::size_t a_hand, CastLock& a_lock) {
             const auto fid = a_follower ? a_follower->GetFormID() : 0;
-            if (fid != 0 && ClaimLiveOnHand(fid, a_hand)) return true;
-            const auto since = std::chrono::steady_clock::now() - a_lock.lastSeen;
-            const float elapsed = std::chrono::duration<float>(since).count();
+            const auto now = std::chrono::steady_clock::now();
+            if (fid != 0 && ClaimLiveOnHand(fid, a_hand)) {
+                a_lock.claimGoneAt = {};   // the claim is here: F8's cap window is not open
+                return true;
+            }
+            const float elapsed = std::chrono::duration<float>(now - a_lock.lastSeen).count();
             if (elapsed <= std::chrono::duration<float>(APMFBridge::FacetExpiry()).count())
                 return true;
             // ── F8: A CHARGED CAST IS NOT FREE REAL ESTATE ─────────────────────
@@ -485,17 +563,20 @@ namespace MFO::Actuation {
             // BOUNDED, so a wedged caster cannot own the hand forever -- see
             // kInFlightHoldCap. Past the cap the lock goes stale exactly as it
             // did before this existed, and the stall becomes visible.
-            if (since >= kInFlightHoldCap) return false;
-            // The proxy, if this hand's claim minted one. Both accessors answer 0
-            // for a claim that is already gone -- which is the common case here
-            // and is harmless: CastInFlightOnHand then matches on the ORIGINAL
-            // spell alone, and a proxied cast whose claim has vanished simply
-            // does not match, so the hand frees exactly as it did before.
-            RE::FormID proxy = a_hand == kHandLeft
-                ? APMFBridge::GetOffenseCastProxy(fid, APMFBridge::kApmfHandLeft)
-                : APMFBridge::GetOffenseCastProxy(fid, APMFBridge::kApmfHandRight);
-            if (proxy == 0 && a_hand == kHandLeft) proxy = APMFBridge::GetHealCastProxy(fid);
-            return CastInFlightOnHand(a_follower, a_hand, a_lock.spell, proxy);
+            // THE CAP RUNS FROM HERE, NOT FROM `lastSeen`. This line is the first
+            // moment the third answer is reached at all -- past the staleness
+            // window with no claim standing -- so it is the moment the in-flight
+            // protection starts, and the moment its 6 s bound must start with it.
+            // See CastLock::claimGoneAt for what anchoring it on `lastSeen` cost.
+            if (a_lock.claimGoneAt.time_since_epoch().count() == 0) a_lock.claimGoneAt = now;
+            if (now - a_lock.claimGoneAt >= kInFlightHoldCap) return false;
+            // The proxy this hand's claim minted, offense or heal (CastProxyOnHand).
+            // 0 for a claim that is already gone -- harmless here:
+            // CastInFlightOnHand then matches on the ORIGINAL spell alone, and a
+            // proxied cast whose claim has vanished simply does not match, so the
+            // hand frees exactly as it did before.
+            return CastInFlightOnHand(a_follower, a_hand, a_lock.spell,
+                                      CastProxyOnHand(fid, a_hand));
         }
 
         // Is hand `a_hand` available for (a_spell,a_target) right now -- i.e.
@@ -1028,16 +1109,26 @@ namespace MFO::Actuation {
                     // call. Skipping it would silence the silent-claim warning for
                     // exactly the claims it exists to catch (a claim that stands
                     // for seconds and never fires) and freeze the lazily-learned
-                    // delivery-flip proxy at whatever it was on lap 1. Same
-                    // per-hand shape as the owned-cast branch's own arming below.
+                    // delivery-flip proxy at whatever it was on lap 1.
+                    //
+                    // `CastProxyOnHand`, NOT `GetOffenseCastProxy` (review fix,
+                    // 2026-09-08). This gate carries HEAL claims too -- a self or
+                    // ally heal is the commonest thing to be in flight here -- and
+                    // a heal's proxy lives in the heal accessor. Arming with the
+                    // offense accessor alone hands WatchArmed a 0 on every lap; it
+                    // keeps whatever it already has, and lap 1 typically has 0
+                    // because APMF mints the proxy lazily during its own Drain. The
+                    // replay above DOES learn it (into the claim's own `proxy`) --
+                    // the watch just never hears about it, so `observed` can never
+                    // latch and every proxied heal warns "[cfc] NO observed cast"
+                    // for as long as it runs. Same resolver as CastLockLive's, so
+                    // the two cannot drift.
                     if (handPlan.left)
                         ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandLeft,
-                                                 APMFBridge::GetOffenseCastProxy(
-                                                     id, APMFBridge::kApmfHandLeft));
+                                                 CastProxyOnHand(id, kHandLeft));
                     if (handPlan.right)
                         ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandRight,
-                                                 APMFBridge::GetOffenseCastProxy(
-                                                     id, APMFBridge::kApmfHandRight));
+                                                 CastProxyOnHand(id, kHandRight));
                     LogCastInFlight(id, handPlan.left ? kHandLeft : kHandRight, a_spellID,
                                     handPlan.left && handPlan.right);
                     return { Result::NoOp, "cast already in flight (claim refreshed)", true };

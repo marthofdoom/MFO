@@ -431,19 +431,31 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   it holds off entirely — never a half-landed dual-cast). `handPlan`/`lockHands`
   thread the resolved hand(s) to every `HoldCastLock`/`ClaimOffenseCast` call site
   below in the SAME function so the lock and the actual APMF claim never disagree)** →
-  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `Actuation.cpp:1019`)** →
+  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `Actuation.cpp:1099`)** →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:74`) via `Packages::CastAt`.
 - **THE PER-HAND CAST LOCK, AND THE TWO 2026-09-08 CHANGES TO IT** (`Docs/DIAG-2026-09-08-field.md`
-  RC1/RC2). `CastLockLive` (`Actuation.cpp:466`) now answers "this hand is still busy" THREE ways,
-  in order: (1) `ClaimLiveOnHand` (`:379`, factored out — a live offense claim on that slot, or the
+  RC1/RC2). `CastLockLive` (`Actuation.cpp:540`) now answers "this hand is still busy" THREE ways,
+  in order: (1) `ClaimLiveOnHand` (`:394`, factored out — a live offense claim on that slot, or the
   heal claim for LEFT); (2) the round-robin `FacetExpiry()` staleness window, unchanged; (3) **NEW
-  (F8)** — `CastInFlightOnHand` (`:416`): the follower's own `RE::MagicCaster` for that hand is
+  (F8)** — `CastInFlightOnHand` (`:487`): the follower's own `RE::MagicCaster` for that hand is
   mid-cast (`state` not `kNone`/`kUnk08`/`kUnk09`) of the locked spell **or its APMF delivery-flip
-  proxy**, bounded by `kInFlightHoldCap` (`:441`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
+  proxy** — read from `GetActorRuntimeData().magicCasters[]` DIRECTLY, never through the
+  `Actor::GetMagicCaster` virtual (that body is the game's, CommonLib implements none of it, and
+  SkyrimSE.exe is Steam-DRM encrypted on disk so it cannot be disassembled here — if it lazily allocates
+  the caster, this always-on job-worker predicate would be allocating off-main; the array read removes the
+  question) — bounded by `kInFlightHoldCap` (`:515`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
   cannot own a hand forever. That third answer is what stops another rule taking a hand whose charged
-  cast has not fired yet when the CLAIM lapsed mid-charge. **It takes an `RE::Actor*` now** — so do
-  `HandFree` (`:514`) and `ResolveCastHand` (`:549`); every call site already had one.
+  cast has not fired yet when the CLAIM lapsed mid-charge. **The cap is anchored on `CastLock::claimGoneAt`
+  (`Actuation.cpp:234`), NOT on `lastSeen`** — F9 deliberately stops re-stamping the lock, so `lastSeen`
+  freezes at the first claiming lap and anchoring there made the protection dead for any claim older than
+  the cap. `claimGoneAt` is stamped the first time this third answer is reached, cleared when the claim is
+  seen live again, and cleared by `HoldCastLock` (fresh hold = fresh cast).
+  The proxy both this and the in-flight watch re-arm use comes from ONE resolver, `CastProxyOnHand`
+  (`:412`): offense proxy, falling back to the HEAL proxy on the left hand — heals are LEFT always, and a
+  left lookup that consults only the offense accessor answers 0 for every proxied heal, which silently
+  rebuilds the RC4 "[cfc] NO observed cast" false alarm. **It takes an `RE::Actor*` now** — so do
+  `HandFree` (`:594`) and `ResolveCastHand` (`:629`); every call site already had one.
   `ResolveCastHand` additionally **PINS a request to the hand(s) its own live claim already occupies**
   (the incumbent pin) instead of honouring a freshly re-derived `Loadout::PlanCastHand` answer: a
   hand-mode flip (Dual↔single, left↔right) is a CHANGE to `EnsureCastClaimLocked`, i.e.
@@ -451,19 +463,19 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **What breaks if you change this:** widen the in-flight state set and a stuck caster owns a hand
   until the cap; drop the proxy match and every APMF-proxied cast reads as "not ours" and loses its
   protection; drop the incumbent pin and the Dual↔single churn returns.
-- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:1019`, `HandPlan::inFlight` at `:539`).** A cast rule whose
+- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:1099`, `HandPlan::inFlight` at `:619`).** A cast rule whose
   own cast is already running (its exact (spell,target) locks the hand AND a live claim stands there)
   no longer re-runs the claim/equip/consent path and returns `Fired` — which ENDED THE SCAN and let one
   self-heal monopolise 22 consecutive laps over 44 s with zero offense rules reached. It now calls
-  `APMFBridge::RefreshOwnedCastOnHand` (`APMFBridge.cpp:1210`), re-arms the `[cfc]` watch, logs one
-  throttled `[eval] ... SATISFIED IN FLIGHT` line (`LogCastInFlight`, `:259`, own map
+  `APMFBridge::RefreshOwnedCastOnHand` (`APMFBridge.cpp:1239`), re-arms the `[cfc]` watch, logs one
+  throttled `[eval] ... SATISFIED IN FLIGHT` line (`LogCastInFlight`, `:273`, own map
   `g_lastInFlightLog`, cleared with `g_lastLockLog` in `ClearCastLock`/`ClearCastLocks`), and returns a
   TRANSPARENT NoOp so the scan continues to the rules below.
   **What breaks if you change this:** call `lockHands` here and the lock outlives the claim it is
   supposed to be bounded by; skip the refresh and `Tick()`'s `FacetExpiry` sweep kills the live claim;
   make it opaque (transparent=false) and RC2 comes straight back. If the refresh comes back FALSE the
   claim really is gone, so the pin that named it is VOID: the gate drops those hands' locks
-  (`ClearCastLockHand`, `Actuation.cpp:369`) and re-derives the plan (`resolveHands` lambda) before
+  (`ClearCastLockHand`, `Actuation.cpp:384`) and re-derives the plan (`resolveHands` lambda) before
   falling through — without that, a LEFT-always heal pinned to the RIGHT by a stale lock would claim,
   equip and lock the wrong hand.
   Off-AE the whole path declines transparently (T#67) so vanilla AI keeps casting.
@@ -1735,7 +1747,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   occupy, so nothing un-gambited can arm there (APMF leaving an unclaimed hand permissive is correct
   for a framework; MFO's design is that only gambited spells occur). Derived — not commanded — by
   `ReconcileHandFloorLocked` (`APMFBridge.cpp:937`), called from ONE place: `Tick()`
-  (`APMFBridge.cpp:1580`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
+  (`APMFBridge.cpp:1609`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
   ABI ≥ 5. That pass also owns the floor's `refreshed` stamp and TTL heartbeat.
   **Exactly one hand driven → floor the other; both driven → none; NEITHER driven → NEITHER hand is
   floored** (not both: principle 4 — nothing was declared; it would mute followers with no cast gambit
@@ -1755,10 +1767,17 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   until APMF's TTL. It does NOT deny MFO's own direct force (`CastSpellImmediate` is `MagicCaster`
   vtable slot 01, `CheckCast` is 0A — pinned `include/RE/M/MagicCaster.h:46,55`) and does NOT deny
   weapons (APMF's 0x0F seat is on the spell/staff selector vtables only).
-- **`RefreshOwnedCastOnHand(follower, hand)` (`APMFBridge.cpp:1210`, F9).** Refreshes the cast claim(s)
+  **Recorded, not fixed:** `Loadout::Prepare` takes no hand parameter, so on a RIGHT-hand offense claim MFO
+  still equips the gambit spell into the left hand, which the floor has closed to the AI. Correctness is
+  unaffected (the claim on the other hand is what drives the cast), but the honest wording is **one wasted
+  left-hand equip per offense claim on a weaponless follower** — not "inert".
+- **`RefreshOwnedCastOnHand(follower, hand)` (`APMFBridge.cpp:1239`, F9).** Refreshes the cast claim(s)
   MFO already holds on a hand WITHOUT re-requesting: it replays each claim's OWN stored tuple through
-  `EnsureCastClaimLocked`, so the identity compare matches by construction and the unchanged fast path
-  (liveness, lazy proxy read, TTL heartbeat, `refreshed` stamp) is the only path it can take. `LEFT`
+  `EnsureCastClaimLocked`, so the identity compare matches by construction: the TTL is renewed in place
+  (liveness, lazy proxy read, heartbeat Repoint, `refreshed` stamp) and the hand mode / target / a
+  still-in-force claim can never be disturbed. **It is NOT true that the fast path is the only path it can
+  take** — a handle APMF has already auto-expired takes the aged-out branch and is RE-REQUESTED from here
+  (correct, and not a concurrent second claim: the dead handle is dropped first). `LEFT`
   covers the left offense slot AND the heal slot; `kApmfHandDualCast` re-mirrors both slots so their
   stamps move together (a stale mirror would have `Tick()` release the shared handle out from under the
   live slot). A `false` means the claim is genuinely gone — the caller must fall through to its normal
