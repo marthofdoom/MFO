@@ -433,9 +433,17 @@ namespace MFO::APMFBridge {
                     //     then published no claim at all (dual-vs-single hand collision
                     //     loser, unloadable actor, FromPackage-without-spell).
                     //   * NOT CAUGHT: losing arbitration on basis, or a tie.
-                    // Separating those needs a real owner query (IsClaimOwning), an
-                    // APMF v7 ABI addition that does not exist yet. Do NOT read this
-                    // branch as "MFO detects arbitration losses" -- it does not.
+                    // Do NOT read this branch as "MFO detects arbitration losses" --
+                    // it does not, and cannot yet.
+                    //
+                    // FOLLOW-UP `apmf-isclaimowning-v7` (OPEN, tracked -- not a note).
+                    // Separating a basis/tie loss from an outright refusal needs a real
+                    // owner query, `IsClaimOwning(handle)`: an APMF v7 ABI addition
+                    // (append-only `APMF_API.h` slot + a ControlMap owner lookup) with
+                    // an MFO consumer change here behind an `abiVersion >= 7` guard,
+                    // exactly the shape of the ABI-6 IsClaimLive/GetCastProxy adoption
+                    // above. It does not exist today; until it does, this split is the
+                    // most MFO can honestly claim.
                     //
                     // Report it as a refusal: drop the handle and leave the claim EMPTY
                     // without re-requesting, so ClaimOffenseCast/ClaimHealCast return

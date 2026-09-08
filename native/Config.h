@@ -113,33 +113,42 @@ namespace MFO::Config {
     // Not a resource cap: a weak heal SHOULD be cast many times over a long
     // fight. What looked wrong in the field was the interval, not the total.
     //
-    // INERT UNDER THE OWNED CAST MODEL, AND THAT IS CORRECT -- SETTLED, marth
-    // 2026-09-07 (memory `cast-cooldown-inert-is-correct`). NOT a regression; do
-    // not "restore" it and do not re-raise it as one.
+    // IT NO LONGER PACES AN APMF-OWNED CAST, AND THAT IS CORRECT -- SETTLED, marth
+    // 2026-09-07 (memory `cast-cooldown-inert-is-correct`). NOT a regression; do not
+    // "restore" it and do not re-raise it as one.
     //
-    // The cooldown is enforced by `Loadout::CoolingDown` -> `Ready::Debounced`, and
-    // it never gated the cast directly -- what actually paced the follower was that
-    // a debounced tick made no APMF claim, so `FacetExpiry` swept the standing one
-    // and `CasterConsent`'s pacing deny re-engaged for the tail.
-    // `fix/mfo-fourstate-followups` moved MFO's APMF ask AHEAD of `Loadout::Prepare`
-    // (so a refused claim leaves no equip/consent side effects standing), which
-    // means the claim is now REFRESHED right through a cooldown stretch: the deny
-    // never re-engages, and this knob stops limiting anything.
+    // WHAT STILL USES THIS KEY (read the readers, do not infer from the owned path):
+    //   * `Loadout::StartCooldown` (`Loadout.cpp:413`) -- stamps `g_coolUntil`,
+    //     mirrors into `CasterConsent::NoteCooldown`, and `ReleaseSpell`s. Called
+    //     from the `[cast]` SpellSink (`Diagnostics.cpp:263`) on every gambit cast,
+    //     AI-fired or forced, plus `Actuation.cpp`'s own cast sites.
+    //   * `Loadout::CoolingDown` -> `Ready::Debounced` (`Loadout.cpp:317`) -- MFO
+    //     still declines to RE-EQUIP inside the window.
+    //   * `CasterConsent`'s pacing deny (`CasterConsent.cpp:762-775`) -- still bites
+    //     in full on the **APMF-ABSENT / `bLegacyCastHybrid` / `bApmfCast`-off**
+    //     path.
+    //   * the direct-force FF apply beats (`Actuation_Direct.cpp:989`, `:1282`) and
+    //     `CastAuto`'s broadcast interval (`:1509`).
     //
-    // marth, verbatim: *"the cast cool down is currently irrelevent as you say. a
-    // cast can only cast as fast as a cast. No reason to be slower."* The engine's
-    // own equip -> charge -> fire pipeline (~2.3-2.5 s measured for an offense cast,
-    // 2.95 s claim-to-observed on the one heal that landed) already paces casting at
-    // the fastest a cast can physically occur, so a cooldown on top can only make a
-    // follower SLOWER than the engine allows -- it cannot make anything safer. An
-    // inert `fCastCooldown` is the ABSENCE OF A REDUNDANT LIMITER, not a lost guard.
+    // WHAT CHANGED, and only this: `CasterConsent::ClientCastClaimed`
+    // (`CasterConsent.cpp:231-235`) early-passes while an APMF cast claim is live, so
+    // the deny thunks never compute a verdict and the pacing deny cannot fire for a
+    // claim-holding follower. On main a cooldown stretch left the claim un-refreshed,
+    // `FacetExpiry` swept it and the deny re-engaged for the tail;
+    // `fix/mfo-fourstate-followups` moved the APMF ask AHEAD of `Loadout::Prepare`
+    // (so a refused claim leaves no equip/consent side effects standing), so the claim
+    // is refreshed throughout and the deny stays stood down.
     //
-    // Still read by `Loadout::CoolingDown` (and by the FF beat in
-    // `Actuation_Direct.cpp`'s direct-force streams), so the key stays live and the
-    // MCM entry keeps working -- it simply no longer paces an APMF-owned cast. If it
-    // ever needs to mean something again that needs a NEW justification (a magicka
-    // economy, or a thrash the engine itself does not bound), never "it used to
-    // fire". See the pre-flight's own comment in `Actuation.cpp`.
+    // WHY THAT IS RIGHT. marth, verbatim: *"the cast cool down is currently irrelevent
+    // as you say. a cast can only cast as fast as a cast. No reason to be slower."*
+    // The engine's own equip -> charge -> fire pipeline (~2.3-2.5 s measured for an
+    // offense cast, 2.95 s claim-to-observed on the one heal that landed) already
+    // paces casting at the fastest a cast can physically occur, so a cooldown on top
+    // can only make a follower SLOWER than the engine allows -- it cannot make
+    // anything safer. Losing it on the owned path is the ABSENCE OF A REDUNDANT
+    // LIMITER, not a lost guard. Reviving it there needs a NEW justification (a
+    // magicka economy, or a thrash the engine itself does not bound), never "it used
+    // to fire". See the pre-flight's own comment in `Actuation.cpp`.
     inline std::atomic<float> g_castCooldown{ 4.0f };
 
     // AUTO fan-out DoT recast threshold (fix #4). For a HOSTILE duration spell

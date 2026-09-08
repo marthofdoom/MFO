@@ -914,35 +914,51 @@ namespace MFO::Actuation {
             // the per-lap refresh keeps `FacetExpiry` from sweeping it. The claim ends
             // when the RULE stops holding -- not when Prepare starts debouncing.
             //
-            // fCastCooldown GOES INERT UNDER THE OWNED MODEL, AND THAT IS CORRECT.
+            // fCastCooldown NO LONGER PACES AN APMF-OWNED CAST, AND THAT IS CORRECT.
             // SETTLED -- marth 2026-09-07, memory `cast-cooldown-inert-is-correct`.
-            // DO NOT re-raise this as a regression, and do NOT "restore" the knob.
+            // DO NOT re-raise this as a regression, and do NOT "restore" it.
             //
-            // `Loadout::Ready::Debounced` is PRIMARILY the `fCastCooldown` case
-            // (`Loadout.cpp:~317`, `CoolingDown`), not just the two-hander/gear-debt
-            // waits the paragraph below describes. On main a cooldown stretch left the
-            // claim UN-refreshed, `FacetExpiry` swept it, and `CasterConsent`'s pacing
-            // deny re-engaged for the tail. Here the claim is refreshed through the
-            // whole cooldown, so that deny never re-engages and the knob stops
-            // limiting anything. marth, verbatim: *"the cast cool down is currently
-            // irrelevent as you say. a cast can only cast as fast as a cast. No reason
-            // to be slower."*
+            // WHAT ACTUALLY CHANGED, precisely (verified by reading the readers, not
+            // inferred from this path -- the first draft of this note over-claimed
+            // that the knob "stops limiting anything", which is FALSE):
+            // `CasterConsent::ClientCastClaimed` (`CasterConsent.cpp:231-235`)
+            // early-passes while an APMF cast claim is live, so MFO's deny thunks
+            // never compute a verdict -- which means the pacing deny at
+            // `CasterConsent.cpp:762-775` cannot fire for a follower holding a claim.
+            // On main the claim went un-refreshed through a cooldown, `FacetExpiry`
+            // swept it, and that deny re-engaged for the tail. Here the claim is
+            // refreshed throughout, so it does not. **That ONE effect is what went
+            // away.**
             //
-            // The engine's own pipeline -- equip -> charge -> fire, measured ~2.3-2.5s
-            // for an offense cast and 2.95s claim-to-observed on the one heal that
-            // landed -- ALREADY paces casting at the fastest a cast can physically
-            // occur. An artificial cooldown stacked on top can only make a follower
-            // SLOWER than the engine allows; it cannot make anything safer. So an
-            // inert `fCastCooldown` is **the absence of a redundant limiter, not a
-            // lost guard**, and gating the ask on `Loadout::CoolingDown` would be
-            // re-adding the redundancy. If the knob ever needs to mean something
-            // again it needs a NEW justification -- a magicka economy, or a thrash the
-            // engine itself does not bound -- never "it used to fire".
+            // WHAT THE KNOB STILL GOVERNS -- it is NOT inert generally:
+            //   * the APMF-ABSENT / `bLegacyCastHybrid` / `bApmfCast`-off path: no
+            //     claim means no early-pass, so the pacing deny bites exactly as
+            //     before;
+            //   * `Loadout::StartCooldown` still stamps (from the `[cast]` SpellSink,
+            //     `Diagnostics.cpp:263`, and from this file's own cast sites) and
+            //     still `ReleaseSpell`s -- the spell is taken back either way;
+            //   * `Prepare` still returns `Debounced`, so MFO still does not re-equip
+            //     inside the window;
+            //   * the direct-force FF apply beats (`Actuation_Direct.cpp:989`, `:1282`)
+            //     and `CastAuto`'s broadcast interval (`:1509`) are untouched.
             //
-            // KEEP THIS SEPARATE FROM THE HAND LOCK. The cooldown being inert is fine.
-            // A claim standing WITHOUT its hand lock is not, and that is a different
-            // defect with its own fix in the Debounced arm below (SEV-2) -- it is
-            // about the missing lock, not about the cooldown.
+            // WHY LOSING IT ON THE OWNED PATH IS RIGHT. marth, verbatim: *"the cast
+            // cool down is currently irrelevent as you say. a cast can only cast as
+            // fast as a cast. No reason to be slower."* The engine's own equip ->
+            // charge -> fire pipeline (~2.3-2.5s measured for an offense cast, 2.95s
+            // claim-to-observed on the one heal that landed) already paces casting at
+            // the fastest a cast can physically occur, so a cooldown stacked on top can
+            // only make a follower SLOWER than the engine allows -- it cannot make
+            // anything safer. Losing it there is **the absence of a redundant limiter,
+            // not a lost guard**, and gating the ask on `Loadout::CoolingDown` would
+            // re-add the redundancy. Reviving it needs a NEW justification (a magicka
+            // economy, or a thrash the engine itself does not bound) -- never "it used
+            // to fire".
+            //
+            // KEEP THIS SEPARATE FROM THE HAND LOCK. The cooldown not pacing an owned
+            // cast is fine. A claim standing WITHOUT its hand lock is not: that is a
+            // different defect with its own fix in the Debounced arm below (SEV-2),
+            // about the missing LOCK, not about the cooldown.
             //
             // The SUCCESS paths are unchanged: they fall through into the switch below
             // exactly as before and still return from their old positions.
