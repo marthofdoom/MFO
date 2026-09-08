@@ -870,16 +870,31 @@ namespace MFO::Actuation {
             // The lock behind each busy hand, for the tests below. Null when this
             // follower has no lock entry at all (then nothing is busy).
             const auto lockIt = g_castLock.find(fid);
-            // May this request TAKE hand `h`? Either it outranks the incumbent
-            // (CanPreemptHand: strictly lower rule index, and never mid-charge), or
-            // it IS the incumbent re-aiming its own cast (IsOwnRetarget -- not a
-            // preemption at all, but bounded by the same never-mid-charge rule).
-            auto canTake = [&](std::size_t h) {
+            // TWO DIFFERENT WAYS A BUSY HAND CAN STILL BE AVAILABLE, and they must
+            // not be conflated -- the first cut ran both through one predicate and
+            // would have reported a rule re-aiming its OWN cast as "preempting"
+            // itself, released its claim through the preemption path (which, for a
+            // heal, tears down ComposedCast's whole bookkeeping) and logged
+            // "rule 3 outranks rule 3".
+            //
+            //  * `mine`  -- this IS the incumbent, same rule and same spell, just
+            //    re-aimed. Nothing is displaced: the hand is already ours and the
+            //    ordinary claim path below re-points it (Release + RequestCast on
+            //    APMF's side, since a cast claim cannot be retargeted in place).
+            //    Bounded by the SAME never-mid-charge rule as preemption, so a
+            //    flickering target cannot throw away a charging cast.
+            //  * `outranks` -- a genuinely higher-ranked rule (strictly lower
+            //    index), which DOES displace the incumbent and is recorded on the
+            //    plan for CastOn to commit at claim time.
+            auto mine = [&](std::size_t h) {
                 if (lockIt == g_castLock.end()) return false;
                 const auto& lk = lockIt->second.hand[h];
-                if (IsOwnRetarget(lk, a_spell))
-                    return !CastInFlightOnHand(a_follower, h, lk.spell, CastProxyOnHand(fid, h));
-                return CanPreemptHand(a_follower, h, lk);
+                return IsOwnRetarget(lk, a_spell) &&
+                       !CastInFlightOnHand(a_follower, h, lk.spell, CastProxyOnHand(fid, h));
+            };
+            auto outranks = [&](std::size_t h) {
+                return lockIt != g_castLock.end() &&
+                       CanPreemptHand(a_follower, h, lockIt->second.hand[h]);
             };
 
             switch (a_pick) {
@@ -889,10 +904,12 @@ namespace MFO::Actuation {
                 // taken -- releasing one claim and then failing on the other would
                 // spend an incumbent's cast for nothing. Checked as a pure
                 // predicate first, committed only once the whole plan is possible.
-                if ((leftFree  || canTake(kHandLeft)) &&
-                    (rightFree || canTake(kHandRight))) {
+                const bool okL = leftFree  || mine(kHandLeft)  || outranks(kHandLeft);
+                const bool okR = rightFree || mine(kHandRight) || outranks(kHandRight);
+                if (okL && okR) {
                     a_out = { true, true, /*inFlight=*/false,
-                              /*preemptLeft=*/!leftFree, /*preemptRight=*/!rightFree };
+                              /*preemptLeft=*/ !leftFree  && !mine(kHandLeft),
+                              /*preemptRight=*/!rightFree && !mine(kHandRight) };
                     return std::nullopt;
                 }
                 const auto hand      = !leftFree ? kHandLeft : kHandRight;
@@ -930,11 +947,13 @@ namespace MFO::Actuation {
                 if (leftFree)  { a_out = { true, false, false }; return std::nullopt; }
                 // Both busy: take one by RANK if this rule outranks its incumbent.
                 // RIGHT first for the same reason.
-                if (canTake(kHandRight)) {
+                if (mine(kHandRight))     { a_out = { false, true, false }; return std::nullopt; }
+                if (mine(kHandLeft))      { a_out = { true, false, false }; return std::nullopt; }
+                if (outranks(kHandRight)) {
                     a_out = { false, true, false, false, /*preemptRight=*/true };
                     return std::nullopt;
                 }
-                if (canTake(kHandLeft)) {
+                if (outranks(kHandLeft)) {
                     a_out = { true, false, false, /*preemptLeft=*/true, false };
                     return std::nullopt;
                 }
@@ -950,7 +969,8 @@ namespace MFO::Actuation {
                 // every concentration stream arrives here, LEFT-only, so this is
                 // the hand a heal near the top of the list has to be able to take
                 // from an offense claim below it.
-                if (canTake(kHandLeft)) {
+                if (mine(kHandLeft)) { a_out = { true, false, false }; return std::nullopt; }
+                if (outranks(kHandLeft)) {
                     a_out = { true, false, false, /*preemptLeft=*/true, false };
                     return std::nullopt;
                 }

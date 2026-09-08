@@ -431,7 +431,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   it holds off entirely — never a half-landed dual-cast). `handPlan`/`lockHands`
   thread the resolved hand(s) to every `HoldCastLock`/`ClaimOffenseCast` call site
   below in the SAME function so the lock and the actual APMF claim never disagree)** →
-  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `Actuation.cpp:1370`)** →
+  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `Actuation.cpp:1390`)** →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:74`) via `Packages::CastAt`.
 - **THE PER-HAND CAST LOCK, AND THE TWO 2026-09-08 CHANGES TO IT** (`Docs/DIAG-2026-09-08-field.md`
@@ -463,7 +463,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **What breaks if you change this:** widen the in-flight state set and a stuck caster owns a hand
   until the cap; drop the proxy match and every APMF-proxied cast reads as "not ours" and loses its
   protection; drop the incumbent pin and the Dual↔single churn returns.
-- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:1370`, `HandPlan::inFlight` at `:821`).** A cast rule whose
+- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:1390`, `HandPlan::inFlight` at `:821`).** A cast rule whose
   own cast is already running (its exact (spell,target) locks the hand AND a live claim stands there)
   no longer re-runs the claim/equip/consent path and returns `Fired` — which ENDED THE SCAN and let one
   self-heal monopolise 22 consecutive laps over 44 s with zero offense rules reached. It now calls
@@ -480,7 +480,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `HoldCastLock` stamps it into `CastLock::owningRule` (`:285`) when a hand is claimed, and `CanPreemptHand`
   (`:690`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
   EQUAL is the incumbent itself (`IsOwnRetarget`, `:718` — a rule re-aiming its own cast, which fails
-  `HandFree`'s incumbent match on `target`), higher is held off. The one safety condition is **never
+  `HandFree`'s incumbent match on `target`), higher is held off. `ResolveCastHand` keeps those two on
+  SEPARATE predicates (`mine` vs `outranks`): a self-retarget displaces nothing and records no preempt flag,
+  so it can never release its own claim through the preemption path (which for a heal would tear down
+  ComposedCast's bookkeeping) or log "rule 3 outranks rule 3". It is bounded by the same never-mid-charge
+  rule, so a flickering target cannot throw away a charging cast. The one safety condition is **never
   mid-charge**, reusing `CastInFlightOnHand` rather than inventing a second notion of busy.
   **An earlier cut inferred rank from scan arrival ("did the incumbent assert itself earlier this lap?") and
   was replaced, not tuned:** a rule whose condition is TRUE but which exits transparently BEFORE the hand
@@ -488,7 +492,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   took the hand from each other on alternate laps and neither ever charged; and a retargeting rule outranked
   itself. The lap counter, `BeginCastLap` and the `Scheduler` call site that fed it are all gone.
   **The displacement is DEFERRED, never done at resolve time:** `ResolveCastHand` only records
-  `HandPlan::preemptLeft/preemptRight` (`:821`), and `CastOn`'s `commitPreempt` (`:1441`) fires immediately
+  `HandPlan::preemptLeft/preemptRight` (`:821`), and `CastOn`'s `commitPreempt` (`:1461`) fires immediately
   before the claim it is for — the self fork, the concentration fork, `ClaimOffenseCast`, `ComposedCast::Try`
   and (for the APMF-absent world, where `Loadout::Prepare` IS the claim on the hand) the equip switch. Every
   transparent refusal in between therefore refuses without having touched the incumbent; committing at
