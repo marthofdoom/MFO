@@ -232,8 +232,30 @@ namespace MFO::Actuation {
             // live again, and cleared by HoldCastLock (a fresh hold is a fresh
             // cast, and its charge deserves a fresh window). Epoch == "not set".
             std::chrono::steady_clock::time_point claimGoneAt{};
+            // THE LAP THIS LOCK'S OWN RULE LAST ASSERTED IT (rank preemption,
+            // marth 2026-09-08). Stamped by HoldCastLock (a claim) and by
+            // MarkCastLockRefreshed (F9's in-flight refresh) -- and by NOTHING
+            // else, because it is RANK bookkeeping, not a liveness stamp: it must
+            // never be confused with `lastSeen`, whose deliberate freezing during
+            // an in-flight cast is what F8's cap depends on.
+            //
+            // WHAT IT DECIDES. The gambit list order IS the priority order (marth:
+            // "Thats intentional ... gambits are already configured correctly with
+            // heals near the top that should overwrite the offense claim"). The
+            // rule scan visits rules in that order, so within ONE lap a rule that
+            // reaches the cast path BEFORE the incumbent has asserted is, by
+            // construction, ranked ABOVE it -- and may take the hand. A rule
+            // arriving AFTER the incumbent already asserted this lap is ranked
+            // below it and is held off, exactly as before; without that half, two
+            // offense rules would take the hand from each other every lap and RC1's
+            // claim churn comes straight back.
+            std::uint64_t refreshedLap = 0;
         };
-        struct FollowerCastLocks { CastLock hand[kHandCount]; };
+        // `lap` counts this follower's rule scans (Actuation::BeginCastLap, called
+        // once per per-follower service by Scheduler::Tick). Per-follower rather
+        // than global because the round-robin services ONE follower per pump, so a
+        // global counter would advance between two rules of the same scan.
+        struct FollowerCastLocks { CastLock hand[kHandCount]; std::uint64_t lap = 0; };
         std::unordered_map<RE::FormID, FollowerCastLocks> g_castLock;
 
         // Rate-limited [eval] log -- one line per (follower, hand, spell) per
@@ -371,10 +393,34 @@ namespace MFO::Actuation {
         // direct-force) using it. a_target == 0 for self.
         void HoldCastLock(RE::FormID a_follower, std::size_t a_hand,
                           RE::FormID a_spell, RE::FormID a_target) {
-            auto& lock = g_castLock[a_follower].hand[a_hand];
+            auto& locks = g_castLock[a_follower];
+            auto& lock = locks.hand[a_hand];
             lock.spell = a_spell; lock.target = a_target;
             lock.lastSeen = std::chrono::steady_clock::now();
             lock.claimGoneAt = {};   // fresh hold == fresh cast: reset F8's cap window
+            // Rank: this rule has asserted the hand on THIS lap, so every rule
+            // BELOW it in the list (which is every rule that reaches the cast path
+            // later in this same scan) is held off rather than allowed to preempt.
+            lock.refreshedLap = locks.lap;
+        }
+
+        // F9's in-flight path asserts the hand WITHOUT re-stamping the lock -- the
+        // live claim is its own liveness proof, and re-stamping `lastSeen` would
+        // let the lock outlive the claim (see CastLock::claimGoneAt). It must still
+        // record the RANK fact, or a lower-ranked rule later in the same scan would
+        // read the incumbent as "has not asserted this lap" and preempt a cast that
+        // is running perfectly well. This bumps the lap marker and NOTHING else.
+        void MarkCastLockRefreshed(RE::FormID a_follower, std::size_t a_hand) {
+            if (auto it = g_castLock.find(a_follower); it != g_castLock.end())
+                it->second.hand[a_hand].refreshedLap = it->second.lap;
+        }
+
+        // Has this hand's incumbent already asserted itself on the CURRENT scan?
+        // True -> the asker is ranked below it. A follower with no lock entry at
+        // all has no incumbent, so nothing to be below.
+        bool IncumbentAssertedThisLap(RE::FormID a_follower, std::size_t a_hand) {
+            const auto it = g_castLock.find(a_follower);
+            return it != g_castLock.end() && it->second.hand[a_hand].refreshedLap == it->second.lap;
         }
 
         // Drop ONE hand's lock (2026-09-08). The whole-follower twin is the public
@@ -592,6 +638,78 @@ namespace MFO::Actuation {
         // hand we are already casting on both return true, and only the second one
         // must skip the whole claim/equip/consent path. Left untouched on every
         // other return, so a caller may pass one variable across both hands.
+        // ── RANK PREEMPTION (marth's ruling, 2026-09-08) ───────────────────────
+        // marth, verbatim: *"Do you mean gambit ordering? Thats intentional. If you
+        // mean an offensive cant be overriden by a heal, theres two hands, auto
+        // should figure it out, and secondly, a heal should absolutely do so
+        // anyway. However gambits are already configured correctly with heals near
+        // the top that should overwrite the offense claim, or at leats submit a
+        // second auto."*
+        //
+        // So the gambit list order IS the priority order, and a higher-ranked rule
+        // must be able to TAKE a hand from a lower-ranked incumbent -- not be held
+        // off transparently, and not wait for the incumbent's condition to go
+        // false. Before this, F8's incumbent pin plus F9's in-flight refresh sealed
+        // the churn gap a heal used to slip through, which made the starvation
+        // DETERMINISTIC rather than occasional; this is the other half of that
+        // change, not a new policy.
+        //
+        // HOW RANK IS DECIDED, WITHOUT INVENTING A PRIORITY SCHEME. The rule index
+        // is the priority, full stop -- and the scan already visits rules in index
+        // order within one lap. So "did the incumbent already assert itself on THIS
+        // lap?" IS the rank comparison, for free and exactly:
+        //   * NOT asserted yet -> the asker reached the cast path first -> it is
+        //     ranked ABOVE the incumbent -> it may preempt.
+        //   * ALREADY asserted -> the asker is below it -> held off, as before.
+        // (An incumbent whose own condition went false this lap never asserts, so
+        // its hand is takeable -- which is right: nothing wants that cast anymore.)
+        //
+        // AND NEVER MID-CHARGE. Preemption must not resurrect the charged-cast loss
+        // F8 just removed, so it is refused while the engine caster on that hand is
+        // running the incumbent's cast: only the idle window BETWEEN casts is
+        // takeable. That reuses CastInFlightOnHand rather than inventing a second
+        // notion of "busy" -- there is one such notion in this file and this is it.
+        bool CanPreemptHand(RE::Actor* a_follower, std::size_t a_hand, const CastLock& a_lock) {
+            const auto fid = a_follower ? a_follower->GetFormID() : 0;
+            if (fid == 0) return false;
+            if (IncumbentAssertedThisLap(fid, a_hand)) return false;   // asker ranks BELOW it
+            return !CastInFlightOnHand(a_follower, a_hand, a_lock.spell,
+                                       CastProxyOnHand(fid, a_hand));  // never mid-charge
+        }
+
+        // Rate-limited [eval] line -- same per-(follower, hand, spell) 2 s dedup as
+        // LogCastLockHold, own map so a preemption and a hold-off on the same hand
+        // cannot silence each other. Preemption is the event that explains why a
+        // cast stopped, so it must be legible in the log it appears in.
+        std::unordered_map<RE::FormID, FollowerLockLog> g_lastPreemptLog;
+
+        // COMMIT the preemption: drop the incumbent's claim on THAT HAND ONLY
+        // (ReleaseOffenseCast is whole-follower and would take the other hand's
+        // unrelated claim with it), then clear the lock so the caller proceeds as
+        // if the hand were free. Caller must have checked CanPreemptHand first.
+        void PreemptHand(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_wantedSpell) {
+            const auto fid = a_follower ? a_follower->GetFormID() : 0;
+            if (fid == 0) return;
+            auto it = g_castLock.find(fid);
+            if (it == g_castLock.end()) return;
+            auto& lock = it->second.hand[a_hand];
+            const auto lostSpell = lock.spell;
+            APMFBridge::ReleaseCastClaimOnHand(fid, a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                                       : APMFBridge::kApmfHandRight);
+            lock = CastLock{};
+            const auto now = std::chrono::steady_clock::now();
+            auto& entry = g_lastPreemptLog[fid].hand[a_hand];
+            if (entry.first == a_wantedSpell &&
+                std::chrono::duration<float>(now - entry.second).count() < 2.0f)
+                return;
+            entry.first = a_wantedSpell; entry.second = now;
+            spdlog::info("[eval] {:08X} cast gambit PREEMPTED the {} hand -- spell {:08X} outranks "
+                         "spell {:08X} (it reached the cast path first this scan, so it sits higher "
+                         "in the gambit list) and the caster was idle between casts; the incumbent's "
+                         "claim on that hand was released, the other hand is untouched",
+                         fid, HandName(a_hand), a_wantedSpell, lostSpell);
+        }
+
         bool HandFree(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell,
                      RE::FormID a_target, RE::FormID& a_busyOut, bool& a_incumbentOut) {
             const auto fid = a_follower ? a_follower->GetFormID() : 0;
@@ -663,9 +781,28 @@ namespace MFO::Actuation {
                 return std::nullopt;
             }
 
+            // The lock behind each busy hand, for the preemption tests below. Null
+            // when this follower has no lock entry at all (then nothing is busy).
+            const auto lockIt = g_castLock.find(fid);
+            auto canTake = [&](std::size_t h) {
+                return lockIt != g_castLock.end() &&
+                       CanPreemptHand(a_follower, h, lockIt->second.hand[h]);
+            };
+
             switch (a_pick) {
             case Loadout::HandPick::DualCast: {
                 if (leftFree && rightFree) { a_out = { true, true, false }; return std::nullopt; }
+                // Dual needs BOTH hands, so BOTH must be takeable before either is
+                // taken -- releasing one claim and then failing on the other would
+                // spend an incumbent's cast for nothing. Checked as a pure
+                // predicate first, committed only once the whole plan is possible.
+                if ((leftFree  || canTake(kHandLeft)) &&
+                    (rightFree || canTake(kHandRight))) {
+                    if (!leftFree)  PreemptHand(a_follower, kHandLeft,  a_spell);
+                    if (!rightFree) PreemptHand(a_follower, kHandRight, a_spell);
+                    a_out = { true, true, false };
+                    return std::nullopt;
+                }
                 const auto hand      = !leftFree ? kHandLeft : kHandRight;
                 const auto busySpell = !leftFree ? busyL : busyR;
                 LogCastLockHold(fid, hand, a_spell, busySpell);
@@ -674,8 +811,34 @@ namespace MFO::Actuation {
                                 "still firing ({} hand)", busySpell, HandName(hand)), true };
             }
             case Loadout::HandPick::EitherFree: {
+                // ── "THERE ARE TWO HANDS, AUTO SHOULD FIGURE IT OUT" (marth,
+                //    2026-09-08) ──────────────────────────────────────────────
+                // An either-free plan used to take the LEFT hand whenever it was
+                // free, which is where every collision came from: the heal facet is
+                // LEFT-ONLY by contract (APMFBridge::ClaimHealCast's hard rule), so
+                // an offense cast that idly parks on the left is standing exactly
+                // where the next heal has to go, while the right hand sits empty.
+                // Prefer a hand MFO has not already claimed; contend for an
+                // occupied one only when both are taken. This removes most
+                // collisions before preemption is ever needed.
+                const bool leftClaimed  = ClaimLiveOnHand(fid, kHandLeft);
+                const bool rightClaimed = ClaimLiveOnHand(fid, kHandRight);
+                if (leftFree  && !leftClaimed)  { a_out = { true, false, false }; return std::nullopt; }
+                if (rightFree && !rightClaimed) { a_out = { false, true, false }; return std::nullopt; }
                 if (leftFree)  { a_out = { true, false, false }; return std::nullopt; }
                 if (rightFree) { a_out = { false, true, false }; return std::nullopt; }
+                // Both busy: take one by RANK if this rule outranks its incumbent.
+                // RIGHT first here, deliberately -- if this request can only have
+                // one hand and both must be taken from someone, leave the LEFT one
+                // standing for the heal facet that can use no other.
+                if (canTake(kHandRight)) {
+                    PreemptHand(a_follower, kHandRight, a_spell);
+                    a_out = { false, true, false }; return std::nullopt;
+                }
+                if (canTake(kHandLeft)) {
+                    PreemptHand(a_follower, kHandLeft, a_spell);
+                    a_out = { true, false, false }; return std::nullopt;
+                }
                 LogCastLockHold(fid, kHandLeft, a_spell, busyL);
                 return Outcome{ Result::NoOp,
                     std::format("cast gambit locked -- both hands busy (left: spell {:08X}, "
@@ -684,6 +847,14 @@ namespace MFO::Actuation {
             case Loadout::HandPick::Left:
             default:
                 if (leftFree) { a_out = { true, false, false }; return std::nullopt; }
+                // THE CASE marth'S RULING IS ABOUT. Every heal, every self-cast and
+                // every concentration stream arrives here, LEFT-only, so this is
+                // the hand a heal near the top of the list has to be able to take
+                // from an offense claim below it.
+                if (canTake(kHandLeft)) {
+                    PreemptHand(a_follower, kHandLeft, a_spell);
+                    a_out = { true, false, false }; return std::nullopt;
+                }
                 LogCastLockHold(fid, kHandLeft, a_spell, busyL);
                 return Outcome{ Result::NoOp,
                     std::format("cast gambit locked -- spell {:08X} still firing (left hand)",
@@ -1129,6 +1300,14 @@ namespace MFO::Actuation {
                     if (handPlan.right)
                         ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandRight,
                                                  CastProxyOnHand(id, kHandRight));
+                    // RANK: this rule has asserted its hand(s) on THIS lap, so a
+                    // rule reaching the cast path LATER in the same scan is ranked
+                    // below it and must be held off rather than preempt a cast that
+                    // is running perfectly well. Marks the lap ONLY -- never
+                    // `lastSeen`, whose deliberate freezing here is what F8's cap
+                    // depends on (see CastLock::claimGoneAt / refreshedLap).
+                    if (handPlan.left)  MarkCastLockRefreshed(id, kHandLeft);
+                    if (handPlan.right) MarkCastLockRefreshed(id, kHandRight);
                     LogCastInFlight(id, handPlan.left ? kHandLeft : kHandRight, a_spellID,
                                     handPlan.left && handPlan.right);
                     return { Result::NoOp, "cast already in flight (claim refreshed)", true };
@@ -2513,9 +2692,24 @@ namespace MFO::Actuation {
     // alongside ReleaseOffenseCast/ComposedCast::ClearWatch -- the SAME two
     // spots the offense-cast claim itself is crisply released from). Idempotent
     // (erase-miss -> no-op), worker-serial, no lock (#4).
+    // ── ONE RULE SCAN FOR ONE FOLLOWER (rank preemption, marth 2026-09-08) ──────
+    // Called by Scheduler::Tick at the top of a follower's scan, before any rule is
+    // evaluated. Advances that follower's lap counter, which is the ONLY thing rank
+    // preemption compares against: a rule reaching the cast path before the
+    // incumbent has asserted itself on THIS lap sits higher in the gambit list and
+    // may take the hand; one arriving after it does not. Per-follower, because the
+    // round-robin services one follower per pump and a global counter would advance
+    // between two rules of the same scan. No engine call, worker-serial, no lock
+    // (#4) -- the same discipline as every other map in this file.
+    void BeginCastLap(RE::FormID a_follower) {
+        if (a_follower == 0) return;
+        ++g_castLock[a_follower].lap;
+    }
+
     void ClearCastLock(RE::FormID a_follower) {
         g_castLock.erase(a_follower);
         g_lastLockLog.erase(a_follower);
+        g_lastPreemptLog.erase(a_follower);   // rank-preemption twin of g_lastLockLog
         g_lastInFlightLog.erase(a_follower);   // F9: the in-flight twin of g_lastLockLog
         g_lastApmfRefusal.erase(a_follower);
         // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
@@ -2531,6 +2725,7 @@ namespace MFO::Actuation {
     void ClearCastLocks() {
         g_castLock.clear();
         g_lastLockLog.clear();
+        g_lastPreemptLog.clear();
         g_lastInFlightLog.clear();   // F9
         g_lastApmfRefusal.clear();
     }

@@ -309,6 +309,23 @@ namespace MFO::APMFBridge {
 
     void ReleaseOffenseCast(RE::FormID a_follower);
 
+    // Worker-safe. Release ONLY the cast claim(s) standing on ONE hand -- the other
+    // hand's independent claim, and every non-cast facet, are untouched. Added for
+    // RANK PREEMPTION (marth 2026-09-08: the gambit list order IS the priority
+    // order, and a higher-ranked rule reaching the cast path must be able to TAKE a
+    // hand from a lower-ranked incumbent rather than wait for its condition to go
+    // false). ReleaseOffenseCast above cannot serve that: it is whole-follower by
+    // design, and using it would drop the OTHER hand's unrelated claim as
+    // collateral.
+    //
+    // a_hand: kApmfHandLeft -> the left offense slot AND the heal slot (heals are
+    // LEFT always); anything else -> the right offense slot.
+    //
+    // A MIRRORED DUALCAST CLAIM IS RELEASED WHOLE from either hand -- one APMF
+    // handle occupying both, arbitrated as one claim, with no half-release to make.
+    // Preempting one hand of a dual cast ends that dual cast, deliberately.
+    void ReleaseCastClaimOnHand(RE::FormID a_follower, std::int32_t a_hand);
+
     // ── combat-target facet CLAIM: PER-COMBAT ────────────────────────────────────
     // Worker-safe. CLAIM the combat-target facet for this follower (APMF records the
     // owner; the intended `a_target` rides along). This does NOT command the target —

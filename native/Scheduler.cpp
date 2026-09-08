@@ -555,6 +555,15 @@ namespace MFO::Scheduler {
         Eval::Choice choice;
         Actuation::Outcome outcome;
 
+        // ONE SCAN STARTS HERE (rank preemption, marth 2026-09-08). The gambit list
+        // order IS the priority order, and the loop below visits rules in that
+        // order -- so "did this hand's incumbent already assert itself on THIS
+        // lap?" is the rank comparison a higher-ranked rule needs in order to TAKE
+        // a hand from a lower-ranked one instead of being held off behind it. This
+        // is the only thing that advances that counter; it must stay ahead of the
+        // scan, not inside it. One integer bump, no engine call.
+        Actuation::BeginCastLap(id);
+
         for (int start = 0; ; ) {
             // Re-find the record each pass (INVARIANTS #2): a transparent
             // outcome may still have dispatched engine events (a failing cast

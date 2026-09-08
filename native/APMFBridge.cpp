@@ -1294,6 +1294,35 @@ namespace MFO::APMFBridge {
         return any;
     }
 
+    // ── PER-HAND CAST-CLAIM RELEASE (rank preemption, marth 2026-09-08) ─────────
+    // See APMFBridge.h. Exists because ReleaseOffenseCast is whole-follower by
+    // design (its two callers both mean "nothing wanted on either hand anymore")
+    // and rank preemption means exactly the opposite: a higher-ranked rule takes
+    // ONE hand, and the other hand's independent claim must not even notice.
+    //
+    // A MIRRORED DUALCAST CLAIM IS ONE CLAIM ON TWO HANDS, so releasing "its left
+    // hand" releases the whole thing and clears both slots. That is the honest
+    // semantics, not a shortcut: there is one APMF handle, APMF arbitrates it as
+    // one claim occupying both hands, and there is no half-release to make. A
+    // caller preempting one hand of a dual cast is ending that dual cast.
+    void ReleaseCastClaimOnHand(RE::FormID a_follower, std::int32_t a_hand) {
+        std::scoped_lock lock(g_mx);
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return;
+        auto& o = it->second;
+        const std::size_t idx   = OffenseSlot(a_hand);
+        const std::size_t other = 1 - idx;
+        if (o.offense[idx].handle != APMF_API::kInvalidHandle) {
+            const bool sharedDual = o.offense[other].handle == o.offense[idx].handle;
+            ReleaseClaimLocked(o.offense[idx]);
+            if (sharedDual) o.offense[other] = CastClaim{};   // one handle, released once
+        }
+        // Heals are LEFT always (ClaimHealCast's own hard rule), so the heal slot
+        // is only ever part of the LEFT hand.
+        if (idx == 0) ReleaseClaimLocked(o.heal);
+        EraseIfEmpty(it);
+    }
+
     void ReleaseOffenseCast(RE::FormID a_follower) {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
