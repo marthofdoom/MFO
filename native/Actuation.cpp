@@ -245,6 +245,31 @@ namespace MFO::Actuation {
                          a_follower, a_wantedSpell, HandName(a_hand), a_lockedSpell);
         }
 
+        // ── THE IN-FLIGHT REFRESH LINE (F9, 2026-09-08) ─────────────────────────
+        // Principle 5: a mechanism that silently changes which rules get a lap
+        // must be visible, or the next field log is read against the old model.
+        // ONE line the first time a rule goes satisfied-in-flight, then at most
+        // one per 2 s for as long as it stays there -- the SAME per-(follower,
+        // hand, spell) dedup shape and window as LogCastLockHold above, and its
+        // OWN map, so an in-flight refresh and a hold-off on the same hand cannot
+        // silence each other. Rate matters here: without a window this fires on
+        // every round-robin lap of a multi-second cast (~7.5 Hz solo).
+        std::unordered_map<RE::FormID, FollowerLockLog> g_lastInFlightLog;
+
+        void LogCastInFlight(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_spell,
+                             bool a_dual) {
+            const auto now = std::chrono::steady_clock::now();
+            auto& entry = g_lastInFlightLog[a_follower].hand[a_hand];
+            if (entry.first == a_spell &&
+                std::chrono::duration<float>(now - entry.second).count() < 2.0f)
+                return;
+            entry.first = a_spell; entry.second = now;
+            spdlog::info("[eval] {:08X} cast gambit SATISFIED IN FLIGHT -- spell {:08X} is already "
+                         "running on the {} hand; claim refreshed in place (no re-claim, no lock "
+                         "re-stamp) and the scan CONTINUES to the rules below it",
+                         a_follower, a_spell, a_dual ? "both hands (dual-cast)" : HandName(a_hand));
+        }
+
         // ── APMF REFUSAL: the ONE trace a cast that did NOT happen leaves ─────────
         // marth 2026-09-07 (verbatim): "without APMF, it needs to just work,
         // whatever unpolished way works. With APMF theres no fallback for it.
@@ -337,6 +362,75 @@ namespace MFO::Actuation {
             lock.lastSeen = std::chrono::steady_clock::now();
         }
 
+        // Does MFO hold a LIVE cast claim on THIS hand right now? Heals are LEFT
+        // always (APMFBridge::ClaimHealCast's own hard rule), so the heal facet
+        // only ever answers for the left hand. Factored out of CastLockLive
+        // (2026-09-08) because the in-flight gate below asks the same question
+        // and the two must never drift apart.
+        bool ClaimLiveOnHand(RE::FormID a_follower, std::size_t a_hand) {
+            return (a_hand == kHandLeft)
+                ? (APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandLeft) ||
+                   APMFBridge::IsHealCastActive(a_follower))
+                : APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandRight);
+        }
+
+        // ── "THE ENGINE STARTED THIS CAST AND HAS NOT FINISHED IT" (F8, 2026-09-08) ──
+        // The signal that a charged cast is mid-flight on `a_hand`, read from the
+        // engine itself rather than inferred: the follower's MagicCaster for that
+        // hand is in a live cast state AND the spell it currently has selected is
+        // the one this hand is locked to (or the delivery-flip PROXY APMF minted
+        // for it -- a proxied claim never has the original spell selected, the
+        // same trap ComposedCast's watch already documents).
+        //
+        // WHY NOT ComposedCast's `observed` LATCH. That latch is set from
+        // Diagnostics' SpellSink, i.e. when a cast actually FIRES -- it answers
+        // "did this claim ever deliver", which is the END of the window this
+        // needs, not the start of it. There is no MFO-side "charge began" event
+        // at all; the caster's own state IS that event.
+        //
+        // SYMBOLS VERIFIED against the PINNED CommonLibSSE-NG (3.7.0 @ c4ab853d,
+        // include/RE/M/MagicCaster.h): `currentSpell` (MagicItem*, 0x28) and
+        // `state` (stl::enumeration<State, uint32_t>, 0x30) are real members;
+        // Actor::GetMagicCaster(CastingSource) is a plain pointer-returning
+        // virtual (RE/A/Actor.h:302, slot 0x5C) with no hidden out-slot. Both are
+        // already read exactly this way, from this same job worker, by the
+        // bDriveCaster probe further down this file -- this adds no new engine
+        // surface, it reuses a proven one.
+        //
+        // STATES. kNone is idle; kUnk08/kUnk09 are the interrupt/deselect pair
+        // (CommonLib's own annotation), i.e. a cast that is ENDING and must not
+        // hold the hand. Everything between is a cast in progress -- request,
+        // charge, ready, casting -- and kUnk07 is deliberately INSIDE that range:
+        // it is unnamed, it sits immediately before the interrupt states, and
+        // treating an unknown mid-sequence state as "already done" is the failure
+        // mode this exists to prevent.
+        bool CastInFlightOnHand(RE::Actor* a_follower, std::size_t a_hand,
+                                RE::FormID a_spell, RE::FormID a_proxy) {
+            if (!a_follower || a_spell == 0) return false;
+            using CS = RE::MagicSystem::CastingSource;
+            auto* caster = a_follower->GetMagicCaster(a_hand == kHandLeft ? CS::kLeftHand
+                                                                         : CS::kRightHand);
+            if (!caster || !caster->currentSpell) return false;
+            const auto cur = caster->currentSpell->GetFormID();
+            if (cur != a_spell && (a_proxy == 0 || cur != a_proxy)) return false;
+            const auto st = caster->state.get();
+            return st != RE::MagicCaster::State::kNone &&
+                   st != RE::MagicCaster::State::kUnk08 &&
+                   st != RE::MagicCaster::State::kUnk09;
+        }
+
+        // HOW LONG THE IN-FLIGHT EXTENSION BELOW MAY OUTLIVE THE LAST TIME THE
+        // LOCK WAS REAFFIRMED (F8). Sized from a real number, not chosen (#9):
+        // APMFBridge::kHealCastTtlMs is the TTL APMF grants every cast claim MFO
+        // makes -- the longest window APMF itself will let one cast stand without
+        // a renewal. A cast the engine has not finished inside that is not one
+        // this is protecting, it is one that is STUCK, and going on holding the
+        // hand for it would hide the stall instead of showing it (principle 7).
+        // It clears the measured pipeline with room to spare: 2.3-2.5s equip +
+        // charge for an offense cast, 4.5s claim-to-fire for the one heal the
+        // 2026-09-08 session landed.
+        constexpr auto kInFlightHoldCap = std::chrono::milliseconds(APMFBridge::kHealCastTtlMs);
+
         // Is hand `a_hand`'s lock still LIVE, i.e. is the follower still
         // genuinely occupied on THAT hand right now? "release on completion,
         // on claim release/TTL expiry" (marth): a live APMF cast claim on that
@@ -355,15 +449,44 @@ namespace MFO::Actuation {
         // re-fires (and re-Holds its hand's lock) every round-robin lap, well
         // inside this window, so the SAME gambit never sees its own lock go
         // stale; only a gambit that stopped being requested at all does.
-        bool CastLockLive(RE::FormID a_follower, std::size_t a_hand, const CastLock& a_lock) {
-            const bool claimLive = (a_hand == kHandLeft)
-                ? (APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandLeft) ||
-                   APMFBridge::IsHealCastActive(a_follower))
-                : APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandRight);
-            if (claimLive) return true;
-            const float elapsed = std::chrono::duration<float>(
-                std::chrono::steady_clock::now() - a_lock.lastSeen).count();
-            return elapsed <= std::chrono::duration<float>(APMFBridge::FacetExpiry()).count();
+        //
+        // THIRD ANSWER since F8 (2026-09-08): past that staleness window, a hand
+        // whose ENGINE CASTER is still mid-cast of the locked spell is also live
+        // -- see the block inside. It takes an RE::Actor* now (rather than a bare
+        // FormID) for exactly that read; every caller already had one.
+        bool CastLockLive(RE::Actor* a_follower, std::size_t a_hand, const CastLock& a_lock) {
+            const auto fid = a_follower ? a_follower->GetFormID() : 0;
+            if (fid != 0 && ClaimLiveOnHand(fid, a_hand)) return true;
+            const auto since = std::chrono::steady_clock::now() - a_lock.lastSeen;
+            const float elapsed = std::chrono::duration<float>(since).count();
+            if (elapsed <= std::chrono::duration<float>(APMFBridge::FacetExpiry()).count())
+                return true;
+            // ── F8: A CHARGED CAST IS NOT FREE REAL ESTATE ─────────────────────
+            // The claim can lapse (APMF's TTL, or MFO's own sweep) WHILE the
+            // engine is still charging the spell it was made for -- and that is
+            // exactly when the field saw casts thrown away: three fully Charged
+            // MFO casts were discarded by MFO's own next claim, because with the
+            // claim gone this function said "stale, take the hand" and the next
+            // rule re-pointed it. So a hand whose engine caster is mid-cast of
+            // the locked spell stays LOCKED even with no claim behind it: the
+            // in-flight cast finishes, and the rule that wants the hand is held
+            // off transparently for the ~1-2 s that takes (the SAME "spell gambit
+            // locks until complete" contract the heal slot already has).
+            //
+            // BOUNDED, so a wedged caster cannot own the hand forever -- see
+            // kInFlightHoldCap. Past the cap the lock goes stale exactly as it
+            // did before this existed, and the stall becomes visible.
+            if (since >= kInFlightHoldCap) return false;
+            // The proxy, if this hand's claim minted one. Both accessors answer 0
+            // for a claim that is already gone -- which is the common case here
+            // and is harmless: CastInFlightOnHand then matches on the ORIGINAL
+            // spell alone, and a proxied cast whose claim has vanished simply
+            // does not match, so the hand frees exactly as it did before.
+            RE::FormID proxy = a_hand == kHandLeft
+                ? APMFBridge::GetOffenseCastProxy(fid, APMFBridge::kApmfHandLeft)
+                : APMFBridge::GetOffenseCastProxy(fid, APMFBridge::kApmfHandRight);
+            if (proxy == 0 && a_hand == kHandLeft) proxy = APMFBridge::GetHealCastProxy(fid);
+            return CastInFlightOnHand(a_follower, a_hand, a_lock.spell, proxy);
         }
 
         // Is hand `a_hand` available for (a_spell,a_target) right now -- i.e.
@@ -371,13 +494,25 @@ namespace MFO::Actuation {
         // gambit refreshing itself), or its lock has gone live-false/stale
         // (dropped right here, in which case it is free)? a_busyOut is set to
         // whichever DIFFERENT spell currently holds it when this returns false.
-        bool HandFree(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_spell,
-                     RE::FormID a_target, RE::FormID& a_busyOut) {
-            auto it = g_castLock.find(a_follower);
+        //
+        // `a_incumbentOut` (F9, 2026-09-08): set when this hand is free BECAUSE
+        // THE CALLER ALREADY OWNS IT -- the lock names this exact (spell,target),
+        // i.e. the requesting rule is the one whose cast is already running here.
+        // It is deliberately NOT the same thing as "free": an unlocked hand and a
+        // hand we are already casting on both return true, and only the second one
+        // must skip the whole claim/equip/consent path. Left untouched on every
+        // other return, so a caller may pass one variable across both hands.
+        bool HandFree(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell,
+                     RE::FormID a_target, RE::FormID& a_busyOut, bool& a_incumbentOut) {
+            const auto fid = a_follower ? a_follower->GetFormID() : 0;
+            auto it = g_castLock.find(fid);
             if (it == g_castLock.end()) return true;
             auto& lock = it->second.hand[a_hand];
             if (lock.spell == 0) return true;
-            if (lock.spell == a_spell && lock.target == a_target) return true;
+            if (lock.spell == a_spell && lock.target == a_target) {
+                a_incumbentOut = true;
+                return true;
+            }
             if (!CastLockLive(a_follower, a_hand, lock)) { lock = CastLock{}; return true; }
             a_busyOut = lock.spell;
             return false;
@@ -386,7 +521,13 @@ namespace MFO::Actuation {
         // Which hand(s) a (spell,target) request would occupy if it proceeds.
         // Both false never happens on a non-held return (ResolveCastHand always
         // sets at least one before returning std::nullopt).
-        struct HandPlan { bool left = false; bool right = false; };
+        // `inFlight` (F9, 2026-09-08): EVERY hand this plan occupies is already
+        // locked to this exact (spell,target) AND MFO holds a live cast claim
+        // there -- i.e. the rule asking is the incumbent and its cast is already
+        // running. The caller must then REFRESH that claim and fall through to
+        // the rules below instead of re-claiming and re-firing; see CastOn's
+        // in-flight gate for why that is the whole of RC2.
+        struct HandPlan { bool left = false; bool right = false; bool inFlight = false; };
 
         // THE GATE + THE JUGGLE. Resolves a_pick (a real Loadout::HandPick for
         // an offense spell, or plain Loadout::HandPick::Left for the self/
@@ -396,45 +537,67 @@ namespace MFO::Actuation {
         // every hand HandPlan sets, on success) or a transparent HELD-OFF
         // Outcome naming the busy hand(s) (GAMBIT_FLOWS §2 -- a held gambit is
         // not a wall for the rules below it).
-        std::optional<Outcome> ResolveCastHand(RE::FormID a_follower, Loadout::HandPick a_pick,
+        std::optional<Outcome> ResolveCastHand(RE::Actor* a_follower, Loadout::HandPick a_pick,
                                                RE::FormID a_spell, RE::FormID a_target,
                                                HandPlan& a_out) {
-            RE::FormID busy = 0;
+            const auto fid = a_follower ? a_follower->GetFormID() : 0;
+            // Both hands are resolved UP FRONT now (F8/F9, 2026-09-08) instead of
+            // inside each case, because the incumbent test below has to see both
+            // before any pick is honoured. The only behavioural edge this adds is
+            // that a Left/EitherFree request may now clear a STALE right-hand lock
+            // one lap earlier than it used to -- clearing a dead lock is what
+            // HandFree does either way, and nothing reads it in between.
+            RE::FormID busyL = 0, busyR = 0;
+            bool incL = false, incR = false;
+            const bool leftFree  = HandFree(a_follower, kHandLeft,  a_spell, a_target, busyL, incL);
+            const bool rightFree = HandFree(a_follower, kHandRight, a_spell, a_target, busyR, incR);
+
+            // ── THE INCUMBENT PIN (F8's hand half + F9's signal) ────────────────
+            // If this exact (spell,target) already holds a hand AND a live cast
+            // claim stands there, the request is PINNED to the hand(s) that claim
+            // occupies -- whatever `a_pick` says this lap. Loadout::PlanCastHand
+            // re-derives its answer every lap from inputs that MOVE (the live
+            // weapon grip, magicka, perks), so the same winning rule can ask for
+            // DualCast on one lap and a single hand on the next; and a hand-mode
+            // change is a CHANGE to APMFBridge::EnsureCastClaimLocked, which means
+            // Release + RequestCast, which means the engine tears down the
+            // equipment set and InterruptCasts whatever was charging. That is one
+            // of the two ways the 2026-09-08 session threw away three fully
+            // Charged casts of its own. The incumbent's own hand mode therefore
+            // wins for as long as its claim stands; a genuinely new (spell,target)
+            // is unaffected, and re-planning resumes the moment the claim ends.
+            const bool liveL = incL && ClaimLiveOnHand(fid, kHandLeft);
+            const bool liveR = incR && ClaimLiveOnHand(fid, kHandRight);
+            if (liveL || liveR) {
+                a_out = { liveL, liveR, /*inFlight=*/true };
+                return std::nullopt;
+            }
+
             switch (a_pick) {
             case Loadout::HandPick::DualCast: {
-                RE::FormID busyL = 0, busyR = 0;
-                const bool leftFree  = HandFree(a_follower, kHandLeft,  a_spell, a_target, busyL);
-                const bool rightFree = HandFree(a_follower, kHandRight, a_spell, a_target, busyR);
-                if (leftFree && rightFree) { a_out = { true, true }; return std::nullopt; }
+                if (leftFree && rightFree) { a_out = { true, true, false }; return std::nullopt; }
                 const auto hand      = !leftFree ? kHandLeft : kHandRight;
                 const auto busySpell = !leftFree ? busyL : busyR;
-                LogCastLockHold(a_follower, hand, a_spell, busySpell);
+                LogCastLockHold(fid, hand, a_spell, busySpell);
                 return Outcome{ Result::NoOp,
                     std::format("cast gambit locked -- dual-cast needs both hands, spell {:08X} "
                                 "still firing ({} hand)", busySpell, HandName(hand)), true };
             }
             case Loadout::HandPick::EitherFree: {
-                RE::FormID busyL = 0, busyR = 0;
-                if (HandFree(a_follower, kHandLeft, a_spell, a_target, busyL)) {
-                    a_out = { true, false }; return std::nullopt;
-                }
-                if (HandFree(a_follower, kHandRight, a_spell, a_target, busyR)) {
-                    a_out = { false, true }; return std::nullopt;
-                }
-                LogCastLockHold(a_follower, kHandLeft, a_spell, busyL);
+                if (leftFree)  { a_out = { true, false, false }; return std::nullopt; }
+                if (rightFree) { a_out = { false, true, false }; return std::nullopt; }
+                LogCastLockHold(fid, kHandLeft, a_spell, busyL);
                 return Outcome{ Result::NoOp,
                     std::format("cast gambit locked -- both hands busy (left: spell {:08X}, "
                                 "right: spell {:08X})", busyL, busyR), true };
             }
             case Loadout::HandPick::Left:
             default:
-                if (HandFree(a_follower, kHandLeft, a_spell, a_target, busy)) {
-                    a_out = { true, false }; return std::nullopt;
-                }
-                LogCastLockHold(a_follower, kHandLeft, a_spell, busy);
+                if (leftFree) { a_out = { true, false, false }; return std::nullopt; }
+                LogCastLockHold(fid, kHandLeft, a_spell, busyL);
                 return Outcome{ Result::NoOp,
                     std::format("cast gambit locked -- spell {:08X} still firing (left hand)",
-                                busy), true };
+                                busyL), true };
             }
         }
 
@@ -788,14 +951,84 @@ namespace MFO::Actuation {
                 !selfOrConc && CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
             HandPlan handPlan;
             if (!offenseSpell) {
-                if (auto held = ResolveCastHand(id, Loadout::HandPick::Left, a_spellID,
+                if (auto held = ResolveCastHand(a_follower, Loadout::HandPick::Left, a_spellID,
                                                 lockTargetKey, handPlan))
                     return *held;
             } else {
                 const auto pick = Loadout::PlanCastHand(a_follower, spell,
                                                         APMFBridge::WeaponHandActive(a_follower));
-                if (auto held = ResolveCastHand(id, pick, a_spellID, lockTargetKey, handPlan))
+                if (auto held = ResolveCastHand(a_follower, pick, a_spellID, lockTargetKey, handPlan))
                     return *held;
+            }
+
+            // ── SATISFIED IN FLIGHT: REFRESH, DO NOT RE-FIRE, DO NOT END THE LAP ──
+            // (F9, RC2 of Docs/DIAG-2026-09-08-field.md, 2026-09-08.)
+            //
+            // THE DEFECT. `HandFree` reports a hand FREE for a request that names
+            // the (spell,target) already locked there -- correctly, it is the same
+            // gambit refreshing itself -- so the rule ran its whole path again and
+            // returned Fired, and Fired ENDS THE SCAN. A self-heal whose condition
+            // stayed true therefore won every lap for 44 s: 22 consecutive
+            // `fired rule 1 (act.cast_self)` lines, ZERO offense rules ever
+            // reached, zero ClaimOffenseCast traffic -- while the follower's right
+            // hand, which no MFO claim ever occupied, was left to its own AI (2
+            // Poison Sprays, 5 Stone Runes, 3 Raise Zombies). One in-flight cast
+            // monopolised the whole evaluator.
+            //
+            // THE FIX. A rule whose cast is ALREADY RUNNING has nothing to do this
+            // lap except keep its claim alive, and that is not an action: refresh
+            // the standing claim IN PLACE and return TRANSPARENT, so the scan
+            // continues to the rules below (GAMBIT_FLOWS §2 -- a held gambit is
+            // not a wall). The heal keeps the left hand, an offense rule below
+            // gets its lap and takes the right, and with F10's floor the right
+            // hand is closed rather than free whenever no offense rule wants it.
+            //
+            // THREE THINGS IT MUST NOT DO, all of them load-bearing:
+            //   * NO DOUBLE CLAIM. RefreshOwnedCastOnHand replays the claim's OWN
+            //     stored tuple through EnsureCastClaimLocked, so it lands on the
+            //     unchanged fast path BY CONSTRUCTION: liveness check, lazy proxy
+            //     read, TTL heartbeat, `refreshed` stamp -- and no RequestCast.
+            //   * IT MUST BUMP `refreshed`. That stamp is what Tick()'s
+            //     FacetExpiry sweep reads; leaving it still would have the sweep
+            //     release the very claim this path exists to protect (measured
+            //     exactly that way in the field -- h=9 died 2.4 s after rule 1
+            //     started winning every lap, to the tenth of a second).
+            //   * NO LOCK RE-STAMP. `lockHands` is deliberately NOT called here.
+            //     The live claim is itself proof the lock is live (CastLockLive
+            //     asks the claim first), so re-stamping would only extend the
+            //     lock's staleness fallback PAST the claim's death -- a hand held
+            //     by a cast that has ended.
+            //
+            // NOT A MASK (principle 7): a refresh that comes back not-live means
+            // the claim really is gone (APMF aged it out, or refused it), and this
+            // falls straight through to the normal path below, which re-claims and
+            // reports its own outcome exactly as before.
+            if (handPlan.inFlight) {
+                const std::int32_t claimHand =
+                    (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
+                    handPlan.left                     ? APMFBridge::kApmfHandLeft :
+                                                        APMFBridge::kApmfHandRight;
+                if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
+                    // KEEP THE [cfc] WATCH TICKING. ComposedCast::WatchClaim's own
+                    // contract is "call every tick the caller's OWN claim call
+                    // returns live" -- and on this path the refresh above IS that
+                    // call. Skipping it would silence the silent-claim warning for
+                    // exactly the claims it exists to catch (a claim that stands
+                    // for seconds and never fires) and freeze the lazily-learned
+                    // delivery-flip proxy at whatever it was on lap 1. Same
+                    // per-hand shape as the owned-cast branch's own arming below.
+                    if (handPlan.left)
+                        ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandLeft,
+                                                 APMFBridge::GetOffenseCastProxy(
+                                                     id, APMFBridge::kApmfHandLeft));
+                    if (handPlan.right)
+                        ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandRight,
+                                                 APMFBridge::GetOffenseCastProxy(
+                                                     id, APMFBridge::kApmfHandRight));
+                    LogCastInFlight(id, handPlan.left ? kHandLeft : kHandRight, a_spellID,
+                                    handPlan.left && handPlan.right);
+                    return { Result::NoOp, "cast already in flight (claim refreshed)", true };
+                }
             }
             // Hold BOTH resolved hands (only ever one, unless a DualCast plan
             // resolved both) on every success path below -- one lambda so the
@@ -2165,6 +2398,7 @@ namespace MFO::Actuation {
     void ClearCastLock(RE::FormID a_follower) {
         g_castLock.erase(a_follower);
         g_lastLockLog.erase(a_follower);
+        g_lastInFlightLog.erase(a_follower);   // F9: the in-flight twin of g_lastLockLog
         g_lastApmfRefusal.erase(a_follower);
         // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
         // anon namespace; drop that follower's entries here too so the two maps
@@ -2179,6 +2413,7 @@ namespace MFO::Actuation {
     void ClearCastLocks() {
         g_castLock.clear();
         g_lastLockLog.clear();
+        g_lastInFlightLog.clear();   // F9
         g_lastApmfRefusal.clear();
     }
 

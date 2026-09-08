@@ -1185,6 +1185,77 @@ namespace MFO::APMFBridge {
         return api && api->abiVersion >= 5 && Config::g_apmfCast.load();
     }
 
+    // ── REFRESH A STANDING CAST CLAIM IN PLACE (F9, 2026-09-08) ─────────────────
+    // See APMFBridge.h for the contract. The implementation is deliberately a
+    // REPLAY of the claim's OWN stored tuple rather than a second refresh path:
+    // handing EnsureCastClaimLocked exactly what it already stored guarantees the
+    // identity compare matches and the unchanged fast path is taken, so this can
+    // NEVER mint a second claim, change a hand mode, or interrupt a charge -- the
+    // three things F8 exists to stop. Everything the fast path does (the ABI-6
+    // liveness check, the lazy proxy read, the TTL heartbeat, the never-published
+    // fail-closed split) happens here too, for free and identically, because it is
+    // the same code.
+    //
+    // IT DOES NOT COLLIDE WITH RefreshHealCastClaim's DELIBERATE NON-RENEWAL.
+    // That function refuses to Repoint on purpose, because it is ComposedCast's
+    // incumbent HOLD -- kept alive for a claim whose own rule may have gone silent
+    // -- and renewing APMF's window from there would remove the liveness bound the
+    // hold depends on. This function is the opposite case and the one the
+    // heartbeat was always scoped to: it is called ONLY by a rule that WON its lap
+    // and is asking for the identical claim it already holds. Same precondition,
+    // same renewal, no new hold.
+    //
+    // IT DOES NOT MOVE `created` EITHER (the never-observed hold cap's clock):
+    // that is stamped once per handle in the mint block, which this cannot reach.
+    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || api->abiVersion < 5) return false;
+        auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
+        std::scoped_lock lock(g_mx);
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return false;
+        auto& o = it->second;
+        const auto now = std::chrono::steady_clock::now();
+        bool any = false;
+
+        auto replay = [&](CastClaim& c) {
+            if (c.handle == APMF_API::kInvalidHandle) return;
+            EnsureCastClaimLocked(v5, a_follower, c, c.spell, c.target, c.hand,
+                                  c.conc, c.stopPct, c.denyOnly);
+            c.refreshed = now;
+            if (c.handle != APMF_API::kInvalidHandle) any = true;
+        };
+        // A mirrored DualCast claim is ONE handle living in BOTH slots, and BOTH
+        // copies' `refreshed` stamps have to move together: Tick()'s sweep reads
+        // each slot independently, so a stale mirror would release the shared
+        // handle out from under the live slot (and then clear it, via that
+        // sweep's own dual dedup). Re-mirror after the replay, exactly as
+        // ClaimOffenseCast does.
+        auto replayOffense = [&](std::size_t idx) {
+            auto& c = o.offense[idx];
+            if (c.handle == APMF_API::kInvalidHandle) return;
+            const std::size_t other = 1 - idx;
+            const bool sharedDual = o.offense[other].handle == c.handle;
+            replay(c);
+            if (sharedDual) o.offense[other] = c;
+        };
+
+        if (a_hand == kApmfHandDualCast) {
+            replayOffense(0);
+        } else if (a_hand == kApmfHandLeft) {
+            replayOffense(0);
+            // Heals are LEFT always (ClaimHealCast's hard rule), and a heal claim
+            // and an offense claim CAN both stand on the left hand at once, so
+            // both are refreshed -- the caller named the hand, not the facet.
+            replay(o.heal);
+        } else {
+            replayOffense(1);
+        }
+
+        EraseIfEmpty(g_owned.find(a_follower));
+        return any;
+    }
+
     void ReleaseOffenseCast(RE::FormID a_follower) {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);

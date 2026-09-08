@@ -274,6 +274,32 @@ namespace MFO::APMFBridge {
     // torn down as the single claim it is, not double-released). Call the instant no
     // cast rule holds (Scheduler !castSeen) so the claim releases crisply, not after
     // the round-robin-aware expiry backstop.
+    // Worker-safe. REFRESH the cast claim(s) MFO already holds on `a_hand` --
+    // without re-requesting anything (F9, 2026-09-08). This is the "my cast is
+    // already running, I only need to keep it alive" call, made by Actuation's
+    // satisfied-in-flight gate instead of re-entering the whole claim/equip/
+    // consent path for a rule that has nothing new to ask for.
+    //
+    // WHAT IT DOES: replays each live claim's OWN stored (spell, target, hand,
+    // concentration, stopPct, deny-only) tuple through the same create-or-refresh
+    // helper every claim call uses. Because the tuple is by construction identical
+    // to what is stored, that lands on the unchanged fast path: the ABI-6 liveness
+    // check, the lazy delivery-flip proxy read, the TTL heartbeat Repoint, and the
+    // `refreshed` stamp Tick()'s FacetExpiry sweep reads. It can never mint a
+    // second claim, never change a hand mode, and never interrupt a charge.
+    //
+    // a_hand: kApmfHandLeft -> the left offense slot AND the heal slot (heals are
+    // LEFT always, and the two can stand together); kApmfHandDualCast -> the
+    // mirrored dual claim, re-mirrored so both slots' stamps move together;
+    // anything else -> the right offense slot.
+    //
+    // RETURNS true when at least one claim on that hand is still live afterwards.
+    // A `false` means the claim really is gone (APMF aged it out, or the
+    // fail-closed never-published split dropped it) -- the caller must then fall
+    // through to its normal claim path, NOT treat the rule as satisfied. It is not
+    // an APMF refusal and must never be logged as one.
+    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand);
+
     void ReleaseOffenseCast(RE::FormID a_follower);
 
     // ── combat-target facet CLAIM: PER-COMBAT ────────────────────────────────────
