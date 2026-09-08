@@ -177,6 +177,21 @@ namespace MFO::APMFBridge {
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
 
+        // ── never-published warn throttle (SEV-3, pre-merge review 2026-09-07) ──
+        // Failing closed leaves the claim EMPTY, so the next winning lap mints again
+        // and the lap after that lands on the same branch: unthrottled, the warn fires
+        // every SECOND lap (~3.75 Hz solo) for as long as the refusal persists, and
+        // buries the caller's headline line under its own noise (principle 8). Same
+        // 5 s per (follower, spell) window as Actuation's LogApmfRefusal, so the two
+        // stay in step. Guarded by g_mx like every other map here -- the only writer
+        // is EnsureCastClaimLocked, and every caller of that holds the lock.
+        constexpr auto kNeverLiveWarnEvery = std::chrono::milliseconds(5000);
+        struct NeverLiveWarn {
+            RE::FormID                            spell = 0;
+            std::chrono::steady_clock::time_point when{};
+        };
+        std::unordered_map<RE::FormID, NeverLiveWarn> g_lastNeverLiveWarn;
+
         // MFO outbids APMF's mid-range test hotkeys (basis 100) so a real gambit wins
         // the hand/target over a tester's Numpad keys. Arbitrary among clients; > 100.
         constexpr float kOwnBasis = 200.0f;
@@ -403,11 +418,29 @@ namespace MFO::APMFBridge {
                 } else {
                     // NEVER PUBLISHED: minted on an EARLIER tick (this branch is only
                     // ever reached by a later call -- see the dependency note above)
-                    // and not once seen live since. That is a drain-time arbitration
-                    // LOSS. Report it as a refusal: drop the handle and leave the claim
-                    // EMPTY without re-requesting, so ClaimOffenseCast/ClaimHealCast
-                    // return false and the caller FAILS CLOSED and logs loudly, naming
-                    // the actor/spell/target/hand under its own 5 s throttle.
+                    // and not once seen live since.
+                    //
+                    // WHAT THIS CATCHES, AND WHAT IT DOES NOT (corrected by the
+                    // pre-merge review 2026-09-07 -- the mechanism is right, but the
+                    // premise it was built on was too broad, and an over-claim in a
+                    // comment is how the NEXT diagnosis goes wrong). APMF `push_back`s
+                    // an enqueued claim REGARDLESS of who ends up owning the facet, and
+                    // `IsClaimLive` answers true for ANY unexpired claim carrying that
+                    // handle, owner or not. So an ordinary BASIS or TIE loss still
+                    // reads live, still latches `everLive`, and is INVISIBLE here --
+                    // MFO reports Claimed while APMF drives someone else's spell.
+                    //   * CAUGHT: an OUTRIGHT refusal -- APMF accepted the request and
+                    //     then published no claim at all (dual-vs-single hand collision
+                    //     loser, unloadable actor, FromPackage-without-spell).
+                    //   * NOT CAUGHT: losing arbitration on basis, or a tie.
+                    // Separating those needs a real owner query (IsClaimOwning), an
+                    // APMF v7 ABI addition that does not exist yet. Do NOT read this
+                    // branch as "MFO detects arbitration losses" -- it does not.
+                    //
+                    // Report it as a refusal: drop the handle and leave the claim EMPTY
+                    // without re-requesting, so ClaimOffenseCast/ClaimHealCast return
+                    // false and the caller FAILS CLOSED and logs loudly, naming the
+                    // actor/spell/target/hand under its own 5 s throttle.
                     //
                     // NOT A LATCH: the claim is left empty, so the next winning tick
                     // makes a genuinely fresh ask. If APMF grants it, everything
@@ -418,9 +451,16 @@ namespace MFO::APMFBridge {
                     // cast tick, and self-corrects on the next ask. A visible,
                     // self-correcting false alarm is the right trade against an
                     // invisible permanent loop.
-                    spdlog::warn("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) was minted but NEVER "
-                                 "published as live -- treating as a drain-time arbitration REFUSAL, "
-                                 "not re-requesting (fail closed)", follower, wantSpell);
+                    if (auto& w = g_lastNeverLiveWarn[follower];
+                        w.spell != wantSpell ||
+                        std::chrono::steady_clock::now() - w.when >= kNeverLiveWarnEvery) {
+                        w.spell = wantSpell;
+                        w.when  = std::chrono::steady_clock::now();
+                        spdlog::warn("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) was minted but NEVER "
+                                     "published as live -- treating as an OUTRIGHT refusal (hand-collision "
+                                     "loss / unloadable actor), not re-requesting (fail closed)",
+                                     follower, wantSpell);
+                    }
                     ReleaseClaimLocked(c);
                     return;
                 }
@@ -971,6 +1011,13 @@ namespace MFO::APMFBridge {
         if (!reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(it->second.heal.handle))
             return false;                       // dead APMF-side: no heartbeat, Tick() sweeps it
         it->second.heal.refreshed = now;
+        // LATCH THE OBSERVATION TOO (SEV-4, pre-merge review 2026-09-07). This IS a
+        // genuine `IsClaimLive == true` sighting of this exact handle, and everLive's
+        // own doc says it is set "the first time IsClaimLive(handle) answers true".
+        // Without it, a heal whose only liveness sightings came through the hold path
+        // would still look never-published to EnsureCastClaimLocked and be reported as
+        // an outright refusal it never suffered.
+        it->second.heal.everLive = true;
         return true;
     }
 

@@ -112,6 +112,24 @@ namespace MFO::Config {
     //
     // Not a resource cap: a weak heal SHOULD be cast many times over a long
     // fight. What looked wrong in the field was the interval, not the total.
+    //
+    // OPEN DECISION -- THIS KNOB IS EFFECTIVELY INERT UNDER THE OWNED CAST MODEL
+    // (raised by the pre-merge review 2026-09-07, NOT decided; marth's call).
+    // The cooldown is enforced by `Loadout::CoolingDown` -> `Ready::Debounced`, and
+    // it never gated the cast directly -- what actually paced the follower was that
+    // a debounced tick made no APMF claim, so `FacetExpiry` swept the standing one
+    // (~2.95 s at defaults, solo) and `CasterConsent`'s pacing deny re-engaged for
+    // the tail. `fix/mfo-fourstate-followups` moved MFO's APMF ask AHEAD of
+    // `Loadout::Prepare` (so a refusal leaves no equip/consent side effects), which
+    // means the claim is now REFRESHED right through a cooldown stretch: the deny
+    // never re-engages, and the follower's own AI paces the cast instead.
+    //
+    // That may be exactly right -- "the AI decides and paces it" IS the owned
+    // model -- but it is a behaviour change to a shipped, frozen-name knob, so it
+    // is flagged rather than quietly absorbed. If the answer is that MFO should
+    // keep pacing, the fix is to skip the ask on `Loadout::CoolingDown`; that gate
+    // is deliberately NOT in place pending the decision. See the pre-flight's own
+    // comment in `Actuation.cpp` (the "OPEN DECISION" paragraph).
     inline std::atomic<float> g_castCooldown{ 4.0f };
 
     // AUTO fan-out DoT recast threshold (fix #4). For a HOSTILE duration spell
@@ -199,8 +217,10 @@ namespace MFO::Config {
     //
     // THE HEAL KILL SWITCH IS `bHealAnimPackage` OFF. That makes
     // `ComposedCast::Enabled` false, so MFO never claims the facet at all, `Try`
-    // answers `NotApplicable`, and the caller runs the working kInstant heal (no
-    // follower animation). That is MFO NOT ASKING -- not a fallback from a refusal.
+    // answers `NotApplicable`, and the caller runs its OWN degrade path -- the
+    // working kInstant heal (no follower animation) in the `Actuation_Direct.cpp`
+    // callers, and the AI-first-grace + `ForceCast` legacy hybrid in `CastOn`'s
+    // ally/player branch. That is MFO NOT ASKING -- not a fallback from a refusal.
     //
     // WITH APMF PRESENT, A REFUSED CLAIM FAILS CLOSED and never degrades: the cast
     // visibly does not happen and one rate-limited `[apmf] ... APMF REFUSED ...`

@@ -656,6 +656,35 @@ namespace MFO::Actuation {
                 }
             }
 
+            // ── DOES THE FOLLOWER EVEN KNOW THIS SPELL? (SEV-1, pre-merge review
+            // 2026-09-07) ───────────────────────────────────────────────────────────
+            // `Loadout::Prepare` has always made this its FIRST check
+            // (`Loadout.cpp:246-249` -> `Ready::Failed`, INVARIANTS #20 / DESIGN §5.4),
+            // and on main that ordering was load-bearing in a way nothing wrote down:
+            // every APMF ask lived AFTER a successful `Prepare`, so a claim for a spell
+            // the actor does not know was STRUCTURALLY IMPOSSIBLE.
+            //
+            // Moving the ask into the pre-flight below broke that for free. A
+            // `cast_target Firebolt` rule on a follower who lacks Firebolt (roster
+            // swap, shared template list, progression removal) would ask APMF every
+            // lap, `Prepare` would answer Failed, and the claim would just STAND: the
+            // rule's condition still holds so `castSeen` is true and Scheduler's
+            // `!castSeen` release never fires, and the per-lap refresh keeps
+            // `FacetExpiry` from sweeping it. While it stands,
+            // `CasterConsent::ClientCastClaimed` early-passes on `IsOwnedCastActive`,
+            // so MFO's OWN deny is stood down for that follower indefinitely -- and
+            // APMF's seats are handed a spell the actor cannot select. That is MFO
+            // declaring intent it already knows cannot run (principle 4).
+            //
+            // So the competence gate moves AHEAD of the ask, beside the magicka gate
+            // it belongs with. `Prepare`'s own identical check STAYS as defence in
+            // depth -- this is a second gate, not a relocation.
+            if (!a_follower->HasSpell(spell)) {
+                // TRANSPARENT, and the SAME reason string `Prepare` produces, so the
+                // board and the log read identically whichever gate caught it.
+                return { Result::FailedSkill, "follower does not know this spell", true };
+            }
+
             // COMPETENCE IS NOT PERMISSION (DESIGN.md §5.3). MFO does not top up
             // magicka, discount the cost, or substitute a cheaper spell -- if
             // the follower cannot afford it the rule FAILS and the tick falls
@@ -875,9 +904,29 @@ namespace MFO::Actuation {
             // whose `Loadout::Prepare` then returns Debounced/Failed, which could not
             // happen before. That is correct under the owned model -- APMF's own seats
             // do the equipping while the claim stands, so MFO declining to thrash ITS
-            // gear is not a reason to drop APMF's claim -- and the claim is refreshed
-            // every winning tick and released crisply by the Scheduler's !castSeen path
-            // either way.
+            // gear is not a reason to drop APMF's claim.
+            //
+            // HOW IT ENDS -- and the first version of this note got this WRONG (SEV-2,
+            // pre-merge review 2026-09-07). It said the claim is "released crisply by
+            // the Scheduler's !castSeen path either way". It is not, in the common
+            // case: through a Debounced stretch the rule's condition still HOLDS, so
+            // `castSeen` is true and Scheduler's `!castSeen` release never runs, while
+            // the per-lap refresh keeps `FacetExpiry` from sweeping it. The claim ends
+            // when the RULE stops holding -- not when Prepare starts debouncing.
+            //
+            // OPEN DECISION, NOT DECIDED HERE (SEV-3, same review -- marth's call).
+            // `Loadout::Ready::Debounced` is PRIMARILY the `fCastCooldown` case
+            // (`Loadout.cpp:~317`, `CoolingDown`), not just the two-hander/gear-debt
+            // waits the paragraph below describes. On main a cooldown stretch left the
+            // claim UN-refreshed, `FacetExpiry` swept it (~2.95 s at defaults, solo),
+            // and `CasterConsent`'s pacing deny re-engaged for the tail. Here the claim
+            // is refreshed through the whole cooldown, so that deny never re-engages
+            // and **fCastCooldown is effectively inert under the owned model.** That
+            // may well be RIGHT -- under the owned model the follower's own AI paces
+            // the cast, which is the entire point -- but it is a real behaviour change
+            // to a shipped knob and marth has not been shown it. Deliberately NOT
+            // gated on `Loadout::CoolingDown` pending that call. See Config.h's
+            // fCastCooldown entry.
             //
             // The SUCCESS paths are unchanged: they fall through into the switch below
             // exactly as before and still return from their old positions.
@@ -1322,6 +1371,35 @@ namespace MFO::Actuation {
                     // the pace), same call the Ready path makes; observe-only
                     // in log mode, exactly like every other Want.
                     CasterConsent::Want(a_follower->GetFormID(), spell->GetFormID());
+
+                    // STAMP THE HAND LOCK IF A CLAIM IS STANDING (SEV-2, pre-merge
+                    // review 2026-09-07). "A live claim implies a hand lock" was an
+                    // invariant main got for free: every claim was minted inside the
+                    // Equipped arm, which always calls `lockHands`. The pre-flight can
+                    // now mint on a Debounced tick, and `HandFree` returns true on
+                    // `lock.spell == 0` BEFORE it ever consults `CastLockLive` -- so an
+                    // unlocked-but-claimed hand read as free. Two ways that bites:
+                    //   * THRASH: a fight starting inside `fCastCooldown` (which
+                    //     survives combat end -- the very case this branch exists for)
+                    //     with two same-hand cast rules true. A mints, debounces
+                    //     unlocked; B passes HandFree, claims, and
+                    //     `EnsureCastClaimLocked`'s param change Releases A and
+                    //     RequestCasts B; next lap A does the same to B. APMF's seats
+                    //     get re-pointed twice a lap for the whole cooldown.
+                    //   * INVISIBLE NON-OWNER: a heal minted unlocked, then a lower
+                    //     same-hand offense rule claims the same hand. APMF's tie rule
+                    //     is "earliest keeps it", so the newcomer is a NON-OWNER -- but
+                    //     `ClaimOffenseCast` returns true (the handle IS valid), so we
+                    //     report the opaque "owned cast: AI deciding" and stamp a lock
+                    //     for Firebolt while APMF is driving the heal.
+                    // Restoring the stamp restores the invariant; the lock is
+                    // claim-driven via `CastLockLive`, so this is the cheap correct
+                    // one. (The Failed arm needs no equivalent: with the HasSpell gate
+                    // above, the only way to reach it holding a claim is a null
+                    // graph/actor manager, which is negligible and self-clearing.)
+                    if (ownedClaimHeld || composed == ComposedCast::TryResult::Claimed)
+                        lockHands(a_spellID, lockTargetKey);
+
                     // TRANSPARENT (marth, GAMBIT_FLOWS §7.1): cast cooldown /
                     // two-handed debounce / gear debt are seconds-long waits
                     // during which the follower FIGHTS -- the rules below run.
