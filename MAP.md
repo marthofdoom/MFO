@@ -1622,9 +1622,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   LIVE claim does it also (b) claim `ClaimCombatTarget(create=true)` and (c) `Targeting::Command(
   follower, target->GetHandle())` to command the target (its UpdateCombat hook re-asserts
   `currentCombatTarget`) — **every owned tick this branch wins, deliberately not deduped here**:
-  `EnsureCastClaimLocked` (`APMFBridge.cpp:444`, shared with `ClaimHealCast`) already no-ops an
+  `EnsureCastClaimLocked` (`APMFBridge.cpp:470`, shared with `ClaimHealCast`) already no-ops an
   unchanged claim but still stamps its liveness timestamp on every call, which is what keeps the claim
-  alive past its `FacetExpiry()` backstop (round-robin-aware, `APMFBridge.cpp:306`; NOT the flat `kExpiry`, `:272` —
+  alive past its `FacetExpiry()` backstop (round-robin-aware, `APMFBridge.cpp:332`; NOT the flat `kExpiry`, `:298` —
   proven round-robin-bound by the Cicero equipment-claim capture) — a per-follower dedupe latch that
   skipped these calls on an unchanged tick was tried 2026-09-02 and reverted the same day (Fable
   review) for starving the claim mid-cast ("casting facet released" while the AI was still charging);
@@ -1806,7 +1806,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   here: `EnsureCastClaimLocked`'s **unchanged-AND-still-live** fast path now sends that `Repoint` before
   its early return.
   - **Where, and only there.** The heartbeat is inside the `liveNow` branch of `EnsureCastClaimLocked`
-    (`APMFBridge.cpp:444`), so it fires ONLY from `ClaimHealCast`/`ClaimOffenseCast` — a rule that WON its
+    (`APMFBridge.cpp:470`), so it fires ONLY from `ClaimHealCast`/`ClaimOffenseCast` — a rule that WON its
     lap re-asking for the identical `(spell,target,hand,conc,stopPct)` it already holds. It is
     **deliberately NOT in `RefreshHealCastClaim`**: that is `ComposedCast`'s incumbent HOLD, which keeps
     `refreshed` moving for a claim whose rule may have gone silent, and renewing APMF's TTL from there
@@ -1816,7 +1816,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `DualCast` claim is ONE handle in both slots and `ClaimOffenseCast` only ever `Ensure`s slot 0, so it
     is renewed exactly once.
   - **Interval = `min(TTL/2, TTL − FacetExpiry())`, floored at 0** (`CastHeartbeatInterval()`,
-    `APMFBridge.cpp`, anon ns, right above `EnsureCastClaimLocked`). Sized from the REAL cadence (#9), and
+    `APMFBridge.cpp:449`, anon ns, right above `EnsureCastClaimLocked`). Sized from the REAL cadence (#9), and
     from the window this file ALREADY agrees on rather than a second invented budget: `FacetExpiry()`
     (`:306`) is MFO's own upper bound on the gap between two services of one follower, so an interval
     above it could let the window lapse between renewals. At the defaults (`fSuppressWindow` 1.5, solo)
@@ -1916,8 +1916,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `Docs/CAST-DELIVERY.md`) still narrates it.
 - **PASS F (ch.8b `kIntent_Cast`/`RequestCast`, feat/mfo-cast-port, 2026-09-05):
   `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`/`GetHealCastProxy`/
-  `RefreshHealCastClaim`** (defs `APMFBridge.cpp:1081`/`:1120`/`:1128`/`:1135`/`:1149`
-  in that order — `:850` is the SEPARATE `GetOffenseCastProxy`, not one of these
+  `RefreshHealCastClaim`** (defs `APMFBridge.cpp:1116`/`:1155`/`:1163`/`:1170`/`:1184`
+  in that order — `:885` is the SEPARATE `GetOffenseCastProxy`, not one of these
   five; decls `APMFBridge.h:610,625,635,644,719`; the last two ADDED 2026-09-06 by
   feat/consume-cast-observability + `fix/mfo-heal-slot-and-proxy` — see the F1
   hold bullet under `ComposedCast.cpp` below for what they are for) — the
@@ -1934,7 +1934,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   Own `g_owned` slot — **field names corrected 2026-09-07: these were written as
   `healHandle`/`healSpell`/`healTarget`/`healHand`/`healConc`/`healStopPct`/
   `healRefreshed` and NO SUCH FIELDS EXIST.** The slot is `Owned::heal`, a
-  `CastClaim` (`APMFBridge.cpp:202`), whose members are plain
+  `CastClaim` (`APMFBridge.cpp:228`), whose members are plain
   `handle`/`spell`/`target`/`hand`/`conc`/`stopPct`/`refreshed`. Heal and hostile casts are
   mutually exclusive per tick by `CasterConsent::SpellKind`, never concurrent
   on one follower, but kept distinct to avoid cross-talk. AT THE TIME (2026-09-05,
@@ -1945,7 +1945,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   SAME facet as this heal claim via its OWN distinct `offenseHandle` slot —
   still never concurrent, never cross-talking, just sharing one underlying
   mechanism instead of two.
-  `EnsureCastClaimLocked` (`APMFBridge.cpp:444`, anon ns, RENAMED from `EnsureHealClaimLocked`
+  `EnsureCastClaimLocked` (`APMFBridge.cpp:470`, anon ns, RENAMED from `EnsureHealClaimLocked`
   by PASS G — it was always generic) create-or-REFRESHES: unlike PASS
   E's `Repoint`, `RequestCast`'s rich payload has NO in-place re-point, so a
   CHANGE in `(spell, target, hand, concentration, stopPct)` releases the old
@@ -1981,7 +1981,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   kApmfHandLeft` unconditionally, forwarded into `req.flags` as
   `kCastFlag_LeftHand` — UNCHANGED, on purpose: heals bypass the intelligent
   hand pass below entirely (heal is left, regardless).
-- **`WeaponHandActive`** (`APMFBridge.cpp:1017`, decl `APMFBridge.h:347`,
+- **`WeaponHandActive`** (`APMFBridge.cpp:1052`, decl `APMFBridge.h:347`,
   2026-09-06) — the canonical "does a weapon own this hand" signal for cast
   hand-selection: `Loadout::Read(follower, nullptr).grip` (a weapon equipped
   RIGHT NOW) OR `IsEquipmentClaimActive` (an equip gambit about to reassert
@@ -2043,11 +2043,11 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   the physical equip (only the claim) between `EquipWeapon`'s one-shot fires,
   a follower stuck in that gap the moment reads as "standing around unarmed
   until the next fight re-fires the equip gambit." Fixed with a dedicated
-  `FacetExpiry()` (`APMFBridge.cpp:306`, decl `APMFBridge.h:81`, renamed from `HealExpiry()`)
+  `FacetExpiry()` (`APMFBridge.cpp:332`, decl `APMFBridge.h:81`, renamed from `HealExpiry()`)
   sized the SAME way `TargetCastReconcile`/`SelfCastReconcile` already size
   their own round-robin-aware release windows (`suppress*1.12 +
   0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s
-  (`APMFBridge.cpp:1254`) per-claim expiry checks (the `CastClaim` slots plus
+  (`APMFBridge.cpp:1289`) per-claim expiry checks (the `CastClaim` slots plus
   `targetHandle`/`equipHandle`) all compare against `FacetExpiry()` now, not
   the flat `kExpiry`. package-offer
   (`packageHandle`) stays on the flat `kExpiry` — VERIFIED (not assumed) it is
@@ -2077,7 +2077,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **PASS G (ch.8b `kIntent_Cast`/`RequestCast`, feat/offense-cast-seats,
   2026-09-05): offense PORTED off ch.8 `kIntent_SelectSpell` onto the SAME
   facet PASS F ported heal onto.** `ClaimOffenseCast`/`ReleaseOffenseCast`
-  (defs `APMFBridge.cpp:867`/`:942`) REPLACE the retired
+  (defs `APMFBridge.cpp:902`/`:977`) REPLACE the retired
   `ClaimCasting`/`ReleaseCasting` (`kIntent_SelectSpell`, ARBITRATE+DENY only --
   the follower's own AI still picked whichever spell IT wanted, the
   long-standing "target right, spell wrong" defect,
@@ -2089,13 +2089,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `offenseHandle`/`offenseSpell`/`offenseTarget`/`offenseHand`/`offenseConc`/
   `offenseStopPct`/`offenseRefreshed` at `APMFBridge.cpp:111-114`. NO SUCH FIELDS
   EXIST** (`:111-114` is the `everLive` comment). The real shape: `Owned` holds
-  `CastClaim heal` (`APMFBridge.cpp:202`) and `CastClaim offense[2]` (`:213`,
+  `CastClaim heal` (`APMFBridge.cpp:228`) and `CastClaim offense[2]` (`:239`,
   [0]=left/[1]=right); the per-claim state — `handle`/`spell`/`target`/`hand`/
   `conc`/`stopPct`/`refreshed`/`created`/`proxy`/`everLive` — lives on `CastClaim`
   itself (`conc`/`stopPct` at `:87-88`). So offense is
   a DISTINCT claim slot from the heal one (Task 3's invariant preserved),
   sharing its create-or-refresh plumbing via the RENAMED, now-generic
-  `EnsureCastClaimLocked` (`APMFBridge.cpp:444`, was `EnsureHealClaimLocked` -- the function
+  `EnsureCastClaimLocked` (`APMFBridge.cpp:470`, was `EnsureHealClaimLocked` -- the function
   was always generic over its handle/out-params). Sole call site:
   `Actuation::CastOn`'s `ownedCast` branch (`Actuation.cpp:1036`, in the pre-flight) always
   passes `hand=kApmfHandLeft` (matches `Loadout::Prepare`'s own
@@ -2190,7 +2190,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   block, and `Followers::ReleaseHeldState`'s dismissal teardown) -- and in bulk
   by `Actuation::ClearCastLocks()`, called from `Actuation::ClearSelfCasts()`
   (the existing `Serialization.cpp` revert call site; no new one added).
-  `APMFBridge::FacetExpiry()` (`APMFBridge.cpp:306` was anon-namespace-private;
+  `APMFBridge::FacetExpiry()` (`APMFBridge.cpp:332` was anon-namespace-private;
   MOVED to external linkage + declared in `APMFBridge.h` for this cross-TU
   reuse -- pure visibility change, same formula, every in-TU caller unaffected).
   **Scope, deliberate:** the legacy AI-first-grace + force-on-miss hybrid and
@@ -2549,7 +2549,7 @@ native seats) and ENGINE_NOTES §0.40.
   records `g_lastHold[fid]` (`HoldRecord`, `:173`) and returns `TryResult::Held` —
   the incumbent keeps its charge window; NOTHING is claimed and NOTHING applied.
   Pieces:
-  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:1149`, decl
+  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:1184`, decl
     `APMFBridge.h:719`) — the hold's HEARTBEAT: bumps the same `refreshed` stamp
     `ClaimHealCast` bumps, because the hold path deliberately never reaches
     `ClaimHealCast` and `Tick()`'s `FacetExpiry()` sweep would otherwise release
@@ -2558,7 +2558,7 @@ native seats) and ENGINE_NOTES §0.40.
     returns false outright** — an honest degrade to the pre-F1 thrash, never a
     hold nothing can break, #7), AND the claim-age cap below.
   - `APMFBridge::kHealHoldNeverObservedMs` (`APMFBridge.h`, **4000ms**) vs
-    `CastClaim::created` (`APMFBridge.cpp:103`, stamped once at `:708`) — the
+    `CastClaim::created` (`APMFBridge.cpp:103`, stamped once at `:734`) — the
     NEVER-OBSERVED cap. **It races `observed` (the `[cast]` SpellSink signal), not
     the fire, and it is sized from the HEAL datum:** the one heal that landed on
     the deck took **2.95s claim-to-observed** (minted 19:59:11.158 → `[cast]`

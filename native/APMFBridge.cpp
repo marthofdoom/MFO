@@ -148,12 +148,38 @@ namespace MFO::APMFBridge {
             std::chrono::steady_clock::time_point renewed{};
             // THE EXACT APMF_Param APMF STORED FOR THIS CLAIM, kept verbatim so
             // a heartbeat Repoint can re-send it byte-for-byte instead of
-            // rebuilding one that is merely "the same". Built at the mint below
-            // to mirror APMF's ControlMap::EnqueueCast exactly -- that function
-            // stores `op.param.form = req->spell` and
-            // `op.param.ival = req->flags` into a zero-initialised APMF_Param
-            // and nothing else -- so this copy is what `self->param` holds on
-            // the APMF side.
+            // rebuilding one that is merely "the same".
+            //
+            // WHAT IT MUST MIRROR IS `ApplyRequest`'s **EFFECTIVE** FORM, NOT
+            // `req->spell` (review finding, 2026-09-08 -- the sentence that stood
+            // here named only EnqueueCast and so recorded a dependency it did not
+            // state). TWO functions shape what APMF ends up storing in
+            // `self->param`, and only the first is a straight copy:
+            //   * core/ControlMap.cpp's EnqueueCast writes
+            //     `op.param.form = req->spell` and `op.param.ival = req->flags`
+            //     into a zero-initialised APMF_Param, and nothing else.
+            //   * core/ControlMap.cpp's ApplyRequest then REWRITES that form
+            //     before the claim is stored, in exactly two cases:
+            //       - kCastFlag_DenyHandOnly -> forced to 0 (that claim drives
+            //         NOTHING for its whole life);
+            //       - kCastFlag_FromPackage  -> replaced by the spell APMF
+            //         EXTRACTED from the package.
+            // MFO sets NEITHER flag today, which is the only reason a plain
+            // `form = wantSpell` was byte-exact -- an unrecorded dependency, and
+            // MFO's own deny-only hand claim is queued work
+            // (memory cast-deny-only-hand-claim / apmf-f3-denyhand-followups).
+            // So the mint below mirrors the DenyHandOnly rewrite locally. It
+            // CANNOT mirror the FromPackage one: the extracted spell is resolved
+            // inside APMF and there is no query that hands it back, so a future
+            // caller that sets kCastFlag_FromPackage MUST solve that first (an
+            // APMF-side read of the resolved spell) rather than assume this copy
+            // is still exact. Stated here so the next reader inherits the
+            // dependency instead of re-deriving it from a warn flood.
+            //
+            // WHAT GOES WRONG IF THE MIRROR DRIFTS. Not a mask -- ApplyRepoint
+            // still renews the TTL -- but it REFUSES the form change and says so
+            // (`spdlog::warn`), so every heartbeat would emit one warn per claim
+            // per interval (~3 s at the defaults) for as long as the claim stands.
             //
             // WHY VERBATIM AND NOT REBUILT. APMF's ApplyRepoint REFUSES (loudly)
             // a Repoint whose `param.form` differs from the claim's current
@@ -491,7 +517,7 @@ namespace MFO::APMFBridge {
                 if (liveNow) {
                     // F4 (RC4, 2026-09-06): the proxy is minted lazily during
                     // APMF's own per-frame Drain, so the GetCastProxy read in
-                    // the mint block below (:734-736) can still see 0 even
+                    // the mint block below (:769-771) can still see 0 even
                     // though the SAME handle now has a real proxy published.
                     // Re-read it lazily here, on the unchanged/still-live fast
                     // path this claim takes on every later Try() while nothing
@@ -721,8 +747,17 @@ namespace MFO::APMFBridge {
                 // therefore a no-change param update plus a TTL renewal, which is
                 // precisely the "same-form heartbeat" APMF_API.h invites and the one
                 // shape that trips none of ApplyRepoint's refusals.
+                //
+                // `form` MIRRORS ApplyRequest's EFFECTIVE form, not `req.spell` --
+                // see CastClaim::reqParam above for the full working. A
+                // kCastFlag_DenyHandOnly claim has its driven form forced to 0 on
+                // the APMF side, and ApplyRepoint pins it to 0 there too, so
+                // re-sending `wantSpell` on such a claim would earn a refusal warn
+                // every single heartbeat. Mirrored here instead of assumed. (The
+                // OTHER rewrite, kCastFlag_FromPackage, is NOT representable from
+                // this side and MFO sets neither flag today -- documented above.)
                 c.reqParam       = APMF_API::APMF_Param{};
-                c.reqParam.form  = wantSpell;
+                c.reqParam.form  = (req.flags & APMF_API::kCastFlag_DenyHandOnly) ? 0u : wantSpell;
                 c.reqParam.ival  = static_cast<std::int32_t>(req.flags);
                 // ABI v6: fetch the delivery-flip proxy APMF minted for this claim
                 // (0 on ABI < 6, or a claim that minted no proxy) -- recorded
