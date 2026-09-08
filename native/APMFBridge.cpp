@@ -1305,6 +1305,16 @@ namespace MFO::APMFBridge {
     // semantics, not a shortcut: there is one APMF handle, APMF arbitrates it as
     // one claim occupying both hands, and there is no half-release to make. A
     // caller preempting one hand of a dual cast is ending that dual cast.
+    //
+    // THE OFFENSE SLOT ONLY -- THE HEAL SLOT IS NOT THIS FUNCTION'S TO TOUCH
+    // (review finding, 2026-09-08). It used to release `heal` too whenever the hand
+    // was LEFT, which was wrong twice over: it was UNCONDITIONAL (an offense claim
+    // being displaced from the left dragged an unrelated coexisting heal claim down
+    // with it), and it went behind ComposedCast's back -- the heal claim is
+    // bookkept THERE (its [cfc] watch slot, its CastBounds arm, its hold record),
+    // and dropping the APMF claim alone leaves all three armed for a claim that no
+    // longer exists. `ComposedCast::End` is the seam that takes them down together,
+    // and the caller routes a heal-backed release through it.
     void ReleaseCastClaimOnHand(RE::FormID a_follower, std::int32_t a_hand) {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
@@ -1317,9 +1327,6 @@ namespace MFO::APMFBridge {
             ReleaseClaimLocked(o.offense[idx]);
             if (sharedDual) o.offense[other] = CastClaim{};   // one handle, released once
         }
-        // Heals are LEFT always (ClaimHealCast's own hard rule), so the heal slot
-        // is only ever part of the LEFT hand.
-        if (idx == 0) ReleaseClaimLocked(o.heal);
         EraseIfEmpty(it);
     }
 
@@ -1514,6 +1521,20 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
         return it != g_owned.end() && it->second.heal.handle != APMF_API::kInvalidHandle;
+    }
+
+    // Which spell the heal slot's live claim names (0 when none stands). Added for
+    // the preempt path (2026-09-08), which must tell "the lock I am displacing IS
+    // the heal claim" from "an offense claim on the LEFT hand, with an unrelated
+    // heal claim coexisting" -- releasing the second case's heal would drop a claim
+    // nothing asked about. Same g_mx / no-live-claim-answers-0 contract as
+    // GetHealCastProxy below.
+    RE::FormID GetHealCastSpell(RE::FormID a_follower) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.heal.handle == APMF_API::kInvalidHandle) return 0;
+        return it->second.heal.spell;
     }
 
     RE::FormID GetHealCastProxy(RE::FormID a_follower) {

@@ -318,8 +318,16 @@ namespace MFO::APMFBridge {
     // design, and using it would drop the OTHER hand's unrelated claim as
     // collateral.
     //
-    // a_hand: kApmfHandLeft -> the left offense slot AND the heal slot (heals are
-    // LEFT always); anything else -> the right offense slot.
+    // a_hand: kApmfHandLeft -> the left offense slot; anything else -> the right
+    // offense slot. **The HEAL slot is deliberately NOT touched, on either hand.**
+    // A heal claim is bookkept by ComposedCast (its [cfc] watch slot, its CastBounds
+    // arm, its hold record), so releasing the APMF claim from under it would leave
+    // all three armed for a claim that no longer exists -- `ComposedCast::End` is
+    // the seam that takes them down together, and a caller displacing a heal must
+    // go through it. (This function used to drop `heal` unconditionally for the LEFT
+    // hand, which also meant an offense claim being displaced took an unrelated
+    // coexisting heal with it.) `GetHealCastSpell` below is how a caller tells the
+    // two apart.
     //
     // A MIRRORED DUALCAST CLAIM IS RELEASED WHOLE from either hand -- one APMF
     // handle occupying both, arbitrated as one claim, with no half-release to make.
@@ -706,6 +714,13 @@ namespace MFO::APMFBridge {
     // (2026-09-06): ComposedCast::Try hands this to WatchArmed so the silent-
     // claim diagnostic recognises a cast of the proxy, not only the original
     // spell, as the claimed heal actually firing.
+    // Worker-safe. The spell the heal slot's LIVE claim names, or 0 when no heal
+    // claim stands. Exists for the preempt path, which must distinguish "the lock I
+    // am displacing IS the heal claim" (route the release through
+    // ComposedCast::End) from "an offense claim on the LEFT hand with a heal claim
+    // coexisting" (leave the heal alone). Same contract as GetHealCastProxy.
+    RE::FormID GetHealCastSpell(RE::FormID a_follower);
+
     RE::FormID GetHealCastProxy(RE::FormID a_follower);
 
     // Worker-safe (the SAME g_mx as every accessor above). HEARTBEAT for a

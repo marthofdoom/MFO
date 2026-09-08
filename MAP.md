@@ -431,31 +431,31 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   it holds off entirely — never a half-landed dual-cast). `handPlan`/`lockHands`
   thread the resolved hand(s) to every `HoldCastLock`/`ClaimOffenseCast` call site
   below in the SAME function so the lock and the actual APMF claim never disagree)** →
-  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `Actuation.cpp:1271`)** →
+  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `Actuation.cpp:1370`)** →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:74`) via `Packages::CastAt`.
 - **THE PER-HAND CAST LOCK, AND THE TWO 2026-09-08 CHANGES TO IT** (`Docs/DIAG-2026-09-08-field.md`
-  RC1/RC2). `CastLockLive` (`Actuation.cpp:587`) now answers "this hand is still busy" THREE ways,
-  in order: (1) `ClaimLiveOnHand` (`:440`, factored out — a live offense claim on that slot, or the
+  RC1/RC2). `CastLockLive` (`Actuation.cpp:595`) now answers "this hand is still busy" THREE ways,
+  in order: (1) `ClaimLiveOnHand` (`:448`, factored out — a live offense claim on that slot, or the
   heal claim for LEFT); (2) the round-robin `FacetExpiry()` staleness window, unchanged; (3) **NEW
-  (F8)** — `CastInFlightOnHand` (`:533`): the follower's own `RE::MagicCaster` for that hand is
+  (F8)** — `CastInFlightOnHand` (`:541`): the follower's own `RE::MagicCaster` for that hand is
   mid-cast (`state` not `kNone`/`kUnk08`/`kUnk09`) of the locked spell **or its APMF delivery-flip
   proxy** — read from `GetActorRuntimeData().magicCasters[]` DIRECTLY, never through the
   `Actor::GetMagicCaster` virtual (that body is the game's, CommonLib implements none of it, and
   SkyrimSE.exe is Steam-DRM encrypted on disk so it cannot be disassembled here — if it lazily allocates
   the caster, this always-on job-worker predicate would be allocating off-main; the array read removes the
-  question) — bounded by `kInFlightHoldCap` (`:562`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
+  question) — bounded by `kInFlightHoldCap` (`:570`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
   cannot own a hand forever. That third answer is what stops another rule taking a hand whose charged
   cast has not fired yet when the CLAIM lapsed mid-charge. **The cap is anchored on `CastLock::claimGoneAt`
-  (`Actuation.cpp:234`), NOT on `lastSeen`** — F9 deliberately stops re-stamping the lock, so `lastSeen`
+  (`Actuation.cpp:254`), NOT on `lastSeen`** — F9 deliberately stops re-stamping the lock, so `lastSeen`
   freezes at the first claiming lap and anchoring there made the protection dead for any claim older than
   the cap. `claimGoneAt` is stamped the first time this third answer is reached, cleared when the claim is
   seen live again, and cleared by `HoldCastLock` (fresh hold = fresh cast).
   The proxy both this and the in-flight watch re-arm use comes from ONE resolver, `CastProxyOnHand`
-  (`:458`): offense proxy, falling back to the HEAL proxy on the left hand — heals are LEFT always, and a
+  (`:466`): offense proxy, falling back to the HEAL proxy on the left hand — heals are LEFT always, and a
   left lookup that consults only the offense accessor answers 0 for every proxied heal, which silently
   rebuilds the RC4 "[cfc] NO observed cast" false alarm. **It takes an `RE::Actor*` now** — so do
-  `HandFree` (`:713`) and `ResolveCastHand` (`:748`); every call site already had one.
+  `HandFree` (`:785`) and `ResolveCastHand` (`:834`); every call site already had one.
   `ResolveCastHand` additionally **PINS a request to the hand(s) its own live claim already occupies**
   (the incumbent pin) instead of honouring a freshly re-derived `Loadout::PlanCastHand` answer: a
   hand-mode flip (Dual↔single, left↔right) is a CHANGE to `EnsureCastClaimLocked`, i.e.
@@ -463,45 +463,65 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **What breaks if you change this:** widen the in-flight state set and a stuck caster owns a hand
   until the cap; drop the proxy match and every APMF-proxied cast reads as "not ours" and loses its
   protection; drop the incumbent pin and the Dual↔single churn returns.
-- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:1271`, `HandPlan::inFlight` at `:738`).** A cast rule whose
+- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:1370`, `HandPlan::inFlight` at `:821`).** A cast rule whose
   own cast is already running (its exact (spell,target) locks the hand AND a live claim stands there)
   no longer re-runs the claim/equip/consent path and returns `Fired` — which ENDED THE SCAN and let one
   self-heal monopolise 22 consecutive laps over 44 s with zero offense rules reached. It now calls
   `APMFBridge::RefreshOwnedCastOnHand` (`APMFBridge.cpp:1239`), re-arms the `[cfc]` watch, logs one
-  throttled `[eval] ... SATISFIED IN FLIGHT` line (`LogCastInFlight`, `:295`, own map
+  throttled `[eval] ... SATISFIED IN FLIGHT` line (`LogCastInFlight`, `:324`, own map
   `g_lastInFlightLog`, cleared with `g_lastLockLog` in `ClearCastLock`/`ClearCastLocks`), and returns a
   TRANSPARENT NoOp so the scan continues to the rules below.
   **What breaks if you change this:** call `lockHands` here and the lock outlives the claim it is
   supposed to be bounded by; skip the refresh and `Tick()`'s `FacetExpiry` sweep kills the live claim;
 - **RANK PREEMPTION — THE GAMBIT LIST ORDER IS THE PRIORITY ORDER (marth, 2026-09-08).** A higher-ranked
   rule must be able to TAKE a hand from a lower-ranked incumbent, not be held off behind it and not wait for
-  its condition to go false. **Rank is not a new scheme — it is the rule index, read off the scan itself:**
-  `Scheduler::Tick` calls `Actuation::BeginCastLap(id)` (`Scheduler.cpp:565` → `Actuation.cpp:2704`) once
-  per follower scan, and `CastLock::refreshedLap` (`Actuation.cpp:252`) records the lap on which each hand's
-  incumbent last asserted itself — stamped by `HoldCastLock` (a claim) and `MarkCastLockRefreshed` (`:413`,
-  F9's in-flight path, which marks the LAP ONLY and never `lastSeen`, because F8's cap depends on that
-  freezing). `IncumbentAssertedThisLap` (`:421`) is therefore the whole rank test: not yet asserted ⇒ the
-  asker reached the cast path first ⇒ it sits higher in the list ⇒ it may preempt. `CanPreemptHand` (`:672`)
-  adds the one safety condition — **never mid-charge**, reusing `CastInFlightOnHand` rather than inventing a
-  second notion of busy — and `PreemptHand` (`:690`) commits: `APMFBridge::ReleaseCastClaimOnHand`
-  (`APMFBridge.cpp:1308`, per-hand; `ReleaseOffenseCast` is whole-follower and would take the other hand's
-  unrelated claim with it), clear that hand's lock, one throttled `[eval] ... PREEMPTED` line.
-  A mirrored DualCast claim is released WHOLE from either hand — one handle, one claim, no half-release.
-  **What breaks if you change this:** stamp `lastSeen` in `MarkCastLockRefreshed` and F8's charge protection
-  dies with it; drop the mid-charge guard and the charged-cast loss returns; bump the lap counter anywhere
-  but ahead of the scan and rank inverts; make it global instead of per-follower and it advances between two
-  rules of the same scan.
+  its condition to go false. **Rank is CARRIED, not inferred:** `Actuation::Fire` records the winning rule's
+  index in `g_firingRule` (`Actuation.cpp:233`) — the single entry point into every actuation in the file —
+  `HoldCastLock` stamps it into `CastLock::owningRule` (`:285`) when a hand is claimed, and `CanPreemptHand`
+  (`:690`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
+  EQUAL is the incumbent itself (`IsOwnRetarget`, `:718` — a rule re-aiming its own cast, which fails
+  `HandFree`'s incumbent match on `target`), higher is held off. The one safety condition is **never
+  mid-charge**, reusing `CastInFlightOnHand` rather than inventing a second notion of busy.
+  **An earlier cut inferred rank from scan arrival ("did the incumbent assert itself earlier this lap?") and
+  was replaced, not tuned:** a rule whose condition is TRUE but which exits transparently BEFORE the hand
+  gate (#68 out-of-range, the magicka cost/reserve exits, `HasSpell`) never asserts at all, so two such rules
+  took the hand from each other on alternate laps and neither ever charged; and a retargeting rule outranked
+  itself. The lap counter, `BeginCastLap` and the `Scheduler` call site that fed it are all gone.
+  **The displacement is DEFERRED, never done at resolve time:** `ResolveCastHand` only records
+  `HandPlan::preemptLeft/preemptRight` (`:821`), and `CastOn`'s `commitPreempt` (`:1441`) fires immediately
+  before the claim it is for — the self fork, the concentration fork, `ClaimOffenseCast`, `ComposedCast::Try`
+  and (for the APMF-absent world, where `Loadout::Prepare` IS the claim on the hand) the equip switch. Every
+  transparent refusal in between therefore refuses without having touched the incumbent; committing at
+  resolve time turned a deterministically-failing higher rule into a dead hand at lap rate.
+  `PreemptHand` (`:733`) then releases via `APMFBridge::ReleaseCastClaimOnHand` (`APMFBridge.cpp:1318`,
+  per-hand, **offense slot only**), routes a heal-backed release through `ComposedCast::End` when
+  `APMFBridge::GetHealCastSpell` (`APMFBridge.cpp:1532`) says the lock being displaced IS the heal claim
+  (otherwise an unrelated coexisting heal would be dropped, and its watch/bounds/hold left armed for a claim
+  that no longer exists), clears the lock, and — for a MIRRORED DUAL incumbent (both hands, same
+  spell+target+owningRule) — clears BOTH locks, because one APMF handle on two hands has no half-release and
+  `HandFree`'s incumbent short-circuit does not consult liveness.
+  **What breaks if you change this:** compare anything but the carried index and the pre-gate transparent
+  exits fool it again; drop the mid-charge guard and the charged-cast loss returns; commit the displacement
+  at resolve time and a failing rule kills a working one; release the heal slot from the bridge and
+  ComposedCast is left holding bookkeeping for a dead claim.
 - **AUTO PREFERS THE UNCLAIMED HAND ("there are two hands, auto should figure it out" — marth).**
   `ResolveCastHand`'s `EitherFree` case took the LEFT hand whenever it was free, which is where the
   collisions came from: the heal facet is LEFT-ONLY by contract (`ClaimHealCast`'s hard rule), so an offense
   cast idling on the left stands exactly where the next heal must go while the right hand sits empty. It now
-  prefers a hand `ClaimLiveOnHand` says MFO has not already claimed, and contends for an occupied one only
-  when both are taken — and when it must take one by rank it takes the RIGHT first, leaving the left for the
-  facet that can use no other. `DualCast` may also preempt, but only when BOTH hands are takeable (checked
+  prefers the RIGHT hand **unconditionally** — free-and-unclaimed first, then free, then by rank — leaving
+  the left for the facet that can use no other. (A first cut only preferred the right once the left was
+  already CLAIMED, which never fires in the flow that matters: a standing heal claim makes `leftFree` false
+  long before that test is reached, so the opening state — two free unclaimed hands — still took the left.)
+  **KNOWN CONFLICT AT THE EQUIPMENT LAYER, outside this file's boundary and NOT fixed here:**
+  `Loadout::Prepare` equips into `LeftHandSlot()` unconditionally (`Loadout.cpp:279, :359`) and at cast
+  level 4 `DeselectSpell`s the RIGHT hand's other spell (`:296-298`). A RIGHT-hand claim therefore has MFO
+  physically equipping the same spell into the LEFT hand — a wasted equip, and on a follower holding a
+  shield or weapon there, a needless displacement recorded as a restore debt. `Prepare` needs a hand
+  parameter; that is its own brief. `DualCast` may also preempt, but only when BOTH hands are takeable (checked
   as a pure predicate before either is committed, so a released claim is never spent for nothing).
     make it opaque (transparent=false) and RC2 comes straight back. If the refresh comes back FALSE the
   claim really is gone, so the pin that named it is VOID: the gate drops those hands' locks
-  (`ClearCastLockHand`, `Actuation.cpp:430`) and re-derives the plan (`resolveHands` lambda) before
+  (`ClearCastLockHand`, `Actuation.cpp:438`) and re-derives the plan (`resolveHands` lambda) before
   falling through — without that, a LEFT-always heal pinned to the RIGHT by a stale lock would claim,
   equip and lock the wrong hand.
   Off-AE the whole path declines transparently (T#67) so vanilla AI keeps casting.
@@ -1773,7 +1793,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   occupy, so nothing un-gambited can arm there (APMF leaving an unclaimed hand permissive is correct
   for a framework; MFO's design is that only gambited spells occur). Derived — not commanded — by
   `ReconcileHandFloorLocked` (`APMFBridge.cpp:937`), called from ONE place: `Tick()`
-  (`APMFBridge.cpp:1638`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
+  (`APMFBridge.cpp:1659`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
   ABI ≥ 5. That pass also owns the floor's `refreshed` stamp and TTL heartbeat.
   **Exactly one hand driven → floor the other; both driven → none; NEITHER driven → NEITHER hand is
   floored** (not both: principle 4 — nothing was declared; it would mute followers with no cast gambit
@@ -1793,10 +1813,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   until APMF's TTL. It does NOT deny MFO's own direct force (`CastSpellImmediate` is `MagicCaster`
   vtable slot 01, `CheckCast` is 0A — pinned `include/RE/M/MagicCaster.h:46,55`) and does NOT deny
   weapons (APMF's 0x0F seat is on the spell/staff selector vtables only).
-  **Recorded, not fixed:** `Loadout::Prepare` takes no hand parameter, so on a RIGHT-hand offense claim MFO
-  still equips the gambit spell into the left hand, which the floor has closed to the AI. Correctness is
-  unaffected (the claim on the other hand is what drives the cast), but the honest wording is **one wasted
-  left-hand equip per offense claim on a weaponless follower** — not "inert".
+  **Recorded, not fixed (understated in the first version of this note):** `Loadout::Prepare` takes no hand
+  parameter and always equips into `LeftHandSlot()` (`Loadout.cpp:279, :359`), so on a RIGHT-hand offense
+  claim MFO equips the gambit spell into the LEFT hand, which the floor has closed to the AI. The cast still
+  works (the claim on the other hand drives it), but the cost is **a wasted left-hand equip on every such
+  claim**, and on a follower carrying a shield or weapon in the left hand it DISPLACES that gear and books a
+  restore debt. With right-first AUTO this is now the common case, not an edge. The fix is a hand parameter
+  on `Prepare` — outside this brief's file boundary, reported rather than reached for.
 - **`RefreshOwnedCastOnHand(follower, hand)` (`APMFBridge.cpp:1239`, F9).** Refreshes the cast claim(s)
   MFO already holds on a hand WITHOUT re-requesting: it replays each claim's OWN stored tuple through
   `EnsureCastClaimLocked`, so the identity compare matches by construction: the TTL is renewed in place

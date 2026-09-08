@@ -221,17 +221,6 @@ namespace MFO::Actuation {
     // release conditions. These two are its EXTERNAL release points, for
     // callers outside this TU:
 
-    // ONE RULE SCAN FOR ONE FOLLOWER -- call from Scheduler::Tick at the top of a
-    // follower's scan, before any rule is evaluated (rank preemption, marth
-    // 2026-09-08). Advances that follower's lap counter, which is the only thing
-    // rank preemption compares against: the gambit list order IS the priority
-    // order, the scan visits rules in that order, so "has this hand's incumbent
-    // already asserted itself on THIS lap?" is exactly the rank test -- a rule that
-    // reaches the cast path first ranks higher and may take the hand from a
-    // lower-ranked incumbent (never mid-charge); one arriving later is held off as
-    // before. Cheap (one integer bump), idempotent in effect, no engine call.
-    void BeginCastLap(RE::FormID a_follower);
-
     // Drop a_follower's lock NOW. Idempotent (no lock -> no-op). Call the
     // instant the follower is dismissed (Followers::ReleaseHeldState) or when
     // no cast rule's condition holds this tick / combat ends (Scheduler,
