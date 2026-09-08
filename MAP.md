@@ -1720,7 +1720,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     owner holding the facet with its own spell equipped, `Prepare` short-circuits only when MFO's spell is
     already in hand, so MFO re-equipped over that owner EVERY 133 ms tick while logging "this cast does NOT
     happen", and latched consent let the follower's own AI cast it unforced — a fallback nobody asked for,
-    wearing a refusal's clothes. Both asks now sit in a **pre-flight** (`Actuation.cpp:~850-980`), still
+    wearing a refusal's clothes. Both asks now sit in a **pre-flight** (comment `Actuation.cpp:901`, the
+    asks themselves `:1013-1094`), still
     gated on `bEquipToCast`, and a refusal returns from there with nothing done.
     **Two things the reordering spent that main got for free, both restored by the pre-merge review
     2026-09-07:** (1) the COMPETENCE gate — `Prepare`'s `!HasSpell` check used to precede every ask, so a
@@ -1741,8 +1742,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `FacetExpiry` swept it and that deny re-engaged for the tail. **The key is NOT inert generally** — it
     still stamps via `Loadout::StartCooldown` (`Loadout.cpp:413`, from the `[cast]` SpellSink
     `Diagnostics.cpp:263`) and still `ReleaseSpell`s, `Prepare` still returns `Debounced` so MFO does not
-    re-equip in the window, the pacing deny **still bites in full on the APMF-absent / `bLegacyCastHybrid` /
-    `bApmfCast`-off path**, and the direct-force FF beats (`Actuation_Direct.cpp:989`, `:1282`) and
+    re-equip in the window, the pacing deny **still bites in full on the APMF-ABSENT path — and only that
+    one** (`bLegacyCastHybrid` / `bApmfCast`-off do NOT restore it; they gate `ownedCast` only, while
+    `ComposedCast::Enabled` (`ComposedCast.cpp:38-45`) reads neither, so with APMF present and
+    `bHealAnimPackage` ON a HEAL gambit still mints a claim on those paths and `ClientCastClaimed` stands the
+    deny down identically — corrected by the re-review 2026-09-07), and the direct-force FF beats
+    (`Actuation_Direct.cpp:989`, `:1282`) and
     `CastAuto`'s interval (`:1509`) are untouched. marth: *"a cast can only cast as fast as a cast. No
     reason to be slower."* The engine's own equip→charge→fire pipeline (~2.3-2.5s offense, 2.95s
     claim-to-observed on the one landed heal) already paces casting at the fastest a cast can physically
@@ -2356,7 +2361,7 @@ native seats) and ENGINE_NOTES §0.40.
   re-pointed, deliberately: re-using the name for the opposite meaning would have let every
   call site keep compiling with inverted semantics.
   ← `Actuation_Direct.cpp:886` (in `CastSelfDirect`, `:829`), `:1183` (in
-  `CastTargetDirect`, `:1141`) **and `Actuation.cpp:965`** (`CastOn`'s ally/player
+  `CastTargetDirect`, `:1141`) **and `Actuation.cpp:1079`** (`CastOn`'s ally/player
   branch — a third call site, MISSING from this entry until 2026-09-06; MOVED by
   F3-2 out of the equip switch into `CastOn`'s pre-flight, so the ask now precedes
   `Loadout::Prepare`/`CasterConsent::Want` and a refusal leaves no side effects).
@@ -2456,7 +2461,7 @@ native seats) and ENGINE_NOTES §0.40.
   records `g_lastHold[fid]` (`HoldRecord`, `:173`) and returns `TryResult::Held` —
   the incumbent keeps its charge window; NOTHING is claimed and NOTHING applied.
   Pieces:
-  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:895`, decl
+  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:943`, decl
     `APMFBridge.h:704`) — the hold's HEARTBEAT: bumps the same `refreshed` stamp
     `ClaimHealCast` bumps, because the hold path deliberately never reaches
     `ClaimHealCast` and `Tick()`'s `FacetExpiry()` sweep would otherwise release
@@ -2499,7 +2504,7 @@ native seats) and ENGINE_NOTES §0.40.
   - **Depended-on-by:** `Actuation_Direct.cpp:888`/`:1185` map `Held` →
     `SelfCast::Held` (`Actuation.h:93`) → `Actuation_Direct.cpp:1488` (`CastAuto`,
     transparent NoOp) and `Logistics.cpp:1506` (transparent `continue`, log deduped
-    2s); `Actuation.cpp:1269-1271` (`CastOn`) returns a TRANSPARENT NoOp with NO hand
+    2s); `Actuation.cpp:1334-1336` (`CastOn`) returns a TRANSPARENT NoOp with NO hand
     lock.
   - **What breaks if you change this:** (1) folding `Held` back into
     `Applied`/`true` re-creates the Fable SEV-2 bug — the held-off spell counts as
