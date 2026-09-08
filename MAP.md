@@ -1721,19 +1721,40 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     already in hand, so MFO re-equipped over that owner EVERY 133 ms tick while logging "this cast does NOT
     happen", and latched consent let the follower's own AI cast it unforced — a fallback nobody asked for,
     wearing a refusal's clothes. Both asks now sit in a **pre-flight** (`Actuation.cpp:~850-980`), still
-    gated on `bEquipToCast`, and a refusal returns from there with nothing done. Deliberate consequence,
-    documented at the site: a claim can now be minted on a tick whose `Prepare` then debounces — correct
-    under the owned model, since APMF's seats do the equipping while the claim stands.
-  - **A DRAIN-TIME LOSS IS A REFUSAL (F3-1, same branch).** APMF's `ControlMap::EnqueueCast` returns
-    `kInvalidHandle` synchronously ONLY when no channel serves `kIntent_Cast`; every real arbitration
-    decision lands later, in `Drain()`. So an arbitration LOSS still returned a handle, reported `Claimed`,
-    took the opaque `"owned cast: AI deciding"` NoOp that walls off every rule below, read not-live next
-    tick, and was re-requested at INFO forever — the fail-closed path was nearly unreachable in the field.
-    `CastClaim` now carries **`everLive`** (`APMFBridge.cpp`, latched the first time `IsClaimLive` answers
-    true, reset with the claim): a not-live handle that WAS live aged out at APMF's TTL and re-requests as
-    before; one that was **never published** is released and NOT re-requested, so the claim comes back
-    empty, the caller fails closed, and a `spdlog::warn` names the shape. Not a latch — the next winning
-    tick asks afresh.
+    gated on `bEquipToCast`, and a refusal returns from there with nothing done.
+    **Two things the reordering spent that main got for free, both restored by the pre-merge review
+    2026-09-07:** (1) the COMPETENCE gate — `Prepare`'s `!HasSpell` check used to precede every ask, so a
+    claim for a spell the actor does not know was structurally impossible; `CastOn` now runs `HasSpell`
+    itself AHEAD of the pre-flight (`Prepare` keeps its own as defence in depth). (2) "a live claim implies
+    a hand lock" — every claim used to be minted in the Equipped arm, which always stamps the lock, and
+    `HandFree` returns true on `lock.spell == 0` BEFORE consulting `CastLockLive`; the **Debounced arm now
+    stamps the lock when a claim is standing**.
+    Deliberate consequence, documented at the site: a claim can now be minted on a tick whose `Prepare`
+    then debounces — correct under the owned model, since APMF's seats do the equipping while the claim
+    stands. It does NOT get released by Scheduler's `!castSeen` path in that state (the rule still holds,
+    so `castSeen` is true); it ends when the RULE stops holding. **OPEN, marth's call:** `Debounced` is
+    primarily the `fCastCooldown` case, and refreshing the claim through a cooldown stretch stops
+    `CasterConsent`'s pacing deny re-engaging, making **`fCastCooldown` effectively inert under the owned
+    model** — flagged at the pre-flight and at `Config.h`'s `fCastCooldown` entry, deliberately not gated
+    on `Loadout::CoolingDown` pending the decision.
+  - **AN OUTRIGHT REFUSAL IS A REFUSAL (F3-1, same branch).** APMF's `ControlMap::EnqueueCast` returns
+    `kInvalidHandle` synchronously ONLY when no channel serves `kIntent_Cast`; everything else is decided
+    later, in `Drain()`. So a request APMF ends up publishing NO claim for still returned a handle, reported
+    `Claimed`, took the opaque `"owned cast: AI deciding"` NoOp that walls off every rule below, read
+    not-live next tick, and was re-requested at INFO forever — the fail-closed path was nearly unreachable
+    in the field. `CastClaim` now carries **`everLive`** (`APMFBridge.cpp`, latched the first time
+    `IsClaimLive` answers true — including from `RefreshHealCastClaim`'s own sighting — and reset with the
+    claim): a not-live handle that WAS live aged out at APMF's TTL and re-requests as before; one that was
+    **never published** is released and NOT re-requested, so the claim comes back empty, the caller fails
+    closed, and a `spdlog::warn` (deduped 5s per follower+spell) names the shape. Not a latch — the next
+    winning tick asks afresh.
+    **SCOPE, corrected by the pre-merge review 2026-09-07 — do NOT read this as "MFO detects arbitration
+    losses".** APMF `push_back`s a claim REGARDLESS of ownership and `IsClaimLive` answers true for ANY
+    unexpired claim carrying that handle, owner or not, so an ordinary **basis or tie loss reads live,
+    latches `everLive`, and is invisible here** — MFO reports `Claimed` while APMF drives another client's
+    spell. This catches OUTRIGHT refusals only: hand-collision loser, unloadable actor,
+    FromPackage-without-spell. Telling a tie loss apart needs a real owner query (`IsClaimOwning`), an
+    **APMF v7 ABI addition that does not exist yet**.
 - **`IsOwnedCastActive(follower)` (Phase 2, ALLOWANCE-TEMPLATE.md §7; REPOINTED feat/offense-cast-seats
   2026-09-05; backing store re-shaped feat/per-hand-cast-slots 2026-09-06):** worker- AND
   combat-thread-safe read (the same `g_mx` every other accessor takes) —
@@ -2451,14 +2472,14 @@ native seats) and ENGINE_NOTES §0.40.
     one-time HANDOVER, but not unconditionally: if the ex-incumbent's condition
     flaps back true and neither claim is ever observed, the slot can ping-pong on
     a cap-plus-lap beat (bounded, and loud — every swap prints a HELD OFF line).
-  - `HeldOffBy(follower, spell)` (`ComposedCast.cpp:477`, decl
-    `ComposedCast.h:175`) ← `Logistics.cpp:1413` — names WHICH incumbent held a
+  - `HeldOffBy(follower, spell)` (`ComposedCast.cpp:499`, decl
+    `ComposedCast.h:218`) ← `Logistics.cpp:1545` — names WHICH incumbent held a
     spell off, for the LOG ONLY. Reads `g_lastHold`, which every `Try()` erases at
     its top (`:207`), so it needs no expiry and MUST NOT grow one (#9).
   - **Depended-on-by:** `Actuation_Direct.cpp:888`/`:1185` map `Held` →
     `SelfCast::Held` (`Actuation.h:93`) → `Actuation_Direct.cpp:1488` (`CastAuto`,
-    transparent NoOp) and `Logistics.cpp:1374` (transparent `continue`, log deduped
-    2s); `Actuation.cpp:1018` (`CastOn`) returns a TRANSPARENT NoOp with NO hand
+    transparent NoOp) and `Logistics.cpp:1506` (transparent `continue`, log deduped
+    2s); `Actuation.cpp:1269-1271` (`CastOn`) returns a TRANSPARENT NoOp with NO hand
     lock.
   - **What breaks if you change this:** (1) folding `Held` back into
     `Applied`/`true` re-creates the Fable SEV-2 bug — the held-off spell counts as
