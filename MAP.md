@@ -1857,8 +1857,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `Docs/CAST-DELIVERY.md`) still narrates it.
 - **PASS F (ch.8b `kIntent_Cast`/`RequestCast`, feat/mfo-cast-port, 2026-09-05):
   `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`/`GetHealCastProxy`/
-  `RefreshHealCastClaim`** (`APMFBridge.cpp:832`; the proxy accessors at `:533`/`:818`, decls
-  `APMFBridge.h:582,591,601,610,670`; the last two ADDED 2026-09-06 by
+  `RefreshHealCastClaim`** (defs `APMFBridge.cpp:764`/`:803`/`:811`/`:818`/`:832`
+  in that order — `:533` is the SEPARATE `GetOffenseCastProxy`, not one of these
+  five; decls `APMFBridge.h:610,625,635,644,704`; the last two ADDED 2026-09-06 by
   feat/consume-cast-observability + `fix/mfo-heal-slot-and-proxy` — see the F1
   hold bullet under `ComposedCast.cpp` below for what they are for) — the
   heal-cast facet `ComposedCast` claims, PORTED BACK to the same ch.8b Intent PASS D used (the
@@ -1891,8 +1892,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   g_healAnimPackage` + APMF present + `api->abiVersion >= 5` (`RequestCast` is
   a v5 slot — logged-once warn + clean degrade to kInstant on an older
   APMF.dll, never a crash). `a_hand` is always `kApmfHandLeft` (2,
-  `APMFBridge.h:87`) — see the HAND FIX below, unchanged in policy from PASS
-  `APMFBridge.h:331`) — see the HAND FIX below, unchanged in policy from PASS
+  `APMFBridge.h:102`) — see the HAND FIX below, unchanged in policy from PASS
   E/D, just re-expressed as `APMF_API::kCastFlag_LeftHand` in `req.flags`
   instead of `ival` bits (which are gone with the retired drive). NEW this
   pass: `a_concentration` sets `kCastFlag_Concentration` (TTL floor for a held
@@ -1900,8 +1900,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `CheckStopCast` where to end a concentration channel instead of always full
   restoration — see `Actuation_Direct.cpp`'s `CastAuto` entry below for the one
   real threshold source. `req.ttlMs` is `APMFBridge::kHealCastTtlMs`
-  (`APMFBridge.h:362`, 6000) — the SAME constant `ComposedCast.cpp`'s
-  (`APMFBridge.h:342`, 6000) — the SAME constant `ComposedCast.cpp`'s
+  (`APMFBridge.h:543`, 6000) — the SAME constant `ComposedCast.cpp`'s
   `kHealBoundsTtlMs` now aliases, so the `RequestCast` window and the
   `CastBounds::Arm` window can never drift apart.
 - **HAND FIX (2026-09-05, deck: heal driven right hand, then displaced by the
@@ -1983,7 +1982,6 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   a follower stuck in that gap the moment reads as "standing around unarmed
   until the next fight re-fires the equip gambit." Fixed with a dedicated
   `FacetExpiry()` (`APMFBridge.cpp:210`, decl `APMFBridge.h:81`, renamed from `HealExpiry()`)
-  `FacetExpiry()` (`APMFBridge.cpp:145`, anon ns, renamed from `HealExpiry()`)
   sized the SAME way `TargetCastReconcile`/`SelfCastReconcile` already size
   their own round-robin-aware release windows (`suppress*1.12 +
   0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s (`:570`)
@@ -2050,10 +2048,25 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   heal's port needed now covers offense too (its two now-redundant standalone
   `IsOwnedCastActive` checks, `:704` and `:999`, are UNREACHABLE in practice
   once the early-pass returns first -- left as defense-in-depth, not removed).
-  **DEGRADE:** a refused claim (APMF absent / ABI < 5 / arbitration loss /
-  `bApmfCast` off) makes `CastOn` fall through to the legacy AI-first-grace +
-  force-on-miss hybrid, byte-identical to the APMF-absent path -- never a
-  silent cast drop. **Diagnostic reused, not duplicated:** the `[cfc]`
+  **DEGRADE vs FAIL-CLOSED — CORRECTED 2026-09-07.** This bullet used to be
+  labelled **DEGRADE** and said a refused claim (including an *arbitration loss*)
+  "makes `CastOn` fall through to the legacy AI-first-grace + force-on-miss
+  hybrid … never a silent cast drop". `fix/mfo-no-decline-fallback` removed that,
+  and it was the exact decline-fallback the APMF SHOWPIECE PRINCIPLE forbids. The
+  two halves are now asymmetric:
+  * **DEGRADE-WHEN-ABSENT** — the channel is not there at all
+    (`APMFBridge::OffenseCastClaimSupported()` false: APMF absent, ABI < 5,
+    `bApmfCast` off), or `bLegacyCastHybrid` is ON → the ORIGINAL AI-first-grace +
+    force-on-miss hybrid, byte-identical to pre-APMF. A documented contract.
+  * **FAIL CLOSED** — APMF present AND capable AND it REFUSED (an arbitration
+    loss lands HERE, not above) → `Actuation.cpp:1051-1058` returns
+    `{FailedSkill, "APMF refused the cast claim", transparent}` with a
+    rate-limited `[apmf] … APMF REFUSED …`. The cast IS dropped, deliberately and
+    loudly; nothing routes around APMF. `transparent` keeps the rules below it
+    running, so it is a visible non-cast, not paralysis.
+  See the "Gating (NO DECLINE-FALLBACK…)" entry and
+  `Docs/CAST-DELIVERY.md`'s DEGRADE PATH block, which this bullet used to
+  contradict. **Diagnostic reused, not duplicated:** the `[cfc]`
   silent-claim watch (`ComposedCast.cpp`'s `g_watch`/`WatchArmed`, previously
   private to `Try()`) is exposed as `ComposedCast::WatchClaim`/`ClearWatch`
   (`ComposedCast.h:~116-131`) so `Actuation::CastOn` can arm the SAME watch on

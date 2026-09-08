@@ -480,8 +480,20 @@ one.
    Restore caster vtable, so it still needs to be told this (actor, spell) pair
    is authorized.
 
-A refused claim `CastBounds::Disarm`s and degrades to the caller's existing
-`kInstant` apply. A heal always lands, exactly as it does today. Release
+**A refused claim FAILS CLOSED — corrected 2026-09-07.** This paragraph used to
+say a refused claim "degrades to the caller's existing `kInstant` apply. A heal
+always lands, exactly as it does today." That is FALSE since
+`fix/mfo-no-decline-fallback`, and it is the heal-side twin of the offense
+decline-fallback the showpiece principle forbids. `ComposedCast::Try` SPLITS a
+`false` from `ClaimHealCast` (`ComposedCast.cpp:441`):
+`APMFBridge::HealCastClaimSupported()` true → **`TryResult::ApmfRefused`**, and
+every caller fails closed with no `kInstant` apply (`Actuation.cpp:1141-1145`,
+`Actuation_Direct.cpp:886` and `:1167`); the code says so itself at
+`ComposedCast.cpp:429` — *"the caller FAILS CLOSED, no kInstant apply"*.
+**Only `TryResult::NotApplicable` — the channel was never there (ABI < 5, toggle
+off, APMF absent) — degrades to `kInstant`.** So a heal is NOT guaranteed to
+land: it can be lost to APMF arbitration, on purpose and loudly.
+`CastBounds::Disarm` still runs on the refusal path. Release
 (`ComposedCast::End` → `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`) has no
 dedicated per-tick reconcile call site — `Try` short-circuits `CastSelfDirect`/
 `CastTargetDirect` before their own stream bookkeeping runs, so an abandoned claim
@@ -1130,7 +1142,7 @@ changed here this pass.
 |---|---|---|---|---|
 | kInstant force-apply | `CastSpellImmediate` | no | any actor | baseline, always on |
 | APMF owned cast | `APMFBridge::ClaimOffenseCast` (`kIntent_Cast`/`RequestCast`, ch.8b — ported feat/offense-cast-seats off ch.8) drives the follower's OWN AI to cast the EXACT gambit spell | yes | hostile foe only | default when APMF is present. A refused claim **FAILS CLOSED** (`{FailedSkill, "APMF refused the cast claim", transparent}`, `Actuation.cpp:1051-1058`) — only the channel being ABSENT/`bLegacyCastHybrid` degrades to the AI-first-grace + force-on-miss hybrid |
-| Composed Forced Cast (CFC) | `ComposedCast::Try` → `APMFBridge::ClaimHealCast` (`kIntent_Cast`/`RequestCast`, ch.8b) | the follower's OWN AI, via APMF's five engine seats — real native animated cast, ZERO engine-cast call from either mod | any actor (explicit target rides the claim, LOAD-BEARING at seats 0x0A/0x0D) | opt-in (`bHealAnimPackage`), HEAL-ONLY. A refused claim degrades to kInstant every time — heal always lands. A claim that stands with no observed cast logs a rate-limited diagnostic (Task 6) instead of falling back — no delivery watchdog |
+| Composed Forced Cast (CFC) | `ComposedCast::Try` → `APMFBridge::ClaimHealCast` (`kIntent_Cast`/`RequestCast`, ch.8b) | the follower's OWN AI, via APMF's five engine seats — real native animated cast, ZERO engine-cast call from either mod | any actor (explicit target rides the claim, LOAD-BEARING at seats 0x0A/0x0D) | opt-in (`bHealAnimPackage`), HEAL-ONLY. A refused claim **FAILS CLOSED** — `TryResult::ApmfRefused` (`ComposedCast.cpp:441`) and every caller drops the heal with no kInstant apply; **only `NotApplicable` (channel absent) degrades to kInstant**, so a heal CAN be lost to arbitration. A claim that stands with no observed cast logs a rate-limited diagnostic (Task 6) instead of falling back — no delivery watchdog |
 
 `native/APMFBridge.h`'s `kHealCastTtlMs` (6 s) sizes BOTH the `RequestCast`
 payload's `req.ttlMs` and (via `native/ComposedCast.cpp`'s `kHealBoundsTtlMs`,

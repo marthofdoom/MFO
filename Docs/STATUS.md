@@ -10,8 +10,9 @@
 
 ## ▶ YOU ARE HERE (2026-09-07)
 
-**Shipped:** `main` = `2553f20` = **v2.0.1** plus the 2026-09-07 fix wave and the
-doc-coherence pass.
+**Shipped:** `main` is **v2.0.1** plus the 2026-09-07 fix wave and the doc-coherence
+pass (check `git log --oneline -1 main` for the exact head rather than trusting a sha
+written here — this line has already gone stale twice).
 v2.0.1 is a beta prerelease and **requires Harbinger (APMF) v0.9.1**; the next cut will
 need a newer APMF (see "What is still unmerged" below). Everything under the "HISTORY"
 line further down is an append-only ledger, kept for the reasoning trail; it is NOT
@@ -53,11 +54,11 @@ Field-test instance: **Tuxbornrc1** on the deck
   carries the CORRECTED pass criterion — the old `[ch.9-redirect]`-within-one-frame test
   is WRONG (it dedups on transition) and must not be used.
 
-### What is still unmerged
+### What is merged but UNRELEASED
 
 | repo | branch | what it fixes | state |
 |---|---|---|---|
-| APMF | `fix/apmf-offerpackage-nudge-ordering` (`8daa27f`) | Publish/drain BEFORE the 0x49 nudge (loot DIAG RC#1's other half) | **merged to APMF `main`**, in NO release tag |
+| APMF | `fix/apmf-offerpackage-nudge-ordering` (head `8daa27f`, a `docs(status)` commit; the nudge fix itself is `3b9b29c`/`e27e22a`) | Publish/drain BEFORE the 0x49 nudge (loot DIAG RC#1's other half) | **merged to APMF `main`**, in NO release tag |
 | APMF | `fix/apmf-claim-renew-denyhand-spellsteer` (`ed637fe`, 10:08 PDT) | F2 TTL renew, F3 deny-hand, F5 spell steer, F6 log throttle | **merged to APMF `main`**, in NO release tag |
 
 **v2.0.2 will require a NEWER APMF RELEASE than v0.9.1.** Both APMF branches are on

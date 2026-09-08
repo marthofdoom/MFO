@@ -46,8 +46,9 @@ applied to `T#55`, `T#67`, `T#69`, `T#75`, `T#76` and `T#78` — the six the aud
 convicted — at 87 sites across `native/`, plus `MAP.md` and `Docs/TOOLING.md`.
 It is NOT applied everywhere. What is still bare:
 
-- **`native/Logistics.cpp`** — `#69` ×5 (`:32, :527, :580, :683, :2045`) and
-  `#78` ×1 (`:676`), all task-sense. **`native/Packages.cpp`** — `#48` ×9
+- **`native/Logistics.cpp`** — `#69` ×5 (`:32, :527, :580, :683, :2052`) and
+  `#78` ×1 (`:676`), all task-sense (`:2052` includes the +7 my own F8 comment
+  added to this file). **`native/Packages.cpp`** — `#48` ×9
   (`:787, :793, :1019, :1057, :1395, :1505, :1799, :1833, :2075`) plus `#48b` ×8.
   Both files were owned by a concurrent branch while this pass ran. **Careful:
   three of the `#48b` sites are inside STRING LITERALS** (`" (the PLAYER, #48b)"`

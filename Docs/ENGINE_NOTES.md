@@ -2088,7 +2088,8 @@ that gap, because there is no claim to enforce.
 you can hold by doing nothing (CLAUDE.md principle 9: *a floor is safe, an expiry
 is not*). Size it against the REAL re-request cadence, or renew it. On `main`
 today MFO does neither: `EnsureCastClaimLocked`
-(`native/APMFBridge.cpp:306-345`; the unchanged fast path is `:313-360`) returns early on an unchanged claim that
+(`native/APMFBridge.cpp:306-423`; the unchanged-claim fast path is `:313-358`,
+and `:358` is its `return`) returns early on an unchanged claim that
 `IsClaimLive` reports as still live, and that early return performs no renewal —
 so the claim runs out its 6 s and MFO only notices on the tick AFTER expiry.
 The ABI v6 `IsClaimLive` check does close the worse bug it was added for (MFO
@@ -2102,7 +2103,8 @@ wrong because the re-check only looked at the MFO repo. The facts, from
 
 - `fix/apmf-claim-renew-denyhand-spellsteer` **IS merged to APMF `main`**
   (`ed637fe`, 2026-09-07 10:08 PDT) and `fix/apmf-offerpackage-nudge-ordering`
-  (`8daa27f`) is an ancestor of APMF `main` too. APMF's `ApplyRepoint` renews on
+  is an ancestor of APMF `main` too (`8daa27f` is that branch's head, a
+  `docs(status)` commit; the nudge fix itself is `3b9b29c`/`e27e22a`). APMF's `ApplyRepoint` renews on
   `main`.
 - **Neither is in any tagged APMF release.** `git tag --contains ed637fe` is
   empty; the newest release tag is `v0.9.2`, dated 2026-09-06, which predates
