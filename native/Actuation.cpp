@@ -661,8 +661,19 @@ namespace MFO::Actuation {
             // `Loadout::Prepare` has always made this its FIRST check
             // (`Loadout.cpp:246-249` -> `Ready::Failed`, INVARIANTS #20 / DESIGN §5.4),
             // and on main that ordering was load-bearing in a way nothing wrote down:
-            // every APMF ask lived AFTER a successful `Prepare`, so a claim for a spell
-            // the actor does not know was STRUCTURALLY IMPOSSIBLE.
+            // every ask **THIS FUNCTION** made lived AFTER a successful `Prepare`, so a
+            // claim for a spell the actor does not know was STRUCTURALLY IMPOSSIBLE
+            // *from `CastOn`*.
+            //
+            // SCOPE, and do not let this sentence grow (re-review 2026-09-07 -- an
+            // earlier draft stated it of MFO generally, which is FALSE): it was only
+            // ever true of `CastOn`'s asks. The combat `kActCastAuto` route
+            // (`Actuation.cpp:~1916` -> `Actuation_Direct.cpp`'s `CastAuto`) bypasses
+            // this function entirely, and `Actuation_Direct.cpp` has no `HasSpell`
+            // anywhere -- so `CastSelfDirect`/`CastTargetDirect` ask APMF with no
+            // competence gate on main AND here. That is a PRE-EXISTING hole of the
+            // same shape, unchanged by this branch and briefed separately; it is not
+            // fixed by the gate below and must not be described as though it were.
             //
             // Moving the ask into the pre-flight below broke that for free. A
             // `cast_target Firebolt` rule on a follower who lacks Firebolt (roster
@@ -679,6 +690,17 @@ namespace MFO::Actuation {
             // So the competence gate moves AHEAD of the ask, beside the magicka gate
             // it belongs with. `Prepare`'s own identical check STAYS as defence in
             // depth -- this is a second gate, not a relocation.
+            //
+            // BEHAVIOUR DELTA VS MAIN, deliberate and worth stating because nothing
+            // else records it: sitting HERE also puts the check ahead of the SELF-CAST
+            // fork (`:~787`) and the CONCENTRATION fork (`:~842`), which had no
+            // competence check at all on main -- direct force does not need the spell
+            // known or in hand. So a `cast_self`/concentration gambit naming a spell
+            // the follower does not know now FAILS TRANSPARENTLY instead of being
+            // force-applied. That is correct under DESIGN §5.4 (a rule they cannot run
+            // fails and says so) and consistent with what the same gambit does through
+            // every other route, but it IS a change: a list relying on MFO force-casting
+            // an unknown self-spell stops working, visibly and with a reason string.
             if (!a_follower->HasSpell(spell)) {
                 // TRANSPARENT, and the SAME reason string `Prepare` produces, so the
                 // board and the log read identically whichever gate caught it.
@@ -931,9 +953,20 @@ namespace MFO::Actuation {
             // away.**
             //
             // WHAT THE KNOB STILL GOVERNS -- it is NOT inert generally:
-            //   * the APMF-ABSENT / `bLegacyCastHybrid` / `bApmfCast`-off path: no
-            //     claim means no early-pass, so the pacing deny bites exactly as
-            //     before;
+            //   * the APMF-ABSENT path, and ONLY that one: no claim of any kind, so
+            //     no early-pass, so the pacing deny bites exactly as before.
+            //     `bLegacyCastHybrid` / `bApmfCast`-off do NOT belong on this line --
+            //     an earlier draft listed them and was wrong (re-review 2026-09-07).
+            //     Those two gate `ownedCast` only. `ComposedCast::Enabled`
+            //     (`ComposedCast.cpp:38-45`) gates on Heal + AE + `bHealAnimPackage` +
+            //     `APMFBridge::Available()` and reads NEITHER of them, and the heal
+            //     `else if` in the pre-flight below runs whenever `ownedCast` is false
+            //     -- so with APMF present and `bHealAnimPackage` on, a heal gambit
+            //     still mints a claim on those paths, `IsHealCastActive` answers true,
+            //     and `ClientCastClaimed` stands the deny down exactly as on the owned
+            //     path. Concretely: `bLegacyCastHybrid` ON + APMF present +
+            //     `bHealAnimPackage` ON + `cast_target Healing Hands` at an ally inside
+            //     a cooldown -- the OFFENSE ask is gone, the HEAL ask is not;
             //   * `Loadout::StartCooldown` still stamps (from the `[cast]` SpellSink,
             //     `Diagnostics.cpp:263`, and from this file's own cast sites) and
             //     still `ReleaseSpell`s -- the spell is taken back either way;
@@ -1427,8 +1460,10 @@ namespace MFO::Actuation {
                     // Restoring the stamp restores the invariant; the lock is
                     // claim-driven via `CastLockLive`, so this is the cheap correct
                     // one. (The Failed arm needs no equivalent: with the HasSpell gate
-                    // above, the only way to reach it holding a claim is a null
-                    // graph/actor manager, which is negligible and self-clearing.)
+                    // above, the only Failed path that can still be reached holding a
+                    // claim is a null EQUIP manager -- `RE::ActorEquipManager::
+                    // GetSingleton() == nullptr` in `Loadout.cpp` -- which is
+                    // negligible and self-clearing.)
                     if (ownedClaimHeld || composed == ComposedCast::TryResult::Claimed)
                         lockHands(a_spellID, lockTargetKey);
 

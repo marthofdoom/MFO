@@ -125,8 +125,14 @@ namespace MFO::Config {
     //   * `Loadout::CoolingDown` -> `Ready::Debounced` (`Loadout.cpp:317`) -- MFO
     //     still declines to RE-EQUIP inside the window.
     //   * `CasterConsent`'s pacing deny (`CasterConsent.cpp:762-775`) -- still bites
-    //     in full on the **APMF-ABSENT / `bLegacyCastHybrid` / `bApmfCast`-off**
-    //     path.
+    //     in full on the **APMF-ABSENT** path, and only that one. `bLegacyCastHybrid`
+    //     and `bApmfCast`-off do NOT restore it (an earlier draft claimed they did;
+    //     corrected by the re-review 2026-09-07): they gate `ownedCast` only, while
+    //     `ComposedCast::Enabled` (`ComposedCast.cpp:38-45`) reads neither, so with
+    //     APMF present and `bHealAnimPackage` ON a HEAL gambit still mints a claim on
+    //     those paths and `ClientCastClaimed` stands the deny down the same way. See
+    //     this file's own `bLegacyCastHybrid` entry, which already says that key does
+    //     not gate `ComposedCast::Try`.
     //   * the direct-force FF apply beats (`Actuation_Direct.cpp:989`, `:1282`) and
     //     `CastAuto`'s broadcast interval (`:1509`).
     //
