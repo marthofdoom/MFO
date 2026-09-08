@@ -362,6 +362,15 @@ namespace MFO::Actuation {
             lock.lastSeen = std::chrono::steady_clock::now();
         }
 
+        // Drop ONE hand's lock (2026-09-08). The whole-follower twin is the public
+        // ClearCastLock at the bottom of this file; this is the per-hand form the
+        // in-flight gate needs when the claim a lock named turns out to be gone --
+        // the other hand's independent lock must survive that.
+        void ClearCastLockHand(RE::FormID a_follower, std::size_t a_hand) {
+            if (auto it = g_castLock.find(a_follower); it != g_castLock.end())
+                it->second.hand[a_hand] = CastLock{};
+        }
+
         // Does MFO hold a LIVE cast claim on THIS hand right now? Heals are LEFT
         // always (APMFBridge::ClaimHealCast's own hard rule), so the heal facet
         // only ever answers for the left hand. Factored out of CastLockLive
@@ -950,16 +959,20 @@ namespace MFO::Actuation {
             const bool offenseSpell =
                 !selfOrConc && CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
             HandPlan handPlan;
-            if (!offenseSpell) {
-                if (auto held = ResolveCastHand(a_follower, Loadout::HandPick::Left, a_spellID,
-                                                lockTargetKey, handPlan))
-                    return *held;
-            } else {
+            // ONE lambda, because the in-flight gate below may have to run this a
+            // SECOND time: if the claim its hand-pin was based on turns out to be
+            // gone, the pin is void and the plan has to be re-derived from a clean
+            // lock state rather than carried forward (a heal pinned to the RIGHT
+            // hand by a stale lock would otherwise claim and lock the wrong hand).
+            auto resolveHands = [&]() -> std::optional<Outcome> {
+                if (!offenseSpell)
+                    return ResolveCastHand(a_follower, Loadout::HandPick::Left, a_spellID,
+                                           lockTargetKey, handPlan);
                 const auto pick = Loadout::PlanCastHand(a_follower, spell,
                                                         APMFBridge::WeaponHandActive(a_follower));
-                if (auto held = ResolveCastHand(a_follower, pick, a_spellID, lockTargetKey, handPlan))
-                    return *held;
-            }
+                return ResolveCastHand(a_follower, pick, a_spellID, lockTargetKey, handPlan);
+            };
+            if (auto held = resolveHands()) return *held;
 
             // ── SATISFIED IN FLIGHT: REFRESH, DO NOT RE-FIRE, DO NOT END THE LAP ──
             // (F9, RC2 of Docs/DIAG-2026-09-08-field.md, 2026-09-08.)
@@ -1029,6 +1042,20 @@ namespace MFO::Actuation {
                                     handPlan.left && handPlan.right);
                     return { Result::NoOp, "cast already in flight (claim refreshed)", true };
                 }
+                // THE PIN IS VOID. The refresh reports the claim is really gone --
+                // APMF never published it, or the fail-closed split dropped it --
+                // so the lock that named it is stale and the hand(s) it pinned this
+                // request to may not be the hand(s) this request should use at all
+                // (a LEFT-always heal pinned to the RIGHT by a stale right-hand
+                // lock would then claim, equip and lock the wrong hand). Drop those
+                // locks and re-derive the plan from scratch, then fall through to
+                // the normal path -- which re-claims and reports its OWN outcome,
+                // loudly if APMF refuses again (LogApmfRefusal). Nothing is masked:
+                // the refusal is still made in the open, one lap later.
+                if (handPlan.left)  ClearCastLockHand(id, kHandLeft);
+                if (handPlan.right) ClearCastLockHand(id, kHandRight);
+                handPlan = HandPlan{};
+                if (auto held = resolveHands()) return *held;
             }
             // Hold BOTH resolved hands (only ever one, unless a DualCast plan
             // resolved both) on every success path below -- one lambda so the

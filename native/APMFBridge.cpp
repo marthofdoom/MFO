@@ -1242,6 +1242,15 @@ namespace MFO::APMFBridge {
 
         if (a_hand == kApmfHandDualCast) {
             replayOffense(0);
+            // "Both hands" is USUALLY one mirrored dual claim, which replayOffense
+            // has already re-mirrored -- but the caller names HANDS, not claims,
+            // and two INDEPENDENT single-hand claims can also occupy both. Refresh
+            // the second one too when it is a genuinely different handle, or its
+            // `refreshed` stamp would stand still and Tick()'s sweep would release
+            // a claim this call was asked to keep alive.
+            if (o.offense[1].handle != APMF_API::kInvalidHandle &&
+                o.offense[1].handle != o.offense[0].handle)
+                replayOffense(1);
         } else if (a_hand == kApmfHandLeft) {
             replayOffense(0);
             // Heals are LEFT always (ClaimHealCast's hard rule), and a heal claim
