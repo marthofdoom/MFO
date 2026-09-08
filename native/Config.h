@@ -312,9 +312,22 @@ namespace MFO::Config {
     //
     // DEFAULT OFF (still experimental -- proving cast+heal on APMF). ON: a
     // follower's forced heal (self or at an ally) is claimed via APMFBridge::
-    // ClaimHealCast; a refused claim (APMF absent/ABI too old) degrades to the
-    // existing kInstant apply so a heal never vanishes -- and if a claim stands
-    // but the AI's seats never actually fire it, ComposedCast.cpp logs a
+    // ClaimHealCast. **THE TWO NEGATIVE OUTCOMES ARE NOT THE SAME THING, and this
+    // line used to conflate them into one false claim ("a refused claim degrades
+    // to the existing kInstant apply so a heal never vanishes"), which is exactly
+    // backwards for the case it names.** fix/mfo-no-decline-fallback split them
+    // and ComposedCast::TryResult now says which is which:
+    //   * NotApplicable -- APMF was NEVER ASKED (APMF absent, ABI too old, SE/VR,
+    //     this toggle off, a non-Heal kind). Nothing arbitrated, so the caller's
+    //     own kInstant apply runs: a DOCUMENTED DEGRADE, and here a heal really
+    //     does not vanish.
+    //   * ApmfRefused -- APMF is PRESENT and CAPABLE and it said NO. The caller
+    //     FAILS CLOSED: the heal is NOT applied this tick and NOT re-routed to
+    //     kInstant, and the refusal is logged loudly (LogApmfRefusal, 5s per
+    //     follower+spell). A decline-fallback here would silently paper over an
+    //     arbitration answer we asked for (#7); the gambit simply re-asks next lap.
+    // And if a claim STANDS but the AI's seats never actually fire it,
+    // ComposedCast.cpp logs a
     // rate-limited diagnostic rather than falling back (no delivery watchdog;
     // silence is the correct signal, not a bug to paper over). Offense and buff
     // casts are UNTOUCHED by this toggle -- ComposedCast is HEAL-ONLY-gated

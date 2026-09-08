@@ -490,8 +490,8 @@ namespace MFO::APMFBridge {
                 if (liveNow) c.everLive = true;   // F3-1: latch, never cleared for this handle
                 if (liveNow) {
                     // F4 (RC4, 2026-09-06): the proxy is minted lazily during
-                    // APMF's own per-frame Drain, so the read at :417-418
-                    // below (right after RequestCast) can still see 0 even
+                    // APMF's own per-frame Drain, so the GetCastProxy read in
+                    // the mint block below (:727-729) can still see 0 even
                     // though the SAME handle now has a real proxy published.
                     // Re-read it lazily here, on the unchanged/still-live fast
                     // path this claim takes on every later Try() while nothing

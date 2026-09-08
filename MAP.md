@@ -673,7 +673,7 @@ them clobbers unrelated engine vtables).
   already — `lvl<4` fast-outs before ever reaching `CastExempt`, so it was never
   part of the graduated path), and the `CheckCast` (0x0A) hook install (`:994`,
   stays installed — still needed for `ConcUnboundedDeny`'s hard bound and the
-  APMF-absent exact-cast degrade). `Config::g_castControl` (`Config.h:307`) keeps
+  APMF-absent exact-cast degrade). `Config::g_castControl` (`Config.h:475`) keeps
   its stored 0-4 range; 1-3 now behaves identically to 4 (only 0/off is distinct).
   MCM slider labels ("ignore heals" etc.) are now stale-until-revival cosmetic
   text, not touched (not a functional gap — see `Docs/MFO-CONVERSION-ROADMAP.md`
@@ -946,7 +946,7 @@ declared there and defined in their home module). Layout:
   loose `Gold001` ref for `Category::Valuables` the same as it always has for
   `Category::Gold`, AND a loose value-dense MISC ref (a dropped gem etc.) for
   `Category::Valuables`, gated by the same `IsValuableMisc` (`:1203`,
-  value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:489`) the
+  value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:586`) the
   container take already uses — a loose ref qualifies iff a container holding
   it would have been looted. `act.loot_gold` is UNCHANGED, still a gold-only
   rule. Loose soul gems/jewelry/ingredients/equipment are still NOT
