@@ -1916,8 +1916,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `Docs/CAST-DELIVERY.md`) still narrates it.
 - **PASS F (ch.8b `kIntent_Cast`/`RequestCast`, feat/mfo-cast-port, 2026-09-05):
   `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`/`GetHealCastProxy`/
-  `RefreshHealCastClaim`** (defs `APMFBridge.cpp:1074`/`:1113`/`:1121`/`:1128`/`:1142`
-  in that order — `:843` is the SEPARATE `GetOffenseCastProxy`, not one of these
+  `RefreshHealCastClaim`** (defs `APMFBridge.cpp:1081`/`:1120`/`:1128`/`:1135`/`:1149`
+  in that order — `:850` is the SEPARATE `GetOffenseCastProxy`, not one of these
   five; decls `APMFBridge.h:610,625,635,644,719`; the last two ADDED 2026-09-06 by
   feat/consume-cast-observability + `fix/mfo-heal-slot-and-proxy` — see the F1
   hold bullet under `ComposedCast.cpp` below for what they are for) — the
@@ -1981,7 +1981,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   kApmfHandLeft` unconditionally, forwarded into `req.flags` as
   `kCastFlag_LeftHand` — UNCHANGED, on purpose: heals bypass the intelligent
   hand pass below entirely (heal is left, regardless).
-- **`WeaponHandActive`** (`APMFBridge.cpp:1010`, decl `APMFBridge.h:347`,
+- **`WeaponHandActive`** (`APMFBridge.cpp:1017`, decl `APMFBridge.h:347`,
   2026-09-06) — the canonical "does a weapon own this hand" signal for cast
   hand-selection: `Loadout::Read(follower, nullptr).grip` (a weapon equipped
   RIGHT NOW) OR `IsEquipmentClaimActive` (an equip gambit about to reassert
@@ -2047,7 +2047,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   sized the SAME way `TargetCastReconcile`/`SelfCastReconcile` already size
   their own round-robin-aware release windows (`suppress*1.12 +
   0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s
-  (`APMFBridge.cpp:1247`) per-claim expiry checks (the `CastClaim` slots plus
+  (`APMFBridge.cpp:1254`) per-claim expiry checks (the `CastClaim` slots plus
   `targetHandle`/`equipHandle`) all compare against `FacetExpiry()` now, not
   the flat `kExpiry`. package-offer
   (`packageHandle`) stays on the flat `kExpiry` — VERIFIED (not assumed) it is
@@ -2077,7 +2077,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **PASS G (ch.8b `kIntent_Cast`/`RequestCast`, feat/offense-cast-seats,
   2026-09-05): offense PORTED off ch.8 `kIntent_SelectSpell` onto the SAME
   facet PASS F ported heal onto.** `ClaimOffenseCast`/`ReleaseOffenseCast`
-  (defs `APMFBridge.cpp:860`/`:935`) REPLACE the retired
+  (defs `APMFBridge.cpp:867`/`:942`) REPLACE the retired
   `ClaimCasting`/`ReleaseCasting` (`kIntent_SelectSpell`, ARBITRATE+DENY only --
   the follower's own AI still picked whichever spell IT wanted, the
   long-standing "target right, spell wrong" defect,
@@ -2549,7 +2549,7 @@ native seats) and ENGINE_NOTES §0.40.
   records `g_lastHold[fid]` (`HoldRecord`, `:173`) and returns `TryResult::Held` —
   the incumbent keeps its charge window; NOTHING is claimed and NOTHING applied.
   Pieces:
-  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:1142`, decl
+  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:1149`, decl
     `APMFBridge.h:719`) — the hold's HEARTBEAT: bumps the same `refreshed` stamp
     `ClaimHealCast` bumps, because the hold path deliberately never reaches
     `ClaimHealCast` and `Tick()`'s `FacetExpiry()` sweep would otherwise release
@@ -2558,7 +2558,7 @@ native seats) and ENGINE_NOTES §0.40.
     returns false outright** — an honest degrade to the pre-F1 thrash, never a
     hold nothing can break, #7), AND the claim-age cap below.
   - `APMFBridge::kHealHoldNeverObservedMs` (`APMFBridge.h`, **4000ms**) vs
-    `CastClaim::created` (`APMFBridge.cpp:103`, stamped once at `:701`) — the
+    `CastClaim::created` (`APMFBridge.cpp:103`, stamped once at `:708`) — the
     NEVER-OBSERVED cap. **It races `observed` (the `[cast]` SpellSink signal), not
     the fire, and it is sized from the HEAL datum:** the one heal that landed on
     the deck took **2.95s claim-to-observed** (minted 19:59:11.158 → `[cast]`

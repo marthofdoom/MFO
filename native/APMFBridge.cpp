@@ -491,7 +491,7 @@ namespace MFO::APMFBridge {
                 if (liveNow) {
                     // F4 (RC4, 2026-09-06): the proxy is minted lazily during
                     // APMF's own per-frame Drain, so the GetCastProxy read in
-                    // the mint block below (:727-729) can still see 0 even
+                    // the mint block below (:734-736) can still see 0 even
                     // though the SAME handle now has a real proxy published.
                     // Re-read it lazily here, on the unchanged/still-live fast
                     // path this claim takes on every later Try() while nothing
@@ -553,7 +553,14 @@ namespace MFO::APMFBridge {
                     // is free to drift from what was actually requested).
                     if (api->abiVersion >= 6) {
                         const auto now = std::chrono::steady_clock::now();
-                        if (now - c.renewed >= CastHeartbeatInterval()) {
+                        // ONE read, reused by the test AND the log below.
+                        // CastHeartbeatInterval() bottoms out in FacetExpiry(),
+                        // whose inputs (fSuppressWindow, party size) are live --
+                        // calling it twice could log a threshold that is not the
+                        // one the decision was made on, which is a diagnostic
+                        // that lies (principle 5).
+                        const auto every = CastHeartbeatInterval();
+                        if (now - c.renewed >= every) {
                             api->Repoint(c.handle, &c.reqParam);
                             const auto sinceRenew = std::chrono::duration_cast<std::chrono::milliseconds>(
                                                         now - c.renewed).count();
@@ -571,7 +578,7 @@ namespace MFO::APMFBridge {
                                              "re-requested; a renewal that did not take shows up on the next "
                                              "lap as the 'already auto-expired' line instead.",
                                              follower, wantSpell, kHealCastTtlMs, age, sinceRenew,
-                                             CastHeartbeatInterval().count());
+                                             every.count());
                             }
                         }
                     }
