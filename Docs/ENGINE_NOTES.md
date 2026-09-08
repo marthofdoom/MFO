@@ -2075,7 +2075,7 @@ MFO's `onTravelPkg=true` on the first WALK line with no `TRAVEL PKG NOT ENGAGED`
 
 `MFO::APMFBridge` requests every `kIntent_Cast` claim with
 `req.ttlMs = kHealCastTtlMs` = **6000 ms** (`native/APMFBridge.h:543`,
-`native/APMFBridge.cpp:380`). APMF then expires that claim **on its own clock,
+`native/APMFBridge.cpp:491`). APMF then expires that claim **on its own clock,
 silently** — `APMF_API.h`'s `IsClaimLive` doc is explicit that the client is
 never told.
 
@@ -2088,8 +2088,8 @@ that gap, because there is no claim to enforce.
 you can hold by doing nothing (CLAUDE.md principle 9: *a floor is safe, an expiry
 is not*). Size it against the REAL re-request cadence, or renew it. On `main`
 today MFO does neither: `EnsureCastClaimLocked`
-(`native/APMFBridge.cpp:306-423`; the unchanged-claim fast path is `:313-358`,
-and `:358` is its `return`) returns early on an unchanged claim that
+(`native/APMFBridge.cpp:339-534`; the unchanged-claim fast path is `:346-397`,
+and `:397` is its `return`) returns early on an unchanged claim that
 `IsClaimLive` reports as still live, and that early return performs no renewal —
 so the claim runs out its 6 s and MFO only notices on the tick AFTER expiry.
 The ABI v6 `IsClaimLive` check does close the worse bug it was added for (MFO
@@ -2112,7 +2112,7 @@ wrong because the re-check only looked at the MFO repo. The facts, from
 - **The MFO side of F2 — the heartbeat — does not exist at all.**
   `native/APMFBridge.h:670` states it plainly: *"MFO never Repoints a
   `kIntent_Cast` claim"*, and the unchanged fast path in `EnsureCastClaimLocked`
-  (`native/APMFBridge.cpp:313-360`) performs no renew. A renewing APMF that is
+  (`native/APMFBridge.cpp:346-397`) performs no renew. A renewing APMF that is
   never asked to renew changes nothing.
 
 **So the 6 s gap is still open**, and stays open until BOTH a newer APMF release

@@ -7,7 +7,7 @@ the dead-ends, see "REJECTED APPROACHES" at the bottom (they exist so nobody ret
 **WHICH PATH IS PRIMARY (corrected 2026-09-07 — read this before the section below).**
 With **APMF present** — the normal case, and what MFO ships as its showpiece — the primary
 cast path is **`ComposedCast::Try` → `APMFBridge::ClaimHealCast` / `ClaimOffenseCast` →
-`RequestCast`** (`native/ComposedCast.cpp:198-460`, `native/APMFBridge.cpp:550`/`:764`). The
+`RequestCast`** (`native/ComposedCast.cpp:198-460`, `native/APMFBridge.cpp:661`/`:875`). The
 follower's OWN AI performs a real animated cast, driven by APMF's four `CombatMagicCaster`
 seats plus `CheckShouldEquip`; neither mod calls an engine cast verb. The `CastSpellImmediate`
 model described in the next section is the **APMF-ABSENT DEGRADE** plus the legacy hybrid —
@@ -98,7 +98,8 @@ real cast and DROPS that cost.
   **A REFUSED offense claim FAILS CLOSED** (corrected 2026-09-07 — this bullet used to say it
   "falls through to the SAME legacy hybrid"; `fix/mfo-no-decline-fallback` removed that):
   when APMF is present AND capable (`APMFBridge::OffenseCastClaimSupported()`) and it still says
-  no, `Actuation.cpp:1051-1058` returns `{FailedSkill, "APMF refused the cast claim", transparent}`
+  no, `Actuation.cpp:1039-1052` (the PRE-FLIGHT, before any hand is touched) returns
+  `{FailedSkill, "APMF refused the cast claim", transparent}`
   and logs `[apmf] … APMF REFUSED …`. Nothing routes around APMF. The cast does not happen this
   tick, the rules BELOW it still run (transparent, not paralysis), and a refusal is a bug to fix in
   APMF rather than a condition to degrade through. Only the ABSENCE of the channel degrades:
@@ -366,11 +367,17 @@ legacy grace+`ForceCast` hybrid even with APMF present. `a_target != a_follower`
 is required explicitly (a self-target can still reach this far when `bCastSelf`,
 dev-only default off, never forked it off earlier — self-cast stays
 `CastSelfDirect`'s own gated mechanism). On success: the same `HoldCastLock` +
-OPAQUE-hold return shape `ownedCast`'s own success path uses. On refusal
-(Buff kind, AE/APMF/`bHealAnimPackage` absent, or a lost claim): falls straight
-through to the same legacy hybrid, byte-identical. **In-combat only** — `CastOn`
+OPAQUE-hold return shape `ownedCast`'s own success path uses.
+
+**CORRECTED 2026-09-07 — this paragraph used to lump every "refusal" together and say
+they all "fall straight through to the same legacy hybrid, byte-identical". A LOST CLAIM
+DOES NOT.** The four-state `TryResult` splits them: `NotApplicable` (Buff kind,
+AE/APMF/`bHealAnimPackage` absent — the channel was never there) falls through to the
+legacy hybrid, byte-identical; **`ApmfRefused` (APMF present, capable, and it said no)
+FAILS CLOSED** at `Actuation.cpp:1082-1089` with no hybrid and no `kInstant`; `Held`
+returns a transparent NoOp. **In-combat only** — `CastOn`
 runs only from `Actuation::Fire`'s combat dispatch. The identical OOC gap
-(`Logistics.cpp:1394-1436`) is deliberately untouched: it is not established that
+(`Logistics.cpp:1465-1580`) is deliberately untouched: it is not established that
 `kIntent_Cast`'s engine seats function without a live `CombatController` (see
 API-PORT-AUDIT.md §5.1) — do not port that leg on the assumption it mirrors this
 one.
@@ -487,8 +494,8 @@ always lands, exactly as it does today." That is FALSE since
 decline-fallback the showpiece principle forbids. `ComposedCast::Try` SPLITS a
 `false` from `ClaimHealCast` (`ComposedCast.cpp:441`):
 `APMFBridge::HealCastClaimSupported()` true → **`TryResult::ApmfRefused`**, and
-every caller fails closed with no `kInstant` apply (`Actuation.cpp:1141-1145`,
-`Actuation_Direct.cpp:886` and `:1167`); the code says so itself at
+every caller fails closed with no `kInstant` apply (`Actuation.cpp:1082-1089`,
+`Actuation_Direct.cpp:889` and `:1186`); the code says so itself at
 `ComposedCast.cpp:429` — *"the caller FAILS CLOSED, no kInstant apply"*.
 **Only `TryResult::NotApplicable` — the channel was never there (ABI < 5, toggle
 off, APMF absent) — degrades to `kInstant`.** So a heal is NOT guaranteed to
@@ -788,7 +795,7 @@ forbids. `ClaimOffenseCast` returning `false` now splits into two halves:
   force-on-miss hybrid, byte-identical to pre-APMF. This is the ONLY surviving
   legacy route and it is a documented contract, not a mask.
 - **FAIL CLOSED** — APMF is present AND capable AND it REFUSED →
-  `Actuation.cpp:1051-1058` returns
+  `Actuation.cpp:1039-1052` returns
   `{FailedSkill, "APMF refused the cast claim", transparent}` with a rate-limited
   `[apmf] … APMF REFUSED …` line (`LogApmfRefusal`). The cast does not happen and
   nothing routes around APMF. `transparent` means the rules below still run — the
@@ -1141,8 +1148,8 @@ changed here this pass.
 | path | trigger | animated | target reach | status |
 |---|---|---|---|---|
 | kInstant force-apply | `CastSpellImmediate` | no | any actor | baseline, always on |
-| APMF owned cast | `APMFBridge::ClaimOffenseCast` (`kIntent_Cast`/`RequestCast`, ch.8b — ported feat/offense-cast-seats off ch.8) drives the follower's OWN AI to cast the EXACT gambit spell | yes | hostile foe only | default when APMF is present. A refused claim **FAILS CLOSED** (`{FailedSkill, "APMF refused the cast claim", transparent}`, `Actuation.cpp:1051-1058`) — only the channel being ABSENT/`bLegacyCastHybrid` degrades to the AI-first-grace + force-on-miss hybrid |
-| Composed Forced Cast (CFC) | `ComposedCast::Try` → `APMFBridge::ClaimHealCast` (`kIntent_Cast`/`RequestCast`, ch.8b) | the follower's OWN AI, via APMF's five engine seats — real native animated cast, ZERO engine-cast call from either mod | any actor (explicit target rides the claim, LOAD-BEARING at seats 0x0A/0x0D) | opt-in (`bHealAnimPackage`), HEAL-ONLY. A refused claim **FAILS CLOSED** — `TryResult::ApmfRefused` (`ComposedCast.cpp:441`) and every caller drops the heal with no kInstant apply; **only `NotApplicable` (channel absent) degrades to kInstant**, so a heal CAN be lost to arbitration. A claim that stands with no observed cast logs a rate-limited diagnostic (Task 6) instead of falling back — no delivery watchdog |
+| APMF owned cast | `APMFBridge::ClaimOffenseCast` (`kIntent_Cast`/`RequestCast`, ch.8b — ported feat/offense-cast-seats off ch.8) drives the follower's OWN AI to cast the EXACT gambit spell | yes | hostile foe only | default when APMF is present. A refused claim **FAILS CLOSED** (`{FailedSkill, "APMF refused the cast claim", transparent}`, `Actuation.cpp:1039-1052`, in the PRE-FLIGHT before any hand is touched) — only the channel being ABSENT/`bLegacyCastHybrid` degrades to the AI-first-grace + force-on-miss hybrid |
+| Composed Forced Cast (CFC) | `ComposedCast::Try` → `APMFBridge::ClaimHealCast` (`kIntent_Cast`/`RequestCast`, ch.8b) | the follower's OWN AI, via APMF's five engine seats — real native animated cast, ZERO engine-cast call from either mod | any actor (explicit target rides the claim, LOAD-BEARING at seats 0x0A/0x0D) | opt-in (`bHealAnimPackage`), HEAL-ONLY. A refused claim **FAILS CLOSED** — `TryResult::ApmfRefused` (`ComposedCast.cpp:441`) and every caller drops the heal with no kInstant apply (`Actuation.cpp:1082-1089`, `Actuation_Direct.cpp:889`/`:1186`); **only `NotApplicable` (channel absent) degrades to kInstant**, so a heal CAN be lost to arbitration. A claim that stands with no observed cast logs a rate-limited diagnostic (Task 6) instead of falling back — no delivery watchdog |
 
 `native/APMFBridge.h`'s `kHealCastTtlMs` (6 s) sizes BOTH the `RequestCast`
 payload's `req.ttlMs` and (via `native/ComposedCast.cpp`'s `kHealBoundsTtlMs`,
@@ -1153,7 +1160,7 @@ which aliases it) the `CastBounds::Arm` ceiling.
 > claim, never a real cap on a continuous heal". That is FALSE on `main`.**
 > The `CastBounds::Arm` ceiling IS re-armed each successful `Try()`
 > (`native/ComposedCast.cpp:453`). **The APMF CLAIM's `req.ttlMs` is NOT.**
-> `EnsureCastClaimLocked` (`native/APMFBridge.cpp:306-345`) returns early when
+> `EnsureCastClaimLocked` (`native/APMFBridge.cpp:339-534`) returns early when
 > the claim is unchanged AND `IsClaimLive` says it still holds — and that early
 > return performs no renew, no `Repoint`, nothing. So the claim runs out its
 > 6 s on APMF's own clock and MFO only re-requests on the tick AFTER expiry.
@@ -1168,7 +1175,7 @@ which aliases it) the `CastBounds::Arm` ceiling.
 > but it is **in no tagged APMF release** — the newest is `v0.9.2` (2026-09-06),
 > which predates it, and MFO ships against a release. **The MFO half — the
 > heartbeat — does not exist at all:** `APMFBridge.h:670` says "MFO never Repoints
-> a `kIntent_Cast` claim" and `APMFBridge.cpp:313-360` performs no renew. A
+> a `kIntent_Cast` claim" and `APMFBridge.cpp:346-397` performs no renew. A
 > renewing APMF that is never asked to renew changes nothing, so the 6 s gap is
 > still open. Do not restore the old wording until a newer APMF release ships AND
 > MFO heartbeats, and both have been field-verified. `Config::g_cfcBackoffMs` is now VESTIGIAL (the retired
@@ -1215,7 +1222,7 @@ fact, fired.
 > so a cached value can go stale as well as start wrong.
 > **FIXED ON `main` 2026-09-07** (`fix/mfo-heal-slot-and-proxy`, merged): F4 landed.
 > `EnsureCastClaimLocked` now re-reads `GetCastProxy` on the LIVE path
-> (`APMFBridge.cpp:418`, not only once at request time), `ComposedCast.cpp:140`
+> (`APMFBridge.cpp:529`, not only once at request time), `ComposedCast.cpp:140`
 > guards the cache with `if (a_proxy != 0) w.proxy = a_proxy;` so a same-spell
 > re-request can still fill in a proxy minted later and a re-mint cannot blank it,
 > and `CastBounds::Arm` is passed the real proxy

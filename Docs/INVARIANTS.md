@@ -679,7 +679,7 @@ It is the Papyrus twin of `CastSpellImmediate`. An entire mechanism was designed
 and shipped default-ON around a verb whose own documentation, present on disk in
 the installed SKSE scripts, refuted it in one line.
 
-*(Where it stands, 2026-09-07: the verb was NOT removed. `Actuation.cpp:1249-1264`
+*(Where it stands, 2026-09-07: the verb was NOT removed. `Actuation.cpp:1482-1497`
 still dispatches `Papyrus::DoCombatSpellApply` behind `Config::g_commandCast`,
 **default OFF**, kept for the magicka-deduct measurement. So "refuted" means
 "refuted as the animated-cast mechanism it was sold as", not "deleted". Docs that
