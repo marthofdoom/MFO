@@ -35,6 +35,21 @@
 // casts — that granular non-interruption is exactly why the cast routes through APMF. No
 // forced cast on this path (see CAST-DELIVERY.md; force lives only in the legacy hybrid).
 //
+// THE IDLE-HAND FLOOR (F10, marth's design ruling 2026-09-08) — internal to
+// APMFBridge.cpp, no entry point of its own, listed here because it is a THIRD claim
+// this bridge makes and nothing else in the header would say so. Whenever MFO's driving
+// cast claim(s) occupy exactly ONE of a follower's hands, MFO also claims the OTHER hand
+// DENY-ONLY (APMF_API::kCastFlag_DenyHandOnly): a claim that drives nothing and admits
+// nothing, so no un-gambited spell can arm there. APMF leaving an unclaimed hand
+// permissive is correct for a general framework; MFO's design is that ONLY gambited
+// spells occur, so "the other hand goes idle" is the specification, not a trade. It is
+// ONLY ever a companion to a driving claim — MFO holding no cast claim floors NEITHER
+// hand — and it is requested at the SAME kOwnBasis as every other claim here, because
+// APMF's comparator makes a deny-only claim lose to a driving one at an equal basis, so
+// MFO's own next gambit takes the hand with no release/re-request gap. Derived once per
+// pump in Tick(); released with the other claims in ClearTransientState(). Full working
+// (including why "neither" and not "both") at ReconcileHandFloorLocked in the .cpp.
+//
 // Claim lifecycles: casting = PER-CAST (refreshed each winning cast tick; released
 // crisply by ReleaseOffenseCast the instant no cast rule holds). combat-target = PER-COMBAT
 // (created by a cast directive, re-pointed via APMF Repoint when the foe changes, kept

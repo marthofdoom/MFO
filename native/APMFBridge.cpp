@@ -6,6 +6,7 @@
 #include "MainThread.h"
 #include "Rapport.h"
 
+#include <array>   // F10: the two-slot (driving / idle-hand floor) log throttles
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -86,6 +87,19 @@ namespace MFO::APMFBridge {
             std::int32_t     hand   = 0;
             bool             conc   = false;
             std::uint32_t    stopPct = 0;
+            // IS THIS THE IDLE-HAND FLOOR? (F10, 2026-09-08.) A claim carrying
+            // APMF_API::kCastFlag_DenyHandOnly drives NOTHING: APMF forces its
+            // spell, proxy and target to 0 when the claim is built
+            // (APMF core/ControlMap.cpp ApplyRequest) and pins `param.form` to 0
+            // on every Repoint, so it exists only to CLOSE its hand to the AI.
+            // Part of this claim's IDENTITY, not a decoration: a floor and a
+            // driving claim are different asks even when every other field
+            // happens to match (both carry spell 0 only in the floor's case, but
+            // the identity compare in EnsureCastClaimLocked must not be able to
+            // mistake one for the other), and it selects the DenyHandOnly bit in
+            // the request flags plus the `reqParam.form = 0` mirror the heartbeat
+            // depends on.
+            bool             denyOnly = false;
             std::chrono::steady_clock::time_point refreshed{};
             // WHEN THIS HANDLE WAS REQUESTED -- the claim's own AGE clock, set
             // ONCE where `handle` is assigned below and never moved again while
@@ -237,6 +251,37 @@ namespace MFO::APMFBridge {
             // indices -- see ClaimOffenseCast's own doc for how that mirroring is
             // created and torn down without a double-release.
             CastClaim offense[2];
+            // ── THE IDLE-HAND FLOOR (F10, marth's design ruling 2026-09-08) ──
+            // A SECOND, DENY-ONLY kIntent_Cast claim (APMF_API::
+            // kCastFlag_DenyHandOnly) standing on whichever ONE hand MFO's own
+            // driving claim above does NOT occupy.
+            //
+            // WHY MFO CLAIMS IT AT ALL. APMF scopes a cast claim's deny to that
+            // claim's own hand, and leaving the other hand permissive is CORRECT
+            // for a general framework -- an unclaimed hand belongs to the actor's
+            // own AI. MFO's design is the narrower one: only GAMBITED spells
+            // occur. marth, 2026-09-08: *"The followers other hand is supposed to
+            // be claimed by MFO as idle is it not? Its proper APMF for it to
+            // behave like it is currently. But its improper MFO. Under MFO it
+            // should be idle when unclaimed."* So "the other hand goes idle" is
+            // the SPECIFICATION here, not a cost being traded against the casts
+            // it forgoes. Field shape it closes (Docs/DIAG-2026-09-08-field.md
+            // RC3): every un-gambited cast that session -- 2 Poison Sprays, 5
+            // Stone Runes, 3 Raise Zombies -- charged on the RIGHT hand inside a
+            // window where MFO held only a LEFT-hand claim; where a claim DID
+            // occupy the hand the deny went 3 for 3.
+            //
+            // ONLY EVER A COMPANION TO A DRIVING CLAIM -- never a standing hold
+            // of its own. See ReconcileHandFloorLocked below for the full
+            // derivation, including WHY "MFO holds no cast claim at all" floors
+            // NEITHER hand rather than both.
+            //
+            // Reuses CastClaim wholesale so it inherits the same TTL heartbeat,
+            // liveness check, never-published fail-closed split and reqParam
+            // mirror as every other cast claim in this file -- one mechanism, not
+            // a second one (its `spell` stays 0 and its `denyOnly` stays true for
+            // the claim's whole life).
+            CastClaim floor;
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
@@ -249,12 +294,22 @@ namespace MFO::APMFBridge {
         // 5 s per (follower, spell) window as Actuation's LogApmfRefusal, so the two
         // stay in step. Guarded by g_mx like every other map here -- the only writer
         // is EnsureCastClaimLocked, and every caller of that holds the lock.
+        //
+        // TWO ENTRIES PER FOLLOWER, NOT ONE (F10, 2026-09-08). The key used to be
+        // the follower alone, with the last-warned SPELL as the "is this the same
+        // situation?" test. With the idle-hand floor a follower now holds a
+        // DRIVING claim (spell X) and a DENY-ONLY floor (spell 0) at the same
+        // time, both walking this same path on the same laps -- so a single entry
+        // would flip X <-> 0 on every call and NEITHER would ever be throttled,
+        // turning a 5 s window into a line per lap. Index [0] = driving claims,
+        // [1] = the floor: each gets its own window and the two cannot cancel
+        // each other out.
         constexpr auto kNeverLiveWarnEvery = std::chrono::milliseconds(5000);
         struct NeverLiveWarn {
             RE::FormID                            spell = 0;
             std::chrono::steady_clock::time_point when{};
         };
-        std::unordered_map<RE::FormID, NeverLiveWarn> g_lastNeverLiveWarn;
+        std::unordered_map<RE::FormID, std::array<NeverLiveWarn, 2>> g_lastNeverLiveWarn;
 
         // ── cast-claim HEARTBEAT log throttle (F5-1, 2026-09-08) ────────────────
         // A heartbeat that silently fails is WORSE than no heartbeat, because RC2
@@ -274,12 +329,16 @@ namespace MFO::APMFBridge {
         // drop lines without costing the field its answer. Nothing here retries or
         // masks: a renewal that does not take shows up on the very next lap as the
         // existing "already auto-expired -- re-requesting" line below (principle 7).
+        //
+        // TWO ENTRIES PER FOLLOWER for exactly the reason g_lastNeverLiveWarn
+        // above has two (F10): a driving claim and the idle-hand floor heartbeat
+        // on the same laps, and one shared entry would defeat both windows.
         constexpr auto kRenewLogEvery = std::chrono::milliseconds(5000);
         struct RenewLog {
             RE::FormID                            spell = 0;
             std::chrono::steady_clock::time_point when{};
         };
-        std::unordered_map<RE::FormID, RenewLog> g_lastRenewLog;
+        std::unordered_map<RE::FormID, std::array<RenewLog, 2>> g_lastRenewLog;
 
         // MFO outbids APMF's mid-range test hotkeys (basis 100) so a real gambit wins
         // the hand/target over a tester's Numpad keys. Arbitrary among clients; > 100.
@@ -467,16 +526,39 @@ namespace MFO::APMFBridge {
         // same slot at once). Caller holds g_mx AND must have already verified
         // api->abiVersion >= 5 (RequestCast is a v5 slot -- see ClaimHealCast/
         // ClaimOffenseCast). `wantSpell == 0` releases.
+        //
+        // `wantDenyOnly` (F10, 2026-09-08) makes this ALSO the mint/renew path for
+        // the IDLE-HAND FLOOR -- a claim that drives nothing and only closes its
+        // hand (APMF_API::kCastFlag_DenyHandOnly). Deliberately the SAME function
+        // rather than a parallel one: the floor needs the identical liveness
+        // check, TTL heartbeat, never-published fail-closed split and reqParam
+        // mirror this already implements, and a copy of ~100 lines of that is how
+        // two paths drift. Three consequences the caller must know:
+        //   * `wantSpell == 0` no longer means "release" on its own -- a floor
+        //     carries spell 0 for its whole life BY DEFINITION (APMF forces it to
+        //     0 anyway). The release sentinel is now "no spell AND not a floor".
+        //     A floor is released by ReleaseClaimLocked at its own call sites.
+        //   * `denyOnly` is part of the claim's IDENTITY, so a floor can never be
+        //     silently reinterpreted as a driving claim (or vice versa) by the
+        //     unchanged fast path below.
+        //   * wantTarget/wantConc/wantStopPct are meaningless for a floor and are
+        //     passed as 0/false/0 by its caller; APMF zeroes the target anyway.
         void EnsureCastClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
                                    CastClaim& c, RE::FormID wantSpell, RE::FormID wantTarget,
-                                   std::int32_t wantHand, bool wantConc, std::uint32_t wantStopPct) {
-            if (wantSpell == 0) {
+                                   std::int32_t wantHand, bool wantConc, std::uint32_t wantStopPct,
+                                   bool wantDenyOnly = false) {
+            // Which of the two per-follower log-throttle slots this claim uses --
+            // see g_lastNeverLiveWarn's comment for why a floor and a driving
+            // claim must never share one.
+            const std::size_t logSlot = wantDenyOnly ? 1u : 0u;
+            if (wantSpell == 0 && !wantDenyOnly) {
                 ReleaseClaimLocked(c);
                 return;
             }
             if (c.handle != APMF_API::kInvalidHandle && c.spell == wantSpell &&
                 c.target == wantTarget && c.hand == wantHand &&
-                c.conc == wantConc && c.stopPct == wantStopPct) {
+                c.conc == wantConc && c.stopPct == wantStopPct &&
+                c.denyOnly == wantDenyOnly) {
                 // ABI v6 (cast-claim observability, 2026-09-06): do NOT trust a
                 // stored handle blindly on the unchanged fast path -- APMF
                 // auto-expires a claim at its own TTL with no notice to the
@@ -593,17 +675,19 @@ namespace MFO::APMFBridge {
                             const auto age        = std::chrono::duration_cast<std::chrono::milliseconds>(
                                                         now - c.created).count();
                             c.renewed = now;
-                            if (auto& r = g_lastRenewLog[follower];
+                            if (auto& r = g_lastRenewLog[follower][logSlot];
                                 r.spell != wantSpell || now - r.when >= kRenewLogEvery) {
                                 r.spell = wantSpell;
                                 r.when  = now;
-                                spdlog::info("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) HEARTBEAT -- "
+                                spdlog::info("[apmf] {:08X} kIntent_Cast {} (spell {:08X}) HEARTBEAT -- "
                                              "Repointed in place, renewing APMF's {}ms TTL (claim age {}ms, "
                                              "{}ms since the last renewal, next in ~{}ms). A LIVE claim whose "
                                              "age exceeds the TTL is the proof the window was RENEWED, not "
                                              "re-requested; a renewal that did not take shows up on the next "
                                              "lap as the 'already auto-expired' line instead.",
-                                             follower, wantSpell, kHealCastTtlMs, age, sinceRenew,
+                                             follower,
+                                             wantDenyOnly ? "IDLE-HAND FLOOR (deny-only)" : "claim",
+                                             wantSpell, kHealCastTtlMs, age, sinceRenew,
                                              every.count());
                             }
                         }
@@ -673,7 +757,7 @@ namespace MFO::APMFBridge {
                     // cast tick, and self-corrects on the next ask. A visible,
                     // self-correcting false alarm is the right trade against an
                     // invisible permanent loop.
-                    if (auto& w = g_lastNeverLiveWarn[follower];
+                    if (auto& w = g_lastNeverLiveWarn[follower][logSlot];
                         w.spell != wantSpell ||
                         std::chrono::steady_clock::now() - w.when >= kNeverLiveWarnEvery) {
                         w.spell = wantSpell;
@@ -698,9 +782,16 @@ namespace MFO::APMFBridge {
             // the single-hand hint. Anything else (kApmfHandRight, or bare 0) is the RIGHT
             // hint -- APMF's own default when kCastFlag_LeftHand is unset (APMF_API.h).
             const bool wantDual = (wantHand == kApmfHandDualCast);
+            // F10: kCastFlag_DenyHandOnly is ORTHOGONAL to the hand hint and rides
+            // ALONGSIDE it -- the floor stands on exactly the hand
+            // kCastFlag_LeftHand selects (APMF_API.h). It is never combined with
+            // kCastFlag_DualCast: a floor is by construction the ONE hand the
+            // driving claim leaves free, and a dual claim leaves none (see
+            // ReconcileHandFloorLocked, which never asks for a dual floor).
             req.flags  = (wantDual                    ? APMF_API::kCastFlag_DualCast :
                           wantHand == kApmfHandLeft    ? APMF_API::kCastFlag_LeftHand : 0u) |
-                         (wantConc ? APMF_API::kCastFlag_Concentration : 0u) |
+                         (wantConc     ? APMF_API::kCastFlag_Concentration : 0u) |
+                         (wantDenyOnly ? APMF_API::kCastFlag_DenyHandOnly  : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
             req.ttlMs  = kHealCastTtlMs;
             c.handle = api->RequestCast(follower, kOwnBasis, &req);
@@ -725,6 +816,7 @@ namespace MFO::APMFBridge {
             if (c.handle != APMF_API::kInvalidHandle) {
                 c.spell = wantSpell; c.target = wantTarget; c.hand = wantHand;
                 c.conc  = wantConc;  c.stopPct = wantStopPct;
+                c.denyOnly = wantDenyOnly;
                 // Fable SEV-1 (2026-09-06): the claim's AGE clock, stamped HERE
                 // and only here -- this is the single point where a NEW handle
                 // comes into existence. The unchanged-and-still-live fast path
@@ -774,13 +866,132 @@ namespace MFO::APMFBridge {
             }
         }
 
+        // ── THE IDLE-HAND FLOOR, DERIVED (F10, 2026-09-08) ──────────────────────
+        // Caller holds g_mx. Brings `o.floor` into agreement with the driving
+        // claims standing beside it, and does nothing else. Called from ONE place
+        // (Tick(), below) so the floor can never disagree with itself across six
+        // call sites -- see that call for the cadence argument.
+        //
+        // THE RULE, and the whole of it:
+        //   exactly ONE hand driven  -> floor the OTHER hand
+        //   both hands driven        -> no floor (a DualCast claim, or a claim on
+        //                               each hand: nothing is left open)
+        //   NEITHER hand driven      -> NO FLOOR ON EITHER HAND
+        //
+        // WHY "NEITHER", NOT "BOTH" (the explicit design question, answered here
+        // rather than picked). Four reasons, in the order that decided it:
+        //   1. DECLARE -> ENFORCE, and MFO has declared nothing. Principle 4 says
+        //      enforce only what was declared and never fabricate un-given input.
+        //      A cast gambit holding one hand is MFO saying "I am driving this
+        //      follower's casting right now"; the floor is the rest of that same
+        //      sentence. With no cast claim at all MFO is saying nothing about
+        //      casting, and a floor would be MFO enforcing an intent no rule
+        //      expressed.
+        //   2. It would mute followers nobody asked to mute. A party member with
+        //      no cast gambit authored at all -- a pure melee or ranged follower,
+        //      or any follower whose cast rules' conditions are simply false --
+        //      would be silenced for the whole game by a rule they never opted
+        //      into. marth's ruling is about the hand MFO LEAVES OVER while it
+        //      drives ("the followers OTHER hand"), not about followers MFO is
+        //      not driving.
+        //   3. A floor with nothing driving is a STANDING HOLD, which kIntent_Cast
+        //      is explicitly never allowed to be (APMF design.md 5a: always
+        //      bounded). As a companion it inherits its bound from the claim it
+        //      accompanies -- when the gambit stops winning, both stop being
+        //      renewed and both die at APMF's TTL. On its own it would need a
+        //      heartbeat with no natural end.
+        //   4. It would be unreadable in the field. A follower who casts nothing,
+        //      with no gambit running and no MFO line to explain it, is
+        //      indistinguishable from MFO being broken -- and that is the hardest
+        //      failure shape to diagnose (principles 5 and 7).
+        //
+        // THE BASIS IS kOwnBasis, THE SAME ONE EVERY OTHER MFO CLAIM USES -- and
+        // that is load-bearing, not laziness. APMF's shared comparator
+        // (core/ControlMap.h BetterClaim, used at EVERY winner selection on the
+        // cast channel) ranks by basis, and adds ONE rule: AT AN EQUAL BASIS A
+        // DENY-ONLY CLAIM LOSES TO A DRIVING ONE. So MFO can put the floor down
+        // first and still have its own next gambit take that hand the instant the
+        // gambit's claim publishes -- no release/re-request gap and no self-deny
+        // -- with the floor still standing underneath when the gambit ends
+        // (APMF_API.h, kCastFlag_DenyHandOnly, "*** BASIS: THE TIE IS ENFORCED FOR
+        // YOU. ***"). A floor at a HIGHER basis would be a strict inversion that
+        // silences MFO's own casts, and APMF warns loudly about it. Requesting the
+        // floor at kOwnBasis is therefore how supersession is expressed, not an
+        // omission -- do NOT give it its own basis constant.
+        //
+        // IT DOES NOT DENY MFO'S OWN DIRECT FORCE -- re-verified 2026-09-08
+        // against the PINNED CommonLibSSE-NG (3.7.0 @ c4ab853d,
+        // include/RE/M/MagicCaster.h), not inherited from the earlier claim.
+        // `CastSpellImmediate` is vtable slot 01 (:46) and `CheckCast` is slot 0A
+        // (:55) -- two different virtuals, and APMF's gates hook CheckCast (0x0A)
+        // and CheckShouldEquip (0x0F), which is the AI's own deliberation, never
+        // the immediate-cast entry. So the APMF-ABSENT / legacy / concentration
+        // direct-force paths (Actuation_Direct.cpp's
+        // GetMagicCaster(kInstant)->CastSpellImmediate) pass a floored hand
+        // untouched. What the floor closes is the AI's deliberation on that hand,
+        // which is exactly and only what it claims to do. Weapons are untouched
+        // too -- the 0x0F seat is installed on the spell/staff selector vtables
+        // only (APMF core/EquipGate.cpp's own "weapon/fist item classes have no
+        // concrete header class to hook"), so a spellsword's off-hand steel is
+        // not disarmed by a floor.
+        void ReconcileHandFloorLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower, Owned& o) {
+            // A DualCast claim is mirrored into BOTH offense slots (see
+            // ClaimOffenseCast), so it reads as both hands driven with no special
+            // case. Heals are LEFT always (ClaimHealCast's own hard rule).
+            const bool leftDriven  = o.offense[0].handle != APMF_API::kInvalidHandle ||
+                                     o.heal.handle       != APMF_API::kInvalidHandle;
+            const bool rightDriven = o.offense[1].handle != APMF_API::kInvalidHandle;
+
+            std::int32_t wantHand = 0;
+            if (leftDriven && !rightDriven)      wantHand = kApmfHandRight;
+            else if (rightDriven && !leftDriven) wantHand = kApmfHandLeft;
+
+            if (wantHand == 0) {
+                if (o.floor.handle != APMF_API::kInvalidHandle) {
+                    const auto hadHand = o.floor.hand;
+                    ReleaseClaimLocked(o.floor);
+                    spdlog::info("[apmf] {:08X} IDLE-HAND FLOOR released ({} hand) -- MFO no longer holds "
+                                 "exactly one driving cast claim, so there is no 'other hand' to close "
+                                 "(both hands driven, or none).",
+                                 follower, hadHand == kApmfHandLeft ? "left" : "right");
+                }
+                return;
+            }
+
+            // Log on the TRANSITION only (a new floor, or a floor that moved to
+            // the other hand). The steady state is silent by construction: the
+            // renewals below take EnsureCastClaimLocked's unchanged fast path,
+            // whose own heartbeat line is already throttled to one per 5 s.
+            const bool announce = o.floor.handle == APMF_API::kInvalidHandle ||
+                                  o.floor.hand   != wantHand;
+            EnsureCastClaimLocked(api, follower, o.floor, /*wantSpell=*/0, /*wantTarget=*/0,
+                                  wantHand, /*wantConc=*/false, /*wantStopPct=*/0,
+                                  /*wantDenyOnly=*/true);
+            o.floor.refreshed = std::chrono::steady_clock::now();
+            if (announce && o.floor.handle != APMF_API::kInvalidHandle)
+                spdlog::info("[apmf] {:08X} IDLE-HAND FLOOR claimed ({} hand, deny-only) -- MFO drives the "
+                             "{} hand, so nothing un-gambited may arm on this one. It drives nothing and "
+                             "admits nothing (not even MFO's own spells); MFO's next gambit takes the hand "
+                             "by the equal-basis tie rule, with no release/re-request gap.",
+                             follower, wantHand == kApmfHandLeft ? "left" : "right",
+                             wantHand == kApmfHandLeft ? "right" : "left");
+        }
+
         // Drop the map entry once EVERY claim is gone. Caller holds g_mx.
         void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
             const auto& o = it->second;
             if (o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
                 o.equipHandle == APMF_API::kInvalidHandle && o.heal.handle == APMF_API::kInvalidHandle &&
-                o.offense[0].handle == APMF_API::kInvalidHandle && o.offense[1].handle == APMF_API::kInvalidHandle)
+                o.offense[0].handle == APMF_API::kInvalidHandle &&
+                o.offense[1].handle == APMF_API::kInvalidHandle &&
+                // F10: an entry holding ONLY the idle-hand floor must survive --
+                // erasing it would drop MFO's record of a claim that is still
+                // standing on APMF's side, leaking it until its TTL. It cannot
+                // normally happen (the floor is released in the same Tick() pass
+                // that sees the last driving claim go), but a caller-driven
+                // release ordering must not be able to create it.
+                o.floor.handle == APMF_API::kInvalidHandle)
                 g_owned.erase(it);
         }
     }
@@ -1326,10 +1537,48 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.equipHandle, o.equip);
             if (o.heal.handle != APMF_API::kInvalidHandle && now - o.heal.refreshed >= facetExpiry)
                 ReleaseClaimLocked(o.heal);
+            // ── THE IDLE-HAND FLOOR (F10, 2026-09-08) ───────────────────────
+            // Reconciled HERE, and only here, AFTER every sweep above -- so it
+            // is always derived from the driving claims as they stand at the end
+            // of this pass, never from a set that is about to change two lines
+            // later.
+            //
+            // WHY ONE CALL SITE AND NOT SIX. The floor is a pure FUNCTION of
+            // which hands MFO drives, and that set changes in six places
+            // (ClaimOffenseCast, ClaimHealCast, the two Release*Cast calls, the
+            // sweeps above, and a claim MFO re-requests after an APMF expiry).
+            // Reconciling at each would be six chances for the derivation to
+            // drift; reconciling on the pump makes it ONE, and Tick() is the one
+            // service that runs for EVERY follower on EVERY pump (~133ms,
+            // Diagnostics.cpp) regardless of whose turn the per-follower
+            // round-robin is on. The cost is that the floor engages/disengages
+            // up to one pump late -- ~8 frames, against a measured equip+charge
+            // cycle of 2.3-4.5 s for any spell the AI could sneak in, so the
+            // window is not one an un-gambited cast can fit through.
+            //
+            // IT ALSO OWNS THE FLOOR'S REFRESH. This pass stamps
+            // `floor.refreshed` every pump and takes EnsureCastClaimLocked's
+            // unchanged fast path, which is where the TTL heartbeat lives -- so
+            // the floor is renewed on the pump's cadence, not the round-robin's,
+            // and needs no FacetExpiry sweep of its own (nothing else refreshes
+            // it, so no sweep could ever fire on it while this runs). The bound
+            // is unchanged and honest: if the pump stops, the floor stops being
+            // renewed and dies at APMF's own TTL like every other cast claim.
+            //
+            // Gated on bApmfCast, the same global switch every driving cast
+            // claim in this file already answers to, so turning the cast facet
+            // off cannot leave a floor standing behind it.
+            if (api->abiVersion >= 5 && Config::g_apmfCast.load())
+                ReconcileHandFloorLocked(reinterpret_cast<const APMF_API::APMF_API_v5*>(api),
+                                         it->first, o);
+            else if (o.floor.handle != APMF_API::kInvalidHandle)
+                ReleaseClaimLocked(o.floor);
             if (o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
                 o.equipHandle == APMF_API::kInvalidHandle && o.heal.handle == APMF_API::kInvalidHandle &&
-                o.offense[0].handle == APMF_API::kInvalidHandle && o.offense[1].handle == APMF_API::kInvalidHandle)
+                o.offense[0].handle == APMF_API::kInvalidHandle &&
+                o.offense[1].handle == APMF_API::kInvalidHandle &&
+                o.floor.handle == APMF_API::kInvalidHandle)
                 it = g_owned.erase(it);
             else
                 ++it;
@@ -1352,6 +1601,12 @@ namespace MFO::APMFBridge {
             ReleaseClaimLocked(o.offense[0]);
             if (sharedDual) o.offense[1] = CastClaim{};
             else            ReleaseClaimLocked(o.offense[1]);
+            // F10: the idle-hand floor goes with the claims it accompanies. This
+            // is the dismissal/revert/load teardown, and g_owned is cleared right
+            // below -- so a floor left standing here would never be reconciled
+            // again and would hold the hand shut until APMF's TTL, with MFO no
+            // longer holding the handle that could release it.
+            ReleaseClaimLocked(o.floor);
         }
         g_owned.clear();
     }
