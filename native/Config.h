@@ -113,23 +113,33 @@ namespace MFO::Config {
     // Not a resource cap: a weak heal SHOULD be cast many times over a long
     // fight. What looked wrong in the field was the interval, not the total.
     //
-    // OPEN DECISION -- THIS KNOB IS EFFECTIVELY INERT UNDER THE OWNED CAST MODEL
-    // (raised by the pre-merge review 2026-09-07, NOT decided; marth's call).
+    // INERT UNDER THE OWNED CAST MODEL, AND THAT IS CORRECT -- SETTLED, marth
+    // 2026-09-07 (memory `cast-cooldown-inert-is-correct`). NOT a regression; do
+    // not "restore" it and do not re-raise it as one.
+    //
     // The cooldown is enforced by `Loadout::CoolingDown` -> `Ready::Debounced`, and
     // it never gated the cast directly -- what actually paced the follower was that
     // a debounced tick made no APMF claim, so `FacetExpiry` swept the standing one
-    // (~2.95 s at defaults, solo) and `CasterConsent`'s pacing deny re-engaged for
-    // the tail. `fix/mfo-fourstate-followups` moved MFO's APMF ask AHEAD of
-    // `Loadout::Prepare` (so a refusal leaves no equip/consent side effects), which
+    // and `CasterConsent`'s pacing deny re-engaged for the tail.
+    // `fix/mfo-fourstate-followups` moved MFO's APMF ask AHEAD of `Loadout::Prepare`
+    // (so a refused claim leaves no equip/consent side effects standing), which
     // means the claim is now REFRESHED right through a cooldown stretch: the deny
-    // never re-engages, and the follower's own AI paces the cast instead.
+    // never re-engages, and this knob stops limiting anything.
     //
-    // That may be exactly right -- "the AI decides and paces it" IS the owned
-    // model -- but it is a behaviour change to a shipped, frozen-name knob, so it
-    // is flagged rather than quietly absorbed. If the answer is that MFO should
-    // keep pacing, the fix is to skip the ask on `Loadout::CoolingDown`; that gate
-    // is deliberately NOT in place pending the decision. See the pre-flight's own
-    // comment in `Actuation.cpp` (the "OPEN DECISION" paragraph).
+    // marth, verbatim: *"the cast cool down is currently irrelevent as you say. a
+    // cast can only cast as fast as a cast. No reason to be slower."* The engine's
+    // own equip -> charge -> fire pipeline (~2.3-2.5 s measured for an offense cast,
+    // 2.95 s claim-to-observed on the one heal that landed) already paces casting at
+    // the fastest a cast can physically occur, so a cooldown on top can only make a
+    // follower SLOWER than the engine allows -- it cannot make anything safer. An
+    // inert `fCastCooldown` is the ABSENCE OF A REDUNDANT LIMITER, not a lost guard.
+    //
+    // Still read by `Loadout::CoolingDown` (and by the FF beat in
+    // `Actuation_Direct.cpp`'s direct-force streams), so the key stays live and the
+    // MCM entry keeps working -- it simply no longer paces an APMF-owned cast. If it
+    // ever needs to mean something again that needs a NEW justification (a magicka
+    // economy, or a thrash the engine itself does not bound), never "it used to
+    // fire". See the pre-flight's own comment in `Actuation.cpp`.
     inline std::atomic<float> g_castCooldown{ 4.0f };
 
     // AUTO fan-out DoT recast threshold (fix #4). For a HOSTILE duration spell
