@@ -91,7 +91,9 @@ The single source of truth for ordering. Everything below depends on it.
   → `CasterConsent::InstallHook` → `CombatStyle::InstallEquipGate` →
   **sinks LAST** (`Rapport::RegisterSinks`, `Logistics::RegisterSinks`,
   `MEOBridge::RegisterSink`) → `Diagnostics::Install` → `Board::Install`
-  (overlay: swapchain-vtable hooks + input sink, VR-refused, `:306`). **Sinks
+  (overlay: swapchain-vtable hooks + input sink IF the trampoline did not take,
+  VR-refused, `:306`; the input trampoline itself went in earlier, at plugin
+  load -- `Board::InstallInputHook`). **Sinks
   must follow form resolution or they fire against unresolved forms.**
 - **`kPreLoadGame`** (`:313`): `Diagnostics::StopPump()` then
   `Packages::ReleaseAll("kPreLoadGame")` — release the alias the engine would
@@ -1658,19 +1660,37 @@ Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 `imgui_impl_win32` = vendored, do not read.**
-- **Overlay mechanism (v1.1 version-fragility kill, `Board.cpp:284-874`):** replaced
-  the three call-site trampolines (D3DInit/DXGIPresent/InputDispatch, each keyed
-  to a HARDCODED in-function byte offset that crashed on 1.5.x/1.7.x) with:
-  `PresentThunk` (`:539`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable
-  slots 8/13** (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable`
-  `:613`), a
-  `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` (`InputSink`, reads every
-  device incl. gamepad; `:660`), the unchanged `WndProcHook` swap (`:285`,
-  WM_CHAR/WM_KILLFOCUS), and `LazyInit` (`:364`, ImGui context + DX11/Win32 backend
-  on first Present). Input
-  CONSUMPTION while the board is open is done by `SyncControlBlock` (`:443`,
-  ControlMap toggle, edge-driven from Present) because a sink cannot null the event
-  array. **That toggle MUST call the ENGINE's `ToggleControls`
+- **Overlay mechanism (`Board.cpp:331-995`):** RENDER is offset-free — `PresentThunk`
+  (`:607`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots 8/13**
+  (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable` `:681`), the
+  unchanged `WndProcHook` swap (`:307`, WM_CHAR/WM_KILLFOCUS), and `LazyInit`
+  (`:398`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
+  (`:703`) polls for the live swapchain then patches.
+- **INPUT: TWO MUTUALLY EXCLUSIVE CARRIERS over ONE translation body (v2.0.4).**
+  The translation is `InputSink::Feed` (`:743`, hotkeys → close grace → ImGui feed);
+  it returns TRUE when the board has taken the batch. `g_inputTrampoline` (`:92`)
+  says which carrier is live, and NOTHING may drive both:
+  * **1.6.1170 — `InputDispatchHook` (`:979`), the v1.1.4 call-site trampoline,
+    RESTORED.** `write_call<5>` at `REL::RelocationID(67315, 68617)` +`0x7B`
+    (`BSInputDeviceManager::PollInputDevices`, AE `0x140CD8F40`), installed by
+    `InstallInputHook` (`:1533`) from `plugin.cpp` at **PLUGIN LOAD** — it rewrites
+    five live bytes in a function that runs on the input thread, and at plugin load
+    that thread does not exist yet. It calls `Feed` and, on TRUE, **nulls the
+    caller's head pointer** so the engine's own sinks never see the batch. THE
+    TRAMPOLINE FEEDS THE BOARD here: `InputSink` is NOT registered and
+    `SyncControlBlock` early-returns to a no-op.
+  * **every other runtime — `InputSink::ProcessEvent` (`:960`)**, a
+    `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` registered by `Install`.
+    THE SINK FEEDS THE BOARD here; it cannot consume, so consumption falls to
+    `SyncControlBlock` (`:477`, ControlMap toggle, edge-driven from Present) and is
+    **only as complete as the control flags are**. That is a known hole, not a fix:
+    5c0957c removed the trampoline for offset fragility and called the sink +
+    ControlMap "behavior-identical", which was FALSE and cost three regressions —
+    the SE-layout `ToggleControls` crash (v2.0.2), a partial category block
+    (v2.0.3), and Favorites still opening on d-pad up with the board up. 1.5.x /
+    1.7.x keep this path until someone disassembles their `67315`/`68617` and
+    verifies the in-function offset. **DO NOT widen the version gate on a guess.**
+- **`SyncControlBlock` (`:477`) — when it does run, that toggle MUST call the ENGINE's `ToggleControls`
   (`REL::RelocationID(67245, 68545)` — SE `0xC11C60`, AE `0xCD5650`, both verified
   against the disassembly), NEVER `RE::ControlMap::ToggleControls`** — see the
   ABI note at `Board.cpp:459-529`. The pinned 3.7.0 header is an SE-17-context
@@ -1683,19 +1703,22 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   `controlMap[]` (`0x60`) through the 3.7.0 header has this same defect.**
   `ShoutKey` (`:139`, `GetMappedKey` on `kGameplay`) is SAFE: `controlMap[]` at
   `0x60` and the `InputContext` stride `0x18` are identical on both runtimes.
-  `TryInstallHooks` (`:635`) polls for the live swapchain then patches. **PORTABLE UNIT
-  for MAO/MEO:** those functions + `Install`; only the two `Draw*` calls in
-  `PresentThunk` and the hotkeys in `InputSink` are mod-specific. Greppable
+  **PORTABLE UNIT
+  for MAO/MEO:** those functions + `InputDispatchHook`/`WriteThunkCall`/
+  `InstallInputHook` + `Install`; only the two `Draw*` calls in
+  `PresentThunk` and the hotkeys in `InputSink::Feed` are mod-specific. Greppable
   `[overlay-probe]` log lines report every component + a SUMMARY on board close.
 - **Module layout (mechanical splits, 2026-08-31 + 2026-09-07):** THREE draw/host
   TUs over one shared substrate header. Board.cpp had grown to 2577 at the
   overlay-swapchain merge (924f3a9) and the panel was cut out of it.
-  * `Board.cpp` (1417) = **shell + the overlay host**: file-local render state and
-    the overlay-probe atomics (`:85`), input translation (`:97`), `CloseBoard`
-    (`:161` — see the anon-namespace note below), `SpellTooltip` (`:185`), `DrawHud`
-    (`:204`), `WndProcHook` + the whole overlay hook section (`:284-874`), then the
-    public API: `ToggleHud` (`:880`), `Toggle` (`:887`), `FillRuleViews` (`:904`),
-    `ApplyEdits` (`:953`), `PublishSnapshot` (`:1188`), `Install` (`:1384`, end).
+  * `Board.cpp` (1604) = **shell + the overlay host**: file-local render state and
+    the overlay-probe atomics (`:86`) incl. `g_inputTrampoline` (`:92`), input
+    translation (`:120`), `CloseBoard`
+    (`:183` — see the anon-namespace note below), `SpellTooltip` (`:207`), `DrawHud`
+    (`:226`), `WndProcHook` (`:307`) + the whole overlay hook section (`:331-995`),
+    then the public API: `ToggleHud` (`:1000`), `Toggle` (`:1007`), `FillRuleViews`
+    (`:1024`), `ApplyEdits` (`:1073`), `PublishSnapshot` (`:1308`),
+    `InstallInputHook` (`:1533`), `Install` (`:1561`, end).
   * `Board_FieldKit.cpp` (1135) = **the whole panel**, ONE public function
     `DrawFieldKit` (`:151`, Followers+Gambits tabs, the list-picker, cascaded-B
     close) plus the four helpers it is the SOLE caller of, in its own anonymous
@@ -1727,13 +1750,22 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   panel (which renders them) and Board.cpp's `ApplyEdits`/`FillRuleViews` (which
   resolve an opcode back to a label/ParamKind) scan them; their opcode strings are
   a FROZEN co-save contract (#10).
-- `Install()` (`Board.h`) — caller `plugin.cpp:306` (kDataLoaded) only, VR-refused.
-  Installs AFTER the renderer is up (the vtable path needs the swapchain LIVE and
-  polls for it) — the OPPOSITE of the old trampoline, which had to patch before
-  renderer init. No `AllocTrampoline` and no patched call site to corrupt. The ONE
-  offset pair in this family is `SyncControlBlock`'s `REL::RelocationID(67245,
-  68545)` engine `ToggleControls` call (`Board.cpp:459-529`) — a plain call, not a
-  patch, and never reached on VR because `Install()` refuses VR first.
+- **TWO install entry points, at DIFFERENT times, and neither may move:**
+  * `InstallInputHook()` (`Board.h`, body `Board.cpp:1533`) — caller `plugin.cpp`
+    inside `SKSEPluginLoad`, **PLUGIN LOAD ONLY**. Writes the `68617`+`0x7B`
+    call-site trampoline. Must run before the input thread exists (it patches five
+    live bytes inside that thread's own poll function). Refuses VR, then gates on
+    `REL::Module::get().version()` major/minor/patch == 1/6/1170; every other
+    runtime is a logged no-op. This is the ONLY `SKSE::AllocTrampoline` in MFO
+    (`AllocTrampoline(64)`) — do not add a second without merging the reservations.
+  * `Install()` (`Board.h`, body `Board.cpp:1561`) — caller `plugin.cpp:306`
+    (kDataLoaded) only, VR-refused. Installs AFTER the renderer is up (the vtable
+    path needs the swapchain LIVE and polls for it). Registers `InputSink` **only
+    when `g_inputTrampoline` is false**.
+  The other offset pair in this family is `SyncControlBlock`'s
+  `REL::RelocationID(67245, 68545)` engine `ToggleControls` call
+  (`Board.cpp:493-563`) — a plain call, not a patch, never reached on VR because
+  `Install()` refuses VR first, and never reached at all on the trampoline path.
 - **Snapshot carries all actor-derived display data** (render thread reads plain
   cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
   pct **and** raw `health/magicka/staminaCur/Max` (Followers tab, `Vocab::VitalCur/
@@ -3145,7 +3177,8 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 |---|---|---|
 | Serialization Save/Load/Revert callbacks | `plugin.cpp:412-414` | `kSerID='MFO0'` |
 | Message listener | `plugin.cpp:416` | drives the whole lifecycle |
-| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + InputSink + WndProc | `plugin.cpp:306` → `Board::Install` (`Board.cpp:1313`, end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
+| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + WndProc + InputSink (sink path only) | `plugin.cpp:306` → `Board::Install` (`Board.cpp:1561`, end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
+| Board input: `InputDispatchHook` `write_call<5>` on `(67315, 68617)` +`0x7B` | `plugin.cpp` (SKSEPluginLoad) → `Board::InstallInputHook` (`Board.cpp:1533`) | **at PLUGIN LOAD**, before the input thread exists; VR-refused and gated to 1.6.1170 (offset verified against the disassembly); nulls the batch so the board takes input outright |
 | `MainThread::Install` (player Update vfunc 0x0AD) | `plugin.cpp:297` | true main-thread pump |
 | `Targeting::InstallHook` (Character::UpdateCombat 0xE4) | `plugin.cpp:299` | also drives CombatStyle |
 | `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:300` | 14 + 1 vtables |

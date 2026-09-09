@@ -91,6 +91,28 @@ namespace MFO::Board {
         std::atomic<bool> g_wndProcSwapped{ false };  // WndProc swap done (old proc captured)
         std::atomic<bool> g_controlsBlocked{ false }; // ControlMap consume edge (board open)
 
+        // TRUE once InstallInputHook() has actually written the InputDispatch
+        // call-site trampoline (1.6.1170 only -- see that function). It selects
+        // between the project's TWO input paths, which are mutually exclusive:
+        //
+        //   trampoline path (1.6.1170): the trampoline reads the events for the
+        //     board AND nulls the caller's head pointer, so nothing reaches the
+        //     engine's own sinks at all. THE TRAMPOLINE FEEDS THE BOARD. The
+        //     InputSink is NOT registered (it would see an empty list anyway --
+        //     the null happens BEFORE the dispatch it rides on) and
+        //     SyncControlBlock is a no-op, because two consumers fighting over
+        //     one input stream is exactly how v2.0.0-2.0.3 got into trouble.
+        //
+        //   sink path (every other runtime): unchanged from v2.0.3. THE
+        //     InputSink FEEDS THE BOARD and SyncControlBlock consumes via the
+        //     engine's ToggleControls. A sink cannot null the array, so this
+        //     path still cannot stop input the control flags do not cover
+        //     (Favorites on d-pad up is the known hole) -- 1.5.x/1.7.x keep the
+        //     v2.0.3 behaviour they have today until their offsets are verified.
+        //
+        // Written once at plugin load, read from the render + input threads.
+        std::atomic<bool> g_inputTrampoline{ false };
+
         bool g_stickNav[4] = { false, false, false, false };   // up/down/left/right
         std::atomic<bool> g_shoutDownSeen{ false };
 
@@ -165,14 +187,19 @@ namespace MFO::Board {
             // ACCEPTANCE GATE: one line that names the state of every overlay
             // component, emitted on each board close. If this reads present>0 +
             // every hook "ok", the whole pipeline is proven from the deck log.
+            // consume= names the CARRIER, not just the ControlMap edge. On the
+            // trampoline path g_controlsBlocked is never set (SyncControlBlock is
+            // a no-op there), so printing it alone would read "no" on the very
+            // path that consumes MOST completely.
             spdlog::info("[overlay-probe] SUMMARY present={} resize={} wndproc={} imgui={} "
-                         "hooks={} input kbd={} mouse={} pad={} consumed-while-open={}",
+                         "hooks={} input kbd={} mouse={} pad={} consume={}",
                          g_probePresent.load(), g_probeResize.load(),
                          g_wndProcSwapped.load() ? "ok" : "no",
                          g_ready.load() ? "ok" : "no",
                          g_hooksInstalled.load() ? "ok" : "no",
                          g_probeKbd.load(), g_probeMouse.load(), g_probePad.load(),
-                         g_controlsBlocked.load() ? "yes" : "no");
+                         g_inputTrampoline.load() ? "trampoline (array nulled)"
+                             : (g_controlsBlocked.load() ? "controlmap yes" : "controlmap no"));
         }
 
     namespace {   // ── the anonymous namespace RESUMES ───────────────────────
@@ -313,7 +340,17 @@ namespace MFO::Board {
         // (+0x7B). Address Library resolves each function BASE on every runtime
         // but NOT the byte offset of the instruction inside it, so on 1.5.x /
         // 1.7.x write_call patched mid-instruction and crashed at load. This
-        // rewrite carries ZERO game offsets:
+        // rewrite carries ZERO game offsets for RENDERING, and made input
+        // version-independent too -- but the input half of that trade was a bad
+        // one and is now RETRACTED on 1.6.1170 (see InstallInputHook). "A sink
+        // plus ControlMap is behaviour-identical to nulling the array" was
+        // false: it cost a hard crash (the SE-layout ToggleControls, fixed in
+        // v2.0.2), then a partial block, then Favorites still opening on d-pad
+        // up with the board up. Control flags cannot stop what the old array
+        // null stopped by construction. So on 1.6.1170 the InputDispatch
+        // trampoline is back and this sink is not even registered; every other
+        // runtime keeps the offset-free path described here, unchanged.
+        // The rendering half stands on its own and is untouched:
         //   * Present (vtable slot 8) + ResizeBuffers (slot 13) are hooked on the
         //     LIVE IDXGISwapChain vtable. Those slots are frozen by the COM/DXGI
         //     ABI, identical on every Windows/D3D11 build regardless of the
@@ -321,17 +358,19 @@ namespace MFO::Board {
         //     generalizes to all runtimes. The swapchain is the SAME object the
         //     old code reached (BSGraphics::Renderer data.renderWindows[0].
         //     swapChain), so the pixels are byte-identical on 1.6.1170.
-        //   * Input rides a BSTEventSink<InputEvent*> on BSInputDeviceManager
-        //     (CommonLib API, no offset) for READING every device incl. gamepad,
-        //     plus the WndProc swap (LazyInit) for text/focus. Game input is
-        //     CONSUMED while the board is open by disabling controls (ControlMap),
-        //     because a sink cannot null the event array the way the old dispatch
-        //     hook did.
+        //   * Input, on runtimes WITHOUT a verified +0x7B, rides a
+        //     BSTEventSink<InputEvent*> on BSInputDeviceManager (CommonLib API,
+        //     no offset) for READING every device incl. gamepad. Game input is
+        //     CONSUMED by disabling controls (ControlMap), because a sink cannot
+        //     null the event array the way the dispatch hook does. INCOMPLETE by
+        //     construction -- see the retraction above.
+        //   * The WndProc swap (LazyInit) carries text/focus on BOTH paths.
         //
         // PORTABLE UNIT (MAO/MEO copy verbatim): CreateRTV/ReleaseRTV, LazyInit,
         // SyncControlBlock, PresentThunk, ResizeBuffersThunk, HookSwapchainVtable,
-        // TryInstallHooks, InputSink, Install(). Only the two Draw* calls in
-        // PresentThunk and the hotkeys in InputSink are mod-specific.
+        // TryInstallHooks, InputSink, InputDispatchHook, WriteThunkCall,
+        // InstallInputHook, Install(). Only the two Draw* calls in PresentThunk
+        // and the hotkeys in InputSink::Feed are mod-specific.
 
         using PresentFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
         using ResizeFn  = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT,
@@ -441,6 +480,15 @@ namespace MFO::Board {
         // closing button's release so it could not leak to the game -> Tween menu).
         // ControlMap mutation is main-thread only, so it rides MainThread::Post.
         void SyncControlBlock() {
+            // TRAMPOLINE PATH: the InputDispatch trampoline nulls the event array,
+            // so the game already sees nothing and there is nothing left for this
+            // to consume. DO NOT also drive ControlMap here. Two mechanisms
+            // fighting over one input stream is what produced the v2.0.0-2.0.3
+            // regressions, and the flag write is not free (a Post per edge plus a
+            // SendEvent inside the engine's ToggleControls). The function and its
+            // ABI note below stay in place for the runtimes that still use it.
+            if (g_inputTrampoline.load()) return;
+
             const bool graceOn = g_closeGrace.load() != 0 &&
                 std::chrono::steady_clock::now().time_since_epoch().count() < g_closeGrace.load();
             const bool want = g_open.load() || graceOn;
@@ -675,20 +723,29 @@ namespace MFO::Board {
             if (HookSwapchainVtable(swap)) g_hooksInstalled.store(true);
         }
 
-        // ── input: the sole engine-side input path (replaces InputDispatchHook) ─
-        // A BSTEventSink on BSInputDeviceManager receives the EXACT same InputEvent
-        // stream the old dispatch trampoline saw (keyboard / mouse / gamepad /
-        // thumbstick), version-independently. The per-event translation below is
-        // the old InputDispatchHook body verbatim; the one thing a sink cannot do
-        // is null the array to consume, so consumption is handled by
-        // SyncControlBlock (ControlMap) instead. Runs on the input thread.
+        // ── input: the board's ONE translation body, two carriers ───────────
+        // Feed() below is the whole engine-side input translation (hotkeys, close
+        // grace, ImGui feed). It is carried by exactly one of two things,
+        // never both (see g_inputTrampoline):
+        //
+        //   * InputDispatchHook::thunk on 1.6.1170. It calls Feed() and, when
+        //     Feed() returns true, NULLS the caller's head pointer so the batch
+        //     never reaches the engine's own sinks. This is the v1.1.4 mechanism,
+        //     restored.
+        //   * InputSink::ProcessEvent everywhere else. Same stream, same Feed(),
+        //     but a sink cannot null the array, so its consume comes from
+        //     SyncControlBlock (ControlMap) and is only as complete as the
+        //     control flags are.
+        //
+        // Both carriers run on the input thread, so Feed() has always been
+        // written for it (atomics + the g_ioMx IO lock).
         class InputSink final : public RE::BSTEventSink<RE::InputEvent*> {
         public:
             static InputSink* GetSingleton() { static InputSink s; return &s; }
 
-            RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_events,
-                                                  RE::BSTEventSource<RE::InputEvent*>*) override {
-                using Ctrl = RE::BSEventNotifyControl;
+            // TRUE = the board has taken this batch and the carrier must consume
+            // it. Only the trampoline carrier can actually act on that.
+            static bool Feed(RE::InputEvent* const* a_events) {
 
                 // THE FOCUS HOTKEY IS HANDLED BEFORE THE PANEL CHECK, and that is
                 // the entire point: a menu button cannot be a target picker,
@@ -782,20 +839,25 @@ namespace MFO::Board {
                 }
 
                 // CLOSE GRACE: the board just closed (g_open false) but we are
-                // still inside the swallow window. The consume is now done by
-                // ControlMap (controls stay disabled until the grace ends), so the
-                // sink only has to END the grace early the instant we see a release
-                // -- then SyncControlBlock re-enables controls on the next frame.
+                // still inside the swallow window. Eat every event so the button
+                // PRESS that closed the board cannot leak its release (or a held
+                // edge) to the game and pop the Tween menu. End the grace the
+                // instant we see a release, so the dead window is only as long as
+                // the closing button is held.
+                // Returning TRUE swallows the batch on the trampoline path (v1.1.4
+                // behaviour). On the sink path the return is ignored and the
+                // consume comes from ControlMap staying disabled until the grace
+                // ends -- SyncControlBlock re-enables on the next frame.
                 if (a_events && !g_open.load() && g_closeGrace.load() != 0 &&
                     std::chrono::steady_clock::now().time_since_epoch().count() < g_closeGrace.load()) {
                     for (auto* e = *a_events; e; e = e->next)
                         if (e->eventType == RE::INPUT_EVENT_TYPE::kButton &&
                             !static_cast<RE::ButtonEvent*>(e)->IsDown()) { g_closeGrace.store(0); break; }
-                    return Ctrl::kContinue;
+                    return true;
                 }
 
                 if (!g_ready.load() || !g_open.load() || !a_events) {
-                    return Ctrl::kContinue;
+                    return false;   // board is not up: the game gets its input
                 }
 
                 std::scoped_lock ioLk(g_ioMx);
@@ -888,13 +950,51 @@ namespace MFO::Board {
                     }
                 }
 
-                // The game still RECEIVES these events (a sink cannot null the
-                // array), but SyncControlBlock has disabled the gameplay/menu
-                // control categories for the whole time the board is open, so they
-                // are inert -- no vanilla menu bleed-through, no control-flag churn.
-                return Ctrl::kContinue;
+                // Board is open: TAKE the batch.
+                // On the trampoline path the caller nulls the head pointer here and
+                // the game sees nothing at all -- no vanilla menu bleed-through, no
+                // Favorites on d-pad up, no control-flag churn.
+                // On the sink path the game still RECEIVES these events (a sink
+                // cannot null the array) and only SyncControlBlock's disabled
+                // control categories make them inert.
+                return true;
+            }
+
+            // The sink carrier. It cannot consume, so the Feed() verdict is
+            // dropped here on purpose and SyncControlBlock does the consuming.
+            RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_events,
+                                                  RE::BSTEventSource<RE::InputEvent*>*) override {
+                static_cast<void>(Feed(a_events));
+                return RE::BSEventNotifyControl::kContinue;
             }
         };
+
+        // ── input carrier #1: the v1.1.4 call-site trampoline (1.6.1170) ────
+        // Installed ONLY by InstallInputHook(), and only where the +0x7B byte
+        // offset inside BSInputDeviceManager::PollInputDevices is verified. The
+        // call it replaces is the one that dispatches the polled batch to every
+        // registered sink, so nulling the caller's head pointer FIRST is what
+        // makes the swallow total -- the engine's own PlayerControls /
+        // MenuControls sinks never see the events, which is the only thing that
+        // has ever actually stopped Favorites (d-pad up) opening over the board.
+        //
+        // NULL THE CALLER'S OWN HEAD POINTER, exactly as v1.1.4 (and MEO) do --
+        // handing the engine a stack-local instead leaves the caller's list
+        // intact and changes what a chained hook at the same site observes.
+        struct InputDispatchHook {
+            static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_source, RE::InputEvent** a_events) {
+                if (a_events && InputSink::Feed(a_events)) *a_events = nullptr;
+                func(a_source, a_events);
+            }
+            static inline REL::Relocation<decltype(thunk)> func;
+        };
+
+        template <class T>
+        void WriteThunkCall(REL::RelocationID a_id, REL::VariantOffset a_off) {
+            auto& trampoline = SKSE::GetTrampoline();
+            const REL::Relocation<std::uintptr_t> hook{ a_id, a_off };
+            T::func = trampoline.write_call<5>(hook.address(), T::thunk);
+        }
 
     }
 
@@ -1406,6 +1506,63 @@ namespace MFO::Board {
         }
     }
 
+    // ── the input trampoline, installed at PLUGIN LOAD ──────────────────────
+    // SEPARATE from Install() and called much earlier (plugin.cpp, straight
+    // after SKSE::Init) for one reason: this patches five live bytes inside
+    // BSInputDeviceManager::PollInputDevices, and that function runs on a
+    // dedicated input thread. At plugin load that thread does not exist yet, so
+    // the patch cannot race a thread executing the very instruction being
+    // rewritten. v1.1.4 installed here for the same reason. The swapchain hooks
+    // in Install() need the opposite (a LIVE renderer), which is why they stay
+    // at kDataLoaded.
+    //
+    // VERSION GATE. Address Library resolves the FUNCTION BASE on every runtime
+    // but not the byte offset of an instruction inside it, so `+0x7B` has to be
+    // verified per runtime. 5c0957c removed this hook because on 1.5.x / 1.7.x
+    // that offset lands mid-instruction and write_call corrupts the function.
+    // VERIFIED on 1.6.1170 ONLY, against the disassembled SkyrimSE.exe:
+    //   id 68617 = 0x140CD8F40 = PollInputDevices -- it loops four times over
+    //     [rcx+0x60 + i*8] calling vfunc +0x10 on each non-null entry, which is
+    //     BSInputDeviceManager::devices[4] (pinned BSInputDeviceManager.h:80)
+    //     being Process()ed, and its call to 0x140CD4F70 (id 68542, the
+    //     ControlMap user-event mapping pass) returns at +0x58 -- the exact
+    //     callee and intra-function offset the 2026-09-08 crash log recorded.
+    //   0x140CD8F40 + 0x7B = 0x140CD8FBB = `e8 40 0e 00 00`, a 5-byte E8 rel32
+    //     CALL to 0x140CD9E00, entered with rcx = the manager (which IS the
+    //     BSTEventSource) and rdx = &(a stack slot holding the batch head). So
+    //     write_call<5> replaces a whole instruction, the thunk signature is
+    //     right, and `*a_events = nullptr` writes the CALLER'S STACK SLOT, not
+    //     an engine global -- the swallow is scoped to this one dispatch.
+    // Any other runtime gets the sink + ControlMap path unchanged. Do NOT widen
+    // this gate without disassembling that runtime's 68617/67315 first.
+    void InstallInputHook() {
+        const auto& mod = REL::Module::get();
+        const auto  ver = mod.version();
+        if (REL::Module::IsVR()) {
+            spdlog::warn("[overlay-probe] VR runtime ({}) -- input trampoline REFUSED", ver.string());
+            return;
+        }
+        // Build is deliberately ignored: 1.6.1170.0 is the only build shipped
+        // under that patch number, and matching on it too would silently drop us
+        // to the sink path if a repack reported 1.6.1170.1.
+        if (!(ver.major() == 1 && ver.minor() == 6 && ver.patch() == 1170)) {
+            spdlog::warn("[overlay-probe] runtime {} -- input trampoline NOT installed "
+                         "(+0x7B verified on 1.6.1170 only); using the input sink + ControlMap path",
+                         ver.string());
+            return;
+        }
+
+        // 5-byte call -> one trampoline entry. Nothing else in MFO allocates the
+        // SKSE trampoline (grep: this is the only AllocTrampoline in the plugin),
+        // so this cannot double-allocate over another subsystem's reservation.
+        SKSE::AllocTrampoline(64);
+        WriteThunkCall<InputDispatchHook>(REL::RelocationID(67315, 68617),
+                                          REL::VariantOffset(0x7B, 0x7B, 0x7B));
+        g_inputTrampoline.store(true);
+        spdlog::info("[overlay-probe] input trampoline installed on 68617+0x7B (runtime {}) -- "
+                     "the board takes input outright; ControlMap sync disabled", ver.string());
+    }
+
     void Install() {
         // REFUSE-AND-GATE before any install (item 4). The overlay was never
         // VR-safe (same as the combat vtable hooks, plugin.cpp:293-295); refuse
@@ -1422,15 +1579,25 @@ namespace MFO::Board {
         }
         spdlog::info("[overlay-probe] install begin (runtime {}, flat-screen)", mod.version().string());
 
-        // Input: a version-independent BSTEventSink on BSInputDeviceManager reads
-        // every device incl. gamepad (replaces the InputDispatch call-site
-        // trampoline). No byte offset. The WndProc swap is done later, in LazyInit.
-        if (auto* idm = RE::BSInputDeviceManager::GetSingleton()) {
+        // Input, path #1: the trampoline is already in (InstallInputHook, at
+        // plugin load). It feeds the board itself and nulls the batch BEFORE the
+        // dispatch this sink would ride, so registering the sink here would only
+        // hand it an empty list -- and a second carrier for the same Feed() is
+        // exactly the double-drive that caused the v2.0.x regressions. Skip it.
+        if (g_inputTrampoline.load()) {
+            spdlog::info("[overlay-probe] input sink NOT registered -- the trampoline feeds the board");
+        } else if (auto* idm = RE::BSInputDeviceManager::GetSingleton()) {
+            // Input, path #2: a version-independent BSTEventSink on
+            // BSInputDeviceManager reads every device incl. gamepad. No byte
+            // offset, but it can only OBSERVE -- SyncControlBlock consumes.
             idm->AddEventSink(InputSink::GetSingleton());
-            spdlog::info("[overlay-probe] input sink registered on BSInputDeviceManager");
+            spdlog::info("[overlay-probe] input sink registered on BSInputDeviceManager "
+                         "(ControlMap consume path)");
         } else {
             spdlog::error("[overlay-probe] no BSInputDeviceManager -- input sink NOT registered");
         }
+        // The WndProc swap (text glyphs / focus loss) is done later, in LazyInit,
+        // and is unaffected by which input carrier is in use.
 
         // Present / ResizeBuffers: poll for the live swapchain, then patch vtable
         // slots 8 / 13. Deferred to a task because the swapchain may not be up the

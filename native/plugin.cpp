@@ -304,10 +304,12 @@ namespace {
             MFO::MEOBridge::RegisterSink();  // equip sink: flush follower gem moves onto worn loot
             MFO::Diagnostics::Install();
             MFO::Board::Install();           // Field Kit overlay: swapchain-vtable Present/Resize
-                                             // hooks + input sink (v1.1). Here, NOT at plugin load:
-                                             // the vtable path needs the swapchain LIVE (it polls
-                                             // for it), the opposite of the old call-site trampoline
-                                             // that had to patch before renderer init.
+                                             // hooks, plus the input sink IF the input trampoline
+                                             // did not take (see InstallInputHook at plugin load).
+                                             // Here, NOT at plugin load: the vtable path needs the
+                                             // swapchain LIVE (it polls for it), the opposite of
+                                             // the input trampoline, which must patch before the
+                                             // input thread exists.
             break;
 
         case SKSE::MessagingInterface::kPreLoadGame:
@@ -403,9 +405,17 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
                  ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
 
-    // The Field Kit overlay now installs at kDataLoaded (swapchain-vtable +
-    // input sink, v1.1) -- the vtable path needs the swapchain LIVE, so it can no
-    // longer go here at plugin load. See OnMessage's kDataLoaded case.
+    // The Field Kit overlay's RENDER hooks install at kDataLoaded (swapchain
+    // vtable, v1.1) -- that path needs the swapchain LIVE, so it cannot go here.
+    // See OnMessage's kDataLoaded case.
+    //
+    // Its INPUT trampoline has to go here, though, and only here (v2.0.4). It
+    // rewrites five live bytes inside BSInputDeviceManager::PollInputDevices,
+    // which runs on a dedicated input thread; at plugin load that thread does not
+    // exist, so the patch cannot race a thread executing those bytes. It is a
+    // logged no-op on any runtime whose in-function offset is unverified, so
+    // calling it unconditionally is safe.
+    MFO::Board::InstallInputHook();
 
     auto* serialization = SKSE::GetSerializationInterface();
     serialization->SetUniqueID(MFO::kSerID);
