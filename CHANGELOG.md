@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.3 -- The board takes the whole controller again
+
+- **Fixed the follower board not fully capturing the controller.** The board blocks the game's controls while it is open. It was only blocking nine of the game's twelve control categories, so anything mapped to the other three still reached the game underneath. This is why the d pad did not behave. It now blocks all of them, which is what the board did before v2.0.0.
+
 ## v2.0.2 -- The crash is gone and the casting holds together
 
 - **Fixed a crash that ended sessions after a few minutes.** Opening and closing the follower board was corrupting one of the game's own input tables. The game then walked that table off its end on the next controller press and died. If you play on a controller you were hitting this every session.

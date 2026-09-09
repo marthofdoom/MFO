@@ -450,12 +450,26 @@ namespace MFO::Board {
                 auto* cm = RE::ControlMap::GetSingleton();
                 if (!cm) return;
                 using F = RE::ControlMap::UEFlag;
+                // EVERY category, deliberately. Through v1.1.4 the overlay consumed
+                // input with a call-site trampoline on the input dispatch, which
+                // NULLED THE EVENT ARRAY -- it blocked everything, unconditionally.
+                // 5c0957c replaced that trampoline (its hardcoded in-function byte
+                // offsets only lined up on 1.6.1170 and crashed 1.5.x/1.7.x at load)
+                // with a BSTEventSink, which can only OBSERVE, and substituted this
+                // ControlMap toggle for the consumption. That substitution silently
+                // narrowed "block everything" to "block the nine categories we
+                // happened to name": kConsole, kJumping and kVATS were left live, so
+                // input mapped to them still reached the game while the board was
+                // open. Naming all twelve restores v1.1.4's semantics without
+                // reinstating any game offset. If a category is ever deliberately
+                // left out, say WHY here -- an unexplained omission is this bug.
                 const auto flags = static_cast<F>(
                     static_cast<std::uint32_t>(F::kMovement)  | static_cast<std::uint32_t>(F::kLooking)  |
                     static_cast<std::uint32_t>(F::kActivate)  | static_cast<std::uint32_t>(F::kMenu)     |
-                    static_cast<std::uint32_t>(F::kPOVSwitch) | static_cast<std::uint32_t>(F::kFighting) |
-                    static_cast<std::uint32_t>(F::kSneaking)  | static_cast<std::uint32_t>(F::kMainFour) |
-                    static_cast<std::uint32_t>(F::kWheelZoom));
+                    static_cast<std::uint32_t>(F::kConsole)   | static_cast<std::uint32_t>(F::kPOVSwitch)|
+                    static_cast<std::uint32_t>(F::kFighting)  | static_cast<std::uint32_t>(F::kSneaking) |
+                    static_cast<std::uint32_t>(F::kMainFour)  | static_cast<std::uint32_t>(F::kWheelZoom)|
+                    static_cast<std::uint32_t>(F::kJumping)   | static_cast<std::uint32_t>(F::kVATS));
                 // ────────────────────────────────────────────────────────────
                 // DO NOT call RE::ControlMap::ToggleControls HERE. This is the
                 // worked example for engineering principle 6 -- "COMMONLIB
