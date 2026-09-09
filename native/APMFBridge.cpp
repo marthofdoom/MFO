@@ -1240,9 +1240,26 @@ namespace MFO::APMFBridge {
     // kHealHoldNeverObservedMs window. Nothing here re-derives it -- but do not
     // add a second unbounded caller without one.
     //
-    // IT DOES NOT MOVE `created` EITHER (the never-observed hold cap's clock):
-    // that is stamped once per handle in the mint block, which this cannot reach.
-    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand, bool a_forHold) {
+    // IT CAN MOVE `created` -- rarely, and the paragraph that used to stand here
+    // said it could not ("stamped once per handle in the mint block, which this
+    // cannot reach"). It CAN reach it: a stored handle APMF has already expired
+    // takes EnsureCastClaimLocked's aged-out branch, which resets the claim and
+    // RequestCasts a fresh one, and the mint block stamps `created` on that new
+    // handle. Practically unreachable while MFO's own ~2.45 s FacetExpiry sweep
+    // beats APMF's 6 s TTL -- the claim is released here long before it can age
+    // out there -- but "cannot" was the wrong word, and the never-observed hold
+    // cap that reads `created` deserves the accurate version.
+    //
+    // `a_holdSpell` (2026-09-08): non-zero marks this a HOLD refresh -- see the
+    // header -- AND names the ONE spell being held for, so only claims naming it
+    // are replayed. That second half is load-bearing on the LEFT hand, where an
+    // offense claim and a heal claim can stand together: without it a held
+    // offense re-aim would renew a coexisting HEAL claim it knows nothing about,
+    // and the heal's own never-observed cap could not stop it (that cap gates
+    // RefreshHealCastClaim's answer and reads `created`, while the claim's LIFE
+    // is `refreshed`, which this call bumps).
+    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand,
+                                RE::FormID a_holdSpell) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || a_follower == 0 || api->abiVersion < 5) return false;
         // ABI < 6 PARITY WITH RefreshHealCastClaim (review, 2026-09-08). On a HOLD
@@ -1258,7 +1275,7 @@ namespace MFO::APMFBridge {
         // The IN-FLIGHT caller is unaffected and stays byte-identical: it is fed by
         // a rule whose (spell,target) still matches, so nothing is being held open
         // on its behalf. Inert in practice -- the DLL pair ships at kABIVersion 6.
-        if (a_forHold && api->abiVersion < 6) return false;
+        if (a_holdSpell != 0 && api->abiVersion < 6) return false;
         auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
@@ -1269,6 +1286,8 @@ namespace MFO::APMFBridge {
 
         auto replay = [&](CastClaim& c) {
             if (c.handle == APMF_API::kInvalidHandle) return;
+            // A hold names its spell; anything else on this hand is not its to feed.
+            if (a_holdSpell != 0 && c.spell != a_holdSpell) return;
             EnsureCastClaimLocked(v5, a_follower, c, c.spell, c.target, c.hand,
                                   c.conc, c.stopPct, c.denyOnly);
             c.refreshed = now;

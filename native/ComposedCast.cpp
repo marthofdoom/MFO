@@ -73,6 +73,21 @@ namespace MFO::ComposedCast {
             RE::FormID        proxy    = 0;
             Clock::time_point since{};       // when this exact (follower, spell) claim began
             bool              observed = false;   // SpellSink confirmed a real cast since `since`
+            // WHEN THE LAST OBSERVED FIRE LANDED (review, 2026-09-08). `observed`
+            // is a LATCH: nothing in the offense lifecycle ever clears it --
+            // ReleaseCastClaimOnHand, ReleaseOffenseCast, PreemptHand's offense
+            // side and APMFBridge's expiry sweep all leave this slot intact, and
+            // the fresh-claim site re-arms with the SAME spell, which is
+            // WatchArmed's no-reset branch. So "this spell fired once on this hand
+            // this fight" stays true for the rest of the fight, ACROSS claims and
+            // across RULES. That is fine for the warning the latch was built for
+            // (it only suppresses a false alarm), and NOT fine for anything using
+            // it as evidence that a claim is alive NOW -- which is exactly what
+            // Actuation's held-re-aim cap needs. This stamp is what makes the
+            // question answerable as "recently", so a claim that fired 17 s ago
+            // and has idled since reads as silent. Stamped by NoteObservedCast on
+            // every observed fire, so a repeating cast keeps re-stamping itself.
+            Clock::time_point lastObservedAt{};
             Clock::time_point lastWarn{};      // rate-limit
         };
         struct FollowerWatch { Watch hand[2]; };   // [0] = left, [1] = right
@@ -520,22 +535,36 @@ namespace MFO::ComposedCast {
     // See ComposedCast.h. Hand-scoped and spell-checked on purpose: a watch slot
     // that has moved on to another spell must never answer for this one, and the
     // OTHER hand's observation says nothing about this hand's claim.
-    bool ObservedFiring(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell) {
+    bool ObservedFiring(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell,
+                        std::uint32_t a_withinMs) {
         const auto it = g_watch.find(a_follower);
         if (it == g_watch.end() || a_spell == 0) return false;
         const auto& w = it->second.hand[WatchSlot(a_hand)];
-        return w.spell == a_spell && w.observed;
+        if (w.spell != a_spell || !w.observed) return false;
+        // RECENTLY, not ever. `observed` alone is a latch no offense release path
+        // clears (see Watch::lastObservedAt), so answering it directly would say
+        // "firing" for any spell that has fired once on this hand this fight --
+        // across claims and across rules -- and a caller using this as a liveness
+        // signal would be unbounded for the ORDINARY case rather than an edge.
+        // A caller that genuinely wants the latch itself can pass 0.
+        if (a_withinMs == 0) return true;
+        return Clock::now() - w.lastObservedAt < std::chrono::milliseconds(a_withinMs);
     }
 
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell) {
         auto it = g_watch.find(a_follower);
         if (it == g_watch.end()) return;
+        const auto now = Clock::now();
         if (it->second.hand[0].spell == a_spell ||
-            (it->second.hand[0].proxy != 0 && it->second.hand[0].proxy == a_spell))
+            (it->second.hand[0].proxy != 0 && it->second.hand[0].proxy == a_spell)) {
             it->second.hand[0].observed = true;
+            it->second.hand[0].lastObservedAt = now;   // "recently", for ObservedFiring
+        }
         if (it->second.hand[1].spell == a_spell ||
-            (it->second.hand[1].proxy != 0 && it->second.hand[1].proxy == a_spell))
+            (it->second.hand[1].proxy != 0 && it->second.hand[1].proxy == a_spell)) {
             it->second.hand[1].observed = true;
+            it->second.hand[1].lastObservedAt = now;
+        }
     }
 
     void WatchClaim(RE::FormID a_follower, RE::FormID a_spell, std::int32_t a_hand, RE::FormID a_proxy) {

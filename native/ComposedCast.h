@@ -257,8 +257,18 @@ namespace MFO::ComposedCast {
     void ClearWatch(RE::FormID a_follower);
 
     // Has the watch on THIS hand seen `a_spell` (or its recorded delivery-flip
-    // proxy) actually FIRE since the claim was armed? The `observed` latch
-    // NoteObservedCast sets, read back.
+    // proxy) actually FIRE within the last `a_withinMs`? (0 = "ever", the raw
+    // latch.) The `observed` latch NoteObservedCast sets, read back with a
+    // recency bound.
+    //
+    // THE RECENCY BOUND IS NOT OPTIONAL FOR A LIVENESS CALLER (review,
+    // 2026-09-08). `observed` is a LATCH and no offense release path clears it --
+    // not ReleaseCastClaimOnHand, ReleaseOffenseCast, PreemptHand's offense side
+    // or APMFBridge's expiry sweep, and the fresh-claim site re-arms with the SAME
+    // spell, which is WatchArmed's no-reset branch. So the raw latch means "this
+    // spell fired once on this hand this fight", across claims AND across rules;
+    // reading it as "this claim is alive" is unbounded for the ordinary case, not
+    // an edge. Pass the window you actually mean.
     //
     // WHY IT IS EXPOSED (2026-09-08). Actuation's cast-hand lock heartbeats an
     // incumbent claim while its own rule is held off from re-aiming, and a
@@ -271,7 +281,8 @@ namespace MFO::ComposedCast {
     //
     // Worker-serial, no lock -- same discipline and same map as every other
     // function in this header (see the THREADING note above).
-    bool ObservedFiring(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell);
+    bool ObservedFiring(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell,
+                        std::uint32_t a_withinMs);
 
     // kPreLoadGame / revert -- beside CastBounds::Reset(). Drops this module's
     // own silent-cast diagnostic watch map (APMFBridge::ClearTransientState

@@ -39,13 +39,6 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Finding:** `WeaponHandExposure` depends on a `g_forcedWeapon` entry, and `EquipWeapon` writes one only under `Config::g_weaponStyleControl` (the kill-switch-off branch is a plain `EquipObject`, no ledger); `ReconcileForcedWeapon` releases unconditionally when off. So with that feature off, a melee/hybrid follower in the transient-unarmed gap still lands RIGHT — the 2026-09-05 "cast never left rest" shape.
 - **Why not closed:** closing it needs a signal that does not depend on that feature being on.
 
-### MFO-B4 — `IncumbentTargetLost` and `PickAlly` disagree on "resolves"
-- **Raised:** Fable review of `1044816`, taken as a comment by `625f3b7`; the review of `625f3b7` asked for a reword once MFO-B5's cap exists.
-- **Severity:** SEV-5
-- **Finding:** `PickAlly`'s "resolves" means "in `Followers::g_active`, or the player"; `IncumbentTargetLost` resolves the raw FormID via `LookupByID`. A mid-fight DISMISSED follower therefore reads valid until healed above threshold.
-- **Author's reasoning for leaving it:** cost is one claim's life against an ally still standing and still hurt; reaching `g_active` would bind the cast lock to the roster list for a case the field has never reported.
-- **Follow-up owed:** the comment's stated bound ("a re-aim held for at most one claim's life") must be reworded once the heartbeat cap lands.
-
 ### MFO-B5 — APMF-side cast retargeting does not exist
 - **Raised:** by the author agent, twice, as an out-of-boundary observation.
 - **Severity:** SEV-4 (design gap, APMF side)
@@ -56,4 +49,10 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 
 ## DRAINED
 
-_(none yet)_
+### MFO-B4 — `IncumbentTargetLost` and `PickAlly` disagree on "resolves"
+- **Raised:** Fable review of `1044816`, taken as a comment by `625f3b7`; the review of `625f3b7` asked for a reword once the heartbeat cap exists.
+- **Severity:** SEV-5
+- **Finding:** `PickAlly`'s "resolves" means "in `Followers::g_active`, or the player"; `IncumbentTargetLost` resolves the raw FormID via `LookupByID`. A mid-fight DISMISSED follower therefore reads valid until healed above threshold.
+- **Author's reasoning for leaving the DIVERGENCE:** cost is one claim's life against an ally still standing and still hurt; reaching `g_active` would bind the cast lock to the roster list for a case the field has never reported. Unchanged — the divergence itself is still open by choice, and if it ever bites it comes back as a new entry.
+- **Follow-up that was owed:** the comment's stated bound ("a re-aim held for at most one claim's life") had to be reworded once the heartbeat cap landed, because that cap is what makes the real bound something other than the claim's life.
+- **DRAINED by `6bfbd79`** (the same commit that landed the cap): the comment now states the actual bound — the re-aim is held while the claim is fed, and the hold's own heartbeat stops at `kHealHoldNeverObservedMs` for a claim that never fires, so the cost is bounded by that window rather than by the fight. Verified in the round-6 review of that SHA.

@@ -306,17 +306,26 @@ namespace MFO::APMFBridge {
     // through to its normal claim path, NOT treat the rule as satisfied. It is not
     // an APMF refusal and must never be logged as one.
     //
-    // `a_forHold` (2026-09-08): this refresh is feeding a claim whose own rule is
-    // being HELD OFF (Actuation's cast-hand lock holding a re-aim), rather than one
-    // whose (spell,target) still matches. Two consequences, both the caller's to
-    // respect: it REFUSES on ABI < 6, for the same reason RefreshHealCastClaim does
-    // (no IsClaimLive to ask, so the refresh would bump MFO's stamp for a claim
-    // APMF may have expired and stop the only sweep that could end the hold); and
-    // the CALLER must bound how long it keeps calling -- a claim that can never
-    // fire must not be renewed forever, which is what kHealHoldNeverObservedMs
-    // bounds on the heal side. Default false = the in-flight caller, unchanged.
+    // `a_holdSpell` (2026-09-08): NON-ZERO marks this a HOLD refresh -- feeding a
+    // claim whose own rule is being HELD OFF (Actuation's cast-hand lock holding a
+    // re-aim) rather than one whose (spell,target) still matches -- and names the
+    // ONE spell being held for. Three consequences, all the caller's to respect:
+    //   * it REFUSES on ABI < 6, for the same reason RefreshHealCastClaim does (no
+    //     IsClaimLive to ask, so the refresh would bump MFO's stamp for a claim
+    //     APMF may have expired and stop the only sweep that could end the hold);
+    //   * only claims NAMING that spell are replayed. On the LEFT hand an offense
+    //     claim and a heal claim can stand together, and a held offense re-aim
+    //     renewing a coexisting heal claim would slip that heal past its own
+    //     never-observed cap -- that cap gates RefreshHealCastClaim's answer and
+    //     reads `created`, while the claim's LIFE is `refreshed`, which this bumps;
+    //   * the CALLER must bound how long it keeps calling. A claim that can never
+    //     fire must not be renewed forever, which is what kHealHoldNeverObservedMs
+    //     bounds on the heal side, and the caller's evidence for "still firing"
+    //     must be RECENT (ComposedCast::ObservedFiring's window) -- the raw
+    //     `observed` latch is never cleared by any offense release path.
+    // 0 (the default) = the in-flight caller: every claim on the hand, no refusal.
     bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand,
-                                bool a_forHold = false);
+                                RE::FormID a_holdSpell = 0);
 
     void ReleaseOffenseCast(RE::FormID a_follower);
 

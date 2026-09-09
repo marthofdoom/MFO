@@ -638,9 +638,13 @@ namespace MFO::Actuation {
         // a renewal. A cast the engine has not finished inside that is not one
         // this is protecting, it is one that is STUCK, and going on holding the
         // hand for it would hide the stall instead of showing it (principle 7).
-        // It clears the measured pipeline with room to spare: 2.3-2.5s equip +
-        // charge for an offense cast, 4.5s claim-to-fire for the one heal the
-        // 2026-09-08 session landed.
+        // It clears the measured pipeline with room to spare. The two numbers this
+        // file quotes are DIFFERENT measurements and neither is a range of the
+        // other -- stated once here because two comments phrased them as if they
+        // were: 2.3-2.5 s is an offense cast's equip + charge (claim to first
+        // CHARGE STATE), and 4.5 s is claim to observed FIRE for the one heal the
+        // 2026-09-08 session landed. "2.3-4.5 s" as used elsewhere in this file is
+        // the span those two bracket, not a single measured quantity.
         constexpr auto kInFlightHoldCap = std::chrono::milliseconds(APMFBridge::kHealCastTtlMs);
 
         // Is hand `a_hand`'s lock still LIVE, i.e. is the follower still
@@ -1102,6 +1106,13 @@ namespace MFO::Actuation {
             //     stood without being re-stated". Past it, stop feeding: the
             //     existing FacetExpiry sweep releases, and the next lap's re-aim
             //     proceeds normally.
+            // THE REAL BOUND IS THE SUM, NOT THE 4 s. Feeding stops at 4000 ms;
+            // the CLAIM then dies when Tick()'s sweep sees `refreshed` go stale at
+            // FacetExpiry() -- so the hold actually stands ~4.8 s (0.77 s floor) to
+            // ~6.5 s (~2.45 s at the defaults) before the hand frees. Stated
+            // because "capped at 4 s" would be a comment the field could not
+            // reconcile with the log. A cast already CHARGING is exempt either way
+            // (`inFlight`), so nothing in flight is cut short by this.
             // NOT A TENURE and NOT a re-litigation of marth's ruling: this caps how
             // long a rule may wait on its OWN silent claim. It delays no
             // higher-ranked rule -- the opposite direction from the tenure that was
@@ -1132,13 +1143,28 @@ namespace MFO::Actuation {
                     const bool inFlight = CastInFlightOnHand(a_follower, h, lk.spell,
                                                              CastProxyOnHand(fid, h));
                     if (IncumbentTargetLost(a_follower, lk) && !inFlight) continue;   // A-3
-                    const bool fired = ComposedCast::ObservedFiring(fid, apmfHand, lk.spell);
+                    // RECENTLY fired, not ever. `observed` is a latch no offense
+                    // release path clears, so the raw answer means "this spell
+                    // fired once on this hand this fight" -- across claims and
+                    // across RULES -- and using it here would leave the cap
+                    // unbounded for the ordinary case: any rule whose spell had
+                    // landed even once could then hold its hand forever. Same
+                    // window as the age cap below, so both halves of "is this
+                    // claim still alive" are measured against one number.
+                    const bool fired = ComposedCast::ObservedFiring(
+                        fid, apmfHand, lk.spell, APMFBridge::kHealHoldNeverObservedMs);
                     const auto  age  = std::chrono::duration_cast<std::chrono::milliseconds>(
                                            now - lk.lastSeen);
                     if (!fired && !inFlight &&
                         age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs))
                         continue;   // silent too long -- stop feeding it, let the sweep run
-                    APMFBridge::RefreshOwnedCastOnHand(fid, apmfHand, /*a_forHold=*/true);
+                    // The SPELL, not just the hand: on the LEFT an offense claim
+                    // and a heal claim can stand together, and a held offense
+                    // re-aim must not renew a coexisting heal it knows nothing
+                    // about (that would slip the heal past its own never-observed
+                    // cap, which gates RefreshHealCastClaim's answer while the
+                    // claim's LIFE is the `refreshed` stamp this call bumps).
+                    APMFBridge::RefreshOwnedCastOnHand(fid, apmfHand, /*a_holdSpell=*/lk.spell);
                     // FEED THE SILENT-CLAIM WATCH TOO. The "[cfc] ... NO observed
                     // cast" warning is emitted only from WatchArmed -- there is no
                     // pump -- which is why the in-flight path re-arms on every
