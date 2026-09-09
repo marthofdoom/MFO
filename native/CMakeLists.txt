@@ -44,6 +44,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Evaluator.cpp
     Actuation.cpp
     Actuation_Direct.cpp
+    Actuation_Hands.cpp
     Scheduler.cpp
     Logistics.cpp
     Logistics_Cast.cpp
