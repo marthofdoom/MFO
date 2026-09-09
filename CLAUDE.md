@@ -202,6 +202,21 @@ of a given change.
 9. **A FLOOR IS SAFE; AN EXPIRY IS NOT.** Size every budget/TTL from the REAL refresh
    cadence, not from a guess. A round-robin tick means per-item refresh is
    `N x period` — a flat expiry shorter than that silently kills LIVE state.
+11. **PER-RUNTIME PATHS, NOT A LOWEST-COMMON-DENOMINATOR COMPROMISE (marth 2026-09-09).**
+    Both binaries are unpacked now (1.6.1170 and 1.5.97), so version fragility is no
+    longer a reason to weaken a mechanism. **Whatever is proven on 1.6 is what ships on
+    1.6.** 1.5 gets its OWN separate path, behaviourally identical, with every offset and
+    id verified against the 1.5 LAYOUT. Never degrade the proven path to make one
+    construct span both runtimes, and never assume a construct valid on one layout is
+    valid on the other — the layouts genuinely differ (17 vs 18 input contexts shifts
+    every `ControlMap` member past `controlMap[]`).
+    (Cost of the opposite, paid across three releases: `5c0957c` replaced three WORKING
+    call-site trampolines with a `BSTEventSink` + `ControlMap` toggle so a single path
+    could span every runtime. That compromise produced a session-ending crash (the 3.7.0
+    header wrote `contextPriorityStack.size` instead of `enabledControls`), then a
+    control-mask hole that let Favorites open over the board, then a dead d-pad and B
+    button. The mechanism it replaced had worked for months.)
+
 10. **PROPER SOLUTIONS, NOT WORKAROUNDS.** Never work around unless absolutely
     needed; solve the root cause. If a compromise is genuinely unavoidable, FLAG it
     explicitly and record why — never bury it.
