@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.4 -- The board takes the controller outright
+
+- **The follower board now takes every button while it is open.** Nothing gets through to the game underneath. The favorites bar no longer opens on d pad up, and the game does not wake up confused after you close the board. This is the exact mechanism the board used through v1.1.4, brought back. It runs on Skyrim 1.6.1170. Other game versions keep the v2.0.3 behaviour until their offsets are checked.
+
 ## v2.0.3 -- The board takes the whole controller again
 
 - **Fixed controls staying dead after the board was closed.** The board was writing the game's own saved control state, which menus and the favorites bar restore from. It now only changes the live controls and puts them back when it closes.

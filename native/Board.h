@@ -139,8 +139,19 @@ namespace MFO::Board {
         std::vector<ProgAllocator::BoardTabView> boardTabs;
     };
 
-    // Install the three trampoline hooks. MUST be called from SKSEPluginLoad,
-    // before the renderer initializes.
+    // Install the InputDispatch call-site trampoline, which lets the board take
+    // input outright (it nulls the batch so the engine's own sinks never see it).
+    // MUST be called from SKSEPluginLoad: it rewrites five live bytes inside a
+    // function that runs on the input thread, and at plugin load that thread does
+    // not exist yet. Installs ONLY on runtimes where the in-function byte offset
+    // is verified (1.6.1170 today); elsewhere it is a logged no-op and the board
+    // falls back to the event-sink + ControlMap path. Safe to call on any runtime.
+    void InstallInputHook();
+
+    // Install the overlay: swapchain-vtable Present/ResizeBuffers hooks, plus the
+    // input event sink if InstallInputHook() did not take the trampoline path.
+    // MUST be called after the renderer is up (kDataLoaded), NOT at plugin load --
+    // it polls for the live swapchain.
     void Install();
 
     // Rebuild the snapshot from live state. MAIN THREAD ONLY.
