@@ -256,6 +256,23 @@ namespace MFO::ComposedCast {
                     std::int32_t a_hand = APMFBridge::kApmfHandLeft, RE::FormID a_proxy = 0);
     void ClearWatch(RE::FormID a_follower);
 
+    // Has the watch on THIS hand seen `a_spell` (or its recorded delivery-flip
+    // proxy) actually FIRE since the claim was armed? The `observed` latch
+    // NoteObservedCast sets, read back.
+    //
+    // WHY IT IS EXPOSED (2026-09-08). Actuation's cast-hand lock heartbeats an
+    // incumbent claim while its own rule is held off from re-aiming, and a
+    // heartbeat that renews APMF's TTL must never be handed to a claim that can
+    // never fire -- otherwise the hold is unbounded, which is the exact failure
+    // APMFBridge::RefreshHealCastClaim's never-observed age cap exists to prevent.
+    // "Has it fired?" is the only honest test of that, and this is where the
+    // answer lives. Deliberately NOT ExpectingCast: that one answers "is this form
+    // one we are watching for", i.e. the opposite question, and is unhand-scoped.
+    //
+    // Worker-serial, no lock -- same discipline and same map as every other
+    // function in this header (see the THREADING note above).
+    bool ObservedFiring(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell);
+
     // kPreLoadGame / revert -- beside CastBounds::Reset(). Drops this module's
     // own silent-cast diagnostic watch map (APMFBridge::ClearTransientState
     // drops the claim; CastBounds::Reset drops the bound); kept as the one seam

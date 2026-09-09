@@ -305,7 +305,18 @@ namespace MFO::APMFBridge {
     // fail-closed never-published split dropped it) -- the caller must then fall
     // through to its normal claim path, NOT treat the rule as satisfied. It is not
     // an APMF refusal and must never be logged as one.
-    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand);
+    //
+    // `a_forHold` (2026-09-08): this refresh is feeding a claim whose own rule is
+    // being HELD OFF (Actuation's cast-hand lock holding a re-aim), rather than one
+    // whose (spell,target) still matches. Two consequences, both the caller's to
+    // respect: it REFUSES on ABI < 6, for the same reason RefreshHealCastClaim does
+    // (no IsClaimLive to ask, so the refresh would bump MFO's stamp for a claim
+    // APMF may have expired and stop the only sweep that could end the hold); and
+    // the CALLER must bound how long it keeps calling -- a claim that can never
+    // fire must not be renewed forever, which is what kHealHoldNeverObservedMs
+    // bounds on the heal side. Default false = the in-flight caller, unchanged.
+    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand,
+                                bool a_forHold = false);
 
     void ReleaseOffenseCast(RE::FormID a_follower);
 

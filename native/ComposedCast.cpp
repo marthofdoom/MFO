@@ -517,6 +517,16 @@ namespace MFO::ComposedCast {
         return it->second.incumbent;
     }
 
+    // See ComposedCast.h. Hand-scoped and spell-checked on purpose: a watch slot
+    // that has moved on to another spell must never answer for this one, and the
+    // OTHER hand's observation says nothing about this hand's claim.
+    bool ObservedFiring(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell) {
+        const auto it = g_watch.find(a_follower);
+        if (it == g_watch.end() || a_spell == 0) return false;
+        const auto& w = it->second.hand[WatchSlot(a_hand)];
+        return w.spell == a_spell && w.observed;
+    }
+
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell) {
         auto it = g_watch.find(a_follower);
         if (it == g_watch.end()) return;

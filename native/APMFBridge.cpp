@@ -1225,20 +1225,40 @@ namespace MFO::APMFBridge {
     // stands on that hand afterwards (renewed or re-minted), `false` = APMF refused
     // it and nothing stands.
     //
-    // IT DOES NOT COLLIDE WITH RefreshHealCastClaim's DELIBERATE NON-RENEWAL.
-    // That function refuses to Repoint on purpose, because it is ComposedCast's
-    // incumbent HOLD -- kept alive for a claim whose own rule may have gone silent
-    // -- and renewing APMF's window from there would remove the liveness bound the
-    // hold depends on. This function is the opposite case and the one the
-    // heartbeat was always scoped to: it is called ONLY by a rule that WON its lap
-    // and is asking for the identical claim it already holds. Same precondition,
-    // same renewal, no new hold.
+    // IT CAN NOW BE CALLED FROM A HOLD, AND THAT CHANGED THE RELATIONSHIP WITH
+    // RefreshHealCastClaim (corrected 2026-09-08 -- the paragraph here used to say
+    // the two could not collide, which was true only while the in-flight match was
+    // this function's only caller). RefreshHealCastClaim refuses to Repoint on
+    // purpose, because it feeds a claim whose own rule may have gone SILENT, and
+    // it additionally caps a NEVER-OBSERVED claim at kHealHoldNeverObservedMs --
+    // both because an incumbent the engine never casts can otherwise re-arm
+    // forever. Actuation's cast-hand lock now also calls this while an incumbent's
+    // own rule is held off from re-aiming, and its LEFT branch replays `o.heal`,
+    // so an unbounded caller here would renew exactly the claim that cap exists to
+    // bound. THE CAP THEREFORE LIVES AT THAT CALL SITE: the hold heartbeats only
+    // while the claim has been OBSERVED firing or is younger than the same
+    // kHealHoldNeverObservedMs window. Nothing here re-derives it -- but do not
+    // add a second unbounded caller without one.
     //
     // IT DOES NOT MOVE `created` EITHER (the never-observed hold cap's clock):
     // that is stamped once per handle in the mint block, which this cannot reach.
-    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand) {
+    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand, bool a_forHold) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || a_follower == 0 || api->abiVersion < 5) return false;
+        // ABI < 6 PARITY WITH RefreshHealCastClaim (review, 2026-09-08). On a HOLD
+        // refresh only. Below ABI 6 there is no IsClaimLive to ask, so
+        // EnsureCastClaimLocked's fast path ASSUMES a stored handle is live and its
+        // TTL heartbeat is compiled out of reach -- meaning a hold refresh there
+        // would bump MFO's own `refreshed` stamp, and nothing else, for a claim
+        // APMF may have expired long ago. Tick()'s sweep is then the only thing
+        // that could ever end the hold, and this call is precisely what stops it
+        // firing: a hold nobody can break (#7). RefreshHealCastClaim refuses on the
+        // same ABI for the same reason; refusing here degrades honestly to the
+        // pre-hold behaviour (the sweep releases, the rule re-aims) instead.
+        // The IN-FLIGHT caller is unaffected and stays byte-identical: it is fed by
+        // a rule whose (spell,target) still matches, so nothing is being held open
+        // on its behalf. Inert in practice -- the DLL pair ships at kABIVersion 6.
+        if (a_forHold && api->abiVersion < 6) return false;
         auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);

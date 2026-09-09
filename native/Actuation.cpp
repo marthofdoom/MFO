@@ -806,10 +806,12 @@ namespace MFO::Actuation {
             // Followers::g_active, or is the player", while this resolves the raw
             // FormID -- so a follower DISMISSED mid-fight still reads as a valid
             // recipient here until it heals above the threshold. Left as-is: the
-            // cost is a re-aim held for at most one claim's life against an ally
-            // who is still standing there and still hurt, and reaching g_active
-            // from this predicate would bind the cast lock to the roster list for
-            // a case the field has never reported.
+            // re-aim is then held while that claim is fed, and the hold's own
+            // heartbeat stops at kHealHoldNeverObservedMs for a claim that never
+            // fires (see refreshHeldOwnClaim), so the cost is bounded by that
+            // window rather than by the fight. Reaching g_active from this
+            // predicate would bind the cast lock to the roster list for a case the
+            // field has never reported.
             auto* victim = RE::TESForm::LookupByID<RE::Actor>(a_lock.target);
             if (!victim) return true;                                   // gone entirely
             if (victim->IsDead() || victim->IsDisabled()) return true;  // PickAlly's test
@@ -1062,33 +1064,90 @@ namespace MFO::Actuation {
             // is holding -- the SAME RefreshOwnedCastOnHand the in-flight path
             // calls, for the same reason.
             //
-            // IT RENEWS APMF'S TTL TOO, AND THAT IS THE DELIBERATE CHOICE. The
-            // heal-hold heartbeat (RefreshHealCastClaim) refuses to renew, because
-            // it feeds an incumbent whose OWN RULE may have gone silent, and
-            // renewing there would remove the only bound that hold has. This is the
-            // opposite case, and it is precisely the precondition
-            // EnsureCastClaimLocked's renewal is written against: a rule that WON
-            // its lap and is asking for the identical spell on the identical hand
-            // it already holds -- differing only in a target MFO has just decided
-            // should NOT be honoured yet. The rule is not silent; it is asking, and
-            // the moment it stops winning nothing calls this and the claim dies at
-            // APMF's TTL exactly as before. Refreshing MFO's stamp WITHOUT renewing
-            // APMF's window would be the two-budgets-that-disagree failure in a new
-            // place: MFO believing the claim is fed while APMF expires it.
+            // IT RENEWS APMF'S TTL TOO -- AND THAT IS ONLY SAFE BECAUSE IT IS
+            // BOUNDED. The first cut renewed unconditionally, on the argument that
+            // the rule had won its lap and was asking for the identical claim.
+            // That argument is true and answers the WRONG QUESTION (review,
+            // 2026-09-08): not "is the rule asking" but "can the claim being
+            // renewed ever FIRE". Nothing in IsOwnRetarget + ClaimLiveOnHand tests
+            // that, and IncumbentTargetLost cannot -- it knows about death, radius
+            // and the heal threshold, and NOTHING about sight. Concretely: rule R
+            // claims S at T1 on the right; T1 steps behind a pillar, still alive
+            // and in radius; PickFoe's soft line-of-sight preference picks the
+            // sighted T2 every lap; HandFree's target match fails, `mine` is true,
+            // the caster is idle because there is no LoS to charge at, and
+            // IncumbentTargetLost(T1) is FALSE -- so an unconditional heartbeat
+            // renews a claim that can never fire, forever, and every lower-ranked
+            // rule queues behind it. The exits would be T1 dying by someone else's
+            // hand, leaving the radius, R's condition going false, or combat
+            // ending. "The cast fires" is not among them.
+            //
+            // THE CODEBASE ALREADY DECIDED THIS, one file over: RefreshHealCastClaim
+            // refuses to renew AND caps a NEVER-OBSERVED claim at
+            // kHealHoldNeverObservedMs (4000 ms, sized from measured
+            // claim-to-observed latency), for exactly this failure -- "an incumbent
+            // the engine NEVER casts can re-arm indefinitely". This path reaches the
+            // same heal slot (RefreshOwnedCastOnHand's LEFT branch replays o.heal),
+            // so without a cap here it would renew, indefinitely, the very claim
+            // that 4 s cap bounds against a COMPETING rule.
+            //
+            // SO: HEARTBEAT ONLY A CLAIM THAT IS EITHER FIRING OR STILL YOUNG.
+            //   * ComposedCast::ObservedFiring -- the claim has been seen to cast.
+            //     A firing claim is by definition not a wedge, and a channelled or
+            //     repeating cast should keep its hand for as long as it runs.
+            //   * otherwise, only while the claim is younger than the SAME
+            //     kHealHoldNeverObservedMs window, anchored on `lastSeen`, which
+            //     HoldCastLock stamps at the claim or re-aim and nothing moves
+            //     afterwards -- so it measures exactly "how long this claim has
+            //     stood without being re-stated". Past it, stop feeding: the
+            //     existing FacetExpiry sweep releases, and the next lap's re-aim
+            //     proceeds normally.
+            // NOT A TENURE and NOT a re-litigation of marth's ruling: this caps how
+            // long a rule may wait on its OWN silent claim. It delays no
+            // higher-ranked rule -- the opposite direction from the tenure that was
+            // overruled, which would have delayed one.
             //
             // Only for a hand whose lock is OURS (IsOwnRetarget). A different,
             // lower-ranked rule being held off must NOT feed the incumbent's claim
             // -- the incumbent's own rule already did that earlier in this scan,
             // and doing it from here would keep a claim alive on behalf of a rule
             // that never asked.
+            //
+            // AND ONLY FOR A HAND WHOSE HOLD REASON WAS "THE TARGET STILL STANDS".
+            // refreshHeldOwnClaim runs on every hold path, including the DualCast
+            // one, which is reached when the WHOLE plan fails -- so a single-hand
+            // claim of ours whose target IS lost could be renewed every lap just
+            // because the OTHER hand is held by a higher-ranked incumbent. Before
+            // the heartbeat existed that claim lapsed at FacetExpiry() and freed
+            // its hand; feeding it would be a straight regression, so a lost-target
+            // hand is fed only while its cast is actually in flight.
             auto refreshHeldOwnClaim = [&]() {
                 if (lockIt == g_castLock.end()) return;
+                const auto now = std::chrono::steady_clock::now();
                 for (std::size_t h = 0; h < kHandCount; ++h) {
                     const auto& lk = lockIt->second.hand[h];
-                    if (IsOwnRetarget(lk, a_spell) && ClaimLiveOnHand(fid, h))
-                        APMFBridge::RefreshOwnedCastOnHand(fid, h == kHandLeft
-                                                                    ? APMFBridge::kApmfHandLeft
-                                                                    : APMFBridge::kApmfHandRight);
+                    if (!IsOwnRetarget(lk, a_spell) || !ClaimLiveOnHand(fid, h)) continue;
+                    const std::int32_t apmfHand = (h == kHandLeft) ? APMFBridge::kApmfHandLeft
+                                                                   : APMFBridge::kApmfHandRight;
+                    const bool inFlight = CastInFlightOnHand(a_follower, h, lk.spell,
+                                                             CastProxyOnHand(fid, h));
+                    if (IncumbentTargetLost(a_follower, lk) && !inFlight) continue;   // A-3
+                    const bool fired = ComposedCast::ObservedFiring(fid, apmfHand, lk.spell);
+                    const auto  age  = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           now - lk.lastSeen);
+                    if (!fired && !inFlight &&
+                        age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs))
+                        continue;   // silent too long -- stop feeding it, let the sweep run
+                    APMFBridge::RefreshOwnedCastOnHand(fid, apmfHand, /*a_forHold=*/true);
+                    // FEED THE SILENT-CLAIM WATCH TOO. The "[cfc] ... NO observed
+                    // cast" warning is emitted only from WatchArmed -- there is no
+                    // pump -- which is why the in-flight path re-arms on every
+                    // refresh. Without this the ONLY line a held re-aim produces is
+                    // LogCastLockHold's "spell X still firing", asserting a fire
+                    // that may never have happened, and the one diagnostic built
+                    // for "a claim stands and never fires" would be blind on the
+                    // one path that renews such a claim (principle 7).
+                    ComposedCast::WatchClaim(fid, lk.spell, apmfHand, CastProxyOnHand(fid, h));
                 }
             };
 
