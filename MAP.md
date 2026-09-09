@@ -38,7 +38,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
    **CAUTION — `Actuation.cpp` line anchors below are a mixed bag.** The
    2026-09-08 split re-anchored every citation that was accurate against this
    branch. Citations that were ALREADY stale before it (written against `main`,
-   when the file was 2034 lines — e.g. `CastOn` at `:600`, `Fire` at `:1832`,
+   where the file is 2271 lines and those anchors still resolve — e.g. `CastOn` at `:600`, `Fire` at `:1832`,
    `ConcentrationCast` at `:470`, and the interior call-site lists) were left
    exactly as they were and still need their own re-anchor pass. Grep the symbol,
    don't trust those numbers.
@@ -413,12 +413,12 @@ TWICE, no logic change either time — 2026-08-31 (`Actuation_Direct.cpp`) and
 `EquipWeapon` (`:1603`), `NearestAlly` (`:53`)/`ResolveCastTarget` (`:1724`),
 the APMF-refusal log, `ClearCastLock(s)` (`:2127`/`:2143`), the T#76 force-hold
 map + FWPN co-save (`:2156`); `Actuation_Hands.cpp` (879) = THE PER-HAND CAST
-LOCK's implementation — `HoldCastLock`/`ClearCastLockHand` (`:61`/`:76`), the
-liveness ladder (`ClaimLiveOnHand` `:88`, `CastInFlightOnHand` `:238`,
-`CastLockLive` `:296`), rank preemption (`CanPreemptHand` `:391`,
-`IncumbentTargetLost` `:430`, `IsOwnRetarget` `:481`, `PreemptHand` `:492`),
-`WeaponHandExposure` (`:160`), `CastProxyOnHand` (`:108`), `HandFree` (`:546`)
-and THE JUGGLE `ResolveCastHand` (`:572`); `Actuation_Direct.cpp` (1679) = the
+LOCK's implementation — `HoldCastLock`/`ClearCastLockHand` (`:61`/`:77`), the
+liveness ladder (`ClaimLiveOnHand` `:89`, `CastInFlightOnHand` `:241`,
+`CastLockLive` `:299`), rank preemption (`CanPreemptHand` `:394`,
+`IncumbentTargetLost` `:433`, `IsOwnRetarget` `:484`, `PreemptHand` `:495`),
+`WeaponHandExposure` (`:163`), `CastProxyOnHand` (`:109`), `HandFree` (`:549`)
+and THE JUGGLE `ResolveCastHand` (`:575`); `Actuation_Direct.cpp` (1679) = the
 direct-delivery streams (`CastSelfDirect`/`CastTargetDirect` +
 reconciles/`ClearSelfCasts`, `CastAuto`) + their apply substrate
 (`ConcProxy`/`DeliverySpell`, dispel/sustain,
@@ -427,8 +427,8 @@ two direct-cast registries (`g_selfCast`/`g_targetCast`) are file-local there;
 `Actuation_internal.h` = everything that crosses a TU boundary: the shared
 concentration numbers (`kConc*` sustain windows, `kConcApplyPeriod` cadence
 contract, `DrawConcCap` random stream cap) AND the cast lock's shared state
-(`g_castLock` `:250` + the three rate-limited log maps, `g_firingRule` `:187`
-and `g_firingAllyThreshold` `:197`, `CastLock` `:199`, `HandPlan` `:299`, the
+(`g_castLock` `:255` + the three rate-limited log maps, `g_firingRule` `:192`
+and `g_firingAllyThreshold` `:202`, `CastLock` `:204`, `HandPlan` `:304`, the
 hand indices `:168`) plus the lock's six cross-TU entry points, all as
 **`inline`** — any definition added to that header MUST be `inline` or it's an
 LNK2005. `Fire(follower,
@@ -461,19 +461,19 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:74`) via `Packages::CastAt`.
 - **THE PER-HAND CAST LOCK, AND THE TWO 2026-09-08 CHANGES TO IT** (`Docs/DIAG-2026-09-08-field.md`
-  RC1/RC2). `CastLockLive` (`Actuation_Hands.cpp:296`) now answers "this hand is still busy" THREE ways,
-  in order: (1) `ClaimLiveOnHand` (`:88`, factored out — a live offense claim on that slot, or the
+  RC1/RC2). `CastLockLive` (`Actuation_Hands.cpp:299`) now answers "this hand is still busy" THREE ways,
+  in order: (1) `ClaimLiveOnHand` (`:89`, factored out — a live offense claim on that slot, or the
   heal claim for LEFT); (2) the round-robin `FacetExpiry()` staleness window, unchanged; (3) **NEW
-  (F8)** — `CastInFlightOnHand` (`:238`): the follower's own `RE::MagicCaster` for that hand is
+  (F8)** — `CastInFlightOnHand` (`:241`): the follower's own `RE::MagicCaster` for that hand is
   mid-cast (`state` not `kNone`/`kUnk08`/`kUnk09`) of the locked spell **or its APMF delivery-flip
   proxy** — read from `GetActorRuntimeData().magicCasters[]` DIRECTLY, never through the
   `Actor::GetMagicCaster` virtual (that body is the game's, CommonLib implements none of it, and
   SkyrimSE.exe is Steam-DRM encrypted on disk so it cannot be disassembled here — if it lazily allocates
   the caster, this always-on job-worker predicate would be allocating off-main; the array read removes the
-  question) — bounded by `kInFlightHoldCap` (`:271`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
+  question) — bounded by `kInFlightHoldCap` (`:274`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
   cannot own a hand forever. That third answer is what stops another rule taking a hand whose charged
   cast has not fired yet when the CLAIM lapsed mid-charge. **The cap is anchored on `CastLock::claimGoneAt`
-  (`Actuation_internal.h:216`), NOT on `lastSeen`** — F9 deliberately stops re-stamping the lock, so `lastSeen`
+  (`Actuation_internal.h:221`), NOT on `lastSeen`** — F9 deliberately stops re-stamping the lock, so `lastSeen`
   freezes at the first claiming lap and anchoring there made the protection dead for any claim older than
   the cap. `claimGoneAt` is stamped the first time this third answer is reached, cleared when the claim is
   seen live again, and cleared by `HoldCastLock` (fresh hold = fresh cast).
@@ -489,7 +489,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **What breaks if you change this:** widen the in-flight state set and a stuck caster owns a hand
   until the cap; drop the proxy match and every APMF-proxied cast reads as "not ours" and loses its
   protection; drop the incumbent pin and the Dual↔single churn returns.
-- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:643`, `HandPlan::inFlight` at `Actuation_internal.h:299`).** A cast rule whose
+- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:643`, `HandPlan::inFlight` at `Actuation_internal.h:304`).** A cast rule whose
   own cast is already running (its exact (spell,target) locks the hand AND a live claim stands there)
   no longer re-runs the claim/equip/consent path and returns `Fired` — which ENDED THE SCAN and let one
   self-heal monopolise 22 consecutive laps over 44 s with zero offense rules reached. It now calls
@@ -502,10 +502,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 - **RANK PREEMPTION — THE GAMBIT LIST ORDER IS THE PRIORITY ORDER (marth, 2026-09-08).** A higher-ranked
   rule must be able to TAKE a hand from a lower-ranked incumbent, not be held off behind it and not wait for
   its condition to go false. **Rank is CARRIED, not inferred:** `Actuation::Fire` records the winning rule's
-  index in `g_firingRule` (`Actuation_internal.h:187`) — the single entry point into every actuation in the family —
-  `HoldCastLock` stamps it into `CastLock::owningRule` (`:247`) when a hand is claimed, and `CanPreemptHand`
-  (`Actuation_Hands.cpp:391`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
-  EQUAL is the incumbent itself (`IsOwnRetarget`, `:481` — a rule re-aiming its own cast, which fails
+  index in `g_firingRule` (`Actuation_internal.h:192`) — the single entry point into every actuation in the family —
+  `HoldCastLock` stamps it into `CastLock::owningRule` (`:252`) when a hand is claimed, and `CanPreemptHand`
+  (`Actuation_Hands.cpp:394`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
+  EQUAL is the incumbent itself (`IsOwnRetarget`, `:484` — a rule re-aiming its own cast, which fails
   `HandFree`'s incumbent match on `target`), higher is held off. `ResolveCastHand` keeps those two on
   SEPARATE predicates (`mine` vs `outranks`): a self-retarget displaces nothing and records no preempt flag,
   so it can never release its own claim through the preemption path (which for a heal would tear down
@@ -513,7 +513,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   mid-charge**, reusing `CastInFlightOnHand` rather than inventing a second notion of busy.
   **A self-retarget carries TWO bounds, and never-mid-charge is NOT the load-bearing one:** it protects a
   cast only from the moment charging BEGINS, and the claim-to-first-charge window is 2.3-4.5 s with the
-  caster reading `kNone` throughout. `IncumbentTargetLost` (`Actuation_Hands.cpp:430`) is the bound that matters —
+  caster reading `kNone` throughout. `IncumbentTargetLost` (`Actuation_Hands.cpp:433`) is the bound that matters —
   it asks the evaluator's own three questions (`Evaluator.cpp`'s `PickAlly`, `:354-375`, mirrored not
   invented): does the target still resolve to a live actor, is it still inside `fSharedRadius`, and — when
   the firing rule's condition is the ally selector that owns that number (`g_firingAllyThreshold`, `:254`,
@@ -614,7 +614,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   collisions came from: the heal facet is LEFT-ONLY by contract (`ClaimHealCast`'s hard rule), so an offense
   cast idling on the left stands exactly where the next heal must go while the right hand sits empty. It now
   prefers the RIGHT hand — free-and-unclaimed first, then free, then by rank — leaving the left for the
-  facet that can use no other, **unless `WeaponHandExposure` (`Actuation_Hands.cpp:160`) says a weapon owns the
+  facet that can use no other, **unless `WeaponHandExposure` (`Actuation_Hands.cpp:163`) says a weapon owns the
   right hand or is coming back to it**, in which case the old LEFT-first order stands. That gate is not
   optional: `PlanCastHand` returns `EitherFree` only when `APMFBridge::WeaponHandActive` is false, and that
   reads the LIVE grip and the live equipment CLAIM — both false during the documented transient-unarmed
@@ -646,7 +646,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   as a pure predicate before either is committed, so a released claim is never spent for nothing).
     make it opaque (transparent=false) and RC2 comes straight back. If the refresh comes back FALSE the
   claim really is gone, so the pin that named it is VOID: the gate drops those hands' locks
-  (`ClearCastLockHand`, `Actuation_Hands.cpp:76`) and re-derives the plan (`resolveHands` lambda) before
+  (`ClearCastLockHand`, `Actuation_Hands.cpp:77`) and re-derives the plan (`resolveHands` lambda) before
   falling through — without that, a LEFT-always heal pinned to the RIGHT by a stale lock would claim,
   equip and lock the wrong hand.
   Off-AE the whole path declines transparently (T#67) so vanilla AI keeps casting.

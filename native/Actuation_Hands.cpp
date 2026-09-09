@@ -70,7 +70,8 @@ namespace MFO::Actuation {
     }
 
     // Drop ONE hand's lock (2026-09-08). The whole-follower twin is the public
-    // ClearCastLock at the bottom of this file; this is the per-hand form the
+    // ClearCastLock in Actuation.cpp (`:2127`, with ClearCastLocks at `:2143`,
+    // where they sit beside the other session-scoped clears); this is the per-hand form the
     // in-flight gate needs when the claim a lock named turns out to be gone --
     // the other hand's independent lock must survive that.
     void ClearCastLockHand(RE::FormID a_follower, std::size_t a_hand) {
@@ -136,8 +137,10 @@ namespace MFO::Actuation {
         // right the default landing spot would reproduce the 2026-09-05 shape for
         // every either-free offense cast on a melee or hybrid follower.
         //
-        // SO ADD THE DURABLE SIGNAL, not a timer: g_forcedWeapon is THIS file's
-        // own T#76 force-hold ledger (the weapon EquipWeapon is holding for this
+        // SO ADD THE DURABLE SIGNAL, not a timer: g_forcedWeapon is Actuation.cpp's
+        // T#76 force-hold ledger -- defined and written there, visible to this TU
+        // only through the extern in Actuation_internal.h, and READ-ONLY here --
+        // (the weapon EquipWeapon is holding for this
         // follower), released by ReconcileForcedWeapon when the equip gambit's
         // condition is known false -- it does NOT lapse with an APMF facet expiry,
         // which is precisely the gap the live reads miss. An entry here means "a

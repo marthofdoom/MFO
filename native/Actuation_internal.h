@@ -174,11 +174,16 @@ namespace MFO::Actuation {
         inline constexpr int kNoRule = std::numeric_limits<int>::max();
 
         // The rule index Fire() is currently acting for -- set at the top of Fire()
-        // (the ONE entry point into every actuation in this file) and read by
-        // HoldCastLock and the preempt test. Worker-serial, no lock: the same #4
-        // discipline as g_castLock and every other map in this anon namespace, and
+        // (Actuation.cpp, the ONE entry point into every actuation in this family)
+        // and read by HoldCastLock and the preempt test, over in
+        // Actuation_Hands.cpp. Worker-serial, no lock: the same #4 discipline as
+        // g_castLock and the cast lock's other maps beside it in this header, and
         // for the same reason -- the per-follower Scheduler service is serialized
         // on the AddTask job worker, so there is never a second Fire() in flight.
+        // NOT an anon-namespace variable any more (it was one until the 2026-09-08
+        // split): it is `inline` at MFO::Actuation scope, so there is exactly ONE
+        // instance shared by all three Actuation TUs, never a per-TU copy. Read
+        // "no lock" as "one writer thread", never as "not shared".
         // Deliberately NOT threaded through six signatures: every reader is reached
         // only from Fire(), so a parameter would be the same value re-typed at each
         // hop with more places to get it wrong. Actuation_Direct.cpp's OOC callers
