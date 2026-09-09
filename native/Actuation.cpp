@@ -232,6 +232,16 @@ namespace MFO::Actuation {
         // touch the hand gate, and cannot see this at all.
         int g_firingRule = kNoRule;
 
+        // THE FIRING RULE'S ALLY-HP THRESHOLD, or < 0 when its condition is not an
+        // ally selector. Carried the same way and for the same reason as
+        // g_firingRule: the incumbent-target validity test below has to ask the
+        // question the EVALUATOR asked -- "is this ally still under the threshold
+        // that made it a target?" -- and `Eval::Choice::conditionParam` is the only
+        // place that number exists. Stored as a float rather than the opcode string
+        // so Fire() copies no string per dispatch; the opcode is resolved to
+        // "ally selector or not" once, at the single write site.
+        float g_firingAllyThreshold = -1.0f;
+
         inline const char* HandName(std::size_t a_hand) { return a_hand == kHandLeft ? "left" : "right"; }
 
         struct CastLock {
@@ -471,6 +481,44 @@ namespace MFO::Actuation {
             return APMFBridge::GetHealCastProxy(a_follower);
         }
 
+        // ── DOES A WEAPON OWN THIS FOLLOWER'S RIGHT HAND, OR IS ONE COMING BACK? ──
+        // (review finding, 2026-09-08.) The gate on right-first hand preference.
+        //
+        // THE FIELD SHAPE IT AVOIDS, which is documented and was paid for once
+        // (Docs/CAST-DELIVERY.md, the 2026-09-05 HAND FIX): a follower was
+        // TRANSIENTLY UNARMED in a facet-expiry gap, the cast claim's auto hand
+        // resolution took the RIGHT hand because it read free, the equip gambit's
+        // own periodic re-equip put the weapon back into that hand ~500 ms later
+        // and displaced the spell, and the cast never left rest. The rule written
+        // then -- a force-held weapon owns the right hand, a spell claims LEFT --
+        // is why heals are LEFT-only and why PlanCastHand refuses anything but
+        // Left while APMFBridge::WeaponHandActive is true.
+        //
+        // WHY THAT GUARD IS NOT ENOUGH HERE. WeaponHandActive reads the LIVE grip
+        // and the live APMF equipment CLAIM (APMFBridge.cpp) -- and the gap is
+        // exactly the moment both are false: the hand is empty and the claim has
+        // expired, while MFO's own force-hold still intends to put the weapon
+        // back. PlanCastHand therefore returns EitherFree in that gap, and making
+        // right the default landing spot would reproduce the 2026-09-05 shape for
+        // every either-free offense cast on a melee or hybrid follower.
+        //
+        // SO ADD THE DURABLE SIGNAL, not a timer: g_forcedWeapon is THIS file's
+        // own T#76 force-hold ledger (the weapon EquipWeapon is holding for this
+        // follower), released only by ReconcileForcedWeapon when the equip
+        // gambit's condition is known false -- it does NOT lapse with an APMF
+        // facet expiry, which is precisely the gap the live reads miss. An entry
+        // here means "a weapon is coming back to the right hand", whether or not
+        // it is in the hand this instant.
+        //
+        // A pure caster never has an entry, so right-first still applies to
+        // exactly the follower marth's ruling was about ("theres two hands, auto
+        // should figure it out") and never to one whose right hand is spoken for.
+        bool WeaponHandExposure(RE::Actor* a_follower) {
+            if (!a_follower) return false;
+            if (APMFBridge::WeaponHandActive(a_follower)) return true;   // live grip / live claim
+            return g_forcedWeapon.contains(a_follower->GetFormID());     // ... or coming back
+        }
+
         // ── "THE ENGINE STARTED THIS CAST AND HAS NOT FINISHED IT" (F8, 2026-09-08) ──
         // The signal that a charged cast is mid-flight on `a_hand`, read from the
         // engine itself rather than inferred: the follower's MagicCaster for that
@@ -698,6 +746,53 @@ namespace MFO::Actuation {
                                        CastProxyOnHand(fid, a_hand));  // never mid-charge
         }
 
+        // ── IS THE INCUMBENT'S TARGET STILL A TARGET? (review finding, 2026-09-08) ──
+        // The bound on a rule re-aiming its own cast. Without one, `IsOwnRetarget`
+        // let the incumbent Release+RequestCast on EVERY lap its target changed,
+        // and the claim-to-first-charge window is 2.3-4.5 s -- so a target that
+        // flickers faster than that restarts APMF's window forever and the cast
+        // NEVER reaches a charge. That is reachable, not theoretical:
+        // Evaluator.cpp's PickAlly re-picks the STRICTLY lowest-HP party member
+        // every lap, so two allies trading that slot as hits land make the same
+        // heal rule resolve to a different target each lap. Before this branch the
+        // rule was held off by its own lock and the first target got healed; the
+        // fix must not be worse than what it replaced.
+        //
+        // NOT A TENURE TIMER -- a minimum-hold window would delay exactly the heal
+        // marth's ruling protects. The question asked instead is whether the
+        // incumbent's target is still a target AT ALL, using the SAME three tests
+        // the evaluator used to pick it (Evaluator.cpp's PickAlly, :354-375, read
+        // and mirrored rather than invented):
+        //   * it still resolves to a live actor      (PickAlly: IsDead/IsDisabled)
+        //   * it is still inside fSharedRadius        (PickAlly: same Config read)
+        //   * it is still UNDER the rule's own threshold, when the firing rule's
+        //     condition is the ally selector that owns that number
+        //     (PickAlly: `hp < min(a_param, kHealFull)`, the identical clamp)
+        // Still a target -> the re-aim is a flicker and is HELD. No longer a target
+        // -> re-aiming is the only correct move and it proceeds.
+        //
+        // A SELF-CAST (target 0) can never reach here: its lock's target never
+        // changes, so HandFree's incumbent match succeeds and there is nothing to
+        // re-aim. Answered false rather than left to the actor lookup.
+        bool IncumbentTargetLost(RE::Actor* a_follower, const CastLock& a_lock) {
+            if (!a_follower || a_lock.target == 0) return false;
+            auto* victim = RE::TESForm::LookupByID<RE::Actor>(a_lock.target);
+            if (!victim) return true;                                   // gone entirely
+            if (victim->IsDead() || victim->IsDisabled()) return true;  // PickAlly's test
+            if (a_follower->GetPosition().GetDistance(victim->GetPosition()) >
+                Config::g_sharedRadius.load())
+                return true;                                           // PickAlly's test
+            if (g_firingAllyThreshold >= 0.0f) {
+                // PickAlly's own boundary, clamp included: it looks for an ally
+                // STRICTLY under min(param, kHealFull), so at-or-above that is no
+                // longer a candidate -- which is exactly "healed back up past the
+                // threshold that made it a target".
+                const float ceiling = std::min(g_firingAllyThreshold, Vocab::kHealFull);
+                if (Vocab::HealthPct(victim) >= ceiling) return true;
+            }
+            return false;
+        }
+
         // ── THE SAME RULE, RE-AIMED (review finding, 2026-09-08) ────────────────
         // A rule that keeps winning with the same spell but a NEW target fails
         // HandFree's incumbent match (which compares target too), so it arrives at
@@ -712,9 +807,14 @@ namespace MFO::Actuation {
         // resolved handle), and APMF_API.h states param.target is not read for
         // kIntent_Cast -- so a Repoint would renew the window while the claim went
         // on driving the OLD target, which is a silently wrong cast. Retargeting is
-        // therefore still Release + RequestCast on APMF's side, and the ONLY thing
-        // MFO can add is the same bound preemption has: never while the engine is
-        // mid-charge. Between casts, re-aiming is exactly what should happen.
+        // therefore still Release + RequestCast on APMF's side.
+        //
+        // THIS PREDICATE IS ONLY THE IDENTITY HALF. "Never mid-charge" is NOT a
+        // sufficient bound on its own and an earlier comment here said it was: it
+        // protects a cast from the moment charging begins, and the 2.3-4.5 s
+        // between claim and first charge is precisely the window a flickering
+        // target restarts. The caller pairs this with IncumbentTargetLost above,
+        // which is the bound that makes the re-aim safe.
         bool IsOwnRetarget(const CastLock& a_lock, RE::FormID a_spell) {
             return a_lock.spell == a_spell && a_lock.owningRule == g_firingRule &&
                    g_firingRule != kNoRule;
@@ -881,8 +981,15 @@ namespace MFO::Actuation {
             //    re-aimed. Nothing is displaced: the hand is already ours and the
             //    ordinary claim path below re-points it (Release + RequestCast on
             //    APMF's side, since a cast claim cannot be retargeted in place).
-            //    Bounded by the SAME never-mid-charge rule as preemption, so a
-            //    flickering target cannot throw away a charging cast.
+            //    TWO bounds, and the second is not optional. Never mid-charge --
+            //    which protects a cast from the moment charging BEGINS, and NOTHING
+            //    before it: the claim-to-first-charge window is 2.3-4.5 s and the
+            //    caster reads kNone throughout, so that test alone let a flickering
+            //    target restart APMF's window every lap and the cast never charged
+            //    at all. So also: only when the incumbent's target is genuinely
+            //    LOST (IncumbentTargetLost -- the evaluator's own three tests). A
+            //    target that merely lost the "lowest HP" race to another ally is
+            //    not lost, and the re-aim waits.
             //  * `outranks` -- a genuinely higher-ranked rule (strictly lower
             //    index), which DOES displace the incumbent and is recorded on the
             //    plan for CastOn to commit at claim time.
@@ -890,7 +997,8 @@ namespace MFO::Actuation {
                 if (lockIt == g_castLock.end()) return false;
                 const auto& lk = lockIt->second.hand[h];
                 return IsOwnRetarget(lk, a_spell) &&
-                       !CastInFlightOnHand(a_follower, h, lk.spell, CastProxyOnHand(fid, h));
+                       !CastInFlightOnHand(a_follower, h, lk.spell, CastProxyOnHand(fid, h)) &&
+                       IncumbentTargetLost(a_follower, lk);
             };
             auto outranks = [&](std::size_t h) {
                 return lockIt != g_castLock.end() &&
@@ -939,24 +1047,39 @@ namespace MFO::Actuation {
                 // that can use no hand but the left. So an either-free offense cast
                 // takes the RIGHT hand and leaves the left for the facet with no
                 // choice, instead of parking on the left and being displaced later.
-                const bool rightClaimed = ClaimLiveOnHand(fid, kHandRight);
-                const bool leftClaimed  = ClaimLiveOnHand(fid, kHandLeft);
-                if (rightFree && !rightClaimed) { a_out = { false, true, false }; return std::nullopt; }
-                if (leftFree  && !leftClaimed)  { a_out = { true, false, false }; return std::nullopt; }
-                if (rightFree) { a_out = { false, true, false }; return std::nullopt; }
-                if (leftFree)  { a_out = { true, false, false }; return std::nullopt; }
-                // Both busy: take one by RANK if this rule outranks its incumbent.
-                // RIGHT first for the same reason.
-                if (mine(kHandRight))     { a_out = { false, true, false }; return std::nullopt; }
-                if (mine(kHandLeft))      { a_out = { true, false, false }; return std::nullopt; }
-                if (outranks(kHandRight)) {
-                    a_out = { false, true, false, false, /*preemptRight=*/true };
-                    return std::nullopt;
-                }
-                if (outranks(kHandLeft)) {
-                    a_out = { true, false, false, /*preemptLeft=*/true, false };
-                    return std::nullopt;
-                }
+                //
+                // ...UNLESS A WEAPON OWNS THE RIGHT HAND, OR IS COMING BACK TO IT
+                // (review finding, 2026-09-08). PlanCastHand only returns EitherFree
+                // when WeaponHandActive is false, and that reads the LIVE grip and
+                // the live equipment claim -- both of which are false during the
+                // documented transient-unarmed facet-expiry gap, while MFO's own
+                // force-hold still intends to put the weapon back ~500 ms later.
+                // Defaulting to the right hand there would reproduce the 2026-09-05
+                // "spell displaced by the equip gambit, cast never left rest"
+                // failure for every either-free offense cast on a melee or hybrid
+                // follower. WeaponHandExposure adds the one signal that survives
+                // that gap; when it fires, the old LEFT-first order stands.
+                const bool preferRight  = !WeaponHandExposure(a_follower);
+                const auto firstHand    = preferRight ? kHandRight : kHandLeft;
+                const auto secondHand   = preferRight ? kHandLeft  : kHandRight;
+                const bool firstFree    = preferRight ? rightFree : leftFree;
+                const bool secondFree   = preferRight ? leftFree  : rightFree;
+                const bool firstClaimed  = ClaimLiveOnHand(fid, firstHand);
+                const bool secondClaimed = ClaimLiveOnHand(fid, secondHand);
+                auto planFor = [&](std::size_t h, bool a_preempt) {
+                    return h == kHandLeft ? HandPlan{ true, false, false, a_preempt, false }
+                                          : HandPlan{ false, true, false, false, a_preempt };
+                };
+                if (firstFree  && !firstClaimed)  { a_out = planFor(firstHand,  false); return std::nullopt; }
+                if (secondFree && !secondClaimed) { a_out = planFor(secondHand, false); return std::nullopt; }
+                if (firstFree)  { a_out = planFor(firstHand,  false); return std::nullopt; }
+                if (secondFree) { a_out = planFor(secondHand, false); return std::nullopt; }
+                // Both busy: take one by RANK if this rule outranks its incumbent,
+                // in the same preference order.
+                if (mine(firstHand))      { a_out = planFor(firstHand,  false); return std::nullopt; }
+                if (mine(secondHand))     { a_out = planFor(secondHand, false); return std::nullopt; }
+                if (outranks(firstHand))  { a_out = planFor(firstHand,  true);  return std::nullopt; }
+                if (outranks(secondHand)) { a_out = planFor(secondHand, true);  return std::nullopt; }
                 LogCastLockHold(fid, kHandLeft, a_spell, busyL);
                 return Outcome{ Result::NoOp,
                     std::format("cast gambit locked -- both hands busy (left: spell {:08X}, "
@@ -2521,7 +2644,28 @@ namespace MFO::Actuation {
         // hand lock store which gambit owns a hand and lets the preempt test make a
         // real comparison instead of inferring rank from when a rule happened to
         // arrive in a scan. Worker-serial, no lock (#4); see g_firingRule.
+        //
+        // RESET ON EVERY EXIT (review finding, 2026-09-08). Correct without it
+        // TODAY -- every reader lives in this file's anon namespace, CastOn and
+        // ConcentrationCast are reachable only from here, Fire has one caller, and
+        // Logistics' own service runs inside the same serialized Scheduler::Tick --
+        // so nothing can observe a stale value. But that is a fact about today's
+        // call graph, not a property of the code: a future public entry into CastOn
+        // would silently inherit whatever rule last fired, for whatever follower,
+        // and mint a hand lock wearing another gambit's RANK. The guard makes the
+        // failure mode of that mistake harmless instead: an unranked (kNoRule) lock,
+        // which outranks nothing and is preemptable by anything.
+        struct FiringScope {
+            ~FiringScope() { g_firingRule = kNoRule; g_firingAllyThreshold = -1.0f; }
+        } firingScope;
         g_firingRule = a_choice.ruleIndex;
+        // Only an ALLY selector's param is an ally-HP threshold. Every other
+        // condition's param means something else entirely, so it must never be
+        // read as one -- Evaluator.cpp's IsAllySelector is this exact test, and
+        // kCondAllyHpBelow is its only member today.
+        g_firingAllyThreshold = (a_choice.conditionOpcode == Vocab::kCondAllyHpBelow)
+                                    ? a_choice.conditionParam
+                                    : -1.0f;
 
         const auto& op = a_choice.actionOpcode;
 
