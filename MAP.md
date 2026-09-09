@@ -1658,31 +1658,44 @@ Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 `imgui_impl_win32` = vendored, do not read.**
-- **Overlay mechanism (v1.1 version-fragility kill, `Board.cpp:284-803`):** replaced
+- **Overlay mechanism (v1.1 version-fragility kill, `Board.cpp:284-874`):** replaced
   the three call-site trampolines (D3DInit/DXGIPresent/InputDispatch, each keyed
   to a HARDCODED in-function byte offset that crashed on 1.5.x/1.7.x) with:
-  `PresentThunk` (`:468`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable
+  `PresentThunk` (`:539`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable
   slots 8/13** (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable`
-  `:542`), a
+  `:613`), a
   `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` (`InputSink`, reads every
-  device incl. gamepad; `:589`), the unchanged `WndProcHook` swap (`:285`,
+  device incl. gamepad; `:660`), the unchanged `WndProcHook` swap (`:285`,
   WM_CHAR/WM_KILLFOCUS), and `LazyInit` (`:364`, ImGui context + DX11/Win32 backend
   on first Present). Input
   CONSUMPTION while the board is open is done by `SyncControlBlock` (`:443`,
   ControlMap toggle, edge-driven from Present) because a sink cannot null the event
-  array. `TryInstallHooks` (`:564`) polls for the live swapchain then patches. **PORTABLE UNIT
+  array. **That toggle MUST call the ENGINE's `ToggleControls`
+  (`REL::RelocationID(67245, 68545)` — SE `0xC11C60`, AE `0xCD5650`, both verified
+  against the disassembly), NEVER `RE::ControlMap::ToggleControls`** — see the
+  ABI note at `Board.cpp:459-529`. The pinned 3.7.0 header is an SE-17-context
+  layout whose inline reimplementation writes `+0x118`, which on 1.6.1130+ (18
+  contexts) is `contextPriorityStack.size`, not `enabledControls`; that corrupted
+  the context stack on every board open/close and crashed the engine's per-frame
+  user-event mapping pass (AE id 68542) at `SkyrimSE.exe+0CD509D`, plus a latent
+  OOB write on the next `PushInputContext`. Field-reproduced 2026-09-08/09, fixed
+  2026-09-09. **Anything reading a `ControlMap` member PAST
+  `controlMap[]` (`0x60`) through the 3.7.0 header has this same defect.**
+  `ShoutKey` (`:139`, `GetMappedKey` on `kGameplay`) is SAFE: `controlMap[]` at
+  `0x60` and the `InputContext` stride `0x18` are identical on both runtimes.
+  `TryInstallHooks` (`:635`) polls for the live swapchain then patches. **PORTABLE UNIT
   for MAO/MEO:** those functions + `Install`; only the two `Draw*` calls in
   `PresentThunk` and the hotkeys in `InputSink` are mod-specific. Greppable
   `[overlay-probe]` log lines report every component + a SUMMARY on board close.
 - **Module layout (mechanical splits, 2026-08-31 + 2026-09-07):** THREE draw/host
   TUs over one shared substrate header. Board.cpp had grown to 2577 at the
   overlay-swapchain merge (924f3a9) and the panel was cut out of it.
-  * `Board.cpp` (1346) = **shell + the overlay host**: file-local render state and
+  * `Board.cpp` (1417) = **shell + the overlay host**: file-local render state and
     the overlay-probe atomics (`:85`), input translation (`:97`), `CloseBoard`
     (`:161` — see the anon-namespace note below), `SpellTooltip` (`:185`), `DrawHud`
-    (`:204`), `WndProcHook` + the whole overlay hook section (`:284-803`), then the
-    public API: `ToggleHud` (`:809`), `Toggle` (`:816`), `FillRuleViews` (`:833`),
-    `ApplyEdits` (`:882`), `PublishSnapshot` (`:1117`), `Install` (`:1313`, end).
+    (`:204`), `WndProcHook` + the whole overlay hook section (`:284-874`), then the
+    public API: `ToggleHud` (`:880`), `Toggle` (`:887`), `FillRuleViews` (`:904`),
+    `ApplyEdits` (`:953`), `PublishSnapshot` (`:1188`), `Install` (`:1384`, end).
   * `Board_FieldKit.cpp` (1135) = **the whole panel**, ONE public function
     `DrawFieldKit` (`:151`, Followers+Gambits tabs, the list-picker, cascaded-B
     close) plus the four helpers it is the SOLE caller of, in its own anonymous
@@ -1717,8 +1730,10 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 - `Install()` (`Board.h`) — caller `plugin.cpp:306` (kDataLoaded) only, VR-refused.
   Installs AFTER the renderer is up (the vtable path needs the swapchain LIVE and
   polls for it) — the OPPOSITE of the old trampoline, which had to patch before
-  renderer init. No `AllocTrampoline`, no `RelocationID`/offset pairs, so there is
-  no call site to corrupt.
+  renderer init. No `AllocTrampoline` and no patched call site to corrupt. The ONE
+  offset pair in this family is `SyncControlBlock`'s `REL::RelocationID(67245,
+  68545)` engine `ToggleControls` call (`Board.cpp:459-529`) — a plain call, not a
+  patch, and never reached on VR because `Install()` refuses VR first.
 - **Snapshot carries all actor-derived display data** (render thread reads plain
   cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
   pct **and** raw `health/magicka/staminaCur/Max` (Followers tab, `Vocab::VitalCur/
@@ -1739,11 +1754,11 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   `ApplyEdits` flips `it->second.mfoEnabled`. The release-on-disable runs on the
   Scheduler tick's OFF edge, not in `ApplyEdits`.
 - **Thread discipline:** `DXGIPresentHook` (render thread) copies `g_snapshot` under
-  `g_snapMx` **before** taking `g_ioMx` (`:479`); reversing = render-thread deadlock.
+  `g_snapMx` **before** taking `g_ioMx` (`:550`); reversing = render-thread deadlock.
   The two mutexes are never nested (#6). Draw functions **never touch `g_followers`**
   — every mutation is a `QueueEdit` (`Board_internal.h:69`, sites in both draw TUs)
   drained by `ApplyEdits`
-  (`:882`). **Rule edits key on `Gambit.uid`, not row index** (`:1011` — resolve by
+  (`:953`). **Rule edits key on `Gambit.uid`, not row index** (`:1082` — resolve by
   identity #31); applying by index misapplies a command to the wrong rule.
 - **Correction to the header:** `PublishSnapshot` (`Board.h:116` says "MAIN THREAD
   ONLY") actually drains on the **task worker**, the same context that
