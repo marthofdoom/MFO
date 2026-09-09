@@ -165,7 +165,10 @@ namespace MFO::Actuation {
         // worker-serial (#4 discipline, same as g_forcedWeapon above) -- the
         // (spell,target) currently occupying EACH hand, and the last tick it
         // was reaffirmed. target == 0 means self.
-        enum : std::size_t { kHandLeft = 0, kHandRight = 1, kHandCount = 2 };
+        // kHandLeft / kHandRight / kHandCount MOVED to Actuation.h (2026-09-09),
+        // value and name unchanged -- ComposedCast.cpp has to name a hand now and
+        // may not include this internal header. Still in scope here: this file
+        // includes Actuation.h.
 
         // ── RANK: THE RULE INDEX, CARRIED, NEVER INFERRED ───────────────────────
         // `kNoRule` sorts BELOW every real rule (lower index == higher priority),

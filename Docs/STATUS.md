@@ -6,7 +6,27 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-07.
+> **Last updated:** 2026-09-09 (delta block only; the body below is 2026-09-07).
+
+## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
+
+The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
+Read it as history and this block as current.
+
+- **Branch `fix/mfo-heal-recognition` (v2.0.5) — pushed, CI-green, NOT merged, NOT
+  deployed, NOT Fable-reviewed.** Two heal defects from the 2026-09-09 deck logs:
+  (1) a heal the engine was actively CASTING was re-pointed by another heal rule
+  17 ms into the cast, so APMF then denied the spell it had been steering — fixed
+  by the F12 in-flight hold in `ComposedCast::Try` (reuses
+  `Actuation::CastInFlightOnHand`, bounded by `APMFBridge::kHealCastTtlMs`);
+  (2) out of combat the APMF claim path cannot deliver at all (every cast seat is a
+  vfunc on `CombatMagicCaster`/`CombatController`, which does not exist OOC), so the
+  claim stood for 2+ minutes with zero seat traffic and the heal never landed —
+  fixed by gating `CastTargetDirect`'s claim on
+  `GetActorRuntimeData().combatController`, restoring marth's "OOC concentration
+  always uses the known working force" ruling. **In combat nothing changed.**
+  Its deferred review, and the three uncertainties the author flagged, are recorded
+  in `Docs/REVIEW-BACKLOG.md` under PENDING FABLE REVIEW.
 
 ## ▶ YOU ARE HERE (2026-09-07)
 

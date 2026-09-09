@@ -25,7 +25,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
    the Actuation split: ProgAllocator 2333, Actuation 2237, Logistics_Loot 2186,
    Packages 2153, Logistics 2072, Actuation_Direct 1679, Board 1346,
    CasterConsent 1243, Board_Progression 1234, Board_FieldKit 1135,
-   Actuation_Hands 879. None of these should sit in context — grep to a symbol,
+   Actuation_Hands 894. None of these should sit in context — grep to a symbol,
    read a narrow window.
    *(Two files have breached the 2500-line HARD RULE and been resolved the same
    way — an internal header for the shared state plus a cohesive module.
@@ -416,7 +416,7 @@ TWICE, no logic change either time — 2026-08-31 (`Actuation_Direct.cpp`) and
 the APMF-refusal log, `ClearCastLock(s)` (`:2127`/`:2143`), the T#76 force-hold
 map + FWPN co-save (`:2156`); `Actuation_Hands.cpp` (879) = THE PER-HAND CAST
 LOCK's implementation — `HoldCastLock`/`ClearCastLockHand` (`:61`/`:77`), the
-liveness ladder (`ClaimLiveOnHand` `:89`, `CastInFlightOnHand` `:241`,
+liveness ladder (`ClaimLiveOnHand` `:89`, `CastInFlightOnHand` `:251` (PUBLIC since 2.0.5 — declared in `Actuation.h`),
 `CastLockLive` `:299`), rank preemption (`CanPreemptHand` `:394`,
 `IncumbentTargetLost` `:433`, `IsOwnRetarget` `:484`, `PreemptHand` `:495`),
 `WeaponHandExposure` (`:163`), `CastProxyOnHand` (`:109`), `HandFree` (`:549`)
@@ -463,10 +463,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:74`) via `Packages::CastAt`.
 - **THE PER-HAND CAST LOCK, AND THE TWO 2026-09-08 CHANGES TO IT** (`Docs/DIAG-2026-09-08-field.md`
-  RC1/RC2). `CastLockLive` (`Actuation_Hands.cpp:299`) now answers "this hand is still busy" THREE ways,
+  RC1/RC2). `CastLockLive` (`Actuation_Hands.cpp:311`) now answers "this hand is still busy" THREE ways,
   in order: (1) `ClaimLiveOnHand` (`:89`, factored out — a live offense claim on that slot, or the
   heal claim for LEFT); (2) the round-robin `FacetExpiry()` staleness window, unchanged; (3) **NEW
-  (F8)** — `CastInFlightOnHand` (`:241`): the follower's own `RE::MagicCaster` for that hand is
+  (F8)** — `CastInFlightOnHand` (`:251`): the follower's own `RE::MagicCaster` for that hand is
   mid-cast (`state` not `kNone`/`kUnk08`/`kUnk09`) of the locked spell **or its APMF delivery-flip
   proxy** — read from `GetActorRuntimeData().magicCasters[]` DIRECTLY, never through the
   `Actor::GetMagicCaster` virtual (that body is the game's, CommonLib implements none of it, and
@@ -506,7 +506,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   its condition to go false. **Rank is CARRIED, not inferred:** `Actuation::Fire` records the winning rule's
   index in `g_firingRule` (`Actuation_internal.h:192`) — the single entry point into every actuation in the family —
   `HoldCastLock` stamps it into `CastLock::owningRule` (`:252`) when a hand is claimed, and `CanPreemptHand`
-  (`Actuation_Hands.cpp:394`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
+  (`Actuation_Hands.cpp:406`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
   EQUAL is the incumbent itself (`IsOwnRetarget`, `:484` — a rule re-aiming its own cast, which fails
   `HandFree`'s incumbent match on `target`), higher is held off. `ResolveCastHand` keeps those two on
   SEPARATE predicates (`mine` vs `outranks`): a self-retarget displaces nothing and records no preempt flag,
@@ -515,7 +515,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   mid-charge**, reusing `CastInFlightOnHand` rather than inventing a second notion of busy.
   **A self-retarget carries TWO bounds, and never-mid-charge is NOT the load-bearing one:** it protects a
   cast only from the moment charging BEGINS, and the claim-to-first-charge window is 2.3-4.5 s with the
-  caster reading `kNone` throughout. `IncumbentTargetLost` (`Actuation_Hands.cpp:433`) is the bound that matters —
+  caster reading `kNone` throughout. `IncumbentTargetLost` (`Actuation_Hands.cpp:445`) is the bound that matters —
   it asks the evaluator's own three questions (`Evaluator.cpp`'s `PickAlly`, `:354-375`, mirrored not
   invented): does the target still resolve to a live actor, is it still inside `fSharedRadius`, and — when
   the firing rule's condition is the ally selector that owns that number (`g_firingAllyThreshold`, `:254`,
@@ -684,6 +684,26 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   to the SAME direct-force stream below, unchanged; APMF present + capable + REFUSED now
   **FAILS CLOSED** (`SelfCast::Declined`, one rate-limited `[apmf]` error, no direct-force
   stream) — with APMF present there is no fallback.
+  **COMBAT-AI GATE (v2.0.5, `fix/mfo-heal-recognition`, 2026-09-09):** the
+  `ComposedCast::Try` call is now wrapped in
+  `if (a_follower->GetActorRuntimeData().combatController)`. **Every APMF cast seat
+  is a vfunc on the engine's COMBAT AI objects** — `CheckStartCast`/`CheckStopCast`/
+  `GetMagicTarget` are `bool(CombatMagicCaster*, CombatController*)`, and the equip
+  gate reads `CombatController::inventory` (APMF `core/CastSeats.cpp`,
+  `core/EquipGate.cpp`) — so with no `CombatController` NOTHING can drive the cast;
+  only `CheckCast` still runs OOC and that is a DENY gate. Field proof: after combat
+  ended 14:19:14 the claim stood and heartbeated for 2+ minutes with ZERO APMF seat
+  lines for that actor and no heal. This RESTORES marth's ruling recorded at
+  `Logistics.cpp:1465-1474` ("OOC concentration delivery must always use the known
+  working force"), which the claim path silently overrode once `bHealAnimPackage`
+  went ON. **Not a decline-fallback:** `ApmfRefused` still FAILS CLOSED; out of
+  combat APMF has no delivery to arbitrate for, so this is the APMF-ABSENT degrade
+  contract evaluated per SITUATION. `combatController` and NOT `IsInCombat()`
+  deliberately — it IS the object the seats hang off (same read as
+  `CombatSense.h`'s `FoeCount`). **IN COMBAT NOTHING CHANGES.** Twins deliberately
+  left alone and recorded instead: `CastSelfDirect`'s own `ComposedCast::Try`
+  (`Actuation_Direct.cpp:886`) and this function's OOC offense-concentration
+  `ClaimOffenseCast` (`:1216`) carry the identical exposure.
 - `CastAuto` (PUBLIC, `Actuation_Direct.cpp:1390`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
@@ -2903,6 +2923,44 @@ native seats) and ENGINE_NOTES §0.40.
     transparent NoOp) and `Logistics.cpp:1506` (transparent `continue`, log deduped
     2s); `Actuation.cpp:289-291` (`ConcentrationCast`) returns a TRANSPARENT NoOp with NO hand
     lock.
+- **THE F12 IN-FLIGHT HOLD — `fix/mfo-heal-recognition`, v2.0.5, 2026-09-09.** The
+  SECOND answer in `Try()` (`ComposedCast.cpp:484-556`), reached only when the F1
+  hold above did NOT stand. **A heal claim whose spell (or whose delivery-flip
+  proxy) the engine is ACTUALLY CASTING on the left hand is never released or
+  re-pointed by another heal rule.** Field root cause (deck 2026-09-09, Jesper
+  `0x750012C6`): the incumbent handle was minted 14:18:41.708, the engine reached
+  `state=4(Casting)` at 14:18:47.148, and 17 ms later a different heal rule
+  re-pointed the claim — so APMF's own `CheckCast` correctly DENIED the spell it
+  had been steering for 5.4 s. **F1 did not fire because every term held EXCEPT
+  `RefreshHealCastClaim`**, which on ABI 6 with a live claim has exactly ONE
+  refusal: the `kHealHoldNeverObservedMs` (4000 ms) claim-age cap. The handle was
+  5457 ms old and still `!observed`, because `observed` means the
+  `TESSpellCastEvent` FIRED and this cast had only reached Casting. The cap is not
+  wrong; it is blind to the engine's own state.
+  - **Reuses `Actuation::CastInFlightOnHand`** (`Actuation_Hands.cpp:251`) — that
+    predicate was file-local and went PUBLIC (decl `Actuation.h`, and
+    `kHandLeft`/`kHandRight`/`kHandCount` MOVED from `Actuation_internal.h` to
+    `Actuation.h` for the same reason: `ComposedCast.cpp` is not one of the three
+    Actuation TUs). ONE definition of "in flight", not a second liveness test.
+  - **Bounded by `kInFlightHoldCap`** (`ComposedCast.cpp:32-42`, `=
+    APMFBridge::kHealCastTtlMs`, the same source constant as
+    `Actuation_Hands.cpp:286`), anchored on `Watch::inFlightHoldSince` — the twin
+    of `CastLock::claimGoneAt`, stamped when the extension first engages and zeroed
+    the moment the engine is no longer casting that spell, so an idle gap between
+    casts hands the slot over at once (matching `CanPreemptHand`'s "only the idle
+    window BETWEEN casts is takeable"). Past the cap the anchor stays STAMPED so a
+    wedged caster cannot re-open the window every lap.
+  - **It does NOT heartbeat.** This branch never calls `RefreshHealCastClaim`, so it
+    adds no lifetime to the incumbent's claim — the hazard F1's own doc warns about.
+  - **Logs `LogHealHoldOffInFlight`** (`ComposedCast.cpp:242`), its OWN `[cfc]`
+    message, sharing F1's dedup map and 2 s window (the two holds are mutually
+    exclusive on any one call, so sharing cannot silence either).
+  - **Why HERE and not in the hand lock.** `ComposedCast::Try` is the ONE
+    `ClaimHealCast` call site in `native/`; BOTH the Logistics OOC concentration
+    dispatch (`Logistics.cpp:~1500` → `CastTargetDirect`) and combat `CastOn`'s
+    composed branch (`Actuation.cpp:1004`) bottom out here. The per-hand cast lock
+    never saw the Logistics claim at all, which is why F8's identical protection did
+    not cover this.
   - **What breaks if you change this:** (1) folding `Held` back into
     `Applied`/`true` re-creates the Fable SEV-2 bug — the held-off spell counts as
     FIRED, buys the `Scheduler.cpp:579-588` suppression window on a no-op,

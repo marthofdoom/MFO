@@ -43,6 +43,33 @@ namespace MFO::Actuation {
     // (§5.3 -- a rule that could not run says why, it is not silent).
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice);
 
+    // ── HAND INDICES ────────────────────────────────────────────────────────
+    // 0 = left, 1 = right, everywhere in the Actuation family (the per-hand cast
+    // lock's two slots, CastInFlightOnHand's `a_hand`). MOVED here from
+    // Actuation_internal.h (2026-09-09) with its value and its name unchanged --
+    // it now has to be nameable from ComposedCast.cpp, which is NOT one of the
+    // three Actuation TUs and so may not include that internal header. The same
+    // numbering as RE::Actor::SlotTypes::kLeftHand/kRightHand, deliberately: the
+    // array index is what CastInFlightOnHand ultimately reads.
+    enum : std::size_t { kHandLeft = 0, kHandRight = 1, kHandCount = 2 };
+
+    // ── "THE ENGINE STARTED THIS CAST AND HAS NOT FINISHED IT" ───────────────
+    // THE one definition of in-flight in this codebase (F8, 2026-09-08). True
+    // when the follower's own MagicCaster for `a_hand` is in a live cast state
+    // AND the spell it currently has selected is `a_spell` -- or `a_proxy`, the
+    // delivery-flip form APMF minted for that claim, since a proxied claim never
+    // has the original spell selected. Read straight off the actor's already-built
+    // caster array: no virtual call, no allocation, safe from the job worker.
+    // Full reasoning, symbol verification and the state table live on the
+    // DEFINITION in Actuation_Hands.cpp -- read it there, it was not copied here.
+    //
+    // PUBLIC since 2026-09-09 (it was file-local to Actuation_Hands.cpp): the heal
+    // claim path lives in ComposedCast.cpp and needs exactly this question
+    // answered before it releases an incumbent claim. A SECOND liveness test was
+    // the alternative and is explicitly refused -- one definition, one answer.
+    bool CastInFlightOnHand(RE::Actor* a_follower, std::size_t a_hand,
+                            RE::FormID a_spell, RE::FormID a_proxy);
+
     // THE CAST-TARGET RESOLUTION LADDER (#68). Resolves WHO a cast_target row
     // aims at: a live selector target -> a named specific follower -> Subject
     // Player/NearestAlly -> the PLAYER fallback (a_outIsFallbackPlayer marks that
