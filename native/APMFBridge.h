@@ -35,6 +35,21 @@
 // casts — that granular non-interruption is exactly why the cast routes through APMF. No
 // forced cast on this path (see CAST-DELIVERY.md; force lives only in the legacy hybrid).
 //
+// THE IDLE-HAND FLOOR (F10, marth's design ruling 2026-09-08) — internal to
+// APMFBridge.cpp, no entry point of its own, listed here because it is a THIRD claim
+// this bridge makes and nothing else in the header would say so. Whenever MFO's driving
+// cast claim(s) occupy exactly ONE of a follower's hands, MFO also claims the OTHER hand
+// DENY-ONLY (APMF_API::kCastFlag_DenyHandOnly): a claim that drives nothing and admits
+// nothing, so no un-gambited spell can arm there. APMF leaving an unclaimed hand
+// permissive is correct for a general framework; MFO's design is that ONLY gambited
+// spells occur, so "the other hand goes idle" is the specification, not a trade. It is
+// ONLY ever a companion to a driving claim — MFO holding no cast claim floors NEITHER
+// hand — and it is requested at the SAME kOwnBasis as every other claim here, because
+// APMF's comparator makes a deny-only claim lose to a driving one at an equal basis, so
+// MFO's own next gambit takes the hand with no release/re-request gap. Derived once per
+// pump in Tick(); released with the other claims in ClearTransientState(). Full working
+// (including why "neither" and not "both") at ReconcileHandFloorLocked in the .cpp.
+//
 // Claim lifecycles: casting = PER-CAST (refreshed each winning cast tick; released
 // crisply by ReleaseOffenseCast the instant no cast rule holds). combat-target = PER-COMBAT
 // (created by a cast directive, re-pointed via APMF Repoint when the foe changes, kept
@@ -259,7 +274,85 @@ namespace MFO::APMFBridge {
     // torn down as the single claim it is, not double-released). Call the instant no
     // cast rule holds (Scheduler !castSeen) so the claim releases crisply, not after
     // the round-robin-aware expiry backstop.
+    // Worker-safe. REFRESH the cast claim(s) MFO already holds on `a_hand` --
+    // without re-requesting anything (F9, 2026-09-08). This is the "my cast is
+    // already running, I only need to keep it alive" call, made by Actuation's
+    // satisfied-in-flight gate instead of re-entering the whole claim/equip/
+    // consent path for a rule that has nothing new to ask for.
+    //
+    // WHAT IT DOES: replays each live claim's OWN stored (spell, target, hand,
+    // concentration, stopPct, deny-only) tuple through the same create-or-refresh
+    // helper every claim call uses. Because the tuple is by construction identical
+    // to what is stored, the identity compare matches: the TTL is renewed in place
+    // (the ABI-6 liveness check, the lazy delivery-flip proxy read, the heartbeat
+    // Repoint, and the `refreshed` stamp Tick()'s FacetExpiry sweep reads). It can
+    // never change a hand mode, never re-point a target, and never tear down a
+    // claim that is still in force.
+    //
+    // IT CAN STILL MINT A HANDLE, and saying otherwise would be false: a stored
+    // handle APMF has already auto-expired takes the aged-out branch and is
+    // RE-REQUESTED from here -- correct (the rule still wants it), and not a
+    // concurrent second claim (the dead handle is dropped first; one claim exists
+    // at every instant, and there is no live charge left to interrupt).
+    //
+    // a_hand: kApmfHandLeft -> the left offense slot AND the heal slot (heals are
+    // LEFT always, and the two can stand together); kApmfHandDualCast -> the
+    // mirrored dual claim, re-mirrored so both slots' stamps move together;
+    // anything else -> the right offense slot.
+    //
+    // RETURNS true when at least one claim on that hand is still live afterwards.
+    // A `false` means the claim really is gone (APMF aged it out, or the
+    // fail-closed never-published split dropped it) -- the caller must then fall
+    // through to its normal claim path, NOT treat the rule as satisfied. It is not
+    // an APMF refusal and must never be logged as one.
+    //
+    // `a_holdSpell` (2026-09-08): NON-ZERO marks this a HOLD refresh -- feeding a
+    // claim whose own rule is being HELD OFF (Actuation's cast-hand lock holding a
+    // re-aim) rather than one whose (spell,target) still matches -- and names the
+    // ONE spell being held for. Three consequences, all the caller's to respect:
+    //   * it REFUSES on ABI < 6, for the same reason RefreshHealCastClaim does (no
+    //     IsClaimLive to ask, so the refresh would bump MFO's stamp for a claim
+    //     APMF may have expired and stop the only sweep that could end the hold);
+    //   * only claims NAMING that spell are replayed. On the LEFT hand an offense
+    //     claim and a heal claim can stand together, and a held offense re-aim
+    //     renewing a coexisting heal claim would slip that heal past its own
+    //     never-observed cap -- that cap gates RefreshHealCastClaim's answer and
+    //     reads `created`, while the claim's LIFE is `refreshed`, which this bumps;
+    //   * the CALLER must bound how long it keeps calling. A claim that can never
+    //     fire must not be renewed forever, which is what kHealHoldNeverObservedMs
+    //     bounds on the heal side, and the caller's evidence for "still firing"
+    //     must be RECENT (ComposedCast::ObservedFiring's window) -- the raw
+    //     `observed` latch is never cleared by any offense release path.
+    // 0 (the default) = the in-flight caller: every claim on the hand, no refusal.
+    bool RefreshOwnedCastOnHand(RE::FormID a_follower, std::int32_t a_hand,
+                                RE::FormID a_holdSpell = 0);
+
     void ReleaseOffenseCast(RE::FormID a_follower);
+
+    // Worker-safe. Release ONLY the cast claim(s) standing on ONE hand -- the other
+    // hand's independent claim, and every non-cast facet, are untouched. Added for
+    // RANK PREEMPTION (marth 2026-09-08: the gambit list order IS the priority
+    // order, and a higher-ranked rule reaching the cast path must be able to TAKE a
+    // hand from a lower-ranked incumbent rather than wait for its condition to go
+    // false). ReleaseOffenseCast above cannot serve that: it is whole-follower by
+    // design, and using it would drop the OTHER hand's unrelated claim as
+    // collateral.
+    //
+    // a_hand: kApmfHandLeft -> the left offense slot; anything else -> the right
+    // offense slot. **The HEAL slot is deliberately NOT touched, on either hand.**
+    // A heal claim is bookkept by ComposedCast (its [cfc] watch slot, its CastBounds
+    // arm, its hold record), so releasing the APMF claim from under it would leave
+    // all three armed for a claim that no longer exists -- `ComposedCast::End` is
+    // the seam that takes them down together, and a caller displacing a heal must
+    // go through it. (This function used to drop `heal` unconditionally for the LEFT
+    // hand, which also meant an offense claim being displaced took an unrelated
+    // coexisting heal with it.) `GetHealCastSpell` below is how a caller tells the
+    // two apart.
+    //
+    // A MIRRORED DUALCAST CLAIM IS RELEASED WHOLE from either hand -- one APMF
+    // handle occupying both, arbitrated as one claim, with no half-release to make.
+    // Preempting one hand of a dual cast ends that dual cast, deliberately.
+    void ReleaseCastClaimOnHand(RE::FormID a_follower, std::int32_t a_hand);
 
     // ── combat-target facet CLAIM: PER-COMBAT ────────────────────────────────────
     // Worker-safe. CLAIM the combat-target facet for this follower (APMF records the
@@ -641,6 +734,13 @@ namespace MFO::APMFBridge {
     // (2026-09-06): ComposedCast::Try hands this to WatchArmed so the silent-
     // claim diagnostic recognises a cast of the proxy, not only the original
     // spell, as the claimed heal actually firing.
+    // Worker-safe. The spell the heal slot's LIVE claim names, or 0 when no heal
+    // claim stands. Exists for the preempt path, which must distinguish "the lock I
+    // am displacing IS the heal claim" (route the release through
+    // ComposedCast::End) from "an offense claim on the LEFT hand with a heal claim
+    // coexisting" (leave the heal alone). Same contract as GetHealCastProxy.
+    RE::FormID GetHealCastSpell(RE::FormID a_follower);
+
     RE::FormID GetHealCastProxy(RE::FormID a_follower);
 
     // Worker-safe (the SAME g_mx as every accessor above). HEARTBEAT for a

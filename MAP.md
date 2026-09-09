@@ -21,15 +21,27 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Sizes verified against `main` 2026-09-07 after the Board split:
-   ProgAllocator 2333, Logistics_Loot 2186, Packages 2153, Logistics 2065,
-   Actuation 2034, Actuation_Direct 1659, Board 1346, CasterConsent 1243,
-   Board_Progression 1234, Board_FieldKit 1135. None of these should sit in
-   context — grep to a symbol, read a narrow window.
-   *(`Board.cpp` had breached the 2500-line HARD RULE at 2577 lines — it crossed
-   at the overlay-swapchain merge `924f3a9`. `refactor/board-split` resolved that
-   by moving the Field Kit panel into `native/Board_FieldKit.cpp`; the cap now
-   holds codebase-wide again.)*
+   whole files. Sizes verified on `feat/mfo-idle-hand-and-churn` 2026-09-08 after
+   the Actuation split: ProgAllocator 2333, Actuation 2237, Logistics_Loot 2186,
+   Packages 2153, Logistics 2072, Actuation_Direct 1679, Board 1346,
+   CasterConsent 1243, Board_Progression 1234, Board_FieldKit 1135,
+   Actuation_Hands 879. None of these should sit in context — grep to a symbol,
+   read a narrow window.
+   *(Two files have breached the 2500-line HARD RULE and been resolved the same
+   way — an internal header for the shared state plus a cohesive module.
+   `Board.cpp` hit 2577 at the overlay-swapchain merge `924f3a9`;
+   `refactor/board-split` moved the Field Kit panel into
+   `native/Board_FieldKit.cpp`. `Actuation.cpp` hit 3282 on this branch;
+   `refactor/actuation-split` moved the per-hand cast lock into
+   `native/Actuation_Hands.cpp` behind `Actuation_internal.h`. The cap holds
+   codebase-wide.)*
+   **CAUTION — `Actuation.cpp` line anchors below are a mixed bag.** The
+   2026-09-08 split re-anchored every citation that was accurate against this
+   branch. Citations that were ALREADY stale before it (written against `main`,
+   where the file is 2271 lines and those anchors still resolve — e.g. `CastOn` at `:600`, `Fire` at `:1832`,
+   `ConcentrationCast` at `:470`, and the interior call-site lists) were left
+   exactly as they were and still need their own re-anchor pass. Grep the symbol,
+   don't trust those numbers.
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
    changing a subsystem, re-read its "What breaks" entry *against current code*
    and **update this map if the structure moved.** A stale impact note is worse
@@ -392,20 +404,34 @@ releases **by eviction** with a non-actor XMarker.
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
-### Actuation.cpp / Actuation_Direct.cpp / Actuation_internal.h / Actuation.h — "a package IS the action"
+### Actuation.cpp / Actuation_Direct.cpp / Actuation_Hands.cpp / Actuation_internal.h / Actuation.h — "a package IS the action"
 Only module that mutates actor state; main-thread only. **Split mechanically
-2026-08-31 (no logic change):** `Actuation.cpp` (1244) = the combat-rule
-dispatch — `Fire` + verbs, `CastOn`/`ConcentrationCast`/`ForceCast`,
-`EquipWeapon`, `NearestAlly`/`ResolveCastTarget` (`:856`), the T#76 force-hold
-map + FWPN co-save; `Actuation_Direct.cpp` (1309) = the direct-delivery
-streams (`CastSelfDirect`/`CastTargetDirect` + reconciles/`ClearSelfCasts`,
-`CastAuto`) + their apply substrate (`ConcProxy`/`DeliverySpell`,
-dispel/sustain, `Apply{Self,Target}Effect`/`ApplyEffectFromTo`,
-beneficial-recast pacing) — the two direct-cast registries (`g_selfCast`/
-`g_targetCast`) are file-local there; `Actuation_internal.h` = the shared
+TWICE, no logic change either time — 2026-08-31 (`Actuation_Direct.cpp`) and
+2026-09-08 (`Actuation_Hands.cpp`, when `Actuation.cpp` reached 3282 lines):**
+`Actuation.cpp` (2237) = the combat-rule dispatch — `Fire` (`:1764`) + verbs,
+`CastOn` (`:396`)/`ConcentrationCast` (`:266`)/`ForceCast` (`:88`),
+`EquipWeapon` (`:1603`), `NearestAlly` (`:53`)/`ResolveCastTarget` (`:1724`),
+the APMF-refusal log, `ClearCastLock(s)` (`:2127`/`:2143`), the T#76 force-hold
+map + FWPN co-save (`:2156`); `Actuation_Hands.cpp` (879) = THE PER-HAND CAST
+LOCK's implementation — `HoldCastLock`/`ClearCastLockHand` (`:61`/`:77`), the
+liveness ladder (`ClaimLiveOnHand` `:89`, `CastInFlightOnHand` `:241`,
+`CastLockLive` `:299`), rank preemption (`CanPreemptHand` `:394`,
+`IncumbentTargetLost` `:433`, `IsOwnRetarget` `:484`, `PreemptHand` `:495`),
+`WeaponHandExposure` (`:163`), `CastProxyOnHand` (`:109`), `HandFree` (`:549`)
+and THE JUGGLE `ResolveCastHand` (`:575`); `Actuation_Direct.cpp` (1679) = the
+direct-delivery streams (`CastSelfDirect`/`CastTargetDirect` +
+reconciles/`ClearSelfCasts`, `CastAuto`) + their apply substrate
+(`ConcProxy`/`DeliverySpell`, dispel/sustain,
+`Apply{Self,Target}Effect`/`ApplyEffectFromTo`, beneficial-recast pacing) — the
+two direct-cast registries (`g_selfCast`/`g_targetCast`) are file-local there;
+`Actuation_internal.h` = everything that crosses a TU boundary: the shared
 concentration numbers (`kConc*` sustain windows, `kConcApplyPeriod` cadence
-contract, `DrawConcCap` random stream cap) as **`inline`** — any definition
-added to that header MUST be `inline` or it's an LNK2005. `Fire(follower,
+contract, `DrawConcCap` random stream cap) AND the cast lock's shared state
+(`g_castLock` `:255` + the three rate-limited log maps, `g_firingRule` `:192`
+and `g_firingAllyThreshold` `:202`, `CastLock` `:204`, `HandPlan` `:304`, the
+hand indices `:168`) plus the lock's six cross-TU entry points, all as
+**`inline`** — any definition added to that header MUST be `inline` or it's an
+LNK2005. `Fire(follower,
 choice)` (`Actuation.cpp:1832`) dispatches one action/tick: Wait / Attack (→`Targeting::Command`) /
 Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::RetreatFill`
 / PowerAttack / drink / unknown→fail-closed. First-match-wins.
@@ -431,8 +457,198 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   it holds off entirely — never a half-landed dual-cast). `handPlan`/`lockHands`
   thread the resolved hand(s) to every `HoldCastLock`/`ClaimOffenseCast` call site
   below in the SAME function so the lock and the actual APMF claim never disagree)** →
+  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `Actuation.cpp:643`)** →
   concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
   follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:74`) via `Packages::CastAt`.
+- **THE PER-HAND CAST LOCK, AND THE TWO 2026-09-08 CHANGES TO IT** (`Docs/DIAG-2026-09-08-field.md`
+  RC1/RC2). `CastLockLive` (`Actuation_Hands.cpp:299`) now answers "this hand is still busy" THREE ways,
+  in order: (1) `ClaimLiveOnHand` (`:89`, factored out — a live offense claim on that slot, or the
+  heal claim for LEFT); (2) the round-robin `FacetExpiry()` staleness window, unchanged; (3) **NEW
+  (F8)** — `CastInFlightOnHand` (`:241`): the follower's own `RE::MagicCaster` for that hand is
+  mid-cast (`state` not `kNone`/`kUnk08`/`kUnk09`) of the locked spell **or its APMF delivery-flip
+  proxy** — read from `GetActorRuntimeData().magicCasters[]` DIRECTLY, never through the
+  `Actor::GetMagicCaster` virtual (that body is the game's, CommonLib implements none of it, and
+  SkyrimSE.exe is Steam-DRM encrypted on disk so it cannot be disassembled here — if it lazily allocates
+  the caster, this always-on job-worker predicate would be allocating off-main; the array read removes the
+  question) — bounded by `kInFlightHoldCap` (`:274`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
+  cannot own a hand forever. That third answer is what stops another rule taking a hand whose charged
+  cast has not fired yet when the CLAIM lapsed mid-charge. **The cap is anchored on `CastLock::claimGoneAt`
+  (`Actuation_internal.h:221`), NOT on `lastSeen`** — F9 deliberately stops re-stamping the lock, so `lastSeen`
+  freezes at the first claiming lap and anchoring there made the protection dead for any claim older than
+  the cap. `claimGoneAt` is stamped the first time this third answer is reached, cleared when the claim is
+  seen live again, and cleared by `HoldCastLock` (fresh hold = fresh cast).
+  The proxy both this and the in-flight watch re-arm use comes from ONE resolver, `CastProxyOnHand`
+  (`:487`): offense proxy, falling back to the HEAL proxy on the left hand — heals are LEFT always, and a
+  left lookup that consults only the offense accessor answers 0 for every proxied heal, which silently
+  rebuilds the RC4 "[cfc] NO observed cast" false alarm. **It takes an `RE::Actor*` now** — so do
+  `HandFree` (`:925`) and `ResolveCastHand` (`:974`); every call site already had one.
+  `ResolveCastHand` additionally **PINS a request to the hand(s) its own live claim already occupies**
+  (the incumbent pin) instead of honouring a freshly re-derived `Loadout::PlanCastHand` answer: a
+  hand-mode flip (Dual↔single, left↔right) is a CHANGE to `EnsureCastClaimLocked`, i.e.
+  Release+RequestCast, i.e. the engine InterruptCasts whatever was charging.
+  **What breaks if you change this:** widen the in-flight state set and a stuck caster owns a hand
+  until the cap; drop the proxy match and every APMF-proxied cast reads as "not ours" and loses its
+  protection; drop the incumbent pin and the Dual↔single churn returns.
+- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:643`, `HandPlan::inFlight` at `Actuation_internal.h:304`).** A cast rule whose
+  own cast is already running (its exact (spell,target) locks the hand AND a live claim stands there)
+  no longer re-runs the claim/equip/consent path and returns `Fired` — which ENDED THE SCAN and let one
+  self-heal monopolise 22 consecutive laps over 44 s with zero offense rules reached. It now calls
+  `APMFBridge::RefreshOwnedCastOnHand` (`APMFBridge.cpp:1245`), re-arms the `[cfc]` watch, logs one
+  throttled `[eval] ... SATISFIED IN FLIGHT` line (`LogCastInFlight`, `:345`, own map
+  `g_lastInFlightLog`, cleared with `g_lastLockLog` in `ClearCastLock`/`ClearCastLocks`), and returns a
+  TRANSPARENT NoOp so the scan continues to the rules below.
+  **What breaks if you change this:** call `lockHands` here and the lock outlives the claim it is
+  supposed to be bounded by; skip the refresh and `Tick()`'s `FacetExpiry` sweep kills the live claim;
+- **RANK PREEMPTION — THE GAMBIT LIST ORDER IS THE PRIORITY ORDER (marth, 2026-09-08).** A higher-ranked
+  rule must be able to TAKE a hand from a lower-ranked incumbent, not be held off behind it and not wait for
+  its condition to go false. **Rank is CARRIED, not inferred:** `Actuation::Fire` records the winning rule's
+  index in `g_firingRule` (`Actuation_internal.h:192`) — the single entry point into every actuation in the family —
+  `HoldCastLock` stamps it into `CastLock::owningRule` (`:252`) when a hand is claimed, and `CanPreemptHand`
+  (`Actuation_Hands.cpp:394`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
+  EQUAL is the incumbent itself (`IsOwnRetarget`, `:484` — a rule re-aiming its own cast, which fails
+  `HandFree`'s incumbent match on `target`), higher is held off. `ResolveCastHand` keeps those two on
+  SEPARATE predicates (`mine` vs `outranks`): a self-retarget displaces nothing and records no preempt flag,
+  so it can never release its own claim through the preemption path (which for a heal would tear down
+  ComposedCast's bookkeeping) or log "rule 3 outranks rule 3". Preemption's one safety condition is **never
+  mid-charge**, reusing `CastInFlightOnHand` rather than inventing a second notion of busy.
+  **A self-retarget carries TWO bounds, and never-mid-charge is NOT the load-bearing one:** it protects a
+  cast only from the moment charging BEGINS, and the claim-to-first-charge window is 2.3-4.5 s with the
+  caster reading `kNone` throughout. `IncumbentTargetLost` (`Actuation_Hands.cpp:433`) is the bound that matters —
+  it asks the evaluator's own three questions (`Evaluator.cpp`'s `PickAlly`, `:354-375`, mirrored not
+  invented): does the target still resolve to a live actor, is it still inside `fSharedRadius`, and — when
+  the firing rule's condition is the ally selector that owns that number (`g_firingAllyThreshold`, `:254`,
+  carried from `Eval::Choice::conditionParam`) — is it still strictly under `min(param, kHealFull)`. A
+  target that merely lost the "lowest HP" race to another ally is NOT lost and the re-aim waits. Without
+  it, two allies trading that slot as hits land restarted APMF's window every lap and the heal never
+  charged at all — strictly worse than the pre-branch behaviour, where the rule was held off by its own
+  lock and the first target got healed.
+  **A HELD RE-AIM MUST HEARTBEAT WHAT IT IS HOLDING FOR** (`refreshHeldOwnClaim`, in `ResolveCastHand`).
+  On a held lap NOTHING else touches the incumbent claim — F9's in-flight refresh runs only when
+  `HandFree`'s (spell,target) match SUCCEEDS, which is exactly the match a re-aimed target fails — so
+  `refreshed` stopped moving and `APMFBridge::Tick()` swept the claim at `FacetExpiry()` (~2.45 s default,
+  floor 0.77 s) inside the 2.3-4.5 s claim-to-first-charge window: the hold was killing the claim it was
+  protecting (principle 9, the stale-cadence class). It calls the same
+  `APMFBridge::RefreshOwnedCastOnHand` the in-flight path uses, **and that renews APMF's TTL as well as
+  MFO's stamp — deliberately.** The heal-hold heartbeat refuses to renew because it feeds an incumbent
+  whose own rule may have gone SILENT; here the rule won its lap and is asking for the identical spell on
+  the identical hand, differing only in a target MFO just decided not to honour yet, which is exactly the
+  precondition `EnsureCastClaimLocked`'s renewal is written against. Refreshing MFO's stamp without
+  renewing APMF's window would be two budgets that disagree in a new place. Only for a hand whose lock is
+  OURS: a lower-ranked rule being held off must never feed an incumbent that never asked.
+  **AND THE HEARTBEAT IS CAPPED, because renewing the TTL is only safe if the claim can still fire.**
+  "Is the rule asking?" is the wrong question — nothing in `IsOwnRetarget` + `ClaimLiveOnHand` tests
+  whether the claim can EVER fire, and `IncumbentTargetLost` cannot: it knows death, radius and the heal
+  threshold, and **nothing about sight**. A foe that steps behind a pillar stays alive and in radius while
+  `PickFoe`'s soft LoS preference names a sighted foe every lap, so an unconditional heartbeat renews a
+  claim that can never fire, forever, with every lower-ranked rule queued behind it. The exits would be
+  the foe dying by another hand, leaving the radius, the rule going false, or combat ending — "the cast
+  fires" is not among them. The codebase already answered this one file over:
+  `APMFBridge::RefreshHealCastClaim` refuses to renew AND caps a never-observed claim at
+  `kHealHoldNeverObservedMs` (4000 ms), and this path reaches the same heal slot. So the hold heartbeats
+  only while the claim was **observed firing RECENTLY** (`ComposedCast::ObservedFiring`, a hand-scoped,
+  spell-checked read of the `observed` latch **within a caller-supplied window** — NOT `ExpectingCast`,
+  which answers the opposite question) **or is younger than that same 4 s window**, anchored on `lastSeen`
+  (stamped by `HoldCastLock` at the claim or re-aim, frozen after). **The recency bound is not decoration:**
+  `observed` is a LATCH that no offense release path clears — not `ReleaseCastClaimOnHand`,
+  `ReleaseOffenseCast`, `PreemptHand`'s offense side or the expiry sweep, and the fresh-claim site re-arms
+  with the same spell, which is `WatchArmed`'s no-reset branch — so the raw latch means "this spell fired
+  once on this hand this fight", across claims and across RULES. Reading it as "alive now" left the cap
+  unbounded for the ordinary case (any rule whose spell had landed even once), not an edge.
+  `NoteObservedCast` therefore stamps `Watch::lastObservedAt` and the window is compared against that.
+  **The real bound is the sum, not the 4 s:** feeding stops at 4000 ms, then the claim dies when `Tick()`'s
+  sweep sees `refreshed` go stale at `FacetExpiry()` — so the hold stands ~4.8 s (0.77 s floor) to ~6.5 s
+  (~2.45 s at the defaults). A cast already charging is exempt either way (`inFlight`).
+  The hold refresh also names its SPELL (`a_holdSpell`), because on the LEFT an offense claim and a heal
+  claim can stand together and a held offense re-aim must not renew a coexisting heal past its own
+  never-observed cap (that cap gates `RefreshHealCastClaim`'s answer and reads `created`; the claim's LIFE
+  is `refreshed`, which this call bumps). That caps how long a
+  rule waits on its OWN silent claim; it delays no higher-ranked rule, which is the opposite direction
+  from the overruled tenure. It also **re-arms the `[cfc]` watch** on every held lap
+  (`ComposedCast::WatchClaim`), because the "NO observed cast" warning is emitted only from `WatchArmed`
+  with no pump — without it the sole line a held re-aim produced was `LogCastLockHold`'s "still firing",
+  asserting a fire that may never have happened, on the one path that renews such a claim. A hand whose
+  own target IS lost is fed only while its cast is genuinely in flight (otherwise a `DualCast` hold, which
+  triggers when the WHOLE plan fails, would keep renewing a single-hand claim aimed at a dead actor just
+  because the other hand is taken). `RefreshOwnedCastOnHand`'s `a_forHold` also refuses on ABI < 6, for
+  the same reason `RefreshHealCastClaim` does: with no `IsClaimLive` the refresh would bump MFO's stamp
+  for a claim APMF may have expired and stop the only sweep that could end the hold.
+  **An earlier cut inferred rank from scan arrival ("did the incumbent assert itself earlier this lap?") and
+  was replaced, not tuned:** a rule whose condition is TRUE but which exits transparently BEFORE the hand
+  gate (#68 out-of-range, the magicka cost/reserve exits, `HasSpell`) never asserts at all, so two such rules
+  took the hand from each other on alternate laps and neither ever charged; and a retargeting rule outranked
+  itself. The lap counter, `BeginCastLap` and the `Scheduler` call site that fed it are all gone.
+  **The displacement is DEFERRED, never done at resolve time:** `ResolveCastHand` only records
+  `HandPlan::preemptLeft/preemptRight` (`:961`), and `CastOn`'s `commitPreempt` (`:1759`) fires immediately
+  before the claim it is for — the self fork, the concentration fork, `ClaimOffenseCast`, `ComposedCast::Try`
+  and (for the APMF-absent world, where `Loadout::Prepare` IS the claim on the hand) the equip switch. Every
+  transparent refusal in between therefore refuses without having touched the incumbent; committing at
+  resolve time turned a deterministically-failing higher rule into a dead hand at lap rate.
+  `PreemptHand` (`:873`) then releases via `APMFBridge::ReleaseCastClaimOnHand` (`APMFBridge.cpp:1357`,
+  per-hand, **offense slot only**), routes a heal-backed release through `ComposedCast::End` when
+  `APMFBridge::GetHealCastSpell` (`APMFBridge.cpp:1571`) says the lock being displaced IS the heal claim
+  (otherwise an unrelated coexisting heal would be dropped, and its watch/bounds/hold left armed for a claim
+  that no longer exists), clears the lock, and — for a MIRRORED DUAL incumbent (both hands, same
+  spell+target+owningRule) — clears BOTH locks, because one APMF handle on two hands has no half-release and
+  `HandFree`'s incumbent short-circuit does not consult liveness.
+  **STRUCTURAL RESIDUAL — deferring the commit NARROWS the window, it does not close it.** Everything that
+  can still refuse the asker AFTER `commitPreempt` — `CastSelfDirect` → `Held`/`Declined`, a refused
+  `ClaimOffenseCast`, `ComposedCast::Try` → `Held`/`ApmfRefused`, a failed `Loadout::Prepare` — still
+  displaces the incumbent first, so a DETERMINISTIC refusal of that shape still churns at lap rate. Closing
+  it generally needs an APMF dry-run ("would this claim be granted?") that does not exist. The one candidate
+  for a pure MFO pre-check, `Try`'s `Held`, is NOT cleanly pre-checkable: its deciding term is
+  `APMFBridge::RefreshHealCastClaim`, which is side-effecting (it bumps `refreshed` and latches `everLive`),
+  so only the first three `g_watch` terms can be evaluated purely — and a "might hold → do not displace"
+  answer would trade this bounded churn for a SILENT arbitration loss (the newcomer claims while the
+  incumbent still stands, and APMF's equal-basis tie keeps the earliest). In the case that actually matters
+  it cannot fire at all: preempting a heal routes through `ComposedCast::End`, which clears `g_watch.hand[0]`
+  before `Try` runs, so the incumbent is 0 and the hold is impossible by construction. The residual is the
+  narrow one F4 deliberately left: an OFFENSE claim displaced from the left while an unrelated heal claim
+  coexists.
+  **What breaks if you change this:** compare anything but the carried index and the pre-gate transparent
+  exits fool it again; drop the mid-charge guard and the charged-cast loss returns; drop
+  `IncumbentTargetLost` and a flickering ally target starves the heal it was picked for; commit the
+  displacement at resolve time and a failing rule kills a working one; release the heal slot from the bridge
+  and ComposedCast is left holding bookkeeping for a dead claim.
+- **AUTO PREFERS THE UNCLAIMED HAND ("there are two hands, auto should figure it out" — marth).**
+  `ResolveCastHand`'s `EitherFree` case took the LEFT hand whenever it was free, which is where the
+  collisions came from: the heal facet is LEFT-ONLY by contract (`ClaimHealCast`'s hard rule), so an offense
+  cast idling on the left stands exactly where the next heal must go while the right hand sits empty. It now
+  prefers the RIGHT hand — free-and-unclaimed first, then free, then by rank — leaving the left for the
+  facet that can use no other, **unless `WeaponHandExposure` (`Actuation_Hands.cpp:163`) says a weapon owns the
+  right hand or is coming back to it**, in which case the old LEFT-first order stands. That gate is not
+  optional: `PlanCastHand` returns `EitherFree` only when `APMFBridge::WeaponHandActive` is false, and that
+  reads the LIVE grip and the live equipment CLAIM — both false during the documented transient-unarmed
+  facet-expiry gap (`Docs/CAST-DELIVERY.md`, the 2026-09-05 HAND FIX: auto took the right hand, the equip
+  gambit re-equipped ~500 ms later and displaced the spell, the cast never left rest). `g_forcedWeapon` —
+  this file's own T#76 force-hold ledger, released when the equip gambit's condition is known false **and
+  never written at all while `bWeaponStyleControl` is off** (see the residual below) —
+  is the one signal that survives that gap. A pure caster never has an entry, so right-first still applies
+  to exactly the follower marth's ruling was about. (`DualCast` still takes both hands in that gap; that
+  exposure predates this branch and is unchanged by it.)
+  **RESIDUAL, non-default config:** the ledger is only WRITTEN while `bWeaponStyleControl` is on —
+  `EquipWeapon`'s kill-switch-off branch is a plain `EquipObject` with no entry, and
+  `ReconcileForcedWeapon` releases unconditionally when the switch is off. With that feature off a melee
+  follower in the transient-unarmed gap therefore still lands RIGHT, i.e. the 2026-09-05 shape on a
+  non-default setting. Recorded, not closed: closing it needs a signal that does not depend on that
+  feature being on.
+  `g_forcedWeapon` is read under `g_forcedMx` here like every other access — the map has an OFF-THREAD
+  reader (the SKSE save callback, `CoSaveForcedWeapons`), so "the writers are worker-serial" is not
+  sufficient. Its declaration comment used to assert BOTH "no lock (#4)" and "guard every access"; the
+  no-lock half is now removed rather than left to mislead the next reader. (A first cut only preferred the right once the left was
+  already CLAIMED, which never fires in the flow that matters: a standing heal claim makes `leftFree` false
+  long before that test is reached, so the opening state — two free unclaimed hands — still took the left.)
+  **KNOWN CONFLICT AT THE EQUIPMENT LAYER, outside this file's boundary and NOT fixed here:**
+  `Loadout::Prepare` equips into `LeftHandSlot()` unconditionally (`Loadout.cpp:279, :359`) and at cast
+  level 4 `DeselectSpell`s the RIGHT hand's other spell (`:296-298`). A RIGHT-hand claim therefore has MFO
+  physically equipping the same spell into the LEFT hand — a wasted equip, and on a follower holding a
+  shield or weapon there, a needless displacement recorded as a restore debt. `Prepare` needs a hand
+  parameter; that is its own brief. `DualCast` may also preempt, but only when BOTH hands are takeable (checked
+  as a pure predicate before either is committed, so a released claim is never spent for nothing).
+    make it opaque (transparent=false) and RC2 comes straight back. If the refresh comes back FALSE the
+  claim really is gone, so the pin that named it is VOID: the gate drops those hands' locks
+  (`ClearCastLockHand`, `Actuation_Hands.cpp:77`) and re-derives the plan (`resolveHands` lambda) before
+  falling through — without that, a LEFT-always heal pinned to the RIGHT by a stale lock would claim,
+  equip and lock the wrong hand.
   Off-AE the whole path declines transparently (T#67) so vanilla AI keeps casting.
   **The FF silent cast (and every other `CastSpellImmediate` on a live path) is now
   `MainThread::Post`ed** — CastOn runs on the job worker and the old inline engine call
@@ -1442,31 +1658,44 @@ Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 `imgui_impl_win32` = vendored, do not read.**
-- **Overlay mechanism (v1.1 version-fragility kill, `Board.cpp:284-803`):** replaced
+- **Overlay mechanism (v1.1 version-fragility kill, `Board.cpp:284-874`):** replaced
   the three call-site trampolines (D3DInit/DXGIPresent/InputDispatch, each keyed
   to a HARDCODED in-function byte offset that crashed on 1.5.x/1.7.x) with:
-  `PresentThunk` (`:468`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable
+  `PresentThunk` (`:539`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable
   slots 8/13** (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable`
-  `:542`), a
+  `:613`), a
   `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` (`InputSink`, reads every
-  device incl. gamepad; `:589`), the unchanged `WndProcHook` swap (`:285`,
+  device incl. gamepad; `:660`), the unchanged `WndProcHook` swap (`:285`,
   WM_CHAR/WM_KILLFOCUS), and `LazyInit` (`:364`, ImGui context + DX11/Win32 backend
   on first Present). Input
   CONSUMPTION while the board is open is done by `SyncControlBlock` (`:443`,
   ControlMap toggle, edge-driven from Present) because a sink cannot null the event
-  array. `TryInstallHooks` (`:564`) polls for the live swapchain then patches. **PORTABLE UNIT
+  array. **That toggle MUST call the ENGINE's `ToggleControls`
+  (`REL::RelocationID(67245, 68545)` — SE `0xC11C60`, AE `0xCD5650`, both verified
+  against the disassembly), NEVER `RE::ControlMap::ToggleControls`** — see the
+  ABI note at `Board.cpp:459-529`. The pinned 3.7.0 header is an SE-17-context
+  layout whose inline reimplementation writes `+0x118`, which on 1.6.1130+ (18
+  contexts) is `contextPriorityStack.size`, not `enabledControls`; that corrupted
+  the context stack on every board open/close and crashed the engine's per-frame
+  user-event mapping pass (AE id 68542) at `SkyrimSE.exe+0CD509D`, plus a latent
+  OOB write on the next `PushInputContext`. Field-reproduced 2026-09-08/09, fixed
+  2026-09-09. **Anything reading a `ControlMap` member PAST
+  `controlMap[]` (`0x60`) through the 3.7.0 header has this same defect.**
+  `ShoutKey` (`:139`, `GetMappedKey` on `kGameplay`) is SAFE: `controlMap[]` at
+  `0x60` and the `InputContext` stride `0x18` are identical on both runtimes.
+  `TryInstallHooks` (`:635`) polls for the live swapchain then patches. **PORTABLE UNIT
   for MAO/MEO:** those functions + `Install`; only the two `Draw*` calls in
   `PresentThunk` and the hotkeys in `InputSink` are mod-specific. Greppable
   `[overlay-probe]` log lines report every component + a SUMMARY on board close.
 - **Module layout (mechanical splits, 2026-08-31 + 2026-09-07):** THREE draw/host
   TUs over one shared substrate header. Board.cpp had grown to 2577 at the
   overlay-swapchain merge (924f3a9) and the panel was cut out of it.
-  * `Board.cpp` (1346) = **shell + the overlay host**: file-local render state and
+  * `Board.cpp` (1417) = **shell + the overlay host**: file-local render state and
     the overlay-probe atomics (`:85`), input translation (`:97`), `CloseBoard`
     (`:161` — see the anon-namespace note below), `SpellTooltip` (`:185`), `DrawHud`
-    (`:204`), `WndProcHook` + the whole overlay hook section (`:284-803`), then the
-    public API: `ToggleHud` (`:809`), `Toggle` (`:816`), `FillRuleViews` (`:833`),
-    `ApplyEdits` (`:882`), `PublishSnapshot` (`:1117`), `Install` (`:1313`, end).
+    (`:204`), `WndProcHook` + the whole overlay hook section (`:284-874`), then the
+    public API: `ToggleHud` (`:880`), `Toggle` (`:887`), `FillRuleViews` (`:904`),
+    `ApplyEdits` (`:953`), `PublishSnapshot` (`:1188`), `Install` (`:1384`, end).
   * `Board_FieldKit.cpp` (1135) = **the whole panel**, ONE public function
     `DrawFieldKit` (`:151`, Followers+Gambits tabs, the list-picker, cascaded-B
     close) plus the four helpers it is the SOLE caller of, in its own anonymous
@@ -1501,8 +1730,10 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 - `Install()` (`Board.h`) — caller `plugin.cpp:306` (kDataLoaded) only, VR-refused.
   Installs AFTER the renderer is up (the vtable path needs the swapchain LIVE and
   polls for it) — the OPPOSITE of the old trampoline, which had to patch before
-  renderer init. No `AllocTrampoline`, no `RelocationID`/offset pairs, so there is
-  no call site to corrupt.
+  renderer init. No `AllocTrampoline` and no patched call site to corrupt. The ONE
+  offset pair in this family is `SyncControlBlock`'s `REL::RelocationID(67245,
+  68545)` engine `ToggleControls` call (`Board.cpp:459-529`) — a plain call, not a
+  patch, and never reached on VR because `Install()` refuses VR first.
 - **Snapshot carries all actor-derived display data** (render thread reads plain
   cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
   pct **and** raw `health/magicka/staminaCur/Max` (Followers tab, `Vocab::VitalCur/
@@ -1523,11 +1754,11 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   `ApplyEdits` flips `it->second.mfoEnabled`. The release-on-disable runs on the
   Scheduler tick's OFF edge, not in `ApplyEdits`.
 - **Thread discipline:** `DXGIPresentHook` (render thread) copies `g_snapshot` under
-  `g_snapMx` **before** taking `g_ioMx` (`:479`); reversing = render-thread deadlock.
+  `g_snapMx` **before** taking `g_ioMx` (`:550`); reversing = render-thread deadlock.
   The two mutexes are never nested (#6). Draw functions **never touch `g_followers`**
   — every mutation is a `QueueEdit` (`Board_internal.h:69`, sites in both draw TUs)
   drained by `ApplyEdits`
-  (`:882`). **Rule edits key on `Gambit.uid`, not row index** (`:1011` — resolve by
+  (`:953`). **Rule edits key on `Gambit.uid`, not row index** (`:1082` — resolve by
   identity #31); applying by index misapplies a command to the wrong rule.
 - **Correction to the header:** `PublishSnapshot` (`Board.h:116` says "MAIN THREAD
   ONLY") actually drains on the **task worker**, the same context that
@@ -1696,6 +1927,52 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   takes an `a_hand` param (default `kApmfHandLeft`, so heal's own callers are unchanged);
   `ComposedCast::End()`/a refused heal claim clear ONLY the left slot so a concurrent
   right-hand offense watch survives.
+- **THE IDLE-HAND FLOOR (F10, marth's design ruling 2026-09-08).** A THIRD claim this bridge makes,
+  internal — no entry point. `Owned::floor` (`APMFBridge.cpp:284`) is a deny-only `kIntent_Cast` claim
+  (`APMF_API::kCastFlag_DenyHandOnly`) standing on whichever ONE hand MFO's driving claims do NOT
+  occupy, so nothing un-gambited can arm there (APMF leaving an unclaimed hand permissive is correct
+  for a framework; MFO's design is that only gambited spells occur). Derived — not commanded — by
+  `ReconcileHandFloorLocked` (`APMFBridge.cpp:937`), called from ONE place: `Tick()`
+  (`APMFBridge.cpp:1698`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
+  ABI ≥ 5. That pass also owns the floor's `refreshed` stamp and TTL heartbeat.
+  **Exactly one hand driven → floor the other; both driven → none; NEITHER driven → NEITHER hand is
+  floored** (not both: principle 4 — nothing was declared; it would mute followers with no cast gambit
+  authored; a floor with nothing driving is the standing hold `kIntent_Cast` may never be).
+  Requested at the SAME `kOwnBasis` (200.0f) as every other claim — APMF's `BetterClaim` makes a
+  deny-only claim LOSE to a driving one at an EQUAL basis, so MFO's own next gambit takes the hand with
+  no release/re-request gap and the floor stands underneath again when it ends. A floor at a higher
+  basis would silence MFO's own casts (APMF warns loudly about it).
+  `EnsureCastClaimLocked` (`APMFBridge.cpp:546`) gained a `wantDenyOnly` parameter rather than a
+  parallel mint path, so the floor inherits the same liveness check / heartbeat / fail-closed split /
+  `reqParam` mirror; `CastClaim::denyOnly` (`:102`) is part of the claim's IDENTITY; the release
+  sentinel is now "no spell AND not a floor". Both log throttles became **two entries per follower**
+  (driving / floor) — one shared entry would have alternated spell X ↔ 0 and defeated both 5 s windows.
+  **What breaks if you change this:** floor at a higher basis → MFO denies its own casts; floor with no
+  driving claim → the actor-wide (`Hand::kUnknown`) allowance read starts denying everything; forget
+  `ClearTransientState`/`EraseIfEmpty` and a floor outlives MFO's handle for it and holds a hand shut
+  until APMF's TTL. It does NOT deny MFO's own direct force (`CastSpellImmediate` is `MagicCaster`
+  vtable slot 01, `CheckCast` is 0A — pinned `include/RE/M/MagicCaster.h:46,55`) and does NOT deny
+  weapons (APMF's 0x0F seat is on the spell/staff selector vtables only).
+  **Recorded, not fixed (understated in the first version of this note):** `Loadout::Prepare` takes no hand
+  parameter and always equips into `LeftHandSlot()` (`Loadout.cpp:279, :359`), so on a RIGHT-hand offense
+  claim MFO equips the gambit spell into the LEFT hand, which the floor has closed to the AI. The cast still
+  works (the claim on the other hand drives it), but the cost is **a wasted left-hand equip on every such
+  claim**, and on a follower carrying a shield or weapon in the left hand it DISPLACES that gear and books a
+  restore debt. With right-first AUTO this is now the common case, not an edge. The fix is a hand parameter
+  on `Prepare` — outside this brief's file boundary, reported rather than reached for.
+- **`RefreshOwnedCastOnHand(follower, hand, holdSpell = 0)` (`APMFBridge.cpp:1261`, F9).** Refreshes the cast claim(s)
+  MFO already holds on a hand WITHOUT re-requesting: it replays each claim's OWN stored tuple through
+  `EnsureCastClaimLocked`, so the identity compare matches by construction: the TTL is renewed in place
+  (liveness, lazy proxy read, heartbeat Repoint, `refreshed` stamp) and the hand mode / target / a
+  still-in-force claim can never be disturbed. **It is NOT true that the fast path is the only path it can
+  take** — a handle APMF has already auto-expired takes the aged-out branch and is RE-REQUESTED from here
+  (correct, and not a concurrent second claim: the dead handle is dropped first). `LEFT`
+  covers the left offense slot AND the heal slot; `kApmfHandDualCast` re-mirrors both slots so their
+  stamps move together (a stale mirror would have `Tick()` release the shared handle out from under the
+  live slot). A `false` means the claim is genuinely gone — the caller must fall through to its normal
+  claim path and must NOT log it as an APMF refusal.
+  **What breaks if you change this:** pass anything but the stored tuple and it mints a second claim /
+  interrupts the charge — the exact churn F8 removes.
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** offense-cast =
   PER-CAST, TTL-bounded (`kIntent_Cast`, PER-HAND now — see above; refreshed each winning cast
   tick; released crisply by
@@ -2592,7 +2869,7 @@ native seats) and ENGINE_NOTES §0.40.
   - **Depended-on-by:** `Actuation_Direct.cpp:888`/`:1185` map `Held` →
     `SelfCast::Held` (`Actuation.h:93`) → `Actuation_Direct.cpp:1488` (`CastAuto`,
     transparent NoOp) and `Logistics.cpp:1506` (transparent `continue`, log deduped
-    2s); `Actuation.cpp:1334-1336` (`CastOn`) returns a TRANSPARENT NoOp with NO hand
+    2s); `Actuation.cpp:289-291` (`ConcentrationCast`) returns a TRANSPARENT NoOp with NO hand
     lock.
   - **What breaks if you change this:** (1) folding `Held` back into
     `Applied`/`true` re-creates the Fable SEV-2 bug — the held-off spell counts as

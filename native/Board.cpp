@@ -456,7 +456,78 @@ namespace MFO::Board {
                     static_cast<std::uint32_t>(F::kPOVSwitch) | static_cast<std::uint32_t>(F::kFighting) |
                     static_cast<std::uint32_t>(F::kSneaking)  | static_cast<std::uint32_t>(F::kMainFour) |
                     static_cast<std::uint32_t>(F::kWheelZoom));
-                cm->ToggleControls(flags, !want);   // want -> disable, else re-enable
+                // ────────────────────────────────────────────────────────────
+                // DO NOT call RE::ControlMap::ToggleControls HERE. This is the
+                // worked example for engineering principle 6 -- "COMMONLIB
+                // DECLARATIONS ARE NOT ABI-TRUSTWORTHY". The pinned
+                // CommonLibSSE-NG 3.7.0 ControlMap.h is an *SE 1.5.97* layout and
+                // its ToggleControls is not a call into the engine at all: it is
+                // an inline C++ REIMPLEMENTATION that writes the member the header
+                // calls `enabledControls`. That member's offset is wrong on our
+                // runtime, so the reimplementation writes the wrong field.
+                //
+                //   UserEvents.h says INPUT_CONTEXT_ID::kTotal == 17. On
+                //   1.6.1130+ there are EIGHTEEN input contexts, so every member
+                //   after `controlMap[]` sits 8 bytes later:
+                //
+                //     member                 header (SE, 17)   runtime (AE, 18)
+                //     controlMap[]             0x60              0x60   (same)
+                //     linkedMappings           0xE8              0xF0
+                //     contextPriorityStack     0x100             0x108
+                //       .data                  0x100             0x108
+                //       .capacity              0x108             0x110
+                //       .size                  0x110             0x118
+                //     enabledControls          0x118             0x120
+                //     unk11C                   0x11C             0x124
+                //
+                //   So the header's `enabledControls` at +0x118 IS
+                //   `contextPriorityStack.size` on this runtime. With our mask
+                //   0x3EF (= 1007) every board OPEN did `size &= ~0x3EF` (1 -> 0)
+                //   and every board CLOSE did `size |= 0x3EF` (-> 1007). The
+                //   engine's per-frame user-event mapping pass (AE id 68542,
+                //   0x140CD4F70) then walks a 1007-deep context stack out of a
+                //   buffer holding one or two entries -- `mov eax,[rdi+0x118]`,
+                //   `rbx = [rdi+0x108] + (size-1)*4`, `movsxd rax,[rbx]`,
+                //   `mov r13,[rdi+rax*8+0x60]` -- and that last load is the AV at
+                //   SkyrimSE.exe+0CD509D. (Field-reproduced 2026-09-08/09, ~6 min
+                //   into a session, same save, after 30+ previously clean hours.)
+                //   The same corruption is also a latent out-of-bounds WRITE: the
+                //   next PushInputContext runs with size >= capacity and writes
+                //   past the buffer. Calling the engine removes both.
+                //
+                // Call the engine's own ToggleControls instead. Signature and ids
+                // are VERIFIED against the disassembled binaries, not the header:
+                //   AE id 68545 -> 0xCD5650 (versionlib-1-6-1170-0)
+                //   SE id 67245 -> 0xC11C60 (version-1-5-97-0)
+                // Both disassemble to the same body: (rcx=this, edx=flags,
+                // r8b=enable, r9b=storeState), writing enabledControls
+                // (SE +0x118 / AE +0x120) and, when storeState, unk11C
+                // (SE +0x11C / AE +0x124), then SendEvent on the BSTEventSource
+                // at +0x08. storeState=true reproduces exactly what the header's
+                // inline version did to unk11C, so behaviour is unchanged.
+                //
+                // VR: RelocationID's two-arg form mirrors the SE id into the VR
+                // slot, and no VR id has been verified. The overlay already
+                // REFUSES VR in Install() before any hook is placed, so
+                // PresentThunk (and therefore this function-local static) can
+                // never run there -- the explicit guard below is the same
+                // belt-and-suspenders `Probe.cpp:34` uses for an unsourced VR id,
+                // so a future caller of SyncControlBlock cannot resolve 67245
+                // against the VR address library and call into garbage.
+                //
+                // Input consumption is UNCHANGED by using the correct field: the
+                // mapping pass blanks `userEvent` when
+                // (enabledControls & mapping.flags) != mapping.flags, which is what
+                // stops the GAME reacting, while MFO's own InputSink matches on
+                // ButtonEvent::GetIDCode() only (`:682`, `:710`, `:728`, `:749`,
+                // `:785` -- it never reads `userEvent`), so the board keeps seeing
+                // every key and pad button while it is open.
+                // ────────────────────────────────────────────────────────────
+                if (REL::Module::IsVR()) return;   // no sourced VR id -- refuse, never guess
+                using ToggleFn = void(RE::ControlMap*, RE::UserEvents::USER_EVENT_FLAG,
+                                      bool a_enable, bool a_storeState);
+                static REL::Relocation<ToggleFn> toggle{ REL::RelocationID(67245, 68545) };
+                toggle(cm, flags, !want, true);   // want -> disable, else re-enable
             });
         }
 

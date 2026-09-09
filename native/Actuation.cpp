@@ -1,26 +1,40 @@
 // Actuation.cpp -- the combat-rule ACTUATION dispatch (split mechanically,
 // no logic change; the direct-delivery streams + apply substrate live in
-// Actuation_Direct.cpp): Fire and its verbs, ForceCast, the bounded
+// Actuation_Direct.cpp, and the per-hand cast lock in Actuation_Hands.cpp):
+// Fire and its verbs, ForceCast, the APMF-refusal log, the bounded
 // concentration stream entry (ConcentrationCast), CastOn, EquipWeapon +
-// the T#76 force-hold bookkeeping and its FWPN co-save, NearestAlly and
-// ResolveCastTarget. Shared concentration numbers: Actuation_internal.h.
+// the T#76 force-hold bookkeeping and its FWPN co-save, NearestAlly,
+// ResolveCastTarget and ClearCastLock(s). Shared concentration numbers and
+// the cast lock's shared state: Actuation_internal.h.
 #include "Actuation_internal.h"
 #include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
+#include <limits>         // rank preemption: kNoRule sentinel (numeric_limits<int>::max)
 
 namespace MFO::Actuation {
 
     // T#76: the weapon a follower is being force-held on, keyed by FormID. Written
     // by EquipWeapon (the fire) and cleared by ReleaseForcedWeapon/Reconcile/
-    // ClearForcedWeapons -- ALL on the job-worker serial tick, the same thread
-    // the scheduler already drives Fire on, so no lock (the g_followers
-    // discipline: #4). Persists ACROSS ticks by design -- it is engine-hold
-    // bookkeeping like CombatStyle's owned-stance map, not per-scan evaluator
-    // state (#22), and is never read back by the evaluator. Session-scoped:
-    // cleared on revert (ClearForcedWeapons). The pointer is a weapon form, which
-    // is stable for the session.
+    // ClearForcedWeapons -- all on the job-worker serial tick, the same thread the
+    // scheduler already drives Fire on. Persists ACROSS ticks by design -- it is
+    // engine-hold bookkeeping like CombatStyle's owned-stance map, not per-scan
+    // evaluator state (#22). Session-scoped: cleared on revert
+    // (ClearForcedWeapons). The pointer is a weapon form, stable for the session.
+    //
+    // *** EVERY ACCESS TAKES g_forcedMx. *** This comment used to end "so no lock
+    // (the g_followers discipline: #4)" while the very next paragraph said "guard
+    // every access", and the file has been following the second one since
+    // 2026-08-17 -- two rules in twelve lines, which is how an unguarded read gets
+    // written in good faith (one was, in the first cut of WeaponHandExposure, and
+    // the review caught it). The #4 no-lock discipline does NOT apply here, for the
+    // reason the SEV-1 note below states: this map has an OFF-THREAD reader. Only
+    // the WRITERS are worker-serial. Corrected 2026-09-08; do not restore the
+    // no-lock claim.
+    //
+    // (It is also no longer true that it "is never read back by the evaluator":
+    // WeaponHandExposure reads it to decide the either-free hand preference.)
     std::unordered_map<RE::FormID, RE::TESBoundObject*> g_forcedWeapon;
     // SEV-1 (Fable 2026-08-17): the worker tick mutates this map, but the SKSE
     // SAVE callback reads it (CoSaveForcedWeapons) off that thread with no pump
@@ -140,111 +154,6 @@ namespace MFO::Actuation {
             return std::nullopt;
         }
 
-        // ── TASK 2 (feat/cast-gambit-concentration) / PER-HAND (feat/per-hand-
-        // cast-slots, 2026-09-06): THE FIRING-SPELL GAMBIT LOCK ────────────────
-        // marth: "while a spell gambit is actively firing, another spell gambit
-        // must not preempt or re-point it, even if it would otherwise win the
-        // rule evaluation" -- UNLESS the two spells would use DIFFERENT hands,
-        // in which case both fire concurrently. Field-proven 2026-09-06: a
-        // per-FOLLOWER lock (Task 2's original shape) serialised a heal and an
-        // offense spell onto ONE hand while the follower's OTHER hand sat idle
-        // -- deck log alternated HELD OFF between the two spells tick to tick
-        // (whichever grabbed the lock first that tick kept it; the other lost
-        // its own scan-fallthrough attempt) and suppressed ~14 of 36 wanted
-        // casts in one capture. The parallel APMF change makes kIntent_Cast
-        // arbitrate PER (actor, hand), so two concurrent claims -- LEFT and
-        // RIGHT -- can now genuinely coexist on one follower; this lock is
-        // rekeyed to match, one slot PER HAND, so a spell firing in one hand
-        // never holds off a different spell that would use the other.
-        //
-        // Both the OWNED-CAST claim (APMF's engine seats mid-charge/mid-
-        // decision on the offense or heal facet) and a CONCENTRATION stream
-        // (claimed via Task 1, or the plain direct-force fallback) are
-        // genuinely multi-tick: the round-robin combat scan can swing to a
-        // DIFFERENT winning cast rule between services before either finishes,
-        // and every one of those paths re-Claims/re-registers on ITS OWN
-        // (spell,target) the instant it is asked to -- so a flip mid-cast on
-        // the SAME hand silently tears down the in-flight charge/channel and
-        // starts a new one, wasting it (the bug this closes).
-        //
-        // WHICH HAND does a given (spell,target) request occupy? Mirrors each
-        // branch's own hand policy below exactly, so the lock's key always
-        // matches what actually gets claimed/executed (see ResolveCastHand):
-        //   * self-target, or ANY concentration spell (self or on-target --
-        //     ConcentrationCast/CastSelfDirect/CastTargetDirect all claim LEFT
-        //     unconditionally, heal or offense) -- forced LEFT.
-        //   * a Heal/Buff spell reaching the composed-cast branch (or falling
-        //     through to the legacy hybrid) -- forced LEFT, the heal-claim
-        //     hard rule (APMFBridge::ClaimHealCast's own doc).
-        //   * an Offense spell at a real (non-self) target -- the ONLY case
-        //     with a real hand DECISION: Loadout::PlanCastHand's Left /
-        //     DualCast / EitherFree, resolved against the CURRENT per-hand
-        //     lock state -- "the juggle": EitherFree tries LEFT then RIGHT;
-        //     DualCast needs BOTH hands free-or-refreshing at once, never a
-        //     partial claim (a dual-cast that only half-lands is not a
-        //     dual-cast, it is a corrupted single one -- CLAUDE.md principle 7,
-        //     no fallback that makes a degrade look like the real thing). The
-        //     hard, non-negotiable weapon-hand-exclusion rule is enforced
-        //     UPSTREAM, inside PlanCastHand itself (a_weaponHandActive -> Left,
-        //     unconditional, checked before Dual/EitherFree are even
-        //     considered) -- this resolver only ever sees Right/Dual as
-        //     candidates once PlanCastHand has ALREADY established the
-        //     follower's right hand is genuinely free, so it cannot open a
-        //     path to claiming a weapon hand.
-        //
-        // SCOPE (deliberate, not an oversight, unchanged from Task 2): CastAuto
-        // is out of scope -- its own sequential-most-hurt hysteresis is a
-        // DELIBERATE target-cycling design ([[cast-fanning-known-good-
-        // behavior]]), not the re-pointing bug this lock exists for. The
-        // out-of-combat Logistics dispatch never calls CastOn/ConcentrationCast
-        // at all (it calls CastSelfDirect/CastTargetDirect/CastAuto directly,
-        // single-pass, no suppression-window rule scan to re-point FROM), so it
-        // needs no gate. The legacy AI-first-grace + force-on-miss hybrid does
-        // not ITSELF hold this lock (it already self-protects via its own grace
-        // window + the aiCastOther miss detector) but IS still gated by it, on
-        // the same resolved hand as every other branch -- a live claim on one
-        // hand still holds a legacy attempt at a DIFFERENT spell off that SAME
-        // hand, while the other hand stays free.
-        //
-        // STATE: TWO slots per follower now (index 0 = left, 1 = right),
-        // worker-serial (#4 discipline, same as g_forcedWeapon above) -- the
-        // (spell,target) currently occupying EACH hand, and the last tick it
-        // was reaffirmed. target == 0 means self.
-        enum : std::size_t { kHandLeft = 0, kHandRight = 1, kHandCount = 2 };
-
-        inline const char* HandName(std::size_t a_hand) { return a_hand == kHandLeft ? "left" : "right"; }
-
-        struct CastLock {
-            RE::FormID spell  = 0;
-            RE::FormID target = 0;
-            std::chrono::steady_clock::time_point lastSeen{};
-        };
-        struct FollowerCastLocks { CastLock hand[kHandCount]; };
-        std::unordered_map<RE::FormID, FollowerCastLocks> g_castLock;
-
-        // Rate-limited [eval] log -- one line per (follower, hand, spell) per
-        // ~2s window, the SAME dedup shape as CasterConsent.cpp's
-        // g_lastDenied/g_lastConcDeny, so a rule held off every tick it keeps
-        // losing does not spam the log at scan rate. Per-hand now too, so a
-        // busy left hand and a busy right hand each get their own dedup entry.
-        struct FollowerLockLog {
-            std::pair<RE::FormID, std::chrono::steady_clock::time_point> hand[kHandCount];
-        };
-        std::unordered_map<RE::FormID, FollowerLockLog> g_lastLockLog;
-
-        void LogCastLockHold(RE::FormID a_follower, std::size_t a_hand,
-                             RE::FormID a_wantedSpell, RE::FormID a_lockedSpell) {
-            const auto now = std::chrono::steady_clock::now();
-            auto& entry = g_lastLockLog[a_follower].hand[a_hand];
-            if (entry.first == a_wantedSpell &&
-                std::chrono::duration<float>(now - entry.second).count() < 2.0f)
-                return;
-            entry.first = a_wantedSpell; entry.second = now;
-            spdlog::info("[eval] {:08X} cast gambit HELD OFF -- spell {:08X} wants the "
-                         "follower's {} hand, spell {:08X} is still firing there",
-                         a_follower, a_wantedSpell, HandName(a_hand), a_lockedSpell);
-        }
-
         // ── APMF REFUSAL: the ONE trace a cast that did NOT happen leaves ─────────
         // marth 2026-09-07 (verbatim): "without APMF, it needs to just work,
         // whatever unpolished way works. With APMF theres no fallback for it.
@@ -323,119 +232,6 @@ namespace MFO::Actuation {
                           "{} hand. APMF is the COMMITTED route: NOT falling back to the legacy "
                           "hybrid, this cast does NOT happen this tick. Fix the refusal in APMF.",
                           a_follower, a_what, a_spell, a_target, a_hand);
-        }
-
-        // Establish/refresh ONE hand's lock -- call whenever CastOn/
-        // ConcentrationCast commits to an outcome that occupies THAT hand
-        // ACROSS ticks: a live APMF cast claim (offense or heal) on it, or a
-        // genuine concentration stream (claimed via Task 1, or plain
-        // direct-force) using it. a_target == 0 for self.
-        void HoldCastLock(RE::FormID a_follower, std::size_t a_hand,
-                          RE::FormID a_spell, RE::FormID a_target) {
-            auto& lock = g_castLock[a_follower].hand[a_hand];
-            lock.spell = a_spell; lock.target = a_target;
-            lock.lastSeen = std::chrono::steady_clock::now();
-        }
-
-        // Is hand `a_hand`'s lock still LIVE, i.e. is the follower still
-        // genuinely occupied on THAT hand right now? "release on completion,
-        // on claim release/TTL expiry" (marth): a live APMF cast claim on that
-        // SPECIFIC hand is authoritative proof by itself, checked FIRST so a
-        // claim that ends EARLY (a heal topping off well inside the window, or
-        // APMF's own TTL elapsing) frees the hand immediately rather than
-        // riding out a timer. Heals are LEFT always (APMFBridge::
-        // ClaimHealCast's hard rule), so a live heal claim only ever proves the
-        // LEFT hand busy. Absent a live claim (APMF off/absent, or a plain
-        // un-claimed direct-force concentration stream -- its registry is
-        // private to Actuation_Direct.cpp's own TU and not queryable from
-        // here), fall back to the SAME round-robin-aware staleness window
-        // every other facet in this codebase already sizes against (#9: a
-        // floor is safe, a guessed budget is not) -- reused via APMFBridge::
-        // FacetExpiry(), never separately invented. A still-winning gambit
-        // re-fires (and re-Holds its hand's lock) every round-robin lap, well
-        // inside this window, so the SAME gambit never sees its own lock go
-        // stale; only a gambit that stopped being requested at all does.
-        bool CastLockLive(RE::FormID a_follower, std::size_t a_hand, const CastLock& a_lock) {
-            const bool claimLive = (a_hand == kHandLeft)
-                ? (APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandLeft) ||
-                   APMFBridge::IsHealCastActive(a_follower))
-                : APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandRight);
-            if (claimLive) return true;
-            const float elapsed = std::chrono::duration<float>(
-                std::chrono::steady_clock::now() - a_lock.lastSeen).count();
-            return elapsed <= std::chrono::duration<float>(APMFBridge::FacetExpiry()).count();
-        }
-
-        // Is hand `a_hand` available for (a_spell,a_target) right now -- i.e.
-        // unlocked, already locked to this EXACT (spell,target) (the SAME
-        // gambit refreshing itself), or its lock has gone live-false/stale
-        // (dropped right here, in which case it is free)? a_busyOut is set to
-        // whichever DIFFERENT spell currently holds it when this returns false.
-        bool HandFree(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_spell,
-                     RE::FormID a_target, RE::FormID& a_busyOut) {
-            auto it = g_castLock.find(a_follower);
-            if (it == g_castLock.end()) return true;
-            auto& lock = it->second.hand[a_hand];
-            if (lock.spell == 0) return true;
-            if (lock.spell == a_spell && lock.target == a_target) return true;
-            if (!CastLockLive(a_follower, a_hand, lock)) { lock = CastLock{}; return true; }
-            a_busyOut = lock.spell;
-            return false;
-        }
-
-        // Which hand(s) a (spell,target) request would occupy if it proceeds.
-        // Both false never happens on a non-held return (ResolveCastHand always
-        // sets at least one before returning std::nullopt).
-        struct HandPlan { bool left = false; bool right = false; };
-
-        // THE GATE + THE JUGGLE. Resolves a_pick (a real Loadout::HandPick for
-        // an offense spell, or plain Loadout::HandPick::Left for the self/
-        // concentration/heal callers that never consult PlanCastHand at all)
-        // against the CURRENT per-hand lock state, either returning the
-        // resolved HandPlan (request may proceed -- caller HoldCastLock's
-        // every hand HandPlan sets, on success) or a transparent HELD-OFF
-        // Outcome naming the busy hand(s) (GAMBIT_FLOWS §2 -- a held gambit is
-        // not a wall for the rules below it).
-        std::optional<Outcome> ResolveCastHand(RE::FormID a_follower, Loadout::HandPick a_pick,
-                                               RE::FormID a_spell, RE::FormID a_target,
-                                               HandPlan& a_out) {
-            RE::FormID busy = 0;
-            switch (a_pick) {
-            case Loadout::HandPick::DualCast: {
-                RE::FormID busyL = 0, busyR = 0;
-                const bool leftFree  = HandFree(a_follower, kHandLeft,  a_spell, a_target, busyL);
-                const bool rightFree = HandFree(a_follower, kHandRight, a_spell, a_target, busyR);
-                if (leftFree && rightFree) { a_out = { true, true }; return std::nullopt; }
-                const auto hand      = !leftFree ? kHandLeft : kHandRight;
-                const auto busySpell = !leftFree ? busyL : busyR;
-                LogCastLockHold(a_follower, hand, a_spell, busySpell);
-                return Outcome{ Result::NoOp,
-                    std::format("cast gambit locked -- dual-cast needs both hands, spell {:08X} "
-                                "still firing ({} hand)", busySpell, HandName(hand)), true };
-            }
-            case Loadout::HandPick::EitherFree: {
-                RE::FormID busyL = 0, busyR = 0;
-                if (HandFree(a_follower, kHandLeft, a_spell, a_target, busyL)) {
-                    a_out = { true, false }; return std::nullopt;
-                }
-                if (HandFree(a_follower, kHandRight, a_spell, a_target, busyR)) {
-                    a_out = { false, true }; return std::nullopt;
-                }
-                LogCastLockHold(a_follower, kHandLeft, a_spell, busyL);
-                return Outcome{ Result::NoOp,
-                    std::format("cast gambit locked -- both hands busy (left: spell {:08X}, "
-                                "right: spell {:08X})", busyL, busyR), true };
-            }
-            case Loadout::HandPick::Left:
-            default:
-                if (HandFree(a_follower, kHandLeft, a_spell, a_target, busy)) {
-                    a_out = { true, false }; return std::nullopt;
-                }
-                LogCastLockHold(a_follower, kHandLeft, a_spell, busy);
-                return Outcome{ Result::NoOp,
-                    std::format("cast gambit locked -- spell {:08X} still firing (left hand)",
-                                busy), true };
-            }
         }
 
         // ── CONCENTRATION: the BOUNDED DIRECT-FORCE STREAM ───────────────────
@@ -787,20 +583,145 @@ namespace MFO::Actuation {
             const bool offenseSpell =
                 !selfOrConc && CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
             HandPlan handPlan;
-            if (!offenseSpell) {
-                if (auto held = ResolveCastHand(id, Loadout::HandPick::Left, a_spellID,
-                                                lockTargetKey, handPlan))
-                    return *held;
-            } else {
+            // ONE lambda, because the in-flight gate below may have to run this a
+            // SECOND time: if the claim its hand-pin was based on turns out to be
+            // gone, the pin is void and the plan has to be re-derived from a clean
+            // lock state rather than carried forward (a heal pinned to the RIGHT
+            // hand by a stale lock would otherwise claim and lock the wrong hand).
+            auto resolveHands = [&]() -> std::optional<Outcome> {
+                if (!offenseSpell)
+                    return ResolveCastHand(a_follower, Loadout::HandPick::Left, a_spellID,
+                                           lockTargetKey, handPlan);
                 const auto pick = Loadout::PlanCastHand(a_follower, spell,
                                                         APMFBridge::WeaponHandActive(a_follower));
-                if (auto held = ResolveCastHand(id, pick, a_spellID, lockTargetKey, handPlan))
-                    return *held;
+                return ResolveCastHand(a_follower, pick, a_spellID, lockTargetKey, handPlan);
+            };
+            if (auto held = resolveHands()) return *held;
+
+            // ── SATISFIED IN FLIGHT: REFRESH, DO NOT RE-FIRE, DO NOT END THE LAP ──
+            // (F9, RC2 of Docs/DIAG-2026-09-08-field.md, 2026-09-08.)
+            //
+            // THE DEFECT. `HandFree` reports a hand FREE for a request that names
+            // the (spell,target) already locked there -- correctly, it is the same
+            // gambit refreshing itself -- so the rule ran its whole path again and
+            // returned Fired, and Fired ENDS THE SCAN. A self-heal whose condition
+            // stayed true therefore won every lap for 44 s: 22 consecutive
+            // `fired rule 1 (act.cast_self)` lines, ZERO offense rules ever
+            // reached, zero ClaimOffenseCast traffic -- while the follower's right
+            // hand, which no MFO claim ever occupied, was left to its own AI (2
+            // Poison Sprays, 5 Stone Runes, 3 Raise Zombies). One in-flight cast
+            // monopolised the whole evaluator.
+            //
+            // THE FIX. A rule whose cast is ALREADY RUNNING has nothing to do this
+            // lap except keep its claim alive, and that is not an action: refresh
+            // the standing claim IN PLACE and return TRANSPARENT, so the scan
+            // continues to the rules below (GAMBIT_FLOWS §2 -- a held gambit is
+            // not a wall). The heal keeps the left hand, an offense rule below
+            // gets its lap and takes the right, and with F10's floor the right
+            // hand is closed rather than free whenever no offense rule wants it.
+            //
+            // THREE THINGS IT MUST NOT DO, all of them load-bearing:
+            //   * NO DOUBLE CLAIM. RefreshOwnedCastOnHand replays the claim's OWN
+            //     stored tuple through EnsureCastClaimLocked, so it lands on the
+            //     unchanged fast path BY CONSTRUCTION: liveness check, lazy proxy
+            //     read, TTL heartbeat, `refreshed` stamp -- and no RequestCast.
+            //   * IT MUST BUMP `refreshed`. That stamp is what Tick()'s
+            //     FacetExpiry sweep reads; leaving it still would have the sweep
+            //     release the very claim this path exists to protect (measured
+            //     exactly that way in the field -- h=9 died 2.4 s after rule 1
+            //     started winning every lap, to the tenth of a second).
+            //   * NO LOCK RE-STAMP. `lockHands` is deliberately NOT called here.
+            //     The live claim is itself proof the lock is live (CastLockLive
+            //     asks the claim first), so re-stamping would only extend the
+            //     lock's staleness fallback PAST the claim's death -- a hand held
+            //     by a cast that has ended.
+            //
+            // NOT A MASK (principle 7): a refresh that comes back not-live means
+            // the claim really is gone (APMF aged it out, or refused it), and this
+            // falls straight through to the normal path below, which re-claims and
+            // reports its own outcome exactly as before.
+            if (handPlan.inFlight) {
+                const std::int32_t claimHand =
+                    (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
+                    handPlan.left                     ? APMFBridge::kApmfHandLeft :
+                                                        APMFBridge::kApmfHandRight;
+                if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
+                    // KEEP THE [cfc] WATCH TICKING. ComposedCast::WatchClaim's own
+                    // contract is "call every tick the caller's OWN claim call
+                    // returns live" -- and on this path the refresh above IS that
+                    // call. Skipping it would silence the silent-claim warning for
+                    // exactly the claims it exists to catch (a claim that stands
+                    // for seconds and never fires) and freeze the lazily-learned
+                    // delivery-flip proxy at whatever it was on lap 1.
+                    //
+                    // `CastProxyOnHand`, NOT `GetOffenseCastProxy` (review fix,
+                    // 2026-09-08). This gate carries HEAL claims too -- a self or
+                    // ally heal is the commonest thing to be in flight here -- and
+                    // a heal's proxy lives in the heal accessor. Arming with the
+                    // offense accessor alone hands WatchArmed a 0 on every lap; it
+                    // keeps whatever it already has, and lap 1 typically has 0
+                    // because APMF mints the proxy lazily during its own Drain. The
+                    // replay above DOES learn it (into the claim's own `proxy`) --
+                    // the watch just never hears about it, so `observed` can never
+                    // latch and every proxied heal warns "[cfc] NO observed cast"
+                    // for as long as it runs. Same resolver as CastLockLive's, so
+                    // the two cannot drift.
+                    if (handPlan.left)
+                        ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandLeft,
+                                                 CastProxyOnHand(id, kHandLeft));
+                    if (handPlan.right)
+                        ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandRight,
+                                                 CastProxyOnHand(id, kHandRight));
+                    // NOTHING TO RE-STAMP HERE. Rank lives in the lock's
+                    // owningRule, written once when the hand was claimed, so an
+                    // in-flight refresh has no rank bookkeeping to do -- and
+                    // `lastSeen` must stay frozen (F8's cap depends on it; see
+                    // CastLock::claimGoneAt).
+                    LogCastInFlight(id, handPlan.left ? kHandLeft : kHandRight, a_spellID,
+                                    handPlan.left && handPlan.right);
+                    return { Result::NoOp, "cast already in flight (claim refreshed)", true };
+                }
+                // THE PIN IS VOID. The refresh reports the claim is really gone --
+                // APMF never published it, or the fail-closed split dropped it --
+                // so the lock that named it is stale and the hand(s) it pinned this
+                // request to may not be the hand(s) this request should use at all
+                // (a LEFT-always heal pinned to the RIGHT by a stale right-hand
+                // lock would then claim, equip and lock the wrong hand). Drop those
+                // locks and re-derive the plan from scratch, then fall through to
+                // the normal path -- which re-claims and reports its OWN outcome,
+                // loudly if APMF refuses again (LogApmfRefusal). Nothing is masked:
+                // the refusal is still made in the open, one lap later.
+                if (handPlan.left)  ClearCastLockHand(id, kHandLeft);
+                if (handPlan.right) ClearCastLockHand(id, kHandRight);
+                handPlan = HandPlan{};
+                if (auto held = resolveHands()) return *held;
             }
             // Hold BOTH resolved hands (only ever one, unless a DualCast plan
             // resolved both) on every success path below -- one lambda so the
             // ownedCast/composed-cast/self/concentration call sites all stay
             // in sync with `handPlan` rather than re-deriving it.
+            // ── DISPLACE THE INCUMBENT, AS LATE AS POSSIBLE ────────────────────
+            // ResolveCastHand only RECORDS that this plan needs a hand taken (see
+            // HandPlan::preemptLeft/preemptRight); the release happens here, and
+            // every call below sits immediately before the claim or dispatch it is
+            // for. Anything that can still refuse the asker -- an unaffordable
+            // self-cast, an APMF refusal, a heal ComposedCast holds off, a Prepare
+            // that fails -- therefore refuses BEFORE the incumbent has been touched,
+            // instead of leaving a hand nobody holds at lap rate.
+            //
+            // Idempotent by construction: the flags are cleared as they are spent,
+            // so a path that reaches two of these calls displaces once.
+            auto commitPreempt = [&]() {
+                if (handPlan.preemptLeft) {
+                    handPlan.preemptLeft = false;
+                    PreemptHand(a_follower, kHandLeft, a_spellID);
+                }
+                if (handPlan.preemptRight) {
+                    handPlan.preemptRight = false;
+                    PreemptHand(a_follower, kHandRight, a_spellID);
+                }
+            };
+
             auto lockHands = [&](RE::FormID a_sp, RE::FormID a_tg) {
                 if (handPlan.left)  HoldCastLock(id, kHandLeft,  a_sp, a_tg);
                 if (handPlan.right) HoldCastLock(id, kHandRight, a_sp, a_tg);
@@ -827,6 +748,7 @@ namespace MFO::Actuation {
                 // persistently-true combat cast_self does not starve attack/drink/
                 // heal below it, and `lastFired`/`[eval] fired` never lies on a
                 // no-op tick.
+                commitPreempt();   // the claim happens inside CastSelfDirect
                 switch (CastSelfDirect(a_follower, spell)) {
                 case SelfCast::Applied:
                     // TASK 2: hold the lock (LEFT -- handPlan resolved above) --
@@ -869,6 +791,7 @@ namespace MFO::Actuation {
             // never reaches here -- the self fork above intercepts it.)
             if (spell->GetCastingType() ==
                 RE::MagicSystem::CastingType::kConcentration) {
+                commitPreempt();   // the claim happens inside ConcentrationCast
                 return ConcentrationCast(a_follower, spell, a_target);
             }
 
@@ -1032,6 +955,7 @@ namespace MFO::Actuation {
                         (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
                         handPlan.left                     ? APMFBridge::kApmfHandLeft :
                                                              APMFBridge::kApmfHandRight;
+                    commitPreempt();
                     ownedClaimHeld =
                         APMFBridge::ClaimOffenseCast(a_follower->GetFormID(), spell->GetFormID(),
                                                      a_target->GetFormID(), claimHand,
@@ -1076,6 +1000,7 @@ namespace MFO::Actuation {
                     // stopPct = 0 (stop at full restoration): no per-gambit numeric
                     // threshold is in scope here, matching every ComposedCast::Try call
                     // site except CastAuto's own (CAST-DELIVERY.md's STOP-PERCENT note).
+                    commitPreempt();
                     composed = ComposedCast::Try(a_follower, spell, a_target,
                                                  CasterConsent::ClassifySpell(spell),
                                                  /*stopPct=*/0);
@@ -1094,6 +1019,13 @@ namespace MFO::Actuation {
             bool equipped = false;
             if (Config::g_equipToCast.load()) {
                 std::string why;
+                // LAST COMMIT POINT, for the APMF-ABSENT world. With no claim to
+                // make, `Loadout::Prepare` putting the spell in the hand IS this
+                // path's claim on it -- so the incumbent is displaced here and not
+                // before, and every transparent refusal above still refuses without
+                // having touched it. A no-op when the plan asked for no displacement,
+                // and a no-op on the owned path (already spent above).
+                commitPreempt();
                 switch (Loadout::Prepare(a_follower, spell, why)) {
                 case Loadout::Ready::AlreadyReady:
                 case Loadout::Ready::Equipped: {
@@ -1835,6 +1767,36 @@ namespace MFO::Actuation {
         // makes an MFO follower byte-identical to a vanilla one when idle).
         if (!a_follower || a_choice.ruleIndex < 0) return { Result::NoOp, {} };
 
+        // RANK, CARRIED FROM THE ONE PLACE THAT KNOWS IT. The gambit list order IS
+        // the priority order (marth 2026-09-08), and the evaluator has just handed
+        // us the winning rule's INDEX in that list. Recording it here -- the single
+        // entry point into every actuation in this file -- is what lets the cast
+        // hand lock store which gambit owns a hand and lets the preempt test make a
+        // real comparison instead of inferring rank from when a rule happened to
+        // arrive in a scan. Worker-serial, no lock (#4); see g_firingRule.
+        //
+        // RESET ON EVERY EXIT (review finding, 2026-09-08). Correct without it
+        // TODAY -- every reader lives in this file's anon namespace, CastOn and
+        // ConcentrationCast are reachable only from here, Fire has one caller, and
+        // Logistics' own service runs inside the same serialized Scheduler::Tick --
+        // so nothing can observe a stale value. But that is a fact about today's
+        // call graph, not a property of the code: a future public entry into CastOn
+        // would silently inherit whatever rule last fired, for whatever follower,
+        // and mint a hand lock wearing another gambit's RANK. The guard makes the
+        // failure mode of that mistake harmless instead: an unranked (kNoRule) lock,
+        // which outranks nothing and is preemptable by anything.
+        struct FiringScope {
+            ~FiringScope() { g_firingRule = kNoRule; g_firingAllyThreshold = -1.0f; }
+        } firingScope;
+        g_firingRule = a_choice.ruleIndex;
+        // Only an ALLY selector's param is an ally-HP threshold. Every other
+        // condition's param means something else entirely, so it must never be
+        // read as one -- Evaluator.cpp's IsAllySelector is this exact test, and
+        // kCondAllyHpBelow is its only member today.
+        g_firingAllyThreshold = (a_choice.conditionOpcode == Vocab::kCondAllyHpBelow)
+                                    ? a_choice.conditionParam
+                                    : -1.0f;
+
         const auto& op = a_choice.actionOpcode;
 
         if (op == Vocab::kActWait) {
@@ -2165,6 +2127,8 @@ namespace MFO::Actuation {
     void ClearCastLock(RE::FormID a_follower) {
         g_castLock.erase(a_follower);
         g_lastLockLog.erase(a_follower);
+        g_lastPreemptLog.erase(a_follower);   // rank-preemption twin of g_lastLockLog
+        g_lastInFlightLog.erase(a_follower);   // F9: the in-flight twin of g_lastLockLog
         g_lastApmfRefusal.erase(a_follower);
         // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
         // anon namespace; drop that follower's entries here too so the two maps
@@ -2179,6 +2143,8 @@ namespace MFO::Actuation {
     void ClearCastLocks() {
         g_castLock.clear();
         g_lastLockLog.clear();
+        g_lastPreemptLog.clear();
+        g_lastInFlightLog.clear();   // F9
         g_lastApmfRefusal.clear();
     }
 
