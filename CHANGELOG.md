@@ -5,6 +5,11 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.5 -- Heals are recognised as our own
+
+- **A follower no longer throws away a heal it is already casting.** Another heal rule could take the hand out from under a cast that was part way through, and the game then refused the spell it had just started. The follower now keeps the hand until that cast finishes.
+- **Heals land out of combat again.** Out of combat the animated cast path has nothing to drive it, so the heal was claimed and then never cast. Out of combat the follower goes straight back to the delivery that always worked. In combat the animated cast is untouched.
+
 ## v2.0.4 -- The board takes the controller outright
 
 - **The follower board now takes every button while it is open.** Nothing gets through to the game underneath. The favorites bar no longer opens on d pad up, and the game does not wake up confused after you close the board. This is the exact mechanism the board used through v1.1.4, brought back. It runs on Skyrim 1.6.1170. Other game versions keep the v2.0.3 behaviour until their offsets are checked.

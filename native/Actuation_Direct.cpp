@@ -1180,15 +1180,67 @@ namespace MFO::Actuation {
         // 2026-09-06) is forwarded as its own SelfCast value rather than
         // masquerading as Applied -- and is likewise not a fall-through to the
         // kInstant apply. `kind` is computed above; a_stopPct forwards unchanged.
-        switch (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct)) {
-        case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
-        case ComposedCast::TryResult::Held:    return SelfCast::Held;
-        case ComposedCast::TryResult::ApmfRefused:
-            LogApmfRefusal(id, "heal-cast", spellID, targetID, "left");
-            return SelfCast::Declined;
-        // NO `default:` -- see the twin in CastSelfDirect above (F3-6).
-        case ComposedCast::TryResult::NotApplicable:
-            break;
+        //
+        // ── NO COMBAT AI -> NO SEATS -> NO CLAIM (2026-09-09) ────────────────────
+        // marth's standing ruling, recorded at Logistics.cpp's OOC concentration
+        // branch: that delivery "must always use the known working force." The
+        // claim path silently overrode it the moment bHealAnimPackage went ON, and
+        // on the deck it IS on. This restores the ruling for the case where the
+        // claim CANNOT work at all.
+        //
+        // WHY IT CANNOT WORK. Every one of APMF's cast seats is a vfunc on the
+        // engine's COMBAT AI objects -- CheckStartCast / CheckStopCast /
+        // GetMagicTarget are `bool(CombatMagicCaster*, CombatController*)` on the
+        // Restore and Offensive caster vtables, the classify seat rides the same
+        // controller, and the equip gate reads CombatController::inventory (APMF
+        // core/CastSeats.cpp, core/EquipGate.cpp). With no CombatController there
+        // is no CombatMagicCaster to seat, so NOTHING can drive the cast. Only
+        // CheckCast (t2c) still runs out of combat, and that is a DENY gate: it can
+        // stop a cast, never start one.
+        //
+        // THE FIELD SHAPE (deck log 2026-09-09, Jesper 0x750012C6). Combat ended at
+        // 14:19:14. From then until 14:21:19 -- over two minutes -- the heal claim
+        // stood, MFO heartbeat-Repointed it every ~3.6 s, `[logistics] ... (APMF
+        // claimed)` printed on every lap, and APMF logged ZERO seat lines for that
+        // actor. The claim reported success on every tick and the player was never
+        // healed once, while the direct force that would have healed him sat behind
+        // this switch.
+        //
+        // THIS IS NOT "ROUTING AROUND A LIVE APMF" (the rule at :865-869 and
+        // [[mfo-is-apmf-showpiece-legacy-is-absent-only]]). That rule forbids
+        // bypassing APMF's ARBITRATION where APMF can deliver -- and an
+        // ApmfRefused below still FAILS CLOSED, unchanged. Out of combat APMF has
+        // no delivery mechanism to arbitrate for: this is the APMF-ABSENT degrade
+        // contract, evaluated per SITUATION instead of per session.
+        //
+        // THE TEST IS THE OBJECT THE SEATS HANG OFF, not a mood flag. `IsInCombat()`
+        // is a bool on the actor and answers a different question -- it can read
+        // true through a teardown, and it says nothing about whether the controller
+        // the seats need exists. `combatController` IS that controller: null means
+        // the engine built no combat AI for this actor, so no seat can be reached.
+        // MFO already treats it as the canonical "is this follower fighting" read
+        // (CombatSense.h's FoeCount, Evaluator.cpp, Targeting.cpp), and it is a
+        // plain member load through GetActorRuntimeData()'s SE/AE-shifted accessor
+        // -- no vfunc, no allocation, safe from this job worker
+        // (ACTOR_RUNTIME_DATA::combatController, pinned CommonLibSSE-NG 3.7.0
+        // RE/A/Actor.h:657, offset 0x158; this TU already makes the identical read
+        // further down). A racy read is fine and is the
+        // race every other reader here already takes: worst case one lap takes the
+        // other road, and both roads heal.
+        //
+        // IN COMBAT NOTHING CHANGES -- the claim path runs exactly as it did, and
+        // that is the path that produced this session's confirmed animated heals.
+        if (a_follower->GetActorRuntimeData().combatController) {
+            switch (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct)) {
+            case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
+            case ComposedCast::TryResult::Held:    return SelfCast::Held;
+            case ComposedCast::TryResult::ApmfRefused:
+                LogApmfRefusal(id, "heal-cast", spellID, targetID, "left");
+                return SelfCast::Declined;
+            // NO `default:` -- see the twin in CastSelfDirect above (F3-6).
+            case ComposedCast::TryResult::NotApplicable:
+                break;
+            }
         }
 
         // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)

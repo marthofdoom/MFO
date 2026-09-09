@@ -171,90 +171,102 @@ namespace MFO::Actuation {
             return g_forcedWeapon.contains(a_follower->GetFormID());     // ... or coming back
         }
 
-        // ── "THE ENGINE STARTED THIS CAST AND HAS NOT FINISHED IT" (F8, 2026-09-08) ──
-        // The signal that a charged cast is mid-flight on `a_hand`, read from the
-        // engine itself rather than inferred: the follower's MagicCaster for that
-        // hand is in a live cast state AND the spell it currently has selected is
-        // the one this hand is locked to (or the delivery-flip PROXY APMF minted
-        // for it -- a proxied claim never has the original spell selected, the
-        // same trap ComposedCast's watch already documents).
-        //
-        // WHY NOT ComposedCast's `observed` LATCH. That latch is set from
-        // Diagnostics' SpellSink, i.e. when a cast actually FIRES -- it answers
-        // "did this claim ever deliver", which is the END of the window this
-        // needs, not the start of it. There is no MFO-side "charge began" event
-        // at all; the caster's own state IS that event.
-        //
-        // NO VIRTUAL CALL HERE -- THE ARRAY IS READ DIRECTLY, ON PURPOSE (review
-        // fix, 2026-09-08; CLAUDE.md principle 6). The obvious spelling is
-        // `Actor::GetMagicCaster(CastingSource)` (`RE/A/Actor.h:302`, vtable slot
-        // 0x5C), and the bDriveCaster probe further down this file does exactly
-        // that -- but that probe is DEFAULT-OFF, and this predicate runs on EVERY
-        // in-flight lap of EVERY cast gambit, on the AddTask job worker. If the
-        // engine's GetMagicCaster LAZILY ALLOCATES the ActorMagicCaster it hands
-        // back, that is an off-main allocation plus a write into
-        // `magicCasters[]`, from a thread that is not allowed to do either. That
-        // is unknowable from CommonLib: it declares the function and implements
-        // NOTHING (grep: only the `override` declaration exists in the pinned
-        // tree), so the body is the game's. It is also not checkable here --
-        // SkyrimSE.exe is Steam-DRM encrypted on disk (a `.bind` section; verified
-        // on the local 1.6.1170 copy), so a static disassembly reads garbage, and
-        // this is precisely the class of read that once turned a "passive" probe
-        // into a crash.
-        //
-        // So the question is REMOVED rather than answered: read the already-built
-        // caster out of the actor's own array and treat a null slot as "not in
-        // flight". A plain member load allocates nothing, dispatches nothing, and
-        // needs no proof beyond the layout.
-        //
-        // SYMBOLS VERIFIED against the PINNED CommonLibSSE-NG (3.7.0 @ c4ab853d):
-        //   * `ACTOR_RUNTIME_DATA::magicCasters[SlotTypes::kTotal]`, `Actor.h:667`
-        //     @0x1A0, reached through `GetActorRuntimeData()` (`Actor.h:698-706`)
-        //     which applies the 0xE0/0xE8 SE-vs-AE shift for us -- the same
-        //     accessor MFO already uses in five places, from this same worker
-        //     (e.g. `Actuation_Direct.cpp:1569`, `CasterConsent.cpp:851`).
-        //     `static_assert(sizeof(Actor) == 0x2B0)` pins the layout.
-        //   * `Actor::SlotTypes::kLeftHand == 0` / `kRightHand == 1`
-        //     (`Actor.h:139-150`) -- the same numeric values as
-        //     `MagicSystem::CastingSource`, but this indexes the ARRAY, so the
-        //     array's own enum is what it is written against.
-        //   * `ActorMagicCaster : public MagicCaster` at offset 00
-        //     (`ActorMagicCaster.h:18-21`), so the stored pointer is a MagicCaster
-        //     with no adjustment, and `currentSpell` (MagicItem*, 0x28) and
-        //     `state` (stl::enumeration<State, uint32_t>, 0x30) are its own real
-        //     members (`MagicCaster.h:80-95`).
-        //
-        // BOTH READS ARE RACY PLAIN LOADS and are meant to be: the combat thread
-        // advances this state machine while we look. A torn or stale answer only
-        // shifts the hold by one round-robin lap (~133 ms x party), which is
-        // nothing against the 2.3-4.5 s pipeline it is protecting -- and it can
-        // only ever make the lock let go one lap early or hold one lap late,
-        // never corrupt anything.
-        //
-        // STATES. kNone is idle; kUnk08/kUnk09 are the interrupt/deselect pair
-        // (CommonLib's own annotation), i.e. a cast that is ENDING and must not
-        // hold the hand. Everything between is a cast in progress -- request,
-        // charge, ready, casting -- and kUnk07 is deliberately INSIDE that range:
-        // it is unnamed, it sits immediately before the interrupt states, and
-        // treating an unknown mid-sequence state as "already done" is the failure
-        // mode this exists to prevent.
-        bool CastInFlightOnHand(RE::Actor* a_follower, std::size_t a_hand,
-                                RE::FormID a_spell, RE::FormID a_proxy) {
-            if (!a_follower || a_spell == 0) return false;
-            const std::size_t slot = a_hand == kHandLeft
-                ? static_cast<std::size_t>(RE::Actor::SlotTypes::kLeftHand)
-                : static_cast<std::size_t>(RE::Actor::SlotTypes::kRightHand);
-            RE::MagicCaster* caster = a_follower->GetActorRuntimeData().magicCasters[slot];
-            if (!caster) return false;                 // never built -> nothing in flight
-            auto* held = caster->currentSpell;
-            if (!held) return false;
-            const auto cur = held->GetFormID();
-            if (cur != a_spell && (a_proxy == 0 || cur != a_proxy)) return false;
-            const auto st = caster->state.get();
-            return st != RE::MagicCaster::State::kNone &&
-                   st != RE::MagicCaster::State::kUnk08 &&
-                   st != RE::MagicCaster::State::kUnk09;
-        }
+    }   // anon
+
+    // ── CROSS-TU (2026-09-09) ────────────────────────────────────────────────
+    // CastInFlightOnHand was file-local until the heal claim path needed it.
+    // ComposedCast.cpp is not one of the three Actuation TUs and cannot include
+    // Actuation_internal.h, so the predicate moved OUT of the anonymous namespace
+    // to namespace scope (declared in Actuation.h). The BODY is unchanged and it
+    // stays the single definition of "in flight"; only its linkage and its
+    // indentation moved. Every caller below still reaches it by plain lookup.
+
+    // ── "THE ENGINE STARTED THIS CAST AND HAS NOT FINISHED IT" (F8, 2026-09-08) ──
+    // The signal that a charged cast is mid-flight on `a_hand`, read from the
+    // engine itself rather than inferred: the follower's MagicCaster for that
+    // hand is in a live cast state AND the spell it currently has selected is
+    // the one this hand is locked to (or the delivery-flip PROXY APMF minted
+    // for it -- a proxied claim never has the original spell selected, the
+    // same trap ComposedCast's watch already documents).
+    //
+    // WHY NOT ComposedCast's `observed` LATCH. That latch is set from
+    // Diagnostics' SpellSink, i.e. when a cast actually FIRES -- it answers
+    // "did this claim ever deliver", which is the END of the window this
+    // needs, not the start of it. There is no MFO-side "charge began" event
+    // at all; the caster's own state IS that event.
+    //
+    // NO VIRTUAL CALL HERE -- THE ARRAY IS READ DIRECTLY, ON PURPOSE (review
+    // fix, 2026-09-08; CLAUDE.md principle 6). The obvious spelling is
+    // `Actor::GetMagicCaster(CastingSource)` (`RE/A/Actor.h:302`, vtable slot
+    // 0x5C), and the bDriveCaster probe further down this file does exactly
+    // that -- but that probe is DEFAULT-OFF, and this predicate runs on EVERY
+    // in-flight lap of EVERY cast gambit, on the AddTask job worker. If the
+    // engine's GetMagicCaster LAZILY ALLOCATES the ActorMagicCaster it hands
+    // back, that is an off-main allocation plus a write into
+    // `magicCasters[]`, from a thread that is not allowed to do either. That
+    // is unknowable from CommonLib: it declares the function and implements
+    // NOTHING (grep: only the `override` declaration exists in the pinned
+    // tree), so the body is the game's. It is also not checkable here --
+    // SkyrimSE.exe is Steam-DRM encrypted on disk (a `.bind` section; verified
+    // on the local 1.6.1170 copy), so a static disassembly reads garbage, and
+    // this is precisely the class of read that once turned a "passive" probe
+    // into a crash.
+    //
+    // So the question is REMOVED rather than answered: read the already-built
+    // caster out of the actor's own array and treat a null slot as "not in
+    // flight". A plain member load allocates nothing, dispatches nothing, and
+    // needs no proof beyond the layout.
+    //
+    // SYMBOLS VERIFIED against the PINNED CommonLibSSE-NG (3.7.0 @ c4ab853d):
+    //   * `ACTOR_RUNTIME_DATA::magicCasters[SlotTypes::kTotal]`, `Actor.h:667`
+    //     @0x1A0, reached through `GetActorRuntimeData()` (`Actor.h:698-706`)
+    //     which applies the 0xE0/0xE8 SE-vs-AE shift for us -- the same
+    //     accessor MFO already uses in five places, from this same worker
+    //     (e.g. `Actuation_Direct.cpp:1569`, `CasterConsent.cpp:851`).
+    //     `static_assert(sizeof(Actor) == 0x2B0)` pins the layout.
+    //   * `Actor::SlotTypes::kLeftHand == 0` / `kRightHand == 1`
+    //     (`Actor.h:139-150`) -- the same numeric values as
+    //     `MagicSystem::CastingSource`, but this indexes the ARRAY, so the
+    //     array's own enum is what it is written against.
+    //   * `ActorMagicCaster : public MagicCaster` at offset 00
+    //     (`ActorMagicCaster.h:18-21`), so the stored pointer is a MagicCaster
+    //     with no adjustment, and `currentSpell` (MagicItem*, 0x28) and
+    //     `state` (stl::enumeration<State, uint32_t>, 0x30) are its own real
+    //     members (`MagicCaster.h:80-95`).
+    //
+    // BOTH READS ARE RACY PLAIN LOADS and are meant to be: the combat thread
+    // advances this state machine while we look. A torn or stale answer only
+    // shifts the hold by one round-robin lap (~133 ms x party), which is
+    // nothing against the 2.3-4.5 s pipeline it is protecting -- and it can
+    // only ever make the lock let go one lap early or hold one lap late,
+    // never corrupt anything.
+    //
+    // STATES. kNone is idle; kUnk08/kUnk09 are the interrupt/deselect pair
+    // (CommonLib's own annotation), i.e. a cast that is ENDING and must not
+    // hold the hand. Everything between is a cast in progress -- request,
+    // charge, ready, casting -- and kUnk07 is deliberately INSIDE that range:
+    // it is unnamed, it sits immediately before the interrupt states, and
+    // treating an unknown mid-sequence state as "already done" is the failure
+    // mode this exists to prevent.
+    bool CastInFlightOnHand(RE::Actor* a_follower, std::size_t a_hand,
+                            RE::FormID a_spell, RE::FormID a_proxy) {
+        if (!a_follower || a_spell == 0) return false;
+        const std::size_t slot = a_hand == kHandLeft
+            ? static_cast<std::size_t>(RE::Actor::SlotTypes::kLeftHand)
+            : static_cast<std::size_t>(RE::Actor::SlotTypes::kRightHand);
+        RE::MagicCaster* caster = a_follower->GetActorRuntimeData().magicCasters[slot];
+        if (!caster) return false;                 // never built -> nothing in flight
+        auto* held = caster->currentSpell;
+        if (!held) return false;
+        const auto cur = held->GetFormID();
+        if (cur != a_spell && (a_proxy == 0 || cur != a_proxy)) return false;
+        const auto st = caster->state.get();
+        return st != RE::MagicCaster::State::kNone &&
+               st != RE::MagicCaster::State::kUnk08 &&
+               st != RE::MagicCaster::State::kUnk09;
+    }
+
+    namespace {
 
         // HOW LONG THE IN-FLIGHT EXTENSION BELOW MAY RUN AFTER THE CLAIM BEHIND IT
         // WENT AWAY (F8; anchored on CastLock::claimGoneAt, NOT on `lastSeen` --

@@ -3,6 +3,7 @@
 #include "Config.h"
 #include "APMFBridge.h"
 #include "CastBounds.h"
+#include "Actuation.h"   // kHandLeft + CastInFlightOnHand -- THE one in-flight definition
 
 #include <chrono>
 #include <unordered_map>
@@ -27,6 +28,17 @@ namespace MFO::ComposedCast {
         // constant) so this window and the RequestCast payload's req.ttlMs
         // (built inside APMFBridge::ClaimHealCast) can never drift apart.
         constexpr std::uint32_t kHealBoundsTtlMs = APMFBridge::kHealCastTtlMs;
+
+        // HOW LONG THE F12 IN-FLIGHT HOLD MAY STAND (2026-09-09). The SAME number
+        // and the SAME reasoning as Actuation_Hands.cpp's kInFlightHoldCap, taken
+        // from the SAME source constant rather than copied: APMFBridge::
+        // kHealCastTtlMs is the longest window APMF itself lets one cast claim
+        // stand without a renewal, so a cast the engine has not finished inside it
+        // is not one worth protecting, it is a STUCK one -- and holding the slot
+        // for a stuck cast would hide the stall instead of showing it (principle
+        // 7). Past the cap the hold lifts and the newcomer claims exactly as it
+        // did before this existed.
+        constexpr auto kInFlightHoldCap = std::chrono::milliseconds(APMFBridge::kHealCastTtlMs);
 
         // Master gate: AE-only (mirrors CastSelfDirect T#67); HEAL-ONLY (offense
         // and buff stay on the byte-identical AI-fired / kInstant paths -- the
@@ -89,6 +101,16 @@ namespace MFO::ComposedCast {
             // every observed fire, so a repeating cast keeps re-stamping itself.
             Clock::time_point lastObservedAt{};
             Clock::time_point lastWarn{};      // rate-limit
+            // WHEN THE IN-FLIGHT EXTENSION BELOW FIRST ENGAGED for this claim
+            // (F12, 2026-09-09), epoch = not engaged. The anchor for its cap --
+            // the twin of CastLock::claimGoneAt in Actuation_Hands.cpp, and for
+            // the same reason: the cap must run from the moment the extension
+            // starts holding, not from some older stamp. Zeroed again the moment
+            // the engine is no longer casting this claim's spell, so the window
+            // is per continuous cast and an idle gap between casts hands the slot
+            // over at once (matching CanPreemptHand's "only the idle window
+            // BETWEEN casts is takeable").
+            Clock::time_point inFlightHoldSince{};
         };
         struct FollowerWatch { Watch hand[2]; };   // [0] = left, [1] = right
         std::unordered_map<RE::FormID, FollowerWatch> g_watch;
@@ -207,6 +229,27 @@ namespace MFO::ComposedCast {
                          "incumbent spell {:08X} still holds a live claim there (not observed "
                          "firing yet); the held-off spell was NOT delivered",
                          a_fid, a_wanted, a_incumbent);
+        }
+
+        // The F12 twin of the line above -- its OWN message, because the two holds
+        // rest on DIFFERENT evidence and a field log that cannot tell them apart
+        // cannot tell you why a heal kept its slot. This one says the engine is
+        // demonstrably casting the incumbent's spell right now. Same dedup map,
+        // same 2 s window, same key (follower, held-off spell): a rule held off on
+        // every round-robin lap must not spam the log at scan rate, and the two
+        // holds are mutually exclusive on any one call so sharing the map cannot
+        // silence either.
+        void LogHealHoldOffInFlight(RE::FormID a_fid, RE::FormID a_wanted,
+                                    RE::FormID a_incumbent, std::int64_t a_heldMs) {
+            const auto now = Clock::now();
+            auto& entry = g_lastHoldLog[a_fid];
+            if (entry.spell == a_wanted && now - entry.when < kHoldLogEvery) return;
+            entry.spell = a_wanted; entry.when = now;
+            spdlog::info("[cfc] {:08X} heal-cast HELD OFF (IN FLIGHT) -- spell {:08X} wants the "
+                         "heal slot, but the engine is CASTING incumbent spell {:08X} on the "
+                         "left hand right now; the held-off spell was NOT delivered and the "
+                         "incumbent claim was NOT re-pointed ({} ms into this hold, cap {} ms)",
+                         a_fid, a_wanted, a_incumbent, a_heldMs, kInFlightHoldCap.count());
         }
     }
 
@@ -388,7 +431,8 @@ namespace MFO::ComposedCast {
         // the very claim it exists to protect. It is the same refresh one more
         // ClaimHealCast lap would have done, never a new lifetime.
         if (auto it = g_watch.find(fid); it != g_watch.end()) {
-            const auto& incumbent = it->second.hand[0];
+            // NON-const since F12 below stamps its own window anchor on the slot.
+            auto& incumbent = it->second.hand[0];
             // RefreshHealCastClaim LAST: it takes APMFBridge's mutex and has the
             // heartbeat side effect, so short-circuit keeps both off every tick
             // that is not actually a hold.
@@ -421,6 +465,11 @@ namespace MFO::ComposedCast {
             // revisit this before assuming the hold still holds.
             if (incumbent.spell != 0 && incumbent.spell != spellID && !incumbent.observed &&
                 APMFBridge::RefreshHealCastClaim(fid)) {
+                // The ordinary hold is standing, so F12's window is not open --
+                // exactly as CastLockLive zeroes claimGoneAt while the claim is
+                // live. If this hold later lifts and the engine IS mid-cast, F12
+                // starts its own cap from THAT moment and not from here.
+                incumbent.inFlightHoldSince = {};
                 // (b) A hold is never silent, and never labelled as a delivery.
                 LogHealHoldOff(fid, spellID, incumbent.spell);
                 g_lastHold[fid] = HoldRecord{ spellID, incumbent.spell };
@@ -430,6 +479,81 @@ namespace MFO::ComposedCast {
                 // no-op, and re-stamp Actuation's Task-2 hand lock with the
                 // held-off spell. Held says exactly what happened: nothing.
                 return TryResult::Held;
+            }
+
+            // ── F12: A HEAL THE ENGINE IS ACTUALLY CASTING IS NOT UP FOR GRABS ──
+            // (2026-09-09, from the deck log of 2.0.4 -- Jesper 0x750012C6, 14:18:47.)
+            //
+            // WHAT THE FIELD SHOWED. The claim was minted at 14:18:41.708 (APMF
+            // handle h=1, spell 0x0004D3F2 Healing Hands, from Logistics' OOC
+            // concentration dispatch). Then, 5.46 s later, inside 17 ms:
+            //   47.046  APMF seat 0x06 CheckStartCast -> YES  (claim spell 0x0004D3F2)
+            //   47.148  [castobs] CASTER[L] state=4(Casting) spell=0x0004D3F2
+            //   47.162  [eval] fired rule 2 (act.cast_target)   -- a DIFFERENT heal
+            //   47.165  ch.8b h=1 dropped, re-minted as h=4 on 0x0002F3B8
+            //   47.512  [t2c] CheckCast DENIED spell=0x0004D3F2 -- the claim no
+            //           longer named the spell the engine had already charged
+            //   47.743  [castobs] ANIM-EVENT 'CastStop'
+            // A cast the engine had spent 5.4 s reaching, thrown away by MFO's own
+            // next claim 17 ms after it started.
+            //
+            // WHY THE F1 HOLD ABOVE DID NOT FIRE, and it is not the clause anyone
+            // would guess. Every term of it held EXCEPT the last:
+            // `RefreshHealCastClaim` refuses once the incumbent HANDLE is
+            // APMFBridge::kHealHoldNeverObservedMs (4000 ms) old with still no
+            // OBSERVED cast -- and on ABI 6 with a live claim that age cap is its
+            // ONLY refusal (read it: the other exits are a missing API, a missing
+            // handle, ABI < 6 and IsClaimLive, none of which applied). This handle
+            // was 5457 ms old, and "observed" means the TESSpellCastEvent has
+            // FIRED, which this cast had not yet reached. So the cap lifted the
+            // hold at t+4.0 s while the engine only reached Casting at t+5.44 s.
+            // The cap is not wrong -- a claim nothing ever casts must not renew
+            // forever -- it is blind to the one piece of evidence that settles the
+            // question, and asking the engine for it costs a pointer load.
+            //
+            // THE ANSWER IS THE ONE ALREADY WRITTEN. Actuation_Hands.cpp's F8 made
+            // exactly this fix for the per-hand cast lock -- "a charged cast is not
+            // free real estate" -- and the heal claim path never went through that
+            // lock: Logistics' OOC concentration dispatch and CastOn's composed
+            // branch BOTH bottom out here, at the single ClaimHealCast call site,
+            // and this is the only place that decides to release/re-point a heal.
+            // So reuse CastInFlightOnHand rather than invent a second notion of
+            // "busy" (Actuation.h; it went public for this).
+            //
+            // BOUNDED, AND IT DOES NOT HEARTBEAT. Two deliberate limits:
+            //   * kInFlightHoldCap above bounds the hold, so a wedged caster cannot
+            //     own the heal slot forever (principle 7 -- show the stall).
+            //   * this branch never calls RefreshHealCastClaim, so it adds NO
+            //     lifetime to the incumbent's claim. The F1 hold's own doc explains
+            //     why that heartbeat is dangerous once a rule has lost interest;
+            //     here it is also unnecessary, because the incumbent's own rule
+            //     re-claims on every lap it keeps winning, and if it has stopped
+            //     winning then the claim dies at APMF's TTL while this hold merely
+            //     lets the cast the engine already started finish.
+            // Heals are LEFT always (ClaimHealCast's hard rule), so hand[0] and
+            // kHandLeft are the only slot in question.
+            if (incumbent.spell != 0 && incumbent.spell != spellID) {
+                if (Actuation::CastInFlightOnHand(a_follower, Actuation::kHandLeft,
+                                                  incumbent.spell, incumbent.proxy)) {
+                    const auto now = Clock::now();
+                    if (incumbent.inFlightHoldSince.time_since_epoch().count() == 0)
+                        incumbent.inFlightHoldSince = now;
+                    const auto heldFor = now - incumbent.inFlightHoldSince;
+                    if (heldFor < kInFlightHoldCap) {
+                        LogHealHoldOffInFlight(
+                            fid, spellID, incumbent.spell,
+                            std::chrono::duration_cast<std::chrono::milliseconds>(heldFor).count());
+                        g_lastHold[fid] = HoldRecord{ spellID, incumbent.spell };
+                        return TryResult::Held;
+                    }
+                    // Past the cap: fall through and let the newcomer claim, and
+                    // leave the anchor STAMPED so a caster that stays wedged on
+                    // this same spell cannot re-open the window every lap.
+                } else {
+                    // Not casting this claim's spell right now -- the window is
+                    // shut and re-opens fresh if a new cast starts.
+                    incumbent.inFlightHoldSince = {};
+                }
             }
         }
 
