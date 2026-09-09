@@ -101,3 +101,27 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Author's reasoning for leaving the DIVERGENCE:** cost is one claim's life against an ally still standing and still hurt; reaching `g_active` would bind the cast lock to the roster list for a case the field has never reported. Unchanged — the divergence itself is still open by choice, and if it ever bites it comes back as a new entry.
 - **Follow-up that was owed:** the comment's stated bound ("a re-aim held for at most one claim's life") had to be reworded once the heartbeat cap landed, because that cap is what makes the real bound something other than the claim's life.
 - **DRAINED by `6bfbd79`** (the same commit that landed the cap): the comment now states the actual bound — the re-aim is held while the claim is fed, and the hold's own heartbeat stops at `kHealHoldNeverObservedMs` for a claim that never fires, so the cost is bounded by that window rather than by the fight. Verified in the round-6 review of that SHA.
+
+---
+
+## PENDING FABLE REVIEW — shipped unreviewed, DEFERRED not waived
+
+marth 2026-09-09, under the low-token order: **"the diffs will be fable reviewed
+when tokens become available. They are defferred not removed."** Rule 8 is
+suspended BY MARTH for these commits, not by the coordinator, and each one
+SHIPPED TO USERS before review. Review them when budget allows, oldest first.
+
+| SHA | what | shipped in | risk |
+|---|---|---|---|
+| `0b8c816` | widen the board's control mask from 9 to all 12 `USER_EVENT_FLAG` categories | v2.0.3 | low - one constant, restores v1.1.4 semantics. **Did NOT fix the reported symptom.** |
+| `6d3e9c5` | `storeState=false` so the overlay stops writing the engine's SAVED control state at +0x124 | v2.0.3 | medium - reasoned from disassembly, never proven in game. **Did NOT fix the reported symptom.** |
+| `49c9d1b` | restore the v1.1.4 `InputDispatchHook` call-site trampoline, gated to 1.6.1170 | v2.0.4 | **HIGHEST - review this first.** Patches 5 live bytes in a function on a dedicated input thread. Its one risky line is `*a_events = nullptr`; the author verified `rdx` is a stack slot at that call site so the swallow is scoped to one dispatch, and that `+0x7B` is a whole E8 rel32 call. Both claims want independent confirmation. |
+
+Merges `6d8074d` and the docs-only `b8087a9` (CLAUDE.md rule 11) carry no
+unreviewed logic.
+
+**Note for whoever reviews `0b8c816` / `6d3e9c5`:** both were coordinator-reasoned
+fixes for a symptom neither one fixed (the real cause was that a `BSTEventSink`
+cannot consume, which `49c9d1b` addresses). They are not known-wrong, but they are
+unproven and were kept only because they are independently defensible. If a review
+finds either is a no-op or harmful, reverting is fine.
