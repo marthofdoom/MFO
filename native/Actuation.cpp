@@ -15,13 +15,24 @@ namespace MFO::Actuation {
 
     // T#76: the weapon a follower is being force-held on, keyed by FormID. Written
     // by EquipWeapon (the fire) and cleared by ReleaseForcedWeapon/Reconcile/
-    // ClearForcedWeapons -- ALL on the job-worker serial tick, the same thread
-    // the scheduler already drives Fire on, so no lock (the g_followers
-    // discipline: #4). Persists ACROSS ticks by design -- it is engine-hold
-    // bookkeeping like CombatStyle's owned-stance map, not per-scan evaluator
-    // state (#22), and is never read back by the evaluator. Session-scoped:
-    // cleared on revert (ClearForcedWeapons). The pointer is a weapon form, which
-    // is stable for the session.
+    // ClearForcedWeapons -- all on the job-worker serial tick, the same thread the
+    // scheduler already drives Fire on. Persists ACROSS ticks by design -- it is
+    // engine-hold bookkeeping like CombatStyle's owned-stance map, not per-scan
+    // evaluator state (#22). Session-scoped: cleared on revert
+    // (ClearForcedWeapons). The pointer is a weapon form, stable for the session.
+    //
+    // *** EVERY ACCESS TAKES g_forcedMx. *** This comment used to end "so no lock
+    // (the g_followers discipline: #4)" while the very next paragraph said "guard
+    // every access", and the file has been following the second one since
+    // 2026-08-17 -- two rules in twelve lines, which is how an unguarded read gets
+    // written in good faith (one was, in the first cut of WeaponHandExposure, and
+    // the review caught it). The #4 no-lock discipline does NOT apply here, for the
+    // reason the SEV-1 note below states: this map has an OFF-THREAD reader. Only
+    // the WRITERS are worker-serial. Corrected 2026-09-08; do not restore the
+    // no-lock claim.
+    //
+    // (It is also no longer true that it "is never read back by the evaluator":
+    // WeaponHandExposure reads it to decide the either-free hand preference.)
     std::unordered_map<RE::FormID, RE::TESBoundObject*> g_forcedWeapon;
     // SEV-1 (Fable 2026-08-17): the worker tick mutates this map, but the SKSE
     // SAVE callback reads it (CoSaveForcedWeapons) off that thread with no pump
@@ -504,11 +515,21 @@ namespace MFO::Actuation {
         //
         // SO ADD THE DURABLE SIGNAL, not a timer: g_forcedWeapon is THIS file's
         // own T#76 force-hold ledger (the weapon EquipWeapon is holding for this
-        // follower), released only by ReconcileForcedWeapon when the equip
-        // gambit's condition is known false -- it does NOT lapse with an APMF
-        // facet expiry, which is precisely the gap the live reads miss. An entry
-        // here means "a weapon is coming back to the right hand", whether or not
-        // it is in the hand this instant.
+        // follower), released by ReconcileForcedWeapon when the equip gambit's
+        // condition is known false -- it does NOT lapse with an APMF facet expiry,
+        // which is precisely the gap the live reads miss. An entry here means "a
+        // weapon is coming back to the right hand", whether or not it is in the
+        // hand this instant. Read under g_forcedMx: the map has an OFF-THREAD
+        // reader (the SKSE save callback) and every access guards it.
+        //
+        // ONE RESIDUAL, STATED: the ledger is only written while
+        // bWeaponStyleControl is ON (EquipWeapon's else branch is a plain
+        // EquipObject with no ledger entry, and ReconcileForcedWeapon releases
+        // unconditionally when the switch is off). With the kill-switch off a
+        // melee follower in the transient-unarmed gap therefore still lands RIGHT
+        // -- the 2026-09-05 shape, on a non-default config. Recorded rather than
+        // papered over; closing it needs a signal that does not depend on that
+        // feature being on.
         //
         // A pure caster never has an entry, so right-first still applies to
         // exactly the follower marth's ruling was about ("theres two hands, auto
@@ -516,6 +537,11 @@ namespace MFO::Actuation {
         bool WeaponHandExposure(RE::Actor* a_follower) {
             if (!a_follower) return false;
             if (APMFBridge::WeaponHandActive(a_follower)) return true;   // live grip / live claim
+            // UNDER g_forcedMx like every other access to this map (see its
+            // declaration): its off-thread reader is the SKSE SAVE callback, so
+            // "the writers are worker-serial" is not enough. Nothing else is held
+            // here and no engine call sits inside the lock.
+            std::scoped_lock lk(g_forcedMx);
             return g_forcedWeapon.contains(a_follower->GetFormID());     // ... or coming back
         }
 
@@ -776,6 +802,14 @@ namespace MFO::Actuation {
         // re-aim. Answered false rather than left to the actor lookup.
         bool IncumbentTargetLost(RE::Actor* a_follower, const CastLock& a_lock) {
             if (!a_follower || a_lock.target == 0) return false;
+            // ONE DELIBERATE MIRROR GAP: PickAlly's "resolves" means "is in
+            // Followers::g_active, or is the player", while this resolves the raw
+            // FormID -- so a follower DISMISSED mid-fight still reads as a valid
+            // recipient here until it heals above the threshold. Left as-is: the
+            // cost is a re-aim held for at most one claim's life against an ally
+            // who is still standing there and still hurt, and reaching g_active
+            // from this predicate would bind the cast lock to the roster list for
+            // a case the field has never reported.
             auto* victim = RE::TESForm::LookupByID<RE::Actor>(a_lock.target);
             if (!victim) return true;                                   // gone entirely
             if (victim->IsDead() || victim->IsDisabled()) return true;  // PickAlly's test
@@ -1005,6 +1039,59 @@ namespace MFO::Actuation {
                        CanPreemptHand(a_follower, h, lockIt->second.hand[h]);
             };
 
+            // ── HOLDING A RE-AIM STILL HAS TO KEEP THE CLAIM ALIVE ──────────────
+            // (review finding, 2026-09-08 -- CLAUDE.md principle 9, the
+            // stale-cadence class that already cost this project a dead heal and a
+            // party of unarmed followers.)
+            //
+            // When `mine` says "your target is still valid, wait", the request
+            // leaves as a transparent NoOp -- and on that lap NOTHING touches the
+            // incumbent claim. F9's in-flight refresh cannot: it runs only when
+            // HandFree's (spell,target) match SUCCEEDS, which is exactly the match
+            // a re-aimed target fails. So `refreshed` stops moving while the hold
+            // stands, and APMFBridge::Tick() sweeps the claim at FacetExpiry()
+            // (~2.45 s at the defaults, floor 0.77 s) -- against a
+            // claim-to-first-charge window of 2.3-4.5 s. The hold would then have
+            // been protecting a claim its own silence was killing: A claimed at
+            // t=0, the ally swap at t=0.5, sweep at ~2.95 s, APMF's Release tears
+            // down the equipment set and interrupts the charge, and A never
+            // charged. The hold only actually worked for flicker FASTER than
+            // FacetExpiry(), where the incumbent's own matching laps kept it fed.
+            //
+            // So a held lap heartbeats the claim it is holding for, on the hand it
+            // is holding -- the SAME RefreshOwnedCastOnHand the in-flight path
+            // calls, for the same reason.
+            //
+            // IT RENEWS APMF'S TTL TOO, AND THAT IS THE DELIBERATE CHOICE. The
+            // heal-hold heartbeat (RefreshHealCastClaim) refuses to renew, because
+            // it feeds an incumbent whose OWN RULE may have gone silent, and
+            // renewing there would remove the only bound that hold has. This is the
+            // opposite case, and it is precisely the precondition
+            // EnsureCastClaimLocked's renewal is written against: a rule that WON
+            // its lap and is asking for the identical spell on the identical hand
+            // it already holds -- differing only in a target MFO has just decided
+            // should NOT be honoured yet. The rule is not silent; it is asking, and
+            // the moment it stops winning nothing calls this and the claim dies at
+            // APMF's TTL exactly as before. Refreshing MFO's stamp WITHOUT renewing
+            // APMF's window would be the two-budgets-that-disagree failure in a new
+            // place: MFO believing the claim is fed while APMF expires it.
+            //
+            // Only for a hand whose lock is OURS (IsOwnRetarget). A different,
+            // lower-ranked rule being held off must NOT feed the incumbent's claim
+            // -- the incumbent's own rule already did that earlier in this scan,
+            // and doing it from here would keep a claim alive on behalf of a rule
+            // that never asked.
+            auto refreshHeldOwnClaim = [&]() {
+                if (lockIt == g_castLock.end()) return;
+                for (std::size_t h = 0; h < kHandCount; ++h) {
+                    const auto& lk = lockIt->second.hand[h];
+                    if (IsOwnRetarget(lk, a_spell) && ClaimLiveOnHand(fid, h))
+                        APMFBridge::RefreshOwnedCastOnHand(fid, h == kHandLeft
+                                                                    ? APMFBridge::kApmfHandLeft
+                                                                    : APMFBridge::kApmfHandRight);
+                }
+            };
+
             switch (a_pick) {
             case Loadout::HandPick::DualCast: {
                 if (leftFree && rightFree) { a_out = { true, true, false }; return std::nullopt; }
@@ -1020,6 +1107,7 @@ namespace MFO::Actuation {
                               /*preemptRight=*/!rightFree && !mine(kHandRight) };
                     return std::nullopt;
                 }
+                refreshHeldOwnClaim();
                 const auto hand      = !leftFree ? kHandLeft : kHandRight;
                 const auto busySpell = !leftFree ? busyL : busyR;
                 LogCastLockHold(fid, hand, a_spell, busySpell);
@@ -1080,6 +1168,7 @@ namespace MFO::Actuation {
                 if (mine(secondHand))     { a_out = planFor(secondHand, false); return std::nullopt; }
                 if (outranks(firstHand))  { a_out = planFor(firstHand,  true);  return std::nullopt; }
                 if (outranks(secondHand)) { a_out = planFor(secondHand, true);  return std::nullopt; }
+                refreshHeldOwnClaim();
                 LogCastLockHold(fid, kHandLeft, a_spell, busyL);
                 return Outcome{ Result::NoOp,
                     std::format("cast gambit locked -- both hands busy (left: spell {:08X}, "
@@ -1097,6 +1186,7 @@ namespace MFO::Actuation {
                     a_out = { true, false, false, /*preemptLeft=*/true, false };
                     return std::nullopt;
                 }
+                refreshHeldOwnClaim();
                 LogCastLockHold(fid, kHandLeft, a_spell, busyL);
                 return Outcome{ Result::NoOp,
                     std::format("cast gambit locked -- spell {:08X} still firing (left hand)",
