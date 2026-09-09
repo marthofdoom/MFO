@@ -541,7 +541,18 @@ namespace MFO::Board {
                 using ToggleFn = void(RE::ControlMap*, RE::UserEvents::USER_EVENT_FLAG,
                                       bool a_enable, bool a_storeState);
                 static REL::Relocation<ToggleFn> toggle{ REL::RelocationID(67245, 68545) };
-                toggle(cm, flags, !want, true);   // want -> disable, else re-enable
+                // storeState=FALSE. The overlay is a transient panel, not a game
+                // mode, and has no business writing the engine's SAVED control
+                // state at +0x124 (SE +0x11C) -- menus, favorites and dialogue
+                // save/restore through that same field, so polluting it can leave
+                // controls dead after we have already re-enabled the live ones.
+                // The site previously passed true, justified as "reproduces what
+                // the 3.7.0 header's inline version did to unk11C". That is FALSE
+                // on AE: the inline version never reached +0x124, it was writing
+                // the context stack (the crash). So true was not restoring old
+                // behaviour, it was writing a field we had never written before.
+                // We touch the live field only, and put it back on close.
+                toggle(cm, flags, !want, false);   // want -> disable, else re-enable
             });
         }
 

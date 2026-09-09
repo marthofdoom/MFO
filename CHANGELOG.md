@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## v2.0.3 -- The board takes the whole controller again
 
+- **Fixed controls staying dead after the board was closed.** The board was writing the game's own saved control state, which menus and the favorites bar restore from. It now only changes the live controls and puts them back when it closes.
 - **Fixed the follower board not fully capturing the controller.** The board blocks the game's controls while it is open. It was only blocking nine of the game's twelve control categories, so anything mapped to the other three still reached the game underneath. This is why the d pad did not behave. It now blocks all of them, which is what the board did before v2.0.0.
 
 ## v2.0.2 -- The crash is gone and the casting holds together
