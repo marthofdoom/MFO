@@ -116,6 +116,41 @@ dispatches and merges it.
    The 2026-09-06 deny/heal failure was a reviewed, CI-green, deliberate change that was simply the wrong
    trade — exactly what a summary-level review cannot catch. Supersedes "pre-cut = one focused review".)
 
+9. **REVIEW CYCLES MUST CONVERGE — SEVERITY FLOOR + A DEFERRED BACKLOG (marth 2026-09-08).** A review round
+   that returns **nothing above SEV-3 ENDS the cycle.** Remaining SEV-4/SEV-5 findings are DEFERRED, never
+   dropped: recorded in `Docs/REVIEW-BACKLOG.md` with the finding's VERBATIM text, its severity, the SHA it
+   was raised against, and the reviewer's reasoning. Anything above SEV-3 keeps the cycle running as before.
+   **Drain the backlog in ONE batch** at a natural boundary — before a release cut, or before a field cycle
+   touching that subsystem — as a single agent round with a single Fable review.
+   **CARVE-OUTS that are ALWAYS fixed immediately, whatever their nominal severity:** (a) co-save layout,
+   threading, or ABI / byte-shared-header findings — a SEV-4 threading finding is a SEV-4 right up until the
+   day it is not, and `g_forcedWeapon`'s unguarded read was graded with "no live race today" while being the
+   exact shape of the 2026-08-17 SEV-1; (b) anything the NEXT field cycle will exercise, because a deferred
+   finding that corrupts the next test costs a whole deploy cycle to rediscover.
+   **The backlog must be cross-referenced from MAP.md's "What breaks" entry** for each affected subsystem, so
+   the next agent to touch that code reads the open findings BEFORE it writes. A deferred finding that is not
+   surfaced at edit time comes back as a higher-severity one.
+   (Why: the cost is per-ROUND, not per-finding. An author round plus its review costs ~250-400k tokens
+   whether it fixes one finding or eight, so chasing a lone SEV-5 costs the same as draining the whole
+   backlog. Measured 2026-09-08: one branch consumed six author/review rounds — ~1.8M subagent tokens across
+   the session — with severities converging SEV-2 -> SEV-3 -> SEV-4/5 while every round still paid full price.
+   This rule does NOT weaken rule 8 or the fix-everything rule: nothing is dropped, and a SEV-1/SEV-2 still
+   blocks the merge.)
+10. **SCALE REVIEW DEPTH TO THE DIFF'S SHAPE — the review still happens, its DEPTH varies (marth 2026-09-08).**
+   Rule 8 stands: every commit gets a review. But match the instrument to the change.
+   - **Tier 1 — doc/comment-only.** Prove it mechanically instead of dispatching: strip `//` comments from
+     every touched source file on both sides of the commit and diff; they MUST be identical. Any code delta
+     at all escalates to tier 2 or 3. (A comment-only commit consumed an 85k adversarial review on
+     2026-09-08 to conclude what that strip-and-diff proves in seconds — which is exactly the check the
+     reviewer itself ran first.)
+   - **Tier 2 — localized change inside an existing mechanism.** Focused Fable review, carrying the
+     cleared-ledger of what earlier rounds already proved so it does not re-derive settled ground.
+   - **Tier 3 — NO DOWNGRADE EVER.** New mechanism, threading, co-save, ABI or byte-shared headers, engine
+     seats/hooks, or a TU split. Full adversarial Fable review. A TU split is tier 3 no matter how mechanical
+     it looks, because "CI-identical" is not a claim a split may assert.
+   Never downgrade the REVIEWER to a cheap model at any tier. Fable found every defect that mattered this
+   week; cheap review is how the 2026-09-06 regression shipped.
+
 ## Engineering + design principles — HOW TO THINK HERE (read before designing anything)
 
 These are hard-won, each one paid for with a crash, a wasted deploy cycle, or a
