@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.2 -- The crash is gone and the casting holds together
+
+- **Fixed a crash that ended sessions after a few minutes.** Opening and closing the follower board was corrupting one of the game's own input tables. The game then walked that table off its end on the next controller press and died. If you play on a controller you were hitting this every session.
+- **Followers pick the right spell far more often.** Your gambit order now decides which spell wins a hand. A heal near the top of the list takes the hand from an attack spell instead of waiting behind it.
+- **Followers stop throwing away spells they already charged.** A follower that was part way through a cast used to abandon it when another rule wanted the same hand.
+- **A follower's free hand is now held rather than left to the game's AI**, so it stops equipping something you did not ask for in the middle of a fight.
+- **Fixed a heal that could hold a hand forever without ever firing.** A held spell now has to show it is still casting to keep its claim.
+
 ## v2.0.1 -- Followers cast heals for real
 
 - **Your followers now cast healing spells with real animations, at you and at each other.** The follower's own combat AI does the casting, so the charge, the aim and the animation style are the game's own rather than something faked on top. This is the first time a follower has been able to heal anyone but themselves through the game's own casting logic.
