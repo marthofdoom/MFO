@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.6 -- The board takes the controller on Skyrim 1.5.97 too
+
+- **The follower board now takes every button on Skyrim 1.5.97, the same way it does on 1.6.1170.** Nothing gets through to the game underneath. The favorites bar no longer opens on d pad up, and the game does not wake up confused after you close the board. 1.5.97 was left on the older, weaker input path in v2.0.4 because its offsets had not been checked. They have been checked now, against the 1.5.97 game itself, and 1.5.97 gets its own path. The 1.6.1170 path is untouched. Other game versions keep the v2.0.3 behaviour.
+
 ## v2.0.5 -- Heals are recognised as our own
 
 - **A follower no longer throws away a heal it is already casting.** Another heal rule could take the hand out from under a cast that was part way through, and the game then refused the spell it had just started. The follower now keeps the hand until that cast finishes.
