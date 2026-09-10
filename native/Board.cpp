@@ -92,10 +92,11 @@ namespace MFO::Board {
         std::atomic<bool> g_controlsBlocked{ false }; // ControlMap consume edge (board open)
 
         // TRUE once InstallInputHook() has actually written the InputDispatch
-        // call-site trampoline (1.6.1170 only -- see that function). It selects
-        // between the project's TWO input paths, which are mutually exclusive:
+        // call-site trampoline (1.6.1170 and 1.5.97 -- see that function, which
+        // gates each runtime on its OWN disassembly). It selects between the
+        // project's TWO input paths, which are mutually exclusive:
         //
-        //   trampoline path (1.6.1170): the trampoline reads the events for the
+        //   trampoline path (1.6.1170, 1.5.97): the trampoline reads the events for the
         //     board AND nulls the caller's head pointer, so nothing reaches the
         //     engine's own sinks at all. THE TRAMPOLINE FEEDS THE BOARD. The
         //     InputSink is NOT registered (it would see an empty list anyway --
@@ -107,8 +108,8 @@ namespace MFO::Board {
         //     InputSink FEEDS THE BOARD and SyncControlBlock consumes via the
         //     engine's ToggleControls. A sink cannot null the array, so this
         //     path still cannot stop input the control flags do not cover
-        //     (Favorites on d-pad up is the known hole) -- 1.5.x/1.7.x keep the
-        //     v2.0.3 behaviour they have today until their offsets are verified.
+        //     (Favorites on d-pad up is the known hole) -- 1.7.x keeps the
+        //     v2.0.3 behaviour it has today until its offsets are verified.
         //
         // Written once at plugin load, read from the render + input threads.
         std::atomic<bool> g_inputTrampoline{ false };
@@ -338,17 +339,19 @@ namespace MFO::Board {
         // THREE call-site trampolines (write_call<5>) at HARDCODED in-function
         // byte offsets: D3DInit (+0x9/0x275), DXGIPresent (+0x9), InputDispatch
         // (+0x7B). Address Library resolves each function BASE on every runtime
-        // but NOT the byte offset of the instruction inside it, so on 1.5.x /
-        // 1.7.x write_call patched mid-instruction and crashed at load. This
-        // rewrite carries ZERO game offsets for RENDERING, and made input
-        // version-independent too -- but the input half of that trade was a bad
-        // one and is now RETRACTED on 1.6.1170 (see InstallInputHook). "A sink
-        // plus ControlMap is behaviour-identical to nulling the array" was
-        // false: it cost a hard crash (the SE-layout ToggleControls, fixed in
-        // v2.0.2), then a partial block, then Favorites still opening on d-pad
-        // up with the board up. Control flags cannot stop what the old array
-        // null stopped by construction. So on 1.6.1170 the InputDispatch
-        // trampoline is back and this sink is not even registered; every other
+        // but NOT the byte offset of the instruction inside it, and those three
+        // offsets were only ever measured on 1.6.1170, so on 1.5.x / 1.7.x they
+        // were unverified and blamed for the load crash. This rewrite carries
+        // ZERO game offsets for RENDERING, and made input version-independent
+        // too -- but the input half of that trade was a bad one and is now
+        // RETRACTED on 1.6.1170 and on 1.5.97, where the InputDispatch site has
+        // since been disassembled and +0x7B PROVEN to be a whole E8 rel32 (see
+        // InstallInputHook). "A sink plus ControlMap is behaviour-identical to
+        // nulling the array" was false: it cost a hard crash (the SE-layout
+        // ToggleControls, fixed in v2.0.2), then a partial block, then Favorites
+        // still opening on d-pad up with the board up. Control flags cannot stop
+        // what the old array null stopped by construction. So on 1.6.1170 and on
+        // 1.5.97 the InputDispatch trampoline is back and this sink is not even registered; every other
         // runtime keeps the offset-free path described here, unchanged.
         // The rendering half stands on its own and is untouched:
         //   * Present (vtable slot 8) + ResizeBuffers (slot 13) are hooked on the
@@ -728,7 +731,7 @@ namespace MFO::Board {
         // grace, ImGui feed). It is carried by exactly one of two things,
         // never both (see g_inputTrampoline):
         //
-        //   * InputDispatchHook::thunk on 1.6.1170. It calls Feed() and, when
+        //   * InputDispatchHook::thunk on 1.6.1170 and 1.5.97. It calls Feed() and, when
         //     Feed() returns true, NULLS the caller's head pointer so the batch
         //     never reaches the engine's own sinks. This is the v1.1.4 mechanism,
         //     restored.
@@ -969,7 +972,7 @@ namespace MFO::Board {
             }
         };
 
-        // ── input carrier #1: the v1.1.4 call-site trampoline (1.6.1170) ────
+        // ── input carrier #1: the v1.1.4 call-site trampoline (1.6.1170/1.5.97) ──
         // Installed ONLY by InstallInputHook(), and only where the +0x7B byte
         // offset inside BSInputDeviceManager::PollInputDevices is verified. The
         // call it replaces is the one that dispatches the polled batch to every
@@ -1519,9 +1522,14 @@ namespace MFO::Board {
     // VERSION GATE. Address Library resolves the FUNCTION BASE on every runtime
     // but not the byte offset of an instruction inside it, so `+0x7B` has to be
     // verified per runtime. 5c0957c removed this hook because on 1.5.x / 1.7.x
-    // that offset lands mid-instruction and write_call corrupts the function.
-    // VERIFIED on 1.6.1170 ONLY, against the disassembled SkyrimSE.exe:
-    //   id 68617 = 0x140CD8F40 = PollInputDevices -- it loops four times over
+    // that offset was ASSUMED to land mid-instruction and write_call would then
+    // corrupt the function. TWO runtimes are now VERIFIED, EACH AGAINST ITS OWN
+    // DISASSEMBLED, STEAMSTUB-UNPACKED BINARY AND ITS OWN ADDRESS LIBRARY -- this
+    // is a per-runtime path, not one construct assumed to span both (CLAUDE.md
+    // principle 11). 1.7.x is still unverified and still takes the sink path.
+    //
+    // AE 1.6.1170 -- id 68617 -> RVA 0xCD8F40 (versionlib-1-6-1170-0.bin):
+    //   0x140CD8F40 = PollInputDevices -- it loops four times over
     //     [rcx+0x60 + i*8] calling vfunc +0x10 on each non-null entry, which is
     //     BSInputDeviceManager::devices[4] (pinned BSInputDeviceManager.h:80)
     //     being Process()ed, and its call to 0x140CD4F70 (id 68542, the
@@ -1533,6 +1541,41 @@ namespace MFO::Board {
     //     write_call<5> replaces a whole instruction, the thunk signature is
     //     right, and `*a_events = nullptr` writes the CALLER'S STACK SLOT, not
     //     an engine global -- the swallow is scoped to this one dispatch.
+    //
+    // SE 1.5.97 -- id 67315 -> RVA 0xC150B0 (version-1-5-97-0.bin, format 1;
+    //   the decoder was validated first on the AE pair 68545 -> 0xCD5650 and
+    //   68542 -> 0xCD4F70, and on the SE pair 67245 -> 0xC11C60 that the
+    //   ToggleControls note below already carries):
+    //   0x140C150B0 = PollInputDevices. Its body is instruction-for-instruction
+    //     the same function as AE's -- identical mnemonics at identical
+    //     intra-function offsets from +0x0 to the +0xC8 ret, differing only in
+    //     rel32 displacements and rip-relative globals. Its four calls sit at
+    //     the SAME offsets: +0x53 -> 0x140C11600, +0x5B -> 0x140C10860,
+    //     +0x7B -> 0x140C15E00, +0x87 -> 0x140C16C80. Two of those four are
+    //     named outright in the pinned CommonLibSSE-NG source comment
+    //     (BSInputDeviceManager.cpp:147-150, written against SE):
+    //     "ControlMap::sub_140C11600(InputEvent*)" and
+    //     "Rumble::Update_140C10860(float secsSinceLastFrame)". That is an
+    //     INDEPENDENT confirmation of both the address-library resolution and
+    //     the function's identity. By the same source comment's ordering, the
+    //     call after Rumble::Update is the one that "Emits the last InputEvent"
+    //     and the one after that "resets the global BSInputEventQueue" -- so
+    //     +0x7B is the emit, exactly as on AE.
+    //   0x140C150B0 + 0x7B = 0x140C1512B = `e8 d0 0c 00 00`, a 5-byte E8 rel32
+    //     CALL to 0x140C15E00. It IS an instruction boundary: the preceding
+    //     `48 8b ce` (mov rcx, rsi) occupies +0x78..+0x7A and the next
+    //     instruction starts at +0x80. write_call<5> replaces a whole
+    //     instruction here, not a mid-instruction slice.
+    //   Entry register state at +0x7B is the AE state: rcx = rsi = the manager
+    //     (which IS the BSTEventSource), and rdx = `lea rdx,[rsp+0x40]` (+0x67)
+    //     whose slot was filled at +0x6C/+0x73 from [rax+0x380] off a
+    //     rip-relative global. So `*a_events = nullptr` writes the CALLER'S
+    //     STACK SLOT on SE too, not an engine global.
+    //   Callee 0x140C15E00 is the same BSTEventSource notify body as AE's
+    //     0x140CD9E00 -- same member offsets (+0x28 sink count, +0x48 lock,
+    //     +0x50 reentry flag), rcx = source, rdx = the InputEvent** -- so the
+    //     thunk signature is right on SE as well.
+    //
     // Any other runtime gets the sink + ControlMap path unchanged. Do NOT widen
     // this gate without disassembling that runtime's 68617/67315 first.
     void InstallInputHook() {
@@ -1542,13 +1585,18 @@ namespace MFO::Board {
             spdlog::warn("[overlay-probe] VR runtime ({}) -- input trampoline REFUSED", ver.string());
             return;
         }
-        // Build is deliberately ignored: 1.6.1170.0 is the only build shipped
-        // under that patch number, and matching on it too would silently drop us
-        // to the sink path if a repack reported 1.6.1170.1.
-        if (!(ver.major() == 1 && ver.minor() == 6 && ver.patch() == 1170)) {
+        // Build is deliberately ignored on both: 1.6.1170.0 and 1.5.97.0 are the
+        // only builds shipped under those patch numbers, and matching on the
+        // build too would silently drop us to the sink path if a repack reported
+        // 1.6.1170.1. The two runtimes are SEPARATE branches on purpose -- each
+        // is licensed by its own disassembly above, and neither vouches for the
+        // other.
+        const bool isAE1170 = (ver.major() == 1 && ver.minor() == 6 && ver.patch() == 1170);
+        const bool isSE597  = (ver.major() == 1 && ver.minor() == 5 && ver.patch() == 97);
+        if (!isAE1170 && !isSE597) {
             spdlog::warn("[overlay-probe] runtime {} -- input trampoline NOT installed "
-                         "(+0x7B verified on 1.6.1170 only); using the input sink + ControlMap path",
-                         ver.string());
+                         "(+0x7B verified on 1.6.1170 and 1.5.97 only); using the input sink "
+                         "+ ControlMap path", ver.string());
             return;
         }
 
@@ -1556,11 +1604,19 @@ namespace MFO::Board {
         // SKSE trampoline (grep: this is the only AllocTrampoline in the plugin),
         // so this cannot double-allocate over another subsystem's reservation.
         SKSE::AllocTrampoline(64);
+        // RelocationID(se, ae) and VariantOffset(se, ae, vr) -- pinned 3.7.0
+        // Relocation.h:1509 / :1427. On SE this resolves id 67315 out of
+        // version-1-5-97-0.bin (load_file format 1, Relocation.h:1214) and adds
+        // 0x7B; on AE it resolves 68617 out of versionlib-1-6-1170-0.bin and
+        // adds 0x7B. The two slots happen to carry the same offset because the
+        // two functions really are laid out identically, NOT because one value
+        // was assumed to cover both.
         WriteThunkCall<InputDispatchHook>(REL::RelocationID(67315, 68617),
                                           REL::VariantOffset(0x7B, 0x7B, 0x7B));
         g_inputTrampoline.store(true);
-        spdlog::info("[overlay-probe] input trampoline installed on 68617+0x7B (runtime {}) -- "
-                     "the board takes input outright; ControlMap sync disabled", ver.string());
+        spdlog::info("[overlay-probe] input trampoline installed on {}+0x7B (runtime {}) -- "
+                     "the board takes input outright; ControlMap sync disabled",
+                     isSE597 ? "67315" : "68617", ver.string());
     }
 
     void Install() {

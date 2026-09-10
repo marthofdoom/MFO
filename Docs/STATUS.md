@@ -13,6 +13,22 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-1.5.97-input-path` (v2.0.6) — pushed, CI-green, NOT merged, NOT
+  deployed, NOT Fable-reviewed (reviews DEFERRED at marth's weekly token limit).**
+  First task of the Skyrim 1.5.97 support pass. `Board::InstallInputHook` now has a
+  SECOND gated branch for 1.5.97 alongside 1.6.1170, so the Field Kit overlay
+  CONSUMES input on SE instead of only observing it (the sink + `ControlMap` path
+  cannot stop what the control flags do not cover, which is why Favorites opened on
+  d-pad up). Derived and verified against the SteamStub-unpacked 1.5.97 exe and
+  `version-1-5-97-0.bin`: id `67315` -> RVA `0xC150B0` =
+  `BSInputDeviceManager::PollInputDevices`, whose body is instruction-for-instruction
+  the AE body, whose four calls sit at the same `+0x53/+0x5B/+0x7B/+0x87`, whose
+  first two land on `0x140C11600` / `0x140C10860` — the exact addresses pinned
+  CommonLib's own source comment names for the ControlMap mapping pass and
+  `Rumble::Update` — and whose `+0x7B` is a whole 5-byte `E8 rel32` entered with
+  `rcx` = the manager and `rdx` = a caller STACK SLOT. The 1.6.1170 path is
+  behaviourally untouched. 1.7.x and VR are unchanged (sink path / refused).
+  Full derivation in the `InstallInputHook` comment and `MAP.md`.
 - **Branch `fix/mfo-heal-recognition` (v2.0.5) — pushed, CI-green, NOT merged, NOT
   deployed, NOT Fable-reviewed.** Two heal defects from the 2026-09-09 deck logs:
   (1) a heal the engine was actively CASTING was re-pointed by another heal rule

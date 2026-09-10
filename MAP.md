@@ -1680,40 +1680,55 @@ Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 `imgui_impl_win32` = vendored, do not read.**
-- **Overlay mechanism (`Board.cpp:331-995`):** RENDER is offset-free — `PresentThunk`
-  (`:607`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots 8/13**
-  (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable` `:681`), the
-  unchanged `WndProcHook` swap (`:307`, WM_CHAR/WM_KILLFOCUS), and `LazyInit`
-  (`:398`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
-  (`:703`) polls for the live swapchain then patches.
+- **Overlay mechanism (`Board.cpp:337-1000`):** RENDER is offset-free — `PresentThunk`
+  (`:610`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots 8/13**
+  (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable` `:689`), the
+  unchanged `WndProcHook` swap (`:313`, WM_CHAR/WM_KILLFOCUS), and `LazyInit`
+  (`:401`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
+  (`:711`) polls for the live swapchain then patches.
 - **INPUT: TWO MUTUALLY EXCLUSIVE CARRIERS over ONE translation body (v2.0.4).**
-  The translation is `InputSink::Feed` (`:743`, hotkeys → close grace → ImGui feed);
+  The translation is `InputSink::Feed` (`:751`, hotkeys → close grace → ImGui feed);
   it returns TRUE when the board has taken the batch. `g_inputTrampoline` (`:92`)
   says which carrier is live, and NOTHING may drive both:
-  * **1.6.1170 — `InputDispatchHook` (`:979`), the v1.1.4 call-site trampoline,
-    RESTORED.** `write_call<5>` at `REL::RelocationID(67315, 68617)` +`0x7B`
-    (`BSInputDeviceManager::PollInputDevices`, AE `0x140CD8F40`), installed by
-    `InstallInputHook` (`:1533`) from `plugin.cpp` at **PLUGIN LOAD** — it rewrites
+  * **1.6.1170 AND 1.5.97 — `InputDispatchHook` (`:987`), the v1.1.4 call-site
+    trampoline, RESTORED.** `write_call<5>` at `REL::RelocationID(67315, 68617)`
+    +`0x7B` (`BSInputDeviceManager::PollInputDevices`, AE `0x140CD8F40` from id
+    `68617`, SE `0x140C150B0` from id `67315`), installed by
+    `InstallInputHook` (`:1581`) from `plugin.cpp` at **PLUGIN LOAD** — it rewrites
     five live bytes in a function that runs on the input thread, and at plugin load
     that thread does not exist yet. It calls `Feed` and, on TRUE, **nulls the
     caller's head pointer** so the engine's own sinks never see the batch. THE
     TRAMPOLINE FEEDS THE BOARD here: `InputSink` is NOT registered and
     `SyncControlBlock` early-returns to a no-op.
-  * **every other runtime — `InputSink::ProcessEvent` (`:960`)**, a
+    **TWO SEPARATE GATED BRANCHES, EACH LICENSED BY ITS OWN DISASSEMBLY** (CLAUDE.md
+    principle 11) — the offset is `0x7B` on both because the two functions really
+    are laid out identically, NOT because one measurement was assumed to cover both.
+    SE 1.5.97 evidence (2026-09-09, `SE.unpacked.exe` + `version-1-5-97-0.bin`):
+    the body is instruction-for-instruction the AE body, its four calls sit at the
+    same `+0x53 / +0x5B / +0x7B / +0x87`, and the first two land on `0x140C11600`
+    and `0x140C10860` — the exact addresses the pinned CommonLib source comment
+    (`BSInputDeviceManager.cpp:147-150`) names for the ControlMap mapping pass and
+    `Rumble::Update`, which independently confirms both the id resolution and the
+    function. `+0x7B` = `e8 d0 0c 00 00`, a whole 5-byte `E8 rel32` (previous
+    instruction `48 8b ce` ends at `+0x7B`, next starts at `+0x80`); `rcx` = the
+    manager, `rdx` = `lea [rsp+0x40]`, a caller STACK SLOT, so the null is scoped
+    to the dispatch. Full derivation in the `InstallInputHook` comment.
+  * **every other runtime — `InputSink::ProcessEvent` (`:963`)**, a
     `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` registered by `Install`.
     THE SINK FEEDS THE BOARD here; it cannot consume, so consumption falls to
-    `SyncControlBlock` (`:477`, ControlMap toggle, edge-driven from Present) and is
+    `SyncControlBlock` (`:485`, ControlMap toggle, edge-driven from Present) and is
     **only as complete as the control flags are**. That is a known hole, not a fix:
     5c0957c removed the trampoline for offset fragility and called the sink +
     ControlMap "behavior-identical", which was FALSE and cost three regressions —
     the SE-layout `ToggleControls` crash (v2.0.2), a partial category block
-    (v2.0.3), and Favorites still opening on d-pad up with the board up. 1.5.x /
-    1.7.x keep this path until someone disassembles their `67315`/`68617` and
-    verifies the in-function offset. **DO NOT widen the version gate on a guess.**
-- **`SyncControlBlock` (`:477`) — when it does run, that toggle MUST call the ENGINE's `ToggleControls`
+    (v2.0.3), and Favorites still opening on d-pad up with the board up. 1.5.97 left
+    this path in **v2.0.6** once its `67315` was disassembled; **1.7.x still keeps
+    it** until someone disassembles that runtime's `67315`/`68617` and verifies the
+    in-function offset. **DO NOT widen the version gate on a guess.**
+- **`SyncControlBlock` (`:485`) — when it does run, that toggle MUST call the ENGINE's `ToggleControls`
   (`REL::RelocationID(67245, 68545)` — SE `0xC11C60`, AE `0xCD5650`, both verified
   against the disassembly), NEVER `RE::ControlMap::ToggleControls`** — see the
-  ABI note at `Board.cpp:459-529`. The pinned 3.7.0 header is an SE-17-context
+  ABI note at `Board.cpp:524-590`. The pinned 3.7.0 header is an SE-17-context
   layout whose inline reimplementation writes `+0x118`, which on 1.6.1130+ (18
   contexts) is `contextPriorityStack.size`, not `enabledControls`; that corrupted
   the context stack on every board open/close and crashed the engine's per-frame
@@ -1731,14 +1746,14 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 - **Module layout (mechanical splits, 2026-08-31 + 2026-09-07):** THREE draw/host
   TUs over one shared substrate header. Board.cpp had grown to 2577 at the
   overlay-swapchain merge (924f3a9) and the panel was cut out of it.
-  * `Board.cpp` (1604) = **shell + the overlay host**: file-local render state and
+  * `Board.cpp` (1665) = **shell + the overlay host**: file-local render state and
     the overlay-probe atomics (`:86`) incl. `g_inputTrampoline` (`:92`), input
     translation (`:120`), `CloseBoard`
     (`:183` — see the anon-namespace note below), `SpellTooltip` (`:207`), `DrawHud`
-    (`:226`), `WndProcHook` (`:307`) + the whole overlay hook section (`:331-995`),
-    then the public API: `ToggleHud` (`:1000`), `Toggle` (`:1007`), `FillRuleViews`
-    (`:1024`), `ApplyEdits` (`:1073`), `PublishSnapshot` (`:1308`),
-    `InstallInputHook` (`:1533`), `Install` (`:1561`, end).
+    (`:226`), `WndProcHook` (`:313`) + the whole overlay hook section (`:337-1000`),
+    then the public API: `ToggleHud` (`:1008`), `Toggle` (`:1015`), `FillRuleViews`
+    (`:1032`), `ApplyEdits` (`:1081`), `PublishSnapshot` (`:1316`),
+    `InstallInputHook` (`:1581`), `Install` (`:1622`, end).
   * `Board_FieldKit.cpp` (1135) = **the whole panel**, ONE public function
     `DrawFieldKit` (`:151`, Followers+Gambits tabs, the list-picker, cascaded-B
     close) plus the four helpers it is the SOLE caller of, in its own anonymous
@@ -1771,20 +1786,21 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   resolve an opcode back to a label/ParamKind) scan them; their opcode strings are
   a FROZEN co-save contract (#10).
 - **TWO install entry points, at DIFFERENT times, and neither may move:**
-  * `InstallInputHook()` (`Board.h`, body `Board.cpp:1533`) — caller `plugin.cpp`
-    inside `SKSEPluginLoad`, **PLUGIN LOAD ONLY**. Writes the `68617`+`0x7B`
+  * `InstallInputHook()` (`Board.h`, body `Board.cpp:1581`) — caller `plugin.cpp`
+    inside `SKSEPluginLoad`, **PLUGIN LOAD ONLY**. Writes the `68617`/`67315`+`0x7B`
     call-site trampoline. Must run before the input thread exists (it patches five
     live bytes inside that thread's own poll function). Refuses VR, then gates on
-    `REL::Module::get().version()` major/minor/patch == 1/6/1170; every other
+    `REL::Module::get().version()` major/minor/patch == 1/6/1170 **or** == 1/5/97
+    (two separate branches, each licensed by its own disassembly); every other
     runtime is a logged no-op. This is the ONLY `SKSE::AllocTrampoline` in MFO
     (`AllocTrampoline(64)`) — do not add a second without merging the reservations.
-  * `Install()` (`Board.h`, body `Board.cpp:1561`) — caller `plugin.cpp:306`
+  * `Install()` (`Board.h`, body `Board.cpp:1622`) — caller `plugin.cpp:306`
     (kDataLoaded) only, VR-refused. Installs AFTER the renderer is up (the vtable
     path needs the swapchain LIVE and polls for it). Registers `InputSink` **only
     when `g_inputTrampoline` is false**.
   The other offset pair in this family is `SyncControlBlock`'s
   `REL::RelocationID(67245, 68545)` engine `ToggleControls` call
-  (`Board.cpp:493-563`) — a plain call, not a patch, never reached on VR because
+  (`Board.cpp:485-596`) — a plain call, not a patch, never reached on VR because
   `Install()` refuses VR first, and never reached at all on the trampoline path.
 - **Snapshot carries all actor-derived display data** (render thread reads plain
   cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
@@ -3235,8 +3251,8 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 |---|---|---|
 | Serialization Save/Load/Revert callbacks | `plugin.cpp:412-414` | `kSerID='MFO0'` |
 | Message listener | `plugin.cpp:416` | drives the whole lifecycle |
-| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + WndProc + InputSink (sink path only) | `plugin.cpp:306` → `Board::Install` (`Board.cpp:1561`, end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
-| Board input: `InputDispatchHook` `write_call<5>` on `(67315, 68617)` +`0x7B` | `plugin.cpp` (SKSEPluginLoad) → `Board::InstallInputHook` (`Board.cpp:1533`) | **at PLUGIN LOAD**, before the input thread exists; VR-refused and gated to 1.6.1170 (offset verified against the disassembly); nulls the batch so the board takes input outright |
+| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + WndProc + InputSink (sink path only) | `plugin.cpp:306` → `Board::Install` (`Board.cpp:1622`, end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
+| Board input: `InputDispatchHook` `write_call<5>` on `(67315, 68617)` +`0x7B` | `plugin.cpp` (SKSEPluginLoad) → `Board::InstallInputHook` (`Board.cpp:1581`) | **at PLUGIN LOAD**, before the input thread exists; VR-refused and gated to **1.6.1170 or 1.5.97**, each a separate branch with its own verified disassembly (AE `0x140CD8F40`+`0x7B`, SE `0x140C150B0`+`0x7B`, both whole `E8 rel32`); every other runtime is a logged no-op; nulls the batch so the board takes input outright |
 | `MainThread::Install` (player Update vfunc 0x0AD) | `plugin.cpp:297` | true main-thread pump |
 | `Targeting::InstallHook` (Character::UpdateCombat 0xE4) | `plugin.cpp:299` | also drives CombatStyle |
 | `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:300` | 14 + 1 vtables |
