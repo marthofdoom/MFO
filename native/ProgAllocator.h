@@ -206,6 +206,15 @@ namespace MFO::ProgAllocator {
         // his) and not debited (the §17 debit is recounted AFTER the strip).
         // Unresolvable ids drop on load.
         std::vector<RE::FormID> strippedPerks;
+        // PRGN v7 — ONE FREE RESPEC (marth 2026-09-14: "give users one free
+        // respec once this patch releases, since we don't want to strand points
+        // in the wrong skill"). Set ONLY by the v6→v7 migration in CoSaveLoad:
+        // a v6 follower's applied values came from the OLD drifting split and
+        // permanence (A′) freezes them as they stood, so the first Respec after
+        // the update skips Rapport::Spend and clears this. A record born under
+        // v7 never drifted: false. Rides the remembered record (unenroll /
+        // bench do not touch it).
+        bool                    freeRespec{ false };
         // RUNTIME-ONLY, never serialized (Fable F1): base AddPerk/RemovePerk do
         // not survive a load (P3), so the strip is PER-SESSION by nature —
         // OnPostLoad re-arms it (false) beside `applied`, the first managed
@@ -332,6 +341,13 @@ namespace MFO::ProgAllocator {
     // harness now, the board's auto-spend later.
     bool AllocateNextEligible(RE::Actor* a_actor);
     bool Respec(RE::Actor* a_actor);                      // refunds points, −500 rapport
+    // True while this enrolled follower's ONE free post-migration respec is
+    // still unspent (ProgState::freeRespec). For the Board's respec cost text /
+    // confirm ("Free" instead of "-500 rapport") — that hookup is ONE call in a
+    // Board brief (Board_Progression.cpp is outside the 2026-09-13 boundary);
+    // BoardFollowerView::freeRespec carries the same bit in the snapshot.
+    // MAIN THREAD (g_prog).
+    bool HasFreeRespec(RE::FormID a_actorID);
     // B′ UNINSTALL / safe-removal restore (marth 2026-09-13: "a clean restore
     // when it's uninstalled"). Puts every native catalog perk MFO stripped from
     // this enrolled follower (ProgState::strippedPerks, PRGN v7) back on the
@@ -401,6 +417,7 @@ namespace MFO::ProgAllocator {
         std::uint16_t allocatedRanks{ 0 };    // §17: ranks MFO has spent
         bool          manualSkills{ false };  // §16 toggle state
         int           manualAvail{ 0 };       // §16 pool (deterministic, see ProgState)
+        bool          freeRespec{ false };    // one-time post-migration free respec pending
         std::vector<BoardSkillLine> skills;   // the 18, kSkillNames order
     };
     struct BoardProgSnap {

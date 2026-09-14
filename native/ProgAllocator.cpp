@@ -1417,6 +1417,7 @@ namespace MFO::ProgAllocator {
                         std::min(AllocatedRanks(*st), 0xFFFF));
                     v.manualSkills   = st->manualSkills;           // §16
                     v.manualAvail    = ManualAvail(*st);
+                    v.freeRespec     = st->freeRespec;             // one-time free respec pending
                 }
                 if (auto* avo = a->AsActorValueOwner()) {
                     v.skills.reserve(std::size(kSkillNames));
@@ -1728,16 +1729,29 @@ namespace MFO::ProgAllocator {
         RecomputeSkills(a_actor, st, /*log*/ true);
 
         // §15: free of gold, −500 rapport (record default; the follower
-        // resents the reset). Reuses the Rapport rank machinery wholesale.
-        Rapport::Spend(id, g_econ.respecRapportCost, "progression respec");
+        // resents the reset). Reuses the Rapport rank machinery wholesale —
+        // EXCEPT the one free post-migration respec (ProgState::freeRespec),
+        // which skips the spend and clears the flag; the next one pays.
+        const bool wasFree = st.freeRespec;
+        if (wasFree) {
+            st.freeRespec = false;
+            spdlog::info("[prog] RESPEC {} -- FREE (one-time, post-migration)", NameOf(a_actor));
+        } else {
+            Rapport::Spend(id, g_econ.respecRapportCost, "progression respec");
+        }
 
         spdlog::info("[prog] RESPEC {} ({:08X}): {} perk(s) removed -> {} point(s) available; "
                      "{:.0f} auto + {:.0f} manual skill point(s) returned, manual {} ({} pooled, "
                      "{} auto level(s) re-granted), rapport -{:.0f}",
                      NameOf(a_actor), id, removed, PerkPointsAvailable(st),
                      autoPlaced, manualPlaced, st.manualSkills ? "ON" : "OFF", ManualAvail(st),
-                     st.autoLevelsGranted, g_econ.respecRapportCost);
+                     st.autoLevelsGranted, wasFree ? 0.0f : g_econ.respecRapportCost);
         return true;
+    }
+
+    bool HasFreeRespec(RE::FormID a_actorID) {
+        const auto it = g_prog.find(a_actorID);
+        return it != g_prog.end() && it->second.enrolled && it->second.freeRespec;
     }
 
     bool RestoreNativePerks(RE::Actor* a_actor) {
@@ -2020,6 +2034,7 @@ namespace MFO::ProgAllocator {
             // ledger (A′) and the native-perk strip record (B′). Read gated on
             // version >= 7; count-prefixed ids, each ResolveFormID'd on load.
             a_intfc->WriteRecordData(st.autoLevelsGranted);
+            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.freeRespec ? 1u : 0u));   // v7
             // (nativeHeld is NOT written: base AddPerk/RemovePerk are runtime-only
             // — P3 — so the strip is per-session by nature and re-runs on load.)
             const auto strippedCount = static_cast<std::uint16_t>(
@@ -2378,13 +2393,16 @@ namespace MFO::ProgAllocator {
             // stream alignment; applied only when resolved. ─────────────────────
             if (a_version >= 7) {
                 std::uint16_t granted = 0, strippedCount = 0;
+                std::uint8_t  freeRespec = 0;
                 if (!a_intfc->ReadRecordData(granted))       return;
+                if (!a_intfc->ReadRecordData(freeRespec))    return;
                 if (!a_intfc->ReadRecordData(strippedCount)) return;
                 if (strippedCount > kMaxPerkAllocs) {
                     spdlog::error("[cosave] implausible stripped-perk count {} -- ABORTING progression load", strippedCount);
                     return;
                 }
                 st.autoLevelsGranted = granted;
+                st.freeRespec        = (freeRespec != 0);
                 for (std::uint16_t i = 0; i < strippedCount; ++i) {
                     RE::FormID raw = 0, res = 0;
                     if (!a_intfc->ReadRecordData(raw)) return;
@@ -2402,6 +2420,10 @@ namespace MFO::ProgAllocator {
                                      : static_cast<int>(st.progressionLevel)) -
                     static_cast<int>(st.manualExcludedLevels));
                 st.autoLevelsGranted = static_cast<std::uint16_t>(std::max(0, effAutoLvl - 1));
+                // ONE FREE RESPEC (marth 2026-09-14): these applied values came
+                // from the OLD drifting split and are now frozen as they stood —
+                // the escape hatch. Only a v6-born record earns it.
+                st.freeRespec = true;
             }
 
             if (!resolved) { ++droppedActor; continue; }

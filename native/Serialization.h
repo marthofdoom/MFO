@@ -97,6 +97,8 @@ namespace MFO {
     //   v7 (2026-09-13, A′/B′): per skill APPENDS autoPoints (f32, after
     //            manualPoints) — the permanent auto accumulator; per follower
     //            APPENDS after the v6 HMS block: autoLevelsGranted (u16),
+    //            freeRespec (u8, the one-time post-migration free respec — set
+    //            ONLY by the v6 reader, cleared by Respec),
     //            strippedCount (u16) + stripped perk FormIDs (u32 × N,
     //            ResolveFormID'd, unresolvable dropped). NO per-session flag
     //            (nativeHeld is runtime-only — the strip re-runs every load

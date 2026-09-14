@@ -59,7 +59,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v7`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v7`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -1621,7 +1621,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   hmsCumulative f32}, then battlesSinceLevelUp u32, battlesOffClass u32,
   offClassPool u8, hmsCaptured u8, **[v6: hmsZeroAwardStreak u8, hmsGrantRemainder
   f32×3, hmsAwardAccum f32]**], **[v7 APPENDED after the HMS block: autoLevelsGranted
-  u16, strippedCount u16 + {perkFormID u32}×N]**}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
+  u16, freeRespec u8, strippedCount u16 + {perkFormID u32}×N]**}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
   behind `if(version>=N)` (**v6 header + block additions gated `if(version>=6)`;
   v5 keeps the old 4-f32/pool reader, reads+discards target, recomputes it; all
   floats finite-guarded, streak clamped 0..2**). The HMS block is read
@@ -1658,7 +1658,15 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `manualExcludedLevels` → 0, manual ON → `manualBaselineLevel = 1`; then one
   `RecomputeSkills` re-grants every level under AUTO by the current weights, or
   leaves the whole pool (`(level − 1) × manualSkillPtsPerLevel`) to the player under
-  MANUAL. Rapport as before; no-op (no cost) only when nothing at all is placed.
+  MANUAL. Rapport as before — EXCEPT the ONE FREE post-migration respec
+  (`ProgState::freeRespec`, v7 u8: set ONLY by the `a_version < 7` reader because a
+  v6 follower's applied values came from the old drifting split and A′ freezes
+  them; `Respec` skips `Rapport::Spend`, logs `RESPEC <name> -- FREE (one-time,
+  post-migration)`, clears the flag; a fresh v7 enrollee has none; unenroll/bench
+  never touch it). `HasFreeRespec(id)` + `BoardFollowerView::freeRespec` expose it
+  — the Board's "-500 rapport" cost text (`Board_Progression.cpp:1195-1212`) does
+  NOT yet read it: one call in a Board brief. No-op (no cost) only when nothing at
+  all is placed.
   Every other path (`SetManualSkills:1758`, `SetClass:1539`, `PollWork:1029`,
   `ReapplyFollower`, HMS, the fixed-stat grant, `CoSaveLoad`) only READS the point
   fields. **What breaks:** a third writer of either field violates #81; the grant

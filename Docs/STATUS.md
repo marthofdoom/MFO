@@ -23,7 +23,9 @@ Read it as history and this block as current.
   returns ALL points (perks + every auto/manual skill point, the level ledger to
   zero) — re-spent by the class under auto or pooled for the player under manual;
   sibling dominance reads BASE SKILLS ONLY. v6 saves migrate with today's applied
-  values frozen. (B′) **native catalog perks are stripped at enrollment** and on the
+  values frozen, and every v6-born follower carries ONE free respec (`freeRespec`,
+  v7; the Board cost text needs a one-call hookup to show "Free"). (B′) **native
+  catalog perks are stripped at enrollment** and on the
   first active poll of an unstripped follower, recorded in the v7 co-save
   (`strippedPerks`; the strip is per-session — re-run on every load), NEVER restored while enrolled (marth: "a clean
   restore when it's uninstalled" — public `ProgAllocator::RestoreNativePerks`, no
