@@ -17,7 +17,8 @@ Read it as history and this block as current.
   no version bump) — pushed, CI on its own tip, NOT merged, NOT deployed. Fable tier-3
   on `f771399` came back with nothing above SEV-3; F1–F5 (SEV-3 carve-outs + SEV-4
   carve-out (b)) are FIXED in `1ac3c6b`, F6 is DECIDED by marth (below), F7–F9 are
-  deferred to `Docs/REVIEW-BACKLOG.md` MFO-B17/B18/B19.** marth 2026-09-13: "both gaps
+  deferred to `Docs/REVIEW-BACKLOG.md` MFO-B17/B18/B19; round 2 on `1ac3c6b`: F-A/F-C/F-D
+  FIXED in `4536ee0`, F-E/F-F deferred as MFO-B20/B21.** marth 2026-09-13: "both gaps
   are clear to fix right away" —
   the two consumers the perk-style branch reported but did not build. **GAP 1, the
   combat pick:** `Actuation.cpp EquipWeapon` now picks by `Logistics::WeaponScore(roles,
@@ -54,7 +55,16 @@ Read it as history and this block as current.
   unequip names `LeftHandSlot()` (CoLoad picks it from the live hands) and a
   next-frame `[hold] <id>: left readback = <form|none>` line follows every yield/
   release. F5 — the satisfied-lap top-up is transparent again (no suppression
-  window, no `lastFired`, no `NoteCombatFire`). **DECIDED (marth 2026-09-14, F6),
+  window, no `lastFired`, no `NoteCombatFire`). **Round 2 (`4536ee0`, Fable on
+  `1ac3c6b`):** F-A — no left WEAPON hold is placed while a LEFT gear debt is open
+  (new `Loadout::OwesLeft`, gating the top-up and the pick path; a hold over an
+  unpaid debt could never be settled by the AI and `Prepare`'s debt gate would
+  Debounce every later cast, heals dead until combat end); with that, F-B's
+  repay-under-lock at combat end / dismissal has no remaining writer. F-C — the
+  `[hold]` readback is double-posted (one full frame after the follower's update
+  drains the queued unequip), so "weapon" in that line means the lock survived,
+  not a stale read. F-D — two stale comments corrected. F-E/F-F deferred to
+  REVIEW-BACKLOG MFO-B20/B21. **DECIDED (marth 2026-09-14, F6),
   verbatim: "for F6 the weapon should always yield to a spell on left hand."** A
   force-held left weapon ALWAYS yields to any spell that needs the left hand, heals
   included; the weapon↔spell churn at cast cadence on a dual-wielder (heals are

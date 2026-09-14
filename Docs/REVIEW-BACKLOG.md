@@ -156,6 +156,24 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** none requested; if a profile ever shows it, cache the roles per follower per service tick (the Scheduler already computes them once per OOC tick in `ShedOffRoleWeapon`).
 - **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
 
+### MFO-B20 — `EquipShieldOnMain` logs the shield equip before the posted closure has re-resolved
+- **Raised:** Fable round-2 review of `1ac3c6b` (`feat/mfo-dualwield-combat-pick`), SEV-5. F-E.
+- **Severity:** SEV-5
+- **Finding (verbatim):** F-E — SEV-5 backlog: EquipShieldOnMain logs "GAMBIT equip shield" synchronously (:1822-1823, :1912) before the posted closure re-resolves; a closure that finds a null actor/item (:1711-1714) equips nothing but the log already claimed it did; no IsTracked/alive check inside the closure (one-frame window, harmless).
+- **Reviewer's reasoning:** a one-frame window between the worker's decision and the main-thread equip; the closure null-checks both re-resolved forms and equips nothing on a miss, so the only defect is a log line that can overstate. Harmless.
+- **Why it was NOT fixed:** raised in a round with nothing above SEV-3 once F-A/F-C/F-D were fixed; a log-placement change with its own review cost. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** move the `[equip] ... GAMBIT equip shield` line into the posted closure after the null checks (log what actually happened), optionally with an `IsTracked`/alive check; same shape as the loot precedent.
+- **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+
+### MFO-B21 — CoLoad both-hands-same-form: the second unequip is slot-less by object after the left-slot one
+- **Raised:** Fable round-2 review of `1ac3c6b` (`feat/mfo-dualwield-combat-pick`), SEV-5. F-F.
+- **Severity:** SEV-5
+- **Finding (verbatim):** F-F — SEV-5 backlog: CoLoad both-hands-same-form (:2552-2553): the second unequip is slot-less by object after the left-slot unequip is queued ahead of it; passing the right-hand slot would make it unambiguous. (Note: there is no RightHandSlot() helper; if you add one it is the LookupByID<BGSEquipSlot>(0x00013F42) twin of LeftHandSlot — only do it if trivial and in-boundary, otherwise backlog as-is.)
+- **Reviewer's reasoning:** only the same-form count>=2 dual hold reaches this branch on load; the two queued unequips target the same object and which instance the slot-less second one clears is the same unverified engine question STATUS.md already carries for the F4 probe.
+- **Why it was NOT fixed:** backlogged as-is per the coordinator (no `RightHandSlot()` helper exists; adding one is its own small brief). Deferred, not dropped.
+- **Fix shape when drained (verbatim):** passing the right-hand slot would make it unambiguous — add `Loadout::RightHandSlot()` (the `kRightHandEquip` twin of `LeftHandSlot`, verify the default-object id in the pinned tree) and pass it on the `inRight` unequip.
+- **Surfaced at edit time from:** MAP.md §1 FWPN entry + §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+
 ---
 
 ## DRAINED
