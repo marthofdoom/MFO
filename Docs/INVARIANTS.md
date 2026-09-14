@@ -19,7 +19,7 @@ one, because the next person will believe it.
 
 ## CITATION NAMESPACE (2026-09-07) — `#N` is an INVARIANT, `T#N` is a TASK
 
-**94 rules: 80 numbered (`#1`–`#80`, each used exactly once) plus 14 lettered
+**95 rules: 81 numbered (`#1`–`#81`, each used exactly once) plus 14 lettered
 sub-rules (`#22a`–`#22j`, `#42a`, `#45a`, `#66a`, `#67a`).** Two things used to
 break a `#N` citation, and both are fixed here:
 
@@ -1143,3 +1143,23 @@ across a fast revert -> load wakes, re-reads a flag that is true again, and
 keeps looping alongside its own replacement -- doubling the tick rate, once per
 fast load, permanently. A boolean cannot express "you specifically should
 stop". An epoch counter can.
+
+### 81. A skill point, once placed by any path, stays on that skill until Respec
+
+`SkillAlloc::manualPoints` (the player's own allocation) and
+`SkillAlloc::autoPoints` (the class share, PRGN v7) are ACCUMULATORS with exactly
+two writers each: the placing verb (`ApplyManualSkillPoint` +1 / the GRANT step of
+`RecomputeSkills` +=) and `Respec` (-> 0). No automatic path may add to, reduce,
+move or re-derive either: not the level poll, not the ~2 s drift-watch, not a
+class change, not HMS, not the catch-up grant, not the load reconcile, not the
+manual toggle. The class weights decide where NEW level-up points go and are not
+even consulted when nothing is pending; `ReconcileSkill` (the single base-AV
+write) only HOLDS natural + floor(auto) + manual (the exact float share is
+the ledger; whole points reach the actor). The sibling dominance under the share
+(`DominantWeaponSkill`/`DominantArmorSkill`) reads BASE SKILLS ONLY -- the old
+loadout read re-homed the whole share on every loot/equip change at drift-watch
+cadence, which the player saw as his placed points drifting (marth, 2026-09-13:
+"fluidly managed"; then: "auto placed skill points are equally as permanent,
+there is no shift"). `Respec` returns ALL points: perks, every auto and manual
+skill point, the level ledger to zero -- re-spent by the class weights under auto,
+or pooled for the player under manual. **MFO** v2.0.7-dev, PRGN v7.

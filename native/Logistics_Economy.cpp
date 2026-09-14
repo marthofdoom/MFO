@@ -416,7 +416,8 @@ namespace MFO::Logistics {
                 const bool wantCrossbow = roles.wantCrossbow;
                 using WT = RE::WEAPON_TYPE;
 
-                std::uint16_t baseDmg = 0, myRangedDmg = 0;
+                float baseScore = 0.0f;   // WeaponScore baseline (perk-style biased damage)
+                std::uint16_t myRangedDmg = 0;
                 float slotRat[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot (0 head..4 shield)
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
@@ -424,7 +425,7 @@ namespace MFO::Logistics {
                         if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
                         if (meleeTargetClass != WepClass::Other &&
                             WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
-                            baseDmg = std::max(baseDmg, w->GetAttackDamage());
+                            baseScore = std::max(baseScore, WeaponScore(roles, w));
                         if (doRanged && w->GetWeaponType() == (wantCrossbow ? WT::kCrossbow : WT::kBow))
                             myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
                     } else if (auto* ar = obj->As<RE::TESObjectARMO>()) {
@@ -437,7 +438,8 @@ namespace MFO::Logistics {
                     }
                 }
                 buy.meleeClass    = static_cast<std::int32_t>(meleeTargetClass);
-                buy.meleeBaseDmg  = baseDmg;
+                buy.meleeBaseScore = baseScore;
+                buy.preferKinds    = static_cast<std::int32_t>(roles.preferKinds);
                 buy.doRanged      = doRanged;
                 buy.wantCrossbow  = wantCrossbow;
                 buy.rangedBaseDmg = myRangedDmg;
@@ -603,6 +605,12 @@ namespace MFO::Logistics {
             // 1H, 2H, bow, crossbow, staff kept SEPARATELY (Fable: merging 1H+2H or
             // bow+crossbow by raw damage let a junk greatsword/crossbow win the keep
             // and the real weapon get sold). Only worse in-class duplicates are junk.
+            // STYLE BY PERKS (marth 2026-09-13): the melee buckets (1H, 2H) rank
+            // by the loot judge's WeaponScore -- damage x the perk-style bias --
+            // so the greatsword the loot side just preferred over a stronger
+            // warhammer is the one KEPT, not the one sold. Ranged/staff buckets
+            // are unchanged; with no preferred kind the score IS the damage.
+            const WeaponRoles keepRoles = ComputeWeaponRoles(a_follower, a_state);
             std::unordered_set<RE::TESBoundObject*> keepWeapons;
             {
                 // bucket: 1=1H 2=2H 3=bow 4=crossbow 5=staff; -1 = don't protect.
@@ -618,7 +626,7 @@ namespace MFO::Logistics {
                         default:                return 1;      // 1h sword/dagger/axe/mace
                     }
                 };
-                std::unordered_map<int, std::pair<RE::TESBoundObject*, std::uint16_t>> best;
+                std::unordered_map<int, std::pair<RE::TESBoundObject*, float>> best;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
@@ -629,10 +637,12 @@ namespace MFO::Logistics {
                     // GetAttackDamage() -- a staff's melee swing stat is irrelevant to
                     // its value, so ranking that bucket by damage could keep the worse
                     // (cheaper) of 2+ unworn staves and sell the better one (SEV2 fix).
-                    // Every other bucket still ranks by combat stat (attack damage).
-                    const std::uint16_t rank = (b == 5)
-                        ? static_cast<std::uint16_t>(std::clamp<std::int32_t>(w->GetGoldValue(), 0, 0xFFFF))
-                        : w->GetAttackDamage();
+                    // Melee buckets rank by WeaponScore (perk-style biased damage);
+                    // bow/crossbow by attack damage.
+                    const float rank = (b == 5)
+                        ? static_cast<float>(std::clamp<std::int32_t>(w->GetGoldValue(), 0, 0xFFFF))
+                        : (b == 1 || b == 2) ? WeaponScore(keepRoles, w)
+                                             : static_cast<float>(w->GetAttackDamage());
                     auto& slot = best[b];
                     if (!slot.first || rank >= slot.second)
                         slot = { obj, rank };
@@ -666,7 +676,7 @@ namespace MFO::Logistics {
                 // ranged (bow) or caster follower never equips one, so it must NOT be
                 // kept -- it is dead weight that should sell. (The off-role WEAPON shed
                 // drops wrong-role weapons; a shield is armor and slipped past it.)
-                const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+                const WeaponRoles& roles = keepRoles;   // computed once above (keepWeapons)
                 const bool usesShield   = (roles.melee == WepClass::OneHand) &&
                                           !roles.doRanged && !caster;
 
@@ -978,6 +988,12 @@ namespace MFO::Logistics {
     // buy planner (TradeBridge::PlanBuy) so buy and loot classify gear identically.
     int WeaponBuyClass(RE::WEAPON_TYPE a_type) {
         return static_cast<int>(WeaponClassOf(a_type));   // WepClass: 0=1H 1=2H 2=Ranged 3=Other
+    }
+
+    float WeaponBuyScore(RE::TESObjectWEAP* a_weap, int a_preferKinds) {
+        WeaponRoles r;
+        r.preferKinds = static_cast<std::uint16_t>(a_preferKinds);
+        return WeaponScore(r, a_weap);   // the loot judge's own score, same bias
     }
 
     int SpellSchoolBit(RE::SpellItem* a_spell) {

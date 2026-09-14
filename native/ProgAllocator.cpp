@@ -278,27 +278,23 @@ namespace MFO::ProgAllocator {
         // SIBLING PRUNING (the documented convention): when a class list
         // carries BOTH weapon skills (OneHanded/TwoHanded) or BOTH armor
         // skills (Heavy/Light), the DLL keeps only the DOMINANT one for this
-        // follower — dominance read from the loadout (equipped weapon type /
-        // worn body-armor class), falling back to the higher base AV. That is
-        // how "dominant weapon 40%" stays name-agnostic and author-tunable at
+        // follower — the HIGHER BASE SKILL, ties to OneHanded / Light (the
+        // Logistics ComputeWeaponRoles / ArmorClassSuits rule). That is how
+        // "dominant weapon 40%" stays name-agnostic and author-tunable at
         // once: the author lists both siblings, the follower picks theirs.
+        //
+        // STRICT POINTS (marth 2026-09-13): dominance is read from the SKILLS
+        // ONLY — never from the equipped weapon or the worn body armor. The
+        // old loadout read re-homed the whole sibling share every ~2 s drift-
+        // watch cycle on every equip/loot change (a looted light cuirass
+        // moved the armor share from Heavy to Light and back), which is the
+        // "fluidly managed" skill drift the player saw under points he had
+        // placed himself. A base-skill compare is a fixed point: the sibling
+        // holding the share grows further ahead, so the pick is stable until
+        // the OTHER sibling genuinely overtakes it — which only the player's
+        // own §16 manual points (or a class change / respec) can cause.
+        // "Highest skill wins" — the same rule Part B uses for equipment.
         RE::ActorValue DominantWeaponSkill(RE::Actor* a_actor) {
-            if (auto* obj = a_actor->GetEquippedObject(false)) {
-                if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
-                    switch (weap->GetWeaponType()) {
-                    case RE::WEAPON_TYPE::kTwoHandSword:
-                    case RE::WEAPON_TYPE::kTwoHandAxe:
-                        return RE::ActorValue::kTwoHanded;
-                    case RE::WEAPON_TYPE::kOneHandSword:
-                    case RE::WEAPON_TYPE::kOneHandDagger:
-                    case RE::WEAPON_TYPE::kOneHandAxe:
-                    case RE::WEAPON_TYPE::kOneHandMace:
-                        return RE::ActorValue::kOneHanded;
-                    default:
-                        break;   // bow/staff/fists say nothing about melee dominance
-                    }
-                }
-            }
             auto* avo = a_actor->AsActorValueOwner();
             if (avo && avo->GetBaseActorValue(RE::ActorValue::kTwoHanded) >
                            avo->GetBaseActorValue(RE::ActorValue::kOneHanded))
@@ -307,14 +303,6 @@ namespace MFO::ProgAllocator {
         }
 
         RE::ActorValue DominantArmorSkill(RE::Actor* a_actor) {
-            using AT = RE::BGSBipedObjectForm::ArmorType;
-            if (auto* body = a_actor->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody)) {
-                switch (body->GetArmorType()) {
-                case AT::kHeavyArmor: return RE::ActorValue::kHeavyArmor;
-                case AT::kLightArmor: return RE::ActorValue::kLightArmor;
-                default: break;   // clothing decides nothing
-                }
-            }
             auto* avo = a_actor->AsActorValueOwner();
             // Ties fall to LIGHT, the Logistics::ArmorClassSuits rule.
             if (avo && avo->GetBaseActorValue(RE::ActorValue::kHeavyArmor) >
@@ -356,13 +344,12 @@ namespace MFO::ProgAllocator {
             return out;
         }
 
-        // ── the auto-scale (§15: AUTO skills, by class, to level) ───────────
-        // total = skillPointsPerLevel × (progressionLevel − 1), split by the
-        // class weights, applied through the reconcile. Recomputed whole on
-        // every level gain / class change; entries leaving the set settle
-        // back to natural and are dropped — UNLESS they carry §16 manual
-        // points, which are ADDITIVE on top of the class share and survive
-        // any class change (the manual override outranks the auto default).
+        // ── the auto-scale (§15) — PRGN v7 ACCUMULATOR (marth: "auto placed
+        // skill points are equally as permanent, there is no shift"). 1) GRANT
+        // the not-yet-granted auto levels × skillPointsPerLevel by the weights
+        // AT THIS MOMENT (largest remainder) into autoPoints — a placed point is
+        // never read or moved. 2) HOLD natural + auto + manual through the single
+        // ReconcileSkill. Respec zeroes both ledgers; this step re-grants (A″).
         void RecomputeSkills(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
             const ClassDef* def = FindClassDef(a_st.clsId);
             if (!def) return;   // no class picked, or the declaring addon left
@@ -372,59 +359,63 @@ namespace MFO::ProgAllocator {
                              a_actor->GetFormID());
                 return;
             }
+            const auto id = a_actor->GetFormID();
 
-            // §16 (round-4 correction): manual REPLACES auto. While the
-            // toggle is ON the auto total is FROZEN at the stint baseline;
-            // levels progressed manually (manualExcludedLevels) are excluded
-            // from the auto total forever — a manual-mode follower does NOT
-            // auto-gain skills on level-up, and toggling back never
-            // back-fills the manual stint.
             const int effAutoLvl = std::max(0,
                 (a_st.manualSkills ? static_cast<int>(a_st.manualBaselineLevel)
                                    : static_cast<int>(a_st.progressionLevel)) -
                 static_cast<int>(a_st.manualExcludedLevels));
-            const float total = g_econ.skillPointsPerLevel *
-                                static_cast<float>(std::max(0, effAutoLvl - 1));
-            const auto weights = WeightsFor(a_actor, *def);
+            const int targetGranted = std::max(0, effAutoLvl - 1);
+            const int pending = targetGranted - static_cast<int>(a_st.autoLevelsGranted);
 
-            // Desired AUTO points per skill (deterministic: round-half-up).
-            std::vector<std::pair<RE::ActorValue, float>> desired;
-            for (const auto& [av, w] : weights)
-                desired.emplace_back(av, std::floor(total * w + 0.5f));
-            auto autoFor = [&](RE::ActorValue av) -> float {
-                for (const auto& d : desired)
-                    if (d.first == av) return d.second;
-                return 0.0f;
-            };
+            // 1) GRANT the pending levels by the weights of this moment. The
+            // EXACT float share goes into autoPoints (Fable F3 on 4a62688: a
+            // per-level largest-remainder split starved the 10 % skill of a
+            // 40/30/20/10 class FOREVER at the shipped 5 pts/level — 2/2/1/0 every
+            // level); the whole-point floor is taken at HOLD time below, so the
+            // fractions carry across levels and every skill converges on its
+            // exact share (20 levels × 5 → 40/30/20/10, not 40/40/20/0).
+            if (pending > 0) {
+                const float pts = g_econ.skillPointsPerLevel * static_cast<float>(pending);
+                const auto weights = WeightsFor(a_actor, *def);
+                if (pts > 0.0f && !weights.empty()) {
+                    std::string diag;
+                    for (const auto& [av, w] : weights) {
+                        const float share = pts * w;
+                        if (share <= 0.0f) continue;
+                        auto* e = [&]() -> SkillAlloc* {
+                            for (auto& x : a_st.skills)
+                                if (x.av == av) return &x;
+                            a_st.skills.push_back({ av, 0.0f, -1.0f });
+                            return &a_st.skills.back();
+                        }();
+                        e->autoPoints += share;
+                        diag += std::format("{}{}+{:.2f}={:.2f}", diag.empty() ? "" : " ", AvName(av), share, e->autoPoints);
+                    }
+                    if (a_log)
+                        spdlog::info("[prog] {:08X}: GRANT {} auto level(s) = {:g} point(s) by class \"{}\": {} "
+                                     "(granted levels {} -> {}; placed points never move)",
+                                     id, pending, pts, def->name, diag, a_st.autoLevelsGranted, targetGranted);
+                }
+                a_st.autoLevelsGranted = static_cast<std::uint16_t>(std::min(targetGranted, 0xFFFF));
+            }
 
-            const auto id = a_actor->GetFormID();
-
-            // 1) skills leaving the allocation entirely (no auto share, no
-            // manual points) settle back to natural and drop. The baseline
-            // floor rides along: a shrink can never land below the captured
-            // natural (SEV-1 guarantee, single choke point).
+            // 2) HOLD. Entries with nothing placed settle back to natural and
+            // drop (the baseline floor rides: a shrink can never land below the
+            // captured natural — SEV-1 guarantee, single choke point).
             for (auto it = a_st.skills.begin(); it != a_st.skills.end();) {
-                const bool keep = it->manualPoints > 0.0f ||
-                                  autoFor(it->av) > 0.0f;
-                if (!keep) {
+                if (it->autoPoints <= 0.0f && it->manualPoints <= 0.0f) {
                     ReconcileSkill(avo, *it, 0.0f, BaselineFloor(a_st, it->av), id, a_log);
                     it = a_st.skills.erase(it);
                 } else {
                     ++it;
                 }
             }
-            // 2) ensure an entry exists for every auto-desired skill, then
-            // reconcile EVERY kept entry to auto + manual in one pass — one
-            // target, one call site, exact recovery.
-            for (const auto& [av, pts] : desired) {
-                (void)pts;
-                const bool have = std::find_if(a_st.skills.begin(), a_st.skills.end(),
-                                               [&](const SkillAlloc& s) { return s.av == av; })
-                                  != a_st.skills.end();
-                if (!have) a_st.skills.push_back({ av, 0.0f, -1.0f });
-            }
+            // Whole points only reach the actor: floor the exact auto ledger
+            // (+1e-3 so an accumulated 39.99999f reads as 40); the fraction
+            // stays in autoPoints for the next grant to complete.
             for (auto& e : a_st.skills)
-                ReconcileSkill(avo, e, autoFor(e.av) + e.manualPoints,
+                ReconcileSkill(avo, e, std::floor(e.autoPoints + 1.0e-3f) + e.manualPoints,
                                BaselineFloor(a_st, e.av), id, a_log);
         }
 
@@ -674,6 +665,62 @@ namespace MFO::ProgAllocator {
                 }
             }
             return total;
+        }
+
+        // ── B′ NATIVE-PERK STRIP (marth 2026-09-13): every CATALOG rank the
+        // base holds that MFO did not grant is removed + recorded (a set).
+        // Non-catalog untouched; an ACTOR-only rank is logged + left. MAIN THREAD.
+        int StripNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
+            int stripped = 0;
+            for (const auto& tree : Progression::Get().skills) {
+                for (const auto& node : tree.nodes) {
+                    auto* alloc = FindAlloc(a_st, node.perkFormID);
+                    const RE::FormID mfoForm = (alloc && alloc->rank >= 1 && alloc->rank <= node.ranks.size())
+                        ? node.ranks[alloc->rank - 1].perkFormID : 0;
+                    for (const auto& rank : node.ranks) {
+                        auto* perk = PerkByID(rank.perkFormID);
+                        if (!perk || rank.perkFormID == mfoForm) continue;   // MFO's own grant stays
+                        if (!a_base->GetPerkIndex(perk).has_value()) {
+                            if (a_actor->HasPerk(perk))
+                                spdlog::info("[prog] {:08X}: native '{}' ({:08X}) is actor-held, not on the base "
+                                             "-- cannot strip, left in place", a_actor->GetFormID(),
+                                             NameOf(perk), rank.perkFormID);
+                            continue;
+                        }
+                        a_base->RemovePerk(perk);
+                        if (std::find(a_st.strippedPerks.begin(), a_st.strippedPerks.end(), rank.perkFormID)
+                                == a_st.strippedPerks.end() && a_st.strippedPerks.size() < kMaxPerkAllocs)
+                            a_st.strippedPerks.push_back(rank.perkFormID);
+                        ++stripped;
+                        spdlog::info("[prog] {:08X}: STRIP native {} perk '{}' ({:08X}) -- list-given, "
+                                     "now the player's to give", a_actor->GetFormID(), tree.skillName,
+                                     NameOf(perk), rank.perkFormID);
+                    }
+                }
+            }
+            if (stripped) a_actor->ApplyPerksFromBase();
+            a_st.nativeHeld = true;
+            // §17 debit = tree ranks STILL natively held (unstrippable), never MFO's.
+            a_st.nativeTreePerksAtEnroll = static_cast<std::uint16_t>(
+                std::clamp(CountNativeTreeRanks(a_actor, a_base) - AllocatedRanks(a_st), 0, 0xFFFF));
+            return stripped;
+        }
+        // The safe-removal restore (public RestoreNativePerks): every recorded
+        // native rank back on the base, record cleared. Uncalled today.
+        int RestoreNativePerksImpl(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
+            int restored = 0;
+            for (const auto fid : a_st.strippedPerks) {
+                auto* perk = PerkByID(fid);
+                if (!perk || a_base->GetPerkIndex(perk).has_value()) continue;
+                a_base->AddPerk(perk, 1);
+                ++restored;
+                spdlog::info("[prog] {:08X}: RESTORE native perk '{}' ({:08X}) -- uninstall",
+                             a_actor->GetFormID(), NameOf(perk), fid);
+            }
+            if (restored) a_actor->ApplyPerksFromBase();
+            a_st.strippedPerks.clear();
+            a_st.nativeHeld = false;
+            return restored;
         }
 
         // The §5 double gate. Returns the 1-based rank this follower may take
@@ -956,6 +1003,15 @@ namespace MFO::ProgAllocator {
             return Followers::IsTrackedFast(a_id);
         }
 
+        // UNENROLLED = T#78 toggle unchecked: "unmanage, don't touch" (marth).
+        // Every actor-touching path refuses; ProgState stays whole (still
+        // leveled, still saved) so re-checking resumes + grants the back debt.
+        bool Unmanaged(RE::Actor* a_actor, const char* a_verb) {
+            if (!a_actor || Followers::IsMfoEnabled(a_actor->GetFormID())) return false;
+            spdlog::info("[prog] {} refused {}: MFO is unchecked for this follower (unmanaged)", a_verb, NameOf(a_actor));
+            return true;
+        }
+
         void PollWork() {
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!player) return;
@@ -987,7 +1043,8 @@ namespace MFO::ProgAllocator {
             for (auto& [id, st] : g_prog) {
                 if (!st.enrolled) continue;
 
-                RE::Actor* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+                RE::Actor* actor   = RE::TESForm::LookupByID<RE::Actor>(id);
+                const bool managed = Followers::IsMfoEnabled(id);
 
                 if (st.clsId != 0) {
                     const bool active = IsActiveFollower(id);
@@ -1021,12 +1078,23 @@ namespace MFO::ProgAllocator {
                                      "(floor(level/{}) − {} spent)",
                                      id, st.progressionLevel, gain, PerkPointsAvailable(st),
                                      g_econ.levelsPerPerkPoint, AllocatedRanks(st));
-                        if (actor) RecomputeSkills(actor, st, /*log*/ true);
-                        if (actor) RecomputeHMS(actor, st, /*log*/ true);   // §HMS
+                        if (actor && managed) RecomputeSkills(actor, st, /*log*/ true);
+                        if (actor && managed) RecomputeHMS(actor, st, /*log*/ true);   // §HMS
                     }
                 }
 
-                if (actor) {
+                if (actor && !managed) {
+                    // UNMANAGED: levels still accrue (back debt), the actor is not
+                    // touched; re-arm reapply + strip for the re-check poll.
+                    st.applied = false;
+                    st.nativeHeld = false;
+                } else if (actor) {
+                    // B′: an unstripped follower (v6 save / benched / re-enrolled)
+                    // is stripped the first ACTIVE poll, BEFORE the reapply (re-armed
+                    // when anything was removed); never restored while enrolled.
+                    if (!st.nativeHeld && IsActiveFollower(id))
+                        if (auto* base = actor->GetActorBase())
+                            if (StripNativePerks(actor, base, st) > 0) st.applied = false;
                     if (!st.applied) {
                         ReapplyFollower(actor, st);   // lazy: runs once the actor resolves
                     } else if (st.clsId != 0 && IsActiveFollower(id)) {
@@ -1250,7 +1318,11 @@ namespace MFO::ProgAllocator {
         ApplyEconomyOverride();   // re-overlay the addon MCM INI (defaults cached)
         // Fresh session: everything reapplies lazily (the poll retries until
         // each enrolled actor resolves — P3's guarded shape, never eager).
-        for (auto& [id, st] : g_prog) st.applied = false;
+        // Fable F1 (4a62688): base perk edits do NOT survive a load (P3), so the
+        // natives are back on every base — re-arm the strip too (idempotent;
+        // strippedPerks unions), or every native node re-locks on the Board and
+        // the reapply defers MFO's rank behind the returned native.
+        for (auto& [id, st] : g_prog) { st.applied = false; st.nativeHeld = false; }
 
         ++g_pollGen;
         g_pollFrames = kPollFrames;
@@ -1345,6 +1417,7 @@ namespace MFO::ProgAllocator {
                         std::min(AllocatedRanks(*st), 0xFFFF));
                     v.manualSkills   = st->manualSkills;           // §16
                     v.manualAvail    = ManualAvail(*st);
+                    v.freeRespec     = st->freeRespec;             // one-time free respec pending
                 }
                 if (auto* avo = a->AsActorValueOwner()) {
                     v.skills.reserve(std::size(kSkillNames));
@@ -1382,6 +1455,7 @@ namespace MFO::ProgAllocator {
     bool Enroll(RE::Actor* a_actor) {
         if (!g_ready) { spdlog::info("[prog] enroll refused: addon absent"); return false; }
         if (!a_actor) { spdlog::warn("[prog] enroll refused: null actor"); return false; }
+        if (Unmanaged(a_actor, "enroll")) return false;
         const auto id = a_actor->GetFormID();
         auto* base = a_actor->GetActorBase();
         if (!base) { spdlog::warn("[prog] enroll refused {:08X}: no TESNPC base", id); return false; }
@@ -1434,24 +1508,30 @@ namespace MFO::ProgAllocator {
             st.hmsCaptured = true;
         }
 
-        // §17: the perk-budget debit — tree ranks the follower brought along.
-        // Captured ONCE, before MFO ever grants anything, so the derived pool
-        // can never double-pay a pre-trained follower.
+        // B′: strip the list-given catalog perks NOW (engagement); recorded for
+        // the uninstall restore, never refunded (not credited, not debited).
+        const int strippedN = StripNativePerks(a_actor, base, st);
+
+        // §17: the perk-budget debit — tree ranks the follower STILL holds after
+        // the strip (an actor-held rank the strip could not remove). Captured
+        // ONCE, before MFO ever grants anything, so the derived pool can never
+        // double-pay a pre-trained follower.
         st.nativeTreePerksAtEnroll =
             static_cast<std::uint16_t>(std::min(CountNativeTreeRanks(a_actor, base), 0xFFFF));
 
         spdlog::info("[prog] ENROLLED {} ({:08X}) — unique base {:08X}, PotentialFollowerFaction={}, "
-                     "baseline {} skill(s) captured, {} native tree rank(s) counted against the "
-                     "perk budget (§17). Progression INACTIVE until a class is set (§15).",
+                     "baseline {} skill(s) captured, {} native tree rank(s) STRIPPED (recorded), {} "
+                     "left counted against the perk budget (§17). Progression INACTIVE until a class "
+                     "is set (§15).",
                      NameOf(a_actor), id, base->GetFormID(),
                      st.wasInPotentialFollowerFaction ? "yes" : "NO",
-                     st.baseline.size(), st.nativeTreePerksAtEnroll);
+                     st.baseline.size(), strippedN, st.nativeTreePerksAtEnroll);
         return true;
     }
 
     bool SetClass(RE::Actor* a_actor, RE::FormID a_classId) {
         if (!g_ready) { spdlog::info("[prog] set-class refused: addon absent"); return false; }
-        if (!a_actor) return false;
+        if (!a_actor || Unmanaged(a_actor, "set-class")) return false;
         const auto id = a_actor->GetFormID();
         auto it = g_prog.find(id);
         if (it == g_prog.end() || !it->second.enrolled) {
@@ -1494,8 +1574,9 @@ namespace MFO::ProgAllocator {
         // only ever clobbered the user's correct Gambit pick with Auto. Mirror removed.
 
         RecomputeSkills(a_actor, st, /*log*/ true);
-        spdlog::info("[prog] {} class {} -> \"{}\" ({:08X}) — skills auto-scaled to level {} "
-                     "({} skill(s) allocated), perk allocation unlocked",
+        spdlog::info("[prog] {} class {} -> \"{}\" ({:08X}) — pending auto levels granted to level {} "
+                     "({} skill(s) allocated; placed points never move, the new class steers "
+                     "future levels), perk allocation unlocked",
                      NameOf(a_actor), beforeName, def->name, def->id,
                      st.progressionLevel, st.skills.size());
         return true;
@@ -1503,7 +1584,7 @@ namespace MFO::ProgAllocator {
 
     bool AllocatePerk(RE::Actor* a_actor, RE::FormID a_nodePerkID) {
         if (!g_ready) { spdlog::info("[prog] allocate refused: addon absent"); return false; }
-        if (!a_actor) return false;
+        if (!a_actor || Unmanaged(a_actor, "allocate")) return false;
         auto* base = a_actor->GetActorBase();
         if (!base) return false;
         auto it = g_prog.find(a_actor->GetFormID());
@@ -1535,7 +1616,7 @@ namespace MFO::ProgAllocator {
     }
 
     bool AllocateNextEligible(RE::Actor* a_actor) {
-        if (!g_ready || !a_actor) return false;
+        if (!g_ready || !a_actor || Unmanaged(a_actor, "auto-pick")) return false;
         auto* base = a_actor->GetActorBase();
         if (!base) return false;
         auto it = g_prog.find(a_actor->GetFormID());
@@ -1596,7 +1677,7 @@ namespace MFO::ProgAllocator {
 
     bool Respec(RE::Actor* a_actor) {
         if (!g_ready) { spdlog::info("[prog] respec refused: addon absent"); return false; }
-        if (!a_actor) return false;
+        if (!a_actor || Unmanaged(a_actor, "respec")) return false;
         auto* base = a_actor->GetActorBase();
         if (!base) return false;
         const auto id = a_actor->GetFormID();
@@ -1606,8 +1687,12 @@ namespace MFO::ProgAllocator {
             return false;
         }
         auto& st = it->second;
-        if (st.perks.empty()) {
-            // No perks, no cost — the rapport hit is FOR the reset, and a
+        // A″ (marth 2026-09-13): "Respec returns ALL points" — every skill
+        // point placed since enrollment, auto AND manual, plus the perks.
+        float autoPlaced = 0.0f, manualPlaced = 0.0f;
+        for (const auto& e : st.skills) { autoPlaced += e.autoPoints; manualPlaced += e.manualPoints; }
+        if (st.perks.empty() && autoPlaced <= 0.0f && manualPlaced <= 0.0f) {
+            // Nothing placed, no cost — the rapport hit is FOR the reset, and a
             // no-op reset must not bill anyone.
             spdlog::info("[prog] respec {}: nothing allocated — no perks removed, no rapport spent",
                          NameOf(a_actor));
@@ -1631,14 +1716,51 @@ namespace MFO::ProgAllocator {
         // §17: the refund is AUTOMATIC — clearing the allocs removes the
         // debit and the derived pool rises by exactly the ranks returned.
 
-        // §15: free of gold, −500 rapport (record default; the follower
-        // resents the reset). Reuses the Rapport rank machinery wholesale.
-        Rapport::Spend(id, g_econ.respecRapportCost, "progression respec");
+        // SKILLS (A″): every placed point comes off (autoPoints/manualPoints
+        // -> 0) and the ledgers restart from enrollment: under AUTO the
+        // RecomputeSkills below re-grants every level by the CURRENT weights;
+        // under MANUAL the baseline drops to 1 so the whole pool is the
+        // player's. Settles through the single ReconcileSkill (baseline floor).
+        for (auto& e : st.skills) { e.autoPoints = 0.0f; e.manualPoints = 0.0f; }
+        st.autoLevelsGranted    = 0;
+        st.manualPointsApplied  = 0;
+        st.manualExcludedLevels = 0;
+        if (st.manualSkills) st.manualBaselineLevel = 1;
+        RecomputeSkills(a_actor, st, /*log*/ true);
 
-        spdlog::info("[prog] RESPEC {} ({:08X}): {} perk(s) removed -> {} point(s) available, "
-                     "rapport -{:.0f}",
+        // §15: free of gold, −500 rapport (record default; the follower
+        // resents the reset). Reuses the Rapport rank machinery wholesale —
+        // EXCEPT the one free post-migration respec (ProgState::freeRespec),
+        // which skips the spend and clears the flag; the next one pays.
+        const bool wasFree = st.freeRespec;
+        if (wasFree) {
+            st.freeRespec = false;
+            spdlog::info("[prog] RESPEC {} -- FREE (one-time, post-migration)", NameOf(a_actor));
+        } else {
+            Rapport::Spend(id, g_econ.respecRapportCost, "progression respec");
+        }
+
+        spdlog::info("[prog] RESPEC {} ({:08X}): {} perk(s) removed -> {} point(s) available; "
+                     "{:.0f} auto + {:.0f} manual skill point(s) returned, manual {} ({} pooled, "
+                     "{} auto level(s) re-granted), rapport -{:.0f}",
                      NameOf(a_actor), id, removed, PerkPointsAvailable(st),
-                     g_econ.respecRapportCost);
+                     autoPlaced, manualPlaced, st.manualSkills ? "ON" : "OFF", ManualAvail(st),
+                     st.autoLevelsGranted, wasFree ? 0.0f : g_econ.respecRapportCost);
+        return true;
+    }
+
+    bool HasFreeRespec(RE::FormID a_actorID) {
+        const auto it = g_prog.find(a_actorID);
+        return it != g_prog.end() && it->second.enrolled && it->second.freeRespec;
+    }
+
+    bool RestoreNativePerks(RE::Actor* a_actor) {
+        if (!a_actor) return false;
+        auto* base = a_actor->GetActorBase();
+        auto it = g_prog.find(a_actor->GetFormID());
+        if (!base || it == g_prog.end() || !it->second.enrolled) return false;
+        const int n = RestoreNativePerksImpl(a_actor, base, it->second);
+        spdlog::info("[prog] {}: safe-removal restore -- {} native perk(s) back, record cleared", NameOf(a_actor), n);
         return true;
     }
 
@@ -1646,7 +1768,7 @@ namespace MFO::ProgAllocator {
 
     bool SetManualSkills(RE::Actor* a_actor, bool a_on) {
         if (!g_ready) { spdlog::info("[prog] manual-skills refused: addon absent"); return false; }
-        if (!a_actor) return false;
+        if (!a_actor || Unmanaged(a_actor, "manual-skills")) return false;
         auto it = g_prog.find(a_actor->GetFormID());
         if (it == g_prog.end() || !it->second.enrolled || it->second.clsId == 0) {
             spdlog::info("[prog] manual-skills refused {}: not enrolled or no class (§15 gate)",
@@ -1685,7 +1807,7 @@ namespace MFO::ProgAllocator {
 
     bool ApplyManualSkillPoint(RE::Actor* a_actor, RE::ActorValue a_av) {
         if (!g_ready) { spdlog::info("[prog] apply-skill refused: addon absent"); return false; }
-        if (!a_actor) return false;
+        if (!a_actor || Unmanaged(a_actor, "apply-skill")) return false;
         auto it = g_prog.find(a_actor->GetFormID());
         if (it == g_prog.end() || !it->second.enrolled || it->second.clsId == 0) {
             spdlog::info("[prog] apply-skill refused {}: not enrolled or no class", NameOf(a_actor));
@@ -1875,6 +1997,7 @@ namespace MFO::ProgAllocator {
                 a_intfc->WriteRecordData(st.skills[i].points);
                 a_intfc->WriteRecordData(st.skills[i].lastWrittenBase);
                 a_intfc->WriteRecordData(st.skills[i].manualPoints);   // v2 (§16)
+                a_intfc->WriteRecordData(st.skills[i].autoPoints);     // v7 (A′ accumulator)
             }
             const auto baseCount = static_cast<std::uint16_t>(
                 std::min<std::size_t>(st.baseline.size(), kMaxSkillAllocs));
@@ -1907,6 +2030,18 @@ namespace MFO::ProgAllocator {
             for (int p = 0; p < 3; ++p)
                 a_intfc->WriteRecordData(st.hmsGrantRemainder[p]);      // v6
             a_intfc->WriteRecordData(st.hmsAwardAccum);                 // v6 (detection tally, serialized)
+            // ── v7 block — APPENDED after the HMS block: the auto-level grant
+            // ledger (A′) and the native-perk strip record (B′). Read gated on
+            // version >= 7; count-prefixed ids, each ResolveFormID'd on load.
+            a_intfc->WriteRecordData(st.autoLevelsGranted);
+            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.freeRespec ? 1u : 0u));   // v7
+            // (nativeHeld is NOT written: base AddPerk/RemovePerk are runtime-only
+            // — P3 — so the strip is per-session by nature and re-runs on load.)
+            const auto strippedCount = static_cast<std::uint16_t>(
+                std::min<std::size_t>(st.strippedPerks.size(), kMaxPerkAllocs));
+            a_intfc->WriteRecordData(strippedCount);
+            for (std::uint16_t i = 0; i < strippedCount; ++i)
+                a_intfc->WriteRecordData(st.strippedPerks[i]);
             ++written;
         }
         spdlog::info("[cosave] saved {} progression record(s), schema v{}{}", written, kProgVersion,
@@ -2143,10 +2278,20 @@ namespace MFO::ProgAllocator {
                 if (!a_intfc->ReadRecordData(points)) return;
                 if (!a_intfc->ReadRecordData(lastBase)) return;
                 if (a_version >= 2 && !a_intfc->ReadRecordData(manual)) return;   // §16
+                float autoPts = 0.0f;
+                if (a_version >= 7 && !a_intfc->ReadRecordData(autoPts)) return;   // A′
                 if (!resolved) continue;
                 if (!IsKnownSkillAv(av)) { ++droppedAv; continue; }   // L2: value, not just count
                 if (!std::isfinite(manual) || manual < 0.0f) manual = 0.0f;   // L2 for v2
-                st.skills.push_back({ static_cast<RE::ActorValue>(av), points, lastBase, manual });
+                if (!std::isfinite(autoPts) || autoPts < 0.0f) autoPts = 0.0f;
+                // v6 MIGRATION (A′): the auto share is whatever is APPLIED today
+                // minus the manual points — frozen as placed, never re-split.
+                // Under cap saturation `points` is the CLAMPED applied delta, so
+                // auto points already wasted into skillCap are not carried into
+                // the ledger (a v7 grant retains them). Visible value identical;
+                // matters only if skillCap is later raised (Fable F5, MFO-B11).
+                if (a_version < 7) autoPts = std::max(0.0f, points - manual);
+                st.skills.push_back({ static_cast<RE::ActorValue>(av), points, lastBase, manual, autoPts });
             }
 
             std::uint16_t baseCount = 0;
@@ -2243,6 +2388,43 @@ namespace MFO::ProgAllocator {
             }
             // a_version < 5: no HMS block on disk → hmsCaptured stays false
             // (struct default) → the first RecomputeHMS adopts the live base.
+
+            // ── v7 block (A′ ledger + B′ strip record), read UNCONDITIONALLY for
+            // stream alignment; applied only when resolved. ─────────────────────
+            if (a_version >= 7) {
+                std::uint16_t granted = 0, strippedCount = 0;
+                std::uint8_t  freeRespec = 0;
+                if (!a_intfc->ReadRecordData(granted))       return;
+                if (!a_intfc->ReadRecordData(freeRespec))    return;
+                if (!a_intfc->ReadRecordData(strippedCount)) return;
+                if (strippedCount > kMaxPerkAllocs) {
+                    spdlog::error("[cosave] implausible stripped-perk count {} -- ABORTING progression load", strippedCount);
+                    return;
+                }
+                st.autoLevelsGranted = granted;
+                st.freeRespec        = (freeRespec != 0);
+                for (std::uint16_t i = 0; i < strippedCount; ++i) {
+                    RE::FormID raw = 0, res = 0;
+                    if (!a_intfc->ReadRecordData(raw)) return;
+                    if (resolved && a_intfc->ResolveFormID(raw, res) && res)
+                        st.strippedPerks.push_back(res);   // unresolvable: the perk left the load order
+                }
+            } else {
+                // v6 MIGRATION (A′): every auto level up to today's partition counts
+                // as GRANTED — nothing pending, so the first RecomputeSkills holds
+                // today's applied values and re-splits nothing. B′: nothing was ever
+                // stripped; the PollWork active-edge strips an active follower on
+                // the first poll (logged per perk).
+                const int effAutoLvl = std::max(0,
+                    (st.manualSkills ? static_cast<int>(st.manualBaselineLevel)
+                                     : static_cast<int>(st.progressionLevel)) -
+                    static_cast<int>(st.manualExcludedLevels));
+                st.autoLevelsGranted = static_cast<std::uint16_t>(std::max(0, effAutoLvl - 1));
+                // ONE FREE RESPEC (marth 2026-09-14): these applied values came
+                // from the OLD drifting split and are now frozen as they stood —
+                // the escape hatch. Only a v6-born record earns it.
+                st.freeRespec = true;
+            }
 
             if (!resolved) { ++droppedActor; continue; }
             g_prog[resolvedID] = std::move(st);

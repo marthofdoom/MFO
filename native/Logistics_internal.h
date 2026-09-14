@@ -27,6 +27,7 @@
 #include "Forms.h"        // g_travelPackage / g_lootQuest (WALK diagnostic)
 #include "Probe.h"        // Probe::CrosshairTarget (the QuickLoot-aware claim signal)
 #include "ItemCatalog.h"  // load-order item catalog: potion class + never-loot exclusions
+#include "Progression.h"  // perk STYLE votes (TallyStyleVotes) -- weapon/armor style by perks
 #include "MEOBridge.h"    // MEO gem transfer on gear swap (#17) + WornUid
 #include "Papyrus.h"      // route 2b acquire probe: VM-dispatched ObjectReference.Activate
 #include "MainThread.h"   // the pump (§0.37): live-vendor reads MUST run on the main thread
@@ -247,7 +248,96 @@ namespace MFO::Logistics {
             WepClass melee        = WepClass::Other;   // Other = no melee role at all
             bool     doRanged     = false;
             bool     wantCrossbow = false;              // meaningful only when doRanged
+            // ── STYLE BY PERKS (marth 2026-09-13) ─────────────────────────
+            // Within the melee class above, the weapon KIND(s) the follower's
+            // owned perks are most conditioned on (Progression::WeaponKind
+            // bits: sword/dagger/war axe/mace inside OneHand, greatsword/
+            // battleaxe/warhammer inside TwoHand). 0 = no preference: no
+            // votes, or every kind tied — the default case, byte-identical
+            // to the pre-style behaviour. A tie BETWEEN leading kinds keeps
+            // them all preferred. Consumed by WeaponScore below.
+            std::uint16_t preferKinds = 0;
+            // Off-hand style the perks vote for: 0 none/tie, 1 shield
+            // (shield-conditioned ranks lead), 2 dual wield (left-hand-
+            // weapon-conditioned ranks lead). DETECTED AND LOGGED ONLY today:
+            // the engine dual-wields an NPC only under a CombatStyle that
+            // allows it (MFO_MeleeStyle does not) and the combat equip lives
+            // in Actuation -- both outside this change (see MAP.md).
+            std::uint8_t  offHand = 0;
         };
+
+        // "Strongly prefers": the multiplier a perk-preferred weapon kind
+        // earns in every damage comparison the loot / keep / buy judges run
+        // (a bias, never a filter -- a follower with greatsword perks and only
+        // a warhammer still fights with the warhammer). 1.5 = a steel
+        // greatsword (17) out-scores an ebony warhammer (25); an iron
+        // greatsword (15 -> 22.5) does not. Big enough that same-tier loot
+        // always follows the perks, small enough that a tier-up still wins.
+        constexpr float kStyleBias = 1.5f;
+
+        // Which Progression::WeaponKind a weapon IS -- by the engine's own
+        // WeapType keyword on the record (the same vocabulary the perk
+        // conditions name), with the WEAPON_TYPE enum as the fallback for a
+        // record that lost its keyword. Battleaxe vs warhammer are the same
+        // WEAPON_TYPE (kTwoHandAxe) and are told apart ONLY by keyword.
+        inline std::uint16_t WeaponKindOf(const RE::TESObjectWEAP* a_w) {
+            if (!a_w) return 0;
+            using WK = Progression::WeaponKind;
+            if (a_w->HasKeywordString("WeapTypeSword"))      return WK::kWkSword;
+            if (a_w->HasKeywordString("WeapTypeDagger"))     return WK::kWkDagger;
+            if (a_w->HasKeywordString("WeapTypeWarAxe"))     return WK::kWkWarAxe;
+            if (a_w->HasKeywordString("WeapTypeMace"))       return WK::kWkMace;
+            if (a_w->HasKeywordString("WeapTypeGreatsword")) return WK::kWkGreatsword;
+            if (a_w->HasKeywordString("WeapTypeBattleaxe"))  return WK::kWkBattleaxe;
+            if (a_w->HasKeywordString("WeapTypeWarhammer"))  return WK::kWkWarhammer;
+            switch (a_w->GetWeaponType()) {
+            case RE::WEAPON_TYPE::kOneHandSword:  return WK::kWkSword;
+            case RE::WEAPON_TYPE::kOneHandDagger: return WK::kWkDagger;
+            case RE::WEAPON_TYPE::kOneHandAxe:    return WK::kWkWarAxe;
+            case RE::WEAPON_TYPE::kOneHandMace:   return WK::kWkMace;
+            case RE::WEAPON_TYPE::kTwoHandSword:  return WK::kWkGreatsword;
+            case RE::WEAPON_TYPE::kBow:
+            case RE::WEAPON_TYPE::kCrossbow:      return WK::kWkBow;
+            default:                              return 0;   // 2H axe w/o keyword, staff, fists
+            }
+        }
+
+        // THE in-role melee weapon score every judge compares: base attack
+        // damage, times kStyleBias when the weapon is a perk-preferred kind.
+        // With no preference (roles.preferKinds == 0) this is exactly the
+        // integer attack damage widened to float -- every comparison that
+        // used to be `dmgA > dmgB` on uint16 is unchanged in that case.
+        inline float WeaponScore(const WeaponRoles& a_roles, const RE::TESObjectWEAP* a_w) {
+            if (!a_w) return 0.0f;
+            float s = static_cast<float>(a_w->GetAttackDamage());
+            if (a_roles.preferKinds != 0 && (WeaponKindOf(a_w) & a_roles.preferKinds) != 0)
+                s *= kStyleBias;
+            return s;
+        }
+
+        // ── PERK-STYLE MIRROR (worker reads, main thread writes) ────────────
+        // Progression::TallyStyleVotes reads the base's live perk array, which
+        // the allocator mutates on the MAIN thread (AddPerk/RemovePerk realloc
+        // it) -- so the tally runs on the main thread (MainThread::Post) and
+        // the worker reads a per-follower COPY under g_styleMx, the g_stockMx /
+        // g_hmsFiredMask mirror pattern. Refresh cadence sized to the change
+        // rate: perks change on a board action or a level-up, never per tick,
+        // so a 10 s re-tally is prompt and negligible (one perk-array walk per
+        // follower per 10 s). First read of a follower returns NO votes (the
+        // default, no-bias case) until the posted tally lands next frame.
+        // VR (no pump): Post is a no-op -> votes stay empty -> default behaviour.
+        // NOT save-scoped: derived from live perks, keyed by FormID, and
+        // re-tallied within the cadence -- a stale entry across a load is
+        // wrong for at most one refresh interval, never persisted.
+        struct StyleMirror {
+            Progression::StyleVotes votes;
+            Clock::time_point       stamp{};
+            bool                    inFlight = false;
+            std::uint32_t           loggedPick = 0xFFFFFFFFu;   // last [style] line's pick (log on change)
+        };
+        inline std::mutex g_styleMx;
+        inline std::unordered_map<RE::FormID, StyleMirror> g_styleMirror;
+        constexpr auto kStyleRefresh = std::chrono::seconds(10);
 
         // Equipment-loot judging context: the follower's combat role/mage-mode
         // gate plus the baselines any weapon/armor candidate must beat, all
@@ -267,7 +357,12 @@ namespace MFO::Logistics {
             std::uint8_t  mageTop2          = 0;
             bool          mageSchoolPrimary = true;
             bool          mageAllowVillain  = false;
-            std::uint16_t baseDmg           = 0;   // best in-role weapon already carried
+            // Best in-role MELEE weapon already carried, as a WeaponScore (attack
+            // damage x the perk-style bias; == the integer damage when the
+            // follower has no preferred kind). Every in-role candidate is
+            // compared through the SAME WeaponScore(roles, weapon).
+            float         baseScore         = 0.0f;
+            WeaponRoles   roles;                   // the roles the score was built from
             std::uint16_t myRangedDmg       = 0;   // best ranged weapon already carried
             std::uint16_t myBackupDmg       = 0;   // best mage sidearm already carried
             bool          wantsMelee        = false;   // diagnostics only
@@ -781,6 +876,7 @@ namespace MFO::Logistics {
     bool CarriesSlotArmorAtLeast(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     void KeepHeadClear(RE::Actor* a_actor);
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
+    Progression::StyleVotes StyleVotesFor(RE::Actor* a_follower);
     bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w);
     bool IsCreatureArmor(const RE::TESObjectARMO* a_armo);
     RE::TESObjectARMO* WornInLogicalSlot(RE::Actor* a_follower, int a_logicalSlot);

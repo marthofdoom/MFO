@@ -55,7 +55,13 @@ namespace MFO::TradeBridge {
         // -- weapon/armor (Feature A), gated by buyGear --
         bool          buyGear      = false;
         std::int32_t  meleeClass   = 3;      // Logistics WepClass int: 0=1H 1=2H 2=Ranged 3=Other(no melee buy)
-        std::int32_t  meleeBaseDmg = 0;      // best in-class melee weapon dmg the follower already owns
+        // Best in-class melee weapon the follower already owns, as the loot
+        // judge's WeaponScore (attack damage x the perk-style bias -- equals the
+        // plain damage when preferKinds == 0). PlanBuy scores every melee
+        // candidate through Logistics::WeaponBuyScore(w, preferKinds) so buy
+        // and loot rank a greatsword vs a warhammer identically.
+        float         meleeBaseScore = 0.0f;
+        std::int32_t  preferKinds    = 0;    // Progression::WeaponKind bits the perks prefer (0 = none)
         bool          doRanged     = false;
         bool          wantCrossbow = false;  // meaningful only when doRanged
         std::int32_t  rangedBaseDmg= 0;      // best owned bow/crossbow dmg

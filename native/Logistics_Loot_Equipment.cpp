@@ -40,6 +40,7 @@ namespace MFO::Logistics {
             const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
             const bool wantsMelee  = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
             const WeaponRoles roles = g_svc ? ComputeWeaponRoles(a_follower, *g_svc) : WeaponRoles{};
+            ctx.roles       = roles;   // carries the perk-style preference into WeaponScore
             ctx.wantsRanged = wantsRanged;
             ctx.wantsMelee  = wantsMelee;
             // Base class (#65 combatClassOverride; 1=Melee 2=Ranged 3=Mage, 0=Auto)
@@ -142,7 +143,7 @@ namespace MFO::Logistics {
                     (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID()))) continue;
                 if (ctx.meleeTargetClass != WepClass::Other &&
                     WeaponClassOf(w->GetWeaponType()) == ctx.meleeTargetClass)
-                    ctx.baseDmg = std::max(ctx.baseDmg, w->GetAttackDamage());
+                    ctx.baseScore = std::max(ctx.baseScore, WeaponScore(ctx.roles, w));
                 // ONE sidearm is the mage-backup contract: he restocks only
                 // when he carries NONE, never accumulates an armory (creature/
                 // excluded weapons already skipped above -- an unusable weapon
@@ -161,7 +162,7 @@ namespace MFO::Logistics {
         // LOOSE weapon/armor item qualify under the EXACT rule LootEquipment
         // applies inside a container scan? For a lone candidate, the container
         // loop's "beats the running best" comparison collapses to "beats the
-        // follower's own baseline" -- bestArmorRat/bestWeapDmg/bestRangedDmg/
+        // follower's own baseline" -- bestArmorRat/bestWeapScore/bestRangedDmg/
         // bestBackupDmg all START at that baseline; a SECOND competing item in
         // the SAME container is what would raise the bar further, and that
         // does not apply to one item sitting alone on the floor. Mirrors
@@ -202,7 +203,7 @@ namespace MFO::Logistics {
                 if (IsCreatureWeapon(weap)) return false;   // never equip automaton/creature gear
                 const WepClass wc = WeaponClassOf(weap->GetWeaponType());
                 if (ctx.meleeTargetClass != WepClass::Other && wc == ctx.meleeTargetClass &&
-                    weap->GetAttackDamage() > ctx.baseDmg)
+                    WeaponScore(ctx.roles, weap) > ctx.baseScore)
                     return true;
                 if (ctx.doRanged) {
                     const auto wt = weap->GetWeaponType();
@@ -250,7 +251,7 @@ namespace MFO::Logistics {
             const std::uint8_t    mageTop2         = ctx.mageTop2;
             const bool            mageSchoolPrimary= ctx.mageSchoolPrimary;
             const bool            mageAllowVillain = ctx.mageAllowVillain;
-            const std::uint16_t   baseDmg          = ctx.baseDmg;
+            const float           baseScore        = ctx.baseScore;
             const std::uint16_t   myRangedDmg      = ctx.myRangedDmg;
             const std::uint16_t   myBackupDmg      = ctx.myBackupDmg;
             const bool            wantsMelee       = ctx.wantsMelee;
@@ -259,9 +260,9 @@ namespace MFO::Logistics {
             const int             castGambits      = ctx.castGambits;
 
             RE::TESBoundObject* bestArmor     = nullptr;
-            float               bestArmorRat  = 0.0f;   // best-first, like bestWeapDmg (marth's rule)
+            float               bestArmorRat  = 0.0f;   // best-first, like bestWeapScore (marth's rule)
             RE::TESBoundObject* bestWeap      = nullptr;
-            std::uint16_t       bestWeapDmg   = baseDmg;
+            float               bestWeapScore = baseScore;   // WeaponScore (perk-style biased damage)
             RE::TESBoundObject* bestRanged    = nullptr;
             std::uint16_t       bestRangedDmg = myRangedDmg;
             RE::TESBoundObject* bestMage      = nullptr;   // clothing/jewelry apparel (magic user) -- unified MEO-aware judge
@@ -359,9 +360,9 @@ namespace MFO::Logistics {
                     // cross-class, and never skill-forced onto a ranged user (that was
                     // the thrash bug). meleeTargetClass == Other means no melee role.
                     if (meleeTargetClass != WepClass::Other && wc == meleeTargetClass &&
-                        weap->GetAttackDamage() > bestWeapDmg) {
-                        bestWeapDmg = weap->GetAttackDamage();
-                        bestWeap    = obj;
+                        WeaponScore(ctx.roles, weap) > bestWeapScore) {
+                        bestWeapScore = WeaponScore(ctx.roles, weap);
+                        bestWeap      = obj;
                     }
                     // Ranged pickup -- ONLY the follower's kind (bow XOR crossbow).
                     if (doRanged) {
@@ -420,15 +421,17 @@ namespace MFO::Logistics {
 
             // [equip] DIAGNOSTIC: log WHAT we put on, over WHAT, and the reasoning.
             if (auto* nw = best->As<RE::TESObjectWEAP>()) {
-                spdlog::info("[equip] {:08X}: LOOT-{} weapon '{}' dmg={} class={} <- held '{}' "
-                             "dmg={} class={} | meleeTgt={} wantsMelee={} wantsRanged={} baseDmg={}",
+                spdlog::info("[equip] {:08X}: LOOT-{} weapon '{}' dmg={} score={:.1f} kind=0x{:02X} class={} <- held '{}' "
+                             "dmg={} class={} | meleeTgt={} wantsMelee={} wantsRanged={} baseScore={:.1f} prefer=0x{:02X}",
                              a_follower->GetFormID(), equipped ? "EQUIP" : "STOCK",
                              nw->GetFullName() ? nw->GetFullName() : "?", nw->GetAttackDamage(),
+                             WeaponScore(ctx.roles, nw), WeaponKindOf(nw),
                              static_cast<int>(WeaponClassOf(nw->GetWeaponType())),
                              myWeap && myWeap->GetFullName() ? myWeap->GetFullName() : "(none)",
                              myWeap ? myWeap->GetAttackDamage() : 0,
                              myWeap ? static_cast<int>(WeaponClassOf(myWeap->GetWeaponType())) : -1,
-                             static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseDmg);
+                             static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseScore,
+                             ctx.roles.preferKinds);
             } else {
                 spdlog::info("[equip] {:08X}: LOOT armor/apparel '{}' -> equip {}", a_follower->GetFormID(),
                              best->As<RE::TESFullName>() && best->As<RE::TESFullName>()->GetFullName()

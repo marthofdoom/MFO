@@ -199,6 +199,10 @@ namespace MFO::Logistics {
         // light-skilled; take light whenever they are at least as light-skilled.
         // Ties and pure casters (both low) fall to light, never heavy. Clothing has
         // no skill and is rating 0 (rejected below) so it rides through.
+        // STYLE BY PERKS (marth 2026-09-13): the SKILL decides ("highest skill
+        // wins"); on an exact skill TIE the follower's owned heavy- vs light-
+        // conditioned perk ranks decide (StyleVotesFor); a tie there too keeps
+        // the light default. No perks, no tie -> byte-identical to before.
         bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
             using AT = RE::BGSBipedObjectForm::ArmorType;
             const auto type = a_armo->GetArmorType();
@@ -207,6 +211,11 @@ namespace MFO::Logistics {
             if (!avo) return true;
             const float heavy = avo->GetActorValue(RE::ActorValue::kHeavyArmor);
             const float light = avo->GetActorValue(RE::ActorValue::kLightArmor);
+            if (heavy == light) {
+                const auto votes = StyleVotesFor(a_follower);
+                const int hv = votes.armor[0], lv = votes.armor[1];   // ArmorKind bit index 0 Heavy, 1 Light
+                if (hv != lv) return (type == AT::kHeavyArmor) ? (hv > lv) : (lv > hv);
+            }
             return (type == AT::kHeavyArmor) ? (heavy > light) : (light >= heavy);
         }
 
@@ -387,6 +396,54 @@ namespace MFO::Logistics {
         }
 
 
+        // The worker-side read of a follower's perk STYLE VOTES (mirror doc in
+        // Logistics_internal.h). Returns the last main-thread tally (empty until
+        // the first one lands) and, when the copy is older than kStyleRefresh
+        // with no refresh already posted, posts one Progression::TallyStyleVotes
+        // to the main thread (FormID captured, actor re-resolved on the frame
+        // that runs -- the #62 hop discipline).
+        Progression::StyleVotes StyleVotesFor(RE::Actor* a_follower) {
+            if (!a_follower) return {};
+            const auto id  = a_follower->GetFormID();
+            const auto now = Clock::now();
+            Progression::StyleVotes out;
+            bool post = false;
+            {
+                std::scoped_lock lk(g_styleMx);
+                auto& m = g_styleMirror[id];
+                out = m.votes;
+                if (!m.inFlight && (m.stamp == Clock::time_point{} || now >= m.stamp + kStyleRefresh)) {
+                    m.inFlight = true;
+                    post = true;
+                }
+            }
+            if (post) {
+                if (!MainThread::IsInstalled()) {
+                    // VR: no pump. Leave the mirror empty (default behaviour) and
+                    // release the in-flight latch so a later install could refresh.
+                    std::scoped_lock lk(g_styleMx);
+                    g_styleMirror[id].inFlight = false;
+                    return out;
+                }
+                MainThread::Post([id]() {
+                    auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+                    const Progression::StyleVotes v = actor ? Progression::TallyStyleVotes(actor)
+                                                            : Progression::StyleVotes{};
+                    std::scoped_lock lk(g_styleMx);
+                    auto& m    = g_styleMirror[id];
+                    m.votes    = v;
+                    m.stamp    = Clock::now();
+                    m.inFlight = false;
+                });
+            }
+            return out;
+        }
+
+        void ClearStyleMirror() {
+            std::scoped_lock lk(g_styleMx);
+            g_styleMirror.clear();
+        }
+
         WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state) {
             using WT = RE::WEAPON_TYPE;
             const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
@@ -430,6 +487,53 @@ namespace MFO::Logistics {
             WeaponRoles roles;
             if (wantsMelee || carriesMelee) roles.melee = bestMeleeSkill;
             roles.doRanged = wantsRanged || carriesRanged;
+
+            // ── STYLE BY PERKS within the melee class (marth 2026-09-13) ─────
+            // "Most perked style wins": among the kinds of the chosen class,
+            // the kind(s) with the MOST owned perk ranks conditioned on them
+            // become preferred (WeaponScore bias). Zero votes, or every kind
+            // level, leaves preferKinds 0 -- today's behaviour exactly. The
+            // off-hand vote (shield vs dual wield) is derived the same way and
+            // logged; it steers nothing yet (WeaponRoles::offHand doc).
+            if (roles.melee != WepClass::Other) {
+                const auto votes = StyleVotesFor(a_follower);
+                using WK = Progression::WeaponKind;
+                const std::uint16_t classMask =
+                    (roles.melee == WepClass::TwoHand) ? WK::kWkTwoHandAll : WK::kWkOneHandAll;
+                int top = 0, lead = 0;
+                for (int b = 0; b < 8; ++b)
+                    if (classMask & (1u << b)) top = std::max(top, votes.weapon[b]);
+                if (top > 0) {
+                    std::uint16_t pick = 0; int kinds = 0;
+                    for (int b = 0; b < 8; ++b) {
+                        if (!(classMask & (1u << b))) continue;
+                        ++kinds;
+                        if (votes.weapon[b] == top) { pick |= static_cast<std::uint16_t>(1u << b); ++lead; }
+                    }
+                    if (lead < kinds) roles.preferKinds = pick;   // all level = no preference
+                }
+                if (votes.leftHandWeapon != votes.leftHandShield + votes.armor[2])
+                    roles.offHand = (votes.leftHandWeapon > votes.leftHandShield + votes.armor[2]) ? 2 : 1;
+                // One [style] line per follower per CHANGE of the pick (the
+                // roles are recomputed every service tick -- never per call).
+                const std::uint32_t key = (static_cast<std::uint32_t>(roles.melee) << 24) |
+                                          (static_cast<std::uint32_t>(roles.offHand) << 16) |
+                                          roles.preferKinds;
+                bool logIt = false;
+                {
+                    std::scoped_lock lk(g_styleMx);
+                    auto& m = g_styleMirror[a_follower->GetFormID()];
+                    if (m.loggedPick != key) { m.loggedPick = key; logIt = true; }
+                }
+                if (logIt)
+                    spdlog::info("[style] {:08X}: melee class {} prefers kinds 0x{:02X} (votes 1H s/d/a/m={}/{}/{}/{} "
+                                 "2H gs/ba/wh={}/{}/{}) offHand={} (dual={} shield={}+{}) | {} of {} owned catalog rank(s) classifiable",
+                                 a_follower->GetFormID(), static_cast<int>(roles.melee), roles.preferKinds,
+                                 votes.weapon[0], votes.weapon[1], votes.weapon[2], votes.weapon[3],
+                                 votes.weapon[4], votes.weapon[5], votes.weapon[6],
+                                 static_cast<int>(roles.offHand), votes.leftHandWeapon, votes.leftHandShield, votes.armor[2],
+                                 votes.classified, votes.owned);
+            }
 
             // BOW vs CROSSBOW (verbatim from ShedOffRoleWeapon): carrying both,
             // the ammo they hold decides (damage breaks a tie); carrying ONE

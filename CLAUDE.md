@@ -50,7 +50,7 @@ regressions here; the ripple notes are why the map exists.
   re-verify it against current code (line numbers drift). **If the structure
   moved, update MAP.md as part of the change.** A stale map misleads the next
   session.
-- Also consult `Docs/INVARIANTS.md` (**94 rules: 80 numbered `#1`–`#80` plus 14
+- Also consult `Docs/INVARIANTS.md` (**95 rules: 81 numbered `#1`–`#81` plus 14
   lettered**) before non-trivial changes; MAP.md cites it as `#N`.
   **`Docs/ARCHITECTURE.md` is HISTORICAL** (banner-marked 2026-09-07; it describes
   a pre-implementation design and contradicts shipped code on hooks, records,
@@ -224,7 +224,7 @@ of a given change.
 ## The five things that corrupt saves or crash — verify before touching
 
 1. **Co-save layout** (`Serialization.cpp`, `ProgAllocator::CoSaveSave/Load`,
-   `State.h`, `Vocabulary.h`): 4 records FLWR v5 / MSTK v1 / PRGN v6 / FWPN v1
+   `State.h`, `Vocabulary.h`): 4 records FLWR v5 / MSTK v1 / PRGN v7 / FWPN v1
    (`Serialization.h`). Changing a
    field order/type/count, bumping a version without a matching `if(version>=N)`
    reader, renaming a serialized opcode string, or renumbering the `Subject` /

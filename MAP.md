@@ -4,8 +4,8 @@ A **blast-radius map**, not a symbol index. Its job is to tell you what a change
 *breaks* before you make it. Every non-trivial claim carries a `file:line`
 citation so you can re-check it against the live code.
 
-Complements the prose docs: `Docs/INVARIANTS.md` (94 rules — 80 numbered `#1`–
-`#80` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
+Complements the prose docs: `Docs/INVARIANTS.md` (95 rules — 81 numbered `#1`–
+`#81` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
 engine mechanisms). This map is the "what-depends-on-what" layer those don't
 carry. `Docs/ARCHITECTURE.md` is HISTORICAL (2026-09-07 banner): it describes a
 pre-implementation design and contradicts shipped code; do not use it as intent.
@@ -22,7 +22,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
    whole files. Sizes verified on `feat/mfo-idle-hand-and-churn` 2026-09-08 after
-   the Actuation split: ProgAllocator 2333, Actuation 2237, Logistics_Loot 2186,
+   the Actuation split: ProgAllocator 2354, Actuation 2237, Logistics_Loot 2285,
    Packages 2153, Logistics 2072, Actuation_Direct 1679, Board 1346,
    CasterConsent 1243, Board_Progression 1234, Board_FieldKit 1135,
    Actuation_Hands 894. None of these should sit in context — grep to a symbol,
@@ -59,7 +59,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:8-134`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v7`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -811,7 +811,12 @@ teardown. Runs on the AddTask worker.
   so the follower stays vanilla. On the ON→OFF edge (`g_mfoDisabledSwept` latch,
   cleared in `ClearTransientState` + when re-enabled) run `Followers::ReleaseHeldState(id)`
   ONCE — same worker + helper as the dismissal sweep. `Logistics::ServiceFollower`
-  carries a defence-in-depth `!a_state.mfoEnabled` early-out too.
+  carries a defence-in-depth `!a_state.mfoEnabled` early-out too. **Progression
+  reads the switch through the `g_mx` mirror** (`Followers::IsMfoEnabled` ←
+  `g_mfoOff`, republished by `PublishActiveMirror` at `Refresh` only — NOT at the
+  Board write site `Board.cpp:1203`, so a poll inside the ≤532 ms diag-turn window
+  can still see the old value once: **REVIEW-BACKLOG MFO-B12**, SEV-5, fix = one
+  `PublishActiveMirror()` after that write).
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
 `Apply()` (`:8`) copies `Config::g_travelGait` onto the loot-travel packages'
@@ -1115,7 +1120,52 @@ declared there and defined in their home module). Layout:
 - `Logistics_Economy.cpp` (1106) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
   `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
-- `Logistics_Loot.cpp` (2201) — the loot judge + per-category looters,
+- **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
+  perked style within a category wins, strongly prefers").** THE decision is
+  `ComputeWeaponRoles` (`Logistics_Loot.cpp:442`): the melee CLASS is still the
+  higher skill (`two > one`, tie → 1H, unchanged); inside that class the kind(s)
+  with the MOST owned perk ranks conditioned on them (`Progression::StyleVotes`
+  via `StyleVotesFor:405`) become `WeaponRoles::preferKinds` (0 = no votes or all
+  kinds level = NO preference); `WeaponRoles::offHand` (1 shield / 2 dual wield)
+  is DETECTED + LOGGED ONLY (`[style]` line, once per follower per change).
+  `WeaponScore` (`Logistics_internal.h:310`) = attack damage × `kStyleBias` (1.5,
+  `:276`) for a preferred kind (`WeaponKindOf:283`, by the record's own WeapType
+  keyword, WEAPON_TYPE fallback; battleaxe vs warhammer is keyword-only) — a
+  BIAS, never a filter. CONSUMERS (all previously raw `GetAttackDamage`
+  compares on the in-role melee weapon): `BuildEquipmentContext:26`
+  (`EquipmentContext::baseScore` + `roles`), `LooseEquipmentQualifies:175`,
+  `LootEquipment:222` (`bestWeapScore`), the economy keep buckets 1H/2H
+  (`Logistics_Economy.cpp:613` `keepRoles`), `BuildBuyThresholds:391` →
+  `TradeBridge::BuyThresholds::meleeBaseScore`/`preferKinds` → `PlanBuy`
+  (`TradeBridge.cpp:234` via public `Logistics::WeaponBuyScore:993`).
+  `ArmorClassSuits` (`:206`): skill first (unchanged); on an EXACT tie the
+  heavy- vs light-conditioned vote counts decide; still-tied → light.
+  **THREADING — the perk-style MIRROR:** `TallyStyleVotes` is main-thread-only, so
+  `StyleVotesFor` reads a per-follower copy under `g_styleMx`
+  (`Logistics_internal.h:338`, `g_styleMirror`, `kStyleRefresh` 10 s) and posts
+  the re-tally through `MainThread::Post` (FormID captured, actor re-resolved);
+  the first read of a follower returns NO votes (default behaviour) until the
+  posted tally lands next frame; VR (no pump) never refreshes → default. Cleared on
+  revert by `Logistics::ClearStyleMirror` (`Logistics_Loot.cpp`, called from
+  `Serialization::ResetAllState` after `MainThread::Clear` — Fable F4: a latch left
+  `inFlight` after Clear dropped its closure froze that follower's votes for the
+  process lifetime).
+  **DEFAULT-CASE PROOF:** with `preferKinds == 0` `WeaponScore` is the uint16
+  damage widened to float, so every `>` / `>=` compare orders identically; with
+  no armor tie `ArmorClassSuits` is untouched; with the catalog unbuilt every
+  vote is 0. **KNOWN GAPS (not consumers yet):** the COMBAT equip
+  `Actuation.cpp EquipWeapon` (`:1603`) still picks raw max damage across BOTH
+  melee classes (it needs `WeaponScore` — Actuation was outside the boundary);
+  bow vs crossbow stays the ammo/damage rule (no perk record distinguishes
+  them — both carry `WeapTypeBow`); dual wield needs a CSTY that allows it
+  (`MFO_MeleeStyle` DATA=1 is dueling-only) + a left-hand equip — `offHand`
+  steers nothing until that mechanism exists. **What breaks:** changing
+  `kStyleBias` re-orders every loot/keep/buy compare at once (they share ONE
+  score by design — never bias one site alone or loot and keep disagree and a
+  looted greatsword sells); `preferKinds` must stay `Progression::WeaponKind`
+  bits (shared with the buy thresholds); reading `TallyStyleVotes` directly from
+  the worker instead of `StyleVotesFor` races the allocator.
+- `Logistics_Loot.cpp` (2285) — the loot judge + per-category looters,
   claim-and-release, navmesh reach, `AcquireEquip:575`, `LootGold:711`,
   `LootValuables:915`, `HasLoot:1210`, `LootNearby:1307`, `StripCorpse:2064`,
   `RunExcursionScan:2128`. `LootEquipment` itself now lives in
@@ -1520,14 +1570,38 @@ board edit queue's progression verbs collapsed to ONE generic carrier `EditKind:
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
 (`ProgAllocator.cpp:2117`), so re-tuning the add-on's declared verdicts (the
 `MFOP_EntryPointVerdicts` GLOBs in `MFO_GenerateESP.py`, read via
-`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`:329`) silently changes which
+`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`:446`) silently changes which
 saved perks survive a load (with an auto §17 refund). The verdicts are ESL DATA now, not a
 DLL table — changing them is a generator+regen change, not a code edit.
+**STYLE FACTS (2026-09-13, marth: "primary weapon, armor and wielding style are
+determined by perks") — the classifier's one extension, still no verdict.**
+`PerkEntryFact::style` (`Progression.h` `PerkStyleFacts`) records what an entry is
+CONDITIONED on: the engine weapon/armor vocabulary keyword a `HasKeyword`/
+`WornHasKeyword`/`WornApparelHasKeywordCount` item names (`WeapTypeSword` …
+`WeapTypeBow`, `ArmorHeavy`/`ArmorLight`/`ArmorShield`, matched by KEYWORD EDITOR-ID,
+positive tests only) and the `GetEquippedItemType(LEFT)` signatures (dual wield =
+excludes 0, admits 1..4, admits nothing ≥5; shield = `== 10`). Read by
+`ReadStyleFacts` (`:283`) off every entry-point TAB (`BGSEntryPointPerkEntry::conditions`,
+bounded by `entryData.numArgs` AND the array size) and off every EFFECT of an ability
+entry (`SpellItem::effects[i]->conditions`, the AbilityPlayerGated list) inside
+`WalkPerkEntries` (`:766`); unioned per rank into `RankView::style` at build (`:580`).
+`TallyStyleVotes` (`:886`, **MAIN THREAD ONLY** — walks the base's live perk array the
+allocator reallocs on AddPerk/RemovePerk) sums, over the frozen catalog, the facts of
+every OWNED rank 1..K per node (rank depth = investment) into `StyleVotes`. Perks
+outside the catalog (hidden engine perks like PerkSkillBoosts, creature perks, dead
+player-UI perks) never vote; a catalog rank conditioned on nothing classifiable votes
+for nothing (`classified`/`owned` counters say how many). NO overhaul is assumed
+anywhere — the facts come off the perk record's own conditions. **What breaks:**
+renaming/renumbering `WeaponKind`/`ArmorKind` bits breaks `Logistics::WeaponKindOf` +
+`TradeBridge::BuyThresholds::preferKinds` (same bit space); calling `TallyStyleVotes`
+off the main thread races the allocator's perk writes (the Logistics mirror exists for
+exactly this); with the catalog unbuilt (addon absent) every vote is 0 → the whole
+perk-style decision is INERT and equipment behaves exactly as before.
 
 ### ProgAllocator.cpp / ProgAllocator_Hms.cpp / ProgAllocator_Manifest.cpp / ProgAllocator_internal.h / ProgAllocator.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
 The engine-mutating half: writes perks (`AddPerk/RemovePerk`+`ApplyPerksFromBase`)
 and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
-- **Module layout (mechanical split, 2026-08-31):** `ProgAllocator.cpp` (2333) =
+- **Module layout (mechanical split, 2026-08-31):** `ProgAllocator.cpp` (2354) =
   the allocation engine + 'PRGN' — skill reconcile (`ReconcileSkill:235`,
   `RecomputeSkills:366`), perk plumbing + `ReapplyFollower` (`:826`), the level
   poll (`PollWork:959`), the verbs, board views, dev harness, and the WHOLE
@@ -1552,12 +1626,13 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   f32 read+discarded], [v2: manualBaselineLevel u16, manualPointsApplied u16,
   manualExcludedLevels u16, nativeTreePerksAtEnroll u16], perkCount u16 +
   {nodePerkID u32, rank u8}×N, skillCount u16 + {av u32, points f32, lastWrittenBase
-  f32, manualPoints f32(v2)}×N, baseCount u16 + {av u32, value f32}×N,
+  f32, manualPoints f32(v2), **autoPoints f32(v7)**}×N, baseCount u16 + {av u32, value f32}×N,
   [v5 §HMS block APPENDED at END: per pool {H,M,S} order {hmsBaseline f32,
   **v5-ONLY hmsTarget f32 (dropped in v6 — recomputed)**, hmsSkew f32,
   hmsCumulative f32}, then battlesSinceLevelUp u32, battlesOffClass u32,
   offClassPool u8, hmsCaptured u8, **[v6: hmsZeroAwardStreak u8, hmsGrantRemainder
-  f32×3, hmsAwardAccum f32]**]}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
+  f32×3, hmsAwardAccum f32]**], **[v7 APPENDED after the HMS block: autoLevelsGranted
+  u16, freeRespec u8, strippedCount u16 + {perkFormID u32}×N]**}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
   behind `if(version>=N)` (**v6 header + block additions gated `if(version>=6)`;
   v5 keeps the old 4-f32/pool reader, reads+discards target, recomputes it; all
   floats finite-guarded, streak clamped 0..2**). The HMS block is read
@@ -1571,7 +1646,117 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   co-save load); `ClearAll` (`ProgAllocator.cpp:2258`) ← `Serialization.cpp:591` (clears `g_prog`,
   bumps `g_pollGen` to orphan in-flight polls).
 - Verbs (all ← Board.cpp, `g_ready`-gated): `Enroll`/`SetClass`/`AllocatePerk`/
-  `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`ProgAllocator.cpp:1382-1727`).
+  `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`ProgAllocator.cpp:1370-1750`).
+- **STRICT POINTS (#81, 2026-09-13; A′/A″ PRGN v7).** A skill point, once placed
+  by ANY path, stays on that skill until Respec. `SkillAlloc::manualPoints` has
+  EXACTLY TWO writers — `ApplyManualSkillPoint` (`:1797`, +1) and `Respec`
+  (`:1685`, → 0); `SkillAlloc::autoPoints` (v7) has EXACTLY TWO — the GRANT step of
+  `RecomputeSkills` (`:354`, +=) and `Respec` (→ 0). `RecomputeSkills` is an
+  ACCUMULATOR, not a re-derivation: `pending = (effAutoLvl − 1) − autoLevelsGranted`
+  auto levels yield `skillPointsPerLevel` each, split by `WeightsFor` AT THAT
+  MOMENT as the EXACT float share and ADDED to `autoPoints` (Fable F3: a per-level
+  whole-point split starved the 10 % skill forever at the shipped 5 pts/level —
+  2/2/1/0 every level; the exact share converges: 20 levels × 5 at 40/30/20/10 →
+  40/30/20/10); the weights are not consulted when nothing is pending, so a class
+  change / dominance flip only steers FUTURE levels. Then every entry is held at
+  natural + `floor(autoPoints + 1e-3)` + manualPoints through the single
+  `ReconcileSkill` (`:235`, baseline floor; REVERT drift-clobber unchanged) — the
+  fraction stays in the ledger for the next grant to complete. `DominantWeaponSkill`
+  (`:297`) / `DominantArmorSkill` (`:305`) read BASE SKILLS ONLY (the old loadout
+  read re-homed the share every ~2 s — marth's "fluidly managed" drift). **A″
+  Respec returns ALL points:** perks cleared as before, every `autoPoints` and
+  `manualPoints` → 0, `autoLevelsGranted` → 0, `manualPointsApplied` → 0,
+  `manualExcludedLevels` → 0, manual ON → `manualBaselineLevel = 1`; then one
+  `RecomputeSkills` re-grants every level under AUTO by the current weights, or
+  leaves the whole pool (`(level − 1) × manualSkillPtsPerLevel`) to the player under
+  MANUAL. Rapport as before — EXCEPT the ONE FREE post-migration respec
+  (`ProgState::freeRespec`, v7 u8: set ONLY by the `a_version < 7` reader because a
+  v6 follower's applied values came from the old drifting split and A′ freezes
+  them; `Respec` skips `Rapport::Spend`, logs `RESPEC <name> -- FREE (one-time,
+  post-migration)`, clears the flag; a fresh v7 enrollee has none; unenroll/bench
+  never touch it). `HasFreeRespec(id)` + `BoardFollowerView::freeRespec` expose it
+  — the Board's "-500 rapport" cost text (`Board_Progression.cpp:1195-1212`) does
+  NOT yet read it: one call in a Board brief. No-op (no cost) only when nothing at
+  all is placed.
+  Every other path (`SetManualSkills:1758`, `SetClass:1539`, `PollWork:1029`,
+  `ReapplyFollower`, HMS, the fixed-stat grant, `CoSaveLoad`) only READS the point
+  fields. **What breaks:** a third writer of either field violates #81; the grant
+  relies on every level being exactly one of auto / pooled / excluded (`effAutoLvl`)
+  — change that partition and levels double-grant or vanish; `autoLevelsGranted`
+  must never be lowered except by Respec; the v6 migration freezes
+  `autoPoints = max(0, points − manualPoints)` — a cap-clamped v6 skill keeps its
+  clamped value (never re-split), by design.
+- **B′ NATIVE-PERK STRIP (2026-09-13, PRGN v7).** *A perk is stripped iff it is a
+  rank form of a node in the progression CATALOG (`Progression::Get().skills[*].nodes`
+  — the effective/marginal nodes of the 18 skill trees, which is exactly what the
+  add-on's Board tab draws for EVERY class: `Board_Progression.cpp:340-356` lists all
+  18 `kSkillNames` rows and opens a tree wherever the catalog has nodes; the class
+  FLSTs of `ProgAllocator_Manifest.cpp` are WEIGHTS, not visibility), the follower's
+  base TESNPC holds that form, and MFO did not itself grant that form (MFO holds
+  exactly `ranks[alloc.rank−1]`).* Not per class. Non-catalog perks (hidden engine,
+  creature, filtered player-UI, non-tree abilities) are never touched; an
+  ACTOR-only rank (never on the base) is logged and left. `StripNativePerks`
+  (`:~697`) runs at `Enroll` (`:1461`) and, for an unstripped enrolled follower (v6
+  save / enrolled while benched), on the first `PollWork` poll it reads ACTIVE —
+  BEFORE `ReapplyFollower`, re-arming it (`applied=false`) when anything was removed
+  so a rank the reapply had deferred to native ownership (`:~918`) is re-added now
+  the native is gone; that deferral is therefore UNREACHABLE for a stripped node
+  (it can only fire for a native rank that lands on the base AFTER the strip within
+  a session — `nativeHeld` stays true until the next load / re-check). **THE STRIP
+  IS PER-SESSION BY NATURE (Fable F1):** base `AddPerk`/`RemovePerk` do not survive a
+  load (P3, the reason `ReapplyFollower` exists), so every load puts the natives
+  back; `nativeHeld` is RUNTIME-ONLY (never serialized) and `OnPostLoad` (`:1325`)
+  re-arms it beside `applied`, so the first managed ACTIVE poll re-strips (union)
+  BEFORE the reapply. **Never restored while
+  enrolled — a benched/dismissed follower stays stripped** (marth: "a clean restore
+  when it's uninstalled"), which rules out the native+MFO same-node double rank by
+  construction. The record `ProgState::strippedPerks` (set, union on re-strip,
+  unresolvable ids drop on load) is the v7 co-save field the safe-removal reads: public `ProgAllocator::RestoreNativePerks(actor)` (`:1754`,
+  header contract in `ProgAllocator.h`) puts every recorded perk back on the base,
+  settles, CLEARS the record — meant to run once per enrolled follower right before
+  the mod is removed; **nothing calls it yet** (the Board/MCM uninstall verb is a
+  separate brief). No refund: not credited, and `nativeTreePerksAtEnroll` (the §17
+  debit) is recounted AFTER every strip as `CountNativeTreeRanks − AllocatedRanks`
+  (native ranks STILL held — i.e. only unstrippable actor-only ranks — never MFO's
+  own), which also corrects a pre-v7 follower's debit. Fixes marth's "engine gives
+  rank 1, rank 2 inaccessible" bug: `GateNextRank` (`:764`) froze natively-owned
+  nodes; stripped nodes are takeable. **What breaks:** stripping a form MFO granted
+  (the `mfoForm` skip) would silently undo an allocation; restoring while enrolled
+  re-creates the double-rank case; a caller of `RestoreNativePerks` that does not
+  then stop MFO leaves the follower with natives AND grants.
+- **UNENROLL = the T#78 per-follower MFO toggle unchecked (marth 2026-09-13:
+  "unmanage, don't touch ... remember the state when dropped and restore it plus
+  back debt when re-enrolled").** Before this change `ProgAllocator` never read
+  `FollowerState::mfoEnabled` (the Board writes it at `Board.cpp:1203`, the
+  Scheduler/Logistics ticks skip on it at `Scheduler.cpp:256` / `Logistics.cpp:680`)
+  — the toggle preserved `ProgState` but did NOT stop progression's actor writes.
+  Now `Followers::IsMfoEnabled(id)` (`Followers.cpp`, an **off-worker-safe read of
+  the `g_mx`-guarded `g_mfoOff` mirror** that `PublishActiveMirror` republishes from
+  `g_followers` on the worker at every `Refresh` — the `IsTrackedFast` road, #74;
+  Fable F2 on 4a62688 rejected the first version's unlocked `g_followers.find`)
+  gates: in `PollWork` (`:~1055`) the LEVEL LEDGER still advances (`progressionLevel`
+  gain, shared-growth banking — that IS the back debt) but every actor-touching
+  branch is skipped (`RecomputeSkills`/`RecomputeHMS` on level gain, the strip, the
+  reapply, the drift-watch/HMS block), and the record is re-armed
+  (`applied=false`, `nativeHeld=false`) so the first managed poll re-strips (union)
+  and re-applies; every board verb (`Enroll`/`SetClass`/`AllocatePerk`/
+  `AllocateNextEligible`/`Respec`/`SetManualSkills`/`ApplyManualSkillPoint`) refuses
+  through `Unmanaged(actor, verb)` with a `[prog] … refused …: MFO is unchecked`
+  line. **Nothing is cleared**: `ProgState` (allocations, autoPoints/manualPoints,
+  ledgers, strippedPerks) is saved for an unmanaged follower exactly like a managed
+  one (`CoSaveSave` writes every `enrolled` record — no `mfoEnabled` gate).
+  **Back debt on re-check falls out of the accumulator:** `pending = (effAutoLvl−1)
+  − autoLevelsGranted` is the levels gained while unchecked, granted by the weights
+  of the re-check moment; the manual pool `(progressionLevel − baseline) × rate −
+  applied` has grown by the same levels; perk points are `floor(level/N) − spent`
+  (derived). **Rapport is untouched on both edges:** progression's only rapport
+  write is `Rapport::Spend` in `Respec` (`ProgAllocator.cpp:1738`); the veteran
+  level-match (`SetClass`) writes `progressionLevel` only. **What breaks:** gating
+  the level ledger on `managed` would erase the back debt; touching the actor while
+  unmanaged violates "don't touch"; `IsMfoEnabled` must keep reading the mirror,
+  never `g_followers` (the SEV-1 cluster shape); a Board toggle is visible to the
+  poll only after the next `Refresh` (one diag turn) — do not shorten that by
+  reading the map.
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
   `GetPerkIndex` absent (`:841`) + native-ownership deferral (`:853`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single

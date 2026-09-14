@@ -13,6 +13,45 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-progression-strict-points-perk-style` (off v2.0.6 `941ddb1`,
+  no version bump) — pushed, CI status in the branch's own run, NOT merged, NOT
+  deployed, awaiting its tier-3 Fable review.** Two marth asks (2026-09-13):
+  (A, tightened by marth to A′/A″) **every skill point is permanent once placed** —
+  `SkillAlloc::autoPoints` (PRGN **v7**) + `manualPoints` are accumulators with two
+  writers each (the placing step / `Respec`; invariant #81); `RecomputeSkills` grants
+  only PENDING levels by the weights of that moment and never re-splits; Respec
+  returns ALL points (perks + every auto/manual skill point, the level ledger to
+  zero) — re-spent by the class under auto or pooled for the player under manual;
+  sibling dominance reads BASE SKILLS ONLY. v6 saves migrate with today's applied
+  values frozen, and every v6-born follower carries ONE free respec (`freeRespec`,
+  v7; the Board cost text needs a one-call hookup to show "Free"). (B′) **native
+  catalog perks are stripped at enrollment** and on the
+  first active poll of an unstripped follower, recorded in the v7 co-save
+  (`strippedPerks`; the strip is per-session — re-run on every load), NEVER restored while enrolled (marth: "a clean
+  restore when it's uninstalled" — public `ProgAllocator::RestoreNativePerks`, no
+  caller yet), never refunded, each strip logged — the strip set is exactly the
+  catalog the Board draws (all 18 trees, not per class); also fixes "engine gives
+  rank 1, rank 2 inaccessible" (`GateNextRank` native-freeze). (UNENROLL) the T#78
+  per-follower toggle now gates progression too: unchecked = no actor writes, state
+  kept and saved, levels still accrue; re-checked = re-strip + reapply + the
+  accumulator grants the back debt (skill + perk points only, rapport untouched);
+  (B) **weapon/armor style by perks** — the existing classifier
+  (`Progression::WalkPerkEntries` + the frozen catalog) gained mechanical STYLE
+  FACTS off each entry's own conditions (weapon/armor vocabulary keywords by
+  editor-id, `GetEquippedItemType(LEFT)` dual-wield / shield signatures; no overhaul
+  assumed), `TallyStyleVotes` (main thread) counts owned ranks per kind, and
+  `Logistics::ComputeWeaponRoles` turns the leading kind(s) inside the skill-chosen
+  melee class into `WeaponRoles::preferKinds` → one shared `WeaponScore` (damage ×
+  1.5 for a preferred kind) used by the loot judge, the economy keep buckets and
+  the buy planner; `ArmorClassSuits` breaks an exact heavy/light skill tie by perk
+  votes. Worker reads go through a `MainThread::Post`-refreshed mirror
+  (`g_styleMirror`, 10 s). **Not consumers yet (reported, not built):** the combat
+  equip in `Actuation.cpp EquipWeapon` (outside the boundary — still raw max damage
+  across both melee classes), bow vs crossbow (no perk record distinguishes them),
+  and actual dual wielding (needs a dual-wield-allowing CSTY + a left-hand equip;
+  `WeaponRoles::offHand` is detected and logged only). Inert without the
+  progression addon (no catalog → no votes → today's behaviour). Details: MAP.md §4
+  "WEAPON / ARMOR STYLE BY PERKS" + §5 "STRICT POINTS".
 - **Branch `feat/mfo-1.5.97-input-path` (v2.0.6) — pushed, CI-green, NOT merged, NOT
   deployed, NOT Fable-reviewed (reviews DEFERRED at marth's weekly token limit).**
   First task of the Skyrim 1.5.97 support pass. `Board::InstallInputHook` now has a

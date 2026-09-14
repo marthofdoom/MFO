@@ -225,15 +225,16 @@ namespace MFO::TradeBridge {
 
             // ── GEAR (Feature A): at most ONE upgrade per category per window. ──
             if (b.buyGear) {
-                // MELEE weapon -- best damage above the owned in-class baseline.
-                { std::size_t best = SIZE_MAX; int bestDmg = b.meleeBaseDmg, bestVal = 0;
+                // MELEE weapon -- best WeaponScore (damage x perk-style bias, the
+                // loot judge's own ranking) above the owned in-class baseline.
+                { std::size_t best = SIZE_MAX; float bestScore = b.meleeBaseScore; int bestVal = 0;
                   for (auto& c : cands) {
                       if (c.kind != NeedCat::kWeaponMelee || !affordReserve(c.value)) continue;
                       auto* w = c.f->As<RE::TESObjectWEAP>();
-                      const int dmg = w ? static_cast<int>(w->GetAttackDamage()) : 0;
-                      if (dmg > bestDmg ||
-                          (best != SIZE_MAX && dmg == bestDmg && c.value < bestVal)) {
-                          best = c.idx; bestDmg = dmg; bestVal = c.value; }
+                      const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds) : 0.0f;
+                      if (score > bestScore ||
+                          (best != SIZE_MAX && score == bestScore && c.value < bestVal)) {
+                          best = c.idx; bestScore = score; bestVal = c.value; }
                   }
                   if (best != SIZE_MAX) buyOne(best, bestVal);
                 }

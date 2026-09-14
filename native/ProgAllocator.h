@@ -114,7 +114,23 @@ namespace MFO::ProgAllocator {
         // §16 manual points the PLAYER spent on this skill (requested, whole).
         // Additive on top of the class auto-share; an entry with manual > 0
         // survives a class change instead of settling out.
+        // STRICT POINTS (#81, marth 2026-09-13): EXACTLY TWO writers —
+        // ApplyManualSkillPoint (+1) and Respec (-> 0, refunded to the pool).
+        // No automatic path (level-up, drift-watch, class change, HMS, the
+        // catch-up grant, load reconcile, the manual toggle) may add to,
+        // reduce, move or re-derive this value; RecomputeSkills only ever
+        // READS it as one additive term of the reconcile target.
         float manualPoints{ 0.0f };
+        // PRGN v7 — the AUTO points the class share has GRANTED this skill,
+        // as permanent as the manual ones (marth 2026-09-13: "auto placed
+        // skill points are equally as permanent, there is no shift"). An
+        // ACCUMULATOR: each level-up adds that level's share (the class
+        // weights AT THAT MOMENT decide where NEW points go) and nothing
+        // later re-derives or moves what was placed. EXACTLY TWO writers —
+        // RecomputeSkills' grant step (+=) and Respec (-> 0). A v6 save
+        // migrates as max(0, points - manualPoints): today's applied value,
+        // frozen, never re-split.
+        float autoPoints{ 0.0f };
     };
     struct BaselineAV {
         RE::ActorValue av{ RE::ActorValue::kNone };
@@ -173,6 +189,38 @@ namespace MFO::ProgAllocator {
         std::uint16_t manualBaselineLevel{ 0 };
         std::uint16_t manualPointsApplied{ 0 };
         std::uint16_t manualExcludedLevels{ 0 };
+        // PRGN v7 — how many AUTO levels (progression levels above 1 that are
+        // neither pooled nor excluded) have had their skill points GRANTED.
+        // The grant ledger: RecomputeSkills grants (effAutoLvl - 1) -
+        // autoLevelsGranted pending levels, never removes. Respec -> 0 (every
+        // level re-spendable). v6 migration: effAutoLvl - 1 as loaded (nothing
+        // pending, nothing re-split).
+        std::uint16_t autoLevelsGranted{ 0 };
+        // PRGN v7 — NATIVE catalog perks (the ones a list/ESP/template gave
+        // the follower, i.e. every rank shown on the Board) that MFO STRIPPED
+        // at enrollment so every tree perk is the player's to give (marth
+        // 2026-09-13). Stripped at Enroll, or on the first poll an unstripped
+        // enrolled follower reads ACTIVE (a v6 save, a bench enrol, a re-check
+        // of the T#78 toggle); stays stripped while enrolled, benched too.
+        // RestoreNativePerks = safe-removal. Never refunded: not credited (never
+        // his) and not debited (the §17 debit is recounted AFTER the strip).
+        // Unresolvable ids drop on load.
+        std::vector<RE::FormID> strippedPerks;
+        // PRGN v7 — ONE FREE RESPEC (marth 2026-09-14: "give users one free
+        // respec once this patch releases, since we don't want to strand points
+        // in the wrong skill"). Set ONLY by the v6→v7 migration in CoSaveLoad:
+        // a v6 follower's applied values came from the OLD drifting split and
+        // permanence (A′) freezes them as they stood, so the first Respec after
+        // the update skips Rapport::Spend and clears this. A record born under
+        // v7 never drifted: false. Rides the remembered record (unenroll /
+        // bench do not touch it).
+        bool                    freeRespec{ false };
+        // RUNTIME-ONLY, never serialized (Fable F1): base AddPerk/RemovePerk do
+        // not survive a load (P3), so the strip is PER-SESSION by nature —
+        // OnPostLoad re-arms it (false) beside `applied`, the first managed
+        // ACTIVE poll re-strips (union), and it is cleared while unmanaged so
+        // a re-check re-strips too.
+        bool                    nativeHeld{ false };
 
         std::vector<PerkAlloc>  perks;
         std::vector<SkillAlloc> skills;
@@ -293,6 +341,23 @@ namespace MFO::ProgAllocator {
     // harness now, the board's auto-spend later.
     bool AllocateNextEligible(RE::Actor* a_actor);
     bool Respec(RE::Actor* a_actor);                      // refunds points, −500 rapport
+    // True while this enrolled follower's ONE free post-migration respec is
+    // still unspent (ProgState::freeRespec). For the Board's respec cost text /
+    // confirm ("Free" instead of "-500 rapport") — that hookup is ONE call in a
+    // Board brief (Board_Progression.cpp is outside the 2026-09-13 boundary);
+    // BoardFollowerView::freeRespec carries the same bit in the snapshot.
+    // MAIN THREAD (g_prog).
+    bool HasFreeRespec(RE::FormID a_actorID);
+    // B′ UNINSTALL / safe-removal restore (marth 2026-09-13: "a clean restore
+    // when it's uninstalled"). Puts every native catalog perk MFO stripped from
+    // this enrolled follower (ProgState::strippedPerks, PRGN v7) back on the
+    // base TESNPC, settles the actor (ApplyPerksFromBase) and CLEARS the record
+    // (nativeHeld=false). Intended to run ONCE for every enrolled follower
+    // immediately before the mod is removed; MFO's own grants are untouched
+    // (Respec removes those). NOT wired to any verb yet — the Board/MCM
+    // uninstall verb is a separate brief. MAIN THREAD. Returns false when the
+    // actor is null / unenrolled. Idempotent (a perk already on the base skips).
+    bool RestoreNativePerks(RE::Actor* a_actor);
 
     // Revert/reload generation — bumped by ClearAll (revert) and OnPostLoad.
     // A board prog-edit captures this at post time and bails inside its
@@ -352,6 +417,7 @@ namespace MFO::ProgAllocator {
         std::uint16_t allocatedRanks{ 0 };    // §17: ranks MFO has spent
         bool          manualSkills{ false };  // §16 toggle state
         int           manualAvail{ 0 };       // §16 pool (deterministic, see ProgState)
+        bool          freeRespec{ false };    // one-time post-migration free respec pending
         std::vector<BoardSkillLine> skills;   // the 18, kSkillNames order
     };
     struct BoardProgSnap {

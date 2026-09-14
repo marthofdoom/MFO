@@ -209,6 +209,112 @@ namespace MFO::Progression {
 
         // ── condition introspection (§2.2/§2.3) ─────────────────────────────
 
+        // ── STYLE FACTS off one condition list (PerkStyleFacts, Progression.h) ──
+        // Mechanical read of what a condition list NAMES: the engine weapon /
+        // armor vocabulary keyword a HasKeyword-family item references, or a
+        // GetEquippedItemType check on the LEFT hand. Keyword identity is the
+        // keyword's editor-id (keyword edids persist at runtime — the same
+        // reader the manifest and the loot school match rely on), never a
+        // FormID, so it holds under any load order. A condition item that
+        // names none of these contributes nothing.
+        //
+        // Only a POSITIVE keyword test counts — a comparison some value >= 1
+        // satisfies and 0 does not ("== 1", "!= 0", ">= 1", "> 0"). An
+        // exclusion ("WornHasKeyword ArmorHeavy == 0" on a light-armor perk)
+        // says nothing about the perk's own kind and is skipped. Global-
+        // compared items (flags.global) are ambiguous and skipped.
+        //
+        // GetEquippedItemType(LEFT) item-type codes: 0 nothing, 1 one-hand
+        // sword, 2 dagger, 3 one-hand axe, 4 mace, 5..8 two-hand/bow/staff,
+        // 9 spell, 10 shield, 11 torch, 12 crossbow. The dual-wield signature
+        // is a tab whose LEFT-hand items together (a) exclude 0, (b) admit
+        // some code in 1..4 and (c) admit nothing >= 5 — the "!= 0 AND <= 4"
+        // / "== 1" shapes. A bare "!= 0" (anything in the left hand) fails
+        // (c) and counts for nothing. "== 10" is the shield-in-left-hand fact.
+        bool PositiveTest(const RE::CONDITION_ITEM_DATA& a_d) {
+            using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            if (a_d.flags.global) return false;
+            const float v = a_d.comparisonValue.f;
+            switch (a_d.flags.opCode) {
+            case Op::kEqualTo:              return v >= 1.0f;
+            case Op::kNotEqualTo:           return v == 0.0f;
+            case Op::kGreaterThan:          return v >= 0.0f;
+            case Op::kGreaterThanOrEqualTo: return v > 0.0f;
+            default:                        return false;   // <, <= admit 0
+            }
+        }
+        // Does the comparison admit item-type code a_code?
+        bool Admits(const RE::CONDITION_ITEM_DATA& a_d, float a_code) {
+            using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            const float v = a_d.comparisonValue.f;
+            switch (a_d.flags.opCode) {
+            case Op::kEqualTo:              return a_code == v;
+            case Op::kNotEqualTo:           return a_code != v;
+            case Op::kGreaterThan:          return a_code >  v;
+            case Op::kGreaterThanOrEqualTo: return a_code >= v;
+            case Op::kLessThan:             return a_code <  v;
+            case Op::kLessThanOrEqualTo:    return a_code <= v;
+            }
+            return false;
+        }
+        std::uint16_t WeaponKindOfKeyword(const RE::TESForm* a_kw) {
+            const char* e = a_kw ? a_kw->GetFormEditorID() : nullptr;
+            if (!e || !*e) return 0;
+            const std::string_view id{ e };
+            if (id == "WeapTypeSword")      return kWkSword;
+            if (id == "WeapTypeDagger")     return kWkDagger;
+            if (id == "WeapTypeWarAxe")     return kWkWarAxe;
+            if (id == "WeapTypeMace")       return kWkMace;
+            if (id == "WeapTypeGreatsword") return kWkGreatsword;
+            if (id == "WeapTypeBattleaxe")  return kWkBattleaxe;
+            if (id == "WeapTypeWarhammer")  return kWkWarhammer;
+            if (id == "WeapTypeBow")        return kWkBow;
+            return 0;
+        }
+        std::uint8_t ArmorKindOfKeyword(const RE::TESForm* a_kw) {
+            const char* e = a_kw ? a_kw->GetFormEditorID() : nullptr;
+            if (!e || !*e) return 0;
+            const std::string_view id{ e };
+            if (id == "ArmorHeavy")  return kAkHeavy;
+            if (id == "ArmorLight")  return kAkLight;
+            if (id == "ArmorShield") return kAkShield;
+            return 0;
+        }
+        void ReadStyleFacts(const RE::TESCondition& a_cond, PerkStyleFacts& a_out) {
+            using Fn = RE::FUNCTION_DATA::FunctionID;
+            bool leftExcludesEmpty = false, leftAdmitsOneHand = false,
+                 leftExcludesNonWeapon = false, leftShield = false;
+            for (auto* it = a_cond.head; it; it = it->next) {
+                const auto& d  = it->data;
+                const auto  fn = d.functionData.function.get();
+                if (fn == Fn::kHasKeyword || fn == Fn::kWornHasKeyword ||
+                    fn == Fn::kWornApparelHasKeywordCount) {
+                    if (!PositiveTest(d)) continue;
+                    // Form pointer resolved at load (the ConditionPlayerGated idiom).
+                    auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                    a_out.weaponKinds |= WeaponKindOfKeyword(form);
+                    a_out.armorKinds  |= ArmorKindOfKeyword(form);
+                } else if (fn == Fn::kGetEquippedItemType) {
+                    if (d.flags.global) continue;
+                    // Integer param stuffed in the pointer slot (the
+                    // ExtractSkillReq idiom): 0 = left hand, 1 = right hand.
+                    const auto hand = reinterpret_cast<std::uintptr_t>(d.functionData.params[0]);
+                    if (hand != 0) continue;   // right-hand checks carry no style fact
+                    if (!Admits(d, 0.0f)) leftExcludesEmpty = true;
+                    if (Admits(d, 1.0f) || Admits(d, 2.0f) || Admits(d, 3.0f) || Admits(d, 4.0f))
+                        leftAdmitsOneHand = true;
+                    bool anyHigh = false;
+                    for (float c = 5.0f; c <= 12.0f; c += 1.0f) anyHigh = anyHigh || Admits(d, c);
+                    if (!anyHigh) leftExcludesNonWeapon = true;
+                    if (d.flags.opCode == RE::CONDITION_ITEM_DATA::OpCode::kEqualTo &&
+                        d.comparisonValue.f == 10.0f)
+                        leftShield = true;
+                }
+            }
+            if (leftExcludesEmpty && leftAdmitsOneHand && leftExcludesNonWeapon) a_out.leftHandWeapon = true;
+            if (leftShield) a_out.leftHandShield = true;
+        }
+
         // The §3 player-gate backstop: an AND-required item hard-requiring
         // the player's identity (GetIsID Player / GetIsReference PlayerRef,
         // == 1) makes the thing it guards inert on a follower. Deliberately
@@ -469,6 +575,9 @@ namespace MFO::Progression {
                     rank.skillReq   = ExtractSkillReq(r, &rank.skillReqAV, &rank.skillReqVal);
                     std::string why;
                     rank.verdict = ClassifyRank(r, why);
+                    // Style facts for this rank: the union over its entries
+                    // (frozen with the catalog; TallyStyleVotes reads them).
+                    for (const auto& f : WalkPerkEntries(r)) rank.style.Merge(f.style);
                     if (rankNo == 0) firstWhy = why;
                     if (rank.verdict < best) best = rank.verdict;   // kEffective < kMarginal < kDead
                     ++a_out.totalRanks;
@@ -674,13 +783,30 @@ namespace MFO::Progression {
                 // Mechanical fact: an ability with no spell, or one whose EVERY
                 // effect is pinned to the player, does nothing on a follower.
                 f.firesForNpc = ab && !AbilityPlayerGated(ab);
+                // Style facts: an ability's conditions live on its EFFECTS
+                // (the perk record itself only gates ownership), so read each
+                // effect's condition list — the same list AbilityPlayerGated
+                // walks.
+                if (ab)
+                    for (auto* eff : ab->effects)
+                        if (eff) ReadStyleFacts(eff->conditions, f.style);
             } else if (f.rawType == static_cast<int>(RE::PERK_ENTRY_TYPE::kEntryPoint)) {
                 f.kind = PerkEntryKind::kEntryPoint;
-                f.entryPointIndex = static_cast<std::uint32_t>(
-                    static_cast<RE::BGSEntryPointPerkEntry*>(entry)->entryData.entryPoint.get());
+                auto* ep = static_cast<RE::BGSEntryPointPerkEntry*>(entry);
+                f.entryPointIndex = static_cast<std::uint32_t>(ep->entryData.entryPoint.get());
                 f.name        = EntryPointName(f.entryPointIndex);
                 f.firesForNpc = true;    // an entry point fires; whether it MATTERS
                                          // for a follower is the add-on's VERDICT
+                // Style facts: one condition list per entry-point TAB (perk
+                // owner / weapon / target ...). The tab count is the entry's
+                // own DATA byte (entryData.numArgs); the array is walked only
+                // as far as BOTH that count and the array's own size allow.
+                {
+                    const std::size_t tabs = std::min<std::size_t>(ep->entryData.numArgs,
+                                                                   ep->conditions.size());
+                    for (std::size_t t = 0; t < tabs; ++t)
+                        ReadStyleFacts(ep->conditions[t], f.style);
+                }
             } else {
                 f.kind = PerkEntryKind::kOther;
             }
@@ -756,6 +882,41 @@ namespace MFO::Progression {
     const std::vector<AddonRef>& Addons() { return g_addons; }
 
     const Catalog& Get() { return g_catalog; }
+
+    StyleVotes TallyStyleVotes(RE::Actor* a_actor) {
+        StyleVotes v;
+        if (!a_actor || !g_catalog.built) return v;
+        auto* base = a_actor->GetActorBase();
+        // Ownership = the base's perk index OR the actor's own list — the
+        // OwnsExactPerk idiom (a follower's perks live on the TESNPC; HasPerk
+        // alone under-reports a base/native perk).
+        const auto owns = [&](RE::FormID a_id) {
+            auto* perk = a_id ? RE::TESForm::LookupByID<RE::BGSPerk>(a_id) : nullptr;
+            return perk && ((base && base->GetPerkIndex(perk).has_value()) ||
+                            a_actor->HasPerk(perk));
+        };
+        for (const auto& tree : g_catalog.skills) {
+            for (const auto& node : tree.nodes) {
+                // Highest rank held: the engine's perk list carries only the
+                // rank taken (earlier ranks are removed on rank-up), so scan
+                // from the top — the CountNativeTreeRanks idiom.
+                int have = 0;
+                for (int r = static_cast<int>(node.ranks.size()); r >= 1; --r)
+                    if (owns(node.ranks[static_cast<std::size_t>(r - 1)].perkFormID)) { have = r; break; }
+                for (int k = 0; k < have; ++k) {
+                    const auto& st = node.ranks[static_cast<std::size_t>(k)].style;
+                    ++v.owned;
+                    if (!st.Any()) continue;   // unclassifiable rank: votes for nothing
+                    ++v.classified;
+                    for (int b = 0; b < 8; ++b) if (st.weaponKinds & (1u << b)) ++v.weapon[b];
+                    for (int b = 0; b < 3; ++b) if (st.armorKinds  & (1u << b)) ++v.armor[b];
+                    if (st.leftHandWeapon) ++v.leftHandWeapon;
+                    if (st.leftHandShield) ++v.leftHandShield;
+                }
+            }
+        }
+        return v;
+    }
 
     // v1.1 self-declaration: an add-on's manifest is recognized by a KEYWORD it
     // ships whose editor-id ends with this suffix. Keyword editor-ids PERSIST at

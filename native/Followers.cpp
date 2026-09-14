@@ -87,6 +87,7 @@ namespace MFO::Followers {
         // under the same lock on revert.
         std::mutex                                       g_mx;
         std::unordered_set<RE::FormID>                   g_tracked;   // FormID membership mirror
+        std::unordered_set<RE::FormID>                   g_mfoOff;    // T#78 mfoEnabled==false mirror
         std::shared_ptr<const std::vector<RE::FormID>>   g_activeSnapshot =
             std::make_shared<const std::vector<RE::FormID>>();
 
@@ -100,6 +101,13 @@ namespace MFO::Followers {
             g_tracked.reserve(g_activeIds.size());
             for (const auto id : g_activeIds) g_tracked.insert(id);
             g_activeSnapshot = std::make_shared<const std::vector<RE::FormID>>(g_activeIds);
+            // The per-follower MFO switch, mirrored for the progression poll on the
+            // TRUE main thread (#74: never the live map). Read here on the worker —
+            // the same domain that writes it (Board ApplyEdits) — so a toggle is
+            // visible off-worker by the next Refresh (one diag turn).
+            g_mfoOff.clear();
+            for (const auto& [id, st] : g_followers)
+                if (!st.mfoEnabled) g_mfoOff.insert(id);
         }
 
         FactionQuirk g_dismissedFactions[] = {
@@ -438,6 +446,10 @@ namespace MFO::Followers {
     }
     std::uint8_t GetBaseClass(RE::Actor* a_actor) {
         return a_actor ? GetBaseClass(a_actor->GetFormID()) : std::uint8_t{ 0 };
+    }
+    bool IsMfoEnabled(RE::FormID a_actorID) {
+        std::lock_guard<std::mutex> lk(g_mx);   // the IsTrackedFast road, never g_followers
+        return g_mfoOff.find(a_actorID) == g_mfoOff.end();
     }
 
     void SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance) {
