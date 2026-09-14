@@ -38,6 +38,13 @@ namespace MFO::Loadout {
     // Read what the follower is holding. Pure reads.
     Hands Read(RE::Actor* a_actor, RE::SpellItem* a_spell);
 
+    // The engine's LEFT-hand equip slot (BGSDefaultObjectManager
+    // kLeftHandEquip) -- the slot every spell Prepare() equips goes into.
+    // Public (2026-09-13) so Actuation's dual-wield left-hand WEAPON equip
+    // targets the identical slot form. nullptr only if the default-object
+    // manager is unavailable. Pure read.
+    const RE::BGSEquipSlot* LeftHandSlot();
+
     // ── intelligent hand selection (marth's hand policy, 2026-09-06) ───────────
     // WHICH hand(s) a cast should claim, decided from the follower's REAL, LIVE
     // loadout + perks + magicka pool -- never a class/build guess (the same
@@ -104,9 +111,28 @@ namespace MFO::Loadout {
         Failed,
     };
 
+    // THE LEFT HAND'S POINT OF NO RETURN (Fable F1/F2 on f771399, 2026-09-14).
+    // Prepare() equips every gambit spell into the LEFT hand. A weapon MFO itself
+    // force-holds there (Actuation's dual-wield left hold, prevent-removal lock)
+    // must be yielded IMMEDIATELY before that EquipSpell -- after every refusal
+    // Prepare can still make (cooldown, two-handed debounce, open gear debt),
+    // never before them, or a persistently refused cast flickers the left hand
+    // weapon<->spell at lap rate. Loadout cannot see that ledger (it lives behind
+    // Actuation_internal.h, Actuation-TU-only by contract), so the caller hands
+    // in the yield: called with the actor at the commit point, returns true when
+    // it actually released a hold there. A true return also tells Prepare the
+    // left item it read was MFO's OWN hold -- NOT gear the follower loses, so no
+    // debt is booked for it (F2: two ledgers over one hand had the repay put the
+    // weapon back in the RIGHT hand at combat end). Non-capturing, so a plain
+    // function pointer: no <functional> in this header.
+    using LeftHandYield = bool (*)(RE::Actor* a_actor);
+
     // Put the spell in a hand if that is allowed right now, recording anything
-    // displaced so it can be given back.
-    Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why);
+    // displaced so it can be given back. `a_yieldLeft` (see LeftHandYield) is
+    // invoked right before the spell takes the left hand; nullptr = no hold to
+    // yield (the only caller today is CastOn, which always passes it).
+    Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why,
+                  LeftHandYield a_yieldLeft = nullptr);
 
     // Hand back everything owed to ONE follower -- on dismissal, or when they
     // leave the party still holding MFO's choice.
@@ -156,5 +182,16 @@ namespace MFO::Loadout {
     void ClearTransientState();
 
     int PendingRestores();
+
+    // Is a LEFT-hand gear debt open for this follower (Prepare displaced a
+    // shield / off-hand item that has not been repaid yet)? Fable F-A on
+    // 1ac3c6b: Actuation's dual-wield LEFT weapon hold must never be placed
+    // while one stands -- the two would coexist (the AI cannot take its shield
+    // back over a prevent-removal lock, so Tick's "debt paid" settle never
+    // fires) and Prepare's "already owe this follower gear" gate would then
+    // Debounce every later cast until combat end: heals dead for the rest of
+    // the fight. Pure read of the worker-serial debt map, same thread as
+    // Prepare/Tick (#4). false for no entry.
+    bool OwesLeft(RE::FormID a_actorID);
 
 }

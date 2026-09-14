@@ -349,6 +349,30 @@ namespace MFO::Actuation {
                                       CastProxyOnHand(fid, a_hand));
         }
 
+    }   // anon
+
+    // THE ONE QUESTION THE DUAL-WIELD EQUIP ASKS BEFORE TAKING A HAND (2026-09-13,
+    // declared in Actuation_internal.h). Same two answers HandFree/CastLockLive
+    // give the cast side, in the same order: a live claim on the hand is
+    // authoritative by itself (a heal claim -- ComposedCast's path -- holds NO
+    // g_castLock entry at all, so this first test is the only one that sees it);
+    // otherwise the hand's lock, if any, judged by CastLockLive (which also
+    // stamps/clears its F8 claimGoneAt exactly as HandFree's call would). A dead
+    // lock is NOT cleared here -- HandFree owns that -- reading it as free is
+    // all the equip side needs.
+    bool CastHandHeld(RE::Actor* a_follower, std::size_t a_hand) {
+        if (!a_follower || a_hand >= kHandCount) return false;
+        const auto fid = a_follower->GetFormID();
+        if (ClaimLiveOnHand(fid, a_hand)) return true;
+        auto it = g_castLock.find(fid);
+        if (it == g_castLock.end()) return false;
+        auto& lock = it->second.hand[a_hand];
+        if (lock.spell == 0) return false;
+        return CastLockLive(a_follower, a_hand, lock);
+    }
+
+    namespace {
+
         // Is hand `a_hand` available for (a_spell,a_target) right now -- i.e.
         // unlocked, already locked to this EXACT (spell,target) (the SAME
         // gambit refreshing itself), or its lock has gone live-false/stale

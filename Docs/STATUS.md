@@ -44,6 +44,81 @@ Read it as history and this block as current.
   on every compare). The field observable: Adelinda/Cicero swap into owned light pieces
   within a tick of idle, the `[armor]` line shows `class LIGHT`, and no `[econ] bought
   plan` names a heavy piece for them.
+- **Branch `feat/mfo-dualwield-combat-pick` (rebased onto `main` `0b71616` 2026-09-14,
+  no version bump) — pushed, CI on its own tip, NOT merged, NOT deployed. Fable tier-3
+  on `f771399` came back with nothing above SEV-3; F1–F5 (SEV-3 carve-outs + SEV-4
+  carve-out (b)) are FIXED in `1ac3c6b`, F6 is DECIDED by marth (below), F7–F9 are
+  deferred to `Docs/REVIEW-BACKLOG.md` MFO-B19/B20/B21; round 2 on `1ac3c6b`: F-A/F-C/F-D
+  FIXED in `4536ee0`, F-E/F-F deferred as MFO-B22/B23.** marth 2026-09-13: "both gaps
+  are clear to fix right away" —
+  the two consumers the perk-style branch reported but did not build. **GAP 1, the
+  combat pick:** `Actuation.cpp EquipWeapon` now picks by `Logistics::WeaponScore(roles,
+  w)` with `roles = ComputeWeaponRoles(actor, g_followers[id])` — the SAME decision the
+  loot judge, keep buckets and buy planner share — so a follower fights with what they
+  are perked for (`Actuation.cpp` gained its first non-Logistics include,
+  `Logistics_internal.h`; `WeaponScore` is not in `Logistics.h`). Default case is
+  byte-identical: no votes → the same `>=` last-equal-wins loop on integer damage. The
+  melee class is not a filter (the pick spans 1H+2H as it always did). **GAP 2, dual
+  wield by perks:** `WeaponRoles::offHand == 2` → the best second one-hander (same
+  score; the right hand's only copy excluded, two copies of one form allowed) is
+  FORCE-HELD in the LEFT hand (`EquipLeftHeld`, `Loadout::LeftHandSlot()` made
+  public); `== 1` → the best shield, plain-equipped; `== 0` → nothing. A satisfied-lap
+  TOP-UP (right already holds a one-hander, left empty, 5 s cadence) refills the left
+  once a cast that took it lapses. The ledger value is now `ForcedHold{right,left}`;
+  **FWPN co-save layout UNCHANGED v1** (a dual hold writes two pairs, the loader always
+  released by object). A live cast claim/lock on the left WINS: `CastOn`'s
+  commitPreempt and `ReconcileForcedWeapon` call `YieldForcedLeftHand`, which drops
+  only the left hold. `MFO_MeleeStyle` CSTY DATA = `1|4` (`kAllowDualWielding`);
+  `out/MFO.esp` regenerated, exactly ONE byte changed (offset 6743, `0x01→0x05`),
+  `tools/audit_esp.py` PASS. All left-hand writes gated on `bWeaponStyleControl`.
+  Strong bias, not exclusion; no overhaul assumed. **Shed interaction traced
+  2026-09-14, no fight** (the OOC release of both hands precedes `ServiceFollower`
+  and the shed's 3 s post-battle dwell; MAP.md §2 "COMBAT PICK + DUAL WIELD BY
+  PERKS"). **The Fable fixes (`1ac3c6b`):** F1 — the left-hand yield moved out of
+  `CastOn`'s commitPreempt (it ran ahead of transparent refusals and erased the
+  top-up's rate limit, so a refused cast flickered the left hand weapon↔spell per
+  lap) INTO `Loadout::Prepare`, immediately before its `EquipSpell`, via a
+  `LeftHandYield` function-pointer parameter, and the yield now re-stamps the 5 s
+  top-up FLOOR instead of erasing it. F2 — `Prepare` books no gear debt for MFO's
+  own hold (the yield's `true` return nulls `willDisplaceLeft`) and `RestoreOne`
+  repays a displaced left-hand WEAPON into the LEFT slot. F3 — both shield equips
+  posted to the main thread (`EquipShieldOnMain`, #62). F4 — every left-hand
+  unequip names `LeftHandSlot()` (CoLoad picks it from the live hands) and a
+  next-frame `[hold] <id>: left readback = <form|none>` line follows every yield/
+  release. F5 — the satisfied-lap top-up is transparent again (no suppression
+  window, no `lastFired`, no `NoteCombatFire`). **Round 2 (`4536ee0`, Fable on
+  `1ac3c6b`):** F-A — no left WEAPON hold is placed while a LEFT gear debt is open
+  (new `Loadout::OwesLeft`, gating the top-up and the pick path; a hold over an
+  unpaid debt could never be settled by the AI and `Prepare`'s debt gate would
+  Debounce every later cast, heals dead until combat end); with that, F-B's
+  repay-under-lock at combat end / dismissal has no remaining writer. F-C — the
+  `[hold]` readback is double-posted (one full frame after the follower's update
+  drains the queued unequip), so "weapon" in that line means the lock survived,
+  not a stale read. F-D — two stale comments corrected. F-E/F-F deferred to
+  REVIEW-BACKLOG MFO-B22/B23. **DECIDED (marth 2026-09-14, F6),
+  verbatim: "for F6 the weapon should always yield to a spell on left hand."** A
+  force-held left weapon ALWAYS yields to any spell that needs the left hand, heals
+  included; the weapon↔spell churn at cast cadence on a dual-wielder (heals are
+  left-only, `WeaponHandExposure` steers casts left while a hold exists) is accepted
+  by design. No right-hand cast preference and no "dual-wielder does not cast" rule
+  may be added for it. **NOT field-verified — the first dual-wield field run must
+  read the `[hold]` readback lines:** (1) whether a slot-named force-unequip clears
+  the left prevent-removal lock (no precedent in the codebase for unequipping a
+  left-hand WEAPON; if the engine resolves an either-hand weapon to the right, the
+  left lock survives every release and the hand can never take a spell); (2) a
+  same-form count≥2 dual hold writes two identical FWPN pairs and which INSTANCE each
+  unequip clears is unverified; (3) whether the AI actually attacks with the left
+  weapon. **KNOWN GAP (open, other agent's files):** the economy keep buckets keep
+  ONE 1H form, so a DIFFERENT second one-hander SELLS at the next vendor, and loot
+  never FETCHES a second one-hander — the left hand only pairs what the pack already
+  holds. **⚠ OPEN DECISION FOR MARTH — the CSTY `kAllowDualWielding` EXPOSURE, NOT
+  decided, NOT implemented:** the flag is GLOBAL to every follower MFO forces into
+  melee. An UNPERKED follower who happens to carry two one-handers may be dual-wielded
+  by its OWN AI (MFO's `EquipGateThunk` denies spells and staves only). This is not
+  deny-complete. A per-follower CSTY (allow-dual only for `offHand == 2` followers)
+  would need `Forms.h` + `CombatStyle.cpp`, outside this branch's boundary. The
+  economy sells the spare at the next vendor today, which narrows the window but is
+  not a deny. marth decides: accept the exposure, or scope a per-follower CSTY brief.
 - **Branch `feat/mfo-shed-fists-rule` (off `feat/mfo-progression-strict-points-perk-style`
   `4a62688`, no version bump) — pushed, CI status in the branch's own run, NOT merged,
   NOT deployed, awaiting its tier-3 Fable review.** The LoreRim 2026-09-12 shed bug:

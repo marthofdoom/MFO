@@ -122,8 +122,6 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** require the OTHER hand not to be a one-hand-weapon signature on the same tree/node, or require both hands empty unless the primaryAV signal also fires.
 - **Surfaced at edit time from:** MAP.md §4 `ShedOffRoleWeapon` FISTS RULE "What breaks" + the Progression STYLE FACTS "UNARMED" note.
 
----
-
 ### MFO-B15 — the board footer can say "free (one time)" for ~300 ms after the free respec was spent
 - **Raised:** Fable tier-2 review of `5f9d6a9` (`feat/mfo-board-free-respec-label`), SEV-5, PLAUSIBLE.
 - **Finding (verbatim):** `native/Board_Progression.cpp:1199` and `:1217`. Chain: Confirm on the render thread → `QueueEdit` → worker `ApplyEdits` on the next pump tick (≤133 ms while the board is open, `Diagnostics.cpp:355`) → `MainThread::Post` → next main-thread frame runs `ProgAllocator::Respec` (clears `st.freeRespec`, `ProgAllocator.cpp:1737`) and immediately `PublishBoardViews()` (`Board.cpp:1153`, swaps `g_boardSnap` under `g_viewMx`) → the Board only picks that up on the NEXT worker `PublishSnapshot` (`Board.cpp:1354`, ≤133 ms) → next render frame copies `g_snapshot` (`Board.cpp:626`). Worst case ~133+16+133+16 ≈ 300 ms during which `who->freeRespec` is still true. Worst-case outcome: an AUTO-class follower (where `RecomputeSkills` re-granted `autoPoints`, so the second respec is not the `:1690` "nothing allocated" no-op) is billed 500 rapport under a popup that said "no rapport is lost". Requires Respec-button + Confirm again inside the window, and the popup lands focus on Cancel (`:1237`).
@@ -144,6 +142,61 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - (b) The "allocator and wardrobe agree" comment (`Logistics_Loot.cpp:201-210`, `Logistics_internal.h:373-376`) overstates: on an exact skill tie the wardrobe takes the perk vote, `DominantArmorSkill` goes straight to light. Doc fix.
 - (c) `TradeBridge::BuyThresholds` (`TradeBridge.h:91-107`) is NOT byte-shared with the .pex (in-DLL only; the .pex sees the 10 natives). Append-only was honoured anyway; stop calling it byte-shared.
 - (d) Shields are half in the wear decision: `EquipBestOwnedGear:372-373` skips shields while keep buckets and force-sell score them; a worn heavy shield with an owned light one is force-sold at a vendor but MFO never puts the light one on. Pre-existing shape.
+
+### MFO-B18 — `WeaponHandExposure` steers every cast LEFT while a force-hold exists, so a dual-wielder's left weapon yields and refills at cast cadence (DECIDED BY MARTH: by design)
+- **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-4. F6.
+- **Severity:** SEV-4 (design)
+- **Finding (verbatim):** F6 — SEV-4 design, marth decides (record only): WeaponHandExposure (Actuation_Hands.cpp:163-172, consumer :872 preferRight = !exposure) steers every cast to the LEFT while any force-hold exists, and heals are left-only, so each cast on a dual-wield follower yields the left weapon and the top-up re-equips it once the lock lapses — weapon↔spell churn at cast cadence on the hand the CSTY change just filled.
+- **Reviewer's reasoning:** a design consequence of two standing rules (right-first-unless-a-weapon-owns-the-right, heals left-only) meeting the new left hold, not a defect in either; the churn is bounded by the top-up floor (5 s after every yield, F1 fix `1ac3c6b`).
+- **Decision (marth 2026-09-14, verbatim):** "for F6 the weapon should always yield to a spell on left hand." DECIDED, not open: a force-held left weapon ALWAYS yields to any spell that needs the left hand (heals included); the weapon<->spell churn at cast cadence is accepted by design. No right-hand cast preference and no "dual-wielder does not cast" rule may be added for this. Recorded here so the reasoning survives; nothing to drain.
+- **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks + `Docs/STATUS.md` DECIDED item.
+
+### MFO-B19 — `Actuation.cpp` includes `Logistics_internal.h` for two symbols
+- **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-5. F7.
+- **Severity:** SEV-5
+- **Finding (verbatim):** F7 — SEV-5 backlog: #include "Logistics_internal.h" in Actuation.cpp:13 pulls a ~900-line internal header; no ODR hazard (inline globals, WeaponScore pure inline, ComputeWeaponRoles defined once); proper seam is a public declaration in Logistics.h.
+- **Reviewer's reasoning:** correctness is unaffected (every definition in that header is `inline` or defined once); the cost is a layering smell and compile-time coupling only.
+- **Why it was NOT fixed:** raised in a round with nothing above SEV-3 once F1-F5 were fixed; a public seam in `Logistics.h` was outside the brief's file boundary. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** proper seam is a public declaration in Logistics.h (declare `WeaponRoles`/`ComputeWeaponRoles`/`WeaponScore` there, or a thin `Logistics::CombatWeaponScore(actor, weapon)` wrapper, and drop the internal include from `Actuation.cpp`).
+- **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+
+### MFO-B20 — `kMaxForcedWeapons` (64) is now a PAIR cap and the FWPN reader aborts the whole load above it
+- **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-5. F8.
+- **Severity:** SEV-5
+- **Finding (verbatim):** F8 — SEV-5 backlog: kMaxForcedWeapons = 64 (Actuation.cpp:2407) is now a PAIR cap and the reader aborts the whole FWPN load above it (:2447-2450). Unreachable at party scale.
+- **Reviewer's reasoning:** a dual hold writes two pairs per follower, so the cap is effectively 32 dual-wielding followers; the party is bounded far below that, and the abort path only drops the release sweep (a session starts hold-free anyway once the gambit re-forces).
+- **Why it was NOT fixed:** unreachable at party scale; raised in a round with nothing above SEV-3 once F1-F5 were fixed. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** raise the cap to `2 * kMaxFollowers`-shaped headroom or make the reader skip (not abort) past it; not a layout change (the count field is unchanged).
+- **Surfaced at edit time from:** MAP.md §1 FWPN entry + §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+
+### MFO-B21 — `ComputeWeaponRoles` (inventory walk + style mirror lock) now also runs from every pick lap and every 5 s top-up attempt
+- **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-5. F9.
+- **Severity:** SEV-5 (note)
+- **Finding (verbatim):** F9 — SEV-5 note: ComputeWeaponRoles (inventory walk + StyleVotesFor + mirror lock) now also runs from every pick lap and 5 s top-up attempt plus PickOffHandWeapon/PickShield walks. Negligible at party scale.
+- **Reviewer's reasoning:** the pick lap fires once per real equip (it buys a suppression window) and the top-up is rate-limited to one inventory walk per follower per 5 s, so the added cost is a handful of inventory walks per fight per follower.
+- **Why it was NOT fixed:** a perf note with no observed cost; no fix requested. Deferred as a note, not dropped.
+- **Fix shape when drained (verbatim):** none requested; if a profile ever shows it, cache the roles per follower per service tick (the Scheduler already computes them once per OOC tick in `ShedOffRoleWeapon`).
+- **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+
+### MFO-B22 — `EquipShieldOnMain` logs the shield equip before the posted closure has re-resolved
+- **Raised:** Fable round-2 review of `1ac3c6b` (`feat/mfo-dualwield-combat-pick`), SEV-5. F-E.
+- **Severity:** SEV-5
+- **Finding (verbatim):** F-E — SEV-5 backlog: EquipShieldOnMain logs "GAMBIT equip shield" synchronously (:1822-1823, :1912) before the posted closure re-resolves; a closure that finds a null actor/item (:1711-1714) equips nothing but the log already claimed it did; no IsTracked/alive check inside the closure (one-frame window, harmless).
+- **Reviewer's reasoning:** a one-frame window between the worker's decision and the main-thread equip; the closure null-checks both re-resolved forms and equips nothing on a miss, so the only defect is a log line that can overstate. Harmless.
+- **Why it was NOT fixed:** raised in a round with nothing above SEV-3 once F-A/F-C/F-D were fixed; a log-placement change with its own review cost. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** move the `[equip] ... GAMBIT equip shield` line into the posted closure after the null checks (log what actually happened), optionally with an `IsTracked`/alive check; same shape as the loot precedent.
+- **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+
+### MFO-B23 — CoLoad both-hands-same-form: the second unequip is slot-less by object after the left-slot one
+- **Raised:** Fable round-2 review of `1ac3c6b` (`feat/mfo-dualwield-combat-pick`), SEV-5. F-F.
+- **Severity:** SEV-5
+- **Finding (verbatim):** F-F — SEV-5 backlog: CoLoad both-hands-same-form (:2552-2553): the second unequip is slot-less by object after the left-slot unequip is queued ahead of it; passing the right-hand slot would make it unambiguous. (Note: there is no RightHandSlot() helper; if you add one it is the LookupByID<BGSEquipSlot>(0x00013F42) twin of LeftHandSlot — only do it if trivial and in-boundary, otherwise backlog as-is.)
+- **Reviewer's reasoning:** only the same-form count>=2 dual hold reaches this branch on load; the two queued unequips target the same object and which instance the slot-less second one clears is the same unverified engine question STATUS.md already carries for the F4 probe.
+- **Why it was NOT fixed:** backlogged as-is per the coordinator (no `RightHandSlot()` helper exists; adding one is its own small brief). Deferred, not dropped.
+- **Fix shape when drained (verbatim):** passing the right-hand slot would make it unambiguous — add `Loadout::RightHandSlot()` (the `kRightHandEquip` twin of `LeftHandSlot`, verify the default-object id in the pinned tree) and pass it on the `inRight` unequip.
+- **Surfaced at edit time from:** MAP.md §1 FWPN entry + §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+
+---
 
 ## DRAINED
 
