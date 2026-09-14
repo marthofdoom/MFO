@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **The left hand slot is looked up by its form now, not read out of the game's default object table.** The library call MFO used for that table reads it at the wrong place on Skyrim 1.5.97 and turns up a bad pointer, so a follower equipping a gambit spell there would have crashed the game. On 1.6.1170 the same call was reading a flag off an unrelated form to decide whether the slot existed at all, so it could hand the game no slot and let the game pick the hand. The slot is the LeftHand form in Skyrim.esm on every version, and that is what the game itself fills the table from, so MFO asks for the form directly. Checked against both the 1.5.97 and 1.6.1170 game binaries. Nothing else changes, and 1.5.97 is still on the older cast path for now.
+
 ## v2.0.7 -- The weapon shed no longer crashes the game
 
 - **A follower setting down an off role weapon no longer crashes the game.** When a follower dropped a weapon that did not fit its role, the game could crash on the spot. It happened every time a drop ran. The call that hands the weapon to the game was passing its arguments in the wrong order, and the game read a scrap of stack memory as the follower. The drop now calls the game directly and hands it exactly what it expects. Checked against both Skyrim 1.6.1170 and 1.5.97.

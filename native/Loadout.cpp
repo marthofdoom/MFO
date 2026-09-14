@@ -56,13 +56,29 @@ namespace MFO::Loadout {
         // most for.
         std::unordered_map<RE::FormID, RE::FormID> g_mfoSpell;
 
+        // The vanilla EQUP forms, read from Skyrim.esm's DOBJ record (DNAM
+        // `LHEQ` -> 0x13F43, `RHEQ` -> 0x13F42) and confirmed against the EQUP
+        // EDIDs ("LeftHand" / "RightHand" / 0x13F44 "EitherHand"). Skyrim.esm is
+        // always load index 00, so the runtime FormID is the file FormID.
+        constexpr RE::FormID kLeftHandEquipSlot = 0x00013F43;
+
         const RE::BGSEquipSlot* LeftHandSlot() {
-            // NOTE: <d3d11.h> elsewhere in this project #defines GetObject ->
-            // GetObjectW, which hijacks this template. That header is not
-            // included here; see Board.cpp's banner (ENGINE_NOTES §9).
-            auto* dom = RE::BGSDefaultObjectManager::GetSingleton();
-            return dom ? dom->GetObject<RE::BGSEquipSlot>(RE::DEFAULT_OBJECT::kLeftHandEquip)
-                       : nullptr;
+            // Resolved by FormID, NOT through BGSDefaultObjectManager::GetObject.
+            // The pinned CommonLib (3.7.0) implements IsObjectInitialized(idx) as
+            // `RelocateMember<bool*>(this, 0xB80, 0xBA8)[idx]`: it DEREFERENCES
+            // the 8 bytes at +0xB80 as a `bool*` and indexes THAT. Measured
+            // against both unpacked binaries (ctor memset + Load + InitItemImpl):
+            //   1.5.97   objects[364] @ +0x20..+0xB80, objectInit[364] @ +0xB80
+            //   1.6.1170 objects[366] @ +0x20..+0xB90, objectInit[366] @ +0xB90
+            // So on 1.5.97 the read turns the first eight init bools into the
+            // poison pointer 0x0101010101010101 and faults; on 1.6.1170 +0xB80 is
+            // objects[364] (DOBJ `HMAE`, a FLST from Update.esm) and the "init"
+            // byte is that form's formFlags bits 24-31 -- a garbage gate that
+            // returns either objects[19] or nullptr. Either way the engine's own
+            // InitItemImpl fills objects[19] with LookupByID(DOBJ.LHEQ), i.e.
+            // exactly this lookup, so the slot the engine calls "left" IS this
+            // form on both runtimes and the lookup has no layout to get wrong.
+            return RE::TESForm::LookupByID<RE::BGSEquipSlot>(kLeftHandEquipSlot);
         }
 
         bool IsTwoHanded(RE::TESForm* a_form) {
