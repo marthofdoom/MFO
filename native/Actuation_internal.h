@@ -343,11 +343,18 @@ namespace MFO::Actuation {
         // disagree about who owns the hand. Worker-serial (reads g_castLock).
         bool CastHandHeld(RE::Actor* a_follower, std::size_t a_hand);
 
-        // Drop ONLY the dual-wield left-hand hold (force-unequip + ledger .left =
-        // null; the right hold stays). Defined in Actuation.cpp beside
-        // ReleaseForcedWeapon, declared here because CastOn's commitPreempt (in
-        // the anon namespace above it) is one of its two callers. Idempotent.
-        void YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why);
+        // Drop ONLY the dual-wield left-hand hold (force-unequip into the LEFT
+        // slot + ledger .left = null; the right hold stays). Defined in
+        // Actuation.cpp beside ReleaseForcedWeapon, declared here because CastOn
+        // (in the anon namespace above it) hands it to Loadout::Prepare as the
+        // LeftHandYield callback -- the left hand's point of no return (Fable F1
+        // on f771399) -- and ReconcileForcedWeapon calls it when a cast claim is
+        // live on the left. Returns true when a hold was actually released
+        // (Prepare books no gear debt for it then, F2). Idempotent: no left hold
+        // -> false, nothing touched. Re-stamps the off-hand top-up FLOOR
+        // (kOffHandRetry) rather than erasing it, so a refused cast can cost at
+        // most one weapon<->spell flicker per 5 s, never one per lap.
+        bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why);
 
         // ── THE LOCK'S CROSS-TU ENTRY POINTS ────────────────────────────────────
         // Defined in Actuation_Hands.cpp, each still carrying the doc comment it has

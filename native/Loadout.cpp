@@ -74,12 +74,23 @@ namespace MFO::Loadout {
             auto* armo = a_form ? a_form->As<RE::TESObjectARMO>() : nullptr;
             return armo && armo->IsShield();
         }
+    }
+    // Declared in Loadout.h; defined below the anon namespace. Forward-declared
+    // here so RestoreOne (anon, above the definition) can name it.
+    const RE::BGSEquipSlot* LeftHandSlot();
+    namespace {
 
-        void EquipBack(RE::Actor* a_actor, RE::TESBoundObject* a_obj) {
+        // `a_slot` (Fable F2 on f771399): a displaced LEFT-hand WEAPON must go back
+        // to the LEFT -- a slot-less EquipObject on a one-hander lands it in the
+        // RIGHT hand (the engine's default), which for a dual-wielder displaces the
+        // main-hand weapon at combat end. Shields and a stowed two-hander keep the
+        // slot-less call (a shield has its own slot, a two-hander takes both).
+        void EquipBack(RE::Actor* a_actor, RE::TESBoundObject* a_obj,
+                       const RE::BGSEquipSlot* a_slot = nullptr) {
             if (!a_actor || !a_obj) return;
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return;
-            mgr->EquipObject(a_actor, a_obj);
+            mgr->EquipObject(a_actor, a_obj, nullptr, 1, a_slot);
         }
 
         // Hand everything back for ONE follower. Returns what it restored, for
@@ -102,7 +113,12 @@ namespace MFO::Loadout {
                     // starts when they get it back.
                     g_lastStow[a_id] = std::chrono::steady_clock::now();
                 }
-                if (it->second.displacedLeft) { EquipBack(actor, it->second.displacedLeft); ++n; }
+                if (auto* left = it->second.displacedLeft) {
+                    // A weapon displaced from the LEFT hand returns to the LEFT hand
+                    // (F2); anything else (shield, torch) keeps the default call.
+                    EquipBack(actor, left, left->As<RE::TESObjectWEAP>() ? LeftHandSlot() : nullptr);
+                    ++n;
+                }
             }
             g_debt.erase(it);
             // The restore displaced MFO's spell, so the AI window it measured is
@@ -242,7 +258,8 @@ namespace MFO::Loadout {
         return CanDualCast(a_actor, a_spell) ? HandPick::DualCast : HandPick::EitherFree;
     }
 
-    Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why) {
+    Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why,
+                  LeftHandYield a_yieldLeft) {
         if (!a_actor || !a_spell) { a_why = "no actor or spell"; return Ready::Failed; }
 
         // NEVER grant a spell the follower does not know (INVARIANTS #20,
@@ -281,6 +298,10 @@ namespace MFO::Loadout {
             const int castLvl = Config::g_castControl.load();
             if (castLvl > 0) {
                 if (auto* m = RE::ActorEquipManager::GetSingleton()) {
+                    // POINT OF NO RETURN (F1): the left hand is taken on the next
+                    // line, so MFO's own left weapon hold yields here and not
+                    // earlier. No debt is booked on this branch (spell->spell swap).
+                    if (a_yieldLeft) a_yieldLeft(a_actor);
                     m->EquipSpell(a_actor, a_spell, LeftHandSlot());
                     a_actor->DrawWeaponMagicHands(true);
 
@@ -360,6 +381,14 @@ namespace MFO::Loadout {
         } else if (hands.left) {
             willDisplaceLeft = hands.left->As<RE::TESBoundObject>();
         }
+
+        // POINT OF NO RETURN (F1): every refusal above has had its say, the spell
+        // takes the left hand on the next line -- MFO's own left weapon hold
+        // yields NOW. Its unequip is queued, so Read()'s synchronous view above
+        // still showed that weapon in the left: a true return means the left item
+        // was MFO's OWN hold, not gear the follower loses -- book NO debt for it
+        // (F2), or the repay hands MFO's released weapon back at combat end.
+        if (a_yieldLeft && a_yieldLeft(a_actor)) willDisplaceLeft = nullptr;
 
         mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
         a_actor->DrawWeaponMagicHands(true);

@@ -725,12 +725,14 @@ namespace MFO::Actuation {
                     handPlan.preemptRight = false;
                     PreemptHand(a_follower, kHandRight, a_spellID);
                 }
-                // (2026-09-13) The dual-wield LEFT-hand weapon hold is an
-                // incumbent of the left hand in exactly this sense: a plan that
-                // takes the left hand displaces it here, at the same last-possible
-                // moment, so Loadout::Prepare's EquipSpell below never meets the
-                // weapon's prevent-removal lock. Idempotent (no left hold -> no-op).
-                if (handPlan.left) YieldForcedLeftHand(a_follower, "a cast is taking the left hand");
+                // The dual-wield LEFT-hand weapon hold is deliberately NOT yielded
+                // here (Fable F1 on f771399): this lambda runs BEFORE refusals that
+                // still return transparently (an APMF claim refusal, a heal
+                // ComposedCast holds off, a Prepare that debounces or fails), and a
+                // yield ahead of a refusal costs a weapon->spell->weapon flicker per
+                // lap. The hold yields at the left hand's true point of no return
+                // instead: inside Loadout::Prepare, immediately before its
+                // EquipSpell, through the LeftHandYield callback passed below.
             };
 
             auto lockHands = [&](RE::FormID a_sp, RE::FormID a_tg) {
@@ -1037,7 +1039,14 @@ namespace MFO::Actuation {
                 // having touched it. A no-op when the plan asked for no displacement,
                 // and a no-op on the owned path (already spent above).
                 commitPreempt();
-                switch (Loadout::Prepare(a_follower, spell, why)) {
+                // The LEFT-hand weapon hold yields INSIDE Prepare, right before its
+                // EquipSpell (F1): after Prepare's own refusals, never before them.
+                // Prepare always equips into the LEFT slot, so this is keyed to the
+                // physical hand it takes, not to handPlan.left. Returns whether a
+                // hold was released, so Prepare books no gear debt for it (F2).
+                switch (Loadout::Prepare(a_follower, spell, why, [](RE::Actor* a_actor) {
+                            return YieldForcedLeftHand(a_actor, "a cast is taking the left hand");
+                        })) {
                 case Loadout::Ready::AlreadyReady:
                 case Loadout::Ready::Equipped: {
                     equipped = true;
@@ -1690,6 +1699,25 @@ namespace MFO::Actuation {
             return best;
         }
 
+        // SHIELD EQUIP ON THE MAIN THREAD (Fable F3 on f771399, #62): an ARMOR
+        // equip from this job worker races the render thread's 3D rebuild (the
+        // invisible-head class of bug) -- the same reason Logistics_Loot.cpp's
+        // equipIt hop exists. Capture FormIDs only, never the worker's Actor*/
+        // item pointers; re-resolve on the frame that runs; null-check both. A
+        // plain equip, no ledger entry: the AI keeps shields on its own. VR (no
+        // pump): the inline call, as the loot precedent does.
+        void EquipShieldOnMain(RE::FormID a_follower, RE::FormID a_shield) {
+            auto doEquip = [a_follower, a_shield]() {
+                auto* fol  = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+                auto* form = RE::TESForm::LookupByID(a_shield);
+                auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
+                if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
+                    eq->EquipObject(fol, item);
+            };
+            if (MainThread::IsInstalled()) MainThread::Post(doEquip);
+            else                           doEquip();
+        }
+
         // Put a_weap in the LEFT hand force-held and record ForcedHold::left. Map
         // under the lock, engine calls outside it (the SEV-1 discipline). A
         // different weapon already held there is force-unequipped first, as the
@@ -1778,21 +1806,23 @@ namespace MFO::Actuation {
                         !CastHandHeld(a_follower, kHandLeft)) {
                         g_offHandRetryAt[id] = now + kOffHandRetry;
                         const Logistics::WeaponRoles roles = WeaponRolesFor(a_follower);
-                        auto* mgr = RE::ActorEquipManager::GetSingleton();
+                        // TRANSPARENT either way (Fable F5 on f771399): a refill is a
+                        // side effect of a SATISFIED rule, not this tick's action. A
+                        // Fired here armed the Scheduler's suppression window (rules
+                        // below the equip -- heals -- starved ~1.5 s per refill),
+                        // stamped lastFired and fed ProgAllocator::NoteCombatFire.
                         if (roles.offHand == 2) {
                             if (auto* w = PickOffHandWeapon(a_follower, roles, daggerMelee, rightW);
                                 w && EquipLeftHeld(a_follower, w)) {
                                 a_follower->DrawWeaponMagicHands(true);
                                 spdlog::info("[equip] {:08X}: GAMBIT equip off-hand '{}' (dual wield by "
                                              "perks, top-up)", id, w->GetFullName() ? w->GetFullName() : "?");
-                                return { Result::Fired, "equipped off-hand weapon" };
                             }
-                        } else if (roles.offHand == 1 && mgr && !(leftA && leftA->IsShield())) {
+                        } else if (roles.offHand == 1 && !(leftA && leftA->IsShield())) {
                             if (auto* sh = PickShield(a_follower)) {
-                                mgr->EquipObject(a_follower, sh);
+                                EquipShieldOnMain(id, sh->GetFormID());
                                 spdlog::info("[equip] {:08X}: GAMBIT equip shield '{}' (shield by perks, "
                                              "top-up)", id, sh->GetFullName() ? sh->GetFullName() : "?");
-                                return { Result::Fired, "equipped shield" };
                             }
                         }
                     }
@@ -1879,7 +1909,7 @@ namespace MFO::Actuation {
                     }
                     // Off-hand (style control ON only -- see the plan above).
                     if (offHandW)       EquipLeftHeld(a_follower, offHandW);   // force-held, ledger .left
-                    else if (offHandSh) mgr->EquipObject(a_follower, offHandSh); // plain: the AI keeps shields
+                    else if (offHandSh) EquipShieldOnMain(id, offHandSh->GetFormID()); // plain (F3: main thread)
                 } else {
                     mgr->EquipObject(a_follower, best);   // kill-switch off: today's behaviour exactly
                 }
@@ -2236,6 +2266,30 @@ namespace MFO::Actuation {
     }
 
     // ── T#76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
+    namespace {
+        // READBACK (Fable F4 on f771399, principle 5 -- observe the path, do not
+        // assume it): after a left-hand hold is released or yielded, log what the
+        // LEFT hand holds. The unequip is QUEUED (a_queueEquip=true), so a read on
+        // this same call would only ever show the weapon still there; the read is
+        // posted to the main thread (next frame, after the engine drains its equip
+        // queue) with the FormID captured and the actor re-resolved. VR (no pump)
+        // reads inline, which is then an honest "queued, not yet applied". The
+        // first dual-wield field run proves or disproves the slot-less/object
+        // unequip question with this line.
+        void LogLeftHandReadback(RE::FormID a_id) {
+            auto read = [a_id]() {
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_id);
+                if (!actor) return;
+                auto* held = actor->GetEquippedObject(true);
+                spdlog::info("[hold] {:08X}: left readback = {}", a_id,
+                             held ? (held->GetName() && *held->GetName() ? held->GetName() : "?")
+                                  : "none");
+            };
+            if (MainThread::IsInstalled()) MainThread::Post(read);
+            else                           read();
+        }
+    }
+
     void ReleaseForcedWeapon(RE::Actor* a_follower) {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();
@@ -2254,8 +2308,10 @@ namespace MFO::Actuation {
         // cast -- the worse-than-oscillation failure this whole feature must not
         // create. Engine calls OUTSIDE the lock. BOTH hands (2026-09-13): the
         // dual-wield left hold is released by the same call, same flags.
+        // The LEFT hold names its slot (F4), mirroring EquipLeftHeld; the right
+        // keeps the slot-less call it has always had.
         if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
-            if (hold.left)  mgr->UnequipObject(a_follower, hold.left,  nullptr, 1, nullptr, true, true);
+            if (hold.left)  mgr->UnequipObject(a_follower, hold.left,  nullptr, 1, Loadout::LeftHandSlot(), true, true);
             if (hold.right) mgr->UnequipObject(a_follower, hold.right, nullptr, 1, nullptr, true, true);
         }
         // APMF ch.15: hands are free again -- release the equipment claim too, so
@@ -2266,6 +2322,7 @@ namespace MFO::Actuation {
         APMFBridge::ReleaseEquipment(id);
         spdlog::info("[equip] {:08X}: force-hold released{}", id,
                      hold.left ? " (both hands)" : "");
+        if (hold.left) LogLeftHandReadback(id);
     }
 
     // ── THE LEFT HAND YIELDS TO A CAST (2026-09-13) ─────────────────────────
@@ -2278,25 +2335,35 @@ namespace MFO::Actuation {
     // lock lapses. A left-ONLY hold (AI-equipped right) erases the entry and
     // releases the APMF equipment claim, so the claim never outlives the hold.
     // Idempotent. Worker-serial; map under the lock, engine call outside it.
-    void YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why) {
-        if (!a_follower) return;
+    bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why) {
+        if (!a_follower) return false;
         const auto id = a_follower->GetFormID();
         RE::TESBoundObject* left = nullptr;
         bool lastHold = false;
         {
             std::scoped_lock lk(g_forcedMx);
             auto it = g_forcedWeapon.find(id);
-            if (it == g_forcedWeapon.end() || !it->second.left) return;
+            if (it == g_forcedWeapon.end() || !it->second.left) return false;
             left = it->second.left;
             it->second.left = nullptr;
             if (it->second.Empty()) { g_forcedWeapon.erase(it); lastHold = true; }
         }
-        g_offHandRetryAt.erase(id);   // refill on the first satisfied lap after the cast
+        // A FLOOR, not a reset (F1, principle 9): the top-up may refill the hand
+        // no sooner than kOffHandRetry from this yield. Erasing the stamp let a
+        // refused cast (yield -> EquipSpell -> refusal -> top-up -> yield...) cycle
+        // the left hand weapon<->spell every lap; now it costs one per 5 s at most.
+        g_offHandRetryAt[id] = std::chrono::steady_clock::now() + kOffHandRetry;
+        // LEFT SLOT on the unequip (F4), mirroring the equip: a slot-less unequip
+        // by object is unverified against a one-hander the engine could resolve
+        // to the RIGHT hand, which would leave the left prevent-removal lock
+        // standing and the hand unable to take a spell (heals are left-only).
         if (auto* mgr = RE::ActorEquipManager::GetSingleton())
-            mgr->UnequipObject(a_follower, left, nullptr, 1, nullptr, true, true);
+            mgr->UnequipObject(a_follower, left, nullptr, 1, Loadout::LeftHandSlot(), true, true);
         if (lastHold) APMFBridge::ReleaseEquipment(id);
         spdlog::info("[equip] {:08X}: left-hand hold yielded ({}){}", id, a_why,
                      lastHold ? " -- no hold remains" : "");
+        LogLeftHandReadback(id);
+        return true;
     }
 
     void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance, bool a_condKnownFalse) {
@@ -2472,18 +2539,32 @@ namespace MFO::Actuation {
                 auto* mgr = RE::ActorEquipManager::GetSingleton();
                 if (!mgr) return;
                 if (weapon != 0) {
-                    if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon))
-                        mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                    if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon)) {
+                        // The pair carries no hand (layout v1), so name the slot
+                        // from the LIVE hands (F4): a form held in the LEFT is
+                        // unequipped with the left slot, one in the RIGHT with the
+                        // default -- BOTH when the same form sits in each hand (a
+                        // count>=2 same-form dual hold). Held in neither: the
+                        // slot-less call by object, exactly as before.
+                        const bool inLeft  = actor->GetEquippedObject(true)  == obj;
+                        const bool inRight = actor->GetEquippedObject(false) == obj;
+                        if (inLeft)  mgr->UnequipObject(actor, obj, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+                        if (inRight) mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                        if (!inLeft && !inRight)
+                            mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                    }
                 } else {
                     // Unknown weapon (created/enchanted): force-unequip the held
                     // WEAPON in either hand to clear the lock. #8: the force-hold
                     // only ever locks a weapon, but GetEquippedObject also returns
                     // spells, shields and torches -- unequipping one of those would
-                    // strip an unrelated off-hand item on load. Weapons only.
+                    // strip an unrelated off-hand item on load. Weapons only. The
+                    // left hand names its slot (F4).
                     for (bool leftHand : { false, true }) {
                         if (auto* held = actor->GetEquippedObject(leftHand))
                             if (auto* wep = held->As<RE::TESObjectWEAP>())
-                                mgr->UnequipObject(actor, wep, nullptr, 1, nullptr, true, true);
+                                mgr->UnequipObject(actor, wep, nullptr, 1,
+                                                   leftHand ? Loadout::LeftHandSlot() : nullptr, true, true);
                     }
                 }
                 spdlog::info("[equip] {:08X}: stale force-hold cleared on load", follower);
