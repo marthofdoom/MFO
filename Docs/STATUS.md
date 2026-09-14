@@ -13,6 +13,24 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-shed-fists-rule` (off `feat/mfo-progression-strict-points-perk-style`
+  `4a62688`, no version bump) — pushed, CI status in the branch's own run, NOT merged,
+  NOT deployed, awaiting its tier-3 Fable review.** The LoreRim 2026-09-12 shed bug:
+  `ShedOffRoleWeapon`'s `inRole` returned `true` for the engine's Unarmed record
+  (`0x1F4`, `WepClass::Other`), so fists alone satisfied the never-disarm guard and the
+  shed dropped a follower's ONLY real weapon (Cosnach, two-handed by skill, sole
+  weapon an Iron Mace). marth's rule: fists are never valid for fighting unless the
+  Progression add-on is installed AND unarmed perks were selected via progression.
+  Now `inRole` returns `fistsValid = Progression::Get().built && votes.unarmed > 0`
+  for `Other`; the vote is the new `StyleVotes::unarmed`, counted off MFO's OWN
+  allocation record (`ProgAllocator::g_prog`, enrolled records, main thread — a
+  commented, deliberate component-1→2 include in `Progression.cpp`), from the new
+  `PerkStyleFacts::unarmed` (`ReadStyleFacts`: a `GetEquippedItemType` test on either
+  hand admitting code 0 only, no hand requiring a weapon, no weapon keyword on the same
+  list; Skyrim.esm has NO hand-to-hand KYWD — checked). Flows through the existing
+  `g_styleMirror` untouched. `[shed] <id>: fists <valid|not valid> (progression=<y/n>,
+  unarmed perks=<n>)` once per change per follower. Default case: the only changed
+  outcome is "one off-role weapon and nothing else" — DROPPED before, KEPT now.
 - **Branch `feat/mfo-progression-strict-points-perk-style` (off v2.0.6 `941ddb1`,
   no version bump) — pushed, CI status in the branch's own run, NOT merged, NOT
   deployed, awaiting its tier-3 Fable review.** Two marth asks (2026-09-13):

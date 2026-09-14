@@ -1298,7 +1298,23 @@ anonymous-namespace copy — that silently forks the instance).
   lull (the field 2h-follower-hands-a-looted-mace bug). `g_lastCombatSeen`
   worker-only/no-lock (#4), cleared in `ClearTransientState`. Guards unchanged
   (never disarm/`inRoleWeapons>0`, `IsStockGear`, `IsCreatureWeapon`, socketed,
-  `Catalog::IsExcluded`).
+  `Catalog::IsExcluded`). **FISTS RULE (2026-09-14, marth: "they can hold them, but
+  they shouldn't be valid for fighting, unless progression is installed AND unarmed
+  perks are selected via progression"):** the engine's Unarmed record (`0x1F4`,
+  `kHandToHandMelee` → `WepClass::Other`, in EVERY inventory) used to fall through
+  `inRole` as `true`, so fists alone satisfied `inRoleWeapons>0` and the shed dropped
+  a follower's ONLY real weapon (LoreRim 2026-09-12, Cosnach). Now `inRole` returns
+  `fistsValid = Progression::Get().built && StyleVotesFor(f).unarmed > 0` for `Other`
+  (the same worker-side mirror `ComputeWeaponRoles` reads — no perk walk on the
+  worker); a not-valid Unarmed record is skipped, never a shed candidate. Logged
+  `[shed] <id>: fists <valid|not valid> (progression=<y/n>, unarmed perks=<n>)` with a
+  candidate in hand, once per CHANGE (`g_shedFistsLogged`, `Logistics_internal.h`,
+  worker-only, cleared in `ClearTransientState`). **Default-case delta:** the ONLY
+  changed outcome is a follower holding one off-role weapon and no real in-role one
+  (DROPPED before, KEPT now); every other path is unchanged. **What breaks:** making
+  `Other` in-role again (or counting `unarmed` off `HasPerk`) re-opens the
+  disarm; the vote MUST come from the allocation record (see Progression's
+  `TallyStyleVotes` note).
 - `ClearTransientState` (`Logistics.cpp:2049`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
@@ -1591,7 +1607,17 @@ every OWNED rank 1..K per node (rank depth = investment) into `StyleVotes`. Perk
 outside the catalog (hidden engine perks like PerkSkillBoosts, creature perks, dead
 player-UI perks) never vote; a catalog rank conditioned on nothing classifiable votes
 for nothing (`classified`/`owned` counters say how many). NO overhaul is assumed
-anywhere — the facts come off the perk record's own conditions. **What breaks:**
+anywhere — the facts come off the perk record's own conditions. **UNARMED (2026-09-14):**
+`PerkStyleFacts::unarmed` = a list whose `GetEquippedItemType` test on EITHER hand admits
+code 0 only (`== 0` / `<= 0` / `< 1`), no hand test on that list excludes 0, and no
+weapon-kind keyword is named on it (per-list, not per-merged-entry). NO engine keyword
+exists — Skyrim.esm ships no `WeapTypeHandToHand` KYWD (checked 2026-09-14; `Unarmed` is
+the WEAP `0x1F4` edid). `StyleVotes::unarmed` is the ONE vote NOT counted off held perks:
+`TallyStyleVotes` reads MFO's allocation record `ProgAllocator::g_prog[id].perks`
+(enrolled records; ranks 1..K of each allocated node; main thread, no lock — where the
+tally already runs) via a deliberate, commented component-1→component-2 include of
+`ProgAllocator.h` in `Progression.cpp` (headers stay acyclic). Consumer:
+`Logistics::ShedOffRoleWeapon` (fists rule). **What breaks:**
 renaming/renumbering `WeaponKind`/`ArmorKind` bits breaks `Logistics::WeaponKindOf` +
 `TradeBridge::BuyThresholds::preferKinds` (same bit space); calling `TallyStyleVotes`
 off the main thread races the allocator's perk writes (the Logistics mirror exists for
