@@ -210,6 +210,17 @@ Read it as history and this block as current.
   Its deferred review, and the three uncertainties the author flagged, are recorded
   in `Docs/REVIEW-BACKLOG.md` under PENDING FABLE REVIEW.
 
+### TODO (marth 2026-09-14): ranged kind by perks + AMMO — bow vs crossbow vs modded ranged (guns)
+marth: "bow vs crossbow vs any added ranged option, keeping ammo in mind for ranged, if out of
+bolts a bow is better than nothing, etc. But certain lists may have guns too so it needs to be a
+capable addition of code." Not started; after the armor + dual-wield field cycle. Shape: the ranged
+pick gets the same perk-style bias as `preferKinds` PLUS an ammo term (a ranged weapon with no
+compatible ammo in the pack scores below any that has ammo, and below nothing only if none has
+ammo); ranged kinds and ammo matching are DATA-DRIVEN from the WEAP record (animation type,
+`WeapType*` keywords, bound ammo), never a bow/crossbow enum, so modded guns and ammo work;
+loot/buy fetch the ammo the CHOSEN weapon needs. Sites: `ComputeWeaponRoles`/`WeaponScore`,
+the Actuation ranged branch, `ReadStyleFacts`, the arrows/bolts loot rules.
+
 ## ▶ YOU ARE HERE (2026-09-07)
 
 **Shipped:** `main` is **v2.0.1** plus the 2026-09-07 fix wave and the doc-coherence
