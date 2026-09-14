@@ -13,6 +13,45 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-dualwield-combat-pick` (rebased onto `main` `0b71616` 2026-09-14,
+  no version bump) — pushed, CI on its own tip, NOT merged, NOT deployed, awaiting its
+  tier-3 Fable review.** marth 2026-09-13: "both gaps are clear to fix right away" —
+  the two consumers the perk-style branch reported but did not build. **GAP 1, the
+  combat pick:** `Actuation.cpp EquipWeapon` now picks by `Logistics::WeaponScore(roles,
+  w)` with `roles = ComputeWeaponRoles(actor, g_followers[id])` — the SAME decision the
+  loot judge, keep buckets and buy planner share — so a follower fights with what they
+  are perked for (`Actuation.cpp` gained its first non-Logistics include,
+  `Logistics_internal.h`; `WeaponScore` is not in `Logistics.h`). Default case is
+  byte-identical: no votes → the same `>=` last-equal-wins loop on integer damage. The
+  melee class is not a filter (the pick spans 1H+2H as it always did). **GAP 2, dual
+  wield by perks:** `WeaponRoles::offHand == 2` → the best second one-hander (same
+  score; the right hand's only copy excluded, two copies of one form allowed) is
+  FORCE-HELD in the LEFT hand (`EquipLeftHeld`, `Loadout::LeftHandSlot()` made
+  public); `== 1` → the best shield, plain-equipped; `== 0` → nothing. A satisfied-lap
+  TOP-UP (right already holds a one-hander, left empty, 5 s cadence) refills the left
+  once a cast that took it lapses. The ledger value is now `ForcedHold{right,left}`;
+  **FWPN co-save layout UNCHANGED v1** (a dual hold writes two pairs, the loader always
+  released by object). A live cast claim/lock on the left WINS: `CastOn`'s
+  commitPreempt and `ReconcileForcedWeapon` call `YieldForcedLeftHand`, which drops
+  only the left hold. `MFO_MeleeStyle` CSTY DATA = `1|4` (`kAllowDualWielding`);
+  `out/MFO.esp` regenerated, exactly ONE byte changed (offset 6743, `0x01→0x05`),
+  `tools/audit_esp.py` PASS. All left-hand writes gated on `bWeaponStyleControl`.
+  Strong bias, not exclusion; no overhaul assumed. **Shed interaction traced
+  2026-09-14, no fight** (the OOC release of both hands precedes `ServiceFollower`
+  and the shed's 3 s post-battle dwell; MAP.md §2 "COMBAT PICK + DUAL WIELD BY
+  PERKS"). **NOT field-verified:** whether a force-held left weapon blocks a spell
+  equip (the yield makes it moot), whether the AI actually attacks with the left
+  weapon. **KNOWN GAP (open, other agent's files):** the economy keep buckets keep
+  ONE 1H form, so a DIFFERENT second one-hander SELLS at the next vendor, and loot
+  never FETCHES a second one-hander — the left hand only pairs what the pack already
+  holds. **⚠ OPEN DECISION FOR MARTH — the CSTY `kAllowDualWielding` EXPOSURE, NOT
+  decided, NOT implemented:** the flag is GLOBAL to every follower MFO forces into
+  melee. An UNPERKED follower who happens to carry two one-handers may be dual-wielded
+  by its OWN AI (MFO's `EquipGateThunk` denies spells and staves only). This is not
+  deny-complete. A per-follower CSTY (allow-dual only for `offHand == 2` followers)
+  would need `Forms.h` + `CombatStyle.cpp`, outside this branch's boundary. The
+  economy sells the spare at the next vendor today, which narrows the window but is
+  not a deny. marth decides: accept the exposure, or scope a per-follower CSTY brief.
 - **Branch `feat/mfo-shed-fists-rule` (off `feat/mfo-progression-strict-points-perk-style`
   `4a62688`, no version bump) — pushed, CI status in the branch's own run, NOT merged,
   NOT deployed, awaiting its tier-3 Fable review.** The LoreRim 2026-09-12 shed bug:
