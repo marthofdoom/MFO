@@ -1144,19 +1144,21 @@ keeps looping alongside its own replacement -- doubling the tick rate, once per
 fast load, permanently. A boolean cannot express "you specifically should
 stop". An epoch counter can.
 
-### 81. A player-placed skill point has exactly two writers: ApplyManualSkillPoint and Respec
+### 81. A skill point, once placed by any path, stays on that skill until Respec
 
-`SkillAlloc::manualPoints` (ProgAllocator.h) is the player's own allocation.
-No automatic path may add to it, reduce it, move it to another skill or
-re-derive it: not the level poll, not the ~2 s drift-watch, not a class change,
-not HMS, not the catch-up grant, not the load reconcile, not the manual toggle.
-`RecomputeSkills` READS it as one additive term of the reconcile target; the
-single `ReconcileSkill` choke point writes the base. The same discipline
-covers what sits UNDER the player's points: the class auto-share is split by
-the higher BASE SKILL only (`DominantWeaponSkill`/`DominantArmorSkill`), never
-by the equipped weapon or the worn body armor -- the loadout read re-homed the
-whole sibling share on every loot/equip change at drift-watch cadence, which
-the player saw as his placed points drifting (marth, 2026-09-13: "fluidly
-managed"). `Respec` is the one reset: every manual point returns to the pool
-and the manual accounting restarts on the serialized fields alone (no new
-co-save state; PRGN stays v6). **MFO** v2.0.7-dev.
+`SkillAlloc::manualPoints` (the player's own allocation) and
+`SkillAlloc::autoPoints` (the class share, PRGN v7) are ACCUMULATORS with exactly
+two writers each: the placing verb (`ApplyManualSkillPoint` +1 / the GRANT step of
+`RecomputeSkills` +=) and `Respec` (-> 0). No automatic path may add to, reduce,
+move or re-derive either: not the level poll, not the ~2 s drift-watch, not a
+class change, not HMS, not the catch-up grant, not the load reconcile, not the
+manual toggle. The class weights decide where NEW level-up points go and are not
+even consulted when nothing is pending; `ReconcileSkill` (the single base-AV
+write) only HOLDS natural + auto + manual. The sibling dominance under the share
+(`DominantWeaponSkill`/`DominantArmorSkill`) reads BASE SKILLS ONLY -- the old
+loadout read re-homed the whole share on every loot/equip change at drift-watch
+cadence, which the player saw as his placed points drifting (marth, 2026-09-13:
+"fluidly managed"; then: "auto placed skill points are equally as permanent,
+there is no shift"). `Respec` returns ALL points: perks, every auto and manual
+skill point, the level ledger to zero -- re-spent by the class weights under auto,
+or pooled for the player under manual. **MFO** v2.0.7-dev, PRGN v7.

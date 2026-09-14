@@ -224,7 +224,7 @@ of a given change.
 ## The five things that corrupt saves or crash — verify before touching
 
 1. **Co-save layout** (`Serialization.cpp`, `ProgAllocator::CoSaveSave/Load`,
-   `State.h`, `Vocabulary.h`): 4 records FLWR v5 / MSTK v1 / PRGN v6 / FWPN v1
+   `State.h`, `Vocabulary.h`): 4 records FLWR v5 / MSTK v1 / PRGN v7 / FWPN v1
    (`Serialization.h`). Changing a
    field order/type/count, bumping a version without a matching `if(version>=N)`
    reader, renaming a serialized opcode string, or renumbering the `Subject` /

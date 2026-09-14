@@ -94,7 +94,16 @@ namespace MFO {
     //            DISCARDS the stored target, recomputes it, and defaults the new
     //            fields (fixedStat=false, streak=0, remainder={0,0,0}, accum=0).
     inline constexpr std::uint32_t kRecProgression = 'PRGN';
-    inline constexpr std::uint32_t kProgVersion    = 6;   // v6: §HMS fixed-stat grant (drop target, add streak/remainder/playerHms)
+    //   v7 (2026-09-13, A′/B′): per skill APPENDS autoPoints (f32, after
+    //            manualPoints) — the permanent auto accumulator; per follower
+    //            APPENDS after the v6 HMS block: autoLevelsGranted (u16),
+    //            nativeHeld (u8), strippedCount (u16) + stripped perk FormIDs
+    //            (u32 × N, ResolveFormID'd, unresolvable dropped). The v6 reader
+    //            is KEPT (#12): autoPoints migrates as max(0, points − manual)
+    //            (today's applied value, frozen), autoLevelsGranted as the loaded
+    //            partition's auto levels (nothing pending, nothing re-split),
+    //            nativeHeld=false (the PollWork edge strips an active follower).
+    inline constexpr std::uint32_t kProgVersion    = 7;   // v7: A′ auto accumulator + B′ native-perk strip record
 
     // T#76 force-hold: a FOURTH independent record — the weapons MFO force-equipped
     // (prevent-removal) for an active equip gambit. The engine's forceEquip lock

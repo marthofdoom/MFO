@@ -59,7 +59,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v6`, FWPN `v1` (`Serialization.h:8-134`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v7`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `nativeHeld` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's applied value, frozen), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split), `nativeHeld=false`. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -1613,12 +1613,13 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   f32 read+discarded], [v2: manualBaselineLevel u16, manualPointsApplied u16,
   manualExcludedLevels u16, nativeTreePerksAtEnroll u16], perkCount u16 +
   {nodePerkID u32, rank u8}×N, skillCount u16 + {av u32, points f32, lastWrittenBase
-  f32, manualPoints f32(v2)}×N, baseCount u16 + {av u32, value f32}×N,
+  f32, manualPoints f32(v2), **autoPoints f32(v7)**}×N, baseCount u16 + {av u32, value f32}×N,
   [v5 §HMS block APPENDED at END: per pool {H,M,S} order {hmsBaseline f32,
   **v5-ONLY hmsTarget f32 (dropped in v6 — recomputed)**, hmsSkew f32,
   hmsCumulative f32}, then battlesSinceLevelUp u32, battlesOffClass u32,
   offClassPool u8, hmsCaptured u8, **[v6: hmsZeroAwardStreak u8, hmsGrantRemainder
-  f32×3, hmsAwardAccum f32]**]}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
+  f32×3, hmsAwardAccum f32]**], **[v7 APPENDED after the HMS block: autoLevelsGranted
+  u16, nativeHeld u8, strippedCount u16 + {perkFormID u32}×N]**}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
   behind `if(version>=N)` (**v6 header + block additions gated `if(version>=6)`;
   v5 keeps the old 4-f32/pool reader, reads+discards target, recomputes it; all
   floats finite-guarded, streak clamped 0..2**). The HMS block is read
@@ -1633,27 +1634,58 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   bumps `g_pollGen` to orphan in-flight polls).
 - Verbs (all ← Board.cpp, `g_ready`-gated): `Enroll`/`SetClass`/`AllocatePerk`/
   `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`ProgAllocator.cpp:1370-1750`).
-- **STRICT POINTS (#81, 2026-09-13).** `SkillAlloc::manualPoints` has EXACTLY TWO
-  writers: `ApplyManualSkillPoint` (`:1707`, +1) and `Respec` (`:1585`, → 0 with the
-  whole manual accounting restarted: `manualPointsApplied=0`, excluded levels folded
-  back — into the current stint's baseline when manual is ON, into AUTO when OFF —
-  then `RecomputeSkills`; a respec with no perks but placed points still bills
-  rapport). Every other path (`RecomputeSkills:354`, `ReconcileSkill:235`,
-  `SetManualSkills:1668`, `SetClass:1440`, `PollWork:947` level gain + drift-watch,
-  `ReapplyFollower:814`, HMS, the fixed-stat grant, `CoSaveLoad`) only READS it.
-  **The auto share under the player's points is split by BASE SKILL ONLY:**
-  `DominantWeaponSkill` (`:297`) / `DominantArmorSkill` (`:305`) no longer read the
-  equipped weapon / worn body armor — that loadout read re-homed the sibling share
-  (≈30-40 % of the auto total) on every loot/equip change at drift-watch cadence,
-  the "fluidly managed" drift marth saw under his own points. Base-skill dominance
-  is a fixed point (the share-holder stays ahead) and flips only when the OTHER
-  sibling genuinely overtakes — which only the player's manual points (or a class
-  change) can cause, and then exactly once. **What breaks:** re-adding a loadout
-  or equip read to either `Dominant*` function reintroduces the drift; adding a
-  third writer of `manualPoints` violates #81; Respec's fold-back relies on every
-  level being exactly one of auto / pooled / excluded (`ManualAvail`, `effAutoLvl`
-  in `RecomputeSkills`) — change that partition and the refund double-pays or
-  loses points. No co-save change (PRGN stays v6): nothing new is persisted.
+- **STRICT POINTS (#81, 2026-09-13; A′/A″ PRGN v7).** A skill point, once placed
+  by ANY path, stays on that skill until Respec. `SkillAlloc::manualPoints` has
+  EXACTLY TWO writers — `ApplyManualSkillPoint` (`:1797`, +1) and `Respec`
+  (`:1685`, → 0); `SkillAlloc::autoPoints` (v7) has EXACTLY TWO — the GRANT step of
+  `RecomputeSkills` (`:354`, +=) and `Respec` (→ 0). `RecomputeSkills` is an
+  ACCUMULATOR, not a re-derivation: `pending = (effAutoLvl − 1) − autoLevelsGranted`
+  auto levels yield `skillPointsPerLevel` each, split by `WeightsFor` AT THAT
+  MOMENT (largest remainder over whole points — every grant sums exactly) and
+  ADDED to `autoPoints`; the weights are not consulted when nothing is pending, so
+  a class change / dominance flip only steers FUTURE levels. Then every entry is
+  held at natural + autoPoints + manualPoints through the single `ReconcileSkill`
+  (`:235`, baseline floor; REVERT drift-clobber unchanged). `DominantWeaponSkill`
+  (`:297`) / `DominantArmorSkill` (`:305`) read BASE SKILLS ONLY (the old loadout
+  read re-homed the share every ~2 s — marth's "fluidly managed" drift). **A″
+  Respec returns ALL points:** perks cleared as before, every `autoPoints` and
+  `manualPoints` → 0, `autoLevelsGranted` → 0, `manualPointsApplied` → 0,
+  `manualExcludedLevels` → 0, manual ON → `manualBaselineLevel = 1`; then one
+  `RecomputeSkills` re-grants every level under AUTO by the current weights, or
+  leaves the whole pool (`(level − 1) × manualSkillPtsPerLevel`) to the player under
+  MANUAL. Rapport as before; no-op (no cost) only when nothing at all is placed.
+  Every other path (`SetManualSkills:1758`, `SetClass:1539`, `PollWork:1029`,
+  `ReapplyFollower`, HMS, the fixed-stat grant, `CoSaveLoad`) only READS the point
+  fields. **What breaks:** a third writer of either field violates #81; the grant
+  relies on every level being exactly one of auto / pooled / excluded (`effAutoLvl`)
+  — change that partition and levels double-grant or vanish; `autoLevelsGranted`
+  must never be lowered except by Respec; the v6 migration freezes
+  `autoPoints = max(0, points − manualPoints)` — a cap-clamped v6 skill keeps its
+  clamped value (never re-split), by design.
+- **B′ NATIVE-PERK STRIP (2026-09-13, PRGN v7).** *A perk is stripped iff it is a
+  rank form of a node in the progression CATALOG (`Progression::Get().skills[*].nodes`
+  — the effective/marginal nodes of the 18 skill trees, which is exactly what the
+  add-on's Board tab draws for EVERY class: `Board_Progression.cpp:340-356` lists all
+  18 `kSkillNames` rows and opens a tree wherever the catalog has nodes; the class
+  FLSTs of `ProgAllocator_Manifest.cpp` are WEIGHTS, not visibility), the follower's
+  base TESNPC holds that form, and MFO did not itself grant that form (MFO holds
+  exactly `ranks[alloc.rank−1]`).* Not per class. Non-catalog perks (hidden engine,
+  creature, filtered player-UI, non-tree abilities) are never touched; an
+  ACTOR-only rank (never on the base) is logged and left. `StripNativePerks`
+  (`:~700`) runs at `Enroll` (`:1461`) and on the benched→active edge; the record
+  `ProgState::strippedPerks` (set, union on re-strip, unresolvable ids drop on load)
+  + `nativeHeld` are v7 co-save fields; `RestoreNativePerks` re-adds the record on
+  the active→benched edge (`PollWork`, gated on `st.applied` so a not-yet-refreshed
+  roster mirror after a load cannot read as benched) — a benched/dismissed follower
+  is never left gutted (it then holds its native perks AND MFO's grants until
+  re-recruit strips again). No refund: not credited, and `nativeTreePerksAtEnroll`
+  (the §17 debit) is recomputed AFTER every strip as `CountNativeTreeRanks −
+  AllocatedRanks` (native ranks STILL held, never MFO's own), which also corrects a
+  pre-v7 follower. Synergy: `GateNextRank` (`:764`) froze natively-owned nodes for
+  the player — stripped nodes are now takeable. **What breaks:** stripping a form MFO
+  granted (the `mfoForm` skip) would silently undo an allocation; restoring while
+  active would double-rank with MFO's grant; there is NO unenroll verb (Board is a
+  separate boundary) — the restore path is the benched edge only.
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
   `GetPerkIndex` absent (`:841`) + native-ownership deferral (`:853`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single

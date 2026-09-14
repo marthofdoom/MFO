@@ -16,13 +16,17 @@ Read it as history and this block as current.
 - **Branch `feat/mfo-progression-strict-points-perk-style` (off v2.0.6 `941ddb1`,
   no version bump) — pushed, CI status in the branch's own run, NOT merged, NOT
   deployed, awaiting its tier-3 Fable review.** Two marth asks (2026-09-13):
-  (A) **strict manual skill points** — `SkillAlloc::manualPoints` now has exactly two
-  writers (`ApplyManualSkillPoint`, `Respec`; new invariant #81), Respec returns the
-  placed points to the pool and restarts the manual accounting on the existing
-  serialized fields (PRGN stays v6), and the class auto-share's sibling dominance
-  (`DominantWeaponSkill`/`DominantArmorSkill`) reads BASE SKILLS ONLY — the old
-  equipped-weapon / worn-armor read re-homed the share at drift-watch cadence on
-  every loot/equip change, which is the "fluidly managed" drift marth saw;
+  (A, tightened by marth to A′/A″) **every skill point is permanent once placed** —
+  `SkillAlloc::autoPoints` (PRGN **v7**) + `manualPoints` are accumulators with two
+  writers each (the placing step / `Respec`; invariant #81); `RecomputeSkills` grants
+  only PENDING levels by the weights of that moment and never re-splits; Respec
+  returns ALL points (perks + every auto/manual skill point, the level ledger to
+  zero) — re-spent by the class under auto or pooled for the player under manual;
+  sibling dominance reads BASE SKILLS ONLY. v6 saves migrate with today's applied
+  values frozen. (B′) **native catalog perks are stripped at enrollment** and on the
+  benched→active edge, recorded in the v7 co-save (`strippedPerks`/`nativeHeld`),
+  restored on the active→benched edge, never refunded, each strip logged — the strip
+  set is exactly the catalog the Board draws (all 18 trees, not per class);
   (B) **weapon/armor style by perks** — the existing classifier
   (`Progression::WalkPerkEntries` + the frozen catalog) gained mechanical STYLE
   FACTS off each entry's own conditions (weapon/armor vocabulary keywords by

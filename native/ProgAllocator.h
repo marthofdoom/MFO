@@ -121,6 +121,16 @@ namespace MFO::ProgAllocator {
         // reduce, move or re-derive this value; RecomputeSkills only ever
         // READS it as one additive term of the reconcile target.
         float manualPoints{ 0.0f };
+        // PRGN v7 — the AUTO points the class share has GRANTED this skill,
+        // as permanent as the manual ones (marth 2026-09-13: "auto placed
+        // skill points are equally as permanent, there is no shift"). An
+        // ACCUMULATOR: each level-up adds that level's share (the class
+        // weights AT THAT MOMENT decide where NEW points go) and nothing
+        // later re-derives or moves what was placed. EXACTLY TWO writers —
+        // RecomputeSkills' grant step (+=) and Respec (-> 0). A v6 save
+        // migrates as max(0, points - manualPoints): today's applied value,
+        // frozen, never re-split.
+        float autoPoints{ 0.0f };
     };
     struct BaselineAV {
         RE::ActorValue av{ RE::ActorValue::kNone };
@@ -179,6 +189,25 @@ namespace MFO::ProgAllocator {
         std::uint16_t manualBaselineLevel{ 0 };
         std::uint16_t manualPointsApplied{ 0 };
         std::uint16_t manualExcludedLevels{ 0 };
+        // PRGN v7 — how many AUTO levels (progression levels above 1 that are
+        // neither pooled nor excluded) have had their skill points GRANTED.
+        // The grant ledger: RecomputeSkills grants (effAutoLvl - 1) -
+        // autoLevelsGranted pending levels, never removes. Respec -> 0 (every
+        // level re-spendable). v6 migration: effAutoLvl - 1 as loaded (nothing
+        // pending, nothing re-split).
+        std::uint16_t autoLevelsGranted{ 0 };
+        // PRGN v7 — NATIVE catalog perks (the ones a list/ESP/template gave
+        // the follower, i.e. every rank shown on the Board) that MFO STRIPPED
+        // at enrollment so every tree perk is the player's to give (marth
+        // 2026-09-13). Held while the follower is ACTIVE in the party; put
+        // back while benched/dismissed (a dismissed follower is never left
+        // gutted) and stripped again on re-recruit — the active-edge sync in
+        // PollWork (StripNativePerks / RestoreNativePerks). nativeHeld: true
+        // while stripped. Never refunded to the player: not credited (they
+        // were never his) and not debited (nativeTreePerksAtEnroll is counted
+        // AFTER the strip). Unresolvable ids drop on load.
+        std::vector<RE::FormID> strippedPerks;
+        bool                    nativeHeld{ false };
 
         std::vector<PerkAlloc>  perks;
         std::vector<SkillAlloc> skills;
