@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **Loot travel, the retreat probe and the cast alias fills now work on Skyrim 1.5.97.** The game call that fills a quest alias was only wired up for Skyrim 1.6. On 1.5.97 every feature built on it stayed off: followers never walked to loot, the retreat probe never ran, and the self and foe cast packages declined. The 1.5.97 address for that call is now verified against the game itself and wired in. Skyrim 1.6 is untouched. VR still declines, since no VR address has been checked.
+
 ## v2.0.7 -- The weapon shed no longer crashes the game
 
 - **A follower setting down an off role weapon no longer crashes the game.** When a follower dropped a weapon that did not fit its role, the game could crash on the spot. It happened every time a drop ran. The call that hands the weapon to the game was passing its arguments in the wrong order, and the game read a scrap of stack memory as the follower. The drop now calls the game directly and hands it exactly what it expects. Checked against both Skyrim 1.6.1170 and 1.5.97.
