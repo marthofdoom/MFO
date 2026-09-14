@@ -439,6 +439,10 @@ namespace MFO::Followers {
     std::uint8_t GetBaseClass(RE::Actor* a_actor) {
         return a_actor ? GetBaseClass(a_actor->GetFormID()) : std::uint8_t{ 0 };
     }
+    bool IsMfoEnabled(RE::FormID a_actorID) {
+        const auto it = g_followers.find(a_actorID);
+        return (it == g_followers.end()) || it->second.mfoEnabled;
+    }
 
     void SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance) {
         if (auto* rec = TryEnsureRecord(a_actorID)) rec->combatClassOverride = a_stance;

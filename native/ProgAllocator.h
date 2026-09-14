@@ -200,9 +200,10 @@ namespace MFO::ProgAllocator {
         // the follower, i.e. every rank shown on the Board) that MFO STRIPPED
         // at enrollment so every tree perk is the player's to give (marth
         // 2026-09-13). Stripped at Enroll, or on the first poll an unstripped
-        // enrolled follower reads ACTIVE; stays stripped while enrolled
-        // (benched too — marth: restore only "when it's uninstalled", via the
-        // public RestoreNativePerks). nativeHeld: true once stripped. Never
+        // enrolled follower reads ACTIVE (a v6 save, a bench enrol, a re-check
+        // of the T#78 toggle); stays stripped while enrolled, benched too.
+        // nativeHeld: true once stripped (cleared while unmanaged so the
+        // re-check re-strips, union). RestoreNativePerks = safe-removal. Never
         // refunded: not credited (never his) and not debited (the §17 debit is
         // recounted AFTER the strip). Unresolvable ids drop on load.
         std::vector<RE::FormID> strippedPerks;

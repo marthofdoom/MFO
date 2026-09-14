@@ -1696,6 +1696,34 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   (the `mfoForm` skip) would silently undo an allocation; restoring while enrolled
   re-creates the double-rank case; a caller of `RestoreNativePerks` that does not
   then stop MFO leaves the follower with natives AND grants.
+- **UNENROLL = the T#78 per-follower MFO toggle unchecked (marth 2026-09-13:
+  "unmanage, don't touch ... remember the state when dropped and restore it plus
+  back debt when re-enrolled").** Before this change `ProgAllocator` never read
+  `FollowerState::mfoEnabled` (the Board writes it at `Board.cpp:1203`, the
+  Scheduler/Logistics ticks skip on it at `Scheduler.cpp:256` / `Logistics.cpp:680`)
+  — the toggle preserved `ProgState` but did NOT stop progression's actor writes.
+  Now `Followers::IsMfoEnabled(id)` (`Followers.cpp`, the `GetBaseClass` read shape)
+  gates: in `PollWork` (`:~1055`) the LEVEL LEDGER still advances (`progressionLevel`
+  gain, shared-growth banking — that IS the back debt) but every actor-touching
+  branch is skipped (`RecomputeSkills`/`RecomputeHMS` on level gain, the strip, the
+  reapply, the drift-watch/HMS block), and the record is re-armed
+  (`applied=false`, `nativeHeld=false`) so the first managed poll re-strips (union)
+  and re-applies; every board verb (`Enroll`/`SetClass`/`AllocatePerk`/
+  `AllocateNextEligible`/`Respec`/`SetManualSkills`/`ApplyManualSkillPoint`) refuses
+  through `Unmanaged(actor, verb)` with a `[prog] … refused …: MFO is unchecked`
+  line. **Nothing is cleared**: `ProgState` (allocations, autoPoints/manualPoints,
+  ledgers, strippedPerks) is saved for an unmanaged follower exactly like a managed
+  one (`CoSaveSave` writes every `enrolled` record — no `mfoEnabled` gate).
+  **Back debt on re-check falls out of the accumulator:** `pending = (effAutoLvl−1)
+  − autoLevelsGranted` is the levels gained while unchecked, granted by the weights
+  of the re-check moment; the manual pool `(progressionLevel − baseline) × rate −
+  applied` has grown by the same levels; perk points are `floor(level/N) − spent`
+  (derived). **Rapport is untouched on both edges:** progression's only rapport
+  write is `Rapport::Spend` in `Respec` (`ProgAllocator.cpp:1738`); the veteran
+  level-match (`SetClass`) writes `progressionLevel` only. **What breaks:** gating
+  the level ledger on `managed` would erase the back debt; touching the actor while
+  unmanaged violates "don't touch"; `IsMfoEnabled` is a `g_followers` read and must
+  stay on the main/serial-pump domain like `GetBaseClass`.
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
   `GetPerkIndex` absent (`:841`) + native-ownership deferral (`:853`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single

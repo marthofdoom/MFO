@@ -29,7 +29,10 @@ Read it as history and this block as current.
   restore when it's uninstalled" — public `ProgAllocator::RestoreNativePerks`, no
   caller yet), never refunded, each strip logged — the strip set is exactly the
   catalog the Board draws (all 18 trees, not per class); also fixes "engine gives
-  rank 1, rank 2 inaccessible" (`GateNextRank` native-freeze);
+  rank 1, rank 2 inaccessible" (`GateNextRank` native-freeze). (UNENROLL) the T#78
+  per-follower toggle now gates progression too: unchecked = no actor writes, state
+  kept and saved, levels still accrue; re-checked = re-strip + reapply + the
+  accumulator grants the back debt (skill + perk points only, rapport untouched);
   (B) **weapon/armor style by perks** — the existing classifier
   (`Progression::WalkPerkEntries` + the frozen catalog) gained mechanical STYLE
   FACTS off each entry's own conditions (weapon/armor vocabulary keywords by

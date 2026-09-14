@@ -167,6 +167,12 @@ namespace MFO::Followers {
     // BoardEditScope tripwire, item 2b) and is a no-op for a non-persistable id.
     std::uint8_t GetBaseClass(RE::FormID a_actorID);
     std::uint8_t GetBaseClass(RE::Actor* a_actor);
+    // The T#78 per-follower MFO master switch (FollowerState::mfoEnabled) —
+    // UNCHECKED = "unmanage, don't touch" (marth 2026-09-13): progression stops
+    // every actor write for that follower too. Same read shape + thread
+    // discipline as GetBaseClass (a g_followers find on the main/serial pump
+    // domain). true for an untracked / non-persistable actor (no record = on).
+    bool IsMfoEnabled(RE::FormID a_actorID);
     void         SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance);
     void         SetBaseClass(RE::Actor* a_actor,   std::uint8_t a_stance);
 
