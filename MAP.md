@@ -816,7 +816,9 @@ teardown. Runs on the AddTask worker.
   `g_mfoOff`, republished by `PublishActiveMirror` at `Refresh` only — NOT at the
   Board write site `Board.cpp:1203`, so a poll inside the ≤532 ms diag-turn window
   can still see the old value once: **REVIEW-BACKLOG MFO-B12**, SEV-5, fix = one
-  `PublishActiveMirror()` after that write).
+  `PublishActiveMirror()` after that write — BUT `PublishActiveMirror` is file-local
+  (Followers.cpp anonymous namespace `:43`/`:98`, no Followers.h decl), so the drain
+  must first export it (Followers.h + Followers.cpp), verified 2026-09-14).
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
 `Apply()` (`:8`) copies `Config::g_travelGait` onto the loot-travel packages'
@@ -1714,9 +1716,11 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   them; `Respec` skips `Rapport::Spend`, logs `RESPEC <name> -- FREE (one-time,
   post-migration)`, clears the flag; a fresh v7 enrollee has none; unenroll/bench
   never touch it). `HasFreeRespec(id)` + `BoardFollowerView::freeRespec` expose it
-  — the Board's "-500 rapport" cost text (`Board_Progression.cpp:1195-1212`) does
-  NOT yet read it: one call in a Board brief. No-op (no cost) only when nothing at
-  all is placed.
+  — the Board's respec footer + confirm popup (`Board_Progression.cpp:1193-1229`)
+  read `who->freeRespec` from the SNAPSHOT row (render thread, never `g_prog`) and
+  show "free (one time)" / "no rapport is lost" instead of the rapport cost;
+  `HasFreeRespec` itself still has no caller (the snapshot bit is the consumer).
+  No-op (no cost) only when nothing at all is placed.
   Every other path (`SetManualSkills:1758`, `SetClass:1539`, `PollWork:1029`,
   `ReapplyFollower`, HMS, the fixed-stat grant, `CoSaveLoad`) only READS the point
   fields. **What breaks:** a third writer of either field violates #81; the grant
@@ -1990,7 +1994,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
     namespace: `kClassNames` (`:46`), the picker-submenu predicates `IsFoeCond`/
     `IsPotionLootAct`/`IsMiscLootAct` (`:56`), `PushSkin` (`:73`),
     `DrawSpellHoverTooltip` (`:135`). Future panel work lands here, NOT in Board.cpp.
-  * `Board_Progression.cpp` (1234) = the hosted progression tab body, ONE function
+  * `Board_Progression.cpp` (1248) = the hosted progression tab body, ONE function
     `DrawProgressionTab` — called from `DrawFieldKit` (`Board_FieldKit.cpp:1062`);
     future progression-tab work lands here.
   * `Board_internal.h` (305) = the shared substrate (Board TUs only):

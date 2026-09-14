@@ -44,7 +44,8 @@ Read it as history and this block as current.
   zero) — re-spent by the class under auto or pooled for the player under manual;
   sibling dominance reads BASE SKILLS ONLY. v6 saves migrate with today's applied
   values frozen, and every v6-born follower carries ONE free respec (`freeRespec`,
-  v7; the Board cost text needs a one-call hookup to show "Free"). (B′) **native
+  v7; the Board's respec cost text + confirm popup read it from the snapshot row
+  and show "free (one time)", 2026-09-14). (B′) **native
   catalog perks are stripped at enrollment** and on the
   first active poll of an unstripped follower, recorded in the v7 co-save
   (`strippedPerks`; the strip is per-session — re-run on every load), NEVER restored while enrolled (marth: "a clean
