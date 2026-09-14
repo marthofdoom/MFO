@@ -106,6 +106,15 @@ namespace MFO::Logistics {
         // sequential across followers (#4). Save-scoped: cleared on revert.
         inline std::unordered_map<RE::FormID, Clock::time_point> g_lastCombatSeen;
 
+        // The shed's last-logged FISTS verdict per follower (marth's rule: fists
+        // are never a valid fighting style unless the Progression add-on is
+        // installed AND unarmed perks were allocated through it). Packed
+        // (valid | progression<<1 | unarmedVotes<<2) so the `[shed] ... fists`
+        // line is written once per CHANGE, not once per idle tick -- a follower
+        // carrying one off-role weapon is evaluated every tick forever.
+        // Worker-only, no lock (#4); save-scoped, cleared with the dwell map.
+        inline std::unordered_map<RE::FormID, std::uint32_t> g_shedFistsLogged;
+
         // How long a follower must be CONTINUOUSLY out of combat before the shed
         // will drop an off-role weapon -- long enough that a combat LULL (LoS loss,
         // a target dying, a disengage) can't be mistaken for "the battle is over".

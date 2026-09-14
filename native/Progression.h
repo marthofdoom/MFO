@@ -151,12 +151,23 @@ namespace MFO::Progression {
                                                  // one-hand weapon and excludes empty:
                                                  // the dual-wield signature
         bool          leftHandShield{ false };   // GetEquippedItemType(LEFT) == shield
+        bool          unarmed{ false };          // conditioned on an EMPTY hand
+                                                 // (GetEquippedItemType == 0 on
+                                                 // either hand, no weapon named
+                                                 // or required in the other):
+                                                 // the hand-to-hand signature.
+                                                 // No engine keyword exists for
+                                                 // it (Skyrim.esm ships no
+                                                 // WeapTypeHandToHand KYWD).
         void Merge(const PerkStyleFacts& a_o) {
             weaponKinds |= a_o.weaponKinds; armorKinds |= a_o.armorKinds;
             leftHandWeapon = leftHandWeapon || a_o.leftHandWeapon;
             leftHandShield = leftHandShield || a_o.leftHandShield;
+            unarmed        = unarmed        || a_o.unarmed;
         }
-        bool Any() const { return weaponKinds || armorKinds || leftHandWeapon || leftHandShield; }
+        bool Any() const {
+            return weaponKinds || armorKinds || leftHandWeapon || leftHandShield || unarmed;
+        }
     };
 
     struct PerkEntryFact {
@@ -309,12 +320,19 @@ namespace MFO::Progression {
     // catalog perk conditioned on nothing classifiable votes for nothing.
     // Empty (all zero) when the catalog is not built (addon absent).
     // MAIN THREAD ONLY: reads the base's live perk array, which the allocator
-    // mutates on the main thread (AddPerk/RemovePerk realloc it).
+    // mutates on the main thread (AddPerk/RemovePerk realloc it), and the
+    // allocator's own record (ProgAllocator::g_prog, main-thread, no lock).
     struct StyleVotes {
         int weapon[8]{};          // by WeaponKind bit index (0 Sword .. 7 Bow)
         int armor[3]{};           // by ArmorKind bit index (0 Heavy 1 Light 2 Shield)
         int leftHandWeapon{ 0 };  // dual-wield-conditioned ranks
         int leftHandShield{ 0 };  // shield-in-left-hand-conditioned ranks
+        int unarmed{ 0 };         // empty-hand-conditioned ranks -- counted from
+                                  // MFO's ALLOCATION record ONLY (ranks MFO
+                                  // itself granted through progression), never
+                                  // from the base's held perks: "unarmed perks
+                                  // selected via progression" (marth). 0 for
+                                  // an unenrolled follower whatever he holds.
         int classified{ 0 };      // owned ranks that carried ANY fact
         int owned{ 0 };           // owned catalog ranks in total (diagnostics)
     };

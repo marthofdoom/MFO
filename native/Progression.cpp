@@ -2,6 +2,11 @@
 #include "Progression.h"
 #include "Config.h"
 #include "Forms.h"   // §18.6 (v1.1: addon manifests self-declare via their own keyword)
+// DELIBERATE component-1 -> component-2 dependency (approved 2026-09-14): TallyStyleVotes
+// counts the UNARMED vote off MFO's own allocation record (ProgAllocator::g_prog), the
+// only source that means "selected via progression"; headers stay acyclic (ProgAllocator.h
+// includes PCH.h only). Do not "fix" this by reverting to the held-perk walk.
+#include "ProgAllocator.h"
 #include <array>     // v1.1 residual #3: the classifier's add-on-declared verdict table
 
 // The production catalog reader. See Progression.h for the contract;
@@ -231,6 +236,19 @@ namespace MFO::Progression {
         // some code in 1..4 and (c) admit nothing >= 5 — the "!= 0 AND <= 4"
         // / "== 1" shapes. A bare "!= 0" (anything in the left hand) fails
         // (c) and counts for nothing. "== 10" is the shield-in-left-hand fact.
+        //
+        // The UNARMED signature (marth: fists are a valid fighting style only
+        // when "unarmed perks are selected via progression"): a tab whose
+        // GetEquippedItemType test on EITHER hand admits ONLY code 0 (the
+        // "== 0" / "<= 0" / "< 1" shapes -- the hand must be EMPTY), while no
+        // hand test on the same tab REQUIRES a weapon (excludes 0) and no
+        // weapon-kind keyword is named on it. So "right empty AND left empty"
+        // (vanilla Fists of Steel) and "right empty" alone both count;
+        // "right sword, left empty" (a one-hand no-offhand perk) does not,
+        // nor does "left empty" beside a WeapTypeSword keyword. There is NO
+        // engine keyword for it: Skyrim.esm ships no WeapTypeHandToHand KYWD
+        // (checked 2026-09-14; `Unarmed` is the WEAP 0x1F4 record's edid),
+        // so the item-type test is the only positive signal.
         bool PositiveTest(const RE::CONDITION_ITEM_DATA& a_d) {
             using Op = RE::CONDITION_ITEM_DATA::OpCode;
             if (a_d.flags.global) return false;
@@ -284,6 +302,11 @@ namespace MFO::Progression {
             using Fn = RE::FUNCTION_DATA::FunctionID;
             bool leftExcludesEmpty = false, leftAdmitsOneHand = false,
                  leftExcludesNonWeapon = false, leftShield = false;
+            // Unarmed signature, THIS list only (a_out may already carry facts
+            // merged from a sibling tab -- never let those decide this one).
+            bool handEmpty[2]{ false, false };    // a test admitting code 0 alone
+            bool handWeapon[2]{ false, false };   // a test excluding code 0
+            std::uint16_t localWeaponKinds = 0;
             for (auto* it = a_cond.head; it; it = it->next) {
                 const auto& d  = it->data;
                 const auto  fn = d.functionData.function.get();
@@ -292,14 +315,24 @@ namespace MFO::Progression {
                     if (!PositiveTest(d)) continue;
                     // Form pointer resolved at load (the ConditionPlayerGated idiom).
                     auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
-                    a_out.weaponKinds |= WeaponKindOfKeyword(form);
+                    const auto wk = WeaponKindOfKeyword(form);
+                    localWeaponKinds  |= wk;
+                    a_out.weaponKinds |= wk;
                     a_out.armorKinds  |= ArmorKindOfKeyword(form);
                 } else if (fn == Fn::kGetEquippedItemType) {
                     if (d.flags.global) continue;
                     // Integer param stuffed in the pointer slot (the
                     // ExtractSkillReq idiom): 0 = left hand, 1 = right hand.
                     const auto hand = reinterpret_cast<std::uintptr_t>(d.functionData.params[0]);
-                    if (hand != 0) continue;   // right-hand checks carry no style fact
+                    if (hand <= 1) {
+                        // Either hand: does this test pin the hand EMPTY, or
+                        // does it demand something in it?
+                        bool admitsAnyItem = false;
+                        for (float c = 1.0f; c <= 12.0f; c += 1.0f) admitsAnyItem = admitsAnyItem || Admits(d, c);
+                        if (Admits(d, 0.0f) && !admitsAnyItem) handEmpty[hand] = true;
+                        if (!Admits(d, 0.0f)) handWeapon[hand] = true;
+                    }
+                    if (hand != 0) continue;   // right-hand checks carry no other style fact
                     if (!Admits(d, 0.0f)) leftExcludesEmpty = true;
                     if (Admits(d, 1.0f) || Admits(d, 2.0f) || Admits(d, 3.0f) || Admits(d, 4.0f))
                         leftAdmitsOneHand = true;
@@ -313,6 +346,9 @@ namespace MFO::Progression {
             }
             if (leftExcludesEmpty && leftAdmitsOneHand && leftExcludesNonWeapon) a_out.leftHandWeapon = true;
             if (leftShield) a_out.leftHandShield = true;
+            if ((handEmpty[0] || handEmpty[1]) && !handWeapon[0] && !handWeapon[1] &&
+                localWeaponKinds == 0)
+                a_out.unarmed = true;
         }
 
         // The §3 player-gate backstop: an AND-required item hard-requiring
@@ -912,6 +948,27 @@ namespace MFO::Progression {
                     for (int b = 0; b < 3; ++b) if (st.armorKinds  & (1u << b)) ++v.armor[b];
                     if (st.leftHandWeapon) ++v.leftHandWeapon;
                     if (st.leftHandShield) ++v.leftHandShield;
+                }
+            }
+        }
+        // UNARMED votes come off MFO's ALLOCATION record, not the held perks:
+        // "selected via progression" means a rank MFO itself granted, and a
+        // follower who is not enrolled has selected nothing however many
+        // empty-hand perks his base happens to carry. Same main-thread
+        // discipline as g_prog itself (no lock). Ranks 1..K of an allocated
+        // node count like the held-perk tally above (rank depth = investment);
+        // a record naming a node the frozen catalog no longer has votes nothing.
+        if (auto it = ProgAllocator::g_prog.find(a_actor->GetFormID());
+            it != ProgAllocator::g_prog.end() && it->second.enrolled) {
+            for (const auto& pa : it->second.perks) {
+                if (!pa.nodePerkID || pa.rank == 0) continue;
+                for (const auto& tree : g_catalog.skills) {
+                    for (const auto& node : tree.nodes) {
+                        if (node.perkFormID != pa.nodePerkID) continue;
+                        const std::size_t have = std::min<std::size_t>(pa.rank, node.ranks.size());
+                        for (std::size_t k = 0; k < have; ++k)
+                            if (node.ranks[k].style.unarmed) ++v.unarmed;
+                    }
                 }
             }
         }
