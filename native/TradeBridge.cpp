@@ -24,6 +24,7 @@ namespace MFO::TradeBridge {
             std::int32_t         buySpent = 0;
             bool                 probeOnly = true;
             BuyThresholds        buy{};      // #21 gear/tome buy thresholds (worker-computed)
+            std::string          buyPlan;    // names PlanBuy chose ("Falkreath Helmet x1, ...") for the [econ] report line
         };
 
         std::mutex                                    g_mtx;
@@ -251,22 +252,30 @@ namespace MFO::TradeBridge {
                   if (best != SIZE_MAX) buyOne(best, bestVal);
                 }
                 // ARMOR (plain rated, non-mage) -- PER LOGICAL SLOT (0 head 1 body
-                // 2 hands 3 feet 4 shield), best rating above THAT slot's owned
+                // 2 hands 3 feet 4 shield), best ArmorScore above THAT slot's owned
                 // baseline. Per-slot so a warrior with a good chestpiece still buys a
                 // helmet/boots for bare slots (mirrors the loot judge + the mage-
                 // apparel pass below). One best-pick per slot.
+                // SCORED (2026-09-14): ArmorScoreOf = rating x the follower's class/
+                // perk bias (armorHeavyBias / armorLightBias, worker-computed from
+                // his BASE skills + perk votes), the loot judge's own ArmorScore --
+                // so buy no longer picks a heavy 18 helmet over a light 13 for a
+                // light-skilled follower (13 x 2.0 = 26 > 18 x 1.0). The baseline is
+                // the best OWNED score per slot (armorBaseScore), never the raw
+                // rating.
                 if (b.buyArmor) {
                     for (int slot = 0; slot < 5; ++slot) {
                         std::size_t best = SIZE_MAX;
-                        int bestRat = b.armorBaseRat[slot], bestVal = 0;
+                        float bestScore = b.armorBaseScore[slot]; int bestVal = 0;
                         for (auto& c : cands) {
                             if (c.kind != NeedCat::kArmor || !affordReserve(c.value)) continue;
                             auto* a = c.f->As<RE::TESObjectARMO>();
                             if (!a || Logistics::ArmorBuySlot(a) != slot) continue;
-                            const int rat = static_cast<int>(a->GetArmorRating());
-                            if (rat > bestRat ||
-                                (best != SIZE_MAX && rat == bestRat && c.value < bestVal)) {
-                                best = c.idx; bestRat = rat; bestVal = c.value; }
+                            const float score = ArmorScoreOf(a->GetArmorRating(), a->GetArmorType(),
+                                                             b.armorHeavyBias, b.armorLightBias);
+                            if (score > bestScore ||
+                                (best != SIZE_MAX && score == bestScore && c.value < bestVal)) {
+                                best = c.idx; bestScore = score; bestVal = c.value; }
                         }
                         if (best != SIZE_MAX) buyOne(best, bestVal);
                     }
@@ -322,6 +331,23 @@ namespace MFO::TradeBridge {
                     buyOne(c.idx, c.value);
                 }
             }
+            // Name the plan for the [econ] report line (2026-09-14): "BUY 2 for
+            // 340g" said nothing about WHAT was bought, so a wrong-class helmet
+            // could not be traced to this planner from the field log. Papyrus
+            // executes the plan verbatim (moves + pays per line), so the planned
+            // names ARE the bought names for every line it could afford.
+            {
+                std::string names; int lines = 0;
+                for (std::size_t i = 0; i < plan.size(); ++i) {
+                    if (plan[i] <= 0) continue;
+                    if (++lines > 12) continue;
+                    auto* n = a_forms[i] ? a_forms[i]->As<RE::TESFullName>() : nullptr;
+                    if (!names.empty()) names += ", ";
+                    names += std::format("'{}' x{}", n && n->GetFullName() && *n->GetFullName() ? n->GetFullName() : "?", plan[i]);
+                }
+                if (lines > 12) names += std::format(", +{} more", lines - 12);
+                o->buyPlan = std::move(names);
+            }
             return plan;
         }
 
@@ -352,13 +378,25 @@ namespace MFO::TradeBridge {
             auto* fol = o.follower.get().get();
             auto* ven = o.vendor.get().get();
             const char* verb = o.probeOnly ? "WOULD" : "did";
+            // Name the SELL rows offered (native's list; Papyrus sells them in this
+            // order until the chest's gold runs out -- the counts say how far it got)
+            // and the BUY plan (PlanBuy's picks, executed verbatim by Papyrus).
+            std::string offered;
+            for (std::size_t i = 0; i < o.sell.size(); ++i) {
+                if (i >= 12) { offered += std::format(", +{} more", o.sell.size() - 12); break; }
+                auto* n = o.sell[i].obj ? o.sell[i].obj->As<RE::TESFullName>() : nullptr;
+                if (!offered.empty()) offered += ", ";
+                offered += std::format("'{}' x{}", n && n->GetFullName() && *n->GetFullName() ? n->GetFullName() : "?",
+                                       o.sell[i].count);
+            }
             spdlog::info("[econ] {:08X} '{}' @ '{}': chest gold={} | {} SELL {} for {}g, BUY {} for {}g "
-                         "(sell n={}, needs={}, purse={})",
+                         "(sell n={}, needs={}, purse={}) | offered [{}] | bought plan [{}]",
                          fol ? fol->GetFormID() : 0u,
                          fol && fol->GetName() ? fol->GetName() : "?",
                          ven && ven->GetName() ? ven->GetName() : "?",
                          a_vendorGold, verb, a_soldCount, a_soldValue, a_boughtCount, a_spent,
-                         o.sell.size(), o.needs.size(), o.budget + o.buySpent);   // original purse
+                         o.sell.size(), o.needs.size(), o.budget + o.buySpent,   // original purse
+                         offered, o.buyPlan);
         }
 
     }

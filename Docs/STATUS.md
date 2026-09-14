@@ -13,6 +13,37 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `fix/mfo-armor-class-score` (off `main` `69c5b3c`, no version bump) — pushed,
+  CI status in the branch's own run, NOT merged, NOT deployed, awaiting its Fable review.**
+  FIELD FINDING (Deck log on `69c5b3c`, Fable): "after respec the followers still wont
+  stop wearing the wrong armor. One even equipped more heavy armor." Skills after respec
+  were right (Adelinda Heavy 15 / Light 69, Cicero Heavy 20 / Light 77). ROOT CAUSE: MFO
+  never un-wears anything and the engine's auto-equip (highest rating per slot,
+  skill-blind) is the wearer; every MFO rated-armor compare was rating-vs-worn-rating
+  with no class term (`ArmorIsBetter`, the `EquipBestOwnedGear` rated branch, the keep
+  buckets, the redundant-inferior force-sell, the whole buy path — Cicero bought the
+  heavy Falkreath Helmet 18 over light 13s because his head baseline was 0);
+  `ArmorClassSuits` was the only skill read and a loot-side filter. `Docs/ENGINE_NOTES.md`
+  §0.46. THE FIX: ONE judge `ArmorScore` (`native/Logistics_Loot.cpp`, declared
+  `Logistics_internal.h`) = rating × `kArmorClassBias` (2.0, on the class of the higher
+  BASE armor skill, exact tie → armor perk votes, else light) × `kArmorPerkBias` (1.25,
+  on the class the perk votes lead — via the `g_styleMx` mirror); a BIAS, never a filter.
+  Every rated-armor compare runs on it at once: `ArmorIsBetter`, `CarriesSlotArmorAtLeast`,
+  `LootEquipment` / `LooseEquipmentQualifies` (via `EquipmentContext::armorPref`),
+  `EquipBestOwnedGear` (now THE wear decision — highest-scored owned piece that beats the
+  worn score → existing `AcquireEquip` `MainThread::Post`, #62), the keep buckets,
+  the redundant-inferior force-sell (off-class worn piece is what sells), and buy
+  (`TradeBridge::BuyThresholds` APPENDED `armorHeavyBias`/`armorLightBias`/
+  `armorBaseScore[5]`; `PlanBuy` ranks by the shared `TradeBridge::ArmorScoreOf`).
+  `MFO_Trade.psc` + the 10 natives untouched. New log lines: `[armor]` (per follower per
+  {class, worn-set} change), `[equip] OWNED armor` (what over what, both scores),
+  `[econ]` names offered/bought items, `[style]` prints `armor h/l/s`, passive
+  `[armor-obs]` in `BeastHeadSink` for every rated-ARMO equip/unequip on a tracked
+  follower (`Followers::IsTrackedFast`, zero new hooks). Default case: a follower whose
+  skills and inventory are all one class orders identically to before (a uniform ×2
+  on every compare). The field observable: Adelinda/Cicero swap into owned light pieces
+  within a tick of idle, the `[armor]` line shows `class LIGHT`, and no `[econ] bought
+  plan` names a heavy piece for them.
 - **Branch `feat/mfo-shed-fists-rule` (off `feat/mfo-progression-strict-points-perk-style`
   `4a62688`, no version bump) — pushed, CI status in the branch's own run, NOT merged,
   NOT deployed, awaiting its tier-3 Fable review.** The LoreRim 2026-09-12 shed bug:

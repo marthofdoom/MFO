@@ -302,6 +302,7 @@ namespace MFO::Logistics {
             auto* myWeap = eqObj ? eqObj->As<RE::TESObjectWEAP>() : nullptr;
 
             RE::TESBoundObject* pick = nullptr;
+            ArmorPref           armorPref;   // filled by the rated branch (the [equip] line reads it)
             if (useMageApparel) {
                 // AUTHORITATIVE mage dress-up (oscillation fix). Compute the single
                 // best OWNED piece per logical slot (deterministic, FormID tiebreak so
@@ -348,8 +349,17 @@ namespace MFO::Logistics {
                     pick = best; break;
                 }
             } else {
-                // RATED ARMOR: best owned piece that upgrades a worn/bare slot.
-                float bestRat = 0.0f;
+                // RATED ARMOR: best owned piece that upgrades a worn/bare slot, by
+                // ArmorScore (rating x the follower's class/perk bias -- Logistics_
+                // internal.h). THIS is the wear decision that displaces a worn
+                // off-class piece: the engine's own auto-equip is skill-blind
+                // (highest rating per slot) and MFO never un-wears, so an owned
+                // light cuirass (26 x 2.0 = 52) must out-score the worn heavy one
+                // (31 x 1.0) HERE or the follower stays in heavy forever (field,
+                // 2026-09-14). Equipping the pick auto-unequips the worn piece.
+                armorPref = ArmorPrefFor(a_follower);
+                LogArmorClassIfChanged(a_follower, armorPref);   // one [armor] line per {class, worn-set} change
+                float bestScore = 0.0f;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
@@ -361,12 +371,36 @@ namespace MFO::Logistics {
                     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
                     if ((static_cast<std::uint32_t>(ar->GetSlotMask()) &
                          static_cast<std::uint32_t>(Slot::kShield)) != 0) continue;   // shields: leave to the loot role logic
-                    if (!ArmorIsBetter(a_follower, ar)) continue;   // strictly better than worn on its slot
-                    if (ar->GetArmorRating() > bestRat) { bestRat = ar->GetArmorRating(); pick = obj; }
+                    if (!ArmorIsBetter(armorPref, a_follower, ar)) continue;   // strictly higher score than worn on its slot
+                    const float sc = ArmorScore(armorPref, ar);
+                    if (sc > bestScore) { bestScore = sc; pick = obj; }
                 }
             }
 
             if (!pick || !FitsCarryWeight(a_follower, pick->GetWeight())) return;
+            if (!useMageApparel) {
+                // [equip] DIAGNOSTIC: what goes on, over what, and the score each
+                // side got -- the line that proves (or disproves) the class swap.
+                auto* na = pick->As<RE::TESObjectARMO>();
+                RE::TESObjectARMO* old = nullptr;
+                if (const int ls = ArmorBuySlot(na); ls >= 0 && ls <= 3) old = WornInLogicalSlot(a_follower, ls);
+                auto typeTag = [](RE::TESObjectARMO* a) -> const char* {
+                    using AT = RE::BGSBipedObjectForm::ArmorType;
+                    if (!a) return "-";
+                    switch (a->GetArmorType()) {
+                    case AT::kHeavyArmor: return "Heavy";
+                    case AT::kLightArmor: return "Light";
+                    default:              return "Clothing";
+                    }
+                };
+                spdlog::info("[equip] {:08X}: OWNED armor '{}' [{}] rat={:.0f} score={:.1f} <- worn '{}' [{}] rat={:.0f} score={:.1f} | class {} bias h/l={:.2f}/{:.2f}",
+                             a_follower->GetFormID(),
+                             na && na->GetFullName() ? na->GetFullName() : "?", typeTag(na),
+                             na ? na->GetArmorRating() : 0.0f, na ? ArmorScore(armorPref, na) : 0.0f,
+                             old && old->GetFullName() ? old->GetFullName() : "(bare)", typeTag(old),
+                             old ? old->GetArmorRating() : 0.0f, old ? ArmorScore(armorPref, old) : 0.0f,
+                             armorPref.heavyClass ? "HEAVY" : "LIGHT", armorPref.heavyBias, armorPref.lightBias);
+            }
             if (useMageApparel) {
                 // THRASH GUARD for the authoritative mage correction: only OUT OF
                 // COMBAT and rate-limited per follower, so an engine tug-of-war over a
@@ -418,7 +452,9 @@ namespace MFO::Logistics {
 
                 float baseScore = 0.0f;   // WeaponScore baseline (perk-style biased damage)
                 std::uint16_t myRangedDmg = 0;
-                float slotRat[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot (0 head..4 shield)
+                float slotRat[5]   = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot (0 head..4 shield): raw rating (diagnostic)
+                float slotScore[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot: ArmorScore -- THE buy baseline
+                const ArmorPref armorPref = ArmorPrefFor(a_follower);   // the loot judge's own class/perk bias
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     if (auto* w = obj->As<RE::TESObjectWEAP>()) {
@@ -432,9 +468,15 @@ namespace MFO::Logistics {
                         if (IsCreatureArmor(ar)) continue;
                         // PER-SLOT owned baseline so a bare head/hands/feet still buys
                         // even when a good chestpiece owns a high overall rating.
-                        if (const int as = ArmorBuySlot(ar);
-                            as >= 0 && ar->GetArmorRating() > slotRat[as])
-                            slotRat[as] = ar->GetArmorRating();
+                        // SCORED (2026-09-14): the baseline PlanBuy must beat is the
+                        // best owned ArmorScore, so a light-skilled follower with a
+                        // bare head (baseline 0) no longer buys the heavy 18 helmet
+                        // (18 x 1.0) over the light 13 (13 x 2.0 = 26) -- Cicero's
+                        // Falkreath Helmet, field 2026-09-14.
+                        if (const int as = ArmorBuySlot(ar); as >= 0) {
+                            slotRat[as]   = std::max(slotRat[as], ar->GetArmorRating());
+                            slotScore[as] = std::max(slotScore[as], ArmorScore(armorPref, ar));
+                        }
                     }
                 }
                 buy.meleeClass    = static_cast<std::int32_t>(meleeTargetClass);
@@ -449,8 +491,13 @@ namespace MFO::Logistics {
                 // the shield slot's baseline so PlanBuy never buys one (matches the sell/keep
                 // side's usesShield and the loot path's shieldUseless).
                 const bool usesShield = (roles.melee == WepClass::OneHand) && !doRanged && !caster;
-                if (!usesShield) slotRat[4] = 1.0e9f;
-                for (int s = 0; s < 5; ++s) buy.armorBaseRat[s] = static_cast<std::int32_t>(slotRat[s]);
+                if (!usesShield) { slotRat[4] = 1.0e9f; slotScore[4] = 1.0e9f; }
+                for (int s = 0; s < 5; ++s) {
+                    buy.armorBaseRat[s]   = static_cast<std::int32_t>(slotRat[s]);
+                    buy.armorBaseScore[s] = slotScore[s];
+                }
+                buy.armorHeavyBias = armorPref.heavyBias;
+                buy.armorLightBias = armorPref.lightBias;
                 buy.buyMageApparel = useMageApparel && !dolls;
                 // MEO-aware ranking (marth): value-driven ONLY with MEO present (gems
                 // transfer + supply school relevance). Without MEO -- or with the
@@ -679,10 +726,20 @@ namespace MFO::Logistics {
                 const WeaponRoles& roles = keepRoles;   // computed once above (keepWeapons)
                 const bool usesShield   = (roles.melee == WepClass::OneHand) &&
                                           !roles.doRanged && !caster;
+                // ARMOR CLASS (2026-09-14): the rated buckets rank by ArmorScore --
+                // the SAME judge EquipBestOwnedGear wears by -- so the piece kept
+                // per slot is the one the follower will actually wear, and the
+                // off-class piece he is still wearing becomes the redundant
+                // inferior the force-sell below removes (the trade's RemoveItem is
+                // the un-wear). Computed once per scan.
+                const ArmorPref keepPref = ArmorPrefFor(a_follower);
 
                 // (a) Always keep what is WORN, regardless of the bucket math (the
                 //     sell loop's IsWorn gate already bars worn gear; this is belt-
                 //     and-suspenders and also pins the jewelry logical slots).
+                //     YIELDS to the redundant-inferior force-sell below: a worn
+                //     piece that is not its slot's best BY SCORE bypasses this set
+                //     (forceSell) -- that is how a worn off-class cuirass leaves.
                 for (int ls = 0; ls < 6; ++ls)
                     if (auto* w = WornInLogicalSlot(a_follower, ls)) keepArmor.insert(w);
                 for (auto sl : { Slot::kForearms, Slot::kCalves })
@@ -728,7 +785,7 @@ namespace MFO::Logistics {
                         if (ls < 0) continue;
                         if (ls == 4 && !usesShield) continue;   // don't keep a shield for a non-shield-user -> it sells
                         key = 10 + ls;
-                        primary   = ar->GetArmorRating();
+                        primary   = ArmorScore(keepPref, ar);   // class x perk biased rating, never the raw rating
                         secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
                     } else {
                         continue;   // a non-mage's clothing/jewelry is sellable junk (nothing wears it)
@@ -863,6 +920,9 @@ namespace MFO::Logistics {
                 // keepArmor/IsWorn gates below, the gem (if any) is extracted first, and the
                 // trade's RemoveItem unequips it on sale. Once it's gone the engine has
                 // nothing to put back (Jesper's Nord Tribal outfit, Auri's spare boots).
+                // "Best" for rated armor is bestBySlot's ArmorScore ranking (above), so a
+                // worn HEAVY cuirass on a light-skilled follower who owns a light one is
+                // exactly this case: the off-class piece is what gets force-sold.
                 bool redundantInferior = false;
                 if (armo && data.second && data.second->IsWorn() && !bestBySlot.empty()) {
                     int sk = -1;

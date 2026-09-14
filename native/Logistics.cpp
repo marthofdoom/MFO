@@ -151,7 +151,38 @@ namespace MFO::Logistics {
 
             RE::BSEventNotifyControl ProcessEvent(const RE::TESEquipEvent* a_ev,
                                                   RE::BSTEventSource<RE::TESEquipEvent>*) override {
-                if (!a_ev || !a_ev->equipped || !a_ev->actor)
+                if (!a_ev || !a_ev->actor)
+                    return RE::BSEventNotifyControl::kContinue;
+                // ── [armor-obs] PASSIVE OBSERVER (2026-09-14, zero new hooks) ──
+                // Every rated-ARMO equip AND unequip on a tracked follower, as the
+                // engine reports it -- the ground truth of WHO is wearing WHAT, so
+                // the next field log can tell an MFO wear decision ([equip]/[armor])
+                // from the engine's own skill-blind auto-equip (the 2026-09-14
+                // finding: MFO judged, the engine wore). Membership through the
+                // locked FormID mirror (Followers::IsTrackedFast, #74) -- never
+                // g_followers / g_active from a sink (#4). Pure reads, no post,
+                // no rate limit: these are per-change lines. Runs BEFORE the
+                // beast-head gates below (equipped-only, bBeastHeadFix), which
+                // are that fix's, not this observer's.
+                if (auto* obsActor = a_ev->actor->As<RE::Actor>();
+                    obsActor && a_ev->baseObject && Followers::IsTrackedFast(obsActor->GetFormID())) {
+                    if (auto* armo = RE::TESForm::LookupByID<RE::TESObjectARMO>(a_ev->baseObject);
+                        armo && armo->GetArmorRating() > 0.0f) {
+                        using AT = RE::BGSBipedObjectForm::ArmorType;
+                        const char* type = "Clothing";
+                        switch (armo->GetArmorType()) {
+                        case AT::kHeavyArmor: type = "Heavy"; break;
+                        case AT::kLightArmor: type = "Light"; break;
+                        default: break;
+                        }
+                        spdlog::info("[armor-obs] {:08X} '{}': {} '{}' ({:08X}) [{}] rat={:.0f}",
+                                     obsActor->GetFormID(), obsActor->GetName() ? obsActor->GetName() : "?",
+                                     a_ev->equipped ? "EQUIP" : "UNEQUIP",
+                                     armo->GetFullName() ? armo->GetFullName() : "?", armo->GetFormID(),
+                                     type, armo->GetArmorRating());
+                    }
+                }
+                if (!a_ev->equipped)
                     return RE::BSEventNotifyControl::kContinue;
                 if (!Config::g_beastHeadFix.load())
                     return RE::BSEventNotifyControl::kContinue;
