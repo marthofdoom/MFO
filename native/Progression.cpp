@@ -248,7 +248,10 @@ namespace MFO::Progression {
         // nor does "left empty" beside a WeapTypeSword keyword. There is NO
         // engine keyword for it: Skyrim.esm ships no WeapTypeHandToHand KYWD
         // (checked 2026-09-14; `Unarmed` is the WEAP 0x1F4 record's edid),
-        // so the item-type test is the only positive signal.
+        // so the item-type test is the only CONDITION signal. The second,
+        // condition-free signal -- an ability effect whose primary AV is
+        // UnarmedDamage (vanilla Fists of Steel) -- is read in
+        // WalkPerkEntries beside the effect-condition read.
         bool PositiveTest(const RE::CONDITION_ITEM_DATA& a_d) {
             using Op = RE::CONDITION_ITEM_DATA::OpCode;
             if (a_d.flags.global) return false;
@@ -823,9 +826,23 @@ namespace MFO::Progression {
                 // (the perk record itself only gates ownership), so read each
                 // effect's condition list — the same list AbilityPlayerGated
                 // walks.
+                // UNARMED, second signal (2026-09-14): an effect whose base
+                // magic effect's PRIMARY actor value is UnarmedDamage IS an
+                // unarmed perk whatever its conditions say -- vanilla Fists
+                // of Steel (PERK 0x58F6E -> SPEL 0x424E9 -> MGEF 0x10C4E6
+                // PerkFistsOfSteelUnarmedDamage, primaryAV 35 measured off
+                // Skyrim.esm) conditions only on WORN gauntlet keywords and
+                // never tests the hands, so the empty-hand read alone would
+                // miss the one unarmed perk every vanilla-tree list has.
+                // Engine data the record itself carries, no overhaul assumed.
                 if (ab)
-                    for (auto* eff : ab->effects)
-                        if (eff) ReadStyleFacts(eff->conditions, f.style);
+                    for (auto* eff : ab->effects) {
+                        if (!eff) continue;
+                        ReadStyleFacts(eff->conditions, f.style);
+                        if (eff->baseEffect &&
+                            eff->baseEffect->data.primaryAV == RE::ActorValue::kUnarmedDamage)
+                            f.style.unarmed = true;
+                    }
             } else if (f.rawType == static_cast<int>(RE::PERK_ENTRY_TYPE::kEntryPoint)) {
                 f.kind = PerkEntryKind::kEntryPoint;
                 auto* ep = static_cast<RE::BGSEntryPointPerkEntry*>(entry);

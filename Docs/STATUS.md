@@ -27,7 +27,9 @@ Read it as history and this block as current.
   commented, deliberate component-1→2 include in `Progression.cpp`), from the new
   `PerkStyleFacts::unarmed` (`ReadStyleFacts`: a `GetEquippedItemType` test on either
   hand admitting code 0 only, no hand requiring a weapon, no weapon keyword on the same
-  list; Skyrim.esm has NO hand-to-hand KYWD — checked). Flows through the existing
+  list, OR an ability effect whose primary AV is `kUnarmedDamage` — vanilla Fists of
+  Steel, measured off Skyrim.esm `MGEF 0x10C4E6` primaryAV 35; Skyrim.esm has NO
+  hand-to-hand KYWD — checked). Flows through the existing
   `g_styleMirror` untouched. `[shed] <id>: fists <valid|not valid> (progression=<y/n>,
   unarmed perks=<n>)` once per change per follower. Default case: the only changed
   outcome is "one off-role weapon and nothing else" — DROPPED before, KEPT now.

@@ -1610,7 +1610,12 @@ for nothing (`classified`/`owned` counters say how many). NO overhaul is assumed
 anywhere — the facts come off the perk record's own conditions. **UNARMED (2026-09-14):**
 `PerkStyleFacts::unarmed` = a list whose `GetEquippedItemType` test on EITHER hand admits
 code 0 only (`== 0` / `<= 0` / `< 1`), no hand test on that list excludes 0, and no
-weapon-kind keyword is named on it (per-list, not per-merged-entry). NO engine keyword
+weapon-kind keyword is named on it (per-list, not per-merged-entry); OR (second signal,
+read in `WalkPerkEntries` beside the effect-condition read) an ability entry with an effect
+whose `baseEffect->data.primaryAV == kUnarmedDamage` (35) — vanilla Fists of Steel
+(`PERK 0x58F6E` → `SPEL 0x424E9` → `MGEF 0x10C4E6`, primaryAV 35 measured off Skyrim.esm)
+conditions only on worn gauntlet keywords, never the hands, so without this the exception
+could never fire on a vanilla-tree list. NO engine keyword
 exists — Skyrim.esm ships no `WeapTypeHandToHand` KYWD (checked 2026-09-14; `Unarmed` is
 the WEAP `0x1F4` edid). `StyleVotes::unarmed` is the ONE vote NOT counted off held perks:
 `TallyStyleVotes` reads MFO's allocation record `ProgAllocator::g_prog[id].perks`

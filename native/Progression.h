@@ -155,7 +155,10 @@ namespace MFO::Progression {
                                                  // (GetEquippedItemType == 0 on
                                                  // either hand, no weapon named
                                                  // or required in the other):
-                                                 // the hand-to-hand signature.
+                                                 // the hand-to-hand signature;
+                                                 // OR an ability effect whose
+                                                 // primary AV is UnarmedDamage
+                                                 // (vanilla Fists of Steel).
                                                  // No engine keyword exists for
                                                  // it (Skyrim.esm ships no
                                                  // WeapTypeHandToHand KYWD).
