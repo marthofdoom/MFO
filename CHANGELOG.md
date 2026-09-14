@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.7 -- The weapon shed no longer crashes the game
+
+- **A follower setting down an off role weapon no longer crashes the game.** When a follower dropped a weapon that did not fit its role, the game could crash on the spot. It happened every time a drop ran. The call that hands the weapon to the game was passing its arguments in the wrong order, and the game read a scrap of stack memory as the follower. The drop now calls the game directly and hands it exactly what it expects. Checked against both Skyrim 1.6.1170 and 1.5.97.
+
 ## v2.0.6 -- The board takes the controller on Skyrim 1.5.97 too
 
 - **The follower board now takes every button on Skyrim 1.5.97, the same way it does on 1.6.1170.** Nothing gets through to the game underneath. The favorites bar no longer opens on d pad up, and the game does not wake up confused after you close the board. 1.5.97 was left on the older, weaker input path in v2.0.4 because its offsets had not been checked. They have been checked now, against the 1.5.97 game itself, and 1.5.97 gets its own path. The 1.6.1170 path is untouched. Other game versions keep the v2.0.3 behaviour.
