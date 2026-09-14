@@ -694,7 +694,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   only `CheckCast` still runs OOC and that is a DENY gate. Field proof: after combat
   ended 14:19:14 the claim stood and heartbeated for 2+ minutes with ZERO APMF seat
   lines for that actor and no heal. This RESTORES marth's ruling recorded at
-  `Logistics.cpp:1465-1474` ("OOC concentration delivery must always use the known
+  `Logistics.cpp:1513-1522` ("OOC concentration delivery must always use the known
   working force"), which the claim path silently overrode once `bHealAnimPackage`
   went ON. **Not a decline-fallback:** `ApmfRefused` still FAILS CLOSED; out of
   combat APMF has no delivery to arbitrate for, so this is the APMF-ABSENT degrade
@@ -708,7 +708,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
-  (`Logistics.cpp:~1090-1250`, inside `ServiceFollower`). On that OOC path a **non-AUTO** resolved `cast_target`
+  (`Logistics.cpp:~1138-1298`, inside `ServiceFollower`). On that OOC path a **non-AUTO** resolved `cast_target`
   now routes by nature: a **CONCENTRATION** spell (any non-self target) is
   intercepted FIRST → `CastTargetDirect` (direct force, package-lock-proof); the rest is
   FIRE-AND-FORGET, routed by `CasterConsent::ClassifySpell` + foe test — a **hostile
@@ -1052,7 +1052,7 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   (decl `Sightline.h:52`, worker-safe cache read) → `Actuation.cpp:91,113`,
   `Actuation_Direct.cpp:1240,1656`, `Evaluator.cpp:320`.
   `Want` (decl `Sightline.h:58`) → `Evaluator.cpp:330`, `Actuation_Direct.cpp:1594` (F7 auto-cast),
-  `Logistics.cpp:1350` (OOC hostile cast — seeds the `Check` at `:1353`; added to
+  `Logistics.cpp:1801` (OOC hostile cast — seeds the `Check` at `:1805`; added to
   close the 2026-08-18 review SEV-3 "Check without a Want → Unknown always passes"
   inert wall-gate). `g_mx` is a strict LEAF (nothing called while held). Fail-open
   by design (cold/stale/VR → Unknown). **Every `Check` must have a `Want` seeding
@@ -1094,9 +1094,9 @@ state/types/small helpers live as `inline` members of `namespace
 MFO::Logistics` in `Logistics_internal.h` (ONE instance across the TUs — it
 replaces the old single anonymous namespace; big cross-module helpers are
 declared there and defined in their home module). Layout:
-- `Logistics.cpp` (1798) — core tick: `ServiceFollower` (`:674`, INCLUDING the
-  OOC cast dispatch `:~1080-1320` — concentration direct-force `:~1210`,
-  fire-and-forget `:~1300`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
+- `Logistics.cpp` (2120) — core tick: `ServiceFollower` (`:722`, INCLUDING the
+  OOC cast dispatch `:~1128-1368` — concentration direct-force `:~1258`,
+  fire-and-forget `:~1348`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
   `ShedOffRoleWeapon`, sinks, lifecycle + MSTK API, evaluator pure reads.
   **PLAYER-COMBAT LOOT INTERRUPT (2026-09-06):** the GLOBAL travel-intent
   backstop (`:664-728`, runs on EVERY out-of-combat service call, ANY
@@ -1220,7 +1220,7 @@ Adding shared state? Put it in `_internal.h` as `inline` (never a per-TU
 anonymous-namespace copy — that silently forks the instance).
 - **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics_internal.h:569`, guarded
   `g_stockMx` `:568`, the one cross-thread map here): the only serialized state the cluster
-  owns. `CopyStockGear` (`Logistics.cpp:1685`) → `Serialization.cpp:209`; `LoadStockRecord`
+  owns. `CopyStockGear` (`Logistics.cpp:2105`) → `Serialization.cpp:209`; `LoadStockRecord`
   (`:1690`) → `:332`; `ClearStockGear` (`:1695`) → `:256,646`. Only
   `IsPersistableID` FormIDs written, sets capped 512, unresolvable IDs dropped.
   Changing the map's key/value shape or record framing breaks the shed-protection
@@ -1231,11 +1231,17 @@ anonymous-namespace copy — that silently forks the instance).
   worker services followers sequentially; parallelizing dangles it.
 - `ShedOffRoleWeapon` (`Logistics.cpp:506`) — one off-role weapon per idle tick, **DROPPED on
   the floor** (no longer handed to the player; no value split, no knob — marth
-  simplified). Disposal is `Actor::DropObject` (a world-ref/3D create) so it MUST
-  go through `MainThread::Post` (`doDrop`, mirrors the #62 equip / ActivateRef
-  hops in this file); on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
+  simplified). Disposal is the engine's `DropObject` vfunc (a world-ref/3D create) so it MUST
+  go through `MainThread::Post` (`doDrop` `:607`, mirrors the #62 equip / ActivateRef
+  hops in this file). **`doDrop` calls the vfunc DIRECTLY (slot 0xCB SE/AE, 0xCD VR)
+  with an explicit `ObjectRefHandle* a_out` second parameter -- NEVER through
+  `RE::Actor::DropObject`**: CommonLib 3.7.0's `RelocateVirtual<>` wrapper builds a
+  free-function type with no non-POD-return handling, so MSVC puts the sret slot in
+  `rcx` and `this` in `rdx`; the engine then reads MFO's stack temporary as the Actor
+  (deterministic CTD, 4x on LoreRim, fixed v2.0.7; principle 6, the third instance).
+  Verified against the unpacked 1.6.1170 (`+0x6781D0`) and 1.5.97 (`+0x5E6150`) binaries; on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
   drop off-worker. **POST-BATTLE GATE:** early-returns until `kShedPostBattleDwell`
-  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:1997`) ←
+  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:2045`) ←
   `Scheduler.cpp:321` (the in-combat branch — the only place combat=true is seen,
   since this path is out-of-combat-only). Survives an `IsInCombat()` mid-fight
   flap: a real combat frame re-stamps `now`, so the dwell can't mature inside a
@@ -1243,7 +1249,7 @@ anonymous-namespace copy — that silently forks the instance).
   worker-only/no-lock (#4), cleared in `ClearTransientState`. Guards unchanged
   (never disarm/`inRoleWeapons>0`, `IsStockGear`, `IsCreatureWeapon`, socketed,
   `Catalog::IsExcluded`).
-- `ClearTransientState` (`Logistics.cpp:2001`) → `Serialization.cpp:641`, after StopPump. Wipes
+- `ClearTransientState` (`Logistics.cpp:2049`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
 - Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`Logistics.cpp:259`),
@@ -1254,7 +1260,7 @@ anonymous-namespace copy — that silently forks the instance).
 - **Alias/travel:** `g_travelSlots` (`Logistics_internal.h:323`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
   `Packages::LootTravelClear` (this follower's own combat via `ReleaseTravelOnCombat`
-  `Logistics.cpp:1753` ← `Scheduler.cpp:328`; the PLAYER's combat via the global
+  `Logistics.cpp:2075` ← `Scheduler.cpp:343`; the PLAYER's combat via the global
   backstop `Logistics.cpp:~664-728`, see the PLAYER-COMBAT LOOT INTERRUPT note
   above; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
