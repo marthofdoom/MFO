@@ -26,9 +26,10 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
    Packages 2153, Logistics 2072, Actuation_Direct 1679, Board 1346,
    CasterConsent 1243, Board_Progression 1234, Board_FieldKit 1135,
    Actuation_Hands 894. None of these should sit in context — grep to a symbol,
-   read a narrow window. **2026-09-14 (`feat/mfo-dualwield-combat-pick`): Actuation
-   2497, Actuation_Hands 918, Actuation_internal.h 371 — 3 lines under the cap;
-   marth relaxed the 2500 cap until the next major release (report, do not split).**
+   read a narrow window. **2026-09-14 (`feat/mfo-dualwield-combat-pick` `1ac3c6b`):
+   Actuation 2578 — OVER the 2500 cap; marth relaxed the cap until the next major
+   release (report, do not split). Actuation_Hands 918, Actuation_internal.h 378,
+   Loadout 672.**
    *(Two files have breached the 2500-line HARD RULE and been resolved the same
    way — an internal header for the shared state plus a cohesive module.
    `Board.cpp` hit 2577 at the overlay-swapchain merge `924f3a9`;
@@ -167,7 +168,10 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   by the 2026-09-13 dual-wield left hold:** the ledger value became
   `ForcedHold{right,left}` (`Actuation_internal.h:329`) but the record is still a
   flat list of (follower, weapon) pairs — a dual hold writes TWO pairs for one
-  follower, and the loader has always released pairs by OBJECT, never by slot.
+  follower, and the loader has always released pairs by OBJECT, never by slot
+  (since `1ac3c6b`, F4, the loader names the slot from the LIVE hands: left slot
+  when the form is held left, default when right, both for a same-form dual
+  hold). `kMaxForcedWeapons` 64 is a PAIR cap now (REVIEW-BACKLOG MFO-B18).
 
 **Ingestion discipline (INVARIANTS #8–#12), all enforced here:** every persisted
 FormID passes `ResolveFormID` or is DROPPED (`:367,447,511`); runtime `0xFF` IDs
@@ -418,16 +422,17 @@ TWICE, no logic change either time — 2026-08-31 (`Actuation_Direct.cpp`) and
 2026-09-08 (`Actuation_Hands.cpp`, when `Actuation.cpp` reached 3282 lines):**
 `Actuation.cpp` (2237) = the combat-rule dispatch — `Fire` (`:1764`) + verbs,
 `CastOn` (`:396`)/`ConcentrationCast` (`:266`)/`ForceCast` (`:88`),
-`EquipWeapon` (`:1729`, **PERK-DRIVEN since 2026-09-13 — see "COMBAT PICK +
-DUAL WIELD BY PERKS" below**) with its anon helpers `WeaponRolesFor` (`:1645`),
-`IsOneHandMelee` (`:1653`), `PickOffHandWeapon` (`:1663`), `PickShield` (`:1680`),
-`EquipLeftHeld` (`:1697`) + the off-hand top-up cadence `g_offHandRetryAt` /
-`kOffHandRetry` (`:1726-1727`), `NearestAlly` (`:53`)/`ResolveCastTarget` (`:1922`),
-the APMF-refusal log, `ClearCastLock(s)` (`:2380`/`:2396`), the T#76 force-hold
-map (`ForcedHold{right,left}`, `g_forcedWeapon` `:43`) + `ReleaseForcedWeapon`
-(`:2239`) / `YieldForcedLeftHand` (`:2281`) / `ReconcileForcedWeapon` (`:2302`) /
-`ClearForcedWeapons` (`:2366`) + FWPN co-save (`CoSaveForcedWeapons` `:2409`,
-`CoLoadForcedWeapons` `:2444`); `Actuation_Hands.cpp` (918) = THE PER-HAND CAST
+`EquipWeapon` (`:1757`, **PERK-DRIVEN since 2026-09-13 — see "COMBAT PICK +
+DUAL WIELD BY PERKS" below**) with its anon helpers `WeaponRolesFor` (`:1654`),
+`IsOneHandMelee` (`:1662`), `PickOffHandWeapon` (`:1672`), `PickShield` (`:1689`),
+`EquipShieldOnMain` (`:1709`), `EquipLeftHeld` (`:1725`) + the off-hand top-up
+cadence `g_offHandRetryAt` / `kOffHandRetry` (`:1754-1755`), `NearestAlly`
+(`:53`)/`ResolveCastTarget` (`:1952`), the APMF-refusal log, `ClearCastLock(s)`
+(`:2447`/`:2463`), the T#76 force-hold map (`ForcedHold{right,left}`,
+`g_forcedWeapon` `:43`) + `LogLeftHandReadback` (`:2279`) / `ReleaseForcedWeapon`
+(`:2293`) / `YieldForcedLeftHand` (`:2338`) / `ReconcileForcedWeapon` (`:2369`) /
+`ClearForcedWeapons` (`:2433`) + FWPN co-save (`CoSaveForcedWeapons` `:2476`,
+`CoLoadForcedWeapons` `:2511`); `Actuation_Hands.cpp` (918) = THE PER-HAND CAST
 LOCK's implementation — `HoldCastLock`/`ClearCastLockHand` (`:61`/`:77`), the
 liveness ladder (`ClaimLiveOnHand` `:89`, `CastInFlightOnHand` `:251` (PUBLIC since 2.0.5 — declared in `Actuation.h`),
 `CastLockLive` `:299`), rank preemption (`CanPreemptHand` `:394`,
@@ -451,9 +456,9 @@ LNK2005. Since 2026-09-13 it also carries the force-hold ledger's VALUE type
 defined in `Actuation.cpp:43/:49`) and two non-inline cross-TU declarations:
 `CastHandHeld(actor, hand)` (`:344`, defined `Actuation_Hands.cpp:363` =
 `ClaimLiveOnHand || CastLockLive` — THE one question the equip side asks before
-touching the left hand) and `YieldForcedLeftHand(actor, why)` (`:350`, defined
-`Actuation.cpp:2281`, called from `CastOn`'s commitPreempt `:733` and
-`ReconcileForcedWeapon` `:2327`). `Fire(follower,
+touching the left hand) and `bool YieldForcedLeftHand(actor, why)` (`:357`, defined
+`Actuation.cpp:2338`; handed to `Loadout::Prepare` as its `LeftHandYield` callback
+from `CastOn` `:1047`, and called from `ReconcileForcedWeapon` `:2394`). `Fire(follower,
 choice)` (`Actuation.cpp:1832`) dispatches one action/tick: Wait / Attack (→`Targeting::Command`) /
 Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::RetreatFill`
 / PowerAttack / drink / unknown→fail-closed. First-match-wins.
@@ -676,44 +681,74 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `MainThread::Post`ed** — CastOn runs on the job worker and the old inline engine call
   was the prime suspect for the queued 1.5.x `act.cast_target` AV reports (#14).
 - **COMBAT PICK + DUAL WIELD BY PERKS (2026-09-13, branch `feat/mfo-dualwield-combat-pick`,
-  marth: "both gaps are clear to fix right away").** `EquipWeapon` (`Actuation.cpp:1729`) now
-  CONSUMES the weapon-style decision the loot/keep/buy judges already share: the pick inside the
-  ordered class is `Logistics::WeaponScore(roles, w)` with `roles = Logistics::ComputeWeaponRoles(
-  actor, g_followers[id])` (`WeaponRolesFor` `:1645`, worker-serial `g_followers` read, #4; no
-  record → default roles). **`Actuation.cpp` therefore includes `Logistics_internal.h` (`:13`)** —
-  its first non-Logistics include; `ComputeWeaponRoles`/`WeaponScore` are NOT in `Logistics.h`.
-  DEFAULT-CASE PROOF: `preferKinds==0` → score == `float(uint16 damage)`, same `>=` last-equal-wins
-  loop, same inventory order → the same weapon as before. The melee CLASS is NOT a filter here (the
-  pick still spans 1H+2H by score, as it always did; `roles.melee` is the higher SKILL, so a
-  two-handed-by-skill follower carrying only one-handers still draws one). Ranged never has a
-  preferred kind. **THE LEFT HAND:** when the right-hand pick is a one-hander (`IsOneHandMelee`
-  `:1653` = the four `IsOneHanded*` tests) and `roles.offHand` votes: `2` → `PickOffHandWeapon`
-  (`:1663`, SAME `WeaponScore`, excludes the right hand's ONLY copy — count ≥ 2 of the same form
-  is allowed — same eligibility: no staff, no non-playable, daggers only for a `bMageDaggersOnly`
-  base mage) is FORCE-HELD in the left via `EquipLeftHeld` (`:1697`: `EquipObject` with
-  `Loadout::LeftHandSlot()`, `forceEquip=true`, ledger `.left` written under `g_forcedMx`, engine
-  calls outside it); `1` → `PickShield` (`:1680`, best `GetArmorRating`) PLAIN-equipped (the AI
-  keeps shields on its own, no ledger entry); `0` → nothing. Plus a SATISFIED-LAP TOP-UP
-  (`:1761-1795`): right already holds a one-hander, left holds no weapon, `!CastHandHeld(left)`,
-  rate-limited by `g_offHandRetryAt`/`kOffHandRetry` 5 s (`:1726`; erased on release/yield so a
-  hand a finished cast freed refills on the next satisfied lap). Every left-hand write is gated on
-  `bWeaponStyleControl`. **CAST LOCK WINS THE LEFT:** `CastOn`'s commitPreempt calls
-  `YieldForcedLeftHand` (`:733`) the instant a plan takes the left — BEFORE `Loadout::Prepare`'s
-  `EquipSpell` would meet the prevent-removal lock — and `ReconcileForcedWeapon` (`:2327`) yields
+  marth: "both gaps are clear to fix right away"; Fable tier-3 on `f771399` F1–F5 fixed in `1ac3c6b`).**
+  `EquipWeapon` (`Actuation.cpp:1757`) now CONSUMES the weapon-style decision the loot/keep/buy
+  judges already share: the pick inside the ordered class is `Logistics::WeaponScore(roles, w)` with
+  `roles = Logistics::ComputeWeaponRoles(actor, g_followers[id])` (`WeaponRolesFor` `:1654`,
+  worker-serial `g_followers` read, #4; no record → default roles). **`Actuation.cpp` therefore
+  includes `Logistics_internal.h` (`:13`)** — its first non-Logistics include; `ComputeWeaponRoles`/
+  `WeaponScore` are NOT in `Logistics.h` (REVIEW-BACKLOG **MFO-B17**: the proper seam is a public
+  declaration there). DEFAULT-CASE PROOF: `preferKinds==0` → score == `float(uint16 damage)`, same
+  `>=` last-equal-wins loop, same inventory order → the same weapon as before. The melee CLASS is
+  NOT a filter here (the pick still spans 1H+2H by score, as it always did; `roles.melee` is the
+  higher SKILL, so a two-handed-by-skill follower carrying only one-handers still draws one).
+  Ranged never has a preferred kind. **THE LEFT HAND:** when the right-hand pick is a one-hander
+  (`IsOneHandMelee` `:1662` = the four `IsOneHanded*` tests) and `roles.offHand` votes: `2` →
+  `PickOffHandWeapon` (`:1672`, SAME `WeaponScore`, excludes the right hand's ONLY copy — count ≥ 2
+  of the same form is allowed — same eligibility: no staff, no non-playable, daggers only for a
+  `bMageDaggersOnly` base mage) is FORCE-HELD in the left via `EquipLeftHeld` (`:1725`:
+  `EquipObject` with `Loadout::LeftHandSlot()`, `forceEquip=true`, ledger `.left` written under
+  `g_forcedMx`, engine calls outside it); `1` → `PickShield` (`:1689`, best `GetArmorRating`)
+  PLAIN-equipped **on the main thread** via `EquipShieldOnMain` (`:1709`, F3/#62: FormIDs captured,
+  re-resolved under `MainThread::Post`, VR inline — the `Logistics_Loot.cpp` equipIt precedent; no
+  ledger entry, the AI keeps shields on its own); `0` → nothing. Plus a SATISFIED-LAP TOP-UP
+  (`:1797-1830`): right already holds a one-hander, left holds no weapon, `!CastHandHeld(left)`,
+  rate-limited by `g_offHandRetryAt`/`kOffHandRetry` 5 s (`:1754`). **The top-up is TRANSPARENT
+  (F5):** both refills fall through to the satisfied lap's `NoOp`, never `Fired` — a `Fired` there
+  armed the Scheduler's suppression window (heals below the equip rule starved ~1.5 s per refill),
+  stamped `lastFired` and fed `ProgAllocator::NoteCombatFire`. Every left-hand write is gated on
+  `bWeaponStyleControl`. **THE LEFT WEAPON ALWAYS YIELDS TO A LEFT-HAND SPELL — marth's DECISION
+  (2026-09-14, verbatim: "for F6 the weapon should always yield to a spell on left hand";
+  REVIEW-BACKLOG MFO-B16):** heals are left-only and `WeaponHandExposure` steers casts LEFT while a
+  hold exists, so a dual-wielder's left weapon yields and refills at cast cadence — accepted by
+  design; no right-hand cast preference and no "dual-wielder does not cast" rule may be added.
+  **WHERE the yield happens (F1):** NOT in `CastOn`'s commitPreempt (`:719`, which runs ahead of
+  refusals that still return transparently — an APMF claim refusal, a heal `ComposedCast` holds
+  off, a `Prepare` that debounces/fails — and a yield ahead of a refusal flickered the left hand
+  weapon→spell→weapon per lap). It happens INSIDE `Loadout::Prepare`, immediately before each of
+  its two `EquipSpell`s (`Loadout.cpp:304`, `:391`), through the `LeftHandYield` function-pointer
+  parameter (`Loadout.h:128`) that `CastOn` passes (`Actuation.cpp:1047`) as a non-capturing lambda
+  over `YieldForcedLeftHand` — keyed to the PHYSICAL hand `Prepare` takes (always LEFT), not to
+  `handPlan.left`. `YieldForcedLeftHand` (`:2338`) returns `bool` (a hold was released) and
+  re-stamps `g_offHandRetryAt` to `now + kOffHandRetry` — a FLOOR (principle 9), not an erase — so
+  a refused cast costs at most one flicker per 5 s. `ReconcileForcedWeapon` (`:2394`) still yields
   when `CastHandHeld(left)` is live (covers the ComposedCast heal claim, which never passes
-  `CastOn`), ORDERED BEFORE its release/claim decision so a yield that emptied a left-only entry
-  reads as "nothing forced" and no equipment claim is re-engaged for a dead hold. On any NEW
-  right-hand equip an old left hold not in the plan is unequipped FIRST (a bow or two-hander needs
-  that hand; a prevent-removal lock refuses it). `ReleaseForcedWeapon` (`:2239`) releases BOTH
-  hands; `ClearForcedWeapons` (`:2366`) clears `g_offHandRetryAt` too. **CSTY:** `MFO_MeleeStyle`
-  DATA = `1|4` (dueling | `kAllowDualWielding` = `TESCombatStyle::FLAG 1<<2`, pinned 3.7.0
-  header; `MFO_GenerateESP.py:1124`, `_csty_record` gained `data_flags` `:1043`) — `out/MFO.esp`
-  regenerated, exactly ONE byte changed (offset 6743, `0x01→0x05`), FormIDs unmoved. Census of
-  all 145 Skyrim.esm CSTY records: 22 carry DATA bit 2, 7 of them with NO record-header bit 19,
-  so DATA is the word the engine honours. **EXPOSURE, OPEN DECISION FOR MARTH (`Docs/STATUS.md`):**
-  the flag is GLOBAL to every follower forced melee — an UNPERKED follower carrying two
-  one-handers may be dual-wielded by its OWN AI (`EquipGateThunk` denies spells/staves only);
-  not deny-complete; a per-follower CSTY needs `Forms.h` + `CombatStyle.cpp`.
+  `CastOn`), ORDERED BEFORE its release/claim decision. **ONE LEDGER PER HAND (F2):** `Prepare`
+  uses the yield's `true` return to null `willDisplaceLeft`, so MFO's own hold is never booked as
+  gear debt (the queued unequip is invisible to `Read()`'s synchronous view, which would otherwise
+  book the yielded weapon and repay it in the RIGHT hand at combat end); and `RestoreOne`
+  (`Loadout.cpp:98`) returns a displaced LEFT-hand WEAPON with `LeftHandSlot()` (`EquipBack` `:88`
+  gained a slot parameter; shields/stowed two-handers unchanged). On any NEW right-hand equip an old
+  left hold not in the plan is unequipped FIRST (a bow or two-hander needs that hand).
+  `ReleaseForcedWeapon` (`:2293`) releases BOTH hands; `ClearForcedWeapons` (`:2433`) clears
+  `g_offHandRetryAt` too. **LEFT-SLOT RELEASES + READBACK (F4, principle 5):** every left-hand
+  unequip names `Loadout::LeftHandSlot()` (Yield, Release; `CoLoadForcedWeapons` `:2511` picks the
+  slot from the LIVE hands because a v1 pair carries no hand — left slot when held left, default
+  when held right, BOTH for a same-form count≥2 dual hold, the old slot-less call when held in
+  neither), and `LogLeftHandReadback` (`:2279`) posts a next-frame `[hold] <id>: left readback =
+  <form|none>` after every Yield and after a Release that had a left hold — the queued unequip makes
+  a same-call read meaningless, so the read runs on the main thread after the engine drains its
+  equip queue. **The first dual-wield field run must read that line**: whether the slot-named
+  unequip clears the left prevent-removal lock, and which instance a same-form count≥2 hold clears,
+  are UNVERIFIED engine behaviour (`Docs/STATUS.md`). **CSTY:** `MFO_MeleeStyle` DATA = `1|4`
+  (dueling | `kAllowDualWielding` = `TESCombatStyle::FLAG 1<<2`, pinned 3.7.0 header;
+  `MFO_GenerateESP.py:1124`, `_csty_record` gained `data_flags` `:1043`) — `out/MFO.esp`
+  regenerated, exactly ONE byte changed (offset 6743, `0x01→0x05`), FormIDs unmoved. Census of all
+  145 Skyrim.esm CSTY records: 22 carry DATA bit 2, 7 of them with NO record-header bit 19, so DATA
+  is the word the engine honours. **EXPOSURE, OPEN DECISION FOR MARTH (`Docs/STATUS.md`):** the
+  flag is GLOBAL to every follower forced melee — an UNPERKED follower carrying two one-handers may
+  be dual-wielded by its OWN AI (`EquipGateThunk` denies spells/staves only); not deny-complete; a
+  per-follower CSTY needs `Forms.h` + `CombatStyle.cpp`.
   **SHED INTERACTION (traced 2026-09-14, no fight):** `ShedOffRoleWeapon` (`Logistics.cpp:506`)
   never reads the ledger — it does not need to, by ORDERING: the equip gambit fires only in
   `Scheduler.cpp`'s in-combat branch, the OOC branch calls `ReleaseForcedWeapon` (`:306-307`,
@@ -724,20 +759,32 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   shed dropped; and a second one-hander is in-role whenever `roles.melee == OneHand` (or the
   magic-user sidearm rule) — `inRole` (`Logistics.cpp:567`) is per class with no count cap. A
   two-handed-BY-SKILL follower dual-wielding one-handers has BOTH judged off-role post-battle,
-  exactly as the right hand alone was before this branch. **What breaks:** running the shed
+  exactly as the right hand alone was before this branch. **What breaks:** moving the yield back
+  ahead of a transparent refusal (into commitPreempt, or before `Prepare`'s cooldown/debounce/debt
+  returns) or erasing `g_offHandRetryAt` on yield re-creates the F1 per-lap weapon↔spell flicker;
+  a change that stops the left weapon yielding to a left-hand spell (a right-hand cast preference,
+  a "dual-wielder does not cast" gate) BREAKS marth's F6 decision; booking `willDisplaceLeft` when
+  the yield returned true, or dropping the `LeftHandSlot()` from `RestoreOne`'s weapon repay,
+  re-creates F2 (the repay lands MFO's released weapon in the RIGHT hand at combat end and the open
+  debt Debounces every later `Prepare`); a `Fired` from the top-up re-creates F5 (heal starvation +
+  false `NoteCombatFire`); equipping the shield inline on the worker re-creates F3 (#62 render-thread
+  race); dropping the slot from a left unequip returns to the F4 unverified path; running the shed
   while a hold stands (moving it into the combat branch, or dropping the OOC release before
   `ServiceFollower`) makes the shed's `DropObject` meet the prevent-removal lock and leaves a
   dangling ledger entry; `IsOneHandMelee` admitting a staff/bow makes `EquipLeftHeld` force a
-  two-hand form into the left slot; writing `.left` without the `g_forcedMx` lock races the
-  save callback (`CoSaveForcedWeapons` walks the map off-thread); `PickOffHandWeapon` losing
-  the "only copy" test makes the engine MOVE the right-hand weapon to the left; a `WeaponScore`
-  divergence between this file and `Logistics_internal.h` is impossible by construction (one
-  inline) — do NOT re-implement it here. **FWPN co-save LAYOUT UNCHANGED v1:** a dual hold
-  writes TWO (follower, weapon) pairs; `CoLoadForcedWeapons` has always released per pair by
-  object, never by slot. **KNOWN GAP (economy/loot, other files):** the economy keep buckets keep
-  ONE 1H form, so a DIFFERENT second one-hander sells at the next vendor; loot never fetches a
-  second one-hander. **NOT FIELD-VERIFIED:** whether a force-held left weapon actually blocks a
-  spell equip (the yield makes it moot), whether the AI attacks with the left weapon.
+  two-hand form into the left slot; writing `.left` without the `g_forcedMx` lock races the save
+  callback (`CoSaveForcedWeapons` walks the map off-thread); `PickOffHandWeapon` losing the "only
+  copy" test makes the engine MOVE the right-hand weapon to the left; a `WeaponScore` divergence
+  between this file and `Logistics_internal.h` is impossible by construction (one inline) — do NOT
+  re-implement it here. **FWPN co-save LAYOUT UNCHANGED v1:** a dual hold writes TWO (follower,
+  weapon) pairs; `CoLoadForcedWeapons` has always released per pair by object (now slot-named from
+  the live hands, F4); `kMaxForcedWeapons` 64 is now a PAIR cap and the reader aborts above it
+  (REVIEW-BACKLOG **MFO-B18**, unreachable at party scale). **KNOWN GAP (economy/loot, other
+  files):** the economy keep buckets keep ONE 1H form, so a DIFFERENT second one-hander sells at
+  the next vendor; loot never fetches a second one-hander. **PERF NOTE (MFO-B19):**
+  `ComputeWeaponRoles` now also runs per pick lap and per 5 s top-up attempt — negligible at party
+  scale. **NOT FIELD-VERIFIED:** whether the AI attacks with the left weapon; the F4 readback
+  questions above.
 - `ConcentrationCast` (anon, `Actuation.cpp:470`, COMBAT) = self→`CastSelfDirect`; non-self→
   **`CastTargetDirect` (DIRECT FORCE, PRIMARY — the package delivery is REMOVED)**.
   Latches `CasterConsent::Want` on each Applied so the slider keeps denying competing
@@ -1591,6 +1638,19 @@ load — no co-save record.
   piece usable for a weapon — `PlanCastHand`/`CastProxyOnHand`/`ClaimLiveOnHand`/`kHand*`
   are cast-only, and no `RightHandSlot` exists. Changing which slot form it resolves
   re-points BOTH the spell-in-hand path and the left weapon hold at once.
+- `Prepare(actor, spell, why, LeftHandYield a_yieldLeft = nullptr)` (`Loadout.h:128-135`,
+  `Loadout.cpp:261`) — since `1ac3c6b` (Fable F1/F2 on `f771399`) carries THE LEFT HAND'S POINT
+  OF NO RETURN: the function-pointer callback is invoked immediately before each `EquipSpell`
+  (`:304` the spell→spell branch, `:391` the displacing branch), i.e. AFTER every refusal
+  `Prepare` can still make (cooldown, two-handed debounce, open gear debt). On the displacing
+  branch a `true` return ("a hold was released") nulls `willDisplaceLeft` so MFO's OWN left
+  weapon hold is never booked as gear debt. `RestoreOne` (`:98`) repays a displaced LEFT-hand
+  WEAPON with `LeftHandSlot()` (`EquipBack` `:88` gained a slot parameter). Sole caller
+  `Actuation.cpp:1047` (`CastOn`, always passes the yield). **What breaks:** calling the yield
+  before the refusals re-creates the F1 per-lap flicker; booking the debt on a `true` return
+  re-creates F2 (repay in the RIGHT hand at combat end, then every later `Prepare` Debounces on
+  the open debt); a second `Prepare` caller that omits the callback makes its `EquipSpell` meet
+  the left prevent-removal lock. See §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS".
 - `Prepare` (`:240`) → sole call `Actuation.cpp:1097`. `StartCooldown` (`:413`) → Actuation
   + Diagnostics; **mirrors into `CasterConsent::NoteCooldown`** (`:425`) so the combat
   thread reads the mirror, never these non-atomic maps. `Tick` (`:465`) ←

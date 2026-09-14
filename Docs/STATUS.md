@@ -14,8 +14,11 @@ The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten
 Read it as history and this block as current.
 
 - **Branch `feat/mfo-dualwield-combat-pick` (rebased onto `main` `0b71616` 2026-09-14,
-  no version bump) — pushed, CI on its own tip, NOT merged, NOT deployed, awaiting its
-  tier-3 Fable review.** marth 2026-09-13: "both gaps are clear to fix right away" —
+  no version bump) — pushed, CI on its own tip, NOT merged, NOT deployed. Fable tier-3
+  on `f771399` came back with nothing above SEV-3; F1–F5 (SEV-3 carve-outs + SEV-4
+  carve-out (b)) are FIXED in `1ac3c6b`, F6 is DECIDED by marth (below), F7–F9 are
+  deferred to `Docs/REVIEW-BACKLOG.md` MFO-B17/B18/B19.** marth 2026-09-13: "both gaps
+  are clear to fix right away" —
   the two consumers the perk-style branch reported but did not build. **GAP 1, the
   combat pick:** `Actuation.cpp EquipWeapon` now picks by `Logistics::WeaponScore(roles,
   w)` with `roles = ComputeWeaponRoles(actor, g_followers[id])` — the SAME decision the
@@ -39,8 +42,31 @@ Read it as history and this block as current.
   Strong bias, not exclusion; no overhaul assumed. **Shed interaction traced
   2026-09-14, no fight** (the OOC release of both hands precedes `ServiceFollower`
   and the shed's 3 s post-battle dwell; MAP.md §2 "COMBAT PICK + DUAL WIELD BY
-  PERKS"). **NOT field-verified:** whether a force-held left weapon blocks a spell
-  equip (the yield makes it moot), whether the AI actually attacks with the left
+  PERKS"). **The Fable fixes (`1ac3c6b`):** F1 — the left-hand yield moved out of
+  `CastOn`'s commitPreempt (it ran ahead of transparent refusals and erased the
+  top-up's rate limit, so a refused cast flickered the left hand weapon↔spell per
+  lap) INTO `Loadout::Prepare`, immediately before its `EquipSpell`, via a
+  `LeftHandYield` function-pointer parameter, and the yield now re-stamps the 5 s
+  top-up FLOOR instead of erasing it. F2 — `Prepare` books no gear debt for MFO's
+  own hold (the yield's `true` return nulls `willDisplaceLeft`) and `RestoreOne`
+  repays a displaced left-hand WEAPON into the LEFT slot. F3 — both shield equips
+  posted to the main thread (`EquipShieldOnMain`, #62). F4 — every left-hand
+  unequip names `LeftHandSlot()` (CoLoad picks it from the live hands) and a
+  next-frame `[hold] <id>: left readback = <form|none>` line follows every yield/
+  release. F5 — the satisfied-lap top-up is transparent again (no suppression
+  window, no `lastFired`, no `NoteCombatFire`). **DECIDED (marth 2026-09-14, F6),
+  verbatim: "for F6 the weapon should always yield to a spell on left hand."** A
+  force-held left weapon ALWAYS yields to any spell that needs the left hand, heals
+  included; the weapon↔spell churn at cast cadence on a dual-wielder (heals are
+  left-only, `WeaponHandExposure` steers casts left while a hold exists) is accepted
+  by design. No right-hand cast preference and no "dual-wielder does not cast" rule
+  may be added for it. **NOT field-verified — the first dual-wield field run must
+  read the `[hold]` readback lines:** (1) whether a slot-named force-unequip clears
+  the left prevent-removal lock (no precedent in the codebase for unequipping a
+  left-hand WEAPON; if the engine resolves an either-hand weapon to the right, the
+  left lock survives every release and the hand can never take a spell); (2) a
+  same-form count≥2 dual hold writes two identical FWPN pairs and which INSTANCE each
+  unequip clears is unverified; (3) whether the AI actually attacks with the left
   weapon. **KNOWN GAP (open, other agent's files):** the economy keep buckets keep
   ONE 1H form, so a DIFFERENT second one-hander SELLS at the next vendor, and loot
   never FETCHES a second one-hander — the left hand only pairs what the pack already
