@@ -1314,7 +1314,13 @@ anonymous-namespace copy — that silently forks the instance).
   (DROPPED before, KEPT now); every other path is unchanged. **What breaks:** making
   `Other` in-role again (or counting `unarmed` off `HasPerk`) re-opens the
   disarm; the vote MUST come from the allocation record (see Progression's
-  `TallyStyleVotes` note).
+  `TallyStyleVotes` note). The mirror the shed reads MUST stay cleared on load
+  (`Serialization.cpp ResetAllState` → `Logistics::ClearStyleMirror`, after
+  `StopPump` + `MainThread::Clear`) or a stale `unarmed` from the previous save
+  drops a weapon on the first post-load tick (Fable F1 on `49a9cc2`). **OPEN
+  BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B14** (SEV-4) — a "left hand empty"-only
+  one-hand perk can vote `unarmed` and make the shed strip a legitimately wielded
+  off-role weapon; read it before touching `inRole` or the unarmed classifier.
 - `ClearTransientState` (`Logistics.cpp:2049`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
@@ -1622,7 +1628,9 @@ the WEAP `0x1F4` edid). `StyleVotes::unarmed` is the ONE vote NOT counted off he
 (enrolled records; ranks 1..K of each allocated node; main thread, no lock — where the
 tally already runs) via a deliberate, commented component-1→component-2 include of
 `ProgAllocator.h` in `Progression.cpp` (headers stay acyclic). Consumer:
-`Logistics::ShedOffRoleWeapon` (fists rule). **What breaks:**
+`Logistics::ShedOffRoleWeapon` (fists rule). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md`
+MFO-B14** (SEV-4) — the per-list empty-hand rule also matches a "left hand empty"-only
+one-hand perk (no keyword, no right-hand test); tightening shape recorded there. **What breaks:**
 renaming/renumbering `WeaponKind`/`ArmorKind` bits breaks `Logistics::WeaponKindOf` +
 `TradeBridge::BuyThresholds::preferKinds` (same bit space); calling `TallyStyleVotes`
 off the main thread races the allocator's perk writes (the Logistics mirror exists for
