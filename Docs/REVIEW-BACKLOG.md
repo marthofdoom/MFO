@@ -124,6 +124,13 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 
 ---
 
+### MFO-B15 — the board footer can say "free (one time)" for ~300 ms after the free respec was spent
+- **Raised:** Fable tier-2 review of `5f9d6a9` (`feat/mfo-board-free-respec-label`), SEV-5, PLAUSIBLE.
+- **Finding (verbatim):** `native/Board_Progression.cpp:1199` and `:1217`. Chain: Confirm on the render thread → `QueueEdit` → worker `ApplyEdits` on the next pump tick (≤133 ms while the board is open, `Diagnostics.cpp:355`) → `MainThread::Post` → next main-thread frame runs `ProgAllocator::Respec` (clears `st.freeRespec`, `ProgAllocator.cpp:1737`) and immediately `PublishBoardViews()` (`Board.cpp:1153`, swaps `g_boardSnap` under `g_viewMx`) → the Board only picks that up on the NEXT worker `PublishSnapshot` (`Board.cpp:1354`, ≤133 ms) → next render frame copies `g_snapshot` (`Board.cpp:626`). Worst case ~133+16+133+16 ≈ 300 ms during which `who->freeRespec` is still true. Worst-case outcome: an AUTO-class follower (where `RecomputeSkills` re-granted `autoPoints`, so the second respec is not the `:1690` "nothing allocated" no-op) is billed 500 rapport under a popup that said "no rapport is lost". Requires Respec-button + Confirm again inside the window, and the popup lands focus on Cancel (`:1237`).
+- **Reviewer's reasoning (verbatim):** Billing authority is correct: `Respec` decides from `g_prog` on the main thread, the label is only a mirror. This is acceptable as the brief anticipated. Recommend a one-line REVIEW-BACKLOG entry rather than a fix (a render-side "spent" latch would be polish, not a root-cause fix).
+- **Why it was NOT fixed:** SEV-5, no carve-out; a render-side latch masks nothing but is polish.
+- **Fix shape when drained:** none required; if drained, a render-side "respec queued" latch that hides the free label until the next snapshot.
+
 ## DRAINED
 
 ### MFO-B4 — `IncumbentTargetLost` and `PickAlly` disagree on "resolves"
