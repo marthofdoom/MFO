@@ -1192,9 +1192,17 @@ namespace MFO::Board {
                             // ── FOOTER: RESPEC + HINTS ──────────────────
                             if (ImGui::Button("Respec")) ImGui::OpenPopup("##prespec");
                             ImGui::SameLine();
-                            ImGui::TextDisabled("refund all perks, -%.0f rapport  |  d-pad move   "
-                                                "[A] open skill tree   [B] back",
-                                                prog.respecRapportCost);
+                            // The ONE free post-migration respec (ProgState::freeRespec,
+                            // PRGN v7) — read from the SNAPSHOT row, never g_prog:
+                            // BoardFollowerView::freeRespec is filled in PublishBoardViews
+                            // on the main thread like every other who-> field here.
+                            if (who->freeRespec)
+                                ImGui::TextDisabled("refund all perks, free (one time)  |  d-pad move   "
+                                                    "[A] open skill tree   [B] back");
+                            else
+                                ImGui::TextDisabled("refund all perks, -%.0f rapport  |  d-pad move   "
+                                                    "[A] open skill tree   [B] back",
+                                                    prog.respecRapportCost);
                             ImGui::SetNextWindowPos(
                                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                                 ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -1206,10 +1214,16 @@ namespace MFO::Board {
                                 ImGui::PopStyleColor();
                                 ImGui::PopFont();
                                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
-                                ImGui::TextWrapped("Every perk MFO allocated to %s is removed and "
-                                                   "its points refunded. They will resent the "
-                                                   "reset: -%.0f rapport.",
-                                                   who->name.c_str(), prog.respecRapportCost);
+                                if (who->freeRespec)
+                                    ImGui::TextWrapped("Every perk MFO allocated to %s is removed and "
+                                                       "its points refunded. This one is free (one "
+                                                       "time): no rapport is lost.",
+                                                       who->name.c_str());
+                                else
+                                    ImGui::TextWrapped("Every perk MFO allocated to %s is removed and "
+                                                       "its points refunded. They will resent the "
+                                                       "reset: -%.0f rapport.",
+                                                       who->name.c_str(), prog.respecRapportCost);
                                 ImGui::PopTextWrapPos();
                                 ImGui::Separator();
                                 ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
