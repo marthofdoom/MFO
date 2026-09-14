@@ -1672,20 +1672,30 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   exactly `ranks[alloc.rank−1]`).* Not per class. Non-catalog perks (hidden engine,
   creature, filtered player-UI, non-tree abilities) are never touched; an
   ACTOR-only rank (never on the base) is logged and left. `StripNativePerks`
-  (`:~700`) runs at `Enroll` (`:1461`) and on the benched→active edge; the record
-  `ProgState::strippedPerks` (set, union on re-strip, unresolvable ids drop on load)
-  + `nativeHeld` are v7 co-save fields; `RestoreNativePerks` re-adds the record on
-  the active→benched edge (`PollWork`, gated on `st.applied` so a not-yet-refreshed
-  roster mirror after a load cannot read as benched) — a benched/dismissed follower
-  is never left gutted (it then holds its native perks AND MFO's grants until
-  re-recruit strips again). No refund: not credited, and `nativeTreePerksAtEnroll`
-  (the §17 debit) is recomputed AFTER every strip as `CountNativeTreeRanks −
-  AllocatedRanks` (native ranks STILL held, never MFO's own), which also corrects a
-  pre-v7 follower. Synergy: `GateNextRank` (`:764`) froze natively-owned nodes for
-  the player — stripped nodes are now takeable. **What breaks:** stripping a form MFO
-  granted (the `mfoForm` skip) would silently undo an allocation; restoring while
-  active would double-rank with MFO's grant; there is NO unenroll verb (Board is a
-  separate boundary) — the restore path is the benched edge only.
+  (`:~697`) runs at `Enroll` (`:1461`) and, for an unstripped enrolled follower (v6
+  save / enrolled while benched), on the first `PollWork` poll it reads ACTIVE —
+  BEFORE `ReapplyFollower`, re-arming it (`applied=false`) when anything was removed
+  so a rank the reapply had deferred to native ownership (`:~918`) is re-added now
+  the native is gone; that deferral is therefore UNREACHABLE for a stripped node
+  (it can only fire for a native rank that lands on the base AFTER the strip —
+  `nativeHeld` stays true, no re-strip until re-enrollment). **Never restored while
+  enrolled — a benched/dismissed follower stays stripped** (marth: "a clean restore
+  when it's uninstalled"), which rules out the native+MFO same-node double rank by
+  construction. The record `ProgState::strippedPerks` (set, union on re-strip,
+  unresolvable ids drop on load) + `nativeHeld` are v7 co-save fields and are what
+  the uninstall reads: public `ProgAllocator::RestoreNativePerks(actor)` (`:1754`,
+  header contract in `ProgAllocator.h`) puts every recorded perk back on the base,
+  settles, CLEARS the record — meant to run once per enrolled follower right before
+  the mod is removed; **nothing calls it yet** (the Board/MCM uninstall verb is a
+  separate brief). No refund: not credited, and `nativeTreePerksAtEnroll` (the §17
+  debit) is recounted AFTER every strip as `CountNativeTreeRanks − AllocatedRanks`
+  (native ranks STILL held — i.e. only unstrippable actor-only ranks — never MFO's
+  own), which also corrects a pre-v7 follower's debit. Fixes marth's "engine gives
+  rank 1, rank 2 inaccessible" bug: `GateNextRank` (`:764`) froze natively-owned
+  nodes; stripped nodes are takeable. **What breaks:** stripping a form MFO granted
+  (the `mfoForm` skip) would silently undo an allocation; restoring while enrolled
+  re-creates the double-rank case; a caller of `RestoreNativePerks` that does not
+  then stop MFO leaves the follower with natives AND grants.
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
   `GetPerkIndex` absent (`:841`) + native-ownership deferral (`:853`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single

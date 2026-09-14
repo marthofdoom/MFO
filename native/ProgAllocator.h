@@ -199,13 +199,12 @@ namespace MFO::ProgAllocator {
         // PRGN v7 — NATIVE catalog perks (the ones a list/ESP/template gave
         // the follower, i.e. every rank shown on the Board) that MFO STRIPPED
         // at enrollment so every tree perk is the player's to give (marth
-        // 2026-09-13). Held while the follower is ACTIVE in the party; put
-        // back while benched/dismissed (a dismissed follower is never left
-        // gutted) and stripped again on re-recruit — the active-edge sync in
-        // PollWork (StripNativePerks / RestoreNativePerks). nativeHeld: true
-        // while stripped. Never refunded to the player: not credited (they
-        // were never his) and not debited (nativeTreePerksAtEnroll is counted
-        // AFTER the strip). Unresolvable ids drop on load.
+        // 2026-09-13). Stripped at Enroll, or on the first poll an unstripped
+        // enrolled follower reads ACTIVE; stays stripped while enrolled
+        // (benched too — marth: restore only "when it's uninstalled", via the
+        // public RestoreNativePerks). nativeHeld: true once stripped. Never
+        // refunded: not credited (never his) and not debited (the §17 debit is
+        // recounted AFTER the strip). Unresolvable ids drop on load.
         std::vector<RE::FormID> strippedPerks;
         bool                    nativeHeld{ false };
 
@@ -328,6 +327,16 @@ namespace MFO::ProgAllocator {
     // harness now, the board's auto-spend later.
     bool AllocateNextEligible(RE::Actor* a_actor);
     bool Respec(RE::Actor* a_actor);                      // refunds points, −500 rapport
+    // B′ UNINSTALL / safe-removal restore (marth 2026-09-13: "a clean restore
+    // when it's uninstalled"). Puts every native catalog perk MFO stripped from
+    // this enrolled follower (ProgState::strippedPerks, PRGN v7) back on the
+    // base TESNPC, settles the actor (ApplyPerksFromBase) and CLEARS the record
+    // (nativeHeld=false). Intended to run ONCE for every enrolled follower
+    // immediately before the mod is removed; MFO's own grants are untouched
+    // (Respec removes those). NOT wired to any verb yet — the Board/MCM
+    // uninstall verb is a separate brief. MAIN THREAD. Returns false when the
+    // actor is null / unenrolled. Idempotent (a perk already on the base skips).
+    bool RestoreNativePerks(RE::Actor* a_actor);
 
     // Revert/reload generation — bumped by ClearAll (revert) and OnPostLoad.
     // A board prog-edit captures this at post time and bails inside its

@@ -24,9 +24,12 @@ Read it as history and this block as current.
   zero) — re-spent by the class under auto or pooled for the player under manual;
   sibling dominance reads BASE SKILLS ONLY. v6 saves migrate with today's applied
   values frozen. (B′) **native catalog perks are stripped at enrollment** and on the
-  benched→active edge, recorded in the v7 co-save (`strippedPerks`/`nativeHeld`),
-  restored on the active→benched edge, never refunded, each strip logged — the strip
-  set is exactly the catalog the Board draws (all 18 trees, not per class);
+  first active poll of an unstripped follower, recorded in the v7 co-save
+  (`strippedPerks`/`nativeHeld`), NEVER restored while enrolled (marth: "a clean
+  restore when it's uninstalled" — public `ProgAllocator::RestoreNativePerks`, no
+  caller yet), never refunded, each strip logged — the strip set is exactly the
+  catalog the Board draws (all 18 trees, not per class); also fixes "engine gives
+  rank 1, rank 2 inaccessible" (`GateNextRank` native-freeze);
   (B) **weapon/armor style by perks** — the existing classifier
   (`Progression::WalkPerkEntries` + the frozen catalog) gained mechanical STYLE
   FACTS off each entry's own conditions (weapon/armor vocabulary keywords by

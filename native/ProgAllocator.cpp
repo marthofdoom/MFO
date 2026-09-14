@@ -346,17 +346,14 @@ namespace MFO::ProgAllocator {
 
         // ── the auto-scale (§15) — PRGN v7 ACCUMULATOR (marth 2026-09-13:
         // "auto placed skill points are equally as permanent, there is no
-        // shift"). One call site for every trigger. 1) GRANT: the auto levels
-        // not yet granted (effAutoLvl − 1 − autoLevelsGranted) yield
-        // skillPointsPerLevel each, split by the class weights AT THIS MOMENT
-        // (largest remainder over whole points, every grant sums exactly) and
-        // ADDED to SkillAlloc::autoPoints — nothing reads or moves a point
-        // already placed; a class change only steers FUTURE levels. 2) HOLD:
-        // every entry reconciles to natural + autoPoints + manualPoints through
-        // the single ReconcileSkill choke point (baseline floor; REVERT mode
-        // still clobbers engine drift each ~2 s). effAutoLvl is the §16
-        // partition unchanged. Respec zeroes autoPoints + autoLevelsGranted so
-        // the whole pool re-spends (A″) — this same step re-grants it.
+        // shift"). 1) GRANT: the auto levels not yet granted (effAutoLvl − 1 −
+        // autoLevelsGranted) yield skillPointsPerLevel each, split by the class
+        // weights AT THIS MOMENT (largest remainder, every grant sums exactly)
+        // and ADDED to autoPoints — a placed point is never read or moved; a
+        // class change steers FUTURE levels only. 2) HOLD: natural + autoPoints
+        // + manualPoints through the single ReconcileSkill (baseline floor;
+        // REVERT drift-clobber unchanged). Respec zeroes both ledgers (A″) and
+        // this same step re-grants the whole pool.
         void RecomputeSkills(RE::Actor* a_actor, ProgState& a_st, bool a_log) {
             const ClassDef* def = FindClassDef(a_st.clsId);
             if (!def) return;   // no class picked, or the declaring addon left
@@ -684,13 +681,12 @@ namespace MFO::ProgAllocator {
             return total;
         }
 
-        // ── B′ NATIVE-PERK STRIP / RESTORE (marth 2026-09-13: "strip list
-        // given perks (those shown in progression) ... when engaged"). Every
-        // CATALOG rank the base holds that MFO did not itself grant (MFO holds
-        // exactly ranks[rank-1] of an allocated node) is removed and recorded
-        // in ProgState::strippedPerks (a set; re-strips union in). Non-catalog
-        // perks are never touched. An ACTOR-only rank (never on the base) is
-        // logged + left. MAIN THREAD (base perk array). Returns ranks stripped.
+        // ── B′ NATIVE-PERK STRIP (marth 2026-09-13: "strip list given perks
+        // (those shown in progression) ... when engaged"). Every CATALOG rank
+        // the base holds that MFO did not grant (MFO holds ranks[rank-1] of an
+        // allocated node) is removed + recorded in strippedPerks (a set).
+        // Non-catalog perks untouched; an ACTOR-only rank is logged + left.
+        // MAIN THREAD (base perk array). Returns ranks stripped.
         int StripNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
             int stripped = 0;
             for (const auto& tree : Progression::Get().skills) {
@@ -721,27 +717,27 @@ namespace MFO::ProgAllocator {
             }
             if (stripped) a_actor->ApplyPerksFromBase();
             a_st.nativeHeld = true;
-            // §17 debit = the tree ranks STILL natively held (what the strip could
-            // not remove), never MFO's own grants (those are AllocatedRanks). Also
-            // corrects a pre-v7 follower whose debit was captured before any strip.
+            // §17 debit = tree ranks STILL natively held (unstrippable), never
+            // MFO's own grants; also corrects a pre-v7 follower's debit.
             a_st.nativeTreePerksAtEnroll = static_cast<std::uint16_t>(std::clamp(
                 CountNativeTreeRanks(a_actor, a_base) - AllocatedRanks(a_st), 0, 0xFFFF));
             return stripped;
         }
-        // Put every recorded native rank back (benched / dismissed: never left
-        // gutted). The record is KEPT — it is the truth of what the list gave —
-        // so the next re-recruit strips the same set again. Returns ranks re-added.
-        int RestoreNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
+        // The UNINSTALL restore (public RestoreNativePerks below): every
+        // recorded native rank back on the base, record cleared. Never runs
+        // while enrolled — a benched follower stays stripped (marth).
+        int RestoreNativePerksImpl(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
             int restored = 0;
             for (const auto fid : a_st.strippedPerks) {
                 auto* perk = PerkByID(fid);
                 if (!perk || a_base->GetPerkIndex(perk).has_value()) continue;
                 a_base->AddPerk(perk, 1);
                 ++restored;
-                spdlog::info("[prog] {:08X}: RESTORE native perk '{}' ({:08X}) -- benched/dismissed",
+                spdlog::info("[prog] {:08X}: RESTORE native perk '{}' ({:08X}) -- uninstall",
                              a_actor->GetFormID(), NameOf(perk), fid);
             }
             if (restored) a_actor->ApplyPerksFromBase();
+            a_st.strippedPerks.clear();
             a_st.nativeHeld = false;
             return restored;
         }
@@ -1097,16 +1093,13 @@ namespace MFO::ProgAllocator {
                 }
 
                 if (actor) {
-                    // B′ active-edge sync: native catalog perks are HELD (stripped)
-                    // while the follower is in the party and put back while
-                    // benched/dismissed. Only the edge acts. Gated on `applied`
-                    // (one poll after the actor resolves) so a not-yet-refreshed
-                    // roster mirror right after a load cannot read as "benched".
-                    if (auto* base = st.applied ? actor->GetActorBase() : nullptr) {
-                        const bool active = IsActiveFollower(id);
-                        if (active && !st.nativeHeld)       StripNativePerks(actor, base, st);
-                        else if (!active && st.nativeHeld)  RestoreNativePerks(actor, base, st);
-                    }
+                    // B′: an unstripped follower (v6 save / enrolled while benched)
+                    // is stripped the first poll it reads ACTIVE; never restored
+                    // while enrolled (uninstall = RestoreNativePerks). Runs BEFORE
+                    // the reapply and re-arms it when it removed anything.
+                    if (!st.nativeHeld && IsActiveFollower(id))
+                        if (auto* base = actor->GetActorBase())
+                            if (StripNativePerks(actor, base, st) > 0) st.applied = false;
                     if (!st.applied) {
                         ReapplyFollower(actor, st);   // lazy: runs once the actor resolves
                     } else if (st.clsId != 0 && IsActiveFollower(id)) {
@@ -1514,10 +1507,8 @@ namespace MFO::ProgAllocator {
             st.hmsCaptured = true;
         }
 
-        // B′: strip the list-given catalog perks NOW (engagement) so every tree
-        // perk from here on is the player's to give. Recorded for the benched
-        // restore; never refunded (not credited, and — counted AFTER the strip
-        // below — not debited either).
+        // B′: strip the list-given catalog perks NOW (engagement); recorded for
+        // the uninstall restore, never refunded (not credited, not debited).
         const int strippedN = StripNativePerks(a_actor, base, st);
 
         // §17: the perk-budget debit — tree ranks the follower STILL holds after
@@ -1751,6 +1742,17 @@ namespace MFO::ProgAllocator {
                      NameOf(a_actor), id, removed, PerkPointsAvailable(st),
                      autoPlaced, manualPlaced, st.manualSkills ? "ON" : "OFF", ManualAvail(st),
                      st.autoLevelsGranted, g_econ.respecRapportCost);
+        return true;
+    }
+
+    bool RestoreNativePerks(RE::Actor* a_actor) {
+        if (!a_actor) return false;
+        auto* base = a_actor->GetActorBase();
+        auto it = g_prog.find(a_actor->GetFormID());
+        if (!base || it == g_prog.end() || !it->second.enrolled) return false;
+        const int n = RestoreNativePerksImpl(a_actor, base, it->second);
+        spdlog::info("[prog] {} ({:08X}): uninstall restore -- {} native perk(s) back, record cleared",
+                     NameOf(a_actor), a_actor->GetFormID(), n);
         return true;
     }
 
