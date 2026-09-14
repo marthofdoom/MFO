@@ -19,7 +19,7 @@ one, because the next person will believe it.
 
 ## CITATION NAMESPACE (2026-09-07) — `#N` is an INVARIANT, `T#N` is a TASK
 
-**94 rules: 80 numbered (`#1`–`#80`, each used exactly once) plus 14 lettered
+**95 rules: 81 numbered (`#1`–`#81`, each used exactly once) plus 14 lettered
 sub-rules (`#22a`–`#22j`, `#42a`, `#45a`, `#66a`, `#67a`).** Two things used to
 break a `#N` citation, and both are fixed here:
 
@@ -1143,3 +1143,20 @@ across a fast revert -> load wakes, re-reads a flag that is true again, and
 keeps looping alongside its own replacement -- doubling the tick rate, once per
 fast load, permanently. A boolean cannot express "you specifically should
 stop". An epoch counter can.
+
+### 81. A player-placed skill point has exactly two writers: ApplyManualSkillPoint and Respec
+
+`SkillAlloc::manualPoints` (ProgAllocator.h) is the player's own allocation.
+No automatic path may add to it, reduce it, move it to another skill or
+re-derive it: not the level poll, not the ~2 s drift-watch, not a class change,
+not HMS, not the catch-up grant, not the load reconcile, not the manual toggle.
+`RecomputeSkills` READS it as one additive term of the reconcile target; the
+single `ReconcileSkill` choke point writes the base. The same discipline
+covers what sits UNDER the player's points: the class auto-share is split by
+the higher BASE SKILL only (`DominantWeaponSkill`/`DominantArmorSkill`), never
+by the equipped weapon or the worn body armor -- the loadout read re-homed the
+whole sibling share on every loot/equip change at drift-watch cadence, which
+the player saw as his placed points drifting (marth, 2026-09-13: "fluidly
+managed"). `Respec` is the one reset: every manual point returns to the pool
+and the manual accounting restarts on the serialized fields alone (no new
+co-save state; PRGN stays v6). **MFO** v2.0.7-dev.

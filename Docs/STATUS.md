@@ -13,6 +13,33 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-progression-strict-points-perk-style` (off v2.0.6 `941ddb1`,
+  no version bump) — pushed, CI status in the branch's own run, NOT merged, NOT
+  deployed, awaiting its tier-3 Fable review.** Two marth asks (2026-09-13):
+  (A) **strict manual skill points** — `SkillAlloc::manualPoints` now has exactly two
+  writers (`ApplyManualSkillPoint`, `Respec`; new invariant #81), Respec returns the
+  placed points to the pool and restarts the manual accounting on the existing
+  serialized fields (PRGN stays v6), and the class auto-share's sibling dominance
+  (`DominantWeaponSkill`/`DominantArmorSkill`) reads BASE SKILLS ONLY — the old
+  equipped-weapon / worn-armor read re-homed the share at drift-watch cadence on
+  every loot/equip change, which is the "fluidly managed" drift marth saw;
+  (B) **weapon/armor style by perks** — the existing classifier
+  (`Progression::WalkPerkEntries` + the frozen catalog) gained mechanical STYLE
+  FACTS off each entry's own conditions (weapon/armor vocabulary keywords by
+  editor-id, `GetEquippedItemType(LEFT)` dual-wield / shield signatures; no overhaul
+  assumed), `TallyStyleVotes` (main thread) counts owned ranks per kind, and
+  `Logistics::ComputeWeaponRoles` turns the leading kind(s) inside the skill-chosen
+  melee class into `WeaponRoles::preferKinds` → one shared `WeaponScore` (damage ×
+  1.5 for a preferred kind) used by the loot judge, the economy keep buckets and
+  the buy planner; `ArmorClassSuits` breaks an exact heavy/light skill tie by perk
+  votes. Worker reads go through a `MainThread::Post`-refreshed mirror
+  (`g_styleMirror`, 10 s). **Not consumers yet (reported, not built):** the combat
+  equip in `Actuation.cpp EquipWeapon` (outside the boundary — still raw max damage
+  across both melee classes), bow vs crossbow (no perk record distinguishes them),
+  and actual dual wielding (needs a dual-wield-allowing CSTY + a left-hand equip;
+  `WeaponRoles::offHand` is detected and logged only). Inert without the
+  progression addon (no catalog → no votes → today's behaviour). Details: MAP.md §4
+  "WEAPON / ARMOR STYLE BY PERKS" + §5 "STRICT POINTS".
 - **Branch `feat/mfo-1.5.97-input-path` (v2.0.6) — pushed, CI-green, NOT merged, NOT
   deployed, NOT Fable-reviewed (reviews DEFERRED at marth's weekly token limit).**
   First task of the Skyrim 1.5.97 support pass. `Board::InstallInputHook` now has a

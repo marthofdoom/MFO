@@ -5,6 +5,11 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **Skill points you place stay where you put them.** A follower's automatic class skills used to move around under your own points every time they picked up or put on something, so a skill you had raised could drop a few seconds later. The automatic share now follows the follower's higher skill and nothing else. Only a respec changes your points now. A respec returns every skill point you placed to the pool along with the perks, and manual growth starts over from there.
+- **Followers fight with what they are perked for.** The perks a follower owns now decide their style inside a weapon class. Perks in greatswords make a follower strongly prefer greatswords when looting, keeping and buying weapons. Perks in swords do the same for swords. It is a strong preference, not a rule. A follower with greatsword perks and only a warhammer in the pack still fights with the warhammer. The class itself still goes to the higher skill, one handed against two handed, heavy against light. On an exact tie the perks break it. A follower with no style perks behaves exactly as before. This reads the perks themselves, so it works with any perk overhaul.
+
 ## v2.0.6 -- The board takes the controller on Skyrim 1.5.97 too
 
 - **The follower board now takes every button on Skyrim 1.5.97, the same way it does on 1.6.1170.** Nothing gets through to the game underneath. The favorites bar no longer opens on d pad up, and the game does not wake up confused after you close the board. 1.5.97 was left on the older, weaker input path in v2.0.4 because its offsets had not been checked. They have been checked now, against the 1.5.97 game itself, and 1.5.97 gets its own path. The 1.6.1170 path is untouched. Other game versions keep the v2.0.3 behaviour.

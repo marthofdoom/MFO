@@ -67,6 +67,12 @@ namespace MFO::Logistics {
     // TradeBridge::BuyThresholds::meleeClass: 0=OneHand 1=TwoHand 2=Ranged 3=Other.
     int WeaponBuyClass(RE::WEAPON_TYPE a_type);
 
+    // The loot judge's melee WeaponScore for a candidate: base attack damage times
+    // the perk-style bias when the weapon's kind is in a_preferKinds
+    // (Progression::WeaponKind bits, from BuyThresholds::preferKinds). Pure form
+    // read (keywords + weapon type). a_preferKinds == 0 -> the plain damage.
+    float WeaponBuyScore(RE::TESObjectWEAP* a_weap, int a_preferKinds);
+
     // The magic-school BIT INDEX of a spell (its costliest effect's Magic Skill),
     // 0..4 in the fixed order Alteration/Conjuration/Destruction/Illusion/
     // Restoration, or -1 for a non-school (or unreadable) spell. The economy tome

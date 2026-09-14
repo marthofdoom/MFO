@@ -114,6 +114,12 @@ namespace MFO::ProgAllocator {
         // §16 manual points the PLAYER spent on this skill (requested, whole).
         // Additive on top of the class auto-share; an entry with manual > 0
         // survives a class change instead of settling out.
+        // STRICT POINTS (#81, marth 2026-09-13): EXACTLY TWO writers —
+        // ApplyManualSkillPoint (+1) and Respec (-> 0, refunded to the pool).
+        // No automatic path (level-up, drift-watch, class change, HMS, the
+        // catch-up grant, load reconcile, the manual toggle) may add to,
+        // reduce, move or re-derive this value; RecomputeSkills only ever
+        // READS it as one additive term of the reconcile target.
         float manualPoints{ 0.0f };
     };
     struct BaselineAV {

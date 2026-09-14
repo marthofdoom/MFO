@@ -278,27 +278,23 @@ namespace MFO::ProgAllocator {
         // SIBLING PRUNING (the documented convention): when a class list
         // carries BOTH weapon skills (OneHanded/TwoHanded) or BOTH armor
         // skills (Heavy/Light), the DLL keeps only the DOMINANT one for this
-        // follower — dominance read from the loadout (equipped weapon type /
-        // worn body-armor class), falling back to the higher base AV. That is
-        // how "dominant weapon 40%" stays name-agnostic and author-tunable at
+        // follower — the HIGHER BASE SKILL, ties to OneHanded / Light (the
+        // Logistics ComputeWeaponRoles / ArmorClassSuits rule). That is how
+        // "dominant weapon 40%" stays name-agnostic and author-tunable at
         // once: the author lists both siblings, the follower picks theirs.
+        //
+        // STRICT POINTS (marth 2026-09-13): dominance is read from the SKILLS
+        // ONLY — never from the equipped weapon or the worn body armor. The
+        // old loadout read re-homed the whole sibling share every ~2 s drift-
+        // watch cycle on every equip/loot change (a looted light cuirass
+        // moved the armor share from Heavy to Light and back), which is the
+        // "fluidly managed" skill drift the player saw under points he had
+        // placed himself. A base-skill compare is a fixed point: the sibling
+        // holding the share grows further ahead, so the pick is stable until
+        // the OTHER sibling genuinely overtakes it — which only the player's
+        // own §16 manual points (or a class change / respec) can cause.
+        // "Highest skill wins" — the same rule Part B uses for equipment.
         RE::ActorValue DominantWeaponSkill(RE::Actor* a_actor) {
-            if (auto* obj = a_actor->GetEquippedObject(false)) {
-                if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
-                    switch (weap->GetWeaponType()) {
-                    case RE::WEAPON_TYPE::kTwoHandSword:
-                    case RE::WEAPON_TYPE::kTwoHandAxe:
-                        return RE::ActorValue::kTwoHanded;
-                    case RE::WEAPON_TYPE::kOneHandSword:
-                    case RE::WEAPON_TYPE::kOneHandDagger:
-                    case RE::WEAPON_TYPE::kOneHandAxe:
-                    case RE::WEAPON_TYPE::kOneHandMace:
-                        return RE::ActorValue::kOneHanded;
-                    default:
-                        break;   // bow/staff/fists say nothing about melee dominance
-                    }
-                }
-            }
             auto* avo = a_actor->AsActorValueOwner();
             if (avo && avo->GetBaseActorValue(RE::ActorValue::kTwoHanded) >
                            avo->GetBaseActorValue(RE::ActorValue::kOneHanded))
@@ -307,14 +303,6 @@ namespace MFO::ProgAllocator {
         }
 
         RE::ActorValue DominantArmorSkill(RE::Actor* a_actor) {
-            using AT = RE::BGSBipedObjectForm::ArmorType;
-            if (auto* body = a_actor->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody)) {
-                switch (body->GetArmorType()) {
-                case AT::kHeavyArmor: return RE::ActorValue::kHeavyArmor;
-                case AT::kLightArmor: return RE::ActorValue::kLightArmor;
-                default: break;   // clothing decides nothing
-                }
-            }
             auto* avo = a_actor->AsActorValueOwner();
             // Ties fall to LIGHT, the Logistics::ArmorClassSuits rule.
             if (avo && avo->GetBaseActorValue(RE::ActorValue::kHeavyArmor) >
@@ -1606,9 +1594,15 @@ namespace MFO::ProgAllocator {
             return false;
         }
         auto& st = it->second;
-        if (st.perks.empty()) {
-            // No perks, no cost — the rapport hit is FOR the reset, and a
-            // no-op reset must not bill anyone.
+        // §16 STRICT POINTS: the manual skill points the player placed are
+        // part of what a respec returns (marth 2026-09-13: "only respec
+        // allowing any changes" — Respec is the ONE verb besides
+        // ApplyManualSkillPoint that may write SkillAlloc::manualPoints).
+        float manualPlaced = 0.0f;
+        for (const auto& e : st.skills) manualPlaced += e.manualPoints;
+        if (st.perks.empty() && manualPlaced <= 0.0f) {
+            // No perks, no manual points, no cost — the rapport hit is FOR the
+            // reset, and a no-op reset must not bill anyone.
             spdlog::info("[prog] respec {}: nothing allocated — no perks removed, no rapport spent",
                          NameOf(a_actor));
             return false;
@@ -1631,13 +1625,40 @@ namespace MFO::ProgAllocator {
         // §17: the refund is AUTOMATIC — clearing the allocs removes the
         // debit and the derived pool rises by exactly the ranks returned.
 
+        // §16 manual skill points: every placed point comes off its skill and
+        // the whole manual accounting restarts, so nothing is double-paid and
+        // nothing is lost. Every progression level is exactly one of AUTO,
+        // POOLED or EXCLUDED (a past manual stint); respec folds the excluded
+        // levels back:
+        //  • manual ON  — they join the CURRENT stint (baseline drops by the
+        //    excluded count, capped at level 1), so the pool becomes every
+        //    level ever progressed manually × rate, all placeable again;
+        //  • manual OFF — they return to AUTO (the class share back-fills
+        //    them on the recompute below), the player having chosen auto.
+        // Serialized fields only (no new state); the pool stays the pure
+        // formula ManualAvail — no accumulator. RecomputeSkills then writes
+        // the settled targets through the single ReconcileSkill choke point
+        // (baseline floor rides, so no skill can land below its natural).
+        if (manualPlaced > 0.0f || st.manualExcludedLevels > 0) {
+            for (auto& e : st.skills) e.manualPoints = 0.0f;
+            st.manualPointsApplied = 0;
+            if (st.manualSkills) {
+                st.manualBaselineLevel = static_cast<std::uint16_t>(std::max(1,
+                    static_cast<int>(st.manualBaselineLevel) -
+                    static_cast<int>(st.manualExcludedLevels)));
+            }
+            st.manualExcludedLevels = 0;
+            RecomputeSkills(a_actor, st, /*log*/ true);
+        }
+
         // §15: free of gold, −500 rapport (record default; the follower
         // resents the reset). Reuses the Rapport rank machinery wholesale.
         Rapport::Spend(id, g_econ.respecRapportCost, "progression respec");
 
         spdlog::info("[prog] RESPEC {} ({:08X}): {} perk(s) removed -> {} point(s) available, "
-                     "rapport -{:.0f}",
+                     "{:.0f} manual skill point(s) returned ({} pooled, manual {}), rapport -{:.0f}",
                      NameOf(a_actor), id, removed, PerkPointsAvailable(st),
+                     manualPlaced, ManualAvail(st), st.manualSkills ? "ON" : "OFF",
                      g_econ.respecRapportCost);
         return true;
     }

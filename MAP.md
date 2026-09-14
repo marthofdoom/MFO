@@ -4,8 +4,8 @@ A **blast-radius map**, not a symbol index. Its job is to tell you what a change
 *breaks* before you make it. Every non-trivial claim carries a `file:line`
 citation so you can re-check it against the live code.
 
-Complements the prose docs: `Docs/INVARIANTS.md` (94 rules — 80 numbered `#1`–
-`#80` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
+Complements the prose docs: `Docs/INVARIANTS.md` (95 rules — 81 numbered `#1`–
+`#81` plus 14 lettered — cited here as `#N`), `Docs/ENGINE_NOTES.md` (proven
 engine mechanisms). This map is the "what-depends-on-what" layer those don't
 carry. `Docs/ARCHITECTURE.md` is HISTORICAL (2026-09-07 banner): it describes a
 pre-implementation design and contradicts shipped code; do not use it as intent.
@@ -22,7 +22,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
    whole files. Sizes verified on `feat/mfo-idle-hand-and-churn` 2026-09-08 after
-   the Actuation split: ProgAllocator 2333, Actuation 2237, Logistics_Loot 2186,
+   the Actuation split: ProgAllocator 2354, Actuation 2237, Logistics_Loot 2285,
    Packages 2153, Logistics 2072, Actuation_Direct 1679, Board 1346,
    CasterConsent 1243, Board_Progression 1234, Board_FieldKit 1135,
    Actuation_Hands 894. None of these should sit in context — grep to a symbol,
@@ -1115,7 +1115,50 @@ declared there and defined in their home module). Layout:
 - `Logistics_Economy.cpp` (1106) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
   `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
-- `Logistics_Loot.cpp` (2201) — the loot judge + per-category looters,
+- **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
+  perked style within a category wins, strongly prefers").** THE decision is
+  `ComputeWeaponRoles` (`Logistics_Loot.cpp:442`): the melee CLASS is still the
+  higher skill (`two > one`, tie → 1H, unchanged); inside that class the kind(s)
+  with the MOST owned perk ranks conditioned on them (`Progression::StyleVotes`
+  via `StyleVotesFor:405`) become `WeaponRoles::preferKinds` (0 = no votes or all
+  kinds level = NO preference); `WeaponRoles::offHand` (1 shield / 2 dual wield)
+  is DETECTED + LOGGED ONLY (`[style]` line, once per follower per change).
+  `WeaponScore` (`Logistics_internal.h:310`) = attack damage × `kStyleBias` (1.5,
+  `:276`) for a preferred kind (`WeaponKindOf:283`, by the record's own WeapType
+  keyword, WEAPON_TYPE fallback; battleaxe vs warhammer is keyword-only) — a
+  BIAS, never a filter. CONSUMERS (all previously raw `GetAttackDamage`
+  compares on the in-role melee weapon): `BuildEquipmentContext:26`
+  (`EquipmentContext::baseScore` + `roles`), `LooseEquipmentQualifies:175`,
+  `LootEquipment:222` (`bestWeapScore`), the economy keep buckets 1H/2H
+  (`Logistics_Economy.cpp:613` `keepRoles`), `BuildBuyThresholds:391` →
+  `TradeBridge::BuyThresholds::meleeBaseScore`/`preferKinds` → `PlanBuy`
+  (`TradeBridge.cpp:234` via public `Logistics::WeaponBuyScore:993`).
+  `ArmorClassSuits` (`:206`): skill first (unchanged); on an EXACT tie the
+  heavy- vs light-conditioned vote counts decide; still-tied → light.
+  **THREADING — the perk-style MIRROR:** `TallyStyleVotes` is main-thread-only, so
+  `StyleVotesFor` reads a per-follower copy under `g_styleMx`
+  (`Logistics_internal.h:338`, `g_styleMirror`, `kStyleRefresh` 10 s) and posts
+  the re-tally through `MainThread::Post` (FormID captured, actor re-resolved);
+  the first read of a follower returns NO votes (default behaviour) until the
+  posted tally lands next frame; VR (no pump) never refreshes → default. NOT
+  cleared by `ClearTransientState` (`Logistics.cpp`, out of the 2026-09-13
+  change's boundary) — a stale copy across a load is at most one refresh old.
+  **DEFAULT-CASE PROOF:** with `preferKinds == 0` `WeaponScore` is the uint16
+  damage widened to float, so every `>` / `>=` compare orders identically; with
+  no armor tie `ArmorClassSuits` is untouched; with the catalog unbuilt every
+  vote is 0. **KNOWN GAPS (not consumers yet):** the COMBAT equip
+  `Actuation.cpp EquipWeapon` (`:1603`) still picks raw max damage across BOTH
+  melee classes (it needs `WeaponScore` — Actuation was outside the boundary);
+  bow vs crossbow stays the ammo/damage rule (no perk record distinguishes
+  them — both carry `WeapTypeBow`); dual wield needs a CSTY that allows it
+  (`MFO_MeleeStyle` DATA=1 is dueling-only) + a left-hand equip — `offHand`
+  steers nothing until that mechanism exists. **What breaks:** changing
+  `kStyleBias` re-orders every loot/keep/buy compare at once (they share ONE
+  score by design — never bias one site alone or loot and keep disagree and a
+  looted greatsword sells); `preferKinds` must stay `Progression::WeaponKind`
+  bits (shared with the buy thresholds); reading `TallyStyleVotes` directly from
+  the worker instead of `StyleVotesFor` races the allocator.
+- `Logistics_Loot.cpp` (2285) — the loot judge + per-category looters,
   claim-and-release, navmesh reach, `AcquireEquip:575`, `LootGold:711`,
   `LootValuables:915`, `HasLoot:1210`, `LootNearby:1307`, `StripCorpse:2064`,
   `RunExcursionScan:2128`. `LootEquipment` itself now lives in
@@ -1514,14 +1557,38 @@ board edit queue's progression verbs collapsed to ONE generic carrier `EditKind:
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
 (`ProgAllocator.cpp:2117`), so re-tuning the add-on's declared verdicts (the
 `MFOP_EntryPointVerdicts` GLOBs in `MFO_GenerateESP.py`, read via
-`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`:329`) silently changes which
+`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`:446`) silently changes which
 saved perks survive a load (with an auto §17 refund). The verdicts are ESL DATA now, not a
 DLL table — changing them is a generator+regen change, not a code edit.
+**STYLE FACTS (2026-09-13, marth: "primary weapon, armor and wielding style are
+determined by perks") — the classifier's one extension, still no verdict.**
+`PerkEntryFact::style` (`Progression.h` `PerkStyleFacts`) records what an entry is
+CONDITIONED on: the engine weapon/armor vocabulary keyword a `HasKeyword`/
+`WornHasKeyword`/`WornApparelHasKeywordCount` item names (`WeapTypeSword` …
+`WeapTypeBow`, `ArmorHeavy`/`ArmorLight`/`ArmorShield`, matched by KEYWORD EDITOR-ID,
+positive tests only) and the `GetEquippedItemType(LEFT)` signatures (dual wield =
+excludes 0, admits 1..4, admits nothing ≥5; shield = `== 10`). Read by
+`ReadStyleFacts` (`:283`) off every entry-point TAB (`BGSEntryPointPerkEntry::conditions`,
+bounded by `entryData.numArgs` AND the array size) and off every EFFECT of an ability
+entry (`SpellItem::effects[i]->conditions`, the AbilityPlayerGated list) inside
+`WalkPerkEntries` (`:766`); unioned per rank into `RankView::style` at build (`:580`).
+`TallyStyleVotes` (`:886`, **MAIN THREAD ONLY** — walks the base's live perk array the
+allocator reallocs on AddPerk/RemovePerk) sums, over the frozen catalog, the facts of
+every OWNED rank 1..K per node (rank depth = investment) into `StyleVotes`. Perks
+outside the catalog (hidden engine perks like PerkSkillBoosts, creature perks, dead
+player-UI perks) never vote; a catalog rank conditioned on nothing classifiable votes
+for nothing (`classified`/`owned` counters say how many). NO overhaul is assumed
+anywhere — the facts come off the perk record's own conditions. **What breaks:**
+renaming/renumbering `WeaponKind`/`ArmorKind` bits breaks `Logistics::WeaponKindOf` +
+`TradeBridge::BuyThresholds::preferKinds` (same bit space); calling `TallyStyleVotes`
+off the main thread races the allocator's perk writes (the Logistics mirror exists for
+exactly this); with the catalog unbuilt (addon absent) every vote is 0 → the whole
+perk-style decision is INERT and equipment behaves exactly as before.
 
 ### ProgAllocator.cpp / ProgAllocator_Hms.cpp / ProgAllocator_Manifest.cpp / ProgAllocator_internal.h / ProgAllocator.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
 The engine-mutating half: writes perks (`AddPerk/RemovePerk`+`ApplyPerksFromBase`)
 and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
-- **Module layout (mechanical split, 2026-08-31):** `ProgAllocator.cpp` (2333) =
+- **Module layout (mechanical split, 2026-08-31):** `ProgAllocator.cpp` (2354) =
   the allocation engine + 'PRGN' — skill reconcile (`ReconcileSkill:235`,
   `RecomputeSkills:366`), perk plumbing + `ReapplyFollower` (`:826`), the level
   poll (`PollWork:959`), the verbs, board views, dev harness, and the WHOLE
@@ -1565,7 +1632,28 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   co-save load); `ClearAll` (`ProgAllocator.cpp:2258`) ← `Serialization.cpp:591` (clears `g_prog`,
   bumps `g_pollGen` to orphan in-flight polls).
 - Verbs (all ← Board.cpp, `g_ready`-gated): `Enroll`/`SetClass`/`AllocatePerk`/
-  `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`ProgAllocator.cpp:1382-1727`).
+  `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`ProgAllocator.cpp:1370-1750`).
+- **STRICT POINTS (#81, 2026-09-13).** `SkillAlloc::manualPoints` has EXACTLY TWO
+  writers: `ApplyManualSkillPoint` (`:1707`, +1) and `Respec` (`:1585`, → 0 with the
+  whole manual accounting restarted: `manualPointsApplied=0`, excluded levels folded
+  back — into the current stint's baseline when manual is ON, into AUTO when OFF —
+  then `RecomputeSkills`; a respec with no perks but placed points still bills
+  rapport). Every other path (`RecomputeSkills:354`, `ReconcileSkill:235`,
+  `SetManualSkills:1668`, `SetClass:1440`, `PollWork:947` level gain + drift-watch,
+  `ReapplyFollower:814`, HMS, the fixed-stat grant, `CoSaveLoad`) only READS it.
+  **The auto share under the player's points is split by BASE SKILL ONLY:**
+  `DominantWeaponSkill` (`:297`) / `DominantArmorSkill` (`:305`) no longer read the
+  equipped weapon / worn body armor — that loadout read re-homed the sibling share
+  (≈30-40 % of the auto total) on every loot/equip change at drift-watch cadence,
+  the "fluidly managed" drift marth saw under his own points. Base-skill dominance
+  is a fixed point (the share-holder stays ahead) and flips only when the OTHER
+  sibling genuinely overtakes — which only the player's manual points (or a class
+  change) can cause, and then exactly once. **What breaks:** re-adding a loadout
+  or equip read to either `Dominant*` function reintroduces the drift; adding a
+  third writer of `manualPoints` violates #81; Respec's fold-back relies on every
+  level being exactly one of auto / pooled / excluded (`ManualAvail`, `effAutoLvl`
+  in `RecomputeSkills`) — change that partition and the refund double-pays or
+  loses points. No co-save change (PRGN stays v6): nothing new is persisted.
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
   `GetPerkIndex` absent (`:841`) + native-ownership deferral (`:853`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single

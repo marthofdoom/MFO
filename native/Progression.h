@@ -115,6 +115,50 @@ namespace MFO::Progression {
         kEntryPoint = 2,   // a BGSEntryPoint modifier (entryPointIndex/name valid)
         kOther      = 3,   // an entry type this build has never seen
     };
+    // ── STYLE FACTS: what an entry is CONDITIONED on (mechanical, no verdict) ──
+    // The engine's own item vocabulary: every weapon/armor record the game
+    // ships carries one of these keywords (WeapTypeSword ... ArmorShield), and
+    // a perk that only fires for one kind says so in its entry conditions —
+    // HasKeyword/WornHasKeyword on that keyword, or GetEquippedItemType on a
+    // hand. Read off the CONDITION items of each entry-point tab (and of each
+    // effect of an ability entry), never off a perk's name/editor-id, so the
+    // facts hold for any overhaul or hand-authored perk. A perk conditioned on
+    // nothing here carries ZERO facts and counts toward nothing downstream —
+    // never a guessed style. Only POSITIVE checks count ("HasKeyword X == 1",
+    // "!= 0", ">= 1"): an EXCLUSION ("WornHasKeyword ArmorHeavy == 0" on a
+    // light-armor perk) says nothing about the perk's own kind.
+    enum WeaponKind : std::uint16_t {
+        kWkSword      = 1u << 0,   // WeapTypeSword
+        kWkDagger     = 1u << 1,   // WeapTypeDagger
+        kWkWarAxe     = 1u << 2,   // WeapTypeWarAxe
+        kWkMace       = 1u << 3,   // WeapTypeMace
+        kWkGreatsword = 1u << 4,   // WeapTypeGreatsword
+        kWkBattleaxe  = 1u << 5,   // WeapTypeBattleaxe
+        kWkWarhammer  = 1u << 6,   // WeapTypeWarhammer
+        kWkBow        = 1u << 7,   // WeapTypeBow (bows AND crossbows carry it)
+        kWkOneHandAll = kWkSword | kWkDagger | kWkWarAxe | kWkMace,
+        kWkTwoHandAll = kWkGreatsword | kWkBattleaxe | kWkWarhammer,
+    };
+    enum ArmorKind : std::uint8_t {
+        kAkHeavy  = 1u << 0,   // ArmorHeavy
+        kAkLight  = 1u << 1,   // ArmorLight
+        kAkShield = 1u << 2,   // ArmorShield
+    };
+    struct PerkStyleFacts {
+        std::uint16_t weaponKinds{ 0 };     // WeaponKind bits the entry is conditioned on
+        std::uint8_t  armorKinds{ 0 };      // ArmorKind bits the entry is conditioned on
+        bool          leftHandWeapon{ false };   // GetEquippedItemType(LEFT) admits a
+                                                 // one-hand weapon and excludes empty:
+                                                 // the dual-wield signature
+        bool          leftHandShield{ false };   // GetEquippedItemType(LEFT) == shield
+        void Merge(const PerkStyleFacts& a_o) {
+            weaponKinds |= a_o.weaponKinds; armorKinds |= a_o.armorKinds;
+            leftHandWeapon = leftHandWeapon || a_o.leftHandWeapon;
+            leftHandShield = leftHandShield || a_o.leftHandShield;
+        }
+        bool Any() const { return weaponKinds || armorKinds || leftHandWeapon || leftHandShield; }
+    };
+
     struct PerkEntryFact {
         PerkEntryKind kind{ PerkEntryKind::kOther };
         std::uint32_t entryPointIndex{ 0 };   // meaningful iff kind==kEntryPoint
@@ -125,6 +169,7 @@ namespace MFO::Progression {
                                               // empty ability; entry points fire
                                               // (whether they MATTER is the verdict)
         int           rawType{ -1 };          // GetType() int — unknown-type diagnostics
+        PerkStyleFacts style;                 // what the entry's conditions name (above)
     };
     // Walk a perk's entry points. Add-on-agnostic; safe on any BGSPerk (empty
     // for null / entry-less). CommonLib-churn-resistant (int GetType() compares).
@@ -168,6 +213,9 @@ namespace MFO::Progression {
         RE::ActorValue skillReqAV{ RE::ActorValue::kNone };
         float          skillReqVal{ 0.0f };
         Verdict     verdict{ Verdict::kDead };
+        // Union of every entry's style facts for THIS rank (WalkPerkEntries,
+        // frozen at build like everything else here). Value-only.
+        PerkStyleFacts style;
     };
 
     // One perk-carrying tree node — everything the board needs to draw and
@@ -251,6 +299,26 @@ namespace MFO::Progression {
     // The frozen catalog. `built == false` (empty) when the addon is absent
     // and no dump was forced. Immutable after Init() — lock-free reads.
     const Catalog& Get();
+
+    // ── STYLE VOTES: how the follower's OWNED catalog perks are conditioned ──
+    // Tally over the frozen catalog: for every node, the ranks the follower
+    // holds (owning rank K counts ranks 1..K — "three ranks of a greatsword
+    // perk" is three votes, exactly the investment) contribute their
+    // PerkStyleFacts as one vote each. Perks outside the catalog (hidden
+    // engine perks, creature perks, dead player-UI perks) never vote; a
+    // catalog perk conditioned on nothing classifiable votes for nothing.
+    // Empty (all zero) when the catalog is not built (addon absent).
+    // MAIN THREAD ONLY: reads the base's live perk array, which the allocator
+    // mutates on the main thread (AddPerk/RemovePerk realloc it).
+    struct StyleVotes {
+        int weapon[8]{};          // by WeaponKind bit index (0 Sword .. 7 Bow)
+        int armor[3]{};           // by ArmorKind bit index (0 Heavy 1 Light 2 Shield)
+        int leftHandWeapon{ 0 };  // dual-wield-conditioned ranks
+        int leftHandShield{ 0 };  // shield-in-left-hand-conditioned ranks
+        int classified{ 0 };      // owned ranks that carried ANY fact
+        int owned{ 0 };           // owned catalog ranks in total (diagnostics)
+    };
+    StyleVotes TallyStyleVotes(RE::Actor* a_actor);
 
     // kDataLoaded, MAIN THREAD, once: detect the addon, resolve the version
     // GLOB, build the catalog (when detected OR bProgCatalogDump), and emit
