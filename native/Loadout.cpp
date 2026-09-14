@@ -56,15 +56,6 @@ namespace MFO::Loadout {
         // most for.
         std::unordered_map<RE::FormID, RE::FormID> g_mfoSpell;
 
-        const RE::BGSEquipSlot* LeftHandSlot() {
-            // NOTE: <d3d11.h> elsewhere in this project #defines GetObject ->
-            // GetObjectW, which hijacks this template. That header is not
-            // included here; see Board.cpp's banner (ENGINE_NOTES §9).
-            auto* dom = RE::BGSDefaultObjectManager::GetSingleton();
-            return dom ? dom->GetObject<RE::BGSEquipSlot>(RE::DEFAULT_OBJECT::kLeftHandEquip)
-                       : nullptr;
-        }
-
         bool IsTwoHanded(RE::TESForm* a_form) {
             auto* weap = a_form ? a_form->As<RE::TESObjectWEAP>() : nullptr;
             if (!weap) return false;
@@ -120,6 +111,20 @@ namespace MFO::Loadout {
             return n;
         }
 
+    }
+
+    // PUBLIC since 2026-09-13 (was file-local in the anon namespace above, body
+    // unchanged): Actuation.cpp's dual-wield LEFT-hand weapon equip targets the
+    // very slot form the spell equips in Prepare() below use, and a second
+    // lookup of the same default object elsewhere would be one more place to
+    // get the GetObject hijack below wrong.
+    const RE::BGSEquipSlot* LeftHandSlot() {
+        // NOTE: <d3d11.h> elsewhere in this project #defines GetObject ->
+        // GetObjectW, which hijacks this template. That header is not
+        // included here; see Board.cpp's banner (ENGINE_NOTES §9).
+        auto* dom = RE::BGSDefaultObjectManager::GetSingleton();
+        return dom ? dom->GetObject<RE::BGSEquipSlot>(RE::DEFAULT_OBJECT::kLeftHandEquip)
+                   : nullptr;
     }
 
     Hands Read(RE::Actor* a_actor, RE::SpellItem* a_spell) {

@@ -38,6 +38,13 @@ namespace MFO::Loadout {
     // Read what the follower is holding. Pure reads.
     Hands Read(RE::Actor* a_actor, RE::SpellItem* a_spell);
 
+    // The engine's LEFT-hand equip slot (BGSDefaultObjectManager
+    // kLeftHandEquip) -- the slot every spell Prepare() equips goes into.
+    // Public (2026-09-13) so Actuation's dual-wield left-hand WEAPON equip
+    // targets the identical slot form. nullptr only if the default-object
+    // manager is unavailable. Pure read.
+    const RE::BGSEquipSlot* LeftHandSlot();
+
     // ── intelligent hand selection (marth's hand policy, 2026-09-06) ───────────
     // WHICH hand(s) a cast should claim, decided from the follower's REAL, LIVE
     // loadout + perks + magicka pool -- never a class/build guess (the same

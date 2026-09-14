@@ -1040,13 +1040,24 @@ def make_pack():
 
 
 # ── CSTY: MFO's combat styles (stance ownership) ───────────────────────────
-def _csty_record(edid, fid, csgd_floats, cscr):
+def _csty_record(edid, fid, csgd_floats, cscr, data_flags=1):
     """One CSTY record. Byte shape MIRRORED from vanilla humanoid styles (dumped
     from Skyrim.esm per doctrine, never format docs): EDID, CSGD 40 bytes (10
     floats, the CommonLibSSE-NG CombatStyleGeneralData layout), CSME 28 bytes
     (7 floats -- the on-disk record carries one float FEWER than the runtime
     struct's 8; mirror the disk, the loader zero-fills), CSCR 16, CSLR 4, CSFL 28
     (same 7-of-8 truncation), DATA 4 (flags, 1 = dueling).
+
+    `data_flags` is the DATA subrecord's flag word = the runtime
+    `TESCombatStyle::flags` member (pinned CommonLibSSE-NG 3.7.0,
+    RE/T/TESCombatStyle.h, `enum class FLAG // DATA`: kDuelingStyle 1<<0,
+    kFlankingStyle 1<<1, kAllowDualWielding 1<<2). NOTE the header also lists a
+    RECORD-HEADER bit `RecordFlags::kAllowDualWielding = 1<<19`; the disk says
+    the DATA bit is the one the engine honours: a census of all 145 Skyrim.esm
+    CSTY records (2026-09-13, tools/esp_inspect.py) found 22 with DATA bit 2 set,
+    of which 7 -- csAlikrBerserker, csForswornBerserkerLow, csTGStandard,
+    csDraugrMagicAllowDual ... -- carry NO header bit at all, and those are the
+    game's actual dual-wielders. So MFO sets DATA only; record flags stay 0.
 
     TWO axes vary between MFO's styles: the CSGD weapon-SCORING (which weapon the
     style prefers) AND the CSCR close-range POSITIONING (`cscr`, 16 raw bytes taken
@@ -1063,7 +1074,7 @@ def _csty_record(edid, fid, csgd_floats, cscr):
     body = (subrec('EDID', zstr(edid))
             + subrec('CSGD', csgd) + subrec('CSME', csme) + subrec('CSCR', cscr)
             + subrec('CSLR', cslr) + subrec('CSFL', csfl)
-            + subrec('DATA', struct.pack('<I', 1)))
+            + subrec('DATA', struct.pack('<I', data_flags)))
     return record('CSTY', fid, 0, body)
 
 
@@ -1097,8 +1108,22 @@ def make_csty():
     CSCR_RANGED = bytes.fromhex('6666e63e6666263fcdcc4c3ecdcc4c3e')  # csHumanMissile   0003BE1D: circle 0.45 / fallback 0.65
     cast   = _csty_record("MFO_CastStyle",   FID_CAST_STYLE,
                           (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2), CSCR_MAGE)
+    # MFO_MeleeStyle DATA = dueling | ALLOW DUAL WIELDING (1 | 4 = 5, the exact
+    # word csThalmorMeleeDual / csAlikrBerserker carry). 2026-09-13, weapon style
+    # by perks: the engine dual-wields an NPC only under a style that allows it,
+    # and the DLL force-equips a second one-hander into the LEFT hand for a
+    # follower whose perks vote dual wield (Actuation.cpp EquipWeapon). THE ONE
+    # GLOBAL CHANGE OF THAT FEATURE, and deliberately not gated per follower: a
+    # second CSTY form would move FormIDs (Forms.h is a frozen contract) and the
+    # DLL swaps ONE melee style onto every follower it forces melee. Exposure,
+    # stated not hidden: an UNPERKED follower carrying two one-handers may now be
+    # dual-wielded by its OWN combat AI (MFO's equip gate denies spells/staves
+    # only). The economy sells a follower's spare one-hander at the next vendor,
+    # so that window is loot-to-vendor. The DLL side never fills a left hand
+    # unless the perks vote for it.
     melee  = _csty_record("MFO_MeleeStyle",  FID_MELEE_STYLE,
-                          (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0), CSCR_MELEE)
+                          (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0), CSCR_MELEE,
+                          data_flags=1 | 4)
     ranged = _csty_record("MFO_RangedStyle", FID_RANGED_STYLE,
                           (1.0, 0.5, 1.0, 0.1, 0.1, 10.0, 1.0, 0.1, 0.1, 0.5), CSCR_RANGED)
     return group('CSTY', cast + melee + ranged)

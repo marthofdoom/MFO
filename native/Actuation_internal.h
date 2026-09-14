@@ -316,8 +316,38 @@ namespace MFO::Actuation {
         // Actuation_Hands.cpp's WeaponHandExposure can still read the map across the
         // cut. *** EVERY ACCESS TAKES g_forcedMx *** -- the map has an OFF-THREAD
         // reader (the SKSE save callback, CoSaveForcedWeapons). See the definition.
-        extern std::unordered_map<RE::FormID, RE::TESBoundObject*> g_forcedWeapon;
+        //
+        // VALUE SHAPE (2026-09-13, dual wield): ONE entry per follower holding up to
+        // TWO force-held weapons -- `right` is the T#76 hold exactly as before (the
+        // map's whole value until this change), `left` the dual-wield off-hand hold
+        // (see EquipWeapon). Either may stand alone: an AI-equipped right hand with
+        // an MFO-held left is a real state. An entry EXISTS iff at least one is
+        // non-null -- WeaponHandExposure's `contains` keeps its meaning ("MFO force-
+        // holds a weapon on this follower"). FWPN co-save layout is UNCHANGED (v1):
+        // each non-null hand is written as its own (follower, weapon) pair, and the
+        // loader has always released pairs by object, never by slot.
+        struct ForcedHold {
+            RE::TESBoundObject* right = nullptr;
+            RE::TESBoundObject* left  = nullptr;
+            bool Empty() const { return !right && !left; }
+        };
+        extern std::unordered_map<RE::FormID, ForcedHold> g_forcedWeapon;
         extern std::mutex g_forcedMx;
+
+        // IS A CAST HOLDING THIS HAND RIGHT NOW? Defined in Actuation_Hands.cpp
+        // (2026-09-13): true when a live APMF cast/heal claim stands on `a_hand`
+        // (ClaimLiveOnHand) OR the per-hand cast lock on it is live (CastLockLive:
+        // claim, staleness window, or the engine caster mid-cast of the locked
+        // spell). THE gate the dual-wield left-hand equip yields to -- read it
+        // through this one question so the equip side and the cast side never
+        // disagree about who owns the hand. Worker-serial (reads g_castLock).
+        bool CastHandHeld(RE::Actor* a_follower, std::size_t a_hand);
+
+        // Drop ONLY the dual-wield left-hand hold (force-unequip + ledger .left =
+        // null; the right hold stays). Defined in Actuation.cpp beside
+        // ReleaseForcedWeapon, declared here because CastOn's commitPreempt (in
+        // the anon namespace above it) is one of its two callers. Idempotent.
+        void YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why);
 
         // ── THE LOCK'S CROSS-TU ENTRY POINTS ────────────────────────────────────
         // Defined in Actuation_Hands.cpp, each still carrying the doc comment it has
