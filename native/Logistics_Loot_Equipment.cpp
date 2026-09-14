@@ -7,7 +7,8 @@
 // ground is judged identically to one in a corpse's pack -- see LootNearby,
 // Logistics_Loot.cpp). Everything here reads/writes only through
 // Logistics_internal.h's shared substrate (g_svc et al.) and the small
-// cross-module helpers declared there (ArmorIsBetter, CarriesSlotArmorAtLeast,
+// cross-module helpers declared there (ArmorPrefFor/ArmorScore, ArmorIsBetter,
+// CarriesSlotArmorAtLeast,
 // ComputeWeaponRoles, WornInLogicalSlot, IsCreatureWeapon/IsCreatureArmor,
 // AcquireEquip) -- all still defined in Logistics_Loot.cpp.
 #include "Logistics_internal.h"
@@ -41,6 +42,7 @@ namespace MFO::Logistics {
             const bool wantsMelee  = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
             const WeaponRoles roles = g_svc ? ComputeWeaponRoles(a_follower, *g_svc) : WeaponRoles{};
             ctx.roles       = roles;   // carries the perk-style preference into WeaponScore
+            ctx.armorPref   = ArmorPrefFor(a_follower);   // ONE armor class/perk judgment for the whole scan (ArmorScore)
             ctx.wantsRanged = wantsRanged;
             ctx.wantsMelee  = wantsMelee;
             // Base class (#65 combatClassOverride; 1=Melee 2=Ranged 3=Mage, 0=Auto)
@@ -162,7 +164,7 @@ namespace MFO::Logistics {
         // LOOSE weapon/armor item qualify under the EXACT rule LootEquipment
         // applies inside a container scan? For a lone candidate, the container
         // loop's "beats the running best" comparison collapses to "beats the
-        // follower's own baseline" -- bestArmorRat/bestWeapScore/bestRangedDmg/
+        // follower's own baseline" -- bestArmorScore/bestWeapScore/bestRangedDmg/
         // bestBackupDmg all START at that baseline; a SECOND competing item in
         // the SAME container is what would raise the bar further, and that
         // does not apply to one item sitting alone on the floor. Mirrors
@@ -195,9 +197,9 @@ namespace MFO::Logistics {
                 }
                 // The PLAIN rating path is for NON-magic users ONLY (see
                 // LootEquipment's identical gate for the marth v1.0.31 story).
-                return !ctx.useMageApparel && !shieldUseless && ArmorIsBetter(a_follower, armo) &&
+                return !ctx.useMageApparel && !shieldUseless && ArmorIsBetter(ctx.armorPref, a_follower, armo) &&
                        armo->GetArmorRating() > 0.0f &&
-                       !CarriesSlotArmorAtLeast(a_follower, armo);
+                       !CarriesSlotArmorAtLeast(ctx.armorPref, a_follower, armo);
             }
             if (auto* weap = a_obj->As<RE::TESObjectWEAP>()) {
                 if (IsCreatureWeapon(weap)) return false;   // never equip automaton/creature gear
@@ -260,7 +262,7 @@ namespace MFO::Logistics {
             const int             castGambits      = ctx.castGambits;
 
             RE::TESBoundObject* bestArmor     = nullptr;
-            float               bestArmorRat  = 0.0f;   // best-first, like bestWeapScore (marth's rule)
+            float               bestArmorScore= 0.0f;   // best-first by ArmorScore (class x perk biased rating), like bestWeapScore
             RE::TESBoundObject* bestWeap      = nullptr;
             float               bestWeapScore = baseScore;   // WeaponScore (perk-style biased damage)
             RE::TESBoundObject* bestRanged    = nullptr;
@@ -343,14 +345,17 @@ namespace MFO::Logistics {
                     // no rating path for mages there is nothing left to
                     // thrash against their robes.
                     // Best-first: among the armour upgrades this body offers, keep the
-                    // HIGHEST-rated (not the first enumerated), so a carry-weight cutoff
-                    // can't strand the actually-best piece.
+                    // HIGHEST-SCORED (ArmorScore: rating x the follower's class/perk
+                    // bias -- not the raw rating, not the first enumerated), so a
+                    // carry-weight cutoff can't strand the actually-best piece and a
+                    // heavy 31 never out-picks the light 26 a light-skilled follower
+                    // should take.
                     if (!useMageApparel &&
-                        !shieldUseless && ArmorIsBetter(a_follower, armo) &&
-                        armo->GetArmorRating() > bestArmorRat &&
-                        !CarriesSlotArmorAtLeast(a_follower, armo)) {   // #3: don't re-take/equip a worse same-slot piece already in the pack (strip double-take)
-                        bestArmorRat = armo->GetArmorRating();
-                        bestArmor    = obj;
+                        !shieldUseless && ArmorIsBetter(ctx.armorPref, a_follower, armo) &&
+                        ArmorScore(ctx.armorPref, armo) > bestArmorScore &&
+                        !CarriesSlotArmorAtLeast(ctx.armorPref, a_follower, armo)) {   // #3: don't re-take/equip a worse same-slot piece already in the pack (strip double-take)
+                        bestArmorScore = ArmorScore(ctx.armorPref, armo);
+                        bestArmor      = obj;
                     }
                 } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
                     if (IsCreatureWeapon(weap)) continue;   // never equip automaton/creature gear
@@ -433,9 +438,15 @@ namespace MFO::Logistics {
                              static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseScore,
                              ctx.roles.preferKinds);
             } else {
-                spdlog::info("[equip] {:08X}: LOOT armor/apparel '{}' -> equip {}", a_follower->GetFormID(),
+                auto* na = best->As<RE::TESObjectARMO>();
+                spdlog::info("[equip] {:08X}: LOOT armor/apparel '{}' type={} rat={:.0f} score={:.1f} (class {} bias h/l={:.2f}/{:.2f}) -> equip {}",
+                             a_follower->GetFormID(),
                              best->As<RE::TESFullName>() && best->As<RE::TESFullName>()->GetFullName()
                                  ? best->As<RE::TESFullName>()->GetFullName() : "?",
+                             na ? static_cast<int>(na->GetArmorType()) : -1,
+                             na ? na->GetArmorRating() : 0.0f, na ? ArmorScore(ctx.armorPref, na) : 0.0f,
+                             ctx.armorPref.heavyClass ? "HEAVY" : "LIGHT",
+                             ctx.armorPref.heavyBias, ctx.armorPref.lightBias,
                              MainThread::IsInstalled() ? "queued to main thread" : "direct (VR/no-pump)");
             }
 

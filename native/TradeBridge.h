@@ -88,7 +88,40 @@ namespace MFO::TradeBridge {
         // -- spell tomes (Feature B), gated by buyTomes; also the strict-apparel top-2 set --
         bool          buyTomes     = false;  // g_economyBuyTomes && follower is a mage w/ a cast gambit
         std::uint8_t  eligibleSchools = 0;   // bitmask over Logistics school-bit order (top-2 skill schools)
+        // -- APPENDED 2026-09-14 (armor class by skill + perks; append-only, never
+        //    reorder or remove a field above) --
+        // The follower's armor multipliers (Logistics::ArmorPref: kArmorClassBias
+        // on the class of his higher BASE armor skill, x kArmorPerkBias on the
+        // class his perk ranks vote for). PlanBuy ranks every rated candidate by
+        // ArmorScoreOf(rating, type, heavyBias, lightBias) -- the loot judge's
+        // own ArmorScore, so buy and loot order a light-vs-heavy piece
+        // identically. 1.0/1.0 = no preference (feature off / no skills read).
+        float         armorHeavyBias = 1.0f;
+        float         armorLightBias = 1.0f;
+        // Best OWNED ArmorScore PER LOGICAL SLOT (ArmorBuySlot order, like
+        // armorBaseRat), the baseline a buy must beat. A float because the score
+        // is one (a x1.25 perk step lands on .5s): truncating it into the int32
+        // armorBaseRat would make a candidate tie its own baseline and be re-
+        // bought every visit. armorBaseRat above still carries the raw best owned
+        // RATING per slot (diagnostic; PlanBuy no longer ranks by it).
+        float         armorBaseScore[5] = {};
     };
+
+    // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /
+    // owned-equip / sell) so the buy planner -- which has no Actor on the VM
+    // thread, only the worker-built thresholds above -- ranks armor by the
+    // exact same arithmetic. rating <= 0 (clothing, jewelry) scores 0; an
+    // ArmorType that is neither heavy nor light scores the raw rating.
+    inline float ArmorScoreOf(float a_rating, RE::BGSBipedObjectForm::ArmorType a_type,
+                              float a_heavyBias, float a_lightBias) {
+        using AT = RE::BGSBipedObjectForm::ArmorType;
+        if (a_rating <= 0.0f) return 0.0f;
+        switch (a_type) {
+        case AT::kHeavyArmor: return a_rating * a_heavyBias;
+        case AT::kLightArmor: return a_rating * a_lightBias;
+        default:              return a_rating;
+        }
+    }
 
     // Register MFO_Trade's Papyrus natives on the VM. Wired once at plugin load
     // via SKSE::GetPapyrusInterface()->Register(RegisterFuncs).

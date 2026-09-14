@@ -193,9 +193,8 @@ namespace MFO::Logistics {
         // a better in-class weapon beats an out-of-class one they merely happen to
         // hold -- so a two-hander specialist stuck with a dagger will take a
         // greatsword. Classified by the follower's OWN skills and the weapon's
-        // type, never by name (§4.8.2). (Armor's light/heavy steer is still
-        // scoped: ArmorIsBetter compares raw rating on the slot -- the heavy/light
-        // steer wants a CommonLib armor-type call not verified on this offline box.)
+        // type, never by name (§4.8.2). (Armor has its own judge, ArmorScore
+        // below: rating x the heavy/light class bias x the perk bias.)
         enum class WepClass : std::uint8_t { OneHand, TwoHand, Ranged, Other };
 
         inline WepClass WeaponClassOf(RE::WEAPON_TYPE a_t) {
@@ -324,6 +323,83 @@ namespace MFO::Logistics {
             return s;
         }
 
+        // ── ARMOR CLASS BY SKILL + PERKS (marth 2026-09-14) ─────────────────
+        // "Highest skill wins the category, most-perked style within a
+        // category wins; strong bias, not exclusion; no assumption of Adamant
+        // or any overhaul." FIELD (Deck log on 69c5b3c, Fable): after a respec
+        // Adelinda (Heavy 15 / Light 69) and Cicero (Heavy 20 / Light 77) kept
+        // wearing heavy armor and Cicero BOUGHT more (Falkreath Helmet, rating
+        // 18, over light 13s), because every rated-armor compare MFO ran was
+        // raw rating vs raw rating with NO class term, and the ENGINE's auto-
+        // equip (highest rating per slot, skill-blind) was the actual wearer --
+        // MFO never un-wore anything. ArmorClassSuits was the only skill read
+        // and a candidate-side FILTER; the votes were consumed only on a tie.
+        // THE judge is now ArmorScore (Logistics_Loot.cpp, beside
+        // ArmorClassSuits) = rating x classBias x perkBias -- the armor twin of
+        // WeaponScore / kStyleBias above -- and EVERY rated-armor compare runs
+        // on it: ArmorIsBetter, CarriesSlotArmorAtLeast, LootEquipment's best-
+        // first pick, EquipBestOwnedGear's owned-upgrade pick (which is what
+        // displaces a worn heavy cuirass with an owned light one), the economy
+        // keep buckets, the redundant-inferior force-sell (the trade's
+        // RemoveItem is the proven un-wear), BuildBuyThresholds' per-slot
+        // baseline and TradeBridge::PlanBuy (TradeBridge::ArmorScoreOf, the
+        // same arithmetic). They share ONE score by design: bias one site alone
+        // and loot and keep disagree, so a looted piece sells or a bought one
+        // is never worn.
+        //
+        // kArmorClassBias -- the multiplier a piece of the follower's OWN class
+        // (the higher BASE armor skill) earns. 2.0, so a same-tier in-class
+        // piece always beats the off-class one (vanilla cuirasses):
+        //   light specialist: hide 20x2=40 > iron 25; leather 26x2=52 > steel 31;
+        //                     elven 29x2=58 > dwarven 34; glass 38x2=76 > ebony 43
+        //   heavy specialist: iron 25x2=50 > leather 26; steel 31x2=62 > glass 38
+        //                     (every heavy cuirass x2 beats every light one)
+        // It is a BIAS, never a filter: a light specialist in hide (20x2=40)
+        // still takes a found ebony plate (43) -- a real tier-up wins; a bare
+        // slot takes any off-class piece over nothing; clothing (rating 0)
+        // scores 0 and rides through untouched, as does creature armor (the
+        // IsCreatureArmor filters are upstream of every score).
+        constexpr float kArmorClassBias = 2.0f;
+        // kArmorPerkBias -- the extra step for the class the follower's OWNED
+        // perk ranks are conditioned on (StyleVotes::armor[0] heavy vs [1]
+        // light, the leading vote; a tie is no vote). The kStyleBias shape,
+        // smaller: it only re-orders pieces when skills and perks disagree, and
+        // 1.25 < 2.0 so the skill still wins the category (a heavy-skilled
+        // follower with light perks scores heavy x2.0 vs light x1.25).
+        constexpr float kArmorPerkBias = 1.25f;
+
+        // A follower's armor preference: the two multipliers ArmorScoreOf
+        // applies, plus the inputs (diagnostics for the [armor] line). Computed
+        // by ArmorPrefFor (Logistics_Loot.cpp) from BASE skills
+        // (GetBaseActorValue -- the same read as ProgAllocator's
+        // DominantArmorSkill, so the allocator and the wardrobe agree) and the
+        // perk-vote MIRROR (StyleVotesFor, never TallyStyleVotes off-main).
+        // Compute it ONCE per scan and hand it to the pref-taking overloads
+        // below; the Actor* overloads recompute it per call (AV reads + the
+        // mirror lock) and are for single-candidate sites.
+        struct ArmorPref {
+            float heavyBias  = 1.0f;
+            float lightBias  = 1.0f;
+            bool  heavyClass = false;   // the winning category (false = light, the tie default)
+            float heavySkill = 0.0f;    // base Heavy Armor
+            float lightSkill = 0.0f;    // base Light Armor
+            int   heavyVotes = 0;       // StyleVotes::armor[0]
+            int   lightVotes = 0;       // StyleVotes::armor[1]
+        };
+
+        // THE rated-armor score: rating x the follower's multiplier for the
+        // piece's ArmorType (heavy / light; anything else -- clothing, a modded
+        // rated "clothing" -- is the raw rating). Rating <= 0 scores 0 exactly
+        // (clothing / jewelry never compete here; the callers' rating>0 gates
+        // stay). The arithmetic is TradeBridge::ArmorScoreOf so the buy planner
+        // (which has no Actor on the VM thread, only the worker-built
+        // thresholds) ranks a light-vs-heavy piece exactly as loot/keep do.
+        inline float ArmorScore(const ArmorPref& a_pref, RE::TESObjectARMO* a_armo) {
+            if (!a_armo) return 0.0f;
+            return TradeBridge::ArmorScoreOf(a_armo->GetArmorRating(), a_armo->GetArmorType(),
+                                             a_pref.heavyBias, a_pref.lightBias);
+        }
+
         // ── PERK-STYLE MIRROR (worker reads, main thread writes) ────────────
         // Progression::TallyStyleVotes reads the base's live perk array, which
         // the allocator mutates on the MAIN thread (AddPerk/RemovePerk realloc
@@ -348,6 +424,7 @@ namespace MFO::Logistics {
             Clock::time_point       stamp{};
             bool                    inFlight = false;
             std::uint32_t           loggedPick = 0xFFFFFFFFu;   // last [style] line's pick (log on change)
+            std::uint64_t           loggedArmor = 0;             // last [armor] line's {class, worn-set} key (0 = never; log on change)
         };
         inline std::mutex g_styleMx;
         inline std::unordered_map<RE::FormID, StyleMirror> g_styleMirror;
@@ -377,6 +454,7 @@ namespace MFO::Logistics {
             // compared through the SAME WeaponScore(roles, weapon).
             float         baseScore         = 0.0f;
             WeaponRoles   roles;                   // the roles the score was built from
+            ArmorPref     armorPref;               // the armor class/perk bias every rated-armor compare in this scan uses
             std::uint16_t myRangedDmg       = 0;   // best ranged weapon already carried
             std::uint16_t myBackupDmg       = 0;   // best mage sidearm already carried
             bool          wantsMelee        = false;   // diagnostics only
@@ -886,8 +964,13 @@ namespace MFO::Logistics {
     bool LootAmmo(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
                   bool a_peek = false);
     bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
+    ArmorPref ArmorPrefFor(RE::Actor* a_follower);
+    float ArmorScore(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
+    void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref);
     bool ArmorIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
-    bool CarriesSlotArmorAtLeast(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
+    bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
+    bool CarriesSlotArmorAtLeast(const ArmorPref& a_pref, RE::Actor* a_follower,
+                                 RE::TESObjectARMO* a_armo);
     void KeepHeadClear(RE::Actor* a_actor);
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
     Progression::StyleVotes StyleVotesFor(RE::Actor* a_follower);

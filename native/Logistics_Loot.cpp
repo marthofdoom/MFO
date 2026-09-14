@@ -193,36 +193,135 @@ namespace MFO::Logistics {
         // the light/heavy-skill steer are a refinement not implemented here --
         // this compares raw armor rating. It never upgrades a follower's whole
         // outfit in one tick, only the single better piece it transfers.
-        // A follower should only pick up armour of the CLASS they can actually use:
-        // Auri (Heavy Armor skill 5) kept looting heavy plate on raw rating alone
-        // (marth). Take heavy only when the follower is STRICTLY more heavy- than
-        // light-skilled; take light whenever they are at least as light-skilled.
-        // Ties and pure casters (both low) fall to light, never heavy. Clothing has
-        // no skill and is rating 0 (rejected below) so it rides through.
-        // STYLE BY PERKS (marth 2026-09-13): the SKILL decides ("highest skill
-        // wins"); on an exact skill TIE the follower's owned heavy- vs light-
-        // conditioned perk ranks decide (StyleVotesFor); a tie there too keeps
-        // the light default. No perks, no tie -> byte-identical to before.
-        bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
-            using AT = RE::BGSBipedObjectForm::ArmorType;
-            const auto type = a_armo->GetArmorType();
-            if (type == AT::kClothing) return true;
+        // ── ARMOR CLASS BY SKILL + PERKS (marth 2026-09-14) -- THE JUDGE ──────
+        // See Logistics_internal.h (kArmorClassBias / kArmorPerkBias / ArmorPref)
+        // for the field finding and the arithmetic. This is the ONE place the
+        // follower's armor class is decided; every rated-armor compare in loot,
+        // owned-equip, keep, sell and buy goes through ArmorScore.
+        //
+        // CATEGORY = the higher BASE armor skill (GetBaseActorValue, the same read
+        // as ProgAllocator's DominantArmorSkill -- never the actual value, which a
+        // Fortify enchant on the very piece under judgment would move). On an
+        // EXACT tie the follower's owned heavy- vs light-conditioned perk ranks
+        // decide (StyleVotesFor -- the g_styleMx MIRROR copy, never TallyStyleVotes
+        // off-main); still tied -> light (pure casters, both low, dress light).
+        // The winning class earns kArmorClassBias; the class the perk votes lead
+        // on earns kArmorPerkBias on top, whichever class that is -- so skill
+        // decides the category and perks nudge inside it. No votes (catalog
+        // unbuilt, addon absent, mirror not yet landed) -> perkBias 1.0 and the
+        // decision is skill alone: no assumption of any perk overhaul.
+        ArmorPref ArmorPrefFor(RE::Actor* a_follower) {
+            ArmorPref p;
+            if (!a_follower) return p;
             auto* avo = a_follower->AsActorValueOwner();
-            if (!avo) return true;
-            const float heavy = avo->GetActorValue(RE::ActorValue::kHeavyArmor);
-            const float light = avo->GetActorValue(RE::ActorValue::kLightArmor);
-            if (heavy == light) {
-                const auto votes = StyleVotesFor(a_follower);
-                const int hv = votes.armor[0], lv = votes.armor[1];   // ArmorKind bit index 0 Heavy, 1 Light
-                if (hv != lv) return (type == AT::kHeavyArmor) ? (hv > lv) : (lv > hv);
-            }
-            return (type == AT::kHeavyArmor) ? (heavy > light) : (light >= heavy);
+            if (!avo) return p;
+            p.heavySkill = avo->GetBaseActorValue(RE::ActorValue::kHeavyArmor);
+            p.lightSkill = avo->GetBaseActorValue(RE::ActorValue::kLightArmor);
+            const auto votes = StyleVotesFor(a_follower);
+            p.heavyVotes = votes.armor[0];   // ArmorKind bit index 0 Heavy, 1 Light
+            p.lightVotes = votes.armor[1];
+            if (p.heavySkill != p.lightSkill)      p.heavyClass = p.heavySkill > p.lightSkill;
+            else if (p.heavyVotes != p.lightVotes) p.heavyClass = p.heavyVotes > p.lightVotes;
+            else                                   p.heavyClass = false;
+            (p.heavyClass ? p.heavyBias : p.lightBias) *= kArmorClassBias;
+            if (p.heavyVotes > p.lightVotes)      p.heavyBias *= kArmorPerkBias;
+            else if (p.lightVotes > p.heavyVotes) p.lightBias *= kArmorPerkBias;
+            return p;
         }
 
-        bool ArmorIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
-            const float cand = a_armo->GetArmorRating();
-            if (cand <= 0.0f) return false;   // clothing / jewellery -- not armor
-            if (!ArmorClassSuits(a_follower, a_armo)) return false;   // wrong class for this follower
+        // Single-candidate convenience (recomputes the preference: two base AV
+        // reads + the mirror lock). Scans compute ArmorPrefFor ONCE and use the
+        // pref-taking inline in Logistics_internal.h.
+        float ArmorScore(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
+            if (!a_follower || !a_armo) return 0.0f;
+            return ArmorScore(ArmorPrefFor(a_follower), a_armo);
+        }
+
+        // ONE [armor] line per follower per CHANGE of {category, worn-set} --
+        // deduped through the style mirror exactly like the [style] line
+        // (StyleMirror::loggedArmor). Called from EquipBestOwnedGear's rated
+        // branch, the per-tick wear decision, so the next field log shows the
+        // class MFO decided, the inputs it decided from, and what the follower
+        // is actually wearing on every rated slot with its score. The worn-set
+        // half of the key means an engine auto-equip that changes a slot is
+        // logged the tick after it lands, even with the category unchanged.
+        void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref) {
+            if (!a_follower) return;
+            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            using AT   = RE::BGSBipedObjectForm::ArmorType;
+            struct SlotRow { Slot slot; const char* name; };
+            static constexpr SlotRow kRows[] = {
+                { Slot::kBody, "body" }, { Slot::kHead, "head" }, { Slot::kHands, "hands" },
+                { Slot::kFeet, "feet" }, { Slot::kShield, "shield" },
+            };
+            RE::TESObjectARMO* worn[5] = {};
+            std::uint64_t key = 1469598103934665603ull;   // FNV-1a offset (never 0)
+            for (int i = 0; i < 5; ++i) {
+                worn[i] = a_follower->GetWornArmor(kRows[i].slot);
+                key = (key ^ (worn[i] ? worn[i]->GetFormID() : 0u)) * 1099511628211ull;
+            }
+            key = (key ^ (a_pref.heavyClass ? 0x48u : 0x4Cu)) * 1099511628211ull;
+            bool logIt = false;
+            {
+                std::scoped_lock lk(g_styleMx);
+                auto& m = g_styleMirror[a_follower->GetFormID()];
+                if (m.loggedArmor != key) { m.loggedArmor = key; logIt = true; }
+            }
+            if (!logIt) return;
+            auto typeTag = [](RE::TESObjectARMO* a) -> const char* {
+                if (!a) return "";
+                switch (a->GetArmorType()) {
+                case AT::kHeavyArmor: return "Heavy";
+                case AT::kLightArmor: return "Light";
+                default:              return "Clothing";
+                }
+            };
+            std::string wornStr;
+            for (int i = 0; i < 5; ++i) {
+                if (!wornStr.empty()) wornStr += ", ";
+                if (!worn[i]) { wornStr += std::format("{} (bare)", kRows[i].name); continue; }
+                wornStr += std::format("{} '{}' [{}] rat={:.0f} score={:.1f}", kRows[i].name,
+                                       worn[i]->GetFullName() ? worn[i]->GetFullName() : "?", typeTag(worn[i]),
+                                       worn[i]->GetArmorRating(), ArmorScore(a_pref, worn[i]));
+            }
+            spdlog::info("[armor] {:08X} '{}': heavy={:.0f} light={:.0f} -> class {} votes h/l={}/{} bias h/l={:.2f}/{:.2f} | worn {}",
+                         a_follower->GetFormID(), a_follower->GetName() ? a_follower->GetName() : "?",
+                         a_pref.heavySkill, a_pref.lightSkill, a_pref.heavyClass ? "HEAVY" : "LIGHT",
+                         a_pref.heavyVotes, a_pref.lightVotes, a_pref.heavyBias, a_pref.lightBias, wornStr);
+        }
+
+        // Class-membership predicate: does this piece belong to the follower's
+        // armor class? Clothing (no skill) always passes. NO LONGER GATES
+        // ArmorIsBetter (2026-09-14): the class is a BIAS inside ArmorScore, not a
+        // filter -- a follower with a bare slot takes off-class armor over
+        // nothing, and a real tier-up still wins. Kept as the one named
+        // statement of the category rule (ProgAllocator's DominantArmorSkill
+        // cites it) and rebased onto the SAME judge (ArmorPrefFor: base skill,
+        // perk-vote tiebreak, light default) so it can never disagree with the
+        // score. Creature armor is filtered upstream (IsCreatureArmor) at every
+        // caller, as before.
+        bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
+            using AT = RE::BGSBipedObjectForm::ArmorType;
+            if (!a_follower || !a_armo) return true;
+            const auto type = a_armo->GetArmorType();
+            if (type == AT::kClothing) return true;
+            const ArmorPref p = ArmorPrefFor(a_follower);
+            return (type == AT::kHeavyArmor) ? p.heavyClass : !p.heavyClass;
+        }
+
+        // Is this candidate an upgrade over what the follower WEARS, judged by
+        // ArmorScore on every armor slot it covers? A bare slot (nothing worn, or
+        // rating-0 clothing) counts as an upgrade; a worn piece is displaced only
+        // by a STRICTLY higher score (a tie or worse on any covered slot is a no).
+        // Rating <= 0 (clothing / jewelry) is never "better armor" here -- the
+        // mage-apparel judge owns those. This is what lets an owned LIGHT
+        // cuirass (26 x 2.0 = 52) displace the worn HEAVY one (31 x 1.0 = 31)
+        // on a light-skilled follower, and stops a heavy 18 helmet from
+        // "upgrading" his bare head over a light 13 (13 x 2.0 = 26 > 18).
+        bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
+            if (!a_follower || !a_armo) return false;
+            if (a_armo->GetArmorRating() <= 0.0f) return false;   // clothing / jewellery -- not armor
+            const float cand = ArmorScore(a_pref, a_armo);
 
             using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
             static constexpr Slot kSlots[] = {
@@ -239,14 +338,19 @@ namespace MFO::Logistics {
                 // piece DRESSES it. Valid to acquire even with no armor to upgrade
                 // (the helmetless-follower case). Not a downgrade -> keep scanning.
                 if (!worn || worn->GetArmorRating() <= 0.0f) continue;
-                // Real worn armor here: only a strictly higher rating may replace
+                // Real worn armor here: only a strictly higher SCORE may replace
                 // it. A tie or worse is beaten -> never downgrade real worn armor.
-                if (worn->GetArmorRating() >= cand) return false;
+                if (ArmorScore(a_pref, worn) >= cand) return false;
             }
             // Acquirable if it actually covers an armor slot (skip amulets/rings
             // whose bits are not in kSlots) and was beaten on none it would
             // replace -- i.e. it upgrades every filled slot and/or dresses a bare one.
             return overlapsAny;
+        }
+
+        bool ArmorIsBetter(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
+            if (!a_follower || !a_armo) return false;
+            return ArmorIsBetter(ArmorPrefFor(a_follower), a_follower, a_armo);
         }
 
         // #3 STRIP DOUBLE-TAKE: does the follower ALREADY CARRY a playable armor
@@ -260,18 +364,22 @@ namespace MFO::Logistics {
         // synchronously by RemoveItem) stops the second, worse take from being
         // looted/equipped at all. Outside a strip this is a no-op / a harmless
         // anti-hoard: no reason to grab a spare worse than one already carried.
+        // SCORED (2026-09-14): "at >= its rating" is now "at >= its ArmorScore",
+        // or a worn heavy 31 in the pack would block looting the light 26 (score
+        // 52) that ArmorIsBetter just judged an upgrade.
         bool IsCreatureArmor(const RE::TESObjectARMO* a_armo);   // fwd (defined near LootEquipment)
-        bool CarriesSlotArmorAtLeast(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
-            const float cand = a_armo->GetArmorRating();
+        bool CarriesSlotArmorAtLeast(const ArmorPref& a_pref, RE::Actor* a_follower,
+                                     RE::TESObjectARMO* a_armo) {
+            const float cand = ArmorScore(a_pref, a_armo);
             const auto  mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
             if (mask == 0) return false;
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* have = obj->As<RE::TESObjectARMO>();
                 if (!have || have == a_armo || IsCreatureArmor(have)) continue;
-                if (have->GetArmorRating() < cand) continue;   // worse -> not a competing baseline
+                if (ArmorScore(a_pref, have) < cand) continue;   // worse -> not a competing baseline
                 if (static_cast<std::uint32_t>(have->GetSlotMask()) & mask)
-                    return true;   // a carried piece already covers this slot at >= rating
+                    return true;   // a carried piece already covers this slot at >= score
             }
             return false;
         }
@@ -527,11 +635,12 @@ namespace MFO::Logistics {
                 }
                 if (logIt)
                     spdlog::info("[style] {:08X}: melee class {} prefers kinds 0x{:02X} (votes 1H s/d/a/m={}/{}/{}/{} "
-                                 "2H gs/ba/wh={}/{}/{}) offHand={} (dual={} shield={}+{}) | {} of {} owned catalog rank(s) classifiable",
+                                 "2H gs/ba/wh={}/{}/{}) offHand={} (dual={} shield={}+{}) armor h/l/s={}/{}/{} | {} of {} owned catalog rank(s) classifiable",
                                  a_follower->GetFormID(), static_cast<int>(roles.melee), roles.preferKinds,
                                  votes.weapon[0], votes.weapon[1], votes.weapon[2], votes.weapon[3],
                                  votes.weapon[4], votes.weapon[5], votes.weapon[6],
                                  static_cast<int>(roles.offHand), votes.leftHandWeapon, votes.leftHandShield, votes.armor[2],
+                                 votes.armor[0], votes.armor[1], votes.armor[2],
                                  votes.classified, votes.owned);
             }
 
