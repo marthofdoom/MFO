@@ -112,6 +112,15 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** raised in the round that ended the cycle; a non-layout tweak of the migration branch with its own review cost. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** round the migrated autoPts up to the next whole point when points is cap-clamped (autoPts = ceil(autoPts − 1e-3)), or fold into the MFO-B11 entry as a note. Not a co-save layout change.
 
+### MFO-B14 — the empty-hand condition signal can mark a "free off-hand" one-hand perk as unarmed
+- **Raised:** Fable tier-3 review of `49a9cc2` (`feat/mfo-shed-fists-rule`), SEV-4. F2.
+- **Severity:** SEV-4
+- **Finding (verbatim):** F2 — SEV-4, PLAUSIBLE: the empty-hand condition signal can mark a 'free off-hand' one-hand perk as unarmed. native/Progression.cpp:326-336, 352-354. The per-list rule fires on a list where any GetEquippedItemType(hand) test admits code 0 only, with no hand test excluding 0 and no weapon-kind keyword. A perk of the shape 'left hand empty' alone (an overhaul's 'no offhand' one-handed perk with no WeapType* keyword and no right-hand GetEquippedItemType test) satisfies it. If MFO allocates such a rank to an enrolled follower, votes.unarmed > 0, fists become valid, and the shed will strip him of an off-role weapon he was legitimately swinging one-handed. Shape-level risk, not demonstrated. Cheap tightening: require the OTHER hand not to be a one-hand-weapon signature on the same tree/node, or require both hands empty unless the primaryAV signal also fires.
+- **Reviewer's reasoning:** shape-level, not demonstrated against any installed perk record; the vote only matters when MFO itself allocates such a rank AND the follower carries an off-role weapon with no in-role one, and the consequence is the pre-fix behaviour (one shed) rather than a crash.
+- **Why it was NOT fixed:** raised in the round that ended the cycle (nothing above SEV-3 remained once F1 closed by the rebase onto `6623bd8`); a classifier tightening with its own review cost. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** require the OTHER hand not to be a one-hand-weapon signature on the same tree/node, or require both hands empty unless the primaryAV signal also fires.
+- **Surfaced at edit time from:** MAP.md §4 `ShedOffRoleWeapon` FISTS RULE "What breaks" + the Progression STYLE FACTS "UNARMED" note.
+
 ---
 
 ## DRAINED

@@ -549,6 +549,25 @@ namespace MFO::Logistics {
         const bool     wantCrossbow = roles.wantCrossbow;
         if (meleeRole == WepClass::Other && !doRanged) return false;   // no role -> not ours to judge
 
+        // FISTS (marth: "they can hold them, but they shouldn't be valid for
+        // fighting, unless progression is installed AND unarmed perks are
+        // selected via progression"). The engine's Unarmed pseudo-weapon (0x1F4,
+        // WEAPON_TYPE kHandToHandMelee -> WepClass::Other) sits in EVERY actor's
+        // inventory. It used to fall through inRole as `true`, so fists alone
+        // satisfied the never-disarm guard below and the shed dropped a
+        // follower's ONLY real weapon (LoreRim, 2026-09-12: Cosnach, two-handed
+        // by skill, sole weapon an Iron Mace -> DROPPED -> fought bare-handed).
+        // Now fists are in-role ONLY when the Progression add-on's catalog is
+        // built AND this follower has empty-hand-conditioned perk ranks in
+        // MFO's OWN allocation record (StyleVotes::unarmed -- never HasPerk, so
+        // a natively perked but unenrolled follower still keeps his weapon).
+        // Read through the worker-side mirror (StyleVotesFor, Logistics_Loot.cpp:
+        // the last main-thread tally, no perk walk on this thread); until the
+        // first tally lands the vote is 0 -> fists not valid -> the safe default.
+        const auto votes = StyleVotesFor(a_follower);
+        const bool progression = Progression::Get().built;
+        const bool fistsValid  = progression && votes.unarmed > 0;
+
         auto inRole = [&](const RE::TESObjectWEAP* w) {
             const WepClass wc = WeaponClassOf(w->GetWeaponType());
             // The magic user's sidearm class is always his to keep (v1.0.29).
@@ -560,7 +579,10 @@ namespace MFO::Logistics {
                 const auto t = w->GetWeaponType();
                 return wantCrossbow ? (t == WT::kCrossbow) : (t == WT::kBow);
             }
-            return true;   // fists/other -> never a shed target
+            // Fists/other: never a shed target (the loop below only counts or
+            // skips), but in-role -- i.e. able to satisfy the never-disarm
+            // guard -- only under marth's rule above.
+            return fistsValid;
         };
         auto socketed = [](RE::InventoryEntryData* e) {
             if (!e || !e->extraLists) return false;
@@ -576,6 +598,9 @@ namespace MFO::Logistics {
             auto* w = obj->As<RE::TESObjectWEAP>();
             if (!w || w->IsStaff()) continue;
             if (inRole(w)) { ++inRoleWeapons; continue; }
+            // Fists that are NOT valid for fighting are still never shed: the
+            // Unarmed record is the engine's, not a weapon anyone can drop.
+            if (WeaponClassOf(w->GetWeaponType()) == WepClass::Other) continue;
             if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
             // #69: never shed the follower's OWN gear, snapshotted at first
             // management (the Gauldurbow fix) -- an off-role signature weapon
@@ -584,7 +609,22 @@ namespace MFO::Logistics {
             if (!Config::g_lootSpecialItems.load() && socketed(data.second.get())) continue;
             if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
         }
-        if (!shed || inRoleWeapons == 0) return false;   // don't disarm
+        if (!shed) return false;   // nothing off-role in the pack
+        // The fists verdict is what decides the never-disarm guard when the only
+        // other "weapon" is the Unarmed record, so log it where it matters --
+        // with a shed candidate in hand -- once per CHANGE per follower.
+        {
+            const std::uint32_t packed = (fistsValid ? 1u : 0u) | (progression ? 2u : 0u) |
+                                         (static_cast<std::uint32_t>(std::max(votes.unarmed, 0)) << 2);
+            auto& last = g_shedFistsLogged[a_follower->GetFormID()];
+            if (last != packed + 1u) {   // +1: an absent entry (0) never matches a real verdict
+                last = packed + 1u;
+                spdlog::info("[shed] {:08X}: fists {} (progression={}, unarmed perks={})",
+                             a_follower->GetFormID(), fistsValid ? "valid" : "not valid",
+                             progression ? "y" : "n", votes.unarmed);
+            }
+        }
+        if (inRoleWeapons == 0) return false;   // don't disarm
 
         const char* nm = shed->GetName() ? shed->GetName() : "?";
 
@@ -2049,6 +2089,7 @@ namespace MFO::Logistics {
     void ClearTransientState() {
         g_nextTick.clear();
         g_lastCombatSeen.clear();   // post-battle shed dwell -- save-scoped, live-session only
+        g_shedFistsLogged.clear();  // the shed's logged fists verdict -- re-log after a load
         g_claim.clear();
         g_lastLootSource = 0;
         g_drinkUntil.clear();

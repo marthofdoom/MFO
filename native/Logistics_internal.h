@@ -106,6 +106,15 @@ namespace MFO::Logistics {
         // sequential across followers (#4). Save-scoped: cleared on revert.
         inline std::unordered_map<RE::FormID, Clock::time_point> g_lastCombatSeen;
 
+        // The shed's last-logged FISTS verdict per follower (marth's rule: fists
+        // are never a valid fighting style unless the Progression add-on is
+        // installed AND unarmed perks were allocated through it). Packed
+        // (valid | progression<<1 | unarmedVotes<<2) so the `[shed] ... fists`
+        // line is written once per CHANGE, not once per idle tick -- a follower
+        // carrying one off-role weapon is evaluated every tick forever.
+        // Worker-only, no lock (#4); save-scoped, cleared with the dwell map.
+        inline std::unordered_map<RE::FormID, std::uint32_t> g_shedFistsLogged;
+
         // How long a follower must be CONTINUOUSLY out of combat before the shed
         // will drop an off-role weapon -- long enough that a combat LULL (LoS loss,
         // a target dying, a disengage) can't be mistaken for "the battle is over".
@@ -326,9 +335,14 @@ namespace MFO::Logistics {
         // follower per 10 s). First read of a follower returns NO votes (the
         // default, no-bias case) until the posted tally lands next frame.
         // VR (no pump): Post is a no-op -> votes stay empty -> default behaviour.
-        // NOT save-scoped: derived from live perks, keyed by FormID, and
-        // re-tallied within the cadence -- a stale entry across a load is
-        // wrong for at most one refresh interval, never persisted.
+        // CLEARED ON LOAD: derived from live perks and never persisted, but a
+        // stale copy across a load is NOT harmless -- ShedOffRoleWeapon acts on
+        // `votes.unarmed` (a DROP), and StyleVotesFor hands back the previous
+        // copy while only posting a refresh. So Serialization::ResetAllState
+        // calls Logistics::ClearStyleMirror() (Logistics_Loot.cpp) after
+        // StopPump() + MainThread::Clear(): that wipes both the stale copy and
+        // the `inFlight` latch (a Post discarded by MainThread::Clear() would
+        // otherwise leave the latch set for the process lifetime). Fable F1/F4.
         struct StyleMirror {
             Progression::StyleVotes votes;
             Clock::time_point       stamp{};
