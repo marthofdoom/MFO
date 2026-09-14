@@ -131,6 +131,20 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** SEV-5, no carve-out; a render-side latch masks nothing but is polish.
 - **Fix shape when drained:** none required; if drained, a render-side "respec queued" latch that hides the free label until the next snapshot.
 
+### MFO-B16 — after the MFO armor swap and before the vendor sale, the engine's rating-only auto-equip and `EquipBestOwnedGear` disagree; a worn off-class piece can flip back and forth until sold
+- **Raised:** Fable tier-2 review of `bb77b69` (`fix/mfo-armor-class-score`), SEV-4, PLAUSIBLE.
+- **Finding (verbatim):** `native/Logistics_Economy.cpp:352-376` — `EquipBestOwnedGear` rated branch, every `ServiceFollower` tick (no combat gate on the rated branch). Before this commit MFO's owned-upgrade judge and the engine's auto-equip both ranked by raw rating, so they never fought. Now: a light follower wearing steel (31) who owns leather (26 → 52) gets leather put on by MFO. The engine's own follower auto-equip re-evaluates "best armor" by raw rating on inventory adds (every loot pickup) and on default-outfit re-apply (cell load), and will put the steel back; MFO re-swaps within ≤ N×133 ms. The un-wear the author relies on (redundant-inferior force-sell) only fires inside `EconomyProbe` — a vendor visit. Until then the body slot is contested, event-paced (not per-frame), each flip emitting `[equip] OWNED` + `[armor]` + two `[armor-obs]` lines. Also `FitsCarryWeight` (pre-existing) gates the swap on an owned pick — an over-encumbered follower never gets the light piece worn by MFO and the sale strips him to the engine's choice.
+- **Reviewer's reasoning (verbatim):** Not a crash, not co-save, converges at the first vendor. The brief said "No engine deny", so this window is a design consequence the brief accepted, not a defect the author could close. It IS what the next field cycle exercises — the `[armor-obs]` probe is precisely the instrument that will measure the flip rate. Read the first deck log for `[armor-obs] ... EQUIP '<heavy>'` lines that are NOT preceded by an MFO `[equip]` line (engine re-wears).
+- **Why it was NOT fixed:** the fix is an engine equip-best deny/steer (new mechanism, principles 1/2) to be sized FROM the probe, not before it (Fable diagnosis 2026-09-14). marth informed.
+- **Fix shape when drained:** measure the flip rate from `[armor-obs]`; if the engine re-wears, either (a) drop/sell the off-class piece without a vendor once a better-scored owned piece is worn, or (b) portal+deny on the engine's equip-best for followers MFO dresses.
+- **Surfaced at edit time from:** MAP.md `EquipBestOwnedGear` / ARMOR CLASS BY SKILL "What breaks".
+
+### MFO-B17 — armor SEV-5 notes from the same review (`bb77b69`)
+- (a) `ArmorClassSuits` (`Logistics_Loot.cpp:303-310`) is now dead code with changed semantics (BASE AV); zero callers. Delete or keep as the named predicate; never re-call on a hot path.
+- (b) The "allocator and wardrobe agree" comment (`Logistics_Loot.cpp:201-210`, `Logistics_internal.h:373-376`) overstates: on an exact skill tie the wardrobe takes the perk vote, `DominantArmorSkill` goes straight to light. Doc fix.
+- (c) `TradeBridge::BuyThresholds` (`TradeBridge.h:91-107`) is NOT byte-shared with the .pex (in-DLL only; the .pex sees the 10 natives). Append-only was honoured anyway; stop calling it byte-shared.
+- (d) Shields are half in the wear decision: `EquipBestOwnedGear:372-373` skips shields while keep buckets and force-sell score them; a worn heavy shield with an owned light one is force-sold at a vendor but MFO never puts the light one on. Pre-existing shape.
+
 ## DRAINED
 
 ### MFO-B4 — `IncumbentTargetLost` and `PickAlly` disagree on "resolves"
