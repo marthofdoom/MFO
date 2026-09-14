@@ -1629,13 +1629,19 @@ namespace MFO::Actuation {
         // vs-ranged-vs-cast; the roles' melee CLASS is deliberately NOT a filter
         // here (the pick still spans both melee classes) so the default case
         // cannot change.
-        // THE LEFT HAND DEFERS TO A CAST (heals are LEFT-only: ClaimHealCast).
-        // One question (CastHandHeld, Actuation_Hands.cpp), three guards: never
-        // filled while a claim/lock is live on it; a plan taking the left YIELDS
-        // it first (commitPreempt -> YieldForcedLeftHand, before Prepare's
-        // EquipSpell can meet the lock); ReconcileForcedWeapon yields the tick a
+        // THE LEFT HAND DEFERS TO A CAST (heals are LEFT-only: ClaimHealCast;
+        // marth 2026-09-14: "the weapon should always yield to a spell on left
+        // hand"). One question (CastHandHeld, Actuation_Hands.cpp), four guards:
+        // never filled while a claim/lock is live on it; never filled while a
+        // LEFT gear debt is open (Loadout::OwesLeft -- a hold over an unpaid
+        // debt would Debounce every later Prepare until combat end, Fable F-A);
+        // a cast taking the left hand YIELDS the hold at the point of no return,
+        // INSIDE Loadout::Prepare immediately before its EquipSpell (the
+        // LeftHandYield callback CastOn passes -- after Prepare's own refusals,
+        // never before them, Fable F1); ReconcileForcedWeapon yields the tick a
         // claim is seen live there (the ComposedCast heal path never passes
-        // CastOn). Once the lock lapses the satisfied lap tops the hand back up.
+        // CastOn). Once the lock lapses AND the 5 s floor a yield stamps has
+        // passed, the satisfied lap tops the hand back up.
         // KILL SWITCH: every left-hand write is gated on bWeaponStyleControl.
         // THREADING: the job-worker tick calling ActorEquipManager directly, the
         // T#76 right-hand road since v1.0.33 (#62's Post is the armor/3D case).
@@ -1734,8 +1740,8 @@ namespace MFO::Actuation {
                     it->second.left && it->second.left != a_weap)
                     oldLeft = it->second.left;
             }
-            if (oldLeft)
-                mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, nullptr, true, true);
+            if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
+                mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, slot, true, true);
             mgr->EquipObject(a_follower, a_weap, nullptr, 1, slot, true, true);
             {
                 std::scoped_lock lk(g_forcedMx);
@@ -1747,10 +1753,12 @@ namespace MFO::Actuation {
         // Off-hand TOP-UP cadence on the equip rule's SATISFIED lap (the AI drew
         // the sword at combat start, or a cast just gave the left back): the
         // answer costs an inventory walk, so it is asked at most once per
-        // follower per kOffHandRetry, and re-armed at once by a yield so a hand
-        // a finished cast freed refills on the next satisfied lap. Worker-
-        // serial, no lock (#4, as g_castLock). Cleared with the ledger; erased
-        // on release so the next combat starts fresh.
+        // follower per kOffHandRetry. A yield RE-STAMPS this to now + kOffHandRetry
+        // (a FLOOR, principle 9 -- Fable F1 on f771399): a hand a cast freed
+        // refills no sooner than 5 s after the yield, so a persistently refused
+        // cast can cost at most one weapon<->spell flicker per 5 s, never one per
+        // lap. Worker-serial, no lock (#4, as g_castLock). Cleared with the
+        // ledger; erased on release so the next combat starts fresh.
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_offHandRetryAt;
         constexpr auto kOffHandRetry = std::chrono::seconds(5);
 
@@ -1802,8 +1810,14 @@ namespace MFO::Actuation {
                     const auto now = std::chrono::steady_clock::now();
                     auto retry = g_offHandRetryAt.find(id);
                     const bool due = retry == g_offHandRetryAt.end() || now >= retry->second;
+                    // !OwesLeft (Fable F-A on 1ac3c6b): a heal that displaced the
+                    // AI's own shield/off-hand booked a LEFT debt; a force-hold
+                    // placed over that unpaid debt can never be settled by the AI
+                    // (locked) and Prepare's debt gate then Debounces every later
+                    // cast until combat end. The repay (hit / combat end) clears
+                    // the debt, then the top-up may fill the hand.
                     if (rightW && IsOneHandMelee(rightW) && !leftW && due &&
-                        !CastHandHeld(a_follower, kHandLeft)) {
+                        !CastHandHeld(a_follower, kHandLeft) && !Loadout::OwesLeft(id)) {
                         g_offHandRetryAt[id] = now + kOffHandRetry;
                         const Logistics::WeaponRoles roles = WeaponRolesFor(a_follower);
                         // TRANSPARENT either way (Fable F5 on f771399): a refill is a
@@ -1863,8 +1877,15 @@ namespace MFO::Actuation {
                                        Config::g_weaponStyleControl.load();
             const bool leftCastHeld  = offHandWanted && CastHandHeld(a_follower, kHandLeft);
             if (offHandWanted && !leftCastHeld) {
-                if (roles.offHand == 2) offHandW  = PickOffHandWeapon(a_follower, roles, daggerMelee, best);
-                else                    offHandSh = PickShield(a_follower);
+                // The WEAPON hold (a prevent-removal lock) is also refused over an
+                // open LEFT gear debt (F-A, same reason as the top-up); the shield
+                // is a plain equip the AI can take back, so no gate.
+                if (roles.offHand == 2) {
+                    if (!Loadout::OwesLeft(a_follower->GetFormID()))
+                        offHandW = PickOffHandWeapon(a_follower, roles, daggerMelee, best);
+                } else {
+                    offHandSh = PickShield(a_follower);
+                }
             }
             if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
                 if (Config::g_weaponStyleControl.load()) {
@@ -1896,8 +1917,8 @@ namespace MFO::Actuation {
                             if (old->second.left  && old->second.left != offHandW) oldLeft = old->second.left;
                         }
                     }
-                    if (oldLeft)
-                        mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, nullptr, true, true);
+                    if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
+                        mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
                     if (oldForced)
                         mgr->UnequipObject(a_follower, oldForced, nullptr, 1, nullptr, true, true);
                     mgr->EquipObject(a_follower, best, nullptr, 1, nullptr, true, true);
@@ -2269,13 +2290,19 @@ namespace MFO::Actuation {
     namespace {
         // READBACK (Fable F4 on f771399, principle 5 -- observe the path, do not
         // assume it): after a left-hand hold is released or yielded, log what the
-        // LEFT hand holds. The unequip is QUEUED (a_queueEquip=true), so a read on
-        // this same call would only ever show the weapon still there; the read is
-        // posted to the main thread (next frame, after the engine drains its equip
-        // queue) with the FormID captured and the actor re-resolved. VR (no pump)
-        // reads inline, which is then an honest "queued, not yet applied". The
-        // first dual-wield field run proves or disproves the slot-less/object
-        // unequip question with this line.
+        // LEFT hand holds. What is KNOWN: the unequip is QUEUED (a_queueEquip=true)
+        // on the follower's own AI process and drains in the follower's update; a
+        // read on this same call would only ever show the weapon still there.
+        // What is NOT established (Fable F-C on 1ac3c6b): the in-frame order of
+        // that drain against MainThread's queue, which drains inside the PLAYER's
+        // Update vfunc -- a single Post could run BEFORE the follower's update of
+        // the same frame and read stale. So the read is posted TWICE (a posted fn
+        // may Post again; the repost lands NEXT frame, MainThread.h) -- one full
+        // frame boundary after the drain, whatever the two updates' order within
+        // a frame. Readings: a spell = conclusive (the slot-named unequip cleared
+        // the lock); none = informative; the weapon = the lock survived -- with
+        // the double Post no longer confusable with a stale read. VR (no pump)
+        // reads inline and is then only an honest "queued, not yet applied".
         void LogLeftHandReadback(RE::FormID a_id) {
             auto read = [a_id]() {
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_id);
@@ -2285,7 +2312,7 @@ namespace MFO::Actuation {
                              held ? (held->GetName() && *held->GetName() ? held->GetName() : "?")
                                   : "none");
             };
-            if (MainThread::IsInstalled()) MainThread::Post(read);
+            if (MainThread::IsInstalled()) MainThread::Post([read]() { MainThread::Post(read); });
             else                           read();
         }
     }

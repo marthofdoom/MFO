@@ -669,4 +669,9 @@ namespace MFO::Loadout {
         return n;
     }
 
+    bool OwesLeft(RE::FormID a_actorID) {
+        const auto it = g_debt.find(a_actorID);
+        return it != g_debt.end() && it->second.displacedLeft != nullptr;
+    }
+
 }

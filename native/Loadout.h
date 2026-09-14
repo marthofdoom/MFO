@@ -183,4 +183,15 @@ namespace MFO::Loadout {
 
     int PendingRestores();
 
+    // Is a LEFT-hand gear debt open for this follower (Prepare displaced a
+    // shield / off-hand item that has not been repaid yet)? Fable F-A on
+    // 1ac3c6b: Actuation's dual-wield LEFT weapon hold must never be placed
+    // while one stands -- the two would coexist (the AI cannot take its shield
+    // back over a prevent-removal lock, so Tick's "debt paid" settle never
+    // fires) and Prepare's "already owe this follower gear" gate would then
+    // Debounce every later cast until combat end: heals dead for the rest of
+    // the fight. Pure read of the worker-serial debt map, same thread as
+    // Prepare/Tick (#4). false for no entry.
+    bool OwesLeft(RE::FormID a_actorID);
+
 }
