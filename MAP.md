@@ -1101,7 +1101,7 @@ state/types/small helpers live as `inline` members of `namespace
 MFO::Logistics` in `Logistics_internal.h` (ONE instance across the TUs — it
 replaces the old single anonymous namespace; big cross-module helpers are
 declared there and defined in their home module). Layout:
-- `Logistics.cpp` (2120) — core tick: `ServiceFollower` (`:722`, INCLUDING the
+- `Logistics.cpp` (2192) — core tick: `ServiceFollower` (`:722`, INCLUDING the
   OOC cast dispatch `:~1128-1368` — concentration direct-force `:~1258`,
   fire-and-forget `:~1348`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
   `ShedOffRoleWeapon`, sinks, lifecycle + MSTK API, evaluator pure reads.
@@ -1119,9 +1119,9 @@ declared there and defined in their home module). Layout:
 - `Logistics_Cast.cpp` (269) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
   `TopTwoSchoolMask`, `LearnCarriedTomes:137`, school name/keyword helpers.
-- `Logistics_Economy.cpp` (1106) — #21 economy: mage-apparel scoring,
-  `UnlockCollegeTomes:220`, `EquipBestOwnedGear:291`, `BuildBuyThresholds:385`,
-  `EconomyProbe:488`, public buy helpers (`MageApparelBuyKey:994` et al).
+- `Logistics_Economy.cpp` (1188) — #21 economy: mage-apparel scoring,
+  `UnlockCollegeTomes:226`, `EquipBestOwnedGear:297`, `BuildBuyThresholds:425`,
+  `EconomyProbe:543`, public buy helpers (`MageApparelBuyKey:1148` et al).
 - **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
   perked style within a category wins, strongly prefers").** THE decision is
   `ComputeWeaponRoles` (`Logistics_Loot.cpp:442`): the melee CLASS is still the
@@ -1140,8 +1140,8 @@ declared there and defined in their home module). Layout:
   (`Logistics_Economy.cpp:613` `keepRoles`), `BuildBuyThresholds:391` →
   `TradeBridge::BuyThresholds::meleeBaseScore`/`preferKinds` → `PlanBuy`
   (`TradeBridge.cpp:234` via public `Logistics::WeaponBuyScore:993`).
-  `ArmorClassSuits` (`:206`): skill first (unchanged); on an EXACT tie the
-  heavy- vs light-conditioned vote counts decide; still-tied → light.
+  Armor: see the ARMOR CLASS BY SKILL + PERKS entry below (2026-09-14) —
+  `ArmorClassSuits` no longer gates anything; `ArmorScore` is the judge.
   **THREADING — the perk-style MIRROR:** `TallyStyleVotes` is main-thread-only, so
   `StyleVotesFor` reads a per-follower copy under `g_styleMx`
   (`Logistics_internal.h:338`, `g_styleMirror`, `kStyleRefresh` 10 s) and posts
@@ -1154,7 +1154,7 @@ declared there and defined in their home module). Layout:
   process lifetime).
   **DEFAULT-CASE PROOF:** with `preferKinds == 0` `WeaponScore` is the uint16
   damage widened to float, so every `>` / `>=` compare orders identically; with
-  no armor tie `ArmorClassSuits` is untouched; with the catalog unbuilt every
+  with the catalog unbuilt every
   vote is 0. **KNOWN GAPS (not consumers yet):** the COMBAT equip
   `Actuation.cpp EquipWeapon` (`:1603`) still picks raw max damage across BOTH
   melee classes (it needs `WeaponScore` — Actuation was outside the boundary);
@@ -1167,10 +1167,84 @@ declared there and defined in their home module). Layout:
   looted greatsword sells); `preferKinds` must stay `Progression::WeaponKind`
   bits (shared with the buy thresholds); reading `TallyStyleVotes` directly from
   the worker instead of `StyleVotesFor` races the allocator.
-- `Logistics_Loot.cpp` (2285) — the loot judge + per-category looters,
-  claim-and-release, navmesh reach, `AcquireEquip:575`, `LootGold:711`,
-  `LootValuables:915`, `HasLoot:1210`, `LootNearby:1307`, `StripCorpse:2064`,
-  `RunExcursionScan:2128`. `LootEquipment` itself now lives in
+- **ARMOR CLASS BY SKILL + PERKS (2026-09-14, field fix; branch
+  `fix/mfo-armor-class-score`).** FIELD (Deck log on `69c5b3c`, Fable): after a
+  respec Adelinda (Heavy 15 / Light 69) and Cicero (Heavy 20 / Light 77) stayed
+  in heavy and Cicero BOUGHT the heavy Falkreath Helmet (18) over light 13s.
+  ROOT CAUSE: MFO never un-wore anything and the ENGINE's auto-equip (highest
+  rating per slot, skill-blind) was the wearer; every MFO rated-armor compare was
+  rating-vs-worn-rating with no class term, `ArmorClassSuits` was the only skill
+  read and a loot-side FILTER (`Docs/ENGINE_NOTES.md` §0.46). THE JUDGE:
+  `ArmorScore` (`Logistics_internal.h:397` pref-taking inline; `Logistics_Loot.cpp:235`
+  Actor* overload) = rating × `kArmorClassBias` (2.0, `Logistics_internal.h:362`,
+  on the class of the higher BASE armor skill — `ArmorPrefFor:213`,
+  `GetBaseActorValue`, the `DominantArmorSkill` read; exact tie → the armor
+  perk votes `StyleVotes::armor[0]` vs `[1]`; still tied → light) ×
+  `kArmorPerkBias` (1.25, `:369`, on the class the perk votes LEAD, whichever
+  class that is; votes via `StyleVotesFor`, the `g_styleMx` mirror). Arithmetic:
+  leather 26×2=52 > steel 31, hide 20×2=40 > iron 25, glass 38×2=76 > ebony 43;
+  a BIAS never a filter — hide (40) still takes a found ebony plate (43), a bare
+  slot takes off-class over nothing, clothing (rating 0) scores 0, creature
+  armor is filtered upstream. The arithmetic itself is `TradeBridge::ArmorScoreOf`
+  (`TradeBridge.h:115`) so the VM-side buy planner ranks identically.
+  `ArmorPref` (`Logistics_internal.h:380`) carries the two multipliers + the
+  inputs; scans compute it ONCE (`EquipmentContext::armorPref`,
+  `BuildEquipmentContext` `Logistics_Loot_Equipment.cpp:45`; `keepPref`
+  `Logistics_Economy.cpp:735`; `armorPref` in `EquipBestOwnedGear` and
+  `BuildBuyThresholds`). **CONSUMERS — ALL of them, by design ONE score:**
+  `ArmorIsBetter` (`Logistics_Loot.cpp:321`, candidate score vs worn score per
+  slot; the `ArmorClassSuits` early-out is DELETED — `ArmorClassSuits:303` is kept
+  as the named category predicate, rebased on `ArmorPrefFor`, and has NO callers),
+  `CarriesSlotArmorAtLeast:371` (score, or a worn heavy 31 in the pack blocks the
+  light 26), `LootEquipment:224` best-first (`bestArmorScore`) +
+  `LooseEquipmentQualifies:177`, **`EquipBestOwnedGear` rated branch
+  (`Logistics_Economy.cpp:297`) — THE WEAR DECISION:** highest-scored owned piece
+  that beats the worn score → the existing `AcquireEquip` `MainThread::Post` path
+  (#62; equipping auto-unequips the displaced piece), the keep buckets
+  (`primary = ArmorScore`, key 10+slot), the redundant-inferior force-sell
+  (`:926`; slot-best by score so the worn OFF-CLASS piece is what sells — the
+  trade's `RemoveItem` is the proven un-wear; worn-is-kept (a) yields to it via
+  `forceSell`), `BuildBuyThresholds:425` → `TradeBridge::BuyThresholds`
+  **APPENDED** `armorHeavyBias` / `armorLightBias` / `armorBaseScore[5]`
+  (`TradeBridge.h:99-107`; `armorBaseRat` keeps the raw rating as a diagnostic — a
+  float score truncated into the int32 would tie its own baseline and re-buy every
+  visit) → `PlanBuy` armor (`TradeBridge.cpp:266`, ranks by `ArmorScoreOf` against
+  `armorBaseScore`). `MFO_Trade.psc` + the 10 natives untouched. **LOG LINES:**
+  `[armor] <id> '<name>': heavy=<base> light=<base> -> class LIGHT|HEAVY votes h/l=
+  bias h/l= | worn body '..' [Heavy] rat= score=, head .., hands .., feet .., shield ..`
+  (`LogArmorClassIfChanged:248`, once per follower per {class, worn-set} change,
+  deduped through `StyleMirror::loggedArmor`, called from `EquipBestOwnedGear`'s
+  rated branch — so a mage-apparel follower never emits it); `[equip] <id>: OWNED
+  armor '..' [Light] rat= score= <- worn '..' [Heavy] rat= score= | class ..`
+  (`EquipBestOwnedGear`); `[equip] <id>: LOOT armor/apparel '..' type= rat= score=`
+  (`LootEquipment`); `[econ] .. | offered [..] | bought plan [..]` (`ReportTrade`,
+  the offered sell rows + `PlanBuy`'s named picks, `TradeOrder::buyPlan`);
+  `[style]` now prints `armor h/l/s=`; passive `[armor-obs] <id> '<name>': EQUIP|
+  UNEQUIP '<item>' (<fid>) [Heavy|Light] rat=` in `BeastHeadSink::ProcessEvent`
+  (`Logistics.cpp:156`, BEFORE the beast-head gates, rated ARMO only, follower
+  membership via `Followers::IsTrackedFast` — the locked mirror, #4/#74 — zero new
+  hooks, no rate limit). **DEFAULT-CASE PROOF:** a follower whose skills and
+  inventory are all one class gets a uniform ×2 (×2.5 with perks) on every compare,
+  so every `>` / `>=` orders as before; no votes → perkBias 1.0. **What breaks:**
+  changing `kArmorClassBias`/`kArmorPerkBias` re-orders loot, owned-equip, keep,
+  sell AND buy at once — they share ONE score, never bias one site alone or a
+  looted light piece is force-sold as a redundant inferior / a bought piece is
+  never worn; `ArmorPrefFor` must stay on `GetBaseActorValue` (an actual-value
+  read would let a Fortify enchant on the very candidate move the category) and
+  on `StyleVotesFor` (never `TallyStyleVotes` off-main); `EquipBestOwnedGear` is
+  now the ONLY place MFO actively swaps a worn rated piece — gate it or rate-limit
+  it and the follower stays in the engine's pick; `ArmorScoreOf` in `TradeBridge.h`
+  and the inline `ArmorScore` must stay the same arithmetic or buy and loot
+  disagree; `BuyThresholds` is append-only (do not move the new fields ahead of
+  `eligibleSchools`); `ArmorClassSuits` is dead code by design — do not re-add it
+  as a gate.
+- `Logistics_Loot.cpp` (2399) — the loot judge + per-category looters,
+  claim-and-release, navmesh reach, the armor judge (`ArmorPrefFor:213`,
+  `ArmorScore:235`, `LogArmorClassIfChanged:248`, `ArmorClassSuits:303`,
+  `ArmorIsBetter:321`, `CarriesSlotArmorAtLeast:371`), `StyleVotesFor:513`,
+  `ComputeWeaponRoles:555`, `AcquireEquip:791`, `LootGold:927`,
+  `LootValuables:1131`, `HasLoot:1426`, `LootNearby:1523`, `StripCorpse:2291`,
+  `RunExcursionScan:2355`. `LootEquipment` itself now lives in
   `Logistics_Loot_Equipment.cpp` (see below); everything else that was here
   (Jewelry/SoulGems/Ingredients/Valuables/Gold/Ammo/Potions/Lockpicks judges)
   is unmoved.
@@ -1202,7 +1276,7 @@ declared there and defined in their home module). Layout:
   `PickUpObject`/AddTask (crash4 class); the whitelist only decides
   ELIGIBILITY. Nothing was deliberately excluded from the generalization —
   every `Category` ordinal now has a loose-ref path.
-- `Logistics_Loot_Equipment.cpp` (461, NEW 2026-09-06) — split out of
+- `Logistics_Loot_Equipment.cpp` (475, NEW 2026-09-06) — split out of
   `Logistics_Loot.cpp` purely to stay under the 2500-line hard rule (pure
   mechanical move, no logic change). Owns the equipment judge:
   `BuildEquipmentContext:26` (the role/mage-mode gate + the follower's-own-
@@ -1442,7 +1516,9 @@ anonymous-namespace copy — that silently forks the instance).
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
   PlayerID()`, `ContainerSink` in `Logistics.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
   only QUEUES to the worker. `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
-  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`Logistics.cpp:1968`) ← `plugin.cpp:360`.
+  → `KeepHeadClear`; since 2026-09-14 it also emits the passive `[armor-obs]` line
+  (`Logistics.cpp:156`) for every rated-ARMO equip/unequip on a tracked follower
+  BEFORE its own equipped-only / toggle gates (pure reads, `Followers::IsTrackedFast`). `SweepBeastHeadsOnLoad` (`Logistics.cpp:1968`) ← `plugin.cpp:360`.
 - `OnFollowerRemoved` (`Logistics.cpp:2040`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
@@ -1491,7 +1567,9 @@ tiebreak) and force-equips it whenever the worn piece isn't exactly it — so an
 engine-re-equipped LESSER clothing piece is replaced and falls through to the sell loop
 as an extra instead of being worn-protected forever. Thrash-guarded: **out of combat +
 rate-limited 5 s/follower**, no-op once the best is worn (equip auto-unequips the lesser,
-never strips naked). The rated-armor branch is unchanged (strictly-better-only).
+never strips naked). The rated-armor branch (2026-09-14) is THE armor wear decision:
+highest `ArmorScore` owned piece that strictly beats the worn score — see ARMOR CLASS
+BY SKILL + PERKS above.
 
 ### Loadout.cpp / Loadout.h — the equip/spell-in-hand ledger (NOT serialized)
 Puts a gambit spell in a follower's hand, records displaced gear as **transient
@@ -3307,6 +3385,12 @@ a fresh order.
   — keeping worn + one best-per-slot upgrade; NOT the raw bitmask, which let varied
   modded robes each survive) + the existing socketed exclusion in `EconomyProbe`.
   Toggles: `bEconomyBuyGear`, `bEconomyBuyTomes`, `bMageWearRobes`, `bMageApparelStrictSchool`.
+  **ARMOR BY CLASS (2026-09-14):** `BuyThresholds` APPENDED `armorHeavyBias` /
+  `armorLightBias` / `armorBaseScore[5]` (`TradeBridge.h:99-107`, after
+  `eligibleSchools`; append-only); `ArmorScoreOf` (`TradeBridge.h:115`) is the shared
+  score arithmetic; `PlanBuy` armor (`:266`) ranks by it against `armorBaseScore`, no
+  longer by raw rating against `armorBaseRat`. `ReportTrade` (`:393`) names the offered
+  sell rows and `TradeOrder::buyPlan` (built at the end of `PlanBuy`, `:349`).
 - **#21 SELL bypass + pricing** (`EconomyProbe`, INI-only, no MCM). `bMerchantPerkBypass`
   + `xMerchantPerkID` (0x00058F7A): a follower holding the merchant perk (dual-check
   `GetActorBase()->GetPerkIndex` + `HasPerk`, the `OwnsExactPerk` idiom) sells past the

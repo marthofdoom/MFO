@@ -2125,6 +2125,53 @@ What DID land on the MFO side is only the DETECTION of a dead handle (ABI v6
 `IsClaimLive` on the unchanged fast path) plus F1/F4 — none of which renews
 anything.
 
+### 0.46 The engine's auto-equip is the WEARER of a follower's armor; MFO had no wear decision at all (2026-09-14)
+
+**Status: PROVEN (field, Deck log on MFO `69c5b3c`; Fable diagnosis).**
+
+marth: "after respec the followers still wont stop wearing the wrong armor. One
+even equipped more heavy armor." The respec itself was correct — Adelinda
+`00015D09` read Heavy 15 / Light 69, Cicero `0009BCB0` Heavy 20 / Light 77 —
+and both stayed in heavy; Cicero then BOUGHT the heavy Falkreath Helmet
+(rating 18) over the vendor's light 13s.
+
+**What the engine does.** An NPC's worn set is the engine's own auto-equip:
+highest armor rating per biped slot, out of whatever the inventory holds,
+**skill-blind** — Heavy Armor vs Light Armor skill never enters it. Hand a
+light-skilled follower a heavier-rated heavy piece and he wears it; there is no
+engine mechanism that takes it off again.
+
+**What MFO did (on `69c5b3c`).** MFO never un-wore anything. Every rated-armor
+compare it ran was rating-vs-worn-rating with NO class term: `ArmorIsBetter`
+(`native/Logistics_Loot.cpp:222-253`, the worn compare at `:243-245`), the
+`EquipBestOwnedGear` rated branch (`native/Logistics_Economy.cpp:355-369`,
+silent — no log), the keep buckets (`:675-680` worn always kept; `:706-712`
+slot-best by raw rating then gold), the redundant-inferior force-sell
+(`:857-876`, which sold a worn LIGHT piece when a heavier-rated heavy piece was
+carried) and the whole buy path (`native/TradeBridge.cpp:91-102` classifier +
+`PlanBuy` armor `:258-271`, thresholds `native/Logistics_Economy.cpp:431-449`),
+which was fully class-blind — Cicero's head baseline was 0, so the heavy 18
+beat the light 13. `ArmorClassSuits` (`native/Logistics_Loot.cpp:206-220`) was
+the ONLY skill read, and it was a candidate-side FILTER (with `GetActorValue`,
+the actual value, not base) gating what MFO would LOOT — never what the
+follower wore. `StyleVotes::armor[]` was consumed only on an exact skill tie
+(`:214-218`) and for shield detection (`:515-516`). So MFO judged loot by
+class, then handed the piece to an engine that wears by rating, and the
+follower's wardrobe was the engine's decision from then on.
+
+**What a client must take from this.** If you want a follower to wear a
+CLASS of armor, the decision has to be an ACTIVE equip of the in-class piece
+over the worn off-class one (`ActorEquipManager::EquipObject` auto-unequips
+the displaced piece) — filtering what you loot for him changes nothing he
+already owns or is handed, and the engine will keep him in the heavier piece
+forever. The fix (branch `fix/mfo-armor-class-score`) puts ONE judge,
+`ArmorScore` = rating × class bias × perk bias, under every rated-armor
+compare, and makes `EquipBestOwnedGear` the wear decision: it equips the
+highest-scored owned piece that beats the worn piece's score, through the
+existing `AcquireEquip` `MainThread::Post` path (#62). The trade's
+`RemoveItem` on a force-sold redundant inferior remains the other proven
+un-wear. See `MAP.md` Logistics family, "ARMOR CLASS BY SKILL + PERKS".
+
 ---
 
 ## 1. Actor control — Tier A primitives
