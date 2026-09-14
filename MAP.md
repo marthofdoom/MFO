@@ -59,7 +59,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v7`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `nativeHeld` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's applied value, frozen), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split), `nativeHeld=false`. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v7`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -1140,9 +1140,11 @@ declared there and defined in their home module). Layout:
   (`Logistics_internal.h:338`, `g_styleMirror`, `kStyleRefresh` 10 s) and posts
   the re-tally through `MainThread::Post` (FormID captured, actor re-resolved);
   the first read of a follower returns NO votes (default behaviour) until the
-  posted tally lands next frame; VR (no pump) never refreshes → default. NOT
-  cleared by `ClearTransientState` (`Logistics.cpp`, out of the 2026-09-13
-  change's boundary) — a stale copy across a load is at most one refresh old.
+  posted tally lands next frame; VR (no pump) never refreshes → default. Cleared on
+  revert by `Logistics::ClearStyleMirror` (`Logistics_Loot.cpp`, called from
+  `Serialization::ResetAllState` after `MainThread::Clear` — Fable F4: a latch left
+  `inFlight` after Clear dropped its closure froze that follower's votes for the
+  process lifetime).
   **DEFAULT-CASE PROOF:** with `preferKinds == 0` `WeaponScore` is the uint16
   damage widened to float, so every `>` / `>=` compare orders identically; with
   no armor tie `ArmorClassSuits` is untouched; with the catalog unbuilt every
@@ -1619,7 +1621,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   hmsCumulative f32}, then battlesSinceLevelUp u32, battlesOffClass u32,
   offClassPool u8, hmsCaptured u8, **[v6: hmsZeroAwardStreak u8, hmsGrantRemainder
   f32×3, hmsAwardAccum f32]**], **[v7 APPENDED after the HMS block: autoLevelsGranted
-  u16, nativeHeld u8, strippedCount u16 + {perkFormID u32}×N]**}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
+  u16, strippedCount u16 + {perkFormID u32}×N]**}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
   behind `if(version>=N)` (**v6 header + block additions gated `if(version>=6)`;
   v5 keeps the old 4-f32/pool reader, reads+discards target, recomputes it; all
   floats finite-guarded, streak clamped 0..2**). The HMS block is read
@@ -1641,11 +1643,14 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `RecomputeSkills` (`:354`, +=) and `Respec` (→ 0). `RecomputeSkills` is an
   ACCUMULATOR, not a re-derivation: `pending = (effAutoLvl − 1) − autoLevelsGranted`
   auto levels yield `skillPointsPerLevel` each, split by `WeightsFor` AT THAT
-  MOMENT (largest remainder over whole points — every grant sums exactly) and
-  ADDED to `autoPoints`; the weights are not consulted when nothing is pending, so
-  a class change / dominance flip only steers FUTURE levels. Then every entry is
-  held at natural + autoPoints + manualPoints through the single `ReconcileSkill`
-  (`:235`, baseline floor; REVERT drift-clobber unchanged). `DominantWeaponSkill`
+  MOMENT as the EXACT float share and ADDED to `autoPoints` (Fable F3: a per-level
+  whole-point split starved the 10 % skill forever at the shipped 5 pts/level —
+  2/2/1/0 every level; the exact share converges: 20 levels × 5 at 40/30/20/10 →
+  40/30/20/10); the weights are not consulted when nothing is pending, so a class
+  change / dominance flip only steers FUTURE levels. Then every entry is held at
+  natural + `floor(autoPoints + 1e-3)` + manualPoints through the single
+  `ReconcileSkill` (`:235`, baseline floor; REVERT drift-clobber unchanged) — the
+  fraction stays in the ledger for the next grant to complete. `DominantWeaponSkill`
   (`:297`) / `DominantArmorSkill` (`:305`) read BASE SKILLS ONLY (the old loadout
   read re-homed the share every ~2 s — marth's "fluidly managed" drift). **A″
   Respec returns ALL points:** perks cleared as before, every `autoPoints` and
@@ -1677,13 +1682,17 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   BEFORE `ReapplyFollower`, re-arming it (`applied=false`) when anything was removed
   so a rank the reapply had deferred to native ownership (`:~918`) is re-added now
   the native is gone; that deferral is therefore UNREACHABLE for a stripped node
-  (it can only fire for a native rank that lands on the base AFTER the strip —
-  `nativeHeld` stays true, no re-strip until re-enrollment). **Never restored while
+  (it can only fire for a native rank that lands on the base AFTER the strip within
+  a session — `nativeHeld` stays true until the next load / re-check). **THE STRIP
+  IS PER-SESSION BY NATURE (Fable F1):** base `AddPerk`/`RemovePerk` do not survive a
+  load (P3, the reason `ReapplyFollower` exists), so every load puts the natives
+  back; `nativeHeld` is RUNTIME-ONLY (never serialized) and `OnPostLoad` (`:1325`)
+  re-arms it beside `applied`, so the first managed ACTIVE poll re-strips (union)
+  BEFORE the reapply. **Never restored while
   enrolled — a benched/dismissed follower stays stripped** (marth: "a clean restore
   when it's uninstalled"), which rules out the native+MFO same-node double rank by
   construction. The record `ProgState::strippedPerks` (set, union on re-strip,
-  unresolvable ids drop on load) + `nativeHeld` are v7 co-save fields and are what
-  the uninstall reads: public `ProgAllocator::RestoreNativePerks(actor)` (`:1754`,
+  unresolvable ids drop on load) is the v7 co-save field the safe-removal reads: public `ProgAllocator::RestoreNativePerks(actor)` (`:1754`,
   header contract in `ProgAllocator.h`) puts every recorded perk back on the base,
   settles, CLEARS the record — meant to run once per enrolled follower right before
   the mod is removed; **nothing calls it yet** (the Board/MCM uninstall verb is a
@@ -1702,7 +1711,10 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `FollowerState::mfoEnabled` (the Board writes it at `Board.cpp:1203`, the
   Scheduler/Logistics ticks skip on it at `Scheduler.cpp:256` / `Logistics.cpp:680`)
   — the toggle preserved `ProgState` but did NOT stop progression's actor writes.
-  Now `Followers::IsMfoEnabled(id)` (`Followers.cpp`, the `GetBaseClass` read shape)
+  Now `Followers::IsMfoEnabled(id)` (`Followers.cpp`, an **off-worker-safe read of
+  the `g_mx`-guarded `g_mfoOff` mirror** that `PublishActiveMirror` republishes from
+  `g_followers` on the worker at every `Refresh` — the `IsTrackedFast` road, #74;
+  Fable F2 on 4a62688 rejected the first version's unlocked `g_followers.find`)
   gates: in `PollWork` (`:~1055`) the LEVEL LEDGER still advances (`progressionLevel`
   gain, shared-growth banking — that IS the back debt) but every actor-touching
   branch is skipped (`RecomputeSkills`/`RecomputeHMS` on level gain, the strip, the
@@ -1722,8 +1734,10 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   write is `Rapport::Spend` in `Respec` (`ProgAllocator.cpp:1738`); the veteran
   level-match (`SetClass`) writes `progressionLevel` only. **What breaks:** gating
   the level ledger on `managed` would erase the back debt; touching the actor while
-  unmanaged violates "don't touch"; `IsMfoEnabled` is a `g_followers` read and must
-  stay on the main/serial-pump domain like `GetBaseClass`.
+  unmanaged violates "don't touch"; `IsMfoEnabled` must keep reading the mirror,
+  never `g_followers` (the SEV-1 cluster shape); a Board toggle is visible to the
+  poll only after the next `Refresh` (one diag turn) — do not shorten that by
+  reading the map.
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
   `GetPerkIndex` absent (`:841`) + native-ownership deferral (`:853`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single

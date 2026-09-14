@@ -1154,7 +1154,8 @@ move or re-derive either: not the level poll, not the ~2 s drift-watch, not a
 class change, not HMS, not the catch-up grant, not the load reconcile, not the
 manual toggle. The class weights decide where NEW level-up points go and are not
 even consulted when nothing is pending; `ReconcileSkill` (the single base-AV
-write) only HOLDS natural + auto + manual. The sibling dominance under the share
+write) only HOLDS natural + floor(auto) + manual (the exact float share is
+the ledger; whole points reach the actor). The sibling dominance under the share
 (`DominantWeaponSkill`/`DominantArmorSkill`) reads BASE SKILLS ONLY -- the old
 loadout read re-homed the whole share on every loot/equip change at drift-watch
 cadence, which the player saw as his placed points drifting (marth, 2026-09-13:

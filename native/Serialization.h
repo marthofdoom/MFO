@@ -97,12 +97,16 @@ namespace MFO {
     //   v7 (2026-09-13, A′/B′): per skill APPENDS autoPoints (f32, after
     //            manualPoints) — the permanent auto accumulator; per follower
     //            APPENDS after the v6 HMS block: autoLevelsGranted (u16),
-    //            nativeHeld (u8), strippedCount (u16) + stripped perk FormIDs
-    //            (u32 × N, ResolveFormID'd, unresolvable dropped). The v6 reader
-    //            is KEPT (#12): autoPoints migrates as max(0, points − manual)
-    //            (today's applied value, frozen), autoLevelsGranted as the loaded
-    //            partition's auto levels (nothing pending, nothing re-split),
-    //            nativeHeld=false (the PollWork edge strips an active follower).
+    //            strippedCount (u16) + stripped perk FormIDs (u32 × N,
+    //            ResolveFormID'd, unresolvable dropped). NO per-session flag
+    //            (nativeHeld is runtime-only — the strip re-runs every load
+    //            because base perk edits do not persist). The v6 reader is KEPT
+    //            (#12): autoPoints migrates as max(0, points − manual) (today's
+    //            APPLIED value, frozen — under cap saturation this under-records
+    //            auto points already wasted into skillCap; visible value
+    //            unchanged, matters only if the cap is raised — REVIEW-BACKLOG
+    //            MFO-B11), autoLevelsGranted as the loaded partition's auto
+    //            levels (nothing pending, nothing re-split).
     inline constexpr std::uint32_t kProgVersion    = 7;   // v7: A′ auto accumulator + B′ native-perk strip record
 
     // T#76 force-hold: a FOURTH independent record — the weapons MFO force-equipped

@@ -202,11 +202,15 @@ namespace MFO::ProgAllocator {
         // 2026-09-13). Stripped at Enroll, or on the first poll an unstripped
         // enrolled follower reads ACTIVE (a v6 save, a bench enrol, a re-check
         // of the T#78 toggle); stays stripped while enrolled, benched too.
-        // nativeHeld: true once stripped (cleared while unmanaged so the
-        // re-check re-strips, union). RestoreNativePerks = safe-removal. Never
-        // refunded: not credited (never his) and not debited (the §17 debit is
-        // recounted AFTER the strip). Unresolvable ids drop on load.
+        // RestoreNativePerks = safe-removal. Never refunded: not credited (never
+        // his) and not debited (the §17 debit is recounted AFTER the strip).
+        // Unresolvable ids drop on load.
         std::vector<RE::FormID> strippedPerks;
+        // RUNTIME-ONLY, never serialized (Fable F1): base AddPerk/RemovePerk do
+        // not survive a load (P3), so the strip is PER-SESSION by nature —
+        // OnPostLoad re-arms it (false) beside `applied`, the first managed
+        // ACTIVE poll re-strips (union), and it is cleared while unmanaged so
+        // a re-check re-strips too.
         bool                    nativeHeld{ false };
 
         std::vector<PerkAlloc>  perks;

@@ -698,6 +698,7 @@ namespace MFO {
         Followers::ClearTransientState();   // streak map is save-scoped (F1)
         Scheduler::ClearTransientState();   // suppression + round-robin cursor likewise
         Logistics::ClearTransientState();   // logistics cadence clocks + loot LRUs (#22h)
+        Logistics::ClearStyleMirror();      // perk-style mirror + its Post in-flight latches (Fable F4)
         // T#69: g_stockGear IS serialized (kRecStock), unlike everything
         // ClearTransientState owns -- kept as its own call so that contract
         // stays true. A load right after this repopulates it; a main-menu

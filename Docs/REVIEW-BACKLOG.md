@@ -89,6 +89,13 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed in the split:** naming the enum is a RENAME, which the split's brief forbids by name ("no refactors, no renames"), and a rename touching a shared header consumed by three TUs is its own change with its own review. Deferred, not dropped.
 - **Fix shape when drained:** give it a name in the house style the other internal headers use (`enum class` where the call sites can take the scoping, or a plain named `enum` if the bare `kHandLeft`/`kHandRight`/`kHandCount` spellings must survive at ~60 call sites across `Actuation.cpp` and `Actuation_Hands.cpp`). Purely mechanical, but it touches every one of those call sites, so it wants a diff review of its own.
 
+### MFO-B11 — v6→v7 PRGN migration under cap saturation under-records the auto ledger
+- **Raised:** Fable tier-3 review of `4a62688` (`feat/mfo-progression-strict-points-perk-style`), SEV-5. F5.
+- **Severity:** SEV-5
+- **Finding (verbatim):** v6 migration under cap saturation under-records the auto ledger (`ProgAllocator.cpp` `CoSaveLoad`, the `a_version < 7` branch): `points` is cap-clamped, so auto points already wasted into `skillCap` are dropped from `autoPoints`, while a v7 grant retains them. Visible value unchanged; matters only if `skillCap` is later raised.
+- **Reviewer's reasoning:** `SkillAlloc::points` is the APPLIED delta (`desired − natural`, clamped at `skillCap` by `ReconcileSkill`), the only v6 datum from which the auto share can be recovered; the granted-but-wasted remainder was never persisted anywhere in v6, so it cannot be reconstructed. A v7 ledger keeps the full float share, so a follower migrated at cap holds fewer ledger points than an identical follower leveled under v7 — invisible unless `skillCap` (`MFOP_SkillCap`, addon INI) is raised, when the v7 follower would climb further.
+- **Why it was NOT fixed:** unrecoverable by construction (the datum does not exist in a v6 save); documented at the migration site and in `Serialization.h`'s v7 doc. Deferred, not dropped.
+- **Fix shape when drained:** none possible for existing saves; if `skillCap` is ever raised as a feature, note in that brief that cap-migrated v6 followers will not receive the wasted points back and decide then whether a one-time `Respec`-style re-grant is offered.
 
 ---
 

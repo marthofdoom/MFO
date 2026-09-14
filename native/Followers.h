@@ -169,9 +169,11 @@ namespace MFO::Followers {
     std::uint8_t GetBaseClass(RE::Actor* a_actor);
     // The T#78 per-follower MFO master switch (FollowerState::mfoEnabled) —
     // UNCHECKED = "unmanage, don't touch" (marth 2026-09-13): progression stops
-    // every actor write for that follower too. Same read shape + thread
-    // discipline as GetBaseClass (a g_followers find on the main/serial pump
-    // domain). true for an untracked / non-persistable actor (no record = on).
+    // every actor write for that follower too. OFF-WORKER SAFE: reads the
+    // g_mx-guarded mirror Refresh republishes (the IsTrackedFast road, #74),
+    // never the live map — so the TRUE main-thread progression poll may call
+    // it. A toggle flipped on the Board is visible here by the next Refresh
+    // (one diag turn). true when no record / not yet mirrored.
     bool IsMfoEnabled(RE::FormID a_actorID);
     void         SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance);
     void         SetBaseClass(RE::Actor* a_actor,   std::uint8_t a_stance);

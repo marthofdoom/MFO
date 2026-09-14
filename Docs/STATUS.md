@@ -25,7 +25,7 @@ Read it as history and this block as current.
   sibling dominance reads BASE SKILLS ONLY. v6 saves migrate with today's applied
   values frozen. (B′) **native catalog perks are stripped at enrollment** and on the
   first active poll of an unstripped follower, recorded in the v7 co-save
-  (`strippedPerks`/`nativeHeld`), NEVER restored while enrolled (marth: "a clean
+  (`strippedPerks`; the strip is per-session — re-run on every load), NEVER restored while enrolled (marth: "a clean
   restore when it's uninstalled" — public `ProgAllocator::RestoreNativePerks`, no
   caller yet), never refunded, each strip logged — the strip set is exactly the
   catalog the Board draws (all 18 trees, not per class); also fixes "engine gives

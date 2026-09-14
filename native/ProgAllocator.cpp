@@ -368,45 +368,32 @@ namespace MFO::ProgAllocator {
             const int targetGranted = std::max(0, effAutoLvl - 1);
             const int pending = targetGranted - static_cast<int>(a_st.autoLevelsGranted);
 
-            // 1) GRANT the pending levels by the weights of this moment.
+            // 1) GRANT the pending levels by the weights of this moment. The
+            // EXACT float share goes into autoPoints (Fable F3 on 4a62688: a
+            // per-level largest-remainder split starved the 10 % skill of a
+            // 40/30/20/10 class FOREVER at the shipped 5 pts/level — 2/2/1/0 every
+            // level); the whole-point floor is taken at HOLD time below, so the
+            // fractions carry across levels and every skill converges on its
+            // exact share (20 levels × 5 → 40/30/20/10, not 40/40/20/0).
             if (pending > 0) {
-                const int pts = static_cast<int>(std::lround(
-                    g_econ.skillPointsPerLevel * static_cast<float>(pending)));
+                const float pts = g_econ.skillPointsPerLevel * static_cast<float>(pending);
                 const auto weights = WeightsFor(a_actor, *def);
-                if (pts > 0 && !weights.empty()) {
-                    // Largest-remainder: floors first, then the leftover whole
-                    // points to the largest fractional parts in weight order
-                    // (deterministic — WeightsFor is ESL order, descending).
-                    std::vector<int>   share(weights.size(), 0);
-                    std::vector<float> frac(weights.size(), 0.0f);
-                    int given = 0;
-                    for (std::size_t i = 0; i < weights.size(); ++i) {
-                        const float exact = static_cast<float>(pts) * weights[i].second;
-                        share[i] = static_cast<int>(std::floor(exact));
-                        frac[i]  = exact - static_cast<float>(share[i]);
-                        given   += share[i];
-                    }
-                    for (int left = pts - given; left > 0; --left) {
-                        std::size_t best = 0;
-                        for (std::size_t i = 1; i < weights.size(); ++i)
-                            if (frac[i] > frac[best]) best = i;
-                        ++share[best];
-                        frac[best] = -1.0f;
-                    }
+                if (pts > 0.0f && !weights.empty()) {
                     std::string diag;
-                    for (std::size_t i = 0; i < weights.size(); ++i) {
-                        if (share[i] <= 0) continue;
+                    for (const auto& [av, w] : weights) {
+                        const float share = pts * w;
+                        if (share <= 0.0f) continue;
                         auto* e = [&]() -> SkillAlloc* {
                             for (auto& x : a_st.skills)
-                                if (x.av == weights[i].first) return &x;
-                            a_st.skills.push_back({ weights[i].first, 0.0f, -1.0f });
+                                if (x.av == av) return &x;
+                            a_st.skills.push_back({ av, 0.0f, -1.0f });
                             return &a_st.skills.back();
                         }();
-                        e->autoPoints += static_cast<float>(share[i]);
-                        diag += std::format("{}{}+{}", diag.empty() ? "" : " ", AvName(weights[i].first), share[i]);
+                        e->autoPoints += share;
+                        diag += std::format("{}{}+{:.2f}={:.2f}", diag.empty() ? "" : " ", AvName(av), share, e->autoPoints);
                     }
                     if (a_log)
-                        spdlog::info("[prog] {:08X}: GRANT {} auto level(s) = {} point(s) by class \"{}\": {} "
+                        spdlog::info("[prog] {:08X}: GRANT {} auto level(s) = {:g} point(s) by class \"{}\": {} "
                                      "(granted levels {} -> {}; placed points never move)",
                                      id, pending, pts, def->name, diag, a_st.autoLevelsGranted, targetGranted);
                 }
@@ -424,8 +411,11 @@ namespace MFO::ProgAllocator {
                     ++it;
                 }
             }
+            // Whole points only reach the actor: floor the exact auto ledger
+            // (+1e-3 so an accumulated 39.99999f reads as 40); the fraction
+            // stays in autoPoints for the next grant to complete.
             for (auto& e : a_st.skills)
-                ReconcileSkill(avo, e, e.autoPoints + e.manualPoints,
+                ReconcileSkill(avo, e, std::floor(e.autoPoints + 1.0e-3f) + e.manualPoints,
                                BaselineFloor(a_st, e.av), id, a_log);
         }
 
@@ -1328,7 +1318,11 @@ namespace MFO::ProgAllocator {
         ApplyEconomyOverride();   // re-overlay the addon MCM INI (defaults cached)
         // Fresh session: everything reapplies lazily (the poll retries until
         // each enrolled actor resolves — P3's guarded shape, never eager).
-        for (auto& [id, st] : g_prog) st.applied = false;
+        // Fable F1 (4a62688): base perk edits do NOT survive a load (P3), so the
+        // natives are back on every base — re-arm the strip too (idempotent;
+        // strippedPerks unions), or every native node re-locks on the Board and
+        // the reapply defers MFO's rank behind the returned native.
+        for (auto& [id, st] : g_prog) { st.applied = false; st.nativeHeld = false; }
 
         ++g_pollGen;
         g_pollFrames = kPollFrames;
@@ -2026,7 +2020,8 @@ namespace MFO::ProgAllocator {
             // ledger (A′) and the native-perk strip record (B′). Read gated on
             // version >= 7; count-prefixed ids, each ResolveFormID'd on load.
             a_intfc->WriteRecordData(st.autoLevelsGranted);
-            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.nativeHeld ? 1u : 0u));
+            // (nativeHeld is NOT written: base AddPerk/RemovePerk are runtime-only
+            // — P3 — so the strip is per-session by nature and re-runs on load.)
             const auto strippedCount = static_cast<std::uint16_t>(
                 std::min<std::size_t>(st.strippedPerks.size(), kMaxPerkAllocs));
             a_intfc->WriteRecordData(strippedCount);
@@ -2276,6 +2271,10 @@ namespace MFO::ProgAllocator {
                 if (!std::isfinite(autoPts) || autoPts < 0.0f) autoPts = 0.0f;
                 // v6 MIGRATION (A′): the auto share is whatever is APPLIED today
                 // minus the manual points — frozen as placed, never re-split.
+                // Under cap saturation `points` is the CLAMPED applied delta, so
+                // auto points already wasted into skillCap are not carried into
+                // the ledger (a v7 grant retains them). Visible value identical;
+                // matters only if skillCap is later raised (Fable F5, MFO-B11).
                 if (a_version < 7) autoPts = std::max(0.0f, points - manual);
                 st.skills.push_back({ static_cast<RE::ActorValue>(av), points, lastBase, manual, autoPts });
             }
@@ -2379,16 +2378,13 @@ namespace MFO::ProgAllocator {
             // stream alignment; applied only when resolved. ─────────────────────
             if (a_version >= 7) {
                 std::uint16_t granted = 0, strippedCount = 0;
-                std::uint8_t  held = 0;
                 if (!a_intfc->ReadRecordData(granted))       return;
-                if (!a_intfc->ReadRecordData(held))          return;
                 if (!a_intfc->ReadRecordData(strippedCount)) return;
                 if (strippedCount > kMaxPerkAllocs) {
                     spdlog::error("[cosave] implausible stripped-perk count {} -- ABORTING progression load", strippedCount);
                     return;
                 }
                 st.autoLevelsGranted = granted;
-                st.nativeHeld        = (held != 0);
                 for (std::uint16_t i = 0; i < strippedCount; ++i) {
                     RE::FormID raw = 0, res = 0;
                     if (!a_intfc->ReadRecordData(raw)) return;
@@ -2406,7 +2402,6 @@ namespace MFO::ProgAllocator {
                                      : static_cast<int>(st.progressionLevel)) -
                     static_cast<int>(st.manualExcludedLevels));
                 st.autoLevelsGranted = static_cast<std::uint16_t>(std::max(0, effAutoLvl - 1));
-                st.nativeHeld        = false;
             }
 
             if (!resolved) { ++droppedActor; continue; }

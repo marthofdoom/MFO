@@ -439,6 +439,11 @@ namespace MFO::Logistics {
             return out;
         }
 
+        void ClearStyleMirror() {
+            std::scoped_lock lk(g_styleMx);
+            g_styleMirror.clear();
+        }
+
         WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state) {
             using WT = RE::WEAPON_TYPE;
             const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
