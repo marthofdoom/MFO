@@ -286,6 +286,32 @@ namespace {
                          MFO::Config::g_cstyReassert.load() ? "ON" : "OFF",
                          MFO::Config::g_cstyReassertKey.load());
             MFO::Forms::Resolve();          // then forms
+            {
+                // THE RUNTIME PATHS IN FORCE, in one line, so a 1.5.97 log proves
+                // which paths are live (feat/mfo-1.5.97-pass, 2026-09-15). The
+                // predicate is the SAME `IsAE() || IsSE()` the cast gates
+                // (Actuation::CastOn, CastSelfDirect / CastTargetDirect / CastAuto,
+                // ComposedCast::Enabled) and Packages' ForceRefToNativeAvailable()
+                // evaluate; VR is the only runtime that reads gated/fallback. The
+                // equip slot is the FormID lookup Loadout::LeftHandSlot() makes
+                // (0x00013F43, Skyrim.esm EQUP LeftHand) -- after Forms::Resolve
+                // so the form is loadable; a null here is a real fault (principle
+                // 7: every spell equip would then pass no slot), so it is an
+                // error line, never a quiet blank.
+                const bool  open = REL::Module::IsAE() || REL::Module::IsSE();
+                const auto* slot = MFO::Loadout::LeftHandSlot();
+                if (slot) {
+                    spdlog::info("[runtime] {}: cast gates {}, ForceRefTo {}, equip-slot {:08X}",
+                                 REL::Module::get().version().string(),
+                                 open ? "open" : "gated", open ? "native" : "fallback",
+                                 slot->GetFormID());
+                } else {
+                    spdlog::error("[runtime] {}: cast gates {}, ForceRefTo {}, equip-slot MISSING "
+                                  "(EQUP 0x00013F43 did not resolve -- spell equips will carry no slot)",
+                                  REL::Module::get().version().string(),
+                                  open ? "open" : "gated", open ? "native" : "fallback");
+                }
+            }
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
             MFO::Progression::Init();       // addon detection + frozen perk catalog (§1/§2/§3); read-only pass

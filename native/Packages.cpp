@@ -307,6 +307,11 @@ namespace MFO::Packages {
         //
         // VR is REFUSED: no verified VR id, and the two-arg RelocationID would
         // hand VR the SE id unverified. Every caller gates on this predicate.
+        // CONFIRMED table (2026-09-15, 1.5-1.7-address-table.CONFIRMED.md) row
+        // "Packages.cpp:302-305 TESQuest::ForceRefTo": AE id 25052 -> 0x3CDEE0,
+        // SE id 24523 -> 0x375050, both CONFIRMED (Papyrus ForceRefTo callback
+        // tail-jump on raw objdump). plugin.cpp's `[runtime]` startup line
+        // prints the same IsAE()||IsSE() verdict so a deck log shows it.
         bool ForceRefToNativeAvailable() {
             return REL::Module::IsAE() || REL::Module::IsSE();
         }

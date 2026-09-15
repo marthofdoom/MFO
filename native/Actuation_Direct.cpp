@@ -827,8 +827,21 @@ namespace MFO::Actuation {
     }
 
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell, std::uint32_t a_stopPct) {
-        // AE-only, mirroring CastOn (the SE crash path T#67). Off AE -> transparent.
-        if (!REL::Module::IsAE())    return SelfCast::Declined;
+        // 1.6.1170 + 1.5.97 (feat/mfo-1.5.97-pass, 2026-09-15; was AE-only as the
+        // T#67 SE crash gate). The T#67 fault was Loadout::LeftHandSlot()'s
+        // GetObject read of BGSDefaultObjectManager (+0xB80 poison on SE) -- now a
+        // FormID lookup (CONFIRMED table rows "held branch Loadout.cpp:63,81
+        // LookupByID<BGSEquipSlot>(0x00013F43)" + "BGSDefaultObjectManager::
+        // objects[]/objectInit[] count": 364 SE / 366 AE). Everything else this
+        // path touches on 1.5.97 is CONFIRMED there too: the forced-cast package
+        // route ("Packages.cpp:302-305 TESQuest::ForceRefTo" 24523/25052), the
+        // CombatController reads ("attackerHandle @0x28, targetHandle @0x2C,
+        // combatStyle @0x38 (all < 0x68)" -- combatGroup @0x00), and the seats a
+        // claimed cast rides on ("CasterConsent.cpp:1087-1095 14 seat vtables",
+        // "CombatStyle.cpp:384-417 CombatInventoryItemMagicT" 30/30, "GetMagicTarget
+        // sret" same ABI). VR stays refused: no VR value in the table. Mirrors
+        // CastOn / CastTargetDirect / CastAuto / ComposedCast::Enabled.
+        if (!(REL::Module::IsAE() || REL::Module::IsSE()))   return SelfCast::Declined;
         if (!a_follower || !a_spell) return SelfCast::Declined;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
@@ -1140,7 +1153,11 @@ namespace MFO::Actuation {
     // the engine apply itself is posted to the MAIN thread (ApplyTargetEffect).
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                               RE::Actor* a_target, std::uint32_t a_stopPct) {
-        if (!REL::Module::IsAE())            return SelfCast::Declined;   // AE-only (T#67)
+        // 1.6.1170 + 1.5.97, VR refused -- the same lift, the same CONFIRMED
+        // table rows and the same reasoning as CastSelfDirect's gate above
+        // (T#67's fault was the LeftHandSlot GetObject read, now a FormID
+        // lookup; ForceRefTo 24523/25052; CombatController < 0x68; seats).
+        if (!(REL::Module::IsAE() || REL::Module::IsSE()))   return SelfCast::Declined;
         if (!a_follower || !a_spell || !a_target) return SelfCast::Declined;
         if (a_target == a_follower)          return SelfCast::Declined;   // self -> CastSelfDirect
         const auto id       = a_follower->GetFormID();
@@ -1440,10 +1457,12 @@ namespace MFO::Actuation {
     // (deferred project-wide). Friendly fire is structurally impossible: the
     // effect is placed on the CHOSEN actor, never launched as a projectile.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold) {
-            // AE-only, mirroring CastOn / CastSelfDirect (the SE crash path T#67).
-            if (!REL::Module::IsAE())
+            // 1.6.1170 + 1.5.97, VR refused -- mirrors CastOn / CastSelfDirect (the
+            // former T#67 SE crash gate; see CastSelfDirect's comment for the
+            // CONFIRMED table rows every 1.5.97 value on this path comes from).
+            if (!(REL::Module::IsAE() || REL::Module::IsSE()))
                 return { Result::FailedOther,
-                         "cast control is AE-only (SE/VR use the follower's own AI casting)", true };
+                         "cast control is 1.6/1.5 only (VR uses the follower's own AI casting)", true };
             auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
             if (!spell)
                 return { Result::FailedOther,

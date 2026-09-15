@@ -40,8 +40,13 @@ namespace MFO::ComposedCast {
         // did before this existed.
         constexpr auto kInFlightHoldCap = std::chrono::milliseconds(APMFBridge::kHealCastTtlMs);
 
-        // Master gate: AE-only (mirrors CastSelfDirect T#67); HEAL-ONLY (offense
-        // and buff stay on the byte-identical AI-fired / kInstant paths -- the
+        // Master gate: 1.6.1170 + 1.5.97, VR refused (feat/mfo-1.5.97-pass,
+        // 2026-09-15; was AE-only, mirroring CastSelfDirect's T#67 gate -- the
+        // same lift, the same CONFIRMED table rows: the seats a claim rides on are
+        // "CasterConsent.cpp:1087-1095 14 seat vtables", "CombatStyle.cpp:384-417
+        // CombatInventoryItemMagicT" 30/30 and "GetMagicTarget sret", all CONFIRMED
+        // on 1.5.97; this TU itself touches no engine value, only the APMF API);
+        // HEAL-ONLY (offense and buff stay on the byte-identical AI-fired / kInstant paths -- the
         // kIntent_Cast claim is reserved for the case the AI would never choose
         // to cast on its own); needs APMF present (the claim keeps the AI/other
         // frameworks off the hand -- without it "legacy = APMF-absent-only"
@@ -50,7 +55,7 @@ namespace MFO::ComposedCast {
         bool Enabled(RE::Actor* a_follower, RE::SpellItem* a_spell, CasterConsent::SpellKind a_kind) {
             if (!a_follower || !a_spell)                     return false;
             if (a_kind != CasterConsent::SpellKind::Heal)    return false;
-            if (!REL::Module::IsAE())                        return false;   // SE/VR -> kInstant
+            if (!(REL::Module::IsAE() || REL::Module::IsSE())) return false; // VR -> kInstant
             if (!Config::g_healAnimPackage.load())           return false;   // opt-in, default OFF
             if (!APMFBridge::Available())                    return false;   // APMF absent -> kInstant
             return true;
@@ -263,7 +268,7 @@ namespace MFO::ComposedCast {
         // label gets printed). Cleared BEFORE the Enabled() gate so a toggle
         // flipped off mid-session cannot leave a record behind either.
         if (a_follower) g_lastHold.erase(a_follower->GetFormID());
-        // NOTHING WAS ASKED -- bad args, a non-Heal kind, SE/VR, bHealAnimPackage
+        // NOTHING WAS ASKED -- bad args, a non-Heal kind, VR, bHealAnimPackage
         // off, or APMF ABSENT (Enabled() is exactly those five). APMF was never
         // consulted, so this can never be a refusal: the caller's kInstant apply
         // is the SUPPORTED degrade contract here, not a fallback around a

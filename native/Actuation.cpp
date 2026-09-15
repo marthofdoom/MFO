@@ -386,7 +386,7 @@ namespace MFO::Actuation {
             case SelfCast::Declined:
             default:
                 // Unaffordable (§5.3) / LoS or line-of-fire held (offense) /
-                // off-AE: transparent + legible, the rules below run.
+                // VR (cast control is 1.6/1.5 only): transparent + legible, the rules below run.
                 return { Result::FailedOther, "concentration direct-force declined", true };
             }
         }
@@ -400,21 +400,31 @@ namespace MFO::Actuation {
         // this (unchanged -- they are not part of the #68 ladder at all).
         Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target,
                        bool a_rangeGate = false) {
-            // T#67 SE/VR GUARD (mirrors the CasterConsent hook guards). The mage
-            // cast-control path CRASHES on Skyrim SE 1.5.97: a reporter's crash log
-            // pinned an EXCEPTION_ACCESS_VIOLATION to Scheduler::Tick -> Actuation::
-            // Fire -> CastOn on the SKSE job worker (byte read off a poisoned
-            // pointer), an SE-only divergence in the equip/cost work below. The
-            // forced-cast PACKAGE route already declines off AE, but CastOn's own
-            // Loadout::Prepare (spell equip) + CalculateMagickaCost run FIRST and
-            // are what fault. This whole feature is AE-developed and AE-tested, so
-            // off AE we decline the cast rule TRANSPARENTLY -- the follower's own
-            // vanilla AI keeps casting (mobile, animated), exactly the graceful
-            // degradation the VR guards already give. Gate here (not just the
-            // package route) so no cast-control code runs at all off AE.
-            if (!REL::Module::IsAE())
+            // RUNTIME GUARD: 1.6.1170 + 1.5.97, VR refused (feat/mfo-1.5.97-pass,
+            // 2026-09-15). This was the T#67 AE-only gate: the mage cast-control
+            // path CRASHED on Skyrim SE 1.5.97 -- a reporter's crash log pinned an
+            // EXCEPTION_ACCESS_VIOLATION to Scheduler::Tick -> Actuation::Fire ->
+            // CastOn on the SKSE job worker, a byte read off the poisoned pointer
+            // 0x0101010101010101. Root cause, measured on both unpacked binaries:
+            // Loadout::LeftHandSlot()'s BGSDefaultObjectManager::GetObject read
+            // (CommonLib 3.7.0 derefs the objectInit bool array AS A POINTER at
+            // +0xB80). That read is gone -- the slot is LookupByID(0x00013F43) on
+            // every runtime (CONFIRMED table rows "held branch Loadout.cpp:63,81
+            // LookupByID<BGSEquipSlot>(0x00013F43)" and "BGSDefaultObjectManager::
+            // objects[]/objectInit[] count": 364 SE / 366 AE). The rest of this
+            // path's 1.5.97 values are CONFIRMED there too: the forced-cast package
+            // route ("Packages.cpp:302-305 TESQuest::ForceRefTo" 24523/25052), the
+            // CombatController reads ("attackerHandle @0x28 ... (all < 0x68)"), and
+            // the seats a claimed cast rides on ("14 seat vtables", "30
+            // CombatInventoryItemMagicT combos", "GetMagicTarget sret"). VR keeps
+            // the transparent decline (no VR value in the table): the follower's
+            // own vanilla AI keeps casting (mobile, animated). Gate here (not just
+            // the package route) so no cast-control code runs at all on a runtime
+            // this pass did not confirm. Mirrors CastSelfDirect / CastTargetDirect /
+            // CastAuto / ComposedCast::Enabled.
+            if (!(REL::Module::IsAE() || REL::Module::IsSE()))
                 return { Result::FailedOther,
-                         "cast control is AE-only (SE/VR use the follower's own AI casting)", true };
+                         "cast control is 1.6/1.5 only (VR uses the follower's own AI casting)", true };
             // TRANSPARENT (GAMBIT_FLOWS §2): a cast that provably cannot run this
             // tick must not wall off the rules below it -- FFXII skips an
             // unaffordable gambit and runs the next line.
@@ -790,7 +800,7 @@ namespace MFO::Actuation {
                     return { Result::NoOp, "self-cast held off (another heal owns the claim)", true };
                 case SelfCast::Declined:
                 default:
-                    // Unaffordable / off-AE / no caster: transparent, the rules
+                    // Unaffordable / VR (1.6/1.5 only) / no caster: transparent, the rules
                     // below run (the follower is not stuck on a cast that can't go).
                     return { Result::FailedOther, "self-cast could not fire", true };
                 }
