@@ -323,7 +323,7 @@ namespace MFO::Packages {
         bool ForceRefToNative(RE::TESQuest* a_quest, std::uint32_t a_aliasID,
                               RE::TESObjectREFR* a_ref) {
             if (!a_quest) return false;
-            if (!ForceRefToNativeAvailable()) return false;   // VR: id unverified
+            if (!ForceRefToNativeAvailable()) return false;   // VR / non-97 1.5.x: id unverified
 
             using func_t = std::uint32_t (*)(RE::TESQuest*, std::uint32_t, RE::TESObjectREFR*);
             static const REL::Relocation<func_t> func{ REL::RelocationID(24523, 25052) };

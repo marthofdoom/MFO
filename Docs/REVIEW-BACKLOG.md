@@ -277,6 +277,14 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** coordinator call 2026-09-15: nothing above SEV-3 this round, cycle ended (rule 9); tier 2 is OFF by default and gem CHOICE is marth's planned redesign.
 - **Fix shape when drained (verbatim):** reserve the candidate at the swap-out (`--avail[loot]` when `UnsocketGem` returns true) so a later item cannot evict for the same copy.
 
+### MFO-B37 — `Actuation.cpp` is over the 2500-line cap (2622): the split is its own brief
+- **Raised:** Fable tier-3 review of `87cabc1` (`feat/mfo-1.5.97-pass`), SEV-5 hygiene, CONFIRMED (`wc -l`: 2605 on `main` `5e1c41b` before the branch, 2622 after round 2's gate comments).
+- **Severity:** SEV-5 (process; no behaviour)
+- **Finding (verbatim):** Actuation.cpp 2615 lines reported.
+- **Reviewer's reasoning:** CLAUDE.md's 2500-line HARD RULE is overridden by scope rule 1 inside an unrelated task — crossing the cap is a STOP-and-report, never a licence to split; a TU split is tier 3 (never "CI-identical") and needs its own field cycle.
+- **Why it was NOT fixed:** the 1.5.97 pass brief said "cap relaxed — report, do not split". The file was already over the cap on `main` (the dual-wield / combat-pick work of 2026-09-13 took it from ~2480 to 2605); this branch added 17 comment lines.
+- **Fix shape when drained (verbatim):** a dedicated split brief for `Actuation.cpp` — candidates are the weapon equip block (`WeaponRolesFor` `:1677`, `IsOneHandMelee` `:1685`, `PickOffHandWeapon` `:1695`, `EquipLeftHeld` `:1748`, `EquipWeapon` `:1782`, the `g_forcedWeapon` ledger + `ReconcileForcedWeapon`/`CoLoadForcedWeapons`) into an `Actuation_Equip.cpp` next to `Actuation_Direct.cpp`/`Actuation_Hands.cpp`, shared state through `Actuation_internal.h`, as the two earlier splits did. Full adversarial Fable review, one field cycle on 1.6.1170 before the next feature lands on it.
+
 ### MFO-B34 — should the tier-2 swap-up ever evict a Conduit that an already-socketed off-domain gem depends on?
 - **Raised:** Fable tier-3 review of `1efa3e3` (`fix/mfo-meo-no-loose-gems`), policy question attached to the SEV-2 (fixed on the branch: the candidate is judged against the item WITHOUT the evictee, `sansEvictee`).
 - **Finding (verbatim):** Policy question for marth, record in backlog: should MFO ever evict a Conduit that an already-socketed off-domain gem depends on?
