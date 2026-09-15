@@ -138,14 +138,29 @@ namespace MFO::Logistics {
             // ALREADY-CARRIED weapon of that kind. Creature/excluded weapons
             // are unusable gear -- they never set a baseline.
             ctx.wantCrossbow = roles.wantCrossbow;
+            // SECOND ONE-HANDER (dual wield by perks, 2026-09-14): a follower whose
+            // perks vote dual wield fights with the top-2 owned one-handers
+            // (Actuation's PickOffHandWeapon pairs from the pack), so the loot
+            // judge tracks the SECOND-best owned in-class score too -- the bar a
+            // second one-hander must beat. A stack of >= 2 of one form covers
+            // both hands, so it counts twice.
+            ctx.wantOffHand = roles.offHand == 2 && ctx.meleeTargetClass == WepClass::OneHand;
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
                 if (!w || IsCreatureWeapon(w) ||
                     (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID()))) continue;
                 if (ctx.meleeTargetClass != WepClass::Other &&
-                    WeaponClassOf(w->GetWeaponType()) == ctx.meleeTargetClass)
-                    ctx.baseScore = std::max(ctx.baseScore, WeaponScore(ctx.roles, w));
+                    WeaponClassOf(w->GetWeaponType()) == ctx.meleeTargetClass) {
+                    const float sc = WeaponScore(ctx.roles, w);
+                    if (sc > ctx.baseScore) {
+                        ctx.offHandBaseScore = std::max(ctx.offHandBaseScore, ctx.baseScore);   // the old best drops to second
+                        ctx.baseScore        = sc;
+                        if (data.first >= 2) ctx.offHandBaseScore = std::max(ctx.offHandBaseScore, sc);
+                    } else {
+                        ctx.offHandBaseScore = std::max(ctx.offHandBaseScore, sc);
+                    }
+                }
                 // ONE sidearm is the mage-backup contract: he restocks only
                 // when he carries NONE, never accumulates an armory (creature/
                 // excluded weapons already skipped above -- an unusable weapon
@@ -182,7 +197,8 @@ namespace MFO::Logistics {
                 if (Config::g_dollsMode.load()) return false;   // #61 FASHIONRIM
                 const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                     & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
-                const bool shieldUseless = isShield && !(ctx.meleeTargetClass == WepClass::OneHand && !ctx.doRanged);
+                const bool shieldUseless = isShield && !(ctx.meleeTargetClass == WepClass::OneHand && !ctx.doRanged &&
+                                                         ctx.roles.offHand != 2);   // a dual wielder's left hand is a weapon, not a shield
                 if (ctx.useMageApparel && !isShield) {
                     const int slot = MageClothingSlot(armo);
                     int cTier = 0; std::int32_t cMetric = 0;
@@ -206,6 +222,11 @@ namespace MFO::Logistics {
                 const WepClass wc = WeaponClassOf(weap->GetWeaponType());
                 if (ctx.meleeTargetClass != WepClass::Other && wc == ctx.meleeTargetClass &&
                     WeaponScore(ctx.roles, weap) > ctx.baseScore)
+                    return true;
+                // SECOND ONE-HANDER (dual wield by perks): beats the second-best
+                // owned one-hander -- same rule as LootEquipment's bestOffHand.
+                if (ctx.wantOffHand && wc == WepClass::OneHand &&
+                    WeaponScore(ctx.roles, weap) > ctx.offHandBaseScore)
                     return true;
                 if (ctx.doRanged) {
                     const auto wt = weap->GetWeaponType();
@@ -265,6 +286,8 @@ namespace MFO::Logistics {
             float               bestArmorScore= 0.0f;   // best-first by ArmorScore (class x perk biased rating), like bestWeapScore
             RE::TESBoundObject* bestWeap      = nullptr;
             float               bestWeapScore = baseScore;   // WeaponScore (perk-style biased damage)
+            RE::TESBoundObject* bestOffHand   = nullptr;     // a SECOND one-hander for a dual wielder (ctx.wantOffHand)
+            float               bestOffHandScore = ctx.offHandBaseScore;   // beat his second-best OWNED one-hander
             RE::TESBoundObject* bestRanged    = nullptr;
             std::uint16_t       bestRangedDmg = myRangedDmg;
             RE::TESBoundObject* bestMage      = nullptr;   // clothing/jewelry apparel (magic user) -- unified MEO-aware judge
@@ -299,7 +322,10 @@ namespace MFO::Logistics {
                     // a shield).
                     const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                         & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
-                    const bool shieldUseless = isShield && !(meleeTargetClass == WepClass::OneHand && !doRanged);
+                    // A dual wielder (perks vote a left-hand WEAPON) has no hand for a
+                    // shield either -- ctx.roles.offHand == 2 (2026-09-14).
+                    const bool shieldUseless = isShield && !(meleeTargetClass == WepClass::OneHand && !doRanged &&
+                                                             ctx.roles.offHand != 2);
                     // MAGE APPAREL + JEWELRY (#21 unified with the buy side): a magic
                     // user's dress-up is judged by the shared MEO-aware ranking
                     // (MageApparelBuyKey: value-primary with MEO, else school-enchant
@@ -369,6 +395,17 @@ namespace MFO::Logistics {
                         bestWeapScore = WeaponScore(ctx.roles, weap);
                         bestWeap      = obj;
                     }
+                    // SECOND ONE-HANDER (dual wield by perks, 2026-09-14): a one-
+                    // hander that beats the follower's SECOND-best owned one-hander
+                    // is loot for his left hand. STOCKED, never put in the right hand
+                    // (it is by construction no better than the primary); Actuation's
+                    // PickOffHandWeapon pairs it at the next combat equip. Same rule
+                    // as LooseEquipmentQualifies (one rule, two sources).
+                    if (ctx.wantOffHand && wc == WepClass::OneHand &&
+                        WeaponScore(ctx.roles, weap) > bestOffHandScore) {
+                        bestOffHandScore = WeaponScore(ctx.roles, weap);
+                        bestOffHand      = obj;
+                    }
                     // Ranged pickup -- ONLY the follower's kind (bow XOR crossbow).
                     if (doRanged) {
                         const auto wt = weap->GetWeaponType();
@@ -400,14 +437,16 @@ namespace MFO::Logistics {
             }
 
             // Prefer the in-class weapon upgrade; then a ranged weapon they need
-            // for their equip-ranged gambit; then the mage's missing sidearm
-            // (safety before wardrobe); then school apparel over plain armor
-            // (the point of the magic loadout). One item this tick (§4.3).
-            RE::TESBoundObject* best = bestWeap   ? bestWeap
-                                     : bestRanged ? bestRanged
-                                     : bestBackup ? bestBackup
-                                     : bestMage   ? bestMage
-                                                  : bestArmor;
+            // for their equip-ranged gambit; then a dual wielder's second one-
+            // hander; then the mage's missing sidearm (safety before wardrobe);
+            // then school apparel over plain armor (the point of the magic
+            // loadout). One item this tick (§4.3).
+            RE::TESBoundObject* best = bestWeap    ? bestWeap
+                                     : bestRanged  ? bestRanged
+                                     : bestOffHand ? bestOffHand
+                                     : bestBackup  ? bestBackup
+                                     : bestMage    ? bestMage
+                                                   : bestArmor;
             // Peek: an upgrade exists AND the follower can actually carry it. Without
             // the weight gate an overencumbered follower walks a whole excursion leg,
             // takes nothing at arrival (the real take IS weight-gated below), and the
@@ -420,14 +459,18 @@ namespace MFO::Logistics {
             // a_src, captures + carries MEO gems, equips IN PLACE on the main thread
             // (MainThread::Post EquipObject, never DoReset3D -- #62), queues the gem
             // move. The mage BACKUP stays STOCK-ONLY (a caster's hand belongs to his
-            // spells; his own AI draws the sidearm at zero magicka). The buy / owned-
-            // upgrade pass calls the SAME AcquireEquip with a_src=nullptr.
-            const bool equipped = AcquireEquip(a_follower, best, a_src, myWeap, best == bestBackup);
+            // spells; his own AI draws the sidearm at zero magicka), and so does the
+            // dual wielder's SECOND one-hander (the right hand keeps the primary;
+            // Actuation fills the left at combat equip). The buy / owned-upgrade
+            // pass calls the SAME AcquireEquip with a_src=nullptr.
+            const bool equipped = AcquireEquip(a_follower, best, a_src, myWeap,
+                                               best == bestBackup || best == bestOffHand);
 
             // [equip] DIAGNOSTIC: log WHAT we put on, over WHAT, and the reasoning.
             if (auto* nw = best->As<RE::TESObjectWEAP>()) {
                 spdlog::info("[equip] {:08X}: LOOT-{} weapon '{}' dmg={} score={:.1f} kind=0x{:02X} class={} <- held '{}' "
-                             "dmg={} class={} | meleeTgt={} wantsMelee={} wantsRanged={} baseScore={:.1f} prefer=0x{:02X}",
+                             "dmg={} class={} | meleeTgt={} wantsMelee={} wantsRanged={} baseScore={:.1f} prefer=0x{:02X} "
+                             "offHand={} offHandBase={:.1f}{}",
                              a_follower->GetFormID(), equipped ? "EQUIP" : "STOCK",
                              nw->GetFullName() ? nw->GetFullName() : "?", nw->GetAttackDamage(),
                              WeaponScore(ctx.roles, nw), WeaponKindOf(nw),
@@ -436,7 +479,8 @@ namespace MFO::Logistics {
                              myWeap ? myWeap->GetAttackDamage() : 0,
                              myWeap ? static_cast<int>(WeaponClassOf(myWeap->GetWeaponType())) : -1,
                              static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseScore,
-                             ctx.roles.preferKinds);
+                             ctx.roles.preferKinds, static_cast<int>(ctx.roles.offHand), ctx.offHandBaseScore,
+                             best == bestOffHand ? " -> second one-hander (dual wield by perks)" : "");
             } else {
                 auto* na = best->As<RE::TESObjectARMO>();
                 spdlog::info("[equip] {:08X}: LOOT armor/apparel '{}' type={} rat={:.0f} score={:.1f} (class {} bias h/l={:.2f}/{:.2f}) -> equip {}",

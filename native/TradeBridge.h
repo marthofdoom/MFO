@@ -105,6 +105,18 @@ namespace MFO::TradeBridge {
         // bought every visit. armorBaseRat above still carries the raw best owned
         // RATING per slot (diagnostic; PlanBuy no longer ranks by it).
         float         armorBaseScore[5] = {};
+        // -- APPENDED 2026-09-14 (second one-hander for dual wield by perks;
+        //    append-only) --
+        // wantOffHand: the follower's perks vote dual wield (WeaponRoles::offHand
+        // == 2) and his melee class is one-handed, so he fights with TWO one-
+        // handers and the buy planner may add a SECOND in-class one-hander.
+        // offHandBaseScore: the SECOND-best owned in-class one-hander's
+        // WeaponScore (a count >= 2 stack counts twice; 0 when he owns fewer
+        // than two) -- the bar a second buy must beat, exactly as
+        // meleeBaseScore is the bar for the first. Loot uses the same pair
+        // (EquipmentContext::wantOffHand / offHandBaseScore).
+        bool          wantOffHand      = false;
+        float         offHandBaseScore = 0.0f;
     };
 
     // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /

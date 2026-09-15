@@ -400,6 +400,29 @@ namespace MFO::Logistics {
                                              a_pref.heavyBias, a_pref.lightBias);
         }
 
+        // ── THE HEAD SLOT is THREE biped bits, not one (field 2026-09-14) ───
+        // Vanilla helmets (Imperial Light Helmet 00013EDB, Elven Helmet
+        // 0001391D, Leather/Iron Helmet, Shrouded Cowl 000D2842) carry BOD2 =
+        // 31 Hair + 42 Circlet with NO bit 30 Head; IA/Dwemer helmets carry
+        // 30+31+42+43. A kHead-only test therefore saw every vanilla helmet
+        // as "not a head piece": never bought (ArmorBuySlot -1), never a head
+        // baseline, never kept, sold as junk, never looted -- and the inverse,
+        // a bit-30 helmet judged a worn 31+42 helmet as a BARE head and MFO
+        // scored a DOWNGRADE ("OWNED armor 'Dwemer Helmet' [Heavy] 20 <- worn
+        // 'Shrouded Cowl' [Light] 32.5"). ONE predicate for "covers the head",
+        // the SAME three bits MageClothingSlot / WornInLogicalSlot(0) already
+        // use: ArmorBuySlot, the keep buckets, ArmorIsBetter and the [armor]
+        // log all route through it. Rating-0 circlets are still excluded by
+        // every consumer's own rating<=0 gate; this is slot identity only.
+        inline bool IsHeadSlotMask(std::uint32_t a_mask) {
+            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            constexpr std::uint32_t kHeadBits =
+                static_cast<std::uint32_t>(Slot::kHead) |
+                static_cast<std::uint32_t>(Slot::kHair) |
+                static_cast<std::uint32_t>(Slot::kCirclet);
+            return (a_mask & kHeadBits) != 0;
+        }
+
         // ── PERK-STYLE MIRROR (worker reads, main thread writes) ────────────
         // Progression::TallyStyleVotes reads the base's live perk array, which
         // the allocator mutates on the MAIN thread (AddPerk/RemovePerk realloc
@@ -453,6 +476,17 @@ namespace MFO::Logistics {
             // follower has no preferred kind). Every in-role candidate is
             // compared through the SAME WeaponScore(roles, weapon).
             float         baseScore         = 0.0f;
+            // SECOND ONE-HANDER (dual wield by perks, 2026-09-14): wantOffHand =
+            // roles.offHand == 2 AND the melee target class is OneHand -- the
+            // follower fights with two one-handers, so a second in-class one-
+            // hander is loot too. offHandBaseScore = the SECOND-best owned in-
+            // class one-hander's WeaponScore (a count >= 2 stack counts twice;
+            // 0 when he owns fewer than two): the bar the second must beat,
+            // as baseScore is the bar for the first. Mirrored in
+            // TradeBridge::BuyThresholds for the buy side and in the economy
+            // keep buckets (top-2 kept) so loot, keep and buy agree.
+            bool          wantOffHand       = false;
+            float         offHandBaseScore  = 0.0f;
             WeaponRoles   roles;                   // the roles the score was built from
             ArmorPref     armorPref;               // the armor class/perk bias every rated-armor compare in this scan uses
             std::uint16_t myRangedDmg       = 0;   // best ranged weapon already carried

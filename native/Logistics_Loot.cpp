@@ -250,6 +250,8 @@ namespace MFO::Logistics {
             using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
             using AT   = RE::BGSBipedObjectForm::ArmorType;
             struct SlotRow { Slot slot; const char* name; };
+            // The head row reads WornInLogicalSlot(0) (Head|Hair|Circlet), not the
+            // kHead bit alone -- a worn vanilla helmet (31+42) printed "head (bare)".
             static constexpr SlotRow kRows[] = {
                 { Slot::kBody, "body" }, { Slot::kHead, "head" }, { Slot::kHands, "hands" },
                 { Slot::kFeet, "feet" }, { Slot::kShield, "shield" },
@@ -257,7 +259,8 @@ namespace MFO::Logistics {
             RE::TESObjectARMO* worn[5] = {};
             std::uint64_t key = 1469598103934665603ull;   // FNV-1a offset (never 0)
             for (int i = 0; i < 5; ++i) {
-                worn[i] = a_follower->GetWornArmor(kRows[i].slot);
+                worn[i] = (kRows[i].slot == Slot::kHead) ? WornInLogicalSlot(a_follower, 0)
+                                                         : a_follower->GetWornArmor(kRows[i].slot);
                 key = (key ^ (worn[i] ? worn[i]->GetFormID() : 0u)) * 1099511628211ull;
             }
             key = (key ^ (a_pref.heavyClass ? 0x48u : 0x4Cu)) * 1099511628211ull;
@@ -324,23 +327,34 @@ namespace MFO::Logistics {
             const float cand = ArmorScore(a_pref, a_armo);
 
             using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            // HEAD is judged ONCE as a logical slot (IsHeadSlotMask: Head|Hair|
+            // Circlet vs WornInLogicalSlot(0), the same three bits) -- a per-bit
+            // kHead test read a worn 31+42 vanilla helmet as a BARE head and let a
+            // bit-30 Dwemer Helmet (20) "dress" it over a worn Shrouded Cowl
+            // (32.5): a scored downgrade (field 2026-09-14). The remaining slots
+            // stay per-bit.
             static constexpr Slot kSlots[] = {
-                Slot::kHead, Slot::kBody, Slot::kHands, Slot::kForearms,
+                Slot::kBody, Slot::kHands, Slot::kForearms,
                 Slot::kFeet, Slot::kCalves, Slot::kShield,
             };
             const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
             bool overlapsAny = false;
+            // BARE slot -- nothing worn, or only rating-0 clothing/rags: this
+            // piece DRESSES it. Valid to acquire even with no armor to upgrade
+            // (the helmetless-follower case). Not a downgrade -> keep scanning.
+            // Real worn armor there: only a strictly higher SCORE may replace
+            // it. A tie or worse is beaten -> never downgrade real worn armor.
+            auto beatenBy = [&](RE::TESObjectARMO* worn) {
+                return worn && worn->GetArmorRating() > 0.0f && ArmorScore(a_pref, worn) >= cand;
+            };
+            if (IsHeadSlotMask(mask)) {
+                overlapsAny = true;
+                if (beatenBy(WornInLogicalSlot(a_follower, 0))) return false;
+            }
             for (const auto slot : kSlots) {
                 if (!(mask & static_cast<std::uint32_t>(slot))) continue;
                 overlapsAny = true;
-                auto* worn = a_follower->GetWornArmor(slot);
-                // BARE slot -- nothing worn, or only rating-0 clothing/rags: this
-                // piece DRESSES it. Valid to acquire even with no armor to upgrade
-                // (the helmetless-follower case). Not a downgrade -> keep scanning.
-                if (!worn || worn->GetArmorRating() <= 0.0f) continue;
-                // Real worn armor here: only a strictly higher SCORE may replace
-                // it. A tie or worse is beaten -> never downgrade real worn armor.
-                if (ArmorScore(a_pref, worn) >= cand) return false;
+                if (beatenBy(a_follower->GetWornArmor(slot))) return false;
             }
             // Acquirable if it actually covers an armor slot (skip amulets/rings
             // whose bits are not in kSlots) and was beaten on none it would
@@ -862,7 +876,10 @@ namespace MFO::Logistics {
             }
 
             // Move the old piece's gems onto the new one when it becomes worn.
-            // No-op if the old item had no gems (fromUid == 0) or MEO is absent.
+            // No-op if the old item has no MEO instance uid (fromUid == 0) or MEO is
+            // absent. NOTE: a nonzero uid means "MEO has tracked this instance", NOT
+            // "it has gems" -- an ungemmed-but-tracked piece still queues a move,
+            // and MEO's MoveGems then moves nothing (the EquipSink logs its bool).
             MEOBridge::QueueGemMove(a_follower, fromBase, fromUid, a_item->GetFormID());
             return equipIt;
         }

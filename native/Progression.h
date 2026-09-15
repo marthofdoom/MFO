@@ -288,6 +288,11 @@ namespace MFO::Progression {
         // (follower pool ÷ player pool) perk-point scale.
         int totalRanks{ 0 };       // player pool (pre-filter)
         int effectiveRanks{ 0 };   // follower pool (kEffective only)
+        // Ranks the declared verdict left marginal/dead that carry a STYLE
+        // fact and were promoted to kEffective on that alone (2026-09-14:
+        // an equipment-deciding perk is never marginal). 0 with a complete
+        // verdict table; nonzero is the "stale/absent verdicts" tell.
+        int stylePromotedRanks{ 0 };
     };
 
     struct Catalog {
@@ -298,6 +303,7 @@ namespace MFO::Progression {
         int filteredPerks{ 0 };
         int totalRanks{ 0 };
         int effectiveRanks{ 0 };
+        int stylePromotedRanks{ 0 };   // sum over skills (see SkillTree)
     };
 
     // ── API ─────────────────────────────────────────────────────────────────

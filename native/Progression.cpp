@@ -617,6 +617,28 @@ namespace MFO::Progression {
                     // Style facts for this rank: the union over its entries
                     // (frozen with the catalog; TallyStyleVotes reads them).
                     for (const auto& f : WalkPerkEntries(r)) rank.style.Merge(f.style);
+                    // STYLE FACTS ARE NEVER MARGINAL (2026-09-14). A rank whose
+                    // conditions name a weapon kind / armor class / hand shape
+                    // is an EQUIPMENT-DECIDING perk: marth's "primary weapon,
+                    // armor and wielding style are determined by perks" reads
+                    // its votes off the follower's OWNED ranks (TallyStyleVotes),
+                    // and the allocator only spends on kEffective ranks -- so a
+                    // missing add-on verdict (a stale MFO_Progression.esl with 0
+                    // verdicts, the field root cause) or an overhaul's odd entry
+                    // point demoting it to marginal/dead would silently turn the
+                    // whole perk-style decision off. The style fact is engine
+                    // truth off the perk record itself, so it is effective by
+                    // definition; the declared verdict still rules every rank
+                    // WITHOUT a style fact. Belt-and-braces to the ESL fix.
+                    if (rank.verdict != Verdict::kEffective && rank.style.Any()) {
+                        spdlog::debug("[prog] {} ({:08X}) rank {}: {} -> effective on style-facts ({})",
+                                      view.name, rank.perkFormID, rankNo + 1,
+                                      rank.verdict == Verdict::kMarginal ? "marginal" : "dead",
+                                      why.empty() ? "no reason recorded" : why);
+                        rank.verdict = Verdict::kEffective;
+                        Append(why, "style-facts");
+                        ++a_out.stylePromotedRanks;
+                    }
                     if (rankNo == 0) firstWhy = why;
                     if (rank.verdict < best) best = rank.verdict;   // kEffective < kMarginal < kDead
                     ++a_out.totalRanks;
@@ -727,6 +749,7 @@ namespace MFO::Progression {
 
                 g_catalog.totalRanks     += tree.totalRanks;
                 g_catalog.effectiveRanks += tree.effectiveRanks;
+                g_catalog.stylePromotedRanks += tree.stylePromotedRanks;
                 g_catalog.keptPerks      += static_cast<int>(tree.nodes.size());
                 g_catalog.filteredPerks  += static_cast<int>(tree.filtered.size());
                 for (const auto& n : tree.nodes)
@@ -788,9 +811,9 @@ namespace MFO::Progression {
                                      ? static_cast<double>(g_catalog.effectiveRanks) / g_catalog.totalRanks
                                      : 0.0;
             spdlog::info("[prog] census: {} perks kept ({} marginal), {} filtered | ranks {} player / "
-                         "{} follower-effective (§15 scarcity ratio {:.2f})",
+                         "{} follower-effective (§15 scarcity ratio {:.2f}) | {} rank(s) effective on style-facts alone",
                          g_catalog.keptPerks, g_catalog.marginalPerks, g_catalog.filteredPerks,
-                         g_catalog.totalRanks, g_catalog.effectiveRanks, ratio);
+                         g_catalog.totalRanks, g_catalog.effectiveRanks, ratio, g_catalog.stylePromotedRanks);
         }
 
     }
