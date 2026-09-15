@@ -106,9 +106,16 @@ Read it as history and this block as current.
   line — FIXED: worn items are (base, hand xList) instances, the dup guard counts only
   unworn copies, one uid-0 request per base per pass. SEV-5s fixed: dead refused path
   documented as a tripwire, `support-limit` why, swap-pending gems not walked, `considered`
-  set past the dup deferral. Deferred: MFO-B33 (WARN vs INFO for off-domain /
-  duplicate-copy, marth's call), MFO-B34 (Conduit-eviction policy). MAP.md §7 MEOBridge
-  carries the worn set with MEO's evidence.
+  set past the dup deferral. **Fable round 2 on `9dacc0e`: nothing above SEV-3, cycle
+  ended.** Fixed anyway (same lines): the swap-up judges `hasConduit` from LANDED state
+  only (a refused queued Conduit would have licensed an eviction for nothing), the
+  `minting` text covers the twin instance, `swapPending` counts copies so the rest of a
+  stack still gets its LEFTOVER line. Deferred: MFO-B33 (WARN vs INFO for off-domain /
+  duplicate-copy / support-limit, marth's call), MFO-B34 (Conduit-eviction policy),
+  MFO-B35 (the duplicate-copy deferral is redundant against MEO's in-place mint and
+  starves a worn item while a spare is carried — SEV-4, plausible, pre-existing),
+  MFO-B36 (swap-up does not reserve its candidate). MAP.md §7 MEOBridge carries the
+  worn set with MEO's evidence.
 - **Branch `fix/mfo-armor-class-score` (off `main` `69c5b3c`, no version bump) — pushed,
   CI status in the branch's own run, NOT merged, NOT deployed, awaiting its Fable review.**
   FIELD FINDING (Deck log on `69c5b3c`, Fable): "after respec the followers still wont

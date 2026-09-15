@@ -2538,7 +2538,11 @@ it is not:
   "fit any" — a Focus picked for a single-socket item was accepted, failed in MEO.log
   and went STUCK 60 s at a time. **The tier-2 swap-up candidate must fit WITHOUT the
   evictee** (`sansEvictee`: a support evictee clears `hasSupport`, a Conduit evictee
-  clears `hasConduit`) — Fable SEV-2 on `1efa3e3`, confirmed by trace: with the
+  clears `hasConduit`; and the swap-up's `hasConduit` comes from LANDED state,
+  `fitAtStart`, never from a Conduit merely queued this pass — Fable SEV-4 on
+  `9dacc0e`: a refused queued Conduit would otherwise have licensed an eviction for
+  nothing, and our own fingerprint change lifts the back-off, so it would churn) —
+  Fable SEV-2 on `1efa3e3`, confirmed by trace: with the
   candidate judged against the item AS-IS, an off-domain gem admitted through the
   Conduit out-scored the Conduit itself, evicted it, was no longer admitted next pass,
   the Conduit re-socketed, and the pair cycled every ~2.4 s with the empty count moving
@@ -2568,8 +2572,13 @@ it is not:
   **support-limit** (a support gem: a dual-socket item is open but already holds, or
   was just given, its one support seat — was misreported as `capacity`),
   **unclassified** (a compatible, un-deferred socket the pass walked past — a bug,
-  never dropped). A gem a swap-out was issued FOR this pass (`swapPending`) is not
-  walked: its socket opens next pass. When no considered item has an empty socket
+  never dropped). A copy a swap-out was issued FOR this pass (`swapPending`, a
+  per-entry COUNT) is not leftover — its socket opens next pass — but the rest of a
+  stack still is (`leftN = avail - pending`, the `x<n>` printed). Open notes:
+  **MFO-B35** (the duplicate-copy deferral is redundant against MEO's in-place mint
+  and starves a worn item while a spare is carried) and **MFO-B36** (the swap-up never
+  decrements `avail[loot]`, so two items can evict for one loose copy — one wasted
+  unsocket/re-socket, no loop). When no considered item has an empty socket
   NOTHING is logged: that is the invariant holding. Classification relies on the slot
   loop's exhaustiveness: it re-picks until `pickGem` returns -1, so on a non-deferred
   item with sockets left every fitting gem in stock is in `excluded`; the deferral
