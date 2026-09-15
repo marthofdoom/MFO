@@ -1741,15 +1741,51 @@ namespace MFO::Actuation {
             else                           doEquip();
         }
 
+        // THE LAST REFUSAL REASON LOGGED PER FOLLOWER (Deck 2026-09-14 finding,
+        // round 2 of feat/mfo-1.5.97-pass): `[equip] ... + off-hand 'Ebony Dagger'
+        // (dual wield by perks)` printed five times with ZERO `[hold]` lines --
+        // EquipLeftHeld returned false every time (LeftHandSlot() was null on
+        // 1.6.1170, see Loadout.cpp) and nothing said so. Principle 7: a refused
+        // precondition is an ERROR line, once per follower per reason (a repeat of
+        // the same reason is silent until it changes or a hold succeeds, which
+        // clears the entry). Worker-serial, no lock (#4, as g_offHandRetryAt: both
+        // call sites are EquipWeapon on the job worker).
+        std::unordered_map<RE::FormID, const char*> g_leftHeldRefusal;
+
         // Put a_weap in the LEFT hand force-held and record ForcedHold::left. Map
         // under the lock, engine calls outside it (the SEV-1 discipline). A
         // different weapon already held there is force-unequipped first, as the
-        // right-hand path swaps its own lock. false = no slot form, no write.
-        bool EquipLeftHeld(RE::Actor* a_follower, RE::TESObjectWEAP* a_weap) {
+        // right-hand path swaps its own lock. false = a precondition failed (no
+        // manager / no left slot form / no weapon), NO write to the ledger, an
+        // error line naming the precondition (rate-limited above), and a_whyNot
+        // (if given) set to that name so the caller's own line can say it too.
+        bool EquipLeftHeld(RE::Actor* a_follower, RE::TESObjectWEAP* a_weap,
+                           const char** a_whyNot = nullptr) {
             auto* mgr  = RE::ActorEquipManager::GetSingleton();
             auto* slot = Loadout::LeftHandSlot();
-            if (!mgr || !slot || !a_weap) return false;
+            const char* why = !a_follower ? "follower"
+                            : !mgr        ? "equip manager"
+                            : !slot       ? "left slot form (Loadout::LeftHandSlot())"
+                            : !a_weap     ? "weapon"
+                            : nullptr;
+            if (why) {
+                if (a_whyNot) *a_whyNot = why;
+                if (a_follower) {
+                    const auto fid = a_follower->GetFormID();
+                    auto it = g_leftHeldRefusal.find(fid);
+                    if (it == g_leftHeldRefusal.end() || it->second != why) {
+                        g_leftHeldRefusal[fid] = why;
+                        spdlog::error("[hold] {:08X}: EquipLeftHeld REFUSED -- {} null; the off-hand "
+                                      "'{}' is NOT held (logged once per reason)", fid, why,
+                                      a_weap && a_weap->GetName() ? a_weap->GetName() : "?");
+                    }
+                } else {
+                    spdlog::error("[hold] EquipLeftHeld REFUSED -- follower null");
+                }
+                return false;
+            }
             const auto id = a_follower->GetFormID();
+            g_leftHeldRefusal.erase(id);   // a success re-arms the once-per-reason line
             RE::TESBoundObject* oldLeft = nullptr;
             {
                 std::scoped_lock lk(g_forcedMx);
@@ -1842,12 +1878,23 @@ namespace MFO::Actuation {
                         // Fired here armed the Scheduler's suppression window (rules
                         // below the equip -- heals -- starved ~1.5 s per refill),
                         // stamped lastFired and fed ProgAllocator::NoteCombatFire.
+                        // g_offHandRetryAt is stamped ABOVE, before the attempt, on
+                        // purpose: it is the FLOOR on how often the inventory walk
+                        // runs (principle 9), not a record of success -- a refused
+                        // hold retries in kOffHandRetry, and the only success-state
+                        // is the ledger .left EquipLeftHeld writes itself.
                         if (roles.offHand == 2) {
-                            if (auto* w = PickOffHandWeapon(a_follower, roles, daggerMelee, rightW);
-                                w && EquipLeftHeld(a_follower, w)) {
-                                a_follower->DrawWeaponMagicHands(true);
-                                spdlog::info("[equip] {:08X}: GAMBIT equip off-hand '{}' (dual wield by "
-                                             "perks, top-up)", id, w->GetFullName() ? w->GetFullName() : "?");
+                            if (auto* w = PickOffHandWeapon(a_follower, roles, daggerMelee, rightW)) {
+                                const char* whyNot = nullptr;
+                                if (EquipLeftHeld(a_follower, w, &whyNot)) {
+                                    a_follower->DrawWeaponMagicHands(true);
+                                    spdlog::info("[equip] {:08X}: GAMBIT equip off-hand '{}' (dual wield by "
+                                                 "perks, top-up)", id, w->GetFullName() ? w->GetFullName() : "?");
+                                } else {
+                                    spdlog::info("[equip] {:08X}: off-hand '{}' NOT held ({} null, top-up)",
+                                                 id, w->GetFullName() ? w->GetFullName() : "?",
+                                                 whyNot ? whyNot : "?");
+                                }
                             }
                         } else if (roles.offHand == 1 && !(leftA && leftA->IsShield())) {
                             if (auto* sh = PickShield(a_follower)) {
@@ -1890,6 +1937,8 @@ namespace MFO::Actuation {
             // claim/lock on the left WINS: nothing goes there while one stands.
             RE::TESObjectWEAP* offHandW  = nullptr;
             RE::TESObjectARMO* offHandSh = nullptr;
+            bool               offHandHeld   = false;     // EquipLeftHeld's verdict for offHandW
+            const char*        offHandWhyNot = nullptr;   // ... and its reason when false
             const bool offHandWanted = !a_ranged && roles.offHand != 0 && IsOneHandMelee(best) &&
                                        Config::g_weaponStyleControl.load();
             const bool leftCastHeld  = offHandWanted && CastHandHeld(a_follower, kHandLeft);
@@ -1945,8 +1994,10 @@ namespace MFO::Actuation {
                         hold.right = best;
                         if (oldLeft) hold.left = nullptr;
                     }
-                    // Off-hand (style control ON only -- see the plan above).
-                    if (offHandW)       EquipLeftHeld(a_follower, offHandW);   // force-held, ledger .left
+                    // Off-hand (style control ON only -- see the plan above). The
+                    // hold's OUTCOME feeds the `[equip]` line below: it says
+                    // "+ off-hand" only for a hold that actually happened.
+                    if (offHandW)       offHandHeld = EquipLeftHeld(a_follower, offHandW, &offHandWhyNot);   // force-held, ledger .left
                     else if (offHandSh) EquipShieldOnMain(id, offHandSh->GetFormID()); // plain (F3: main thread)
                 } else {
                     mgr->EquipObject(a_follower, best);   // kill-switch off: today's behaviour exactly
@@ -1963,7 +2014,10 @@ namespace MFO::Actuation {
             spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' dmg={}{}{}{}", a_follower->GetFormID(),
                          a_ranged ? "ranged" : "melee", nm(best), bestDmg,
                          Logistics::WeaponScore(roles, best) != static_cast<float>(bestDmg) ? " (perk-preferred kind)" : "",
-                         offHandW  ? std::format(" + off-hand '{}' (dual wield by perks)", nm(offHandW))
+                         offHandW  ? (offHandHeld
+                                        ? std::format(" + off-hand '{}' (dual wield by perks)", nm(offHandW))
+                                        : std::format(" off-hand '{}' NOT held ({} null)", nm(offHandW),
+                                                      offHandWhyNot ? offHandWhyNot : "?"))
                          : offHandSh ? std::format(" + shield '{}' (shield by perks)", nm(offHandSh)) : std::string{},
                          leftCastHeld ? " (off-hand skipped: a cast holds the left hand)" : "");
             return { Result::Fired, a_ranged ? "equipped ranged" : "equipped melee" };
@@ -2346,6 +2400,7 @@ namespace MFO::Actuation {
             g_forcedWeapon.erase(it);
         }
         g_offHandRetryAt.erase(id);   // next combat's off-hand top-up starts fresh
+        g_leftHeldRefusal.erase(id);  // ... and a refused hold is reported afresh
         // forceEquip=true on the UNequip clears the prevent-removal lock the
         // force-equip set; a plain unequip would be REFUSED against a forced
         // item and the follower would stay stuck holding the weapon, unable to
@@ -2476,6 +2531,7 @@ namespace MFO::Actuation {
 
     void ClearForcedWeapons() {
         g_offHandRetryAt.clear();   // worker-serial twin of the ledger (revert/load, #4 path)
+        g_leftHeldRefusal.clear();
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
     }

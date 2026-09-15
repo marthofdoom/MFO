@@ -43,7 +43,16 @@ Read it as history and this block as current.
   carries the slot); the per-hand cast claims (`kApmfHandLeft`), `CastInFlightOnHand(left)`
   and the displaced-left debts are exercised for real. Watch for: a follower whose right
   hand is emptied by a left equip, a shield displaced by a left-hand weapon, a spell that
-  lands LEFT where the AI expected RIGHT.
+  lands LEFT where the AI expected RIGHT. **The Deck 2026-09-14 log already showed the
+  masked failure this fixes:** `[equip] 0009BCB0: GAMBIT equip melee 'Grossmesser' ... +
+  off-hand 'Ebony Dagger' (dual wield by perks)` five times with ZERO `[hold]` lines — the
+  hold had returned false every time on the null slot and the line claimed an equip that
+  never happened. Now (principle 7) `EquipLeftHeld` logs `[hold] <id>: EquipLeftHeld REFUSED
+  -- <follower|equip manager|left slot form|weapon> null` (error, once per follower per
+  reason), the `GAMBIT equip` line says `+ off-hand` ONLY on a hold that happened and
+  `off-hand '<w>' NOT held (<what> null)` otherwise, and the top-up prints its own `NOT held`
+  line; the ledger `.left` is written only on success (`g_offHandRetryAt` is a cadence floor,
+  stamped before the attempt by design).
   (2) LIFTED the five cast-control gates — `Actuation::CastOn`, `CastSelfDirect`,
   `CastTargetDirect`, `CastAuto`, `ComposedCast::Enabled` — from `IsAE()` to
   **`Runtime::CastPathsVerified()` = `IsAE() || IsVerified1_5_97()`** (new header
@@ -81,7 +90,7 @@ Read it as history and this block as current.
   and the heal never lands while the toggle is ON (by design: never a decline-fallback).
   After the APMF 1.5.97 branch (the table's "Group C" + "CastClassify" rows, all CONFIRMED on
   SE) merges, that degrade disappears and the claimed heal fires as on 1.6. Deploy the pair
-  together. `Actuation.cpp` is 2622 lines (over the 2500 cap; reported, not split — rule 1;
+  together. `Actuation.cpp` is 2678 lines (over the 2500 cap; reported, not split — rule 1;
   REVIEW-BACKLOG **MFO-B37** holds the split brief).
 - **Branch `fix/mfo-deck-0914-helmet-offhand-verdict-meo` (off `main` `72485e7`, no
   version bump) — pushed, CI on its own tip, NOT merged, NOT deployed, awaiting its

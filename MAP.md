@@ -550,7 +550,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   trampoline (per-runtime since v2.0.6, its own exact-version pair — the two predicates are
   the same test written twice; folding Board onto `Runtime.h` is a separate change), VR (refused
   everywhere), and anything 1.7.104 (no address library; the confirmed 1.7 values are recorded
-  in the table for marth's `REL::Offset` decision). `Actuation.cpp` is 2622 lines — over the
+  in the table for marth's `REL::Offset` decision). `Actuation.cpp` is 2678 lines — over the
   2500 cap, reported not split (rule 1; REVIEW-BACKLOG **MFO-B37** holds the split brief).
 - `CastOn` (`Actuation.cpp:600`) escalation, IN EXECUTION ORDER: runtime gate `Runtime::CastPathsVerified()` (`:432`, AE bucket or exactly 1.5.97 — see RUNTIME GATES above) →
   `:624` → `:649` → competence gate `HasSpell` (`:704`) → magicka reserve (`:742-752`) → range/competence/reserve →
@@ -777,9 +777,20 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (`IsOneHandMelee` `:1668` = the four `IsOneHanded*` tests) and `roles.offHand` votes: `2` →
   `PickOffHandWeapon` (`:1678`, SAME `WeaponScore`, excludes the right hand's ONLY copy — count ≥ 2
   of the same form is allowed — same eligibility: no staff, no non-playable, daggers only for a
-  `bMageDaggersOnly` base mage) is FORCE-HELD in the left via `EquipLeftHeld` (`:1731`:
+  `bMageDaggersOnly` base mage) is FORCE-HELD in the left via `EquipLeftHeld` (`:1762`:
   `EquipObject` with `Loadout::LeftHandSlot()`, `forceEquip=true`, ledger `.left` written under
-  `g_forcedMx`, engine calls outside it); `1` → `PickShield` (`:1695`, best `GetArmorRating`)
+  `g_forcedMx`, engine calls outside it; **since round 2 of `feat/mfo-1.5.97-pass` it takes an
+  optional `const char** a_whyNot` and a refused precondition — follower / equip manager /
+  left slot form / weapon null — is an ERROR line `[hold] <id>: EquipLeftHeld REFUSED -- <what>
+  null`, once per follower per reason via `g_leftHeldRefusal` (`:1753`, worker-serial, erased
+  on a success, on `ReleaseForcedWeapon`, and in `ClearForcedWeapons`). Both callers consume
+  the verdict: the pick path's `[equip] GAMBIT equip ...` line says `+ off-hand '<w>' (dual
+  wield by perks)` ONLY when the hold happened and `off-hand '<w>' NOT held (<what> null)`
+  otherwise; the top-up prints its own `NOT held` info line. The Deck 2026-09-14 log showed
+  five `+ off-hand 'Ebony Dagger'` claims with zero `[hold]` lines — the hold had returned
+  false every time (the null AE slot, SEV-2 above) and nothing said so. `g_offHandRetryAt` is
+  stamped BEFORE the attempt on purpose (a cadence floor, principle 9), never a success
+  record; the only success state is the ledger `.left` the function writes itself.**); `1` → `PickShield` (`:1695`, best `GetArmorRating`)
   PLAIN-equipped **on the main thread** via `EquipShieldOnMain` (`:1715`, F3/#62: FormIDs captured,
   re-resolved under `MainThread::Post`, VR inline — the `Logistics_Loot.cpp` equipIt precedent; no
   ledger entry, the AI keeps shields on its own); `0` → nothing. Plus a SATISFIED-LAP TOP-UP

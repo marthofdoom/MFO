@@ -277,8 +277,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** coordinator call 2026-09-15: nothing above SEV-3 this round, cycle ended (rule 9); tier 2 is OFF by default and gem CHOICE is marth's planned redesign.
 - **Fix shape when drained (verbatim):** reserve the candidate at the swap-out (`--avail[loot]` when `UnsocketGem` returns true) so a later item cannot evict for the same copy.
 
-### MFO-B37 — `Actuation.cpp` is over the 2500-line cap (2622): the split is its own brief
-- **Raised:** Fable tier-3 review of `87cabc1` (`feat/mfo-1.5.97-pass`), SEV-5 hygiene, CONFIRMED (`wc -l`: 2605 on `main` `5e1c41b` before the branch, 2622 after round 2's gate comments).
+### MFO-B37 — `Actuation.cpp` is over the 2500-line cap (2678): the split is its own brief
+- **Raised:** Fable tier-3 review of `87cabc1` (`feat/mfo-1.5.97-pass`), SEV-5 hygiene, CONFIRMED (`wc -l`: 2605 on `main` `5e1c41b` before the branch, 2678 after round 2's gate comments and the EquipLeftHeld refusal logging).
 - **Severity:** SEV-5 (process; no behaviour)
 - **Finding (verbatim):** Actuation.cpp 2615 lines reported.
 - **Reviewer's reasoning:** CLAUDE.md's 2500-line HARD RULE is overridden by scope rule 1 inside an unrelated task — crossing the cap is a STOP-and-report, never a licence to split; a TU split is tier 3 (never "CI-identical") and needs its own field cycle.
