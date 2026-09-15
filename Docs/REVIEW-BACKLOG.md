@@ -223,6 +223,24 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** narrow the fingerprint to the stalled key's own inputs (that item's worn (base,uid) + that gem base's loose count) so an unrelated socket/swap does not lift it; or keep the lift but suppress the re-warn within the original 60 s window.
 - **Surfaced at edit time from:** MAP.md §7 MEOBridge "RETURN LOGGING + STALL DETECTOR" What-breaks.
 
+### MFO-B27 — the stall detector's progress signal is the per-ITEM empty count shared by both ops; another slot landing on the same item resets a genuinely stuck key
+- **Raised:** Fable round-2 review of `5f814d5` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5.
+- **Severity:** SEV-5
+- **Finding (verbatim):** B27 SEV-5 — MEOBridge.cpp:371 progress signal is the per-ITEM empty count shared by both ops; no false STUCK reachable, but another slot's landing on the same item resets a genuinely stuck key's passes (false progress), delaying detection by up to (empty slots × 3) passes; bounded.
+- **Reviewer's reasoning:** no false STUCK is reachable (a key only advances when the count is unchanged); the only cost is delayed detection while sibling slots on the same item still land, bounded by the item's empty-slot count.
+- **Why it was NOT fixed:** bounded and in the safe direction (later, never spurious); a per-slot progress signal needs `GetGemDetails` re-read per slot per pass and its own review. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** key progress on the SLOT, not the item: record `filled.contains(slot)` (from `GetGemDetails`) at issue and treat "this slot is still empty next pass" as no-progress, independent of sibling slots; the unsocket op mirrors it with "this slot is still filled".
+- **Surfaced at edit time from:** MAP.md §7 MEOBridge "RETURN LOGGING + STALL DETECTOR" What-breaks.
+
+### MFO-B28 — bought weapons never reach `AcquireEquip`, so a BOUGHT primary upgrade carries no gems (pre-existing)
+- **Raised:** Fable round-2 review of `5f814d5` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5.
+- **Severity:** SEV-5
+- **Finding (verbatim):** B28 SEV-5 — bought weapons never reach AcquireEquip (Logistics_Economy.cpp:330-378 picks ARMO only), so a BOUGHT primary upgrade wielded by Actuation's EquipObject (Actuation.cpp:1924/1935) carries no gems (QueueGemMove has exactly one caller); pre-existing, outside this SHA.
+- **Reviewer's reasoning:** `EquipBestOwnedGear`'s rated branch only ever picks armor, so the one `QueueGemMove` caller (`AcquireEquip`) never sees a bought weapon; the combat equip in Actuation is a plain `EquipObject` with no gem carry. Pre-existing; the SHA did not change it.
+- **Why it was NOT fixed:** outside the SHA and the brief (Actuation + the owned-weapon wear decision are separate mechanisms). Deferred, not dropped.
+- **Fix shape when drained (verbatim):** give `EquipBestOwnedGear` (or the trade completion path) a WEAPON branch that routes a bought/owned in-role primary upgrade through `AcquireEquip(a_src=nullptr, myWeap, forceStock=false)` so the same-role gem capture + `QueueGemMove` run for it; the combat equip then finds the gems already moved.
+- **Surfaced at edit time from:** MAP.md §4 Logistics "CLOSED 2026-09-14 — THE SECOND ONE-HANDER" What-breaks + §7 MEOBridge gem-transfer entry.
+
 ---
 
 ## DRAINED

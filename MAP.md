@@ -1333,9 +1333,14 @@ declared there and defined in their home module). Layout:
   (`EquipmentContext::wantOffHand` / `offHandBaseScore`, `BuildEquipmentContext`;
   `LootEquipment` `bestOffHand`, priority after bestRanged, before bestBackup;
   `LooseEquipmentQualifies` the mirrored rule): a 1H above `offHandBaseScore` is
-  taken and STOCKED (`AcquireEquip` `a_forceStock`) — never into the right hand
-  (it is by construction no better than the primary); Actuation's
-  `PickOffHandWeapon` pairs it at the next combat equip, unchanged. `usesShield`
+  taken and STOCKED (`AcquireEquip` `a_forceStock`) — never into the right hand;
+  Actuation's `PickOffHandWeapon` pairs it at the next combat equip, unchanged.
+  **ALIASING (Fable round-2 SEV-3 on `5f814d5`, fixed):** `bestOffHandScore <=
+  bestWeapScore` throughout the scan, so the max-scored one-hander passes BOTH
+  gates and `bestOffHand` ALIASES `bestWeap` whenever a primary upgrade exists —
+  `forceStock` is `best == bestBackup || (best == bestOffHand && best != bestWeap)`
+  (`trueSecond`), so a primary upgrade is equipped in place with its gems carried and
+  only a TRUE second is stocked (and, being stocked, captures no gems). `usesShield`
   (buy `BuildBuyThresholds` + keep `EconomyProbe`) and `shieldUseless` (both loot
   sites) gained `roles.offHand != 2` — a dual wielder's left hand is a weapon.
   `[equip] LOOT-*` prints `offHand= offHandBase=` and tags the second-1H pick.
@@ -1346,7 +1351,10 @@ declared there and defined in their home module). Layout:
   `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **OPEN
   BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B24** (SEV-5) — keep gates on
   `keepRoles.melee`, loot/buy on `meleeTargetClass` (a base caster keeps two daggers,
-  fetches none); "ONE rule" holds for weapon-role followers. **What breaks:** changing
+  fetches none); "ONE rule" holds for weapon-role followers; **MFO-B28** (SEV-5,
+  pre-existing) — a BOUGHT primary upgrade never passes `AcquireEquip`, so it carries
+  no gems. **What breaks:** the `trueSecond` test must stay `best != bestWeap` — a bare
+  `best == bestOffHand` stocks every primary upgrade. Changing
   `kStyleBias` re-orders every loot/keep/buy compare at once (they share ONE
   score by design — never bias one site alone or loot and keep disagree and a
   looted greatsword sells); `preferKinds` must stay `Progression::WeaponKind`
@@ -2460,13 +2468,21 @@ lambda `stallGate` at BOTH issue sites: a request seen `kStuckPasses` (3) consec
 passes with `GetEmptySocketCount` unMOVED (a socket drops it, an unsocket raises it) —
 i.e. 2 accepted issues, ~2.4 s, STUCK declared on the 3rd pass BEFORE issuing — logs
 `[meo] reconcile STUCK <actor> <item>/<uid> slot <n> gem <base> -- <api> accepted 2
-time(s) ... -- see MEO.log [api] <api>` ONCE and backs that key off; a backed-off
-socket does NOT reserve its gem in the pass's local `avail` (a later worn item may
-take it — Fable SEV-4 on `b3ac577`); until the follower's loose-gem/worn fingerprint
-changes or `kStuckBackoff` (60 s — principle 9: sized from the ~1.2 s cadence, ~50
-passes, never silently forever); then it retries from a clean count and reports again
-if it stalls again. Keys not re-issued
-in a pass are forgotten at its end; the `nLoose == 0` early return drops the actor's
+time(s) ... -- see MEO.log [api] <api>` ONCE and backs that key off. A backed-off
+socket NEITHER RESERVES NOR SHADOWS its gem (Fable SEV-4 on `b3ac577` + round-2 SEV-2
+on `5f814d5`): the gem is not taken from the pass-local `avail` (a later worn item may
+take it), the slot marks it `excluded` for THIS item and RE-PICKS (`pickGem` lambda)
+so the next-best gem fills the slot, and the tier-2 swap-up skips any loose gem that is
+`excluded` or whose socket key on this item is still backed off (`socketBackedOff`) —
+without that the swap-up unsocketed a worn gem to make room for the refused one, our
+own unsocket changed the inventory fingerprint, lifted the back-off, and the item
+cycled unsocket/re-socket every ~5 s forever. The back-off holds until the follower's
+loose-gem/worn fingerprint changes or `kStuckBackoff` (60 s — principle 9: sized from
+the ~1.2 s cadence, ~50 passes, never silently forever); then it retries from a clean
+count and reports again if it stalls again. Keys not re-issued
+in a pass are forgotten at its end EXCEPT keys still in back-off (the swap-up's
+`socketBackedOff` read needs them when the item has no empty slot to gate on; they
+expire at their own `backoffUntil`); the `nLoose == 0` early return drops the actor's
 keys; `ClearTransientState` clears the map (revert/load, `Serialization.cpp`). NOT a
 mask: the failure is loud and retried. Domain is matched here so MEO never rejects
 into a retry loop. Tier 1 conservation always runs (fill any domain-matching gem);
@@ -2476,9 +2492,12 @@ beats. Whole feature no-ops below MEO v3. **What breaks:** `g_stuck` is written
 without `g_mx` on purpose (a lock held across `g_meo->` calls is the #4 re-entrant
 deadlock class) — never touch it from the worker while the pump is live; lowering
 `kStuckPasses` below 2 turns every first issue into a STUCK line; a `MEO_API.h`
-change is off the table (byte-shared, append-only). **OPEN BACKLOG:
+change is off the table (byte-shared, append-only); the swap-up MUST keep skipping
+backed-off gems or the unsocket/re-socket loop returns. **OPEN BACKLOG:
 `Docs/REVIEW-BACKLOG.md` MFO-B26** (SEV-5) — the back-off lifts on ANY inventory
-change, so under churn the one warn per 60 s becomes one per change + 3 passes.
+change, so under churn the one warn per 60 s becomes one per change + 3 passes;
+**MFO-B27** (SEV-5) — progress is the per-ITEM empty count, so a sibling slot
+landing delays a stuck key's detection (never spurious).
 **GEM CAPTURE RULE (Fable SEV-2 on `b3ac577`, fixed):** `AcquireEquip`
 (`Logistics_Loot.cpp`) captures the worn same-role item's gems ONLY when the new item
 REPLACES it — `a_forceStock` (mage backup, the dual wielder's second one-hander) skips

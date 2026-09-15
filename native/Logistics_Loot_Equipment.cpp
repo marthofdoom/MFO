@@ -397,10 +397,14 @@ namespace MFO::Logistics {
                     }
                     // SECOND ONE-HANDER (dual wield by perks, 2026-09-14): a one-
                     // hander that beats the follower's SECOND-best owned one-hander
-                    // is loot for his left hand. STOCKED, never put in the right hand
-                    // (it is by construction no better than the primary); Actuation's
-                    // PickOffHandWeapon pairs it at the next combat equip. Same rule
-                    // as LooseEquipmentQualifies (one rule, two sources).
+                    // is loot for his left hand. NOTE the max-scored one-hander passes
+                    // BOTH gates (bestOffHandScore <= bestWeapScore throughout), so
+                    // bestOffHand ALIASES bestWeap whenever a primary upgrade exists;
+                    // only `best == bestOffHand && best != bestWeap` is a TRUE second
+                    // (Fable round-2 SEV-3 on 5f814d5). A true second is STOCKED,
+                    // never put in the right hand; Actuation's PickOffHandWeapon pairs
+                    // it at the next combat equip. Same rule as
+                    // LooseEquipmentQualifies (one rule, two sources).
                     if (ctx.wantOffHand && wc == WepClass::OneHand &&
                         WeaponScore(ctx.roles, weap) > bestOffHandScore) {
                         bestOffHandScore = WeaponScore(ctx.roles, weap);
@@ -460,11 +464,14 @@ namespace MFO::Logistics {
             // (MainThread::Post EquipObject, never DoReset3D -- #62), queues the gem
             // move. The mage BACKUP stays STOCK-ONLY (a caster's hand belongs to his
             // spells; his own AI draws the sidearm at zero magicka), and so does the
-            // dual wielder's SECOND one-hander (the right hand keeps the primary;
-            // Actuation fills the left at combat equip). The buy / owned-upgrade
-            // pass calls the SAME AcquireEquip with a_src=nullptr.
-            const bool equipped = AcquireEquip(a_follower, best, a_src, myWeap,
-                                               best == bestBackup || best == bestOffHand);
+            // dual wielder's TRUE SECOND one-hander (the right hand keeps the primary;
+            // Actuation fills the left at combat equip). A PRIMARY upgrade that also
+            // beat the off-hand bar (bestOffHand aliases bestWeap, see above) is a
+            // primary: equipped in place and its gems carried. The buy / owned-
+            // upgrade pass calls the SAME AcquireEquip with a_src=nullptr.
+            const bool trueSecond = best == bestOffHand && best != bestWeap;
+            const bool equipped   = AcquireEquip(a_follower, best, a_src, myWeap,
+                                                 best == bestBackup || trueSecond);
 
             // [equip] DIAGNOSTIC: log WHAT we put on, over WHAT, and the reasoning.
             if (auto* nw = best->As<RE::TESObjectWEAP>()) {
@@ -480,7 +487,7 @@ namespace MFO::Logistics {
                              myWeap ? static_cast<int>(WeaponClassOf(myWeap->GetWeaponType())) : -1,
                              static_cast<int>(meleeTargetClass), wantsMelee, wantsRanged, baseScore,
                              ctx.roles.preferKinds, static_cast<int>(ctx.roles.offHand), ctx.offHandBaseScore,
-                             best == bestOffHand ? " -> second one-hander (dual wield by perks)" : "");
+                             trueSecond ? " -> second one-hander (dual wield by perks)" : "");
             } else {
                 auto* na = best->As<RE::TESObjectARMO>();
                 spdlog::info("[equip] {:08X}: LOOT armor/apparel '{}' type={} rat={:.0f} score={:.1f} (class {} bias h/l={:.2f}/{:.2f}) -> equip {}",

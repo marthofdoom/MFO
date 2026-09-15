@@ -390,6 +390,18 @@ namespace MFO::MEOBridge {
                 return true;
             };
             auto passOf = [&](const StuckKey& a_key) { auto it = stuckMap.find(a_key); return it == stuckMap.end() ? 0 : it->second.passes; };
+            // Is a SOCKET of this gem base into this item (any slot) currently backed
+            // off? The swap-up must never unsocket a worn gem to make room for a gem
+            // MEO keeps refusing on this item (Fable round-2 SEV-2 on 5f814d5: that
+            // was a self-driven unsocket/re-socket loop, since our own unsocket
+            // changes the inventory fingerprint and lifts the back-off).
+            auto socketBackedOff = [&](RE::FormID a_base, std::uint16_t a_uid, RE::FormID a_gemBase) {
+                for (const auto& [k, st] : stuckMap)
+                    if (k.op == 0 && k.base == a_base && k.uid == a_uid && k.gemBase == a_gemBase &&
+                        st.backoffUntil != std::chrono::steady_clock::time_point{} && now < st.backoffUntil)
+                        return true;
+                return false;
+            };
 
             for (auto& item : items) {
                 const int emptyCount = g_meo->GetEmptySocketCount(a_actor, item.base, item.uid);
@@ -420,19 +432,22 @@ namespace MFO::MEOBridge {
                 // off). Defer until the copy is gone or the worn copy has a real uid.
                 if (mintGuard && invBaseCount(item.base) > 1) continue;
 
-                for (int slot = 0; slot < capacity; ++slot) {
-                    if (filled.contains(static_cast<std::uint8_t>(slot))) continue;
-
+                // Loose entries EXCLUDED for THIS item this pass: a gem whose socket
+                // into this item is stuck/backed off. It neither reserves (a later
+                // item may still take it) nor SHADOWS (the slot re-picks past it, and
+                // the swap-up ignores it) -- Fable round-2 SEV-2 on 5f814d5.
+                std::unordered_set<std::uint32_t> excluded;
+                auto pickGem = [&]() -> int {
                     int pick = -1;
                     if (!a_effectAware) {
                         // tier 1 conservation: first domain-matching loose gem in stock.
                         for (std::uint32_t i = 0; i < nLoose; ++i)
-                            if (avail[i] > 0 && DomainFits(loose[i], item.isArmor)) { pick = static_cast<int>(i); break; }
+                            if (avail[i] > 0 && !excluded.contains(i) && DomainFits(loose[i], item.isArmor)) { pick = static_cast<int>(i); break; }
                     } else {
                         // tier 2 effect-aware: best by (class bonus, base magnitude).
                         int bestB = std::numeric_limits<int>::min(); float bestM = -1.0f;
                         for (std::uint32_t i = 0; i < nLoose; ++i) {
-                            if (avail[i] == 0 || !DomainFits(loose[i], item.isArmor)) continue;
+                            if (avail[i] == 0 || excluded.contains(i) || !DomainFits(loose[i], item.isArmor)) continue;
                             const int bo = GemBonus(loose[i].gid, loose[i].name,
                                                     loose[i].isArmor, loose[i].isSupport, a_prefs);
                             if (bo > bestB || (bo == bestB && loose[i].magnitude > bestM)) {
@@ -440,16 +455,26 @@ namespace MFO::MEOBridge {
                             }
                         }
                     }
-                    if (pick < 0) break;   // no gem fits this item's domain -> next item
+                    return pick;
+                };
 
-                    // STALL DETECTOR: same request as last pass with the empty count
-                    // unchanged = MEO accepted it and it did not land. A backed-off
-                    // slot does NOT reserve the gem -- the next slot/item may take it.
-                    const StuckKey key{ 0, item.base, item.uid, static_cast<std::uint8_t>(slot), loose[pick].gemBase };
-                    if (!stallGate(key, emptyCount, "SocketGem", loose[pick].name)) {
-                        if (mintGuard) break;
-                        continue;
+                for (int slot = 0; slot < capacity; ++slot) {
+                    if (filled.contains(static_cast<std::uint8_t>(slot))) continue;
+
+                    // Pick, gate, and on a stuck pick EXCLUDE it and RE-PICK for this
+                    // same slot until a gem passes the gate or none is left.
+                    int pick = -1;
+                    StuckKey key{};
+                    for (;;) {
+                        pick = pickGem();
+                        if (pick < 0) break;   // no (non-stuck) gem fits this item's domain
+                        // STALL DETECTOR: same request as last pass with the empty count
+                        // unchanged = MEO accepted it and it did not land.
+                        key = StuckKey{ 0, item.base, item.uid, static_cast<std::uint8_t>(slot), loose[pick].gemBase };
+                        if (stallGate(key, emptyCount, "SocketGem", loose[pick].name)) break;
+                        excluded.insert(static_cast<std::uint32_t>(pick));   // stuck here: neither reserved nor shadowing
                     }
+                    if (pick < 0) break;   // nothing left for this item -> next item
 
                     const bool queued = g_meo->SocketGem(a_actor, item.base, item.uid, static_cast<std::uint8_t>(slot),
                                                          loose[pick].gemBase, loose[pick].gemUid);
@@ -485,6 +510,10 @@ namespace MFO::MEOBridge {
                     float lootM = -1.0f;
                     for (std::uint32_t i = 0; i < nLoose; ++i) {
                         if (avail[i] == 0 || !DomainFits(loose[i], item.isArmor)) continue;
+                        // Never make room for a gem MEO keeps refusing on this item
+                        // (excluded this pass, or its socket key is still backed off from
+                        // an earlier pass) -- the self-driven unsocket/re-socket loop.
+                        if (excluded.contains(i) || socketBackedOff(item.base, item.uid, loose[i].gemBase)) continue;
                         const int bo = GemBonus(loose[i].gid, loose[i].name,
                                                 loose[i].isArmor, loose[i].isSupport, a_prefs);
                         if (bo > lootB || (bo == lootB && loose[i].magnitude > lootM)) {
@@ -511,9 +540,14 @@ namespace MFO::MEOBridge {
 
             // Forget every stall key this pass did not re-issue: the request stopped
             // recurring (it landed, the gem left, the item was sold), so it is not
-            // stuck and a later identical request starts from a clean count.
+            // stuck and a later identical request starts from a clean count. A key
+            // still in BACK-OFF is kept even if untouched (the swap-up's
+            // socketBackedOff read needs it when the item has no empty slot to gate
+            // on); it expires at its own backoffUntil.
             std::erase_if(stuckMap, [&](const auto& kv) {
-                return std::find(touched.begin(), touched.end(), kv.first) == touched.end();
+                const bool backedOff = kv.second.backoffUntil != std::chrono::steady_clock::time_point{} &&
+                                       now < kv.second.backoffUntil;
+                return !backedOff && std::find(touched.begin(), touched.end(), kv.first) == touched.end();
             });
             if (stuckMap.empty()) g_stuck.erase(a_actor->GetFormID());
         }

@@ -63,6 +63,16 @@ Read it as history and this block as current.
   on back-off); one SEV-5 (STUCK is declared on the 3rd pass BEFORE issuing = 2 accepted
   issues, ~2.4 s; comment/warn/MAP text fixed to match the code). Three SEV-5 deferred
   to `Docs/REVIEW-BACKLOG.md` MFO-B24/B25/B26.
+  **Fable round 2 on `5f814d5`:** SEV-2 — the no-reserve back-off let the tier-2
+  swap-up unsocket a worn gem to make room for the refused one, and our own unsocket
+  lifted the back-off (a self-driven ~5 s unsocket/re-socket loop) — FIXED: a stuck pick
+  is `excluded` for that item and the slot re-picks; the swap-up skips excluded /
+  backed-off gems; backed-off keys survive untouched passes. SEV-3 — `bestOffHand`
+  always aliases `bestWeap`, so a dual wielder's PRIMARY upgrade was stocked (and, with
+  the SEV-2 guard, its gems not carried) — FIXED: `forceStock` only for a TRUE second
+  (`best == bestOffHand && best != bestWeap`). Two SEV-5 deferred: MFO-B27 (per-item
+  progress signal delays detection), MFO-B28 (bought weapons never reach `AcquireEquip`,
+  pre-existing).
 - **Branch `fix/mfo-armor-class-score` (off `main` `69c5b3c`, no version bump) — pushed,
   CI status in the branch's own run, NOT merged, NOT deployed, awaiting its Fable review.**
   FIELD FINDING (Deck log on `69c5b3c`, Fable): "after respec the followers still wont
