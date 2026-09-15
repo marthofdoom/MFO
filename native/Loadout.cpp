@@ -145,18 +145,33 @@ namespace MFO::Loadout {
         // `RelocateMember<bool*>(this, 0xB80, 0xBA8)[idx]`: it DEREFERENCES
         // the 8 bytes at +0xB80 as a `bool*` and indexes THAT. Measured
         // against both unpacked binaries (ctor memset + Load + InitItemImpl;
-        // CONFIRMED table row "BGSDefaultObjectManager::objects[] / objectInit[]
-        // count": 364 on 1.5.97, 366 on 1.6.1170, 372 on 1.7.104):
+        // Docs/ADDRESS-TABLE-2026-09-15.md row "BGSDefaultObjectManager::
+        // objects[] / objectInit[] count": 364 on 1.5.97, 366 on 1.6.1170, 372
+        // on 1.7.104; the engine's own GetLeftHandSlot, SE 0x3315F0, reads
+        // `[dom+0xB93]` = objectInit[19] then `[dom+0xB8]` = objects[19]):
         //   1.5.97   objects[364] @ +0x20..+0xB80, objectInit[364] @ +0xB80
         //   1.6.1170 objects[366] @ +0x20..+0xB90, objectInit[366] @ +0xB90
         // So on 1.5.97 the read turns the first eight init bools into the
-        // poison pointer 0x0101010101010101 and faults; on 1.6.1170 +0xB80 is
-        // objects[364] (DOBJ `HMAE`, a FLST from Update.esm) and the "init"
-        // byte is that form's formFlags bits 24-31 -- a garbage gate that
-        // returns either objects[19] or nullptr. Either way the engine's own
-        // InitItemImpl fills objects[19] with LookupByID(DOBJ.LHEQ), i.e.
-        // exactly this lookup, so the slot the engine calls "left" IS this
-        // form on both runtimes and the lookup has no layout to get wrong.
+        // poison pointer 0x0101010101010101 and faults (the T#67 crash reports).
+        //
+        // ON 1.6.1170 IT ALWAYS RETURNED nullptr IN THE FIELD (Fable, round 2 of
+        // feat/mfo-1.5.97-pass, measured 2026-09-15): +0xB80 there is
+        // objects[364], and the engine's DOBJ tag table (stride 24, .data; AE
+        // index 19 = LHEQ, 20 = RHEQ, 364 = HMAE, 365 = MHFL, 366 entries)
+        // makes that DOBJ `HMAE` = Update.esm FLST 0x01003275, whose record
+        // header flags are 0x0 -- so `((bool*)objects[364])[19]` is byte 3 of a
+        // zero formFlags word: 0, "not initialized", nullptr. Every spell equip
+        // on 1.6.1170 therefore ran `EquipSpell(actor, spell, nullptr)` (the
+        // engine's helper, AE 0x6CAB20, then picks the hand itself for an
+        // EitherHand spell) and Actuation's EquipLeftHeld (`if (!slot) return
+        // false`) never fired. THIS FormID lookup is the first build where the
+        // LeftHand slot actually reaches the engine on 1.6.1170; MAP.md's
+        // RUNTIME GATES entry lists what that switches on there.
+        //
+        // The engine's own InitItemImpl fills objects[19] with LookupByID
+        // (DOBJ.LHEQ), i.e. exactly this lookup, so the slot the engine calls
+        // "left" IS this form on both runtimes and the lookup has no layout to
+        // get wrong.
         // (The <d3d11.h> GetObject -> GetObjectW hijack noted in Board.cpp's
         // banner, ENGINE_NOTES §9, no longer matters here: nothing in this TU
         // names GetObject any more.)

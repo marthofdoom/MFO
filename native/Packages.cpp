@@ -5,6 +5,7 @@
 #include "Forms.h"
 #include "Sightline.h"   // concentration hold: the mid-stream line-of-fire watch
 #include "APMFBridge.h"  // ch.9 0x49 loot-travel route (package-locked-follower fix)
+#include "Runtime.h"     // CastPathsVerified(): the ONE exact-version gate shared with the cast paths
 #include "MainThread.h"  // the only road to the true main thread (§0.37) -- an
                          // EvaluatePackage is an engine AI write and this file's
                          // callers run on the AddTask job worker.
@@ -306,14 +307,17 @@ namespace MFO::Packages {
         // CommonLib's own pin for it, where AE inlines that lookup.
         //
         // VR is REFUSED: no verified VR id, and the two-arg RelocationID would
-        // hand VR the SE id unverified. Every caller gates on this predicate.
-        // CONFIRMED table (2026-09-15, 1.5-1.7-address-table.CONFIRMED.md) row
+        // hand VR the SE id unverified. So is every 1.5.x other than 1.5.97: the
+        // SE id was confirmed on that binary only, and pinned CommonLib's IsSE()
+        // is the default bucket for anything not 1.6/1.4 (Runtime.h). Every
+        // caller gates on this predicate. Docs/ADDRESS-TABLE-2026-09-15.md row
         // "Packages.cpp:302-305 TESQuest::ForceRefTo": AE id 25052 -> 0x3CDEE0,
         // SE id 24523 -> 0x375050, both CONFIRMED (Papyrus ForceRefTo callback
         // tail-jump on raw objdump). plugin.cpp's `[runtime]` startup line
-        // prints the same IsAE()||IsSE() verdict so a deck log shows it.
+        // prints the same Runtime::CastPathsVerified() verdict so a deck log
+        // shows it.
         bool ForceRefToNativeAvailable() {
-            return REL::Module::IsAE() || REL::Module::IsSE();
+            return Runtime::CastPathsVerified();
         }
 
         bool ForceRefToNative(RE::TESQuest* a_quest, std::uint32_t a_aliasID,
@@ -813,7 +817,7 @@ namespace MFO::Packages {
         // BY EVICTION, exactly like LootTravelClear/RetreatClear (#48/#73):
         // force-fill alias 0 with the non-actor XMarker so the follower's alias
         // instance is REPLACED and the framework reclaims him. The old VM
-        // Clear() stays only as the off-AE / marker-less fallback -- MFO's
+        // Clear() stays only as the no-native (unverified runtime) / marker-less fallback -- MFO's
         // aliases carry no script, which is exactly why the loot quest's VM
         // Clear silently failed (v0.8.2 lesson, Config.h bLootTravel note), so
         // it cannot be the primary release for a package that now fires every
@@ -832,7 +836,7 @@ namespace MFO::Packages {
                              g_holder.self ? " [self]" : "");
                 released = true;
             } else if (DispatchAlias("Clear", nullptr, actorAlias)) {
-                spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear alias {} (no marker/off-AE)",
+                spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear alias {} (no marker/no native ForceRefTo)",
                              id, a_why, actorAlias);
                 released = true;
             }
@@ -1515,7 +1519,7 @@ namespace MFO::Packages {
         // whether or not this session's holder mirror knows anything (a
         // PREVIOUS session's latch is exactly the case the mirror cannot see).
         // Evict any ACTOR occupant, the player included (#48b); the VM Clear
-        // is the off-AE fallback only. BOTH carrier aliases are swept: alias 0
+        // is the no-native (unverified runtime) fallback only. BOTH carrier aliases are swept: alias 0
         // (foe cast) AND alias 2 (self cast, SPEC-self-cast-forced) -- the self
         // fill is engine-serialized exactly like the foe fill, so a save written
         // mid-self-stream latches alias 2 on every subsequent load unless it is
@@ -1541,7 +1545,7 @@ namespace MFO::Packages {
                     bool released = false;
                     if (mark && ForceRefToNative(quest, aliasID, mark)) {
                         released = true;
-                    } else if (DispatchAlias("Clear", nullptr, aliasID)) {   // off-AE / marker-less;
+                    } else if (DispatchAlias("Clear", nullptr, aliasID)) {   // no native / marker-less;
                         released = true;                                     // per-alias, never alias 0
                     }
                     if (released) {

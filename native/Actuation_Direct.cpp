@@ -10,6 +10,7 @@
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
 #include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
+#include "Runtime.h"        // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
                             // non-heal (Offense/Buff) CONCENTRATION stream -- ComposedCast::Try
                             // above is HEAL-ONLY by design, so offense/buff concentration needs
@@ -827,21 +828,25 @@ namespace MFO::Actuation {
     }
 
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell, std::uint32_t a_stopPct) {
-        // 1.6.1170 + 1.5.97 (feat/mfo-1.5.97-pass, 2026-09-15; was AE-only as the
-        // T#67 SE crash gate). The T#67 fault was Loadout::LeftHandSlot()'s
+        // RUNTIME GATE: Runtime::CastPathsVerified() = the AE bucket (pre-existing)
+        // or EXACTLY 1.5.97 (feat/mfo-1.5.97-pass, 2026-09-15; was IsAE()-only as
+        // the T#67 SE crash gate). The T#67 fault was Loadout::LeftHandSlot()'s
         // GetObject read of BGSDefaultObjectManager (+0xB80 poison on SE) -- now a
-        // FormID lookup (CONFIRMED table rows "held branch Loadout.cpp:63,81
-        // LookupByID<BGSEquipSlot>(0x00013F43)" + "BGSDefaultObjectManager::
-        // objects[]/objectInit[] count": 364 SE / 366 AE). Everything else this
-        // path touches on 1.5.97 is CONFIRMED there too: the forced-cast package
-        // route ("Packages.cpp:302-305 TESQuest::ForceRefTo" 24523/25052), the
-        // CombatController reads ("attackerHandle @0x28, targetHandle @0x2C,
-        // combatStyle @0x38 (all < 0x68)" -- combatGroup @0x00), and the seats a
-        // claimed cast rides on ("CasterConsent.cpp:1087-1095 14 seat vtables",
-        // "CombatStyle.cpp:384-417 CombatInventoryItemMagicT" 30/30, "GetMagicTarget
-        // sret" same ABI). VR stays refused: no VR value in the table. Mirrors
+        // FormID lookup (Docs/ADDRESS-TABLE-2026-09-15.md rows "held branch
+        // Loadout.cpp:63,81 LookupByID<BGSEquipSlot>(0x00013F43)" + "BGSDefault
+        // ObjectManager::objects[]/objectInit[] count": 364 SE / 366 AE).
+        // Everything else this path touches on 1.5.97 is CONFIRMED there too: the
+        // forced-cast package route (row "Packages.cpp:302-305 TESQuest::
+        // ForceRefTo" 24523/25052), the CombatController reads (row "attackerHandle
+        // @0x28, targetHandle @0x2C, combatStyle @0x38 (all < 0x68)"; the
+        // `combatGroup` member at +0x00 is not a table row -- it is CommonLib's own
+        // SE-origin declaration, right on SE by construction), and the seats a
+        // claimed cast rides on (rows "CasterConsent.cpp:1087-1095 14 seat
+        // vtables", "CombatStyle.cpp:384-417 CombatInventoryItemMagicT" 30/30,
+        // "GetMagicTarget sret" same ABI). VR and every other 1.5.x stay refused:
+        // the 1.5 values were confirmed on 1.5.97 only (Runtime.h). Mirrors
         // CastOn / CastTargetDirect / CastAuto / ComposedCast::Enabled.
-        if (!(REL::Module::IsAE() || REL::Module::IsSE()))   return SelfCast::Declined;
+        if (!Runtime::CastPathsVerified())   return SelfCast::Declined;
         if (!a_follower || !a_spell) return SelfCast::Declined;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
@@ -868,7 +873,7 @@ namespace MFO::Actuation {
         // an unaffordable cast declines exactly as today. ComposedCast::Try is
         // fully self-gating (HEAL-ONLY; AE + APMF + toggle). FOUR outcomes:
         //   Claimed       -> APMF owns the cast, return Applied with no engine call.
-        //   NotApplicable -> offense/buff kind, SE/VR, toggle off, APMF ABSENT, or
+        //   NotApplicable -> offense/buff kind, unverified runtime, toggle off, APMF ABSENT, or
         //                    an APMF too old to carry the facet: the kInstant path
         //                    below runs, BYTE-IDENTICAL to today. That is the
         //                    declared degrade contract (marth 2026-09-07: "without
@@ -1153,11 +1158,12 @@ namespace MFO::Actuation {
     // the engine apply itself is posted to the MAIN thread (ApplyTargetEffect).
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                               RE::Actor* a_target, std::uint32_t a_stopPct) {
-        // 1.6.1170 + 1.5.97, VR refused -- the same lift, the same CONFIRMED
-        // table rows and the same reasoning as CastSelfDirect's gate above
-        // (T#67's fault was the LeftHandSlot GetObject read, now a FormID
-        // lookup; ForceRefTo 24523/25052; CombatController < 0x68; seats).
-        if (!(REL::Module::IsAE() || REL::Module::IsSE()))   return SelfCast::Declined;
+        // RUNTIME GATE (Runtime::CastPathsVerified(): AE bucket or exactly 1.5.97)
+        // -- the same lift, the same Docs/ADDRESS-TABLE-2026-09-15.md rows and the
+        // same reasoning as CastSelfDirect's gate above (T#67's fault was the
+        // LeftHandSlot GetObject read, now a FormID lookup; ForceRefTo 24523/25052;
+        // CombatController < 0x68; the seats).
+        if (!Runtime::CastPathsVerified())   return SelfCast::Declined;
         if (!a_follower || !a_spell || !a_target) return SelfCast::Declined;
         if (a_target == a_follower)          return SelfCast::Declined;   // self -> CastSelfDirect
         const auto id       = a_follower->GetFormID();
@@ -1457,12 +1463,13 @@ namespace MFO::Actuation {
     // (deferred project-wide). Friendly fire is structurally impossible: the
     // effect is placed on the CHOSEN actor, never launched as a projectile.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold) {
-            // 1.6.1170 + 1.5.97, VR refused -- mirrors CastOn / CastSelfDirect (the
-            // former T#67 SE crash gate; see CastSelfDirect's comment for the
-            // CONFIRMED table rows every 1.5.97 value on this path comes from).
-            if (!(REL::Module::IsAE() || REL::Module::IsSE()))
+            // RUNTIME GATE (Runtime::CastPathsVerified(): AE bucket or exactly 1.5.97)
+            // -- mirrors CastOn / CastSelfDirect (the former T#67 SE crash gate; see
+            // CastSelfDirect's comment for the Docs/ADDRESS-TABLE-2026-09-15.md rows
+            // every 1.5.97 value on this path comes from).
+            if (!Runtime::CastPathsVerified())
                 return { Result::FailedOther,
-                         "cast control is 1.6/1.5 only (VR uses the follower's own AI casting)", true };
+                         "cast control is verified on 1.6 and 1.5.97 only (this runtime uses the follower's own AI casting)", true };
             auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
             if (!spell)
                 return { Result::FailedOther,
