@@ -13,6 +13,44 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-1.5.97-pass` (off `main` `5e1c41b`, no version bump) — pushed, CI on
+  its own tip, NOT merged, NOT deployed, awaiting its Fable review. THE SKYRIM 1.5.97 PASS,
+  placement half.** Every value comes from `1.5-1.7-address-table.CONFIRMED.md` (the
+  2026-09-15 cell-by-cell re-derivation of the address-table scan: 80 rows x 3 runtimes, 0
+  numeric errors, 4 label errors, 2 omitted rows supplied) — nothing was derived in this
+  branch. (1) MERGED the two held green branches: `feat/mfo-1.5.97-forcerefto` (`ab39541`,
+  `TESQuest::ForceRefTo` `RelocationID(24523, 25052)` + `ForceRefToNativeAvailable() =
+  IsAE() || IsSE()` at the six `Packages.cpp` gates — CONFIRMED row: SE `0x375050` by the
+  Papyrus callback tail-jump on raw objdump) and `feat/mfo-1.5.97-equipslot` (`04da1d4`,
+  `Loadout::LeftHandSlot()` = `LookupByID<BGSEquipSlot>(0x00013F43)`; `main` had made the
+  function PUBLIC meanwhile, resolved to ONE public implementation with the FormID body, no
+  `RightHandSlot` twin). (2) LIFTED the five cast-control gates — `Actuation::CastOn`,
+  `CastSelfDirect`, `CastTargetDirect`, `CastAuto`, `ComposedCast::Enabled` — from `IsAE()`
+  to `IsAE() || IsSE()` (VR still refused). They were the T#67 SE crash gate; the fault was
+  the `GetObject` read the equipslot merge removed, and every other 1.5.97 value on those
+  paths is CONFIRMED (ForceRefTo, `CombatController` < 0x68 + `combatGroup @0x00`, the 14
+  seat vtables, the 30 `CombatInventoryItemMagicT` combos incl. the two Armor rows the
+  confirmation added, the `GetMagicTarget` sret shape). Each gate's comment names its rows.
+  (3) ONE startup line, `plugin.cpp` kDataLoaded after `Forms::Resolve`: `[runtime]
+  <version>: cast gates <open|gated>, ForceRefTo <native|fallback>, equip-slot <formid>` —
+  a 1.5.97 log now proves which paths are live (error line if the EQUP form is missing).
+  **Not touched:** the Board input trampoline (v2.0.6, already per-runtime), VR, anything
+  1.7.104. **1.7.104 stays DEFERRED:** no `versionlib`/`version-1.7.104.0.bin` exists on this
+  machine or in the wild for that exe, so every `RelocationID`/`VTABLE_*` resolves null there
+  and pinned CommonLib's `IDDatabase::load` fails fatally at plugin load; the confirmation
+  pass DID resolve the 1.7 values (ForceRefTo `0x3D4FA0`, DOBJ `objects[372]`, all vtables,
+  the 72 behavior leaves) but shipping them needs a `REL::Offset`-literal path that neither
+  codebase has a convention for — marth's call, not a placement. **Field observable on
+  1.5.97:** the `[runtime]` line reads `cast gates open, ForceRefTo native, equip-slot
+  00013F43`; followers cast heals/offense/buffs through the same paths as on 1.6.1170;
+  loot travel and the retreat probe engage. **Known consequence to watch:** with APMF
+  present and `bHealAnimPackage` ON, a 1.5.97 heal now goes through `ComposedCast::Try` →
+  APMF's claim; if APMF's own SE gates (`CastClassify.cpp:246` `!IsAE()`, Group C `:1218`)
+  are still closed the claim comes back `ApmfRefused` and the heal FAILS CLOSED (by design —
+  never a decline-fallback) where it used to take the silent kInstant path. The APMF side
+  of the table ("Group C" + "CastClassify" rows, all CONFIRMED on SE) is its own placement
+  brief in the APMF repo; deploy the pair together. `Actuation.cpp` is 2615 lines (over the
+  2500 cap; reported, not split — rule 1).
 - **Branch `fix/mfo-deck-0914-helmet-offhand-verdict-meo` (off `main` `72485e7`, no
   version bump) — pushed, CI on its own tip, NOT merged, NOT deployed, awaiting its
   Fable review.** FIELD (Deck log 2026-09-14 on the armor + dual-wield deploy, Fable):
