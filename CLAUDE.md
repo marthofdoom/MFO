@@ -19,6 +19,12 @@ regressions here; the ripple notes are why the map exists.
   modules; Packages/CasterConsent deferred. Keep MAP.md's file:line nav current.
 - **Delegate bulk file-reads to a subagent** and keep only its conclusion, so
   large files never sit in the main context.
+- **AGENTS KEEP DISK LOGS (marth 2026-09-15).** Token-heavy work is protected against
+  token loss: every agent brief includes "create `<scratchpad>/agentlogs/<task>.md` at the
+  start and append after every meaningful step (values verified, decisions + why, files
+  written file:line, what remains, branch/commit state); code agents commit + push WIP at
+  each coherent checkpoint; if resumed after a limit, read the log first." A replacement
+  for a died agent is pointed at that log, never re-briefed from zero.
 - **Control the token/agent burn (marth 2026-09-02).** ONE complete brief per
   agent, run to completion — never drip-feed sequential refinements (each resume
   re-orients it into a fresh 100+-tool pass; resume only to fix a real error, not
