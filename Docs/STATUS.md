@@ -13,6 +13,66 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-equip-authority` (off `origin/main` `0182234`, v2.0.8 stamped) — PORT #1:
+  MFO's worn-set hold moves into APMF's EQUIP AUTHORITY (ch.17, ABI v7). Pushed, CI GREEN on
+  the code commit `c66dc80` (run 35027862896), NOT merged, NOT deployed, NOT field-tested.** Field context (Fable 2026-09-15,
+  `agentlogs/fable-dualwield-shield.md`): the dual-wield left-hand equip works, then the
+  follower's own combat AI re-equips the shield within <1 s and the engine's forced
+  displacement strips MFO's hold; a worn shield on a dual-wielder is neither kept nor sold.
+  Now MFO DECLARES each managed follower's worn set (`Logistics_Economy.cpp`
+  `RefreshEquipDeclaration`, sent only on change; `APMFBridge::ClaimEquipAuthority` /
+  `DeclareEquipSet`; `Actuation::DeclareFromLedger` on the combat equip laps) and APMF equips it
+  and refuses every other engine equip on that actor. The declared set for a dual-wielder is
+  {right weapon, left weapon, ammo if ranged, the armor pick, everything else worn} and NO
+  shield, so the AI's shield equip is refused. MCM/INI `bApmfEquipAuthority` (default ON,
+  General tab; `tools/audit_mcm.py` PASS). Requires the APMF build that carries ch.17 (APMF
+  `main` `44ad0ad`, `APMF_API.h` md5 `172eb7fd…`; MFO's header is that file byte-for-byte —
+  `kABIVersion` 7, so a v6 APMF nulls the whole bridge: deploy the PAIR).
+  **THE PROBE-RUN PLAN (observe-only first, APMF ships `[EquipAuthority] bEquipObserveOnly=1`):**
+  (1) deploy the pair; (2) play a session with a dual-wield-by-perks follower AND a shield
+  follower, loot armor, buy at a vendor, drink a potion in combat, dress a follower by hand once
+  through the trade menu; (3) grep the deck APMF log for `[apmf][equip-obs]` and read it against
+  APMF `Docs/INTEGRATION.md`'s five probe criteria (named path on every `would-deny`; ZERO
+  `would-deny` with `tls>0`; ZERO `path=Unknown(<id>)` on a deny/would-deny; every
+  `[apmf][equip-auth] -> equip` followed by its `tls=1 verdict=allow`; at least one named engine
+  path) plus MFO's own lines: `[equip-auth] <id>: claim` once per follower, `declare n=` on
+  changes only (a `declare` every second is the churn the design forbids — find the flapping
+  item), `[equip] ... declared` where the direct hop used to be, and the `[hold]` left readback;
+  (4) only when all five hold, flip `bEquipObserveOnly=0` in APMF.ini and re-run the same
+  session. **WHAT THE PROBE MUST SETTLE — the APMF-side gaps found while porting (none is
+  MFO's to fix; all three are release blockers for enforcement, not for observe):** (a) the
+  #17a seat governs EVERY `ActorEquipManager::EquipObject`, and a POTION is "equipped" to drink
+  it — MFO's `DrinkPotion` (`Logistics.cpp` `EquipObject(potion)`) and the AI's own potion use
+  will show `would-deny`; the seat needs a non-wearable exemption (AlchemyItem, ingredients,
+  scrolls, books) before enforcing; (b) `PlayerMenu` is a NAMED DENIED path, so the player
+  dressing a follower through the trade menu is refused under enforcement — player agency
+  (memory: every auto-behavior needs a manual override) wants a `kEquipAuth_AllowPlayerMenu`
+  bit or a Script-class exemption for it; (c) the v7 ABI carries NO per-item hand and APMF's
+  pass equips slot-less, and a slot-less one-hander lands in the RIGHT hand (Loadout.cpp F2) —
+  so MFO still places both hands itself after declaring (`PostHandEquipsDeferred`, double
+  main-thread hop; in-set → allowed), and the pass's own slot-less equip of the declared
+  off-hand weapon is expected to show as an `[apmf][equip-auth] -> equip` of the dagger
+  followed by MFO's corrective right/left placement — read the `[hold] left readback` and the
+  follower's actual hands; a hand extension to `SetEquipSet` (v8) is the proper fix.
+  **DIRECT EQUIP SITES LEFT UNDER THE AUTHORITY ("to migrate" — each shows as
+  `External(MFO.dll)` in the probe; off-set ones as `would-deny`):** `Actuation.cpp`
+  `PostHandEquipsDeferred` (both hands, in-set, BY DESIGN until the ABI has a hand);
+  `EquipWeapon`'s `bWeaponStyleControl=0` plain `EquipObject` (kill-switch branch);
+  `Logistics_Loot.cpp` `AcquireEquip` WEAPON equip-in-place (a just-looted same-role upgrade;
+  armor is declared, weapons wait for the next combat equip gambit); `Logistics.cpp`
+  `EquipTorch` (the torch gambit; the declaration carries a torch only once worn),
+  `DrinkPotion` (gap (a)), `HealExcludedWeapon`'s best-weapon re-equip; `Loadout.cpp`
+  `EquipBack` (cast-debt repay; in-set when it repays a declared item, off-set when it repays
+  the AI's own shield on a dual-wielder — which is then correctly refused). **Known behaviour
+  changes under enforcement to watch:** after MFO's combat-end force-unequip the AI's re-arm is
+  allowed only for ≤1 s (the released weapons stay declared until the next OOC service
+  re-declares from the hands) — a follower may stand unarmed until his next equip gambit; a
+  follower with NO equip gambit keeps whatever he holds (declared as "the current weapon").
+  **Line counts:** `Actuation.cpp` 2803 (was 2678 — over the 2500 cap BEFORE this branch;
+  reported, not split, per the scope rule), `Logistics_Loot.cpp` 2443, `Logistics.cpp` 2227,
+  `APMFBridge.cpp` 1933, `Logistics_Economy.cpp` 1450. Boundary touch reported:
+  `native/Logistics_internal.h` (+20, the builder's declarations — Actuation.cpp already
+  includes it, Logistics.h is public API).
 - **Branch `feat/mfo-1.5.97-pass` (off `main` `5e1c41b`, `origin/main` `2300f7b` merged in,
   no version bump) — pushed, CI on its own tip, NOT merged, NOT deployed, Fable round 2
   applied (tier-3 on `87cabc1`: SEV-2/3/4/5, all fixed). THE SKYRIM 1.5.97 PASS, placement

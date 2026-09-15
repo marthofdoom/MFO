@@ -893,6 +893,53 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `ComputeWeaponRoles` now also runs per pick lap and per 5 s top-up attempt — negligible at party
   scale. **NOT FIELD-VERIFIED:** whether the AI attacks with the left weapon; the F4 readback
   questions above.
+- **UNDER THE APMF EQUIP AUTHORITY (ch.17, ABI v7; `feat/mfo-equip-authority` 2026-09-15, PORT
+  #1 of an MFO engine mechanism into APMF) THE DECLARATION IS THE EQUIP PATH.** Per follower,
+  `authority = APMFBridge::EquipAuthoritySupported() && APMFBridge::ClaimEquipAuthority(id)` is
+  read on the Fired lap (`EquipWeapon`, inside the `bWeaponStyleControl` block) and on the
+  satisfied-lap top-up. With it TRUE: (1) no engine call is made from the worker lap — the
+  ledger (`g_forcedWeapon[id].right/.left`) is written exactly as before (`EquipLeftHeld(...,
+  a_defer=true, &oldLeft)` writes `.left` and returns without its `UnequipObject`/`EquipObject`);
+  (2) `DeclareFromLedger` (anon, beside `PostHandEquipsDeferred`) reads the ledger under
+  `g_forcedMx`, the `FollowerState` off `g_followers` (worker-serial, `WeaponRolesFor`'s road)
+  and `CastHandHeld(left)`, and calls `Logistics::RefreshEquipDeclaration` (Logistics_Economy.cpp)
+  which SENDS the set iff it changed (the top-up passes `a_force` = the "give it back" re-issue);
+  (3) `PostHandEquipsDeferred(id, oldLeft, oldRight, right, forceRight, left)` posts the SAME
+  engine calls (old holds force-unequipped, right force-equipped slot-less, left force-equipped
+  into `Loadout::LeftHandSlot()`) through a DOUBLE `MainThread::Post` hop so they run ≥1 full
+  frame after APMF published the set AND ran its pass in that frame (APMF drains + enforces in the
+  same `PlayerCharacter::Update` seat MFO's pump hooks; relative order unknown, so two hops).
+  WHY MFO STILL PLACES THE HANDS: the v7 ABI carries no hand and APMF's pass equips slot-less
+  (`channels/EquipAuthority.cpp`), and a slot-less one-hander lands in the RIGHT hand
+  (`Loadout.cpp` `EquipBack` doc, Fable F2) — so the pass cannot dual-wield and its slot-less
+  equip of a not-yet-worn off-hand weapon evicts the main-hand one. In-set items pass the seat
+  whoever equips them, so MFO's explicit placement lands as `External(MFO.dll) verdict=allow`
+  and re-issuing the RIGHT (plain, `a_forceRight=false`, on the top-up's AI-owned right; T#76
+  force on MFO's own hold) undoes the pass's mis-hand. The shield branches
+  (`EquipShieldOnMain`) become declaration-only: `RefreshEquipDeclaration`'s shield rule
+  (`offHand==1` → best by rating, `offHand==2` → NEVER, `0` → the worn one) carries it and
+  APMF's pass equips it (slot-unambiguous). `ReleaseForcedWeapon` / `YieldForcedLeftHand` /
+  `ReconcileForcedWeapon` / the ch.15 `ClaimEquipment` are UNCHANGED (the T#76 lock is still
+  placed by the deferred post, so the release contract F1/F6 and the FWPN co-save are intact;
+  ch.15's param form is unaffected by a ch.17 claim, APMF INTEGRATION.md). After a release no
+  refresh is sent: the next OOC `ServiceFollower` declares what the hands then hold. With the
+  authority FALSE (APMF absent / <v7 / `bApmfEquipAuthority=0` / claim refused): byte-identical
+  to the block above. **What breaks:** posting the hand equips with ONE hop (or inline) can land
+  them before APMF's snapshot carries the weapons → `External(MFO.dll) would-deny` (observe) /
+  DENIED + an unarmed follower (enforce); dropping the right re-issue leaves the pass's slot-less
+  off-hand equip in the RIGHT hand with the sword evicted and nothing to bring it back (no
+  declaration change follows); forcing the top-up's AI-owned right puts a prevent-removal lock on
+  a weapon the ledger does not own and no release path clears; declaring from the worker BEFORE
+  the ledger write declares the OLD hold; skipping `ClaimEquipAuthority` on the combat lap leaves a
+  follower first seen in combat unclaimed until combat end (his direct equips then run allowed,
+  no declaration exists). **Direct equips that remain under the authority (listed in
+  `Docs/STATUS.md` "to migrate")**: the `bWeaponStyleControl=0` plain `EquipObject`
+  (`EquipWeapon`'s kill-switch branch), `Loadout.cpp` `EquipBack` (the cast-debt repay; in-set
+  when it repays a declared item), `Logistics.cpp` `EquipTorch`, `DrinkPotion`'s
+  `EquipObject(potion)` and `HealExcludedWeapon`'s best-weapon re-equip, `AcquireEquip`'s WEAPON
+  equip-in-place hop. Observe-only this cycle (APMF ships `[EquipAuthority] bEquipObserveOnly=1`):
+  every one of those logs `[apmf][equip-obs] ... path=External(MFO.dll) ... verdict=would-deny`
+  when off-set, which is the probe's purpose.
 - `ConcentrationCast` (anon, `Actuation.cpp:470`, COMBAT) = self→`CastSelfDirect`; non-self→
   **`CastTargetDirect` (DIRECT FORCE, PRIMARY — the package delivery is REMOVED)**.
   Latches `CasterConsent::Want` on each Applied so the slider keeps denying competing
@@ -1523,6 +1570,52 @@ declared there and defined in their home module). Layout:
   disagree; `BuyThresholds` is append-only (do not move the new fields ahead of
   `eligibleSchools`); `ArmorClassSuits` is dead code by design — do not re-add it
   as a gate.
+- **THE DECLARED WORN SET — `RefreshEquipDeclaration` (`Logistics_Economy.cpp`, beside
+  `EquipBestOwnedGear`; `feat/mfo-equip-authority` 2026-09-15, PORT #1).** When
+  `APMFBridge::EquipAuthoritySupported()` (APMF present, ABI ≥ 7, `bApmfEquipAuthority`) and
+  `FollowerState::mfoEnabled`, MFO no longer equips ARMOR directly: it DECLARES the worn set to
+  APMF's ch.17 channel and APMF equips every declared item the follower is not wearing and
+  refuses every other engine equip on him. THE COMPOSITION (declare→enforce, principle 4 — only
+  what MFO decides elsewhere): hands = `a_holdRight/a_holdLeft` (Actuation's `ForcedHold`
+  ledger) else the WEAPON in that hand (a torch counts; a spell is not an item; a two-hander/bow
+  in the right empties the left; never a weapon not held — a stowed bow beside a held sword is
+  not simultaneously wearable); AMMO when the right is ranged or `roles.doRanged` (worn of the
+  matching kind, else best carried by damage; bolts for a crossbow / `wantCrossbow`); the SHIELD
+  by `roles.offHand` (2 → NEVER, whatever is worn — THE FIELD FIX; two-hander/bow right, a left
+  item or `a_leftReserved` (a cast on the left) → none; 1 → best owned by rating; 0 → the worn
+  one); the JUDGED ARMOR PICK = `ComputeOwnedGearPick` (EquipBestOwnedGear's own pick, factored
+  out VERBATIM so there is one judge; one pick per declaration, it replaces every worn ARMO its
+  slot mask overlaps); everything else WORN (jewelry, clothing, circlets, modded slots) stays
+  declared. Dolls mode declares the worn set as-is. SENT ONLY ON CHANGE: `g_lastDeclared`
+  (anon, worker-serial like `g_nextTick`) holds the last sent set sorted; `a_force` bypasses
+  it (the top-up's "give it back" re-issue, bounded by APMF's 3 s per-item hold). Log lines:
+  `[equip-auth] <id>: declare n=<count> [<names>] (<why>[, re-issue])`, `claim`, `release`.
+  ROADS: `ServiceFollower` (`Logistics.cpp`, OOC, after the ~1 s cadence gate — CLAIM, then a
+  scope guard declares at every exit so a loot/buy/owned-upgrade THIS tick is declared THIS
+  tick; `a_leftReserved` from `APMFBridge::IsHealCastActive || IsOwnedCastActiveOnHand(left)`);
+  `Actuation::DeclareFromLedger` (combat weapon events; the Scheduler never reaches
+  `ServiceFollower` in combat); `OnFollowerRemoved` (dismiss + T#78 MFO-OFF edge via
+  `Followers::ReleaseHeldState`) RELEASES + forgets; `ClearTransientState` →
+  `ClearEquipDeclarations` (the claims go in `APMFBridge::ClearTransientState`, kPreLoadGame),
+  so the first service after a load re-claims and re-declares. The gate OFF releases any standing
+  claim (and `APMFBridge::Tick` releases on `bApmfEquipAuthority=0` for in-combat followers).
+  DIRECT SITES GATED: `AcquireEquip` (`Logistics_Loot.cpp`) skips its `MainThread::Post`
+  `EquipObject` hop for ARMOR when `EquipAuthorityLive(id)` (transfer, verdicts, MEO gem carry
+  untouched; logs `'<name>' declared`); `EquipBestOwnedGear`'s `[equip] OWNED` line appends
+  `| declared (APMF equip authority)`. `bLogistics=0` → no OOC road at all (the combat road
+  still claims/declares). **What breaks:** declaring BOTH a held melee weapon and a stowed
+  ranged one (or two items for one slot) makes APMF's pass displace one with the other on every
+  declaration event — the set must be simultaneously wearable; declaring the shield for
+  `offHand==2` re-creates the Fable 2026-09-15 shield-over-dagger loop as an APMF-performed
+  equip; a per-tick unconditional send is bounded by APMF (3 s per item) but is exactly the churn
+  the log will show — keep the change detector; computing the armor pick with a second loop
+  instead of `ComputeOwnedGearPick` lets the declaration and `EquipBestOwnedGear` drift; a
+  refresh from a non-worker thread races `g_lastDeclared` (#4); dropping the `mfoEnabled` gate
+  keeps a claim standing on a follower MFO must leave alone (T#78); an empty declaration
+  (`SetEquipSet(h, nullptr, 0)`) is PASS-THROUGH, not "deny all" — never send it as a "hold
+  nothing" instruction. APMF-SIDE GAPS THE PROBE MUST SETTLE BEFORE ENFORCEMENT (Docs/STATUS.md):
+  the seat governs every `EquipObject` incl. potions (`DrinkPotion`) and the AI's own potion
+  equips; `PlayerMenu` (the trade-menu dress) is a denied path; the ABI has no per-item hand.
 - **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
   `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
   CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet
@@ -2726,6 +2819,34 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   own initiative (its channels are client-declared, arbitration/drive-only). This bridge only ever
   CLAIMS facets (`ClaimOffenseCast`/`ClaimCombatTarget` → `RequestCast`/`RequestEx`/`Repoint`, basis
   200); MFO executes the equip/target/consent half with its OWN mechanisms.
+- **EQUIP AUTHORITY (ch.17, `kIntent_EquipAuthority`, ABI v7 `SetEquipSet`; `feat/mfo-equip-
+  authority` 2026-09-15 — PORT #1, the first MFO engine mechanism moved into APMF).** `APMF_API.h`
+  copied byte-for-byte from APMF main (md5 `172eb7fd3d37696c555bc457d67ce405`); `kABIVersion` 6→7,
+  so `Acquire()` now asks a v6 APMF for v7 and gets nullptr → the WHOLE APMF path degrades (the
+  DLL pair ships together). `EquipAuthoritySupported()` = `Available() && abiVersion >= 7 &&
+  Config::g_apmfEquipAuthority` (the OffenseCastClaimSupported split: false + supported = APMF
+  REFUSED = fail closed, `spdlog::error`, never a degrade). `ClaimEquipAuthority(fid)`: a
+  STANDING `RequestEx(kIntent_EquipAuthority, kOwnBasis, ival = kEquipAuth_None)` on
+  `Owned::equipAuthHandle` — kept if live, never re-requested, refusal logged once per streak
+  (`g_equipAuthRefused`); `ReleaseEquipAuthority(fid)`; `IsEquipAuthorityClaimed(fid)`;
+  `DeclareEquipSet(fid, forms)` → `APMF_API_v7::SetEquipSet` (copied inside the call; > kMaxEquipSet
+  32 logged as an error and truncated; no claim → error + false). NOT swept by `Tick()` (no cadence
+  sizes it) — `Tick()` only RELEASES it when `bApmfEquipAuthority` reads OFF (the kill switch
+  reaches in-combat followers the OOC service never does); `ClearTransientState` releases it;
+  `EraseIfEmpty`/Tick's empty test include it. MFO does NOT set `kEquipAuth_ObserveOnly`: APMF's
+  own `[EquipAuthority] bEquipObserveOnly` is the ONE enforcement switch. Thread road = the
+  worker (`ServiceFollower`, `Actuation::EquipWeapon`), `ClaimEquipment`'s discipline: thread-safe
+  APMF enqueues, `g_mx` for the map, FormIDs only. Ch.15 `ClaimEquipment` (param form, gate only)
+  stands beside it — APMF INTEGRATION.md: unaffected by a ch.17 claim. The declaration itself
+  (what is in the set, when it is sent) lives in `Logistics_Economy.cpp` `RefreshEquipDeclaration`
+  and `Actuation.cpp` `DeclareFromLedger` — see those entries. **What breaks:** sweeping the claim
+  on `FacetExpiry()`/`kExpiry` drops a standing authority mid-session and the follower's own AI
+  re-dresses him the moment the set clears (nothing re-declares until the next change); releasing
+  without `ForgetEquipDeclaration` leaves the change detector believing the set is still
+  declared, so a re-claim never re-sends; passing anything but the standing handle to `SetEquipSet`
+  is a silent no-op on APMF's side (no error comes back — the `[apmf][equip-auth]` pass line is the
+  only readback); calling `Acquire()` with a header older than APMF's does NOT break (a v7 APMF
+  serves v6), the reverse does.
 - **THE OWNED CAST (default), a real AI-DECIDED animated cast — `Actuation::CastOn` FF-non-self
   hostile branch (`Actuation.cpp:600` `CastOn`, worker).**
   **ORDER OF OPERATIONS, RE-NARRATED 2026-09-07 (`fix/mfo-fourstate-followups`):** this bullet used
