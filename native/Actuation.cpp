@@ -7,6 +7,7 @@
 // ResolveCastTarget and ClearCastLock(s). Shared concentration numbers and
 // the cast lock's shared state: Actuation_internal.h.
 #include "Actuation_internal.h"
+#include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
@@ -386,7 +387,7 @@ namespace MFO::Actuation {
             case SelfCast::Declined:
             default:
                 // Unaffordable (§5.3) / LoS or line-of-fire held (offense) /
-                // off-AE: transparent + legible, the rules below run.
+                // unverified runtime (Runtime.h): transparent + legible, the rules below run.
                 return { Result::FailedOther, "concentration direct-force declined", true };
             }
         }
@@ -400,21 +401,37 @@ namespace MFO::Actuation {
         // this (unchanged -- they are not part of the #68 ladder at all).
         Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target,
                        bool a_rangeGate = false) {
-            // T#67 SE/VR GUARD (mirrors the CasterConsent hook guards). The mage
-            // cast-control path CRASHES on Skyrim SE 1.5.97: a reporter's crash log
-            // pinned an EXCEPTION_ACCESS_VIOLATION to Scheduler::Tick -> Actuation::
-            // Fire -> CastOn on the SKSE job worker (byte read off a poisoned
-            // pointer), an SE-only divergence in the equip/cost work below. The
-            // forced-cast PACKAGE route already declines off AE, but CastOn's own
-            // Loadout::Prepare (spell equip) + CalculateMagickaCost run FIRST and
-            // are what fault. This whole feature is AE-developed and AE-tested, so
-            // off AE we decline the cast rule TRANSPARENTLY -- the follower's own
-            // vanilla AI keeps casting (mobile, animated), exactly the graceful
-            // degradation the VR guards already give. Gate here (not just the
-            // package route) so no cast-control code runs at all off AE.
-            if (!REL::Module::IsAE())
+            // RUNTIME GUARD: Runtime::CastPathsVerified() -- the AE bucket (pre-
+            // existing) or EXACTLY 1.5.97; VR and every other 1.5.x refused (feat/
+            // mfo-1.5.97-pass, 2026-09-15). This was the T#67 AE-only gate: the mage cast-control
+            // path CRASHED on Skyrim SE 1.5.97 -- a reporter's crash log pinned an
+            // EXCEPTION_ACCESS_VIOLATION to Scheduler::Tick -> Actuation::Fire ->
+            // CastOn on the SKSE job worker, a byte read off the poisoned pointer
+            // 0x0101010101010101. Root cause, measured on both unpacked binaries:
+            // Loadout::LeftHandSlot()'s BGSDefaultObjectManager::GetObject read
+            // (CommonLib 3.7.0 derefs the objectInit bool array AS A POINTER at
+            // +0xB80). That read is gone -- the slot is LookupByID(0x00013F43) on
+            // every runtime (Docs/ADDRESS-TABLE-2026-09-15.md rows "held branch
+            // Loadout.cpp:63,81 LookupByID<BGSEquipSlot>(0x00013F43)" and
+            // "BGSDefaultObjectManager::objects[]/objectInit[] count": 364 SE / 366
+            // AE). NOTE what that changes on 1.6.1170 too: the GetObject read there
+            // returned nullptr in the field (see LeftHandSlot()), so this is the
+            // first build whose spell equips carry the LeftHand slot on AE. The rest
+            // of this path's 1.5.97 values are CONFIRMED in the same table: the
+            // forced-cast package route (row "Packages.cpp:302-305 TESQuest::
+            // ForceRefTo" 24523/25052), the CombatController reads (row
+            // "attackerHandle @0x28 ... (all < 0x68)"; `combatGroup` at +0x00 is
+            // CommonLib's own SE-origin declaration, not a table row), and the seats
+            // a claimed cast rides on (rows "14 seat vtables", "30
+            // CombatInventoryItemMagicT combos", "GetMagicTarget sret"). An
+            // unverified runtime keeps the transparent decline: the follower's own
+            // vanilla AI keeps casting (mobile, animated). Gate here (not just the
+            // package route) so no cast-control code runs at all on a runtime the
+            // table did not confirm. Mirrors CastSelfDirect / CastTargetDirect /
+            // CastAuto / ComposedCast::Enabled.
+            if (!Runtime::CastPathsVerified())
                 return { Result::FailedOther,
-                         "cast control is AE-only (SE/VR use the follower's own AI casting)", true };
+                         "cast control is verified on 1.6 and 1.5.97 only (this runtime uses the follower's own AI casting)", true };
             // TRANSPARENT (GAMBIT_FLOWS §2): a cast that provably cannot run this
             // tick must not wall off the rules below it -- FFXII skips an
             // unaffordable gambit and runs the next line.
@@ -790,7 +807,7 @@ namespace MFO::Actuation {
                     return { Result::NoOp, "self-cast held off (another heal owns the claim)", true };
                 case SelfCast::Declined:
                 default:
-                    // Unaffordable / off-AE / no caster: transparent, the rules
+                    // Unaffordable / unverified runtime / no caster: transparent, the rules
                     // below run (the follower is not stuck on a cast that can't go).
                     return { Result::FailedOther, "self-cast could not fire", true };
                 }
@@ -1305,7 +1322,7 @@ namespace MFO::Actuation {
                             return { Result::FailedSkill,
                                      "APMF refused the heal claim", true };
 
-                        // APMF was never asked (non-Heal kind / SE / toggle off / APMF
+                        // APMF was never asked (non-Heal kind / unverified runtime / toggle off / APMF
                         // absent / ABI < 5) -- the degrade contract, unchanged. NO
                         // `default:` (F3-6): all four enumerators are listed, so a fifth
                         // TryResult value must break the build instead of silently
@@ -1724,15 +1741,51 @@ namespace MFO::Actuation {
             else                           doEquip();
         }
 
+        // THE LAST REFUSAL REASON LOGGED PER FOLLOWER (Deck 2026-09-14 finding,
+        // round 2 of feat/mfo-1.5.97-pass): `[equip] ... + off-hand 'Ebony Dagger'
+        // (dual wield by perks)` printed five times with ZERO `[hold]` lines --
+        // EquipLeftHeld returned false every time (LeftHandSlot() was null on
+        // 1.6.1170, see Loadout.cpp) and nothing said so. Principle 7: a refused
+        // precondition is an ERROR line, once per follower per reason (a repeat of
+        // the same reason is silent until it changes or a hold succeeds, which
+        // clears the entry). Worker-serial, no lock (#4, as g_offHandRetryAt: both
+        // call sites are EquipWeapon on the job worker).
+        std::unordered_map<RE::FormID, const char*> g_leftHeldRefusal;
+
         // Put a_weap in the LEFT hand force-held and record ForcedHold::left. Map
         // under the lock, engine calls outside it (the SEV-1 discipline). A
         // different weapon already held there is force-unequipped first, as the
-        // right-hand path swaps its own lock. false = no slot form, no write.
-        bool EquipLeftHeld(RE::Actor* a_follower, RE::TESObjectWEAP* a_weap) {
+        // right-hand path swaps its own lock. false = a precondition failed (no
+        // manager / no left slot form / no weapon), NO write to the ledger, an
+        // error line naming the precondition (rate-limited above), and a_whyNot
+        // (if given) set to that name so the caller's own line can say it too.
+        bool EquipLeftHeld(RE::Actor* a_follower, RE::TESObjectWEAP* a_weap,
+                           const char** a_whyNot = nullptr) {
             auto* mgr  = RE::ActorEquipManager::GetSingleton();
             auto* slot = Loadout::LeftHandSlot();
-            if (!mgr || !slot || !a_weap) return false;
+            const char* why = !a_follower ? "follower"
+                            : !mgr        ? "equip manager"
+                            : !slot       ? "left slot form (Loadout::LeftHandSlot())"
+                            : !a_weap     ? "weapon"
+                            : nullptr;
+            if (why) {
+                if (a_whyNot) *a_whyNot = why;
+                if (a_follower) {
+                    const auto fid = a_follower->GetFormID();
+                    auto it = g_leftHeldRefusal.find(fid);
+                    if (it == g_leftHeldRefusal.end() || it->second != why) {
+                        g_leftHeldRefusal[fid] = why;
+                        spdlog::error("[hold] {:08X}: EquipLeftHeld REFUSED -- {} null; the off-hand "
+                                      "'{}' is NOT held (logged once per reason)", fid, why,
+                                      a_weap && a_weap->GetName() ? a_weap->GetName() : "?");
+                    }
+                } else {
+                    spdlog::error("[hold] EquipLeftHeld REFUSED -- follower null");
+                }
+                return false;
+            }
             const auto id = a_follower->GetFormID();
+            g_leftHeldRefusal.erase(id);   // a success re-arms the once-per-reason line
             RE::TESBoundObject* oldLeft = nullptr;
             {
                 std::scoped_lock lk(g_forcedMx);
@@ -1825,12 +1878,23 @@ namespace MFO::Actuation {
                         // Fired here armed the Scheduler's suppression window (rules
                         // below the equip -- heals -- starved ~1.5 s per refill),
                         // stamped lastFired and fed ProgAllocator::NoteCombatFire.
+                        // g_offHandRetryAt is stamped ABOVE, before the attempt, on
+                        // purpose: it is the FLOOR on how often the inventory walk
+                        // runs (principle 9), not a record of success -- a refused
+                        // hold retries in kOffHandRetry, and the only success-state
+                        // is the ledger .left EquipLeftHeld writes itself.
                         if (roles.offHand == 2) {
-                            if (auto* w = PickOffHandWeapon(a_follower, roles, daggerMelee, rightW);
-                                w && EquipLeftHeld(a_follower, w)) {
-                                a_follower->DrawWeaponMagicHands(true);
-                                spdlog::info("[equip] {:08X}: GAMBIT equip off-hand '{}' (dual wield by "
-                                             "perks, top-up)", id, w->GetFullName() ? w->GetFullName() : "?");
+                            if (auto* w = PickOffHandWeapon(a_follower, roles, daggerMelee, rightW)) {
+                                const char* whyNot = nullptr;
+                                if (EquipLeftHeld(a_follower, w, &whyNot)) {
+                                    a_follower->DrawWeaponMagicHands(true);
+                                    spdlog::info("[equip] {:08X}: GAMBIT equip off-hand '{}' (dual wield by "
+                                                 "perks, top-up)", id, w->GetFullName() ? w->GetFullName() : "?");
+                                } else {
+                                    spdlog::info("[equip] {:08X}: off-hand '{}' NOT held ({} null, top-up)",
+                                                 id, w->GetFullName() ? w->GetFullName() : "?",
+                                                 whyNot ? whyNot : "?");
+                                }
                             }
                         } else if (roles.offHand == 1 && !(leftA && leftA->IsShield())) {
                             if (auto* sh = PickShield(a_follower)) {
@@ -1873,6 +1937,8 @@ namespace MFO::Actuation {
             // claim/lock on the left WINS: nothing goes there while one stands.
             RE::TESObjectWEAP* offHandW  = nullptr;
             RE::TESObjectARMO* offHandSh = nullptr;
+            bool               offHandHeld   = false;     // EquipLeftHeld's verdict for offHandW
+            const char*        offHandWhyNot = nullptr;   // ... and its reason when false
             const bool offHandWanted = !a_ranged && roles.offHand != 0 && IsOneHandMelee(best) &&
                                        Config::g_weaponStyleControl.load();
             const bool leftCastHeld  = offHandWanted && CastHandHeld(a_follower, kHandLeft);
@@ -1928,8 +1994,10 @@ namespace MFO::Actuation {
                         hold.right = best;
                         if (oldLeft) hold.left = nullptr;
                     }
-                    // Off-hand (style control ON only -- see the plan above).
-                    if (offHandW)       EquipLeftHeld(a_follower, offHandW);   // force-held, ledger .left
+                    // Off-hand (style control ON only -- see the plan above). The
+                    // hold's OUTCOME feeds the `[equip]` line below: it says
+                    // "+ off-hand" only for a hold that actually happened.
+                    if (offHandW)       offHandHeld = EquipLeftHeld(a_follower, offHandW, &offHandWhyNot);   // force-held, ledger .left
                     else if (offHandSh) EquipShieldOnMain(id, offHandSh->GetFormID()); // plain (F3: main thread)
                 } else {
                     mgr->EquipObject(a_follower, best);   // kill-switch off: today's behaviour exactly
@@ -1946,7 +2014,10 @@ namespace MFO::Actuation {
             spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' dmg={}{}{}{}", a_follower->GetFormID(),
                          a_ranged ? "ranged" : "melee", nm(best), bestDmg,
                          Logistics::WeaponScore(roles, best) != static_cast<float>(bestDmg) ? " (perk-preferred kind)" : "",
-                         offHandW  ? std::format(" + off-hand '{}' (dual wield by perks)", nm(offHandW))
+                         offHandW  ? (offHandHeld
+                                        ? std::format(" + off-hand '{}' (dual wield by perks)", nm(offHandW))
+                                        : std::format(" off-hand '{}' NOT held ({} null)", nm(offHandW),
+                                                      offHandWhyNot ? offHandWhyNot : "?"))
                          : offHandSh ? std::format(" + shield '{}' (shield by perks)", nm(offHandSh)) : std::string{},
                          leftCastHeld ? " (off-hand skipped: a cast holds the left hand)" : "");
             return { Result::Fired, a_ranged ? "equipped ranged" : "equipped melee" };
@@ -2329,6 +2400,7 @@ namespace MFO::Actuation {
             g_forcedWeapon.erase(it);
         }
         g_offHandRetryAt.erase(id);   // next combat's off-hand top-up starts fresh
+        g_leftHeldRefusal.erase(id);  // ... and a refused hold is reported afresh
         // forceEquip=true on the UNequip clears the prevent-removal lock the
         // force-equip set; a plain unequip would be REFUSED against a forced
         // item and the follower would stay stuck holding the weapon, unable to
@@ -2459,6 +2531,7 @@ namespace MFO::Actuation {
 
     void ClearForcedWeapons() {
         g_offHandRetryAt.clear();   // worker-serial twin of the ledger (revert/load, #4 path)
+        g_leftHeldRefusal.clear();
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
     }

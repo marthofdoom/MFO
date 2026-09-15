@@ -13,6 +13,85 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-1.5.97-pass` (off `main` `5e1c41b`, `origin/main` `2300f7b` merged in,
+  no version bump) — pushed, CI on its own tip, NOT merged, NOT deployed, Fable round 2
+  applied (tier-3 on `87cabc1`: SEV-2/3/4/5, all fixed). THE SKYRIM 1.5.97 PASS, placement
+  half.** Every value comes from `Docs/ADDRESS-TABLE-2026-09-15.md` (the 2026-09-15
+  cell-by-cell re-derivation of the address-table scan: 80 rows x 3 runtimes, 0 numeric
+  errors, 4 label errors, 2 omitted rows supplied) — nothing was derived in this branch.
+  (1) MERGED the two held green branches: `feat/mfo-1.5.97-forcerefto` (`ab39541`,
+  `TESQuest::ForceRefTo` `RelocationID(24523, 25052)` at the six `Packages.cpp` gates —
+  table row: SE `0x375050` by the Papyrus callback tail-jump on raw objdump) and
+  `feat/mfo-1.5.97-equipslot` (`04da1d4`, `Loadout::LeftHandSlot()` = `LookupByID<
+  BGSEquipSlot>(0x00013F43)`; `main` had made the function PUBLIC meanwhile, resolved to ONE
+  public implementation with the FormID body, no `RightHandSlot` twin).
+  **THE EQUIPSLOT MERGE CHANGES THE PROVEN 1.6.1170 PATH — SAY SO (Fable SEV-2, measured):**
+  on AE CommonLib 3.7.0's `GetObject<BGSEquipSlot>(kLeftHandEquip)` derefs `+0xB80` as
+  `bool*`, and on the 366-entry AE DOBJ table `+0xB80` is `objects[364]` = DOBJ `HMAE` =
+  Update.esm FLST `0x01003275`, record flags `0x0` → byte 3 = 0 → **`LeftHandSlot()` has
+  ALWAYS returned `nullptr` on 1.6.1170 in the field.** So every cast ran `EquipSpell(actor,
+  spell, nullptr)` (the engine's helper AE `0x6CAB20` picks the hand itself for an
+  EitherHand spell), and `EquipLeftHeld` (`Actuation.cpp:1748`, `if (!slot) return false`)
+  was DEAD on AE — the dual-wield off-hand force never fired, nor its five `UnequipObject(...,
+  LeftHandSlot())` companions. **This branch makes both LIVE on 1.6.1170 for the first time.
+  Coordinator decision: KEEP (it is the design intent — left-hand casts, dual wield by
+  perks) and tell the truth**; every "1.6 untouched / unchanged" claim (incl. `ab39541`'s
+  wording) is withdrawn. **AE field observables, new in this build:** the spell hand on a
+  gambit cast is LEFT (was engine-chosen); `[equip] ... GAMBIT equip off-hand '...' (dual
+  wield by perks)` lines appear for the first time; a left-hand weapon MFO displaced for a
+  cast comes back to the LEFT at combat end (`RestoreOne`'s `displacedLeft` debt now
+  carries the slot); the per-hand cast claims (`kApmfHandLeft`), `CastInFlightOnHand(left)`
+  and the displaced-left debts are exercised for real. Watch for: a follower whose right
+  hand is emptied by a left equip, a shield displaced by a left-hand weapon, a spell that
+  lands LEFT where the AI expected RIGHT. **The Deck 2026-09-14 log already showed the
+  masked failure this fixes:** `[equip] 0009BCB0: GAMBIT equip melee 'Grossmesser' ... +
+  off-hand 'Ebony Dagger' (dual wield by perks)` five times with ZERO `[hold]` lines — the
+  hold had returned false every time on the null slot and the line claimed an equip that
+  never happened. Now (principle 7) `EquipLeftHeld` logs `[hold] <id>: EquipLeftHeld REFUSED
+  -- <follower|equip manager|left slot form|weapon> null` (error, once per follower per
+  reason), the `GAMBIT equip` line says `+ off-hand` ONLY on a hold that happened and
+  `off-hand '<w>' NOT held (<what> null)` otherwise, and the top-up prints its own `NOT held`
+  line; the ledger `.left` is written only on success (`g_offHandRetryAt` is a cadence floor,
+  stamped before the attempt by design).
+  (2) LIFTED the five cast-control gates — `Actuation::CastOn`, `CastSelfDirect`,
+  `CastTargetDirect`, `CastAuto`, `ComposedCast::Enabled` — from `IsAE()` to
+  **`Runtime::CastPathsVerified()` = `IsAE() || IsVerified1_5_97()`** (new header
+  `native/Runtime.h`, Fable SEV-3: pinned CommonLib's `IsSE()` is the DEFAULT bucket — every
+  1.5.x and anything not 1.6/1.4 — and the 1.5 values were confirmed on 1.5.97 ONLY; Board.cpp
+  already gated on the exact `isSE597`). VR and every other 1.5.x refused. The AE side stays
+  the pre-existing `IsAE()` bucket (outside this brief; noted in MAP). They were the T#67 SE
+  crash gate; the fault was the `GetObject` read the equipslot merge removed, and every other
+  1.5.97 value on those paths is CONFIRMED (ForceRefTo, `CombatController` < 0x68, the 14 seat
+  vtables, the 30 `CombatInventoryItemMagicT` combos incl. the two Armor rows the
+  confirmation added, the `GetMagicTarget` sret shape; `combatGroup @0x00` is CommonLib's
+  SE-origin declaration, not a table row). Each gate's comment names its rows.
+  `ForceRefToNativeAvailable()` evaluates the same predicate. (3) ONE startup line,
+  `plugin.cpp` kDataLoaded after `Forms::Resolve`: `[runtime] <version> [<build>]: cast
+  gates <open|gated (reason)>, ForceRefTo <native|fallback>, equip-slot <formid>` — build =
+  `1.6.1170` / `1.5.97` / `AE (not 1.6.1170)` / the gate reason; a non-97 1.5.x prints
+  `gated (unverified 1.5.x)`; error line if the EQUP form is missing.
+  **Not touched:** the Board input trampoline (v2.0.6, already per-runtime), VR, anything
+  1.7.104. **1.7.104 stays DEFERRED:** no `versionlib`/`version-1.7.104.0.bin` exists on this
+  machine or in the wild for that exe, so every `RelocationID`/`VTABLE_*` resolves null there
+  and pinned CommonLib's `IDDatabase::load` fails fatally at plugin load; the confirmation
+  pass DID resolve the 1.7 values (ForceRefTo `0x3D4FA0`, DOBJ `objects[372]`, all vtables,
+  the 72 behavior leaves) but shipping them needs a `REL::Offset`-literal path that neither
+  codebase has a convention for — marth's call, not a placement. **Field observable on
+  1.5.97:** the `[runtime]` line reads `1.5.97.0 [1.5.97]: cast gates open, ForceRefTo
+  native, equip-slot 00013F43`; followers cast heals/offense/buffs through the same paths
+  as on 1.6.1170; loot travel and the retreat probe engage.
+  **Known degrade to watch on 1.5.97 (Fable SEV-4 corrected the earlier wording):** with
+  APMF present and `bHealAnimPackage` ON, a heal goes through `ComposedCast::Try` → APMF's
+  `EnqueueCast`, which has NO runtime gate — the claim is **ACCEPTED, not `ApmfRefused`**.
+  APMF's `!IsAE()` gates only skip seat-0 classify (`CastClassify.cpp:246`) and Group C
+  (`AiCastSeats.cpp:1218`), so on today's APMF the seats never fire the cast: the observable
+  is a `Held` claim with no cast — `[cfc] <id> kIntent_Cast claim live N ms with NO observed
+  cast` (`ComposedCast.cpp:190`) plus APMF's `[ch.8b seat 0] non-AE runtime` install warn —
+  and the heal never lands while the toggle is ON (by design: never a decline-fallback).
+  After the APMF 1.5.97 branch (the table's "Group C" + "CastClassify" rows, all CONFIRMED on
+  SE) merges, that degrade disappears and the claimed heal fires as on 1.6. Deploy the pair
+  together. `Actuation.cpp` is 2678 lines (over the 2500 cap; reported, not split — rule 1;
+  REVIEW-BACKLOG **MFO-B37** holds the split brief).
 - **Branch `fix/mfo-deck-0914-helmet-offhand-verdict-meo` (off `main` `72485e7`, no
   version bump) — pushed, CI on its own tip, NOT merged, NOT deployed, awaiting its
   Fable review.** FIELD (Deck log 2026-09-14 on the armor + dual-wield deploy, Fable):

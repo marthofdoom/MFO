@@ -56,6 +56,12 @@ namespace MFO::Loadout {
         // most for.
         std::unordered_map<RE::FormID, RE::FormID> g_mfoSpell;
 
+        // The vanilla EQUP forms, read from Skyrim.esm's DOBJ record (DNAM
+        // `LHEQ` -> 0x13F43, `RHEQ` -> 0x13F42) and confirmed against the EQUP
+        // EDIDs ("LeftHand" / "RightHand" / 0x13F44 "EitherHand"). Skyrim.esm is
+        // always load index 00, so the runtime FormID is the file FormID.
+        constexpr RE::FormID kLeftHandEquipSlot = 0x00013F43;
+
         bool IsTwoHanded(RE::TESForm* a_form) {
             auto* weap = a_form ? a_form->As<RE::TESObjectWEAP>() : nullptr;
             if (!weap) return false;
@@ -129,18 +135,47 @@ namespace MFO::Loadout {
 
     }
 
-    // PUBLIC since 2026-09-13 (was file-local in the anon namespace above, body
-    // unchanged): Actuation.cpp's dual-wield LEFT-hand weapon equip targets the
-    // very slot form the spell equips in Prepare() below use, and a second
-    // lookup of the same default object elsewhere would be one more place to
-    // get the GetObject hijack below wrong.
+    // PUBLIC since 2026-09-13 (was file-local in the anon namespace above):
+    // Actuation.cpp's dual-wield LEFT-hand weapon equip targets the very slot
+    // form the spell equips in Prepare() below use. ONE implementation, so the
+    // form it names is the same in every caller.
     const RE::BGSEquipSlot* LeftHandSlot() {
-        // NOTE: <d3d11.h> elsewhere in this project #defines GetObject ->
-        // GetObjectW, which hijacks this template. That header is not
-        // included here; see Board.cpp's banner (ENGINE_NOTES §9).
-        auto* dom = RE::BGSDefaultObjectManager::GetSingleton();
-        return dom ? dom->GetObject<RE::BGSEquipSlot>(RE::DEFAULT_OBJECT::kLeftHandEquip)
-                   : nullptr;
+        // Resolved by FormID, NOT through BGSDefaultObjectManager::GetObject.
+        // The pinned CommonLib (3.7.0) implements IsObjectInitialized(idx) as
+        // `RelocateMember<bool*>(this, 0xB80, 0xBA8)[idx]`: it DEREFERENCES
+        // the 8 bytes at +0xB80 as a `bool*` and indexes THAT. Measured
+        // against both unpacked binaries (ctor memset + Load + InitItemImpl;
+        // Docs/ADDRESS-TABLE-2026-09-15.md row "BGSDefaultObjectManager::
+        // objects[] / objectInit[] count": 364 on 1.5.97, 366 on 1.6.1170, 372
+        // on 1.7.104; the engine's own GetLeftHandSlot, SE 0x3315F0, reads
+        // `[dom+0xB93]` = objectInit[19] then `[dom+0xB8]` = objects[19]):
+        //   1.5.97   objects[364] @ +0x20..+0xB80, objectInit[364] @ +0xB80
+        //   1.6.1170 objects[366] @ +0x20..+0xB90, objectInit[366] @ +0xB90
+        // So on 1.5.97 the read turns the first eight init bools into the
+        // poison pointer 0x0101010101010101 and faults (the T#67 crash reports).
+        //
+        // ON 1.6.1170 IT ALWAYS RETURNED nullptr IN THE FIELD (Fable, round 2 of
+        // feat/mfo-1.5.97-pass, measured 2026-09-15): +0xB80 there is
+        // objects[364], and the engine's DOBJ tag table (stride 24, .data; AE
+        // index 19 = LHEQ, 20 = RHEQ, 364 = HMAE, 365 = MHFL, 366 entries)
+        // makes that DOBJ `HMAE` = Update.esm FLST 0x01003275, whose record
+        // header flags are 0x0 -- so `((bool*)objects[364])[19]` is byte 3 of a
+        // zero formFlags word: 0, "not initialized", nullptr. Every spell equip
+        // on 1.6.1170 therefore ran `EquipSpell(actor, spell, nullptr)` (the
+        // engine's helper, AE 0x6CAB20, then picks the hand itself for an
+        // EitherHand spell) and Actuation's EquipLeftHeld (`if (!slot) return
+        // false`) never fired. THIS FormID lookup is the first build where the
+        // LeftHand slot actually reaches the engine on 1.6.1170; MAP.md's
+        // RUNTIME GATES entry lists what that switches on there.
+        //
+        // The engine's own InitItemImpl fills objects[19] with LookupByID
+        // (DOBJ.LHEQ), i.e. exactly this lookup, so the slot the engine calls
+        // "left" IS this form on both runtimes and the lookup has no layout to
+        // get wrong.
+        // (The <d3d11.h> GetObject -> GetObjectW hijack noted in Board.cpp's
+        // banner, ENGINE_NOTES §9, no longer matters here: nothing in this TU
+        // names GetObject any more.)
+        return RE::TESForm::LookupByID<RE::BGSEquipSlot>(kLeftHandEquipSlot);
     }
 
     Hands Read(RE::Actor* a_actor, RE::SpellItem* a_spell) {

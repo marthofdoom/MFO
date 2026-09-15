@@ -38,11 +38,14 @@ namespace MFO::Loadout {
     // Read what the follower is holding. Pure reads.
     Hands Read(RE::Actor* a_actor, RE::SpellItem* a_spell);
 
-    // The engine's LEFT-hand equip slot (BGSDefaultObjectManager
-    // kLeftHandEquip) -- the slot every spell Prepare() equips goes into.
-    // Public (2026-09-13) so Actuation's dual-wield left-hand WEAPON equip
-    // targets the identical slot form. nullptr only if the default-object
-    // manager is unavailable. Pure read.
+    // The engine's LEFT-hand equip slot -- the slot every spell Prepare() equips
+    // goes into. Resolved by FormID (Skyrim.esm EQUP "LeftHand" 0x00013F43, the
+    // very form the engine's own DOBJ init puts in its table), NOT through
+    // BGSDefaultObjectManager::GetObject, whose pinned-CommonLib read faults on
+    // 1.5.97 and reads a garbage gate on 1.6.1170 (see Loadout.cpp). Public
+    // (2026-09-13) so Actuation's dual-wield left-hand WEAPON equip targets the
+    // identical slot form. nullptr only if that form is not in the load order,
+    // which plugin.cpp's `[runtime]` line reports as an error. Pure read.
     const RE::BGSEquipSlot* LeftHandSlot();
 
     // ── intelligent hand selection (marth's hand policy, 2026-09-06) ───────────

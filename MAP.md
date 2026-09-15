@@ -411,8 +411,20 @@ releases **by eviction** with a non-actor XMarker.
   CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
   `Followers::ReleaseHeldState(id)` (`Followers.cpp`, worker-only, idempotent) —
   shared by the dismissal sweep (`Refresh`) and the T#78 MFO-OFF toggle (Scheduler).
-- `ForceRefToNative` (`:266`) = `REL::ID(25052)` `TESQuest::ForceRefTo`, AE-only
-  (VM path off AE). Two-class layout offsets (`kPointerOffFromIPackageData=0x10`,
+- `ForceRefToNative` (`:319`) = `REL::RelocationID(24523, 25052)` `TESQuest::ForceRefTo`,
+  AE + SE (SE id verified 2026-09-13 via the engine's own `ReferenceAlias.ForceRefTo`
+  Papyrus callback tail-jump; **CONFIRMED 2026-09-15** — `Docs/ADDRESS-TABLE-2026-09-15.md`
+  row "`Packages.cpp:302-305 TESQuest::ForceRefTo`": AE 25052 → `0x3CDEE0`, SE 24523 →
+  `0x375050`, both by raw objdump; 1.7.104 `0x3D4FA0` confirmed but NOT placed — no address
+  library, no `REL::Offset` convention, marth's call). Gated by `ForceRefToNativeAvailable()`
+  (`:319`) = **`Runtime::CastPathsVerified()`** (`Runtime.h`: the AE bucket or EXACTLY 1.5.97;
+  VR and every other 1.5.x refused, since the SE id was confirmed on 1.5.97 only) — every
+  call-site gate (`:911`, `:979`, `:1656`, `:1767`, `:2032`) goes through that ONE predicate;
+  VM path only where it is false. **What breaks:** the predicate lives in `Runtime.h` and is
+  SHARED with the five cast gates and `plugin.cpp`'s `[runtime]` line — change it in one
+  place and every consumer moves together; hand-roll a local `IsSE()` here and a 1.5.80 user
+  gets an unverified id (pinned CommonLib 3.7.0 files EVERY 1.5.x, and any `major.minor` that is
+  not 1.6/1.4 — a 1.7.x binary included — under `IsSE()`). Two-class layout offsets (`kPointerOffFromIPackageData=0x10`,
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
@@ -473,7 +485,74 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 - `Outcome.transparent` (`Actuation.h:38`) is the fall-through contract the
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
-- `CastOn` (`Actuation.cpp:600`) escalation, IN EXECUTION ORDER: AE-only gate (`:614`) →
+- **RUNTIME GATES — THE 1.5.97 PASS (`feat/mfo-1.5.97-pass`, 2026-09-15; Fable round 2 on
+  `87cabc1` applied).** The five cast-control gates — `CastOn` (`Actuation.cpp:432`),
+  `CastSelfDirect` (`Actuation_Direct.cpp:849`), `CastTargetDirect` (`:1166`), `CastAuto`
+  (`:1470`) and `ComposedCast::Enabled` (`ComposedCast.cpp:61`) — evaluate ONE shared
+  predicate, **`Runtime::CastPathsVerified()`** (`native/Runtime.h`, header-only) **=
+  `REL::Module::IsAE() || Runtime::IsVerified1_5_97()`** — the pre-existing AE bucket, or
+  EXACTLY 1.5.97 (`major.minor.patch == 1.5.97`). VR and every other 1.5.x are refused.
+  `Packages::ForceRefToNativeAvailable()` and `plugin.cpp`'s `[runtime]` line evaluate the
+  SAME function. WHY EXACT (Fable SEV-3): pinned CommonLib 3.7.0 classifies the runtime from
+  the exe's second version field alone (`REL/Relocation.h` `load_version`: 4 → VR, 6 → AE,
+  anything else → SE), so `IsSE()` is the DEFAULT bucket — true on 1.5.3 through 1.5.97 (all
+  of which have address libraries, so the plugin loads and a bucket gate would OPEN with ids
+  confirmed on 1.5.97 only) and on any future `major.minor` that is not 1.6/1.4, a 1.7.x
+  binary included (moot only while no format-1 `version-1.7.x.bin` exists, because
+  `IDDatabase::load` then dies fatally at plugin init). `Board.cpp:1594`'s input trampoline
+  already gated on the exact pair; `Runtime.h` is that predicate made shareable. **THE AE
+  SIDE IS STILL THE `IsAE()` BUCKET (open question, outside the 1.5.97 brief):** the gates were
+  `IsAE()` since v1.0.48 and shipped on every 1.6.x that way; every AE offset in the table was
+  measured on 1.6.1170 only. `Runtime::IsVerified1_6_1170()` exists so the `[runtime]` line can
+  tag the build (`[1.6.1170]` vs `[AE (not 1.6.1170)]`); narrowing the gate itself is its own
+  decision.
+  The gates were `IsAE()`-only since v1.0.48 as **the T#67 SE crash gate**, whose fault was
+  `Loadout::LeftHandSlot()`'s `BGSDefaultObjectManager::GetObject` read (see Loadout.cpp's
+  entry) — gone, now a FormID lookup. **THAT LOOKUP CHANGES 1.6.1170 TOO (Fable SEV-2,
+  measured):** on AE the `+0xB80` read is `objects[364]` = DOBJ `HMAE` = Update.esm FLST
+  `0x01003275`, record flags `0x0`, so `LeftHandSlot()` ALWAYS returned `nullptr` on 1.6.1170
+  in the field — every spell equip ran `EquipSpell(actor, spell, nullptr)` (engine-chosen hand
+  for an EitherHand spell) and `EquipLeftHeld` (`Actuation.cpp:1748`, `if (!slot) return
+  false`) was DEAD, with its five `UnequipObject(..., LeftHandSlot())` companions. This is the
+  first build where the LeftHand slot reaches the engine on AE: gambit spells land LEFT,
+  `[equip] ... GAMBIT equip off-hand` lines appear, a displaced left weapon returns LEFT at
+  combat end, the per-hand claims / `kApmfHandLeft` / `CastInFlightOnHand(left)` / displaced-
+  left debts are exercised for the first time. Kept on purpose (coordinator, round 2): it is
+  the design intent.
+  Every 1.5.97 value the gated paths reach is CONFIRMED in `Docs/ADDRESS-TABLE-2026-09-15.md`:
+  rows "held branch `Loadout.cpp` `LookupByID<BGSEquipSlot>(0x00013F43)`" + "`BGSDefault
+  ObjectManager::objects[]/objectInit[]` count" (364 SE / 366 AE / 372 1.7 — CommonLib's
+  `IsObjectInitialized +0xB80` is right on SE only), "`Packages.cpp:302-305 TESQuest::
+  ForceRefTo`" (the forced-cast package route), "`CombatController::attackerHandle @0x28,
+  targetHandle @0x2C, combatStyle @0x38` (all `< 0x68`)" (MFO reads `combatController` via the
+  SE/AE-shifted `GetActorRuntimeData()` accessor; `combatGroup` at `+0x00` is NOT a table row —
+  it is CommonLib's own SE-origin declaration, right on SE by construction), "`CasterConsent.cpp:
+  1087-1095` 14 seat vtables", "`CombatStyle.cpp:384-417` `CombatInventoryItemMagicT`" (30/30,
+  the two `_CombatMagicCasterArmor_` rows supplied by the confirmation) and "`GetMagicTarget`
+  sret" (same 16-byte out-slot ABI on SE). What the table does NOT row, and Fable's round-2
+  review then verified on 1.5.97 by raw disassembly: `Actor::GetMagicCaster` vfunc 0x5C
+  (`magicCasters[]` @0x1A0 SE / 0x1A8 AE), `MagicCaster::CastSpellImmediate` vfunc 01 (same
+  ABI, `currentSpell` @0x28 / `state` @0x30), `ActorEquipManager::EquipSpell` `RELOCATION_ID
+  (37939, 38895)`, `UnequipObject` (37945/38901), `MagicItem::CalculateCost` (11213/11321),
+  `InterruptCast` (33630/34408), `DeselectSpell` (37820/38769), `GetActorValueModifier`
+  (37524/38469), and `kPointerOffFromIPackageData=0x10` (SE ctor `0x3EC590` stores the
+  PackageTarget at `[this+0x10]`) — the library's own SE-first bindings, not MFO-derived values.
+  `plugin.cpp` (`:306`, kDataLoaded after `Forms::Resolve`) prints ONE `[runtime] <version>
+  [<build>]: cast gates <open|gated (reason)>, ForceRefTo <native|fallback>, equip-slot
+  <formid>` line — build `1.6.1170` / `1.5.97` / `AE (not 1.6.1170)` / the reason; a non-97
+  1.5.x prints `gated (unverified 1.5.x)`, VR `gated (VR)`; error line if the EQUP form is
+  missing. **What breaks if you change this:** re-gating any ONE of the five on a local
+  `IsAE()`/`IsSE()` silently re-splits the runtimes (a 1.5.97 log then shows `cast gates open`
+  while that path declines) — every consumer MUST call `Runtime::CastPathsVerified()`, and the
+  `[runtime]` line MUST keep printing that same function or it lies. Widening the predicate to
+  another 1.5.x needs that build's own disassembly (rule 11). A 1.7 path is a separate design
+  decision, never an accident of the predicate. **Not touched, on purpose:** the Board input
+  trampoline (per-runtime since v2.0.6, its own exact-version pair — the two predicates are
+  the same test written twice; folding Board onto `Runtime.h` is a separate change), VR (refused
+  everywhere), and anything 1.7.104 (no address library; the confirmed 1.7 values are recorded
+  in the table for marth's `REL::Offset` decision). `Actuation.cpp` is 2678 lines — over the
+  2500 cap, reported not split (rule 1; REVIEW-BACKLOG **MFO-B37** holds the split brief).
+- `CastOn` (`Actuation.cpp:600`) escalation, IN EXECUTION ORDER: runtime gate `Runtime::CastPathsVerified()` (`:432`, AE bucket or exactly 1.5.97 — see RUNTIME GATES above) →
   `:624` → `:649` → competence gate `HasSpell` (`:704`) → magicka reserve (`:742-752`) → range/competence/reserve →
   **the Task 2 firing-spell gambit lock, PER-HAND now (`ResolveCastHand`, feat/per-hand-
   cast-slots 2026-09-06 — renamed off `CheckCastLock`; TWO lock slots per follower,
@@ -676,7 +755,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (`ClearCastLockHand`, `Actuation_Hands.cpp:77`) and re-derives the plan (`resolveHands` lambda) before
   falling through — without that, a LEFT-always heal pinned to the RIGHT by a stale lock would claim,
   equip and lock the wrong hand.
-  Off-AE the whole path declines transparently (T#67) so vanilla AI keeps casting.
+  On an unverified runtime (VR, a non-97 1.5.x) the whole path declines transparently (the
+  former T#67 AE-only gate; opened for exactly 1.5.97 on 2026-09-15 — see RUNTIME GATES above)
+  so vanilla AI keeps casting.
   **The FF silent cast (and every other `CastSpellImmediate` on a live path) is now
   `MainThread::Post`ed** — CastOn runs on the job worker and the old inline engine call
   was the prime suspect for the queued 1.5.x `act.cast_target` AV reports (#14).
@@ -696,9 +777,20 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (`IsOneHandMelee` `:1668` = the four `IsOneHanded*` tests) and `roles.offHand` votes: `2` →
   `PickOffHandWeapon` (`:1678`, SAME `WeaponScore`, excludes the right hand's ONLY copy — count ≥ 2
   of the same form is allowed — same eligibility: no staff, no non-playable, daggers only for a
-  `bMageDaggersOnly` base mage) is FORCE-HELD in the left via `EquipLeftHeld` (`:1731`:
+  `bMageDaggersOnly` base mage) is FORCE-HELD in the left via `EquipLeftHeld` (`:1762`:
   `EquipObject` with `Loadout::LeftHandSlot()`, `forceEquip=true`, ledger `.left` written under
-  `g_forcedMx`, engine calls outside it); `1` → `PickShield` (`:1695`, best `GetArmorRating`)
+  `g_forcedMx`, engine calls outside it; **since round 2 of `feat/mfo-1.5.97-pass` it takes an
+  optional `const char** a_whyNot` and a refused precondition — follower / equip manager /
+  left slot form / weapon null — is an ERROR line `[hold] <id>: EquipLeftHeld REFUSED -- <what>
+  null`, once per follower per reason via `g_leftHeldRefusal` (`:1753`, worker-serial, erased
+  on a success, on `ReleaseForcedWeapon`, and in `ClearForcedWeapons`). Both callers consume
+  the verdict: the pick path's `[equip] GAMBIT equip ...` line says `+ off-hand '<w>' (dual
+  wield by perks)` ONLY when the hold happened and `off-hand '<w>' NOT held (<what> null)`
+  otherwise; the top-up prints its own `NOT held` info line. The Deck 2026-09-14 log showed
+  five `+ off-hand 'Ebony Dagger'` claims with zero `[hold]` lines — the hold had returned
+  false every time (the null AE slot, SEV-2 above) and nothing said so. `g_offHandRetryAt` is
+  stamped BEFORE the attempt on purpose (a cadence floor, principle 9), never a success
+  record; the only success state is the ledger `.left` the function writes itself.**); `1` → `PickShield` (`:1695`, best `GetArmorRating`)
   PLAIN-equipped **on the main thread** via `EquipShieldOnMain` (`:1715`, F3/#62: FormIDs captured,
   re-resolved under `MainThread::Post`, VR inline — the `Logistics_Loot.cpp` equipIt precedent; no
   ledger entry, the AI keeps shields on its own); `0` → nothing. Plus a SATISFIED-LAP TOP-UP
@@ -1798,10 +1890,28 @@ load — no co-save record.
 - Five deliberately-separate main-thread-only maps (`:9-57`): `g_debt`, `g_lastStow`,
   `g_equipClock`, `g_coolUntil`, `g_mfoSpell` — merging them re-introduces named
   regressions.
-- `LeftHandSlot()` (`Loadout.cpp:121`, decl `Loadout.h:46`) — PUBLIC since 2026-09-13
-  (moved out of the anon namespace, body unchanged): the `BGSEquipSlot` for the left hand,
-  now shared by `Prepare`'s `EquipSpell` (`:284, :364`) and `Actuation.cpp`'s
-  `EquipLeftHeld` (dual-wield left-hand WEAPON equip). It was the only hand-machinery
+- `LeftHandSlot()` (`Loadout.cpp:142`, decl `Loadout.h:49`) — PUBLIC since 2026-09-13
+  (moved out of the anon namespace); **body CHANGED 2026-09-15 (merge of
+  `feat/mfo-1.5.97-equipslot`, `04da1d4`): `RE::TESForm::LookupByID<RE::BGSEquipSlot>
+  (kLeftHandEquipSlot = 0x00013F43)`, NOT `BGSDefaultObjectManager::GetObject<>
+  (kLeftHandEquip)`.** Pinned CommonLib's `IsObjectInitialized(idx)` is `RelocateMember<bool*>
+  (this, 0xB80, 0xBA8)[idx]` — it DEREFERENCES the objectInit bool array as a pointer: on 1.5.97
+  that is the `0x0101010101010101` poison AV of the T#67 crash reports; **on 1.6.1170 `+0xB80`
+  is `objects[364]` = DOBJ `HMAE` = Update.esm FLST `0x01003275` with record flags `0x0`, so
+  the "init" byte was ALWAYS 0 and the function ALWAYS returned `nullptr` in the field (Fable
+  round 2, measured against the AE DOBJ tag table: 366 entries, 19 = LHEQ, 20 = RHEQ, 364 =
+  HMAE, 365 = MHFL). Every AE spell equip therefore ran `EquipSpell(actor, spell, nullptr)`
+  and the engine's helper (AE `0x6CAB20`) picked the hand for an EitherHand spell;
+  `EquipLeftHeld` (`Actuation.cpp:1748`) returned false on its `!slot` test and the dual-wield
+  off-hand force never fired. THIS is the first build where the slot reaches the engine on AE
+  — see Actuation's RUNTIME GATES entry for the observables.** `Docs/ADDRESS-TABLE-2026-09-15.md`
+  rows: "held branch `Loadout.cpp:63,81`" (by construction — a Skyrim.esm FormID, the same
+  form the engine's own `InitItemImpl` fills `objects[19]` from; the engine's `GetLeftHandSlot`
+  SE `0x3315F0` reads `[dom+0xB93]` then `[dom+0xB8]`) and "`BGSDefaultObjectManager::objects[]/
+  objectInit[]` count" (364 / 366 / 372). ONE implementation, no `RightHandSlot` twin.
+  `plugin.cpp`'s `[runtime]` line prints the resolved FormID (error if null). The `<d3d11.h>` `GetObject`
+  hijack note no longer applies to this TU. The slot is shared by `Prepare`'s `EquipSpell`
+  (`:325, :413`) and `Actuation.cpp`'s `EquipLeftHeld` (dual-wield left-hand WEAPON equip). It was the only hand-machinery
   piece usable for a weapon — `PlanCastHand`/`CastProxyOnHand`/`ClaimLiveOnHand`/`kHand*`
   are cast-only, and no `RightHandSlot` exists. Changing which slot form it resolves
   re-points BOTH the spell-in-hand path and the left weapon hold at once.
@@ -3519,7 +3629,8 @@ native seats) and ENGINE_NOTES §0.40.
   `Loadout::Prepare`/`CasterConsent::Want` and a refusal leaves no side effects).
   Call sites forward an extra `a_stopPct` (see below);
   replacing the two deleted `Packages::HealAnimFill` call sites historically.
-  Gated `Enabled()`: AE-only (`T#67` mirror), **HEAL-ONLY** (`kind !=
+  Gated `Enabled()`: `Runtime::CastPathsVerified()` (the AE bucket or exactly 1.5.97 — the
+  former `T#67` mirror, opened 2026-09-15; see Actuation's RUNTIME GATES entry), **HEAL-ONLY** (`kind !=
   SpellKind::Heal` → immediate false — offense/buff never enter this module,
   they stay on the byte-identical AI-fired/kInstant paths), `Config::
   g_healAnimPackage` (repurposed toggle), `APMFBridge::Available()`. Sequence:

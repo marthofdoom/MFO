@@ -5,6 +5,7 @@
 #include "Forms.h"
 #include "Sightline.h"   // concentration hold: the mid-stream line-of-fire watch
 #include "APMFBridge.h"  // ch.9 0x49 loot-travel route (package-locked-follower fix)
+#include "Runtime.h"     // CastPathsVerified(): the ONE exact-version gate shared with the cast paths
 #include "MainThread.h"  // the only road to the true main thread (§0.37) -- an
                          // EvaluatePackage is an engine AI write and this file's
                          // callers run on the AddTask job worker.
@@ -293,22 +294,45 @@ namespace MFO::Packages {
         // the call returns, which deletes the fill->valid window §0.24 calls
         // load-bearing and demotes the watchdog from mandatory to defensive.
         //
-        // AE ONLY. The SE (1.5.97) id could not be verified -- no SE-era SKSE
-        // source is on disk and the SE/AE id windows are not index-aligned. On
-        // anything but AE this returns false and the VM path runs.
+        // SE (1.5.97) id 24523 = RVA 0x375050, verified 2026-09-13 against the
+        // unpacked 1.5.97 binary + version-1-5-97-0.bin (decoder validated on
+        // known pairs first). Proof independent of the decoder: the engine's own
+        // Papyrus native `ReferenceAlias.ForceRefTo` (registration names the
+        // string "ForceRefTo" / "ReferenceAlias"; callback SE 0x96A030, AE
+        // 0xA03470) loads alias->owningQuest (+0x10) into rcx, alias->aliasID
+        // (+0x18) into edx, the ref into r8 and TAIL-JUMPS to this member --
+        // 0x375050 on SE, 0x3CDEE0 on AE. Same wrapper, same arg registers, so
+        // the declared `(TESQuest*, uint32, TESObjectREFR*)` holds on both. The
+        // SE body also calls CreateRefHandleByAliasID at 0x378760 = SE 24537,
+        // CommonLib's own pin for it, where AE inlines that lookup.
+        //
+        // VR is REFUSED: no verified VR id, and the two-arg RelocationID would
+        // hand VR the SE id unverified. So is every 1.5.x other than 1.5.97: the
+        // SE id was confirmed on that binary only, and pinned CommonLib's IsSE()
+        // is the default bucket for anything not 1.6/1.4 (Runtime.h). Every
+        // caller gates on this predicate. Docs/ADDRESS-TABLE-2026-09-15.md row
+        // "Packages.cpp:302-305 TESQuest::ForceRefTo": AE id 25052 -> 0x3CDEE0,
+        // SE id 24523 -> 0x375050, both CONFIRMED (Papyrus ForceRefTo callback
+        // tail-jump on raw objdump). plugin.cpp's `[runtime]` startup line
+        // prints the same Runtime::CastPathsVerified() verdict so a deck log
+        // shows it.
+        bool ForceRefToNativeAvailable() {
+            return Runtime::CastPathsVerified();
+        }
+
         bool ForceRefToNative(RE::TESQuest* a_quest, std::uint32_t a_aliasID,
                               RE::TESObjectREFR* a_ref) {
             if (!a_quest) return false;
-            if (!REL::Module::IsAE()) return false;   // id unverified off AE
+            if (!ForceRefToNativeAvailable()) return false;   // VR / non-97 1.5.x: id unverified
 
             using func_t = std::uint32_t (*)(RE::TESQuest*, std::uint32_t, RE::TESObjectREFR*);
-            static const REL::Relocation<func_t> func{ REL::ID(25052) };
+            static const REL::Relocation<func_t> func{ REL::RelocationID(24523, 25052) };
             func(a_quest, a_aliasID, a_ref);
             return true;
         }
 
         // Dispatch ReferenceAlias.ForceRefTo / .Clear through the VM.
-        // The fallback when the native is unavailable (SE), and the route for
+        // The fallback when the native is unavailable (VR), and the route for
         // Clear, which has no verified native id.
         bool DispatchAlias(const char* a_fn, RE::TESObjectREFR* a_arg,
                            std::uint32_t a_aliasID = kAliasCommandActor) {
@@ -793,7 +817,7 @@ namespace MFO::Packages {
         // BY EVICTION, exactly like LootTravelClear/RetreatClear (#48/#73):
         // force-fill alias 0 with the non-actor XMarker so the follower's alias
         // instance is REPLACED and the framework reclaims him. The old VM
-        // Clear() stays only as the off-AE / marker-less fallback -- MFO's
+        // Clear() stays only as the no-native (unverified runtime) / marker-less fallback -- MFO's
         // aliases carry no script, which is exactly why the loot quest's VM
         // Clear silently failed (v0.8.2 lesson, Config.h bLootTravel note), so
         // it cannot be the primary release for a package that now fires every
@@ -812,7 +836,7 @@ namespace MFO::Packages {
                              g_holder.self ? " [self]" : "");
                 released = true;
             } else if (DispatchAlias("Clear", nullptr, actorAlias)) {
-                spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear alias {} (no marker/off-AE)",
+                spdlog::info("[pkg] {:08X}: released ({}) -- VM Clear alias {} (no marker/no native ForceRefTo)",
                              id, a_why, actorAlias);
                 released = true;
             }
@@ -879,11 +903,12 @@ namespace MFO::Packages {
             if (!quest || !pkg)                return Decline::NoRecord;
             if (!VM() || !CommandAlias())      return Decline::NoVM;
 
-            // The self route is native-only (AE): the VM fallback fills alias 0,
+            // The self route is native-only: the VM fallback fills alias 0,
             // the FOE carrier -- wrong for self. The foe route is already
-            // effectively AE-only (its alias-1 target fill is), so this loses
-            // nothing. Off AE, self declines and the caller falls back.
-            if (self && !REL::Module::IsAE()) return Decline::NoVM;
+            // effectively native-only (its alias-1 target fill is), so this
+            // loses nothing. Without the native (VR), self declines and the
+            // caller falls back.
+            if (self && !ForceRefToNativeAvailable()) return Decline::NoVM;
 
             const std::uint32_t actorAlias = self ? kAliasCommandSelfActor
                                                   : kAliasCommandActor;
@@ -947,11 +972,11 @@ namespace MFO::Packages {
             // FOE ROUTE: fill the TARGET alias (1) with the victim BEFORE the
             // actor alias, the same no-rooting order as loot/retreat -- the
             // package's t4 target must resolve when alias 0 instances it.
-            // Native-only: alias 1 has no VM fallback, so off AE the foe route
-            // declines and the caller falls back. Self skips this entirely --
-            // t6 aims the caster at himself, no target alias.
+            // Native-only: alias 1 has no VM fallback, so without the native
+            // (VR) the foe route declines and the caller falls back. Self skips
+            // this entirely -- t6 aims the caster at himself, no target alias.
             if (!self) {
-                if (!REL::Module::IsAE()) return Decline::NoVM;
+                if (!ForceRefToNativeAvailable()) return Decline::NoVM;
                 if (!ForceRefToNative(quest, kAliasCommandTarget, a_target)) {
                     spdlog::error("[pkg] {:08X}: TARGET alias {} fill failed -- refusing to "
                                   "cast at a stale target", id, kAliasCommandTarget);
@@ -961,7 +986,7 @@ namespace MFO::Packages {
 
             // Fill the holder's carrier alias (0 foe / 2 self). Native first --
             // synchronous, so the alias is filled when this returns. VM fallback
-            // only for the FOE route on SE (self already returned NoVM off AE,
+            // only for the FOE route on VR (self already returned NoVM there,
             // and the VM fallback fills alias 0 regardless of route).
             bool filled = ForceRefToNative(quest, actorAlias, a_follower);
             if (filled) {
@@ -1494,7 +1519,7 @@ namespace MFO::Packages {
         // whether or not this session's holder mirror knows anything (a
         // PREVIOUS session's latch is exactly the case the mirror cannot see).
         // Evict any ACTOR occupant, the player included (#48b); the VM Clear
-        // is the off-AE fallback only. BOTH carrier aliases are swept: alias 0
+        // is the no-native (unverified runtime) fallback only. BOTH carrier aliases are swept: alias 0
         // (foe cast) AND alias 2 (self cast, SPEC-self-cast-forced) -- the self
         // fill is engine-serialized exactly like the foe fill, so a save written
         // mid-self-stream latches alias 2 on every subsequent load unless it is
@@ -1520,7 +1545,7 @@ namespace MFO::Packages {
                     bool released = false;
                     if (mark && ForceRefToNative(quest, aliasID, mark)) {
                         released = true;
-                    } else if (DispatchAlias("Clear", nullptr, aliasID)) {   // off-AE / marker-less;
+                    } else if (DispatchAlias("Clear", nullptr, aliasID)) {   // no native / marker-less;
                         released = true;                                     // per-alias, never alias 0
                     }
                     if (released) {
@@ -1577,7 +1602,7 @@ namespace MFO::Packages {
         // write, or APMF itself refusing the claim -- e.g. a lost arbitration to
         // a higher-basis client) is logged LOUDLY and FAILS CLOSED (no travel
         // dispatched this tick; the caller's existing arm's-reach fallback is the
-        // ONLY degrade, same as "off AE" already behaves) rather than silently
+        // ONLY degrade, same as VR already behaves) rather than silently
         // reverting to the pre-APMF route and masking an APMF-path bug behind a
         // false "it worked".
         if (APMFBridge::Available() && Config::g_apmfLootTravel.load()) {
@@ -1626,9 +1651,9 @@ namespace MFO::Packages {
         // decline-fallback from the branch above, which always returns).
         auto* quest = Forms::g_lootQuest;
         if (!quest)                                return false;
-        // The native ForceRefTo id is AE-only (see ForceRefToNative). Off AE we
+        // The native ForceRefTo is AE + SE (see ForceRefToNative). On VR we
         // simply do not offer travel -- the caller falls back to arm's-reach.
-        if (!REL::Module::IsAE())                  return false;
+        if (!ForceRefToNativeAvailable())          return false;
         if (!quest->IsRunning()) {
             spdlog::error("[loot] MFO_LootQuest {:08X} is NOT RUNNING -- Data/SEQ/MFO.seq "
                           "missing or stale? Travel unavailable.", quest->GetFormID());
@@ -1739,7 +1764,7 @@ namespace MFO::Packages {
         // excursion's whole lifetime, same principle as the APMF branch above.
         auto* quest = Forms::g_lootQuest;
         if (!quest)                                return false;
-        if (!REL::Module::IsAE())                  return false;
+        if (!ForceRefToNativeAvailable())          return false;
         if (!quest->IsRunning())                   return false;
         if (!ForceRefToNative(quest, LootTargetAlias(a_slot), a_ref)) return false;
         a_follower->EvaluatePackage(true, false);
@@ -1835,7 +1860,7 @@ namespace MFO::Packages {
         auto* quest = Forms::g_lootQuest;
         if (!quest) return;
         if (auto* ev = EvictionRef())
-            ForceRefToNative(quest, LootActorAlias(a_slot), ev);   // no-op off AE, fine
+            ForceRefToNative(quest, LootActorAlias(a_slot), ev);   // no-op on VR, fine
         // Re-evaluate NOW so the framework reclaims him this tick, not on the
         // engine's slow pass. (true,false) -- never resetAI. Without the follower
         // here the eviction still frees him on the next engine evaluation.
@@ -1905,7 +1930,7 @@ namespace MFO::Packages {
             if (!held || held->GetFormID() != a_id) continue;   // a_id is not in this slot
 
             if (auto* ev = EvictionRef())
-                ForceRefToNative(quest, LootActorAlias(slot), ev);   // no-op off AE, fine
+                ForceRefToNative(quest, LootActorAlias(slot), ev);   // no-op on VR, fine
             if (auto* actor = held->As<RE::Actor>())
                 VerifyDetached(actor, a_why);   // prove the ex-actor detached
         }
@@ -2002,9 +2027,9 @@ namespace MFO::Packages {
         // a decline-fallback from the branch above, which always returns).
         auto* quest = Forms::g_retreatQuest;
         if (!quest || !Forms::g_retreatPackage) return false;
-        // The native ForceRefTo id is AE-only (see ForceRefToNative). Off AE
-        // the probe simply never runs -- no VM fallback, no partial data.
-        if (!REL::Module::IsAE())                  return false;
+        // The native ForceRefTo is AE + SE (see ForceRefToNative). On VR the
+        // probe simply never runs -- no VM fallback, no partial data.
+        if (!ForceRefToNativeAvailable())          return false;
         if (!quest->IsRunning()) {
             spdlog::error("[retreat] MFO_RetreatQuest {:08X} is NOT RUNNING -- Data/SEQ/MFO.seq "
                           "missing or stale? Probe unavailable.", quest->GetFormID());
@@ -2078,7 +2103,7 @@ namespace MFO::Packages {
         auto* quest = Forms::g_retreatQuest;
         if (!quest) return;
         if (auto* ev = EvictionRef())
-            ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op off AE, fine
+            ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op on VR, fine
         if (a_follower) {
             a_follower->EvaluatePackage(true, false);   // reclaim THIS tick; never resetAI
             VerifyDetachedFrom(quest, a_follower, "retreat", "MFO_RetreatQuest", a_why);
@@ -2116,7 +2141,7 @@ namespace MFO::Packages {
         if (!held || held->GetFormID() != a_id) return;
 
         if (auto* ev = EvictionRef())
-            ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op off AE, fine
+            ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op on VR, fine
         if (auto* actor = held->As<RE::Actor>())
             VerifyDetachedFrom(quest, actor, "retreat", "MFO_RetreatQuest", "dismissed");
         if (g_retreatHold.actorID == a_id) g_retreatHold = RetreatHold{};

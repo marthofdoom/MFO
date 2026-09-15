@@ -14,6 +14,7 @@
 #include "ProgAllocator.h"
 #include "Vocabulary.h"
 #include "Loadout.h"
+#include "Runtime.h"
 #include "Targeting.h"
 #include "CasterConsent.h"
 #include "CombatStyle.h"
@@ -286,6 +287,41 @@ namespace {
                          MFO::Config::g_cstyReassert.load() ? "ON" : "OFF",
                          MFO::Config::g_cstyReassertKey.load());
             MFO::Forms::Resolve();          // then forms
+            {
+                // THE RUNTIME PATHS IN FORCE, in one line, so a deck log proves
+                // which paths are live (feat/mfo-1.5.97-pass, 2026-09-15). The
+                // predicate is THE SAME Runtime::CastPathsVerified() the cast gates
+                // (Actuation::CastOn, CastSelfDirect / CastTargetDirect / CastAuto,
+                // ComposedCast::Enabled) and Packages' ForceRefToNativeAvailable()
+                // evaluate -- the AE bucket or exactly 1.5.97; VR and every other
+                // 1.5.x read gated/fallback with the reason (Runtime::GateReason).
+                // "1.6.1170" / "1.5.97" name the measured builds; another AE build
+                // prints "AE (not 1.6.1170)" so the log says out loud that the
+                // offsets were measured elsewhere. The equip slot is the FormID
+                // lookup Loadout::LeftHandSlot() makes (0x00013F43, Skyrim.esm
+                // EQUP LeftHand) -- after Forms::Resolve so the form is loadable;
+                // a null here is a real fault (principle 7: every spell equip
+                // would then pass no slot), so it is an error line, never a
+                // quiet blank.
+                const bool  open   = MFO::Runtime::CastPathsVerified();
+                const char* build  = MFO::Runtime::IsVerified1_6_1170() ? "1.6.1170"
+                                   : MFO::Runtime::IsVerified1_5_97()   ? "1.5.97"
+                                   : REL::Module::IsAE()                ? "AE (not 1.6.1170)"
+                                   : MFO::Runtime::GateReason();
+                const std::string gates = open ? "open"
+                                               : std::string("gated (") + MFO::Runtime::GateReason() + ")";
+                const auto* slot = MFO::Loadout::LeftHandSlot();
+                if (slot) {
+                    spdlog::info("[runtime] {} [{}]: cast gates {}, ForceRefTo {}, equip-slot {:08X}",
+                                 REL::Module::get().version().string(), build, gates,
+                                 open ? "native" : "fallback", slot->GetFormID());
+                } else {
+                    spdlog::error("[runtime] {} [{}]: cast gates {}, ForceRefTo {}, equip-slot MISSING "
+                                  "(EQUP 0x00013F43 did not resolve -- spell equips will carry no slot)",
+                                  REL::Module::get().version().string(), build, gates,
+                                  open ? "native" : "fallback");
+                }
+            }
             MFO::Gait::Apply();             // gait onto the (just-resolved) travel package -- Read() ran too early for it
             MFO::Catalog::Load();           // load-order item catalog (mfo_items.json); needs the data handler
             MFO::Progression::Init();       // addon detection + frozen perk catalog (§1/§2/§3); read-only pass
