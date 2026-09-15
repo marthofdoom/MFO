@@ -5,7 +5,7 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
-## Unreleased
+## v2.0.8 -- Gear follows the perks, and Skyrim 1.5.97 joins
 
 - **Loose gems always go into a free socket on worn gear.** A follower with a gem in his pack and an empty socket on something he wears fills it, including the second weapon of a matched pair. The pass only looks at gear MEO can socket and follows MEO's own rules, so a support gem waits for a two socket item and a weapon gem never tries a ring. When a gem stays loose the log says why in one line.
 - **Skill points stay where they were placed. All of them.** A follower's automatic class skills used to move around every time they picked up or put on something, so a skill could drop a few seconds after it rose. Now every skill point is permanent once placed, whether the class placed it or you did. Each level adds its points by the class weights of that moment and nothing later moves them. Changing a follower's class only steers the levels still to come.
