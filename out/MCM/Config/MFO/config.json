@@ -203,6 +203,16 @@
           }
         },
         {
+          "id": "bApmfEquipAuthority:General",
+          "text": "Harbinger equip authority",
+          "type": "toggle",
+          "help": "ON (default): with Harbinger (APMF) installed, MFO declares each follower's worn set to Harbinger, which equips it and keeps the game from putting other things on them (no shield going back on a dual wielder, no outfit re-apply). OFF: MFO equips gear directly as before. Has no effect if Harbinger is not installed or is older than ABI v7.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "id": "bWarnNoApmf:General",
           "text": "Warn when Harbinger (APMF) is missing",
           "type": "toggle",

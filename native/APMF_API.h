@@ -56,14 +56,14 @@
 // ABI contract; the transport is just how you get the pointer.)
 //
 // ── Threading ──
-// Request/RequestEx/Repoint/Release/SetSpellAllowList are SAFE FROM ANY THREAD.
-// They capture POD (a FormID, a copy of the APMF_Param, or — for
-// SetSpellAllowList — a copy of the forms array) and enqueue the work; APMF
-// applies it on the game thread. A client's BSJobs worker may call them
-// directly. The APMF_Param pointer passed to RequestEx/Repoint, and the
-// RE::FormID* passed to SetSpellAllowList, are READ AND COPIED synchronously
-// inside the call — APMF never retains the client's pointer, so a stack
-// temporary/local array is fine.
+// Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet are SAFE FROM
+// ANY THREAD. They capture POD (a FormID, a copy of the APMF_Param, or — for
+// SetSpellAllowList/SetEquipSet — a copy of the forms array) and enqueue the
+// work; APMF applies it on the game thread. A client's BSJobs worker may call
+// them directly. The APMF_Param pointer passed to RequestEx/Repoint, and the
+// RE::FormID* passed to SetSpellAllowList/SetEquipSet, are READ AND COPIED
+// synchronously inside the call — APMF never retains the client's pointer, so a
+// stack temporary/local array is fine.
 //
 // ── Exceptions ──
 // NO exception ever crosses this boundary. Every APMF-side body (Request,
@@ -81,7 +81,7 @@ namespace RE {
 
 namespace APMF_API {
 
-    inline constexpr std::uint32_t kABIVersion = 6;
+    inline constexpr std::uint32_t kABIVersion = 7;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -209,7 +209,66 @@ namespace APMF_API {
                                      //       because the engine's Self branch always lands on the
                                      //       caster. Still bounded by TTL auto-release; a cast is
                                      //       NEVER a package (invisible to ch.9's 0x49 offer).
+        kIntent_EquipAuthority = 17, // ch.17 CLAIM the ENGINE-EQUIP facet, WHOLE (ABI v7, marth
+                                     //       2026-09-15: "a command is sent to APMF with what to
+                                     //       equip and that is enforced until overridden").
+                                     //       Mode: ARBITRATE + DENY + the one #17a-licensed equip.
+                                     //       A STANDING authority: no TTL, ended only by Release.
+                                     //       Param: ival (an EquipAuthFlags bitmask, see below).
+                                     //       The claim alone changes NOTHING -- the client then
+                                     //       DECLARES the worn set with SetEquipSet(handle, ...)
+                                     //       (APMF_API_v7). From that declaration on: APMF equips
+                                     //       every declared item the actor is not already wearing
+                                     //       (once, on the main thread, on each declaration --
+                                     //       never a re-assert loop), and APMF REFUSES every engine
+                                     //       equip of an item that is NOT in the declared set --
+                                     //       outfit re-apply, AI weapon/armor choice, combat
+                                     //       re-arm, RemoveItem re-equip, another plugin's equip
+                                     //       call -- at the ONE non-virtual choke point every
+                                     //       engine equip funnels through (core/EquipSink.cpp;
+                                     //       Docs/INVARIANTS.md #17a). Papyrus/console equips pass
+                                     //       unless kEquipAuth_DenyScript. UNEQUIPS are never
+                                     //       denied by this ABI (kEquipAuth_DenyUnequip is
+                                     //       RESERVED and refused). The engine's own in-worker
+                                     //       displacement still handles slot conflicts, so a
+                                     //       declared two-hander displaces a declared shield the
+                                     //       ordinary way. The player is NEVER subject to it.
+                                     //       Declare->enforce (CLAUDE.md principle 4): an empty
+                                     //       declaration (count 0) CLEARS it and the seat passes
+                                     //       everything through again; APMF never invents a set.
     };
+
+    // ── Equip-authority flags (kIntent_EquipAuthority's param.ival, ABI v7) ──
+    // Read at RequestEx/Repoint time from param.ival. APPEND-ONLY: never renumber
+    // an existing bit; OR in a new bit at the next free position.
+    enum EquipAuthFlags : std::uint32_t {
+        kEquipAuth_None        = 0,
+        kEquipAuth_DenyUnequip = 1u << 0,   // RESERVED. Not implemented: the unequip twin
+                                            //   (UnequipObject -> its own worker) is NOT seated
+                                            //   in this ABI. A claim carrying this bit is
+                                            //   ACCEPTED with the bit REFUSED (logged, ignored),
+                                            //   so a client built against a later APMF that does
+                                            //   honour it degrades to "unequips pass", never to
+                                            //   a refused claim.
+        kEquipAuth_DenyScript  = 1u << 1,   // Also refuse Papyrus (EquipItem/EquipItemEx) and
+                                            //   console equips of off-set items. Default OFF:
+                                            //   scripts are a quest/mod author's deliberate act
+                                            //   and pass through unless the client says otherwise.
+        kEquipAuth_ObserveOnly = 1u << 2,   // Log every verdict as `would-deny`, deny nothing.
+                                            //   The client-side twin of APMF.ini's
+                                            //   [EquipAuthority] bEquipObserveOnly (either one
+                                            //   set = observe). The first field build runs in
+                                            //   observe mode until the probe criteria in
+                                            //   Docs/INTEGRATION.md pass.
+    };
+
+    // ABI v7: the bound on SetEquipSet's declared worn set. A full worn set is
+    // two hands (or a two-hander), body/head/hands/feet, shield, amulet, ring,
+    // circlet, plus a handful of modded slots (cloak, backpack, quiver) -- low
+    // teens at the extreme. 32 is comfortably above that; an overflow degrades to
+    // "the excess items are treated as off-set" (denied when the engine equips
+    // them, never equipped by APMF; never a crash or an unbounded write).
+    inline constexpr std::uint32_t kMaxEquipSet = 32;
 
     // ── Combat-action CATEGORY bitmask (kIntent_CombatAction's param.ival) ──────
     // Which combat behavior-tree leaf CATEGORY a kIntent_CombatAction claim
@@ -517,6 +576,8 @@ namespace APMF_API {
     //   ival   kIntent_Cast            the rich payload -- ival = CastFlags on the degenerate form
     //                                  (req.target / req.flags' hand + stop-percent are read by
     //                                  the engine seats, core/CastSeats.cpp)
+    //   ival   kIntent_EquipAuthority  an EquipAuthFlags bitmask (the worn set itself is NOT a
+    //                                  param field -- it is declared with SetEquipSet, ABI v7)
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is not read by any channel yet (reserved for a future per-request bias
@@ -714,6 +775,61 @@ namespace APMF_API {
         // is still in force. Read-only; safe from any thread, same discipline as
         // GetCastProxy above.
         bool (*IsClaimLive)(Handle handle);
+    };
+
+    // The v7 interface: APMF_API_v6's members verbatim (prefix EXTENSION, same shape
+    // as every prior revision), then ONE appended slot: the equip-authority
+    // declaration. This header is BYTE-SHARED with MFO: the declaration below is
+    // authoritative and must be mirrored byte-identically on the client side.
+    //
+    // WHY A BUMP (INVARIANTS #14b): a new function-pointer slot needs an
+    // `abiVersion >= 7` test before a client may call it. A v1..v6 client reading
+    // this object through its own struct pointer still sees exactly its prefix.
+    struct APMF_API_v7 : APMF_API_v6 {
+        // DECLARE the worn set for the actor behind an EXISTING kIntent_EquipAuthority
+        // claim (`handle`, as returned by RequestEx/Request). `forms` are BASE
+        // FormIDs (weapons, armor, jewelry -- anything ActorEquipManager equips);
+        // `count` is silently clamped to kMaxEquipSet. `forms` is READ AND COPIED
+        // synchronously inside the call -- APMF never retains the pointer, same
+        // contract as RequestEx/Repoint's `param` and SetSpellAllowList's array (a
+        // stack-local array is fine). Applied on the game thread at the next Drain.
+        //
+        // WHAT HAPPENS, in order, when the declaring claim OWNS the channel:
+        //   1. the set is published into the lock-free snapshot the equip seat reads
+        //      (Docs/INVARIANTS.md #12), so from the next engine equip on, any item
+        //      NOT in `forms` is refused for this actor (path-classified and logged;
+        //      Papyrus/console pass unless kEquipAuth_DenyScript; observe-only logs
+        //      `would-deny` and refuses nothing);
+        //   2. one main-thread pass equips each declared item the actor is not
+        //      already wearing, through the engine's own ActorEquipManager::EquipObject
+        //      (queued, not forced, sounds on) -- exactly what the client would have
+        //      called itself, now issued by the framework so the seat lets it through.
+        //      APMF never UNEQUIPS anything: the engine's own worker displaces whatever
+        //      occupies a declared item's slot, the ordinary way. No re-assert loop
+        //      follows: the seat is what keeps the engine from undoing the set.
+        // DECLARE, DO NOT TICK. Call this when the loadout CHANGES. Each call on the
+        // owning claim is a declaration event and walks the inventory; an item APMF
+        // already queued is held 3 s before it is queued again, so a per-tick
+        // re-send is bounded, logged work, not a queue pile-up -- but it is still
+        // wasted work. The set MUST BE SIMULTANEOUSLY
+        // WEARABLE: a two-hander and a shield, or two items for one slot, make the
+        // engine displace one with the other on every pass. That is the client's
+        // error and the log will show it; APMF never picks which one wins.
+        // A declaration on a claim that does NOT own the channel is STORED (same
+        // non-owning semantics as Repoint/SetSpellAllowList) and takes effect the
+        // moment that claim wins arbitration: the seat re-arms on ITS set and the
+        // same one-pass equip runs for it (a win is a declaration event too).
+        // `count == 0` or `forms == nullptr` CLEARS the declaration: the seat passes
+        // every engine equip through again (nothing is unequipped), and a Release
+        // does the same. A stale/unknown `handle`, or a handle whose claim is on a
+        // channel OTHER than kIntent_EquipAuthority, is a silent no-op (mirrors
+        // Repoint's own no-op-on-unknown-handle discipline). Thread-safe (enqueues).
+        //
+        // NOT provided, deliberately: a per-item callback. The seat runs on whatever
+        // engine thread performs the equip; running client code there would hand the
+        // client a combat-thread re-entrancy hazard it cannot see. The declaration
+        // IS the policy; the log line (`[apmf][equip-obs]`) is the observability.
+        void (*SetEquipSet)(Handle handle, const RE::FormID* forms, std::uint32_t count);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

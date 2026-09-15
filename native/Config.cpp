@@ -135,6 +135,7 @@ namespace MFO::Config {
             else if (a_key == "bLegacyCastHybrid")  setB(g_legacyCastHybrid);  // ON = old AI-first+force hybrid; default OFF = APMF owned model
             else if (a_key == "bApmfLootTravel")    setB(g_apmfLootTravel);   // APMF package-offer loot-travel, inert without APMF
             else if (a_key == "bApmfRetreat")       setB(g_apmfRetreat);      // APMF package-offer retreat, inert without APMF
+            else if (a_key == "bApmfEquipAuthority") setB(g_apmfEquipAuthority); // APMF equip authority (declared worn set), inert without APMF v7+
             else if (a_key == "bWarnNoApmf")        setB(g_warnNoApmf);       // corner-toast reminder when APMF is absent, default ON
             else if (a_key == "bHealAnimPackage")   setB(g_healAnimPackage);  // REPURPOSED master enable for the ComposedCast animated forced-cast executor, default OFF, inert without APMF (SPEC-FORCED-CAST.md)
             else if (a_key == "iForcedCastTrigger") setI(g_forcedCastTrigger, 0, 3);   // ComposedCast trigger variant, RESERVED (default 0)
@@ -271,6 +272,7 @@ namespace MFO::Config {
             g_legacyCastHybrid   = false;   // default = APMF owned cast model (animated)
             g_apmfLootTravel     = true;    // default = APMF package-offer loot-travel, inert without APMF
             g_apmfRetreat        = true;    // default = APMF package-offer retreat, inert without APMF
+            g_apmfEquipAuthority = true;    // default = declare the worn set to APMF (equip authority), inert without APMF v7+
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
             g_healAnimPackage    = false;   // default OFF = kInstant heal (byte-identical); ON = ComposedCast animated forced-cast executor (inert until the trigger seam lands)
             g_forcedCastTrigger  = 0;       // RESERVED ComposedCast trigger variant
@@ -369,6 +371,7 @@ namespace MFO::Config {
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
             { "bForceCastOnMiss", "1" },       { "iCastControl", "2" },
             { "bLegacyCastHybrid", "0" },      { "bWarnNoApmf", "1" },
+            { "bApmfEquipAuthority", "1" },
             { "bCstyReassert", "1" },
             { "bHealAnimPackage", "0" },
             { "iForcedCastTrigger", "0" },     { "iCfcBackoffMs", "10000" },

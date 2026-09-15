@@ -280,6 +280,23 @@ namespace MFO::Config {
     // off/absent.
     inline std::atomic<bool>  g_apmfRetreat{ true };
 
+    // APMF EQUIP AUTHORITY (MCM bApmfEquipAuthority, feat/mfo-equip-authority,
+    // 2026-09-15 -- port #1 of an MFO engine mechanism into APMF). Default ON.
+    // With APMF present at ABI >= 7, MFO DECLARES each managed follower's worn
+    // set to APMF's kIntent_EquipAuthority channel (Logistics_Economy.cpp's
+    // RefreshEquipDeclaration) and APMF both equips the declared items and
+    // REFUSES every other engine equip on that actor (the follower's own
+    // combat AI putting a shield back on a dual-wielder, outfit re-apply,
+    // RemoveItem re-equip). Where the authority is live MFO stops equipping
+    // armor directly and lets the declaration carry it; the weapon hands are
+    // declared first and then placed by MFO (the ABI carries no hand). Wholly
+    // INERT unless APMF is in the load order at v7+; this kill-switch exists
+    // for A/B field testing, same pattern as bApmfLootTravel/bApmfCast. OFF ->
+    // the byte-identical direct equip paths run and any standing claim is
+    // released on the next pump (APMFBridge::Tick). No save state (the claim is
+    // runtime-only, re-made on the first service after a load).
+    inline std::atomic<bool>  g_apmfEquipAuthority{ true };
+
     // WARN WHEN APMF IS ABSENT (MCM bWarnNoApmf). Default ON. 2.0.0 makes APMF
     // (Harbinger) a recommended companion; MFO still runs its full legacy
     // fallback without it, but a player who forgot to install it should know

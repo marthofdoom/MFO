@@ -11,6 +11,7 @@
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>   // ch.17 claim-refusal throttle
 
 #include <spdlog/spdlog.h>
 
@@ -282,9 +283,22 @@ namespace MFO::APMFBridge {
             // a second one (its `spell` stays 0 and its `denyOnly` stays true for
             // the claim's whole life).
             CastClaim floor;
+            // ── EQUIP AUTHORITY (ch.17, APMF v7; feat/mfo-equip-authority) ──
+            // STANDING: no refresh stamp on purpose -- Tick() never sweeps it
+            // (there is no cadence to size a window from; the claim ends only
+            // by an explicit Release: OnFollowerRemoved, ClearTransientState,
+            // or the bApmfEquipAuthority kill switch in Tick()). The declared
+            // set itself is NOT mirrored here: Logistics_Economy.cpp owns the
+            // last-sent copy (the change detector), this file only carries the
+            // handle the declaration rides on.
+            APMF_API::Handle equipAuthHandle = APMF_API::kInvalidHandle;
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
+        // ch.17 claim-refusal error throttle (once per refusal streak, per
+        // follower). Outside Owned on purpose: a refused claim leaves no handle,
+        // so its Owned entry is erased and could not carry the latch. Under g_mx.
+        std::unordered_set<RE::FormID>         g_equipAuthRefused;
 
         // ── never-published warn throttle (SEV-3, pre-merge review 2026-09-07) ──
         // Failing closed leaves the claim EMPTY, so the next winning lap mints again
@@ -1007,7 +1021,8 @@ namespace MFO::APMFBridge {
                 // normally happen (the floor is released in the same Tick() pass
                 // that sees the last driving claim go), but a caller-driven
                 // release ordering must not be able to create it.
-                o.floor.handle == APMF_API::kInvalidHandle)
+                o.floor.handle == APMF_API::kInvalidHandle &&
+                o.equipAuthHandle == APMF_API::kInvalidHandle)   // ch.17 standing claim
                 g_owned.erase(it);
         }
     }
@@ -1508,6 +1523,91 @@ namespace MFO::APMFBridge {
     // answered while a kIntent_Cast claim stands, so the NPC's OWN AI drives the
     // animated cast natively. See APMFBridge.h's doc comment above for the full
     // shape; this is just the claim plumbing.
+    // ── EQUIP AUTHORITY (ch.17, APMF v7; feat/mfo-equip-authority) ────────────
+    // See APMFBridge.h's block doc. Worker road, g_mx for the map, APMF calls are
+    // thread-safe enqueues. The three non-arbitration early returns here and in
+    // EquipAuthoritySupported() read the SAME g_apmf / abiVersion / toggle, so a
+    // `false` from Claim/Declare with Supported() true can only mean APMF refused.
+    bool EquipAuthoritySupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= 7 && Config::g_apmfEquipAuthority.load();
+    }
+
+    bool ClaimEquipAuthority(RE::FormID a_follower) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || api->abiVersion < 7 || !Config::g_apmfEquipAuthority.load()) return false;
+        std::scoped_lock lock(g_mx);
+        auto& o = g_owned[a_follower];
+        if (o.equipAuthHandle != APMF_API::kInvalidHandle) return true;   // standing -- kept, never re-requested
+        // param.ival = the EquipAuthFlags word. kEquipAuth_None on purpose:
+        // scripts/console pass (a quest author's deliberate act), unequips are
+        // never denied by this ABI, and observe-only is APMF's INI decision for
+        // the probe cycle -- MFO does not set kEquipAuth_ObserveOnly itself, so
+        // flipping APMF's bEquipObserveOnly=0 is the ONE switch that enforces.
+        APMF_API::APMF_Param p{};
+        p.ival = static_cast<std::int32_t>(APMF_API::kEquipAuth_None);
+        o.equipAuthHandle = api->RequestEx(a_follower, APMF_API::kIntent_EquipAuthority, kOwnBasis, &p);
+        if (o.equipAuthHandle == APMF_API::kInvalidHandle) {
+            // APMF present, capable, and said NO: a bug to surface, never a
+            // condition to route around (the callers keep their direct equips
+            // OFF while Supported() is true). Once per refusal streak.
+            if (g_equipAuthRefused.insert(a_follower).second) {
+                spdlog::error("[equip-auth] {:08X}: APMF REFUSED the kIntent_EquipAuthority claim "
+                              "(RequestEx returned kInvalidHandle) -- fail closed: the declaration "
+                              "cannot be sent and MFO does NOT fall back to direct equips",
+                              a_follower);
+            }
+            EraseIfEmpty(g_owned.find(a_follower));
+            return false;
+        }
+        g_equipAuthRefused.erase(a_follower);
+        spdlog::info("[equip-auth] {:08X}: claim (kIntent_EquipAuthority, basis {}, flags 0)",
+                     a_follower, kOwnBasis);
+        return true;
+    }
+
+    void ReleaseEquipAuthority(RE::FormID a_follower) {
+        std::scoped_lock lock(g_mx);
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return;
+        if (it->second.equipAuthHandle != APMF_API::kInvalidHandle) {
+            RE::FormID dummy = 0;
+            ReleaseHandleLocked(it->second.equipAuthHandle, dummy);
+            spdlog::info("[equip-auth] {:08X}: release", a_follower);
+        }
+        EraseIfEmpty(it);
+    }
+
+    bool IsEquipAuthorityClaimed(RE::FormID a_follower) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        return it != g_owned.end() && it->second.equipAuthHandle != APMF_API::kInvalidHandle;
+    }
+
+    bool DeclareEquipSet(RE::FormID a_follower, const std::vector<RE::FormID>& a_forms) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || api->abiVersion < 7 || !Config::g_apmfEquipAuthority.load()) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) {
+            spdlog::error("[equip-auth] {:08X}: DeclareEquipSet without a standing claim -- "
+                          "ClaimEquipAuthority first (declaration NOT sent)", a_follower);
+            return false;
+        }
+        if (a_forms.size() > APMF_API::kMaxEquipSet)
+            spdlog::error("[equip-auth] {:08X}: declared set has {} items, over kMaxEquipSet {} -- "
+                          "truncated; APMF treats the excess as off-set (MFO's composition bug)",
+                          a_follower, a_forms.size(), APMF_API::kMaxEquipSet);
+        const std::uint32_t count = a_forms.size() > APMF_API::kMaxEquipSet
+                                      ? APMF_API::kMaxEquipSet
+                                      : static_cast<std::uint32_t>(a_forms.size());
+        // COPIED inside the call (APMF_API.h threading contract); a_forms may die.
+        reinterpret_cast<const APMF_API::APMF_API_v7*>(api)->SetEquipSet(
+            it->second.equipAuthHandle, count ? a_forms.data() : nullptr, count);
+        return true;
+    }
+
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                        std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
@@ -1771,12 +1871,26 @@ namespace MFO::APMFBridge {
                                          it->first, o);
             else if (o.floor.handle != APMF_API::kInvalidHandle)
                 ReleaseClaimLocked(o.floor);
+            // ch.17 EQUIP AUTHORITY: STANDING -- never expiry-swept (no cadence
+            // sizes it; it ends by explicit Release). The ONE thing this pump does
+            // for it is the kill switch: bApmfEquipAuthority flipped OFF mid-
+            // session must not leave a declared set enforced on a follower MFO has
+            // stopped declaring for (APMF would keep refusing the AI's equips
+            // against a frozen set). Released here, on the pump's cadence, for
+            // every follower at once -- including one in combat, whom the OOC
+            // logistics service (the other release road) never reaches.
+            if (o.equipAuthHandle != APMF_API::kInvalidHandle && !Config::g_apmfEquipAuthority.load()) {
+                RE::FormID dummy = 0;
+                ReleaseHandleLocked(o.equipAuthHandle, dummy);
+                spdlog::info("[equip-auth] {:08X}: release (bApmfEquipAuthority off)", it->first);
+            }
             if (o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
                 o.equipHandle == APMF_API::kInvalidHandle && o.heal.handle == APMF_API::kInvalidHandle &&
                 o.offense[0].handle == APMF_API::kInvalidHandle &&
                 o.offense[1].handle == APMF_API::kInvalidHandle &&
-                o.floor.handle == APMF_API::kInvalidHandle)
+                o.floor.handle == APMF_API::kInvalidHandle &&
+                o.equipAuthHandle == APMF_API::kInvalidHandle)
                 it = g_owned.erase(it);
             else
                 ++it;
@@ -1805,7 +1919,15 @@ namespace MFO::APMFBridge {
             // again and would hold the hand shut until APMF's TTL, with MFO no
             // longer holding the handle that could release it.
             ReleaseClaimLocked(o.floor);
+            // ch.17: the standing equip-authority claim goes too (kPreLoadGame /
+            // revert). APMF wipes its own control map at its kPreLoadGame, so this
+            // is the harmless stale-handle Release the file header describes; the
+            // declaration's change detector lives in Logistics and is cleared by
+            // Logistics::ClearTransientState on the same road, so the first
+            // service after the load re-claims AND re-declares.
+            { RE::FormID dummy = 0; ReleaseHandleLocked(o.equipAuthHandle, dummy); }
         }
         g_owned.clear();
+        g_equipAuthRefused.clear();
     }
 }
