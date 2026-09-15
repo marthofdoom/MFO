@@ -73,6 +73,49 @@ Read it as history and this block as current.
   (`best == bestOffHand && best != bestWeap`). Two SEV-5 deferred: MFO-B27 (per-item
   progress signal delays detection), MFO-B28 (bought weapons never reach `AcquireEquip`,
   pre-existing).
+- **Branch `fix/mfo-meo-no-loose-gems` (off `main` `e53230f`, no version bump) — pushed,
+  CI green on its own tip, NOT merged, NOT deployed, awaiting its Fable review.**
+  THE INVARIANT (marth 2026-09-14): "there should never be unequipped gems when there
+  are free spaces on equipped items." Audit of `ReconcileLooseGems` (`native/MEOBridge.cpp`)
+  against MEO's own socket rules, four fixes: **(a) the worn set** is now exactly what
+  MEO's menu sockets (`IsSocketableArmorBase`/`IsSocketableWeaponBase`, MEO `plugin.cpp:2270-2326`:
+  kHead/kHair/kBody/kHands/kAmulet/kRing/kCirclet/kFeet/kShield + the two hands, minus
+  base-enchanted / unplayable / `MagicDisallowEnchanting` / unarmed / bound / tool
+  weapons; kForearms/kCalves dropped) and skips a worn instance carrying a FOREIGN
+  enchant — MEO's `SocketCapacity` returns 1 for ANY armor or weapon, so an ineligible
+  piece reported an empty socket and either went STUCK or was stamped where MEO's menu
+  cannot see it. **(b) the domain rule** honours MEO: a support gem fits only a
+  DUAL-socket item holding no other support gem (a Focus picked for a single-socket ring
+  was accepted, failed in MEO.log and went STUCK 60 s at a time); a socketed Conduit
+  admits off-domain gems. **(e) capacity:** the pass-local stock is decremented only on
+  a queued request; the false-return branch is a tripwire (today's MEO returns false only
+  for a null actor, so the predicate mirror + `GemFits` are the only defence against a
+  refused request and STUCK the only detector). **(f) the LEFTOVER line:** at the end of
+  a pass every loose gem still in stock while a worn item still has an empty socket logs
+  ONE `[meo] reconcile LEFTOVER <actor> <gem> x<n> -- <why>` (off-domain / stuck /
+  capacity / support-limit / refused / duplicate-copy / minting / unclassified),
+  rate-limited like STUCK; nothing is logged when no socket is open. (c) tier-1
+  conservation and (d) the per-item stuck exclusion were verified correct on `64512aa`
+  (trace in the branch report); tier-2 gem ORDERING, the gem CAPTURE rule, the stall
+  detector's contract, threading and `MEO_API.h` unchanged. **Fable tier-3 on `1efa3e3`:**
+  SEV-2 (tier 2 only) — a swap-up candidate admitted THROUGH the item's Conduit
+  out-scored the Conduit, evicted it, and the pair cycled every ~2.4 s invisibly to the
+  stall detector — FIXED: the candidate is judged against the item WITHOUT the evictee;
+  SEV-4 — an identical dual-wield pair was deduped by BASE, so the second dagger's
+  sockets were either deferred forever as "duplicate-copy" or invisible with no LEFTOVER
+  line — FIXED: worn items are (base, hand xList) instances, the dup guard counts only
+  unworn copies, one uid-0 request per base per pass. SEV-5s fixed: dead refused path
+  documented as a tripwire, `support-limit` why, swap-pending gems not walked, `considered`
+  set past the dup deferral. **Fable round 2 on `9dacc0e`: nothing above SEV-3, cycle
+  ended.** Fixed anyway (same lines): the swap-up judges `hasConduit` from LANDED state
+  only (a refused queued Conduit would have licensed an eviction for nothing), the
+  `minting` text covers the twin instance, `swapPending` counts copies so the rest of a
+  stack still gets its LEFTOVER line. Deferred: MFO-B33 (WARN vs INFO for off-domain /
+  duplicate-copy / support-limit, marth's call), MFO-B34 (Conduit-eviction policy),
+  MFO-B35 (the duplicate-copy deferral is redundant against MEO's in-place mint and
+  starves a worn item while a spare is carried — SEV-4, plausible, pre-existing),
+  MFO-B36 (swap-up does not reserve its candidate). MAP.md §7 MEOBridge carries the
+  worn set with MEO's evidence.
 - **Branch `fix/mfo-armor-class-score` (off `main` `69c5b3c`, no version bump) — pushed,
   CI status in the branch's own run, NOT merged, NOT deployed, awaiting its Fable review.**
   FIELD FINDING (Deck log on `69c5b3c`, Fable): "after respec the followers still wont

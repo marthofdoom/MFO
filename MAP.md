@@ -2498,6 +2498,105 @@ backed-off gems or the unsocket/re-socket loop returns. **OPEN BACKLOG:
 change, so under churn the one warn per 60 s becomes one per change + 3 passes;
 **MFO-B27** (SEV-5) — progress is the per-ITEM empty count, so a sibling slot
 landing delays a stuck key's detection (never spurious).
+**THE INVARIANT (marth 2026-09-14, `fix/mfo-meo-no-loose-gems`): "there should never be
+unequipped gems when there are free spaces on equipped items."** After a
+`ReconcileLooseGems` pass no loose gem may remain while any WORN item has an empty
+socket MEO would accept it in. Three things make that true and one thing says so when
+it is not:
+- **THE WORN SET = MEO's OWN eligibility, mirrored** (`MeoSocketableArmor` /
+  `MeoSocketableWeapon`, `kMeoArmorSlots`, anon, above `ReconcileLooseGems`). MEO's API
+  does NOT gate on eligibility: `SocketCapacity` (MEO `plugin.cpp:1628`) returns 1 for
+  ANY armor or weapon, so `GetEmptySocketCount` reported an empty socket on a
+  base-enchanted ring or a bound sword and the pass issued into it (STUCK loop, or a
+  slot MEO's menu cannot see — MEO's shield story, `plugin.cpp:2315-2319`). The set is
+  now exactly MEO's `IsSocketableArmorBase` (`plugin.cpp:2300-2326`): worn in one of
+  **kHead, kHair, kBody, kHands, kAmulet, kRing, kCirclet, kFeet, kShield** (kForearms /
+  kCalves were enumerated before and are NOT in MEO's list — dropped), not
+  base-enchanted (`formEnchanting`), `GetPlayable`, no `MagicDisallowEnchanting`; plus
+  the two hands via `IsSocketableWeaponBase` (`:2270-2298`): the same verdicts plus not
+  unarmed / bound / nameless / a tool (MEO's name blocklist). **An item is a worn
+  INSTANCE = (base, worn xList)**, not a base: an identical dual-wield pair is two
+  instances with their own sockets, so a weapon is looked up by its HAND
+  (`WornXList(actor, base, hand)`: 0 = kWorn, 1 = kWornLeft, -1 = either for armor)
+  and the dedupe is on (base, xList) — Fable SEV-4 on `1efa3e3`: deduping by base hid
+  the second dagger (uid-0 pair: deferred forever as "duplicate-copy"; one minted: the
+  other's empty socket invisible and NO LEFTOVER line). A weapon with no worn xList
+  for its hand is skipped (MEO's uid-0 mint wants a worn xList too, `:9143`). The
+  duplicate-copy deferral counts only UNWORN copies (`invBaseCount > wornCopies`), and
+  a uid-0 base takes ONE request per pass (`mintedBases`; the other instance is
+  `mintWait`, classified `minting`). A worn instance whose xList carries a FOREIGN
+  enchant (kEnchantment with no MEO socket record — uid 0, or `GetGemDetails` == 0)
+  is skipped in the item loop: `ApiSocketGem` refuses it (`:9258`) and at uid 0 MEO's
+  mint path falls through to a DIFFERENT copy.
+- **THE DOMAIN RULE = `GemFits(gem, ItemFit{capacity,isArmor,hasSupport,hasConduit})`**
+  (replaces `DomainFits`): weapon gems → weapons, armor gems → armor, EXCEPT an item
+  holding a socketed Conduit (GemDetail gid `conduit`) admits off-domain gems
+  (`ApiSocketGem :9277-9279`); a SUPPORT gem fits any item that is DUAL-socket
+  (`:9241`, and `MEO_API.h:112` says "dual-socket" too) and holds no other support gem
+  (`:9272`), counting one issued THIS pass (`rec.fitNow.hasSupport`, and
+  `.hasConduit` for a queued Conduit — MEO runs its queue in order). Before, support
+  "fit any" — a Focus picked for a single-socket item was accepted, failed in MEO.log
+  and went STUCK 60 s at a time. **The tier-2 swap-up candidate must fit WITHOUT the
+  evictee** (`sansEvictee`: a support evictee clears `hasSupport`, a Conduit evictee
+  clears `hasConduit`; and the swap-up's `hasConduit` comes from LANDED state,
+  `fitAtStart`, never from a Conduit merely queued this pass — Fable SEV-4 on
+  `9dacc0e`: a refused queued Conduit would otherwise have licensed an eviction for
+  nothing, and our own fingerprint change lifts the back-off, so it would churn) —
+  Fable SEV-2 on `1efa3e3`, confirmed by trace: with the
+  candidate judged against the item AS-IS, an off-domain gem admitted through the
+  Conduit out-scored the Conduit itself, evicted it, was no longer admitted next pass,
+  the Conduit re-socketed, and the pair cycled every ~2.4 s with the empty count moving
+  each time — a loop the stall detector cannot see (progress on the socket key, the
+  unsocket key forgotten every other pass).
+- **CAPACITY ACCOUNTING:** `avail[pick]` is decremented ONLY when `SocketGem` returned
+  true. That false branch is a TRIPWIRE, not a live path: today's MEO returns false
+  only for a null actor (`plugin.cpp:9416-9427`), which the pass excludes — every real
+  refusal happens inside MEO's queued task. So the predicate mirror + `GemFits` are the
+  ONLY defence against a refused request and the STUCK detector the only detector of
+  one.
+- **THE LEFTOVER LINE** (end of pass, `g_leftover`, anon, MAIN THREAD like `g_stuck`,
+  cleared by `ClearTransientState` and the `nLoose == 0` return): for every loose gem
+  still in stock while any considered worn item still has `emptyAtStart - issued > 0`,
+  ONE `[meo] reconcile LEFTOVER <actor> <gemBase> '<gem>' x<n> -- <why>` per
+  (actor, gemBase, why), rate-limited like STUCK (again after `kStuckBackoff` 60 s or
+  on the loose/worn fingerprint change; keys not seen in a pass are forgotten).
+  `why` ∈ **off-domain** (no worn item of its domain has an empty socket), **stuck**
+  (every compatible empty socket is `excluded`/`socketBackedOff` for it), **capacity**
+  (a compatible socket was open at the top of the pass but other gems filled it),
+  **refused** (the tripwire above fired), **duplicate-copy** (its only compatible
+  empty sockets are on a uid-0 item deferred for a carried UNWORN second copy — can
+  persist with economy off), **minting** (a uid-0 item took its ONE first-mint gem
+  this pass, or is the other instance of a base that did; the rest fill next pass —
+  the one by-design class, logged at INFO, the rest WARN — **MFO-B33** records the
+  open call on whether off-domain / duplicate-copy should be INFO too),
+  **support-limit** (a support gem: a dual-socket item is open but already holds, or
+  was just given, its one support seat — was misreported as `capacity`),
+  **unclassified** (a compatible, un-deferred socket the pass walked past — a bug,
+  never dropped). A copy a swap-out was issued FOR this pass (`swapPending`, a
+  per-entry COUNT) is not leftover — its socket opens next pass — but the rest of a
+  stack still is (`leftN = avail - pending`, the `x<n>` printed). Open notes:
+  **MFO-B35** (the duplicate-copy deferral is redundant against MEO's in-place mint
+  and starves a worn item while a spare is carried) and **MFO-B36** (the swap-up never
+  decrements `avail[loot]`, so two items can evict for one loose copy — one wasted
+  unsocket/re-socket, no loop). When no considered item has an empty socket
+  NOTHING is logged: that is the invariant holding. Classification relies on the slot
+  loop's exhaustiveness: it re-picks until `pickGem` returns -1, so on a non-deferred
+  item with sockets left every fitting gem in stock is in `excluded`; the deferral
+  flags are tested BEFORE `excluded` because a deferred item never ran its slot loop
+  (`rec.considered` is set only past the dup deferral).
+**What breaks (2026-09-14 additions):** `kMeoArmorSlots` / the two predicates must
+track MEO's `IsSocketable*Base` — a slot MEO adds is a slot MFO silently never fills
+(the LEFTOVER line then says off-domain for a gem that DOES fit); a slot MFO adds that
+MEO's menu cannot see socket-stamps a gem the player cannot recover. `GemFits` must
+stay the conservative side of `ApiSocketGem` (never looser) or the STUCK loop returns.
+**MFO-B34** (policy, open): should the swap-up ever evict a Conduit that an
+already-socketed off-domain gem depends on? Today it may, if a same-domain candidate
+strictly out-scores the Conduit's bonus. The swap-up MUST keep judging its candidate
+against `sansEvictee`, never `fitNow`, or the Conduit loop returns. Weapons MUST stay
+enumerated per hand xList or the second instance of a pair goes dark again.
+`rec.fitNow.hasSupport` must be set on a queued support issue or a second support gem
+is issued to the same item and refused. The LEFTOVER classifier's `hole → unclassified`
+branch is the tripwire for a pick/gate change that leaves a fitting gem unwalked.
 **GEM CAPTURE RULE (Fable SEV-2 on `b3ac577`, fixed):** `AcquireEquip`
 (`Logistics_Loot.cpp`) captures the worn same-role item's gems ONLY when the new item
 REPLACES it — `a_forceStock` (mage backup, the dual wielder's second one-hander) skips

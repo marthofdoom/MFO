@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>   // reconcile: case-insensitive gem-name preference match
 #include <chrono>   // reconcile stall detector: the 60 s backoff floor
+#include <cstring>  // reconcile: MEO's tool-name blocklist (strstr), mirrored
 #include <format>   // reconcile: the pass-count suffix on the socket line
 #include <limits>   // reconcile: best/weakest gem sentinels
 #include <mutex>
@@ -290,10 +291,118 @@ namespace MFO::MEOBridge {
             return b;
         }
 
-        // Domain fit: armor gems -> armor items, weapon gems -> weapons, support -> either.
-        bool DomainFits(const MEO_API::LooseGemInfo& a_g, bool a_itemIsArmor) {
-            return a_g.isSupport || (a_g.isArmor == a_itemIsArmor);
+        // ── THE WORN SET: MEO's OWN eligibility, mirrored (marth 2026-09-14) ─────
+        // "There should never be unequipped gems when there are free spaces on
+        // equipped items." That invariant is only meaningful over the items MEO
+        // will actually socket, and MEO's API does NOT gate on its eligibility:
+        // SocketCapacity (MEO plugin.cpp:1628) returns 1 for ANY armor or weapon,
+        // so GetEmptySocketCount reports an empty socket on a base-enchanted ring
+        // or a bound sword, and SocketGem then either fails in MEO.log (a STUCK
+        // loop here) or stamps a slot MEO's own menu cannot see (the gem becomes
+        // unrecoverable -- MEO's shield story, plugin.cpp:2315-2319). So the worn
+        // set is filtered by the SAME predicates MEO's menu applies:
+        //   IsSocketableArmorBase  (MEO plugin.cpp:2300-2326): not base-enchanted,
+        //     playable, no MagicDisallowEnchanting, and worn in one of kHead,
+        //     kHair, kBody, kHands, kAmulet, kRing, kCirclet, kFeet, kShield.
+        //     (kForearms / kCalves are NOT in MEO's list and are no longer here.)
+        //   IsSocketableWeaponBase (MEO plugin.cpp:2270-2298): not base-enchanted,
+        //     playable, not unarmed, not bound, no MagicDisallowEnchanting, named,
+        //     and not a tool (MEO's own name blocklist -- "no socketed pickaxes").
+        // A worn instance carrying a FOREIGN enchant (a player-table enchant on
+        // its xList with no MEO socket record) is refused by ApiSocketGem
+        // (plugin.cpp:9258 "item already carries a foreign enchant") and, at uid 0,
+        // would make MEO's mint path fall through to a DIFFERENT copy; that check
+        // needs the item's gem count, so it lives in the item loop below.
+        using BipedSlot = RE::BGSBipedObjectForm::BipedObjectSlot;
+        constexpr BipedSlot kMeoArmorSlots[] = {
+            BipedSlot::kHead, BipedSlot::kHair, BipedSlot::kBody, BipedSlot::kHands, BipedSlot::kAmulet,
+            BipedSlot::kRing, BipedSlot::kCirclet, BipedSlot::kFeet, BipedSlot::kShield,
+        };
+        bool MeoSocketableArmor(const RE::TESObjectARMO* a_armo) {
+            if (!a_armo || a_armo->formEnchanting || !a_armo->GetPlayable() ||
+                a_armo->HasKeywordString("MagicDisallowEnchanting")) return false;
+            for (const auto s : kMeoArmorSlots)          // HasPartOf is .all(): per slot, OR'd (MEO's NB)
+                if (a_armo->HasPartOf(s)) return true;
+            return false;
         }
+        bool MeoSocketableWeapon(const RE::TESObjectWEAP* a_weap) {
+            if (!a_weap || a_weap->formEnchanting || !a_weap->GetPlayable() ||
+                a_weap->IsHandToHandMelee() || a_weap->IsBound() ||
+                a_weap->HasKeywordString("MagicDisallowEnchanting")) return false;
+            const char* n = a_weap->GetName();
+            if (!n || !*n) return false;                 // nameless pseudo-weapons (trap/effect bases)
+            static constexpr const char* kToolWords[] = { "Pickaxe", "Pick Axe", "Woodcutter", "Wood Axe", "Woodsman" };
+            for (const char* w : kToolWords)
+                if (std::strstr(n, w)) return false;
+            return true;
+        }
+        // The WORN xList of a_base on a_actor (the one MEO mints/stamps), or null.
+        // Same walk as WornUid, but the pass also needs the list itself (its enchant
+        // flag, and its identity: an identical dual-wield pair is TWO worn instances
+        // of one base -- Fable SEV-4 on 1efa3e3 -- so a weapon is looked up by its
+        // HAND: a_hand 0 = right (kWorn), 1 = left (kWornLeft), -1 = either (armor).
+        RE::ExtraDataList* WornXList(RE::Actor* a_actor, const RE::TESBoundObject* a_base, int a_hand) {
+            auto* ch = a_actor ? a_actor->GetInventoryChanges() : nullptr;
+            if (!ch || !ch->entryList) return nullptr;
+            for (auto* e : *ch->entryList) {
+                if (!e || e->object != a_base || !e->extraLists) continue;
+                for (auto* xl : *e->extraLists) {
+                    if (!xl) continue;
+                    const bool worn = a_hand == 0 ? xl->HasType(RE::ExtraDataType::kWorn)
+                                    : a_hand == 1 ? xl->HasType(RE::ExtraDataType::kWornLeft)
+                                                  : IsWornXList(xl);
+                    if (worn) return xl;
+                }
+            }
+            return nullptr;
+        }
+
+        // ── THE DOMAIN RULE (MEO_API.h:112 + ApiSocketGem, MEO plugin.cpp:9235-9280) ──
+        // weapon gems -> weapons, armor gems -> armor, EXCEPT an item holding a
+        // socketed Conduit accepts an off-domain gem (:9277 ItemHasConduit, :9279).
+        // Support gems (Echo/Conduit/Focus) fit ANY item -- but only a DUAL-socket
+        // one (:9241 "support gem needs a dual-socket item") that does not already
+        // hold a support gem (:9272 "item already holds a support gem"). Before
+        // this the pass treated support as fitting everything, so a Focus picked
+        // for a single-socket ring was accepted, failed in MEO.log, and went STUCK.
+        struct ItemFit { int capacity; bool isArmor; bool hasSupport; bool hasConduit; };
+        bool GemFits(const MEO_API::LooseGemInfo& a_g, const ItemFit& a_f) {
+            if (a_g.isSupport) return a_f.capacity >= 2 && !a_f.hasSupport;
+            return a_g.isArmor == a_f.isArmor || a_f.hasConduit;
+        }
+
+        // ── THE LEFTOVER LINE ──────────────────────────────────────────────────
+        // After a pass, a loose gem still in stock while ANY worn item still has
+        // an empty socket is a broken invariant, and principle 7 says it is never
+        // silent: one `[meo] reconcile LEFTOVER` line per (actor, gem, why), then
+        // again after the same 60 s floor as STUCK or when the follower's
+        // loose/worn fingerprint changes (principle 9). Keys not seen in a pass are
+        // forgotten at its end. MAIN THREAD ONLY, like g_stuck.
+        enum class LeftoverWhy : std::uint8_t {
+            kOffDomain,       // no worn item of its domain has an empty socket
+            kStuck,           // every compatible empty socket is backed off for it
+            kCapacity,        // compatible sockets existed but other gems filled them this pass
+            kRefused,         // MEO refused the SocketGem outright this pass (returned false)
+            kDuplicateCopy,   // the only compatible empty sockets are on a uid-0 item with a duplicate copy carried (deferred)
+            kMinting,         // the only compatible empty sockets are on a uid-0 item that took its first gem this pass (the rest fill next pass)
+            kSupportLimit,    // a support gem: a dual-socket item is open but already holds (or was just given) its one support gem
+            kUnclassified,    // a compatible, un-deferred empty socket exists and the gem was neither issued nor stuck -- a bug, never dropped
+        };
+        const char* LeftoverWord(LeftoverWhy a_w) {
+            switch (a_w) {
+            case LeftoverWhy::kOffDomain:     return "off-domain (no worn item of its domain has an empty socket)";
+            case LeftoverWhy::kStuck:         return "stuck (every compatible empty socket is backed off for it -- see the STUCK line)";
+            case LeftoverWhy::kCapacity:      return "capacity (compatible sockets existed but other gems filled them this pass)";
+            case LeftoverWhy::kRefused:       return "refused (MEO refused the socket request outright this pass -- see MEO.log)";
+            case LeftoverWhy::kDuplicateCopy: return "duplicate-copy (its only compatible empty sockets are on an un-minted item with a second copy carried; deferred until the copy leaves)";
+            case LeftoverWhy::kMinting:       return "minting (its only compatible empty sockets are on an un-minted item that took its first gem this pass, or whose twin worn instance took the base's one uid-0 request; the rest fill next pass)";
+            case LeftoverWhy::kSupportLimit:  return "support-limit (a dual-socket item is open but already holds its one support gem)";
+            default:                          return "unclassified";
+            }
+        }
+        struct LeftoverState { std::chrono::steady_clock::time_point at{}; std::uint64_t inventoryKey = 0; bool seen = false; };
+        // actor -> ((gemBase<<8 | why) -> state)
+        std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, LeftoverState>> g_leftover;
 
         void ReconcileLooseGems(RE::Actor* a_actor, bool a_effectAware, GemReconcilePrefs a_prefs) {
             if (!g_meo || g_meo->Version() < 3 || !a_actor) return;
@@ -304,6 +413,7 @@ namespace MFO::MEOBridge {
             const std::uint32_t nLoose = std::min(g_meo->GetLooseGems(a_actor, loose, kMaxLoose), kMaxLoose);
             if (nLoose == 0) {         // nothing to place -> nothing to reconcile
                 g_stuck.erase(a_actor->GetFormID());   // no request recurs with no gems: drop any stall keys
+                g_leftover.erase(a_actor->GetFormID());
                 return;
             }
 
@@ -313,27 +423,32 @@ namespace MFO::MEOBridge {
             for (std::uint32_t i = 0; i < nLoose; ++i)
                 avail[i] = loose[i].count ? loose[i].count : 1u;
 
-            // 2) The follower's WORN socketable gear (weapons + armor). Worn is the
+            // 2) The follower's WORN socketable gear (weapons + armor), filtered by
+            //    MEO's own eligibility (see the worn-set note above). Worn is the
             //    unambiguous "keeps/wears" set -- never re-socket into to-be-sold junk.
-            struct WornItem { RE::FormID base; std::uint16_t uid; bool isArmor; };
+            //    An item is a worn INSTANCE = (base, worn xList): an identical dual-wield
+            //    pair is two instances of one base, each with its own sockets (Fable
+            //    SEV-4 on 1efa3e3: deduping by base hid the second dagger). A weapon
+            //    with no worn xList for its hand is skipped -- MEO could not mint it in
+            //    place either (its uid-0 path wants a worn xList, MEO plugin.cpp:9143).
+            struct WornItem { RE::FormID base; std::uint16_t uid; bool isArmor; bool xlEnchanted; const RE::ExtraDataList* xl; };
             std::vector<WornItem> items;
-            auto addItem = [&](RE::TESBoundObject* a_obj, bool a_isArmor) {
+            auto addItem = [&](RE::TESBoundObject* a_obj, bool a_isArmor, int a_hand) {
                 if (!a_obj) return;
                 const RE::FormID base = a_obj->GetFormID();
-                for (const auto& it : items) if (it.base == base) return;   // dedupe (armor covers many biped slots)
-                items.push_back({ base, WornUid(a_actor, a_obj), a_isArmor });
+                auto* xl = WornXList(a_actor, a_obj, a_hand);
+                if (!xl) return;
+                for (const auto& it : items) if (it.base == base && it.xl == xl) return;   // dedupe (armor covers many biped slots)
+                std::uint16_t uid = 0;
+                if (auto* x = xl->GetByType<RE::ExtraUniqueID>()) uid = x->uniqueID;
+                items.push_back({ base, uid, a_isArmor, xl->HasType(RE::ExtraDataType::kEnchantment), xl });
             };
             for (int hand = 0; hand < 2; ++hand)
                 if (auto* eq = a_actor->GetEquippedObject(hand == 1))
-                    if (auto* w = eq->As<RE::TESObjectWEAP>()) addItem(w, false);
-            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-            static constexpr Slot kArmorSlots[] = {
-                Slot::kHead, Slot::kHair, Slot::kCirclet, Slot::kBody, Slot::kHands,
-                Slot::kForearms, Slot::kFeet, Slot::kCalves, Slot::kShield,
-                Slot::kRing, Slot::kAmulet,
-            };
-            for (const auto s : kArmorSlots)
-                if (auto* w = a_actor->GetWornArmor(s)) addItem(w, true);
+                    if (auto* w = eq->As<RE::TESObjectWEAP>(); w && MeoSocketableWeapon(w)) addItem(w, false, hand);
+            for (const auto s : kMeoArmorSlots)
+                if (auto* w = a_actor->GetWornArmor(s); w && MeoSocketableArmor(w)) addItem(w, true, -1);
+            auto wornCopies = [&](RE::FormID b) { std::int32_t n = 0; for (const auto& it : items) if (it.base == b) ++n; return n; };
 
             // Total inventory count of a base (worn copies included) -- used to defer
             // ambiguous uid-0 SocketGem targeting when a duplicate copy is carried.
@@ -403,8 +518,28 @@ namespace MFO::MEOBridge {
                 return false;
             };
 
-            for (auto& item : items) {
+            // Per-item record of what this pass did, for the LEFTOVER classification.
+            struct ItemPass {
+                ItemFit fitAtStart{};   // capacity/domain/support/conduit as found (support = socketed gems)
+                ItemFit fitNow{};       // ... plus any support gem ISSUED to it this pass
+                int  emptyAtStart = 0;  // GetEmptySocketCount at the top of the pass
+                int  issued       = 0;  // SocketGem requests queued to it this pass
+                bool considered   = false;   // reached the slot loop (eligible, socketable, not foreign-enchanted, not dup-deferred)
+                bool dupDeferred  = false;   // uid 0 + an UNWORN duplicate copy carried: no request this pass
+                bool mintIssued   = false;   // uid 0: took its ONE socket this pass, the rest wait for the uid
+                bool mintWait     = false;   // uid 0: another worn instance of the same base took the uid-0 request this pass
+                bool refused      = false;   // a SocketGem returned false on it this pass (see the tripwire note at the issue site)
+                std::unordered_set<std::uint32_t> excluded;   // loose entries stuck/backed off on THIS item
+            };
+            std::vector<ItemPass> recs(items.size());
+            std::unordered_set<RE::FormID> mintedBases;    // bases that took a uid-0 SocketGem this pass (one per base per pass)
+            std::unordered_map<std::uint32_t, std::uint32_t> swapPending; // loose entry -> swap-outs issued FOR it this pass (each exempts ONE copy from LEFTOVER)
+
+            for (std::size_t idx = 0; idx < items.size(); ++idx) {
+                auto& item = items[idx];
+                auto& rec  = recs[idx];
                 const int emptyCount = g_meo->GetEmptySocketCount(a_actor, item.base, item.uid);
+                rec.emptyAtStart = std::max(emptyCount, 0);
                 // Tier 1 (conservation) only FILLS empty sockets -- if none, skip. Tier 2
                 // (effect-aware) must still reach the swap-up below on a fully-socketed
                 // item, so don't skip it here when a_effectAware.
@@ -419,35 +554,55 @@ namespace MFO::MEOBridge {
                 const int capacity          = static_cast<int>(trueDet) + emptyCount;
                 if (capacity <= 0) continue;   // socketless item -- nothing to fill or swap
 
+                // FOREIGN enchant: an enchant on the worn xList that is not one of
+                // MEO's socket records. ApiSocketGem refuses it (MEO plugin.cpp:9258)
+                // and at uid 0 MEO's mint path skips this xList and falls through to
+                // "any fresh instance of this base" -- never target it.
+                if (item.xlEnchanted && (item.uid == 0 || trueDet == 0)) continue;
+
                 std::unordered_set<std::uint8_t> filled;
-                for (std::uint32_t i = 0; i < nDet; ++i) filled.insert(det[i].slot);
+                bool hasSupport = false, hasConduit = false;
+                for (std::uint32_t i = 0; i < nDet; ++i) {
+                    filled.insert(det[i].slot);
+                    if (det[i].isSupport) {
+                        hasSupport = true;
+                        if (ContainsCI(det[i].gid, "conduit")) hasConduit = true;   // MEO GemCatalog.h gid "conduit"
+                    }
+                }
+                rec.fitAtStart = ItemFit{ capacity, item.isArmor, hasSupport, hasConduit };
+                rec.fitNow     = rec.fitAtStart;
 
                 // A WORN item never gemmed (uid 0): MEO mints the uid on the FIRST
                 // socket, so fill only ONE slot this pass; the rest fill next pass once
                 // WornUid returns the minted uid (avoids ambiguous uid-0 targeting).
                 const bool mintGuard = (item.uid == 0);
-                // If a DUPLICATE copy of this base is carried (e.g. a junk copy awaiting
-                // sale), a uid-0 SocketGem could mint on the wrong instance and park the
-                // gem on to-be-sold junk (churn with economy on, permanent loss with it
-                // off). Defer until the copy is gone or the worn copy has a real uid.
-                if (mintGuard && invBaseCount(item.base) > 1) continue;
+                // If an UNWORN duplicate copy of this base is carried (e.g. a junk copy
+                // awaiting sale), a uid-0 SocketGem could mint on the wrong instance and
+                // park the gem on to-be-sold junk (churn with economy on, permanent loss
+                // with it off). Defer until the copy is gone or the worn copy has a real
+                // uid. A second WORN copy (the dual-wield pair) is not junk: MEO's uid-0
+                // path mints on a worn xList (plugin.cpp:9143), so it lands on one of the
+                // pair; only ONE uid-0 request per base per pass, the other instance waits.
+                if (mintGuard && invBaseCount(item.base) > wornCopies(item.base)) { rec.dupDeferred = true; continue; }
+                rec.considered = true;   // classifier order: dupDeferred is tested first, then mintWait/mintIssued/refused, then excluded
+                if (mintGuard && mintedBases.contains(item.base)) { rec.mintWait = true; continue; }
 
                 // Loose entries EXCLUDED for THIS item this pass: a gem whose socket
                 // into this item is stuck/backed off. It neither reserves (a later
                 // item may still take it) nor SHADOWS (the slot re-picks past it, and
                 // the swap-up ignores it) -- Fable round-2 SEV-2 on 5f814d5.
-                std::unordered_set<std::uint32_t> excluded;
+                auto& excluded = rec.excluded;
                 auto pickGem = [&]() -> int {
                     int pick = -1;
                     if (!a_effectAware) {
-                        // tier 1 conservation: first domain-matching loose gem in stock.
+                        // tier 1 conservation: first fitting loose gem in stock.
                         for (std::uint32_t i = 0; i < nLoose; ++i)
-                            if (avail[i] > 0 && !excluded.contains(i) && DomainFits(loose[i], item.isArmor)) { pick = static_cast<int>(i); break; }
+                            if (avail[i] > 0 && !excluded.contains(i) && GemFits(loose[i], rec.fitNow)) { pick = static_cast<int>(i); break; }
                     } else {
                         // tier 2 effect-aware: best by (class bonus, base magnitude).
                         int bestB = std::numeric_limits<int>::min(); float bestM = -1.0f;
                         for (std::uint32_t i = 0; i < nLoose; ++i) {
-                            if (avail[i] == 0 || excluded.contains(i) || !DomainFits(loose[i], item.isArmor)) continue;
+                            if (avail[i] == 0 || excluded.contains(i) || !GemFits(loose[i], rec.fitNow)) continue;
                             const int bo = GemBonus(loose[i].gid, loose[i].name,
                                                     loose[i].isArmor, loose[i].isSupport, a_prefs);
                             if (bo > bestB || (bo == bestB && loose[i].magnitude > bestM)) {
@@ -467,7 +622,7 @@ namespace MFO::MEOBridge {
                     StuckKey key{};
                     for (;;) {
                         pick = pickGem();
-                        if (pick < 0) break;   // no (non-stuck) gem fits this item's domain
+                        if (pick < 0) break;   // no (non-stuck) gem fits this item
                         // STALL DETECTOR: same request as last pass with the empty count
                         // unchanged = MEO accepted it and it did not land.
                         key = StuckKey{ 0, item.base, item.uid, static_cast<std::uint8_t>(slot), loose[pick].gemBase };
@@ -478,15 +633,30 @@ namespace MFO::MEOBridge {
 
                     const bool queued = g_meo->SocketGem(a_actor, item.base, item.uid, static_cast<std::uint8_t>(slot),
                                                          loose[pick].gemBase, loose[pick].gemUid);
-                    --avail[pick];
-                    if (queued)
+                    if (queued) {
+                        // The gem is spoken for ONLY once MEO took the request: a refusal
+                        // leaves it in stock for the next item (and the LEFTOVER line).
+                        --avail[pick];
+                        ++rec.issued;
+                        if (mintGuard) mintedBases.insert(item.base);
+                        if (loose[pick].isSupport) {
+                            rec.fitNow.hasSupport = true;   // one support per item (MEO :9272)
+                            if (ContainsCI(loose[pick].gid, "conduit")) rec.fitNow.hasConduit = true;   // MEO runs the queue in order: it lands before a later off-domain request
+                        }
                         spdlog::info("[meo] reconcile socket '{}' -> {:08X}/{} slot {} on {:08X} (queued{})",
                                      loose[pick].name, item.base, item.uid, slot, a_actor->GetFormID(),
                                      passOf(key) > 1 ? std::format(", pass {}", passOf(key)) : std::string{});
-                    else
+                    } else {
                         spdlog::warn("[meo] reconcile socket '{}' -> {:08X}/{} slot {} on {:08X} REFUSED by MEO (SocketGem returned false) -- see MEO.log",
                                      loose[pick].name, item.base, item.uid, slot, a_actor->GetFormID());
-                    if (mintGuard) break;   // one socket per pass on a fresh (uid 0) item
+                        // TRIPWIRE, not a live path: today's MEO returns false only for a
+                        // null actor (plugin.cpp:9416-9427), which this pass excludes; every
+                        // real refusal happens inside its queued task and is visible here
+                        // only through the STUCK detector. Kept because the ABI allows false.
+                        rec.refused = true;
+                        break;
+                    }
+                    if (mintGuard) { rec.mintIssued = true; break; }   // one socket per pass on a fresh (uid 0) item
                 }
 
                 // tier 2 SWAP-UP: if a still-available loose gem STRICTLY beats the
@@ -505,11 +675,28 @@ namespace MFO::MEOBridge {
                             weakB = bo; weakM = det[i].effectiveMagnitude; weakIdx = i;
                         }
                     }
+                    // The candidate must fit the item WITHOUT the evictee (Fable SEV-2 on
+                    // 1efa3e3): evicting the Conduit un-admits every off-domain gem, so an
+                    // off-domain candidate admitted THROUGH that Conduit would be refused
+                    // next pass, the Conduit re-socketed, and the pair would cycle every
+                    // ~2.4 s with the empty count moving each time (invisible to the stall
+                    // detector). Likewise a support evictee frees the item's one support seat.
+                    ItemFit sansEvictee = rec.fitNow;
+                    // A merely QUEUED Conduit must not license an eviction (Fable SEV-4 on
+                    // 9dacc0e): if MEO refuses it inside its task, the evictee was unsocketed
+                    // for nothing and our own fingerprint change lifts the back-off -- churn.
+                    // The slot path keeps the queued shortcut (a refused Conduit there costs
+                    // nothing that is not already cleared); the swap-up judges LANDED state.
+                    sansEvictee.hasConduit = rec.fitAtStart.hasConduit;
+                    if (det[weakIdx].isSupport) {
+                        sansEvictee.hasSupport = false;
+                        if (ContainsCI(det[weakIdx].gid, "conduit")) sansEvictee.hasConduit = false;
+                    }
                     int   loot = -1;
                     int   lootB = std::numeric_limits<int>::min();
                     float lootM = -1.0f;
                     for (std::uint32_t i = 0; i < nLoose; ++i) {
-                        if (avail[i] == 0 || !DomainFits(loose[i], item.isArmor)) continue;
+                        if (avail[i] == 0 || !GemFits(loose[i], sansEvictee)) continue;
                         // Never make room for a gem MEO keeps refusing on this item
                         // (excluded this pass, or its socket key is still backed off from
                         // an earlier pass) -- the self-driven unsocket/re-socket loop.
@@ -527,16 +714,90 @@ namespace MFO::MEOBridge {
                         // Progress = the empty count RISING once the unsocket lands.
                         const StuckKey ukey{ 1, item.base, item.uid, det[weakIdx].slot, 0 };
                         if (!stallGate(ukey, emptyCount, "UnsocketGem", det[weakIdx].name)) continue;
-                        if (g_meo->UnsocketGem(a_actor, item.base, item.uid, det[weakIdx].slot))
+                        if (g_meo->UnsocketGem(a_actor, item.base, item.uid, det[weakIdx].slot)) {
+                            ++swapPending[static_cast<std::uint32_t>(loot)];   // one copy's socket opens next pass: not a LEFTOVER
                             spdlog::info("[meo] reconcile swap-out '{}' (slot {}) on {:08X} -- '{}' will re-fill (queued{})",
                                          det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID(), loose[loot].name,
                                          passOf(ukey) > 1 ? std::format(", pass {}", passOf(ukey)) : std::string{});
-                        else
+                        } else
                             spdlog::warn("[meo] reconcile swap-out '{}' (slot {}) on {:08X} REFUSED by MEO (UnsocketGem returned false) -- see MEO.log",
                                          det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID());
                     }
                 }
             }
+
+            // ── THE LEFTOVER LINE: the invariant, checked at the end of the pass ──
+            // For every loose gem still in stock: is there a worn socket (as MEO
+            // counts them) that is still empty after this pass's issues? If no item
+            // has one, the invariant holds and nothing is logged. Otherwise say why
+            // the gem is not in it (one line per (actor, gem, why), rate-limited).
+            auto& leftMap = g_leftover[a_actor->GetFormID()];
+            for (auto& kv : leftMap) kv.second.seen = false;
+            bool anyEmpty = false;
+            for (const auto& rec : recs)
+                if (rec.considered || rec.dupDeferred) if (rec.emptyAtStart - rec.issued > 0) { anyEmpty = true; break; }
+            if (anyEmpty) {
+                for (std::uint32_t i = 0; i < nLoose; ++i) {
+                    // Copies a swap-out was issued FOR this pass are not leftover (their
+                    // socket opens next pass); the REST of a stack still are.
+                    std::uint32_t leftN = avail[i];
+                    if (auto sp = swapPending.find(i); sp != swapPending.end()) leftN = sp->second >= leftN ? 0u : leftN - sp->second;
+                    if (leftN == 0) continue;
+                    bool compatNow = false, stuck = false, refused = false, dup = false, minting = false, supportLimit = false, hole = false;
+                    for (std::size_t idx = 0; idx < items.size(); ++idx) {
+                        const auto& rec = recs[idx];
+                        if (!(rec.considered || rec.dupDeferred) || rec.emptyAtStart - rec.issued <= 0) continue;
+                        if (!GemFits(loose[i], rec.fitNow)) {
+                            // A support gem kept out only by the item's one support seat.
+                            if (loose[i].isSupport && rec.fitNow.capacity >= 2) supportLimit = true;
+                            continue;
+                        }
+                        compatNow = true;
+                        // ORDER MATTERS: the deferrals are tested before `excluded`, because a
+                        // deferred item never ran its slot loop and so never excluded anything.
+                        if (rec.dupDeferred)       { dup = true;     continue; }
+                        if (rec.mintWait || rec.mintIssued) { minting = true; continue; }
+                        if (rec.refused)           { refused = true; continue; }
+                        if (rec.excluded.contains(i) || socketBackedOff(items[idx].base, items[idx].uid, loose[i].gemBase)) { stuck = true; continue; }
+                        hole = true;   // an open, compatible, un-deferred socket the pass walked past
+                    }
+                    LeftoverWhy why;
+                    if (!compatNow) {
+                        // Nothing of its kind is open now: kept out by the support seat, or
+                        // was it ever open this pass (then other gems took it), or never?
+                        bool wasOpen = false;
+                        for (const auto& rec : recs)
+                            if ((rec.considered || rec.dupDeferred) && rec.emptyAtStart > 0 && GemFits(loose[i], rec.fitAtStart)) { wasOpen = true; break; }
+                        why = supportLimit ? LeftoverWhy::kSupportLimit
+                            : wasOpen      ? LeftoverWhy::kCapacity : LeftoverWhy::kOffDomain;
+                    } else if (hole)    why = LeftoverWhy::kUnclassified;
+                    else if (stuck)     why = LeftoverWhy::kStuck;
+                    else if (refused)   why = LeftoverWhy::kRefused;
+                    else if (dup)       why = LeftoverWhy::kDuplicateCopy;
+                    else if (minting)   why = LeftoverWhy::kMinting;
+                    else                why = LeftoverWhy::kUnclassified;
+
+                    const std::uint64_t lk = (static_cast<std::uint64_t>(loose[i].gemBase) << 8) | static_cast<std::uint8_t>(why);
+                    auto& ls = leftMap[lk];
+                    const bool fresh = ls.at == std::chrono::steady_clock::time_point{};
+                    if (fresh || ls.inventoryKey != inventoryKey || now >= ls.at + kStuckBackoff) {
+                        ls.at = now;
+                        ls.inventoryKey = inventoryKey;
+                        // A one-pass mint deferral is by design (info); every other class is a
+                        // broken invariant the user needs to see (warn).
+                        const char* actorName = a_actor->GetName() ? a_actor->GetName() : "?";
+                        if (why == LeftoverWhy::kMinting)
+                            spdlog::info("[meo] reconcile LEFTOVER {:08X} '{}' {:08X} '{}' x{} -- {}",
+                                         a_actor->GetFormID(), actorName, loose[i].gemBase, loose[i].name, leftN, LeftoverWord(why));
+                        else
+                            spdlog::warn("[meo] reconcile LEFTOVER {:08X} '{}' {:08X} '{}' x{} -- {}",
+                                         a_actor->GetFormID(), actorName, loose[i].gemBase, loose[i].name, leftN, LeftoverWord(why));
+                    }
+                    ls.seen = true;
+                }
+            }
+            std::erase_if(leftMap, [](const auto& kv) { return !kv.second.seen; });
+            if (leftMap.empty()) g_leftover.erase(a_actor->GetFormID());
 
             // Forget every stall key this pass did not re-issue: the request stopped
             // recurring (it landed, the gem left, the item was sold), so it is not
@@ -579,6 +840,7 @@ namespace MFO::MEOBridge {
         g_carriedGems.clear();      // per-follower carried-gem cache is session-scoped
         g_extractRequested.clear();
         g_stuck.clear();            // reconcile stall detector: keyed by FormID, session-scoped (main thread, like its writer)
+        g_leftover.clear();         // reconcile LEFTOVER rate-limit: same domain as g_stuck
     }
 
     GemPreview PreviewWithGems(RE::Actor* a_actor, RE::TESBoundObject* a_candidateBase) {
