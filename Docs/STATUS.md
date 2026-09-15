@@ -13,6 +13,66 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `fix/mfo-deck-0914-helmet-offhand-verdict-meo` (off `main` `72485e7`, no
+  version bump) — pushed, CI on its own tip, NOT merged, NOT deployed, awaiting its
+  Fable review.** FIELD (Deck log 2026-09-14 on the armor + dual-wield deploy, Fable):
+  four findings, four fixes in one branch.
+  **(1) HEAD SLOT — ROOT CAUSE CONFIRMED.** Vanilla helmets (Imperial Light Helmet,
+  Elven Helmet, Leather/Iron Helmet, Shrouded Cowl) carry BOD2 31 Hair + 42 Circlet with
+  NO bit 30 Head; only IA/Dwemer-style helmets carry 30. MFO's `ArmorBuySlot` tested
+  kHead only, so every vanilla helmet was never bought, contributed 0 to the head
+  baseline, was never kept and sold as junk; `ArmorIsBetter` had no Hair/Circlet bit so
+  none was ever looted/worn; and the inverse read a worn Cowl as a BARE head and scored a
+  DOWNGRADE (`OWNED armor 'Dwemer Helmet' [Heavy] 20 <- worn 'Shrouded Cowl' [Light]
+  32.5`); the `[armor]` line printed `head (bare)` for a worn Cowl. FIX: one predicate
+  `IsHeadSlotMask` (Head|Hair|Circlet, the bits `MageClothingSlot`/`WornInLogicalSlot(0)`
+  already use) drives `ArmorBuySlot`, the keep lambda, `ArmorIsBetter` (head judged once
+  vs `WornInLogicalSlot(0)`) and the `[armor]` head row. Observable: a vanilla helmet
+  shows in the head baseline, gets bought/kept/looted, and no `OWNED armor` line ever
+  swaps a lower-scored helmet over a worn one.
+  **(2) SECOND ONE-HANDER for dual wielders — CONFIRMED gap.** Keep kept ONE 1H form (the
+  left-hand weapon reads unworn OOC after `ReleaseForcedWeapon`), buy bought one melee,
+  loot fetched one. Now `wantOffHand` (`offHand == 2`, melee class 1H) + `offHandBaseScore`
+  (second-best owned 1H, a stack >= 2 counts twice) run through keep (top-2 kept), buy
+  (`BuyThresholds` APPENDED `wantOffHand`/`offHandBaseScore`; `PlanBuy` buys one more
+  1H; the `[econ] bought plan` names it) and both loot sites (STOCKED, never into the
+  right hand; Actuation pairs it). `usesShield`/`shieldUseless` exclude a dual wielder.
+  `[equip] LOOT-*` prints `offHand=`/`offHandBase=`. Observable: a dual wielder ends a
+  vendor visit still owning two one-handers and draws both next fight.
+  **(3) STYLE-FACT PERKS NEVER MARGINAL — belt-and-braces.** THE ROOT CAUSE of "zero
+  style votes" was a STALE deployed `MFO_Progression.esl` with 0 verdicts (every rank
+  `no-verdict` → marginal → the allocator never spent on an equipment-deciding perk);
+  the ESL is being redeployed separately. The DLL now promotes any rank whose
+  conditions carry a style fact to effective at the catalog build (`stylePromotedRanks`
+  in the `[prog] census` line: nonzero = stale/absent verdicts). Verdict table and
+  generator untouched.
+  **(4) MEO MASKED FAILURE.** `SocketGem`'s bool only means "queued"; MFO dropped it and
+  logged `reconcile socket` before anything happened, and the deck log showed the same
+  request re-issued 192× at ~1.2 s. Now every `SocketGem`/`UnsocketGem`/`MoveGems`
+  return is logged (REFUSED warn on false) and `ReconcileLooseGems` has a per-actor
+  stall detector: the same request 3 passes running with the empty count unchanged logs
+  `[meo] reconcile STUCK ... -- see MEO.log [api] SocketGem` ONCE and backs off until
+  the follower's inventory changes or 60 s (principle 9), then retries loudly. NOT a
+  mask. `MEO_API.h` untouched. The wrong "no-op if no gems" comment at `AcquireEquip`
+  corrected (uid != 0 = tracked, not gemmed).
+  **Fable review of `b3ac577`:** ONE SEV-2 (the stocked second one-hander captured the
+  right-hand primary's MEO gems via `AcquireEquip`'s same-role capture and Actuation's
+  left-hand equip would have fired the move) — FIXED: no gem capture when `a_forceStock`;
+  two SEV-4 (a backed-off socket reserved its gem and starved later worn items; the
+  swap-out `UnsocketGem` had no stall gate) — FIXED (one shared `stallGate`, no reserve
+  on back-off); one SEV-5 (STUCK is declared on the 3rd pass BEFORE issuing = 2 accepted
+  issues, ~2.4 s; comment/warn/MAP text fixed to match the code). Three SEV-5 deferred
+  to `Docs/REVIEW-BACKLOG.md` MFO-B24/B25/B26.
+  **Fable round 2 on `5f814d5`:** SEV-2 — the no-reserve back-off let the tier-2
+  swap-up unsocket a worn gem to make room for the refused one, and our own unsocket
+  lifted the back-off (a self-driven ~5 s unsocket/re-socket loop) — FIXED: a stuck pick
+  is `excluded` for that item and the slot re-picks; the swap-up skips excluded /
+  backed-off gems; backed-off keys survive untouched passes. SEV-3 — `bestOffHand`
+  always aliases `bestWeap`, so a dual wielder's PRIMARY upgrade was stocked (and, with
+  the SEV-2 guard, its gems not carried) — FIXED: `forceStock` only for a TRUE second
+  (`best == bestOffHand && best != bestWeap`). Two SEV-5 deferred: MFO-B27 (per-item
+  progress signal delays detection), MFO-B28 (bought weapons never reach `AcquireEquip`,
+  pre-existing).
 - **Branch `fix/mfo-armor-class-score` (off `main` `69c5b3c`, no version bump) — pushed,
   CI status in the branch's own run, NOT merged, NOT deployed, awaiting its Fable review.**
   FIELD FINDING (Deck log on `69c5b3c`, Fable): "after respec the followers still wont

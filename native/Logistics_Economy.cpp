@@ -451,6 +451,12 @@ namespace MFO::Logistics {
                 using WT = RE::WEAPON_TYPE;
 
                 float baseScore = 0.0f;   // WeaponScore baseline (perk-style biased damage)
+                // SECOND ONE-HANDER (dual wield by perks, 2026-09-14): the second-
+                // best owned in-class score is the bar a second one-hander buy
+                // must beat (a stack of >= 2 counts twice). Mirrors
+                // BuildEquipmentContext::offHandBaseScore exactly.
+                float secondScore = 0.0f;
+                const bool wantOffHand = roles.offHand == 2 && meleeTargetClass == WepClass::OneHand;
                 std::uint16_t myRangedDmg = 0;
                 float slotRat[5]   = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot (0 head..4 shield): raw rating (diagnostic)
                 float slotScore[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };   // per ArmorBuySlot: ArmorScore -- THE buy baseline
@@ -460,8 +466,16 @@ namespace MFO::Logistics {
                     if (auto* w = obj->As<RE::TESObjectWEAP>()) {
                         if (IsCreatureWeapon(w) || Catalog::IsExcluded(obj->GetFormID())) continue;
                         if (meleeTargetClass != WepClass::Other &&
-                            WeaponClassOf(w->GetWeaponType()) == meleeTargetClass)
-                            baseScore = std::max(baseScore, WeaponScore(roles, w));
+                            WeaponClassOf(w->GetWeaponType()) == meleeTargetClass) {
+                            const float sc = WeaponScore(roles, w);
+                            if (sc > baseScore) {
+                                secondScore = std::max(secondScore, baseScore);   // the old best drops to second
+                                baseScore   = sc;
+                                if (data.first >= 2) secondScore = std::max(secondScore, sc);
+                            } else {
+                                secondScore = std::max(secondScore, sc);
+                            }
+                        }
                         if (doRanged && w->GetWeaponType() == (wantCrossbow ? WT::kCrossbow : WT::kBow))
                             myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
                     } else if (auto* ar = obj->As<RE::TESObjectARMO>()) {
@@ -482,15 +496,20 @@ namespace MFO::Logistics {
                 buy.meleeClass    = static_cast<std::int32_t>(meleeTargetClass);
                 buy.meleeBaseScore = baseScore;
                 buy.preferKinds    = static_cast<std::int32_t>(roles.preferKinds);
+                buy.wantOffHand      = wantOffHand;
+                buy.offHandBaseScore = wantOffHand ? secondScore : 0.0f;
                 buy.doRanged      = doRanged;
                 buy.wantCrossbow  = wantCrossbow;
                 buy.rangedBaseDmg = myRangedDmg;
                 buy.buyArmor       = !useMageApparel && !dolls;   // non-caster OR caster-in-armor: rated armor
                 // A shield is in-role ONLY for a dedicated one-hand melee follower (not a
-                // ranged/caster, even one carrying a 1h backup). For everyone else, saturate
-                // the shield slot's baseline so PlanBuy never buys one (matches the sell/keep
-                // side's usesShield and the loot path's shieldUseless).
-                const bool usesShield = (roles.melee == WepClass::OneHand) && !doRanged && !caster;
+                // ranged/caster, even one carrying a 1h backup, and not a DUAL WIELDER --
+                // his perks put a weapon in the left hand, roles.offHand == 2). For
+                // everyone else, saturate the shield slot's baseline so PlanBuy never
+                // buys one (matches the sell/keep side's usesShield and the loot path's
+                // shieldUseless).
+                const bool usesShield = (roles.melee == WepClass::OneHand) && !doRanged && !caster &&
+                                        roles.offHand != 2;
                 if (!usesShield) { slotRat[4] = 1.0e9f; slotScore[4] = 1.0e9f; }
                 for (int s = 0; s < 5; ++s) {
                     buy.armorBaseRat[s]   = static_cast<std::int32_t>(slotRat[s]);
@@ -657,7 +676,15 @@ namespace MFO::Logistics {
             // so the greatsword the loot side just preferred over a stronger
             // warhammer is the one KEPT, not the one sold. Ranged/staff buckets
             // are unchanged; with no preferred kind the score IS the damage.
+            // SECOND ONE-HANDER (dual wield by perks, 2026-09-14): a dual wielder
+            // fights with the TOP-2 owned one-handers (Actuation's PickOffHandWeapon
+            // pairs from the pack, and ReleaseForcedWeapon un-wears the left at
+            // combat end, so the off-hand weapon reads UNWORN here). Bucket 1
+            // therefore keeps its runner-up too -- unless the best form is a
+            // stack of >= 2, which already covers both hands (PickOffHandWeapon
+            // takes the second copy), so the runner-up is junk and sells.
             const WeaponRoles keepRoles = ComputeWeaponRoles(a_follower, a_state);
+            const bool keepSecond1H = keepRoles.offHand == 2 && keepRoles.melee == WepClass::OneHand;
             std::unordered_set<RE::TESBoundObject*> keepWeapons;
             {
                 // bucket: 1=1H 2=2H 3=bow 4=crossbow 5=staff; -1 = don't protect.
@@ -674,6 +701,8 @@ namespace MFO::Logistics {
                     }
                 };
                 std::unordered_map<int, std::pair<RE::TESBoundObject*, float>> best;
+                struct OneHander { RE::TESBoundObject* obj; float rank; std::int32_t count; };
+                std::vector<OneHander> oneHanders;   // bucket 1, for the dual-wield runner-up
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
@@ -693,8 +722,22 @@ namespace MFO::Logistics {
                     auto& slot = best[b];
                     if (!slot.first || rank >= slot.second)
                         slot = { obj, rank };
+                    if (keepSecond1H && b == 1) oneHanders.push_back({ obj, rank, data.first });
                 }
                 for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
+                // Dual wield: keep the runner-up one-hander as well (top-2 by
+                // WeaponScore), unless the best is a stack of >= 2 of one form.
+                if (keepSecond1H && oneHanders.size() >= 2) {
+                    auto bi = best.find(1);
+                    RE::TESBoundObject* top = (bi != best.end()) ? bi->second.first : nullptr;
+                    bool topStacked = false;
+                    const OneHander* runnerUp = nullptr;
+                    for (const auto& oh : oneHanders) {
+                        if (oh.obj == top) { topStacked = oh.count >= 2; continue; }
+                        if (!runnerUp || oh.rank > runnerUp->rank) runnerUp = &oh;
+                    }
+                    if (top && !topStacked && runnerUp) keepWeapons.insert(runnerUp->obj);
+                }
             }
 
             // #21 KEEP-ARMOR: protect what the follower WEARS + its single best
@@ -724,8 +767,10 @@ namespace MFO::Logistics {
                 // kept -- it is dead weight that should sell. (The off-role WEAPON shed
                 // drops wrong-role weapons; a shield is armor and slipped past it.)
                 const WeaponRoles& roles = keepRoles;   // computed once above (keepWeapons)
+                // ... and not for a DUAL WIELDER (roles.offHand == 2): his left hand
+                // holds a weapon, so a shield is dead weight for him too.
                 const bool usesShield   = (roles.melee == WepClass::OneHand) &&
-                                          !roles.doRanged && !caster;
+                                          !roles.doRanged && !caster && roles.offHand != 2;
                 // ARMOR CLASS (2026-09-14): the rated buckets rank by ArmorScore --
                 // the SAME judge EquipBestOwnedGear wears by -- so the piece kept
                 // per slot is the one the follower will actually wear, and the
@@ -750,7 +795,7 @@ namespace MFO::Logistics {
                 // (b) The single best NEXT-UPGRADE per LOGICAL slot.
                 auto armorLogicalSlot = [](std::uint32_t mask) -> int {
                     if (mask & static_cast<std::uint32_t>(Slot::kBody))   return 1;
-                    if (mask & static_cast<std::uint32_t>(Slot::kHead))   return 0;
+                    if (IsHeadSlotMask(mask))                             return 0;   // Head|Hair|Circlet (vanilla helmets have no bit 30)
                     if (mask & static_cast<std::uint32_t>(Slot::kHands))  return 2;
                     if (mask & static_cast<std::uint32_t>(Slot::kFeet))   return 3;
                     if (mask & static_cast<std::uint32_t>(Slot::kShield)) return 4;
@@ -1132,13 +1177,17 @@ namespace MFO::Logistics {
         return -1;
     }
 
+    // The LOGICAL rated-armor slot: 0 head, 1 body, 2 hands, 3 feet, 4 shield,
+    // -1 none. Body wins over the head bits a suit may also carry. HEAD is the
+    // three-bit IsHeadSlotMask (Head/Hair/Circlet) -- a kHead-only test missed
+    // every vanilla helmet (31+42, no 30), see Logistics_internal.h.
     int ArmorBuySlot(RE::TESObjectARMO* a_armo) {
         if (!a_armo) return -1;
         using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
         const auto mask = static_cast<std::uint32_t>(a_armo->GetSlotMask());
         auto has = [&](Slot s) { return (mask & static_cast<std::uint32_t>(s)) != 0; };
         if (has(Slot::kBody))   return 1;
-        if (has(Slot::kHead))   return 0;
+        if (IsHeadSlotMask(mask)) return 0;
         if (has(Slot::kHands))  return 2;
         if (has(Slot::kFeet))   return 3;
         if (has(Slot::kShield)) return 4;

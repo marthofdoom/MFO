@@ -225,9 +225,11 @@ namespace MFO::TradeBridge {
             };
 
             // ── GEAR (Feature A): at most ONE upgrade per category per window. ──
+            std::size_t offHandIdx = SIZE_MAX;   // the second one-hander's plan line, named in buyPlan
             if (b.buyGear) {
                 // MELEE weapon -- best WeaponScore (damage x perk-style bias, the
                 // loot judge's own ranking) above the owned in-class baseline.
+                bool primaryBought = false;
                 { std::size_t best = SIZE_MAX; float bestScore = b.meleeBaseScore; int bestVal = 0;
                   for (auto& c : cands) {
                       if (c.kind != NeedCat::kWeaponMelee || !affordReserve(c.value)) continue;
@@ -237,7 +239,29 @@ namespace MFO::TradeBridge {
                           (best != SIZE_MAX && score == bestScore && c.value < bestVal)) {
                           best = c.idx; bestScore = score; bestVal = c.value; }
                   }
-                  if (best != SIZE_MAX) buyOne(best, bestVal);
+                  if (best != SIZE_MAX) { buyOne(best, bestVal); primaryBought = true; }
+                }
+                // SECOND ONE-HANDER (dual wield by perks, 2026-09-14): a dual
+                // wielder (wantOffHand: offHand == 2, melee class 1H -- so every
+                // kWeaponMelee candidate here IS a one-hander) also buys ONE more
+                // in-class weapon above his SECOND-best owned score. If a primary
+                // was just bought, the old best drops to the off-hand and ITS score
+                // (meleeBaseScore) is the bar instead. A stock line the primary
+                // took the last copy of is skipped; the same form with copies left
+                // is a legitimate pair (PickOffHandWeapon takes the second copy).
+                if (b.wantOffHand) {
+                    const float bar = primaryBought ? b.meleeBaseScore : b.offHandBaseScore;
+                    std::size_t best = SIZE_MAX; float bestScore = bar; int bestVal = 0;
+                    for (auto& c : cands) {
+                        if (c.kind != NeedCat::kWeaponMelee || !affordReserve(c.value)) continue;
+                        if (plan[c.idx] >= c.avail) continue;   // the primary took the only copy
+                        auto* w = c.f->As<RE::TESObjectWEAP>();
+                        const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds) : 0.0f;
+                        if (score > bestScore ||
+                            (best != SIZE_MAX && score == bestScore && c.value < bestVal)) {
+                            best = c.idx; bestScore = score; bestVal = c.value; }
+                    }
+                    if (best != SIZE_MAX) { buyOne(best, bestVal); offHandIdx = best; }
                 }
                 // RANGED weapon -- best damage above the owned baseline.
                 { std::size_t best = SIZE_MAX; int bestDmg = b.rangedBaseDmg, bestVal = 0;
@@ -343,7 +367,8 @@ namespace MFO::TradeBridge {
                     if (++lines > 12) continue;
                     auto* n = a_forms[i] ? a_forms[i]->As<RE::TESFullName>() : nullptr;
                     if (!names.empty()) names += ", ";
-                    names += std::format("'{}' x{}", n && n->GetFullName() && *n->GetFullName() ? n->GetFullName() : "?", plan[i]);
+                    names += std::format("'{}' x{}{}", n && n->GetFullName() && *n->GetFullName() ? n->GetFullName() : "?", plan[i],
+                                         i == offHandIdx ? " (second one-hander, dual wield)" : "");
                 }
                 if (lines > 12) names += std::format(", +{} more", lines - 12);
                 o->buyPlan = std::move(names);
