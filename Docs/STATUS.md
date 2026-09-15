@@ -73,6 +73,29 @@ Read it as history and this block as current.
   (`best == bestOffHand && best != bestWeap`). Two SEV-5 deferred: MFO-B27 (per-item
   progress signal delays detection), MFO-B28 (bought weapons never reach `AcquireEquip`,
   pre-existing).
+- **Branch `fix/mfo-meo-no-loose-gems` (off `main` `e53230f`, no version bump) — pushed,
+  CI green on its own tip, NOT merged, NOT deployed, awaiting its Fable review.**
+  THE INVARIANT (marth 2026-09-14): "there should never be unequipped gems when there
+  are free spaces on equipped items." Audit of `ReconcileLooseGems` (`native/MEOBridge.cpp`)
+  against MEO's own socket rules, four fixes: **(a) the worn set** is now exactly what
+  MEO's menu sockets (`IsSocketableArmorBase`/`IsSocketableWeaponBase`, MEO `plugin.cpp:2270-2326`:
+  kHead/kHair/kBody/kHands/kAmulet/kRing/kCirclet/kFeet/kShield + the two hands, minus
+  base-enchanted / unplayable / `MagicDisallowEnchanting` / unarmed / bound / tool
+  weapons; kForearms/kCalves dropped) and skips a worn instance carrying a FOREIGN
+  enchant — MEO's `SocketCapacity` returns 1 for ANY armor or weapon, so an ineligible
+  piece reported an empty socket and either went STUCK or was stamped where MEO's menu
+  cannot see it. **(b) the domain rule** honours MEO: a support gem fits only a
+  DUAL-socket item holding no other support gem (a Focus picked for a single-socket ring
+  was accepted, failed in MEO.log and went STUCK 60 s at a time); a socketed Conduit
+  admits off-domain gems. **(e) capacity:** a `SocketGem` that returns false no longer
+  consumes the gem from the pass-local stock. **(f) the LEFTOVER line:** at the end of a
+  pass every loose gem still in stock while a worn item still has an empty socket logs
+  ONE `[meo] reconcile LEFTOVER <actor> <gem> x<n> -- <why>` (off-domain / stuck /
+  capacity / refused / duplicate-copy / minting / unclassified), rate-limited like STUCK;
+  nothing is logged when no socket is open. (c) tier-1 conservation and (d) the per-item
+  stuck exclusion were verified correct on `64512aa` (trace in the branch report); tier-2
+  gem ORDERING, the gem CAPTURE rule, the stall detector's contract, threading and
+  `MEO_API.h` unchanged. MAP.md §7 MEOBridge carries the worn set with MEO's evidence.
 - **Branch `fix/mfo-armor-class-score` (off `main` `69c5b3c`, no version bump) — pushed,
   CI status in the branch's own run, NOT merged, NOT deployed, awaiting its Fable review.**
   FIELD FINDING (Deck log on `69c5b3c`, Fable): "after respec the followers still wont
