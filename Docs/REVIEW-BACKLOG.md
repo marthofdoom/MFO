@@ -255,6 +255,20 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **B31 (B26 addendum):** our OWN legitimate swap-up on the item is a fingerprint change that lifts G's back-off in the SLOT path (`:364-369`, `:512-537`): a three-pass detour (2 wasted G issues + a repeat STUCK warn) per legitimate swap-up on that item; no loop.
 - **B32 (B28 broadened):** route-2b LOOSE-looted weapons never reach `AcquireEquip` either (`AcquireEquip` callers: `Logistics_Loot_Equipment.cpp:473`, `Logistics_Economy.cpp:417` armor-only; `Logistics_Loot.cpp:1835` only sets `lootable`), so a loose primary one-hander is worn by Actuation's plain `EquipObject` with no gem carry. B28's fix shape becomes "bought OR loose-looted OR owned weapon".
 
+### MFO-B33 — LEFTOVER `off-domain` / `duplicate-copy` WARN every 60 s in by-design steady states
+- **Raised:** Fable tier-3 review of `1efa3e3` (`fix/mfo-meo-no-loose-gems`), SEV-5 #3, record only.
+- **Finding (verbatim):** kOffDomain and kDuplicateCopy WARN every 60 s in by-design steady states (one loose armor gem, all armor full, a weapon socket open); suggest INFO; marth's call.
+- **Reviewer's reasoning:** the invariant is "no loose gem while a socket it FITS is open"; an off-domain gem with only an off-domain socket open is not a broken invariant, and a junk copy that never sells (economy off) is a steady state, so both warn on a condition the user cannot act on from MFO's side.
+- **Why it was NOT fixed:** coordinator call 2026-09-15: log LEVEL is marth's call; only `minting` is INFO today (`LeftoverWhy` → the `spdlog::info`/`warn` split at the LEFTOVER issue site, `native/MEOBridge.cpp`).
+- **Fix shape when drained (verbatim):** suggest INFO for kOffDomain and kDuplicateCopy; keep stuck / capacity / support-limit / refused / unclassified at WARN.
+
+### MFO-B34 — should the tier-2 swap-up ever evict a Conduit that an already-socketed off-domain gem depends on?
+- **Raised:** Fable tier-3 review of `1efa3e3` (`fix/mfo-meo-no-loose-gems`), policy question attached to the SEV-2 (fixed on the branch: the candidate is judged against the item WITHOUT the evictee, `sansEvictee`).
+- **Finding (verbatim):** Policy question for marth, record in backlog: should MFO ever evict a Conduit that an already-socketed off-domain gem depends on?
+- **Reviewer's reasoning:** the SEV-2 fix stops the self-driven loop (an off-domain candidate can no longer be admitted through the Conduit it would evict), but a SAME-domain candidate that strictly out-scores the Conduit's class bonus (1) still evicts it, and MEO then holds an off-domain gem on the item with no Conduit to remap it — what MEO does with that gem is MEO's rule, not MFO's.
+- **Why it was NOT fixed:** gem CHOICE (tier-2 ordering and preference) is marth's planned redesign; the brief forbade changing it.
+- **Fix shape when drained (verbatim):** when `det` holds a Conduit AND an off-domain gem, exclude the Conduit from the weakest-gem search (it is load-bearing); or rank a Conduit by the gem it carries.
+
 ## DRAINED
 
 ### MFO-B4 — `IncumbentTargetLost` and `PickAlly` disagree on "resolves"
