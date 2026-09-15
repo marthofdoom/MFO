@@ -243,6 +243,18 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 
 ---
 
+### MFO-B29 — on a FULLY-socketed item the back-off's expiry re-entry point is the swap-up, so the eviction bounce recurs every ~63 s while MEO keeps refusing, and the wiped key means the warn never escalates
+- **Raised:** Fable round-3 review of `64512aa` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-4, CONFIRMED by trace.
+- **Finding (verbatim):** `native/MEOBridge.cpp:518-521` (swap-up skip reads only `backoffUntil`), `:546-550` (erase_if drops an expired, untouched key). On the reported case (M fully socketed, W in slot s, G better and refused) the slot loop never touches `keyG`, so at expiry: `socketBackedOff` → false → swap-up evicts W → end of pass `keyG` is ERASED (untouched, not backed off). Next passes: (s,G) is a NEW key → issue, issue, STUCK + warn + back-off → excluded → W re-socketed. Per cycle (~60 s + 3-4 passes): 1 unsocket, 2 socket-G, 1 socket-W, one full STUCK warn that always reads "accepted 2 time(s)". Not the round-2 SEV-2 (that was self-lifted every ~5 s; this honours the full 60 s and is loud), and it IS the retry contract MAP.md documents — but the retry on a full item is an eviction of a worn gem, ~5 % duty loss of W and 4 MEO ops/min, forever.
+- **Reviewer's reasoning:** carve-out (b) question: if marth's pass criterion is "M stops bouncing" fix before deploy; if "bounce ≤ once per back-off window, warned" is acceptable, defer.
+- **Why it was NOT fixed:** coordinator call 2026-09-14: loud, bounded to once per 60 s window, does not corrupt the next test (the STUCK line still names the request); deploy proceeds; marth informed.
+- **Fix shape when drained (verbatim):** (i) at expiry retry ONLY via the slot path — the swap-up keeps skipping a gem whose key EXISTS for this item (expired or not); the key is then erased only by the fingerprint-change lift; or (ii) keep `reported`/pass history across expiry and grow the back-off (exponential) so the warn escalates instead of repeating.
+
+### MFO-B30/B31/B32 — SEV-5 notes from the same review (`64512aa`)
+- **B30:** stuck key is per-SLOT, exclusion per-ITEM, and a uid-0 key does not cover the minted uid (`:473`, `:436`, `:398-404`): each newly-opened slot (and the first post-mint pass) re-runs the 2-issue + warn detour for G; bounded by capacity (≤ 8 per item), never spurious. Note against B27.
+- **B31 (B26 addendum):** our OWN legitimate swap-up on the item is a fingerprint change that lifts G's back-off in the SLOT path (`:364-369`, `:512-537`): a three-pass detour (2 wasted G issues + a repeat STUCK warn) per legitimate swap-up on that item; no loop.
+- **B32 (B28 broadened):** route-2b LOOSE-looted weapons never reach `AcquireEquip` either (`AcquireEquip` callers: `Logistics_Loot_Equipment.cpp:473`, `Logistics_Economy.cpp:417` armor-only; `Logistics_Loot.cpp:1835` only sets `lootable`), so a loose primary one-hander is worn by Actuation's plain `EquipObject` with no gem carry. B28's fix shape becomes "bought OR loose-looted OR owned weapon".
+
 ## DRAINED
 
 ### MFO-B4 — `IncumbentTargetLost` and `PickAlly` disagree on "resolves"
