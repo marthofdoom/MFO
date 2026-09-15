@@ -196,6 +196,33 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** passing the right-hand slot would make it unambiguous — add `Loadout::RightHandSlot()` (the `kRightHandEquip` twin of `LeftHandSlot`, verify the default-object id in the pinned tree) and pass it on the `inRight` unequip.
 - **Surfaced at edit time from:** MAP.md §1 FWPN entry + §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
 
+### MFO-B24 — keep gates the second one-hander on `keepRoles.melee`, loot/buy on `meleeTargetClass`; a base caster keeps two daggers but never fetches a second
+- **Raised:** Fable review of `b3ac577` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5 (a).
+- **Severity:** SEV-5
+- **Finding (verbatim):** SEV-5 keep gates the second 1H on `keepRoles.melee == OneHand` (Logistics_Economy.cpp:687) while loot/buy gate on `meleeTargetClass == OneHand` (Loot_Equipment.cpp:147, Economy.cpp:459), which is `Other` for a base caster → a caster with a dagger and dual-wield votes keeps two daggers but never fetches a second; harmless; MAP's "ONE rule" overstated for casters.
+- **Reviewer's reasoning:** harmless — the only divergence is that a caster keeps a spare dagger instead of selling it; loot/buy never fetch one, so nothing accumulates.
+- **Why it was NOT fixed:** raised in a round whose blocking finding (the SEV-2 gem capture) was fixed; a keep-gate change re-opens the keep/sell contract for casters and wants its own field observation. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** derive the keep gate from the SAME `meleeTargetClass` computation the buy side uses (`caster && !baseWeaponUser && (baseCaster || !wantsMelee) ? Other : roles.melee`) instead of `keepRoles.melee`, so keep, buy and loot share one predicate; and soften MAP's "ONE rule" to "one rule for weapon-role followers".
+- **Surfaced at edit time from:** MAP.md §4 Logistics "CLOSED 2026-09-14 — THE SECOND ONE-HANDER" What-breaks.
+
+### MFO-B25 — style-facts promotion also promotes a player-gated ability conditioned on a weapon/armor keyword (design remark for marth)
+- **Raised:** Fable review of `b3ac577` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5 (b).
+- **Severity:** SEV-5
+- **Finding (verbatim):** SEV-5 design remark on FIX 3: WalkPerkEntries reads ability effect conditions regardless of firesForNpc, so a player-gated ability conditioned on a weapon/armor keyword is promoted and the allocator may spend a follower point on a rank whose only follower effect is its style vote; consistent with the brief's intent, recorded for marth.
+- **Reviewer's reasoning:** the promotion is by design (a style fact is engine truth off the record); the only cost is a follower perk point on a rank whose sole follower-side effect is the vote it casts.
+- **Why it was NOT fixed:** consistent with the brief's intent; marth's call whether a player-gated ability's style vote is worth a point. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** if marth says no, require `f.firesForNpc` (or `kind != kAbility`) on at least one style-carrying entry before promoting — i.e. promote on `rank.style.Any()` only when the fact came off an entry-point tab or an NPC-firing ability.
+- **Surfaced at edit time from:** MAP.md §5 Progression "STYLE-FACT RANKS ARE NEVER MARGINAL" What-breaks.
+
+### MFO-B26 — the reconcile back-off lifts on ANY inventory change, so under churn "one warn per 60 s" becomes "one warn per change + 3 passes"
+- **Raised:** Fable review of `b3ac577` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5 (c).
+- **Severity:** SEV-5
+- **Finding (verbatim):** SEV-5 back-off lift: the fingerprint includes loose stack count and every worn (base,uid); any legitimate socket elsewhere or worn swap lifts the back-off, restarts the 3-pass count and re-warns — under heavy churn "one warn per 60 s" becomes "one warn per inventory change + 3 passes"; bounded and loud by design.
+- **Reviewer's reasoning:** bounded (every re-warn costs three passes of a changed inventory) and loud by design; the failure it reports is real each time.
+- **Why it was NOT fixed:** the lift-on-change is what keeps the back-off from masking a request that WOULD now succeed; narrowing the fingerprint trades that for quieter logs and wants a deck measurement first. Deferred, not dropped.
+- **Fix shape when drained (verbatim):** narrow the fingerprint to the stalled key's own inputs (that item's worn (base,uid) + that gem base's loose count) so an unrelated socket/swap does not lift it; or keep the lift but suppress the re-warn within the original 60 s window.
+- **Surfaced at edit time from:** MAP.md §7 MEOBridge "RETURN LOGGING + STALL DETECTOR" What-breaks.
+
 ---
 
 ## DRAINED

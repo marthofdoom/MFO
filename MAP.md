@@ -1342,7 +1342,11 @@ declared there and defined in their home module). Layout:
   **What breaks:** the three `offHandBaseScore` computations (`BuildEquipmentContext`,
   `BuildBuyThresholds`) and the keep runner-up must stay the SAME top-2 rule or
   loot fetches what keep sells; `PlanBuy`'s `plan[c.idx] >= c.avail` skip is what
-  stops the off-hand buy from over-buying a single stock line. **What breaks:** changing
+  stops the off-hand buy from over-buying a single stock line; the LOOT take must stay
+  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **OPEN
+  BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B24** (SEV-5) — keep gates on
+  `keepRoles.melee`, loot/buy on `meleeTargetClass` (a base caster keeps two daggers,
+  fetches none); "ONE rule" holds for weapon-role followers. **What breaks:** changing
   `kStyleBias` re-orders every loot/keep/buy compare at once (they share ONE
   score by design — never bias one site alone or loot and keep disagree and a
   looted greatsword sells); `preferKinds` must stay `Progression::WeaponKind`
@@ -1954,7 +1958,10 @@ an equipment-deciding perk → zero style votes), redeployed separately; this ma
 perk-style decision survive a missing or overhaul-odd verdict. The 92-row verdict
 table, `ReadEntryPointVerdicts`, `ClassifyRank` and the generator are untouched;
 every rank WITHOUT a style fact still follows the declared verdict. Consumers
-(allocator, board, census) unchanged — they read `verdict`. **What breaks:**
+(allocator, board, census) unchanged — they read `verdict`. **OPEN BACKLOG:
+`Docs/REVIEW-BACKLOG.md` MFO-B25** (SEV-5, marth's call) — a player-gated ability
+conditioned on a weapon/armor keyword is promoted too, so a follower point can buy a
+rank whose only follower effect is its style vote. **What breaks:**
 renaming/renumbering `WeaponKind`/`ArmorKind` bits breaks `Logistics::WeaponKindOf` +
 `TradeBridge::BuyThresholds::preferKinds` (same bit space); calling `TallyStyleVotes`
 off the main thread races the allocator's perk writes (the Logistics mirror exists for
@@ -2446,14 +2453,19 @@ its OWN log. **RETURN LOGGING + STALL DETECTOR (2026-09-14,
 warn on false — the `EquipSink` move, `UnsocketItemGems`, both reconcile sites).
 `ReconcileLooseGems` keeps a MAIN-THREAD-ONLY per-actor map `g_stuck` (anon, no
 lock — same domain as the pass; VR runs the pass inline off the worker, which nothing
-else shares) keyed `StuckKey{base, uid, slot, gemBase}` → `StuckState{emptyAtIssue,
-passes, reported, backoffUntil, inventoryKey}`: a request re-issued `kStuckPasses`
-(3) passes running with `GetEmptySocketCount` unchanged logs `[meo] reconcile STUCK
-<actor> <item>/<uid> slot <n> gem <base> -- see MEO.log [api] SocketGem` ONCE and
-backs that key off (the gem is still held for that slot in the pass's local `avail`)
-until the follower's loose-gem/worn fingerprint changes or `kStuckBackoff` (60 s —
-principle 9: sized from the ~1.2 s cadence, ~50 passes, never silently forever); then
-it retries from a clean count and reports again if it stalls again. Keys not re-issued
+else shares) keyed `StuckKey{op, base, uid, slot, gemBase}` (op 0 = `SocketGem`, op 1 = the tier-2
+swap-out `UnsocketGem`, gemBase 0 there — `GemDetail` carries none) →
+`StuckState{emptyAtIssue, passes, reported, backoffUntil, inventoryKey}`, applied by ONE
+lambda `stallGate` at BOTH issue sites: a request seen `kStuckPasses` (3) consecutive
+passes with `GetEmptySocketCount` unMOVED (a socket drops it, an unsocket raises it) —
+i.e. 2 accepted issues, ~2.4 s, STUCK declared on the 3rd pass BEFORE issuing — logs
+`[meo] reconcile STUCK <actor> <item>/<uid> slot <n> gem <base> -- <api> accepted 2
+time(s) ... -- see MEO.log [api] <api>` ONCE and backs that key off; a backed-off
+socket does NOT reserve its gem in the pass's local `avail` (a later worn item may
+take it — Fable SEV-4 on `b3ac577`); until the follower's loose-gem/worn fingerprint
+changes or `kStuckBackoff` (60 s — principle 9: sized from the ~1.2 s cadence, ~50
+passes, never silently forever); then it retries from a clean count and reports again
+if it stalls again. Keys not re-issued
 in a pass are forgotten at its end; the `nLoose == 0` early return drops the actor's
 keys; `ClearTransientState` clears the map (revert/load, `Serialization.cpp`). NOT a
 mask: the failure is loud and retried. Domain is matched here so MEO never rejects
@@ -2464,7 +2476,17 @@ beats. Whole feature no-ops below MEO v3. **What breaks:** `g_stuck` is written
 without `g_mx` on purpose (a lock held across `g_meo->` calls is the #4 re-entrant
 deadlock class) — never touch it from the worker while the pump is live; lowering
 `kStuckPasses` below 2 turns every first issue into a STUCK line; a `MEO_API.h`
-change is off the table (byte-shared, append-only).
+change is off the table (byte-shared, append-only). **OPEN BACKLOG:
+`Docs/REVIEW-BACKLOG.md` MFO-B26** (SEV-5) — the back-off lifts on ANY inventory
+change, so under churn the one warn per 60 s becomes one per change + 3 passes.
+**GEM CAPTURE RULE (Fable SEV-2 on `b3ac577`, fixed):** `AcquireEquip`
+(`Logistics_Loot.cpp`) captures the worn same-role item's gems ONLY when the new item
+REPLACES it — `a_forceStock` (mage backup, the dual wielder's second one-hander) skips
+the capture and queues NO move; before the fix a stocked second 1H captured the
+primary's uid and Actuation's left-hand equip at the next combat fired
+`MoveGems(primary → second)`, migrating the gems to a weapon that is un-worn at combat
+end (overflow to the PLAYER's pouch). A future stock path must keep `a_forceStock`
+true or re-open this.
 
 ### APMFBridge.cpp / APMFBridge.h — optional APMF client (MODERATOR model, Phase 3)
 Makes MFO a client of the SEPARATE APMF.dll (AI Package Management Framework) via the

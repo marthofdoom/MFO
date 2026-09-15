@@ -800,7 +800,13 @@ namespace MFO::Logistics {
         //   a_myWeap          -> currently-equipped weapon (the equip-IN-PLACE rule +
         //                        gem role match); weapons only go into a hand that
         //                        already holds the same role, else STOCK.
-        //   a_forceStock      -> keep it in the pack, never into a hand (mage backup).
+        //   a_forceStock      -> keep it in the pack, never into a hand (mage backup,
+        //                        the dual wielder's second one-hander). A STOCKED
+        //                        item REPLACES NOTHING, so it captures NO gems
+        //                        (Fable SEV-2 on b3ac577: the same-role capture
+        //                        below would have queued the primary's gems onto
+        //                        the second one-hander, and Actuation's left-hand
+        //                        equip at the next combat fired that move).
         // Returns true if it was actually equipped (vs stocked). Worker domain only.
         bool AcquireEquip(RE::Actor* a_follower, RE::TESBoundObject* a_item,
                           RE::TESObjectREFR* a_src, RE::TESObjectWEAP* a_myWeap,
@@ -810,9 +816,12 @@ namespace MFO::Logistics {
             // MEO gem transfer (#17): capture the OLD worn item this upgrade REPLACES
             // (base + instance uid) BEFORE the swap. CROSS-ROLE IS THE BUG (marth): a
             // new bow must never pull gems off the melee weapon. Same-role/slot only.
+            // RULE: gems are captured ONLY when the new item REPLACES the worn one --
+            // a stocked item (a_forceStock) replaces nothing, so nothing is captured
+            // and no move is queued.
             RE::FormID    fromBase = 0;
             std::uint16_t fromUid  = 0;
-            if (MEOBridge::Available()) {
+            if (MEOBridge::Available() && !a_forceStock) {
                 RE::TESBoundObject* oldItem = nullptr;
                 if (auto* newWeap = a_item->As<RE::TESObjectWEAP>()) {
                     const auto     newWt   = newWeap->GetWeaponType();
@@ -876,7 +885,8 @@ namespace MFO::Logistics {
             }
 
             // Move the old piece's gems onto the new one when it becomes worn.
-            // No-op if the old item has no MEO instance uid (fromUid == 0) or MEO is
+            // No-op for a stocked item (nothing captured above), if the old item has
+            // no MEO instance uid (fromUid == 0) or MEO is
             // absent. NOTE: a nonzero uid means "MEO has tracked this instance", NOT
             // "it has gems" -- an ungemmed-but-tracked piece still queues a move,
             // and MEO's MoveGems then moves nothing (the EquipSink logs its bool).

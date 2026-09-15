@@ -203,35 +203,41 @@ namespace MFO::MEOBridge {
         // re-issued 192 times at the ~1.2 s reconcile cadence: MFO's "no dedup
         // state -- GetEmptySocketCount reflects landed sockets" assumption
         // held for a request MEO accepts and then FAILS. Per-actor, per
-        // (item base, item uid, slot, gem base) request: count consecutive
-        // passes that re-issue it while GetEmptySocketCount did not drop. On
-        // the kStuckPasses-th such pass, log STUCK once (loud, names the item so
-        // MEO.log's [api] SocketGem line can be matched) and BACK OFF that
+        // request (op, item base, item uid, slot, gem base -- op 0 = SocketGem,
+        // op 1 = the tier-2 swap-out UnsocketGem, whose gem base MEO's GemDetail
+        // does not carry, so 0): count consecutive passes that re-issue it while
+        // GetEmptySocketCount did not MOVE (a socket drops it, an unsocket raises
+        // it). On the kStuckPasses-th such pass -- i.e. after kStuckPasses-1
+        // accepted issues -- log STUCK once (loud, names the item so MEO.log's
+        // [api] SocketGem/UnsocketGem line can be matched) and BACK OFF that
         // key -- until the follower's inventory changes (the loose-gem set or
         // the worn set differs from the pass that stalled) or a 60 s floor
         // (principle 9: sized from the ~1.2 s cadence, ~50 passes, never
         // silently forever). NOT a mask: the request is retried after the
-        // backoff and the failure stays in the log.
+        // backoff and the failure stays in the log. A backed-off socket does
+        // NOT reserve its gem (Fable SEV-4 on b3ac577): a later worn item in
+        // the same pass may take it.
         struct StuckKey {
-            RE::FormID base; std::uint16_t uid; std::uint8_t slot; RE::FormID gemBase;
+            std::uint8_t op; RE::FormID base; std::uint16_t uid; std::uint8_t slot; RE::FormID gemBase;
             bool operator==(const StuckKey&) const = default;
         };
         struct StuckKeyHash {
             std::size_t operator()(const StuckKey& k) const noexcept {
                 std::uint64_t h = (static_cast<std::uint64_t>(k.base) << 32) ^ k.gemBase;
-                h ^= (static_cast<std::uint64_t>(k.uid) << 8) ^ k.slot;
+                h ^= (static_cast<std::uint64_t>(k.uid) << 8) ^ k.slot ^ (static_cast<std::uint64_t>(k.op) << 24);
                 return std::hash<std::uint64_t>{}(h);
             }
         };
         struct StuckState {
             int   emptyAtIssue = -1;   // GetEmptySocketCount when the request was last issued
-            int   passes       = 0;    // consecutive passes that re-issued it without the count dropping
+            int   passes       = 0;    // consecutive passes that saw it with the count unchanged (issues + the STUCK pass)
             bool  reported     = false;
             std::chrono::steady_clock::time_point backoffUntil{};   // zero = not backed off
             std::uint64_t inventoryKey = 0;   // the follower's loose+worn fingerprint when the stall was declared
         };
         constexpr auto kStuckBackoff = std::chrono::seconds(60);
-        constexpr int  kStuckPasses  = 3;   // issue + 2 re-issues (~3.6 s at the ~1.2 s cadence) with no drop = stuck
+        constexpr int  kStuckPasses  = 3;   // STUCK is declared on the 3rd consecutive pass, BEFORE issuing: 2 accepted
+                                            // issues (~2.4 s at the ~1.2 s cadence) with the empty count unchanged
         // MAIN THREAD ONLY (ReconcileLooseGems runs there; VR runs it inline from the
         // worker, where nothing else touches this map) -- no lock, like the pass itself.
         std::unordered_map<RE::FormID, std::unordered_map<StuckKey, StuckState, StuckKeyHash>> g_stuck;
@@ -348,6 +354,42 @@ namespace MFO::MEOBridge {
             // Every key not re-issued this pass is forgotten at the end (a request
             // that stopped recurring is not stuck) -- collect the ones we touched.
             std::vector<StuckKey> touched;
+            // THE GATE, shared by SocketGem and the swap-out UnsocketGem. true = issue
+            // the request now (st.passes then says which issue this is); false = the
+            // key is stuck and backed off, skip it this pass.
+            auto stallGate = [&](const StuckKey& a_key, int a_emptyNow, const char* a_api,
+                                 const char* a_gemName) -> bool {
+                auto& st = stuckMap[a_key];
+                touched.push_back(a_key);
+                if (st.backoffUntil != std::chrono::steady_clock::time_point{}) {
+                    const bool inventoryChanged = st.inventoryKey != inventoryKey;
+                    if (now < st.backoffUntil && !inventoryChanged) return false;
+                    // Backoff over (60 s floor) or the inventory changed: retry from a
+                    // clean count, and report again if it stalls again.
+                    st = StuckState{};
+                }
+                if (st.passes > 0 && st.emptyAtIssue == a_emptyNow) {
+                    ++st.passes;
+                    if (!st.reported && st.passes >= kStuckPasses) {
+                        st.reported = true;
+                        spdlog::warn("[meo] reconcile STUCK {:08X} '{}' {:08X}/{} slot {} gem {:08X} '{}' -- "
+                                     "{} accepted {} time(s) and the empty count never moved ({}); "
+                                     "backing off {} s (or until his inventory changes) -- see MEO.log [api] {}",
+                                     a_actor->GetFormID(), a_actor->GetName() ? a_actor->GetName() : "?",
+                                     a_key.base, a_key.uid, a_key.slot, a_key.gemBase, a_gemName,
+                                     a_api, st.passes - 1, a_emptyNow,
+                                     std::chrono::duration_cast<std::chrono::seconds>(kStuckBackoff).count(), a_api);
+                        st.backoffUntil = now + kStuckBackoff;
+                        st.inventoryKey = inventoryKey;
+                        return false;
+                    }
+                } else {
+                    st.passes       = 1;   // first issue, or the count moved (progress): restart
+                    st.emptyAtIssue = a_emptyNow;
+                }
+                return true;
+            };
+            auto passOf = [&](const StuckKey& a_key) { auto it = stuckMap.find(a_key); return it == stuckMap.end() ? 0 : it->second.passes; };
 
             for (auto& item : items) {
                 const int emptyCount = g_meo->GetEmptySocketCount(a_actor, item.base, item.uid);
@@ -401,41 +443,12 @@ namespace MFO::MEOBridge {
                     if (pick < 0) break;   // no gem fits this item's domain -> next item
 
                     // STALL DETECTOR: same request as last pass with the empty count
-                    // unchanged = MEO accepted it and it did not land.
-                    const StuckKey key{ item.base, item.uid, static_cast<std::uint8_t>(slot), loose[pick].gemBase };
-                    auto& st = stuckMap[key];
-                    touched.push_back(key);
-                    if (st.backoffUntil != std::chrono::steady_clock::time_point{}) {
-                        const bool inventoryChanged = st.inventoryKey != inventoryKey;
-                        if (now < st.backoffUntil && !inventoryChanged) {
-                            --avail[pick];   // hold the gem for this slot; do not re-issue
-                            if (mintGuard) break;
-                            continue;
-                        }
-                        // Backoff over (60 s floor) or the inventory changed: retry
-                        // from a clean count, and report again if it stalls again.
-                        st = StuckState{};
-                    }
-                    if (st.passes > 0 && st.emptyAtIssue == emptyCount) {
-                        ++st.passes;
-                        if (!st.reported && st.passes >= kStuckPasses) {
-                            st.reported = true;
-                            spdlog::warn("[meo] reconcile STUCK {:08X} '{}' {:08X}/{} slot {} gem {:08X} '{}' -- "
-                                         "SocketGem accepted {} passes running and the empty count never dropped ({}); "
-                                         "backing off {} s (or until his inventory changes) -- see MEO.log [api] SocketGem",
-                                         a_actor->GetFormID(), a_actor->GetName() ? a_actor->GetName() : "?",
-                                         item.base, item.uid, slot, loose[pick].gemBase, loose[pick].name,
-                                         st.passes, emptyCount,
-                                         std::chrono::duration_cast<std::chrono::seconds>(kStuckBackoff).count());
-                            st.backoffUntil = now + kStuckBackoff;
-                            st.inventoryKey = inventoryKey;
-                            --avail[pick];
-                            if (mintGuard) break;
-                            continue;
-                        }
-                    } else {
-                        st.passes       = 1;   // first issue, or the count moved (progress): restart
-                        st.emptyAtIssue = emptyCount;
+                    // unchanged = MEO accepted it and it did not land. A backed-off
+                    // slot does NOT reserve the gem -- the next slot/item may take it.
+                    const StuckKey key{ 0, item.base, item.uid, static_cast<std::uint8_t>(slot), loose[pick].gemBase };
+                    if (!stallGate(key, emptyCount, "SocketGem", loose[pick].name)) {
+                        if (mintGuard) break;
+                        continue;
                     }
 
                     const bool queued = g_meo->SocketGem(a_actor, item.base, item.uid, static_cast<std::uint8_t>(slot),
@@ -444,7 +457,7 @@ namespace MFO::MEOBridge {
                     if (queued)
                         spdlog::info("[meo] reconcile socket '{}' -> {:08X}/{} slot {} on {:08X} (queued{})",
                                      loose[pick].name, item.base, item.uid, slot, a_actor->GetFormID(),
-                                     st.passes > 1 ? std::format(", pass {}", st.passes) : std::string{});
+                                     passOf(key) > 1 ? std::format(", pass {}", passOf(key)) : std::string{});
                     else
                         spdlog::warn("[meo] reconcile socket '{}' -> {:08X}/{} slot {} on {:08X} REFUSED by MEO (SocketGem returned false) -- see MEO.log",
                                      loose[pick].name, item.base, item.uid, slot, a_actor->GetFormID());
@@ -479,9 +492,16 @@ namespace MFO::MEOBridge {
                         }
                     }
                     if (loot >= 0 && (lootB > weakB || (lootB == weakB && lootM > weakM))) {
+                        // Same stall gate as the socket (op 1; GemDetail carries no gem
+                        // base, so 0): an accepted-then-failed unsocket would otherwise
+                        // re-issue every pass with a "(queued)" line -- the 192x class.
+                        // Progress = the empty count RISING once the unsocket lands.
+                        const StuckKey ukey{ 1, item.base, item.uid, det[weakIdx].slot, 0 };
+                        if (!stallGate(ukey, emptyCount, "UnsocketGem", det[weakIdx].name)) continue;
                         if (g_meo->UnsocketGem(a_actor, item.base, item.uid, det[weakIdx].slot))
-                            spdlog::info("[meo] reconcile swap-out '{}' (slot {}) on {:08X} -- '{}' will re-fill (queued)",
-                                         det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID(), loose[loot].name);
+                            spdlog::info("[meo] reconcile swap-out '{}' (slot {}) on {:08X} -- '{}' will re-fill (queued{})",
+                                         det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID(), loose[loot].name,
+                                         passOf(ukey) > 1 ? std::format(", pass {}", passOf(ukey)) : std::string{});
                         else
                             spdlog::warn("[meo] reconcile swap-out '{}' (slot {}) on {:08X} REFUSED by MEO (UnsocketGem returned false) -- see MEO.log",
                                          det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID());

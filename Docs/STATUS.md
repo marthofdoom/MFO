@@ -55,6 +55,14 @@ Read it as history and this block as current.
   the follower's inventory changes or 60 s (principle 9), then retries loudly. NOT a
   mask. `MEO_API.h` untouched. The wrong "no-op if no gems" comment at `AcquireEquip`
   corrected (uid != 0 = tracked, not gemmed).
+  **Fable review of `b3ac577`:** ONE SEV-2 (the stocked second one-hander captured the
+  right-hand primary's MEO gems via `AcquireEquip`'s same-role capture and Actuation's
+  left-hand equip would have fired the move) — FIXED: no gem capture when `a_forceStock`;
+  two SEV-4 (a backed-off socket reserved its gem and starved later worn items; the
+  swap-out `UnsocketGem` had no stall gate) — FIXED (one shared `stallGate`, no reserve
+  on back-off); one SEV-5 (STUCK is declared on the 3rd pass BEFORE issuing = 2 accepted
+  issues, ~2.4 s; comment/warn/MAP text fixed to match the code). Three SEV-5 deferred
+  to `Docs/REVIEW-BACKLOG.md` MFO-B24/B25/B26.
 - **Branch `fix/mfo-armor-class-score` (off `main` `69c5b3c`, no version bump) — pushed,
   CI status in the branch's own run, NOT merged, NOT deployed, awaiting its Fable review.**
   FIELD FINDING (Deck log on `69c5b3c`, Fable): "after respec the followers still wont
