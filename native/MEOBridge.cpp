@@ -395,7 +395,7 @@ namespace MFO::MEOBridge {
             case LeftoverWhy::kCapacity:      return "capacity (compatible sockets existed but other gems filled them this pass)";
             case LeftoverWhy::kRefused:       return "refused (MEO refused the socket request outright this pass -- see MEO.log)";
             case LeftoverWhy::kDuplicateCopy: return "duplicate-copy (its only compatible empty sockets are on an un-minted item with a second copy carried; deferred until the copy leaves)";
-            case LeftoverWhy::kMinting:       return "minting (its only compatible empty sockets are on an un-minted item that took its first gem this pass; the rest fill next pass)";
+            case LeftoverWhy::kMinting:       return "minting (its only compatible empty sockets are on an un-minted item that took its first gem this pass, or whose twin worn instance took the base's one uid-0 request; the rest fill next pass)";
             case LeftoverWhy::kSupportLimit:  return "support-limit (a dual-socket item is open but already holds its one support gem)";
             default:                          return "unclassified";
             }
@@ -533,7 +533,7 @@ namespace MFO::MEOBridge {
             };
             std::vector<ItemPass> recs(items.size());
             std::unordered_set<RE::FormID> mintedBases;    // bases that took a uid-0 SocketGem this pass (one per base per pass)
-            std::unordered_set<std::uint32_t> swapPending; // loose entries a swap-out was issued FOR this pass (they re-fill next pass)
+            std::unordered_map<std::uint32_t, std::uint32_t> swapPending; // loose entry -> swap-outs issued FOR it this pass (each exempts ONE copy from LEFTOVER)
 
             for (std::size_t idx = 0; idx < items.size(); ++idx) {
                 auto& item = items[idx];
@@ -682,6 +682,12 @@ namespace MFO::MEOBridge {
                     // ~2.4 s with the empty count moving each time (invisible to the stall
                     // detector). Likewise a support evictee frees the item's one support seat.
                     ItemFit sansEvictee = rec.fitNow;
+                    // A merely QUEUED Conduit must not license an eviction (Fable SEV-4 on
+                    // 9dacc0e): if MEO refuses it inside its task, the evictee was unsocketed
+                    // for nothing and our own fingerprint change lifts the back-off -- churn.
+                    // The slot path keeps the queued shortcut (a refused Conduit there costs
+                    // nothing that is not already cleared); the swap-up judges LANDED state.
+                    sansEvictee.hasConduit = rec.fitAtStart.hasConduit;
                     if (det[weakIdx].isSupport) {
                         sansEvictee.hasSupport = false;
                         if (ContainsCI(det[weakIdx].gid, "conduit")) sansEvictee.hasConduit = false;
@@ -709,7 +715,7 @@ namespace MFO::MEOBridge {
                         const StuckKey ukey{ 1, item.base, item.uid, det[weakIdx].slot, 0 };
                         if (!stallGate(ukey, emptyCount, "UnsocketGem", det[weakIdx].name)) continue;
                         if (g_meo->UnsocketGem(a_actor, item.base, item.uid, det[weakIdx].slot)) {
-                            swapPending.insert(static_cast<std::uint32_t>(loot));   // its socket opens next pass: not a LEFTOVER
+                            ++swapPending[static_cast<std::uint32_t>(loot)];   // one copy's socket opens next pass: not a LEFTOVER
                             spdlog::info("[meo] reconcile swap-out '{}' (slot {}) on {:08X} -- '{}' will re-fill (queued{})",
                                          det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID(), loose[loot].name,
                                          passOf(ukey) > 1 ? std::format(", pass {}", passOf(ukey)) : std::string{});
@@ -732,7 +738,11 @@ namespace MFO::MEOBridge {
                 if (rec.considered || rec.dupDeferred) if (rec.emptyAtStart - rec.issued > 0) { anyEmpty = true; break; }
             if (anyEmpty) {
                 for (std::uint32_t i = 0; i < nLoose; ++i) {
-                    if (avail[i] == 0 || swapPending.contains(i)) continue;   // a swap-out was issued FOR it: its socket opens next pass
+                    // Copies a swap-out was issued FOR this pass are not leftover (their
+                    // socket opens next pass); the REST of a stack still are.
+                    std::uint32_t leftN = avail[i];
+                    if (auto sp = swapPending.find(i); sp != swapPending.end()) leftN = sp->second >= leftN ? 0u : leftN - sp->second;
+                    if (leftN == 0) continue;
                     bool compatNow = false, stuck = false, refused = false, dup = false, minting = false, supportLimit = false, hole = false;
                     for (std::size_t idx = 0; idx < items.size(); ++idx) {
                         const auto& rec = recs[idx];
@@ -778,10 +788,10 @@ namespace MFO::MEOBridge {
                         const char* actorName = a_actor->GetName() ? a_actor->GetName() : "?";
                         if (why == LeftoverWhy::kMinting)
                             spdlog::info("[meo] reconcile LEFTOVER {:08X} '{}' {:08X} '{}' x{} -- {}",
-                                         a_actor->GetFormID(), actorName, loose[i].gemBase, loose[i].name, avail[i], LeftoverWord(why));
+                                         a_actor->GetFormID(), actorName, loose[i].gemBase, loose[i].name, leftN, LeftoverWord(why));
                         else
                             spdlog::warn("[meo] reconcile LEFTOVER {:08X} '{}' {:08X} '{}' x{} -- {}",
-                                         a_actor->GetFormID(), actorName, loose[i].gemBase, loose[i].name, avail[i], LeftoverWord(why));
+                                         a_actor->GetFormID(), actorName, loose[i].gemBase, loose[i].name, leftN, LeftoverWord(why));
                     }
                     ls.seen = true;
                 }
