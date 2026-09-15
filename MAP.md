@@ -411,8 +411,11 @@ releases **by eviction** with a non-actor XMarker.
   CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
   `Followers::ReleaseHeldState(id)` (`Followers.cpp`, worker-only, idempotent) —
   shared by the dismissal sweep (`Refresh`) and the T#78 MFO-OFF toggle (Scheduler).
-- `ForceRefToNative` (`:266`) = `REL::ID(25052)` `TESQuest::ForceRefTo`, AE-only
-  (VM path off AE). Two-class layout offsets (`kPointerOffFromIPackageData=0x10`,
+- `ForceRefToNative` (`:314`) = `REL::RelocationID(24523, 25052)` `TESQuest::ForceRefTo`,
+  AE + SE (SE id verified 2026-09-13 via the engine's own `ReferenceAlias.ForceRefTo`
+  Papyrus callback tail-jump). VR refused via `ForceRefToNativeAvailable()` (`:310`) — every
+  call-site gate (`:902`, `:970`, `:1647`, `:1758`, `:2023`) goes through that ONE predicate;
+  VM path only on VR. Two-class layout offsets (`kPointerOffFromIPackageData=0x10`,
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
