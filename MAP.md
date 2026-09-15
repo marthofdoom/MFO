@@ -1315,10 +1315,34 @@ declared there and defined in their home module). Layout:
   STEERS: 2 → a second one-hander force-held in the left, 1 → best shield, under
   `MFO_MeleeStyle` DATA = `1|4` (`kAllowDualWielding`) — see §2 Actuation "COMBAT
   PICK + DUAL WIELD BY PERKS". **STILL A GAP:** bow vs crossbow stays the
-  ammo/damage rule (no perk record distinguishes them — both carry `WeapTypeBow`);
-  the economy keep buckets keep ONE 1H form, so a DIFFERENT second one-hander
-  SELLS at the next vendor, and loot never FETCHES a second one-hander (the left
-  hand only ever pairs what the pack already holds). **What breaks:** changing
+  ammo/damage rule (no perk record distinguishes them — both carry `WeapTypeBow`).
+  **CLOSED 2026-09-14 (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`) — THE
+  SECOND ONE-HANDER, all three paths at once, ONE rule:** `wantOffHand` =
+  `roles.offHand == 2 && meleeTargetClass == OneHand`; `offHandBaseScore` = the
+  SECOND-best owned in-class one-hander's `WeaponScore` (0 with fewer than two
+  owned; a stack of >= 2 of one form counts twice — it covers both hands).
+  KEEP (`Logistics_Economy.cpp` `keepSecond1H`, the weapon keep buckets): bucket
+  1 also keeps its runner-up form UNLESS the best form is a stack >= 2 (then
+  `PickOffHandWeapon` takes the second copy and the runner-up is junk). BUY
+  (`BuildBuyThresholds` → `TradeBridge::BuyThresholds` APPENDED `wantOffHand` /
+  `offHandBaseScore` after `armorBaseScore` → `PlanBuy` "SECOND ONE-HANDER"
+  block): one more in-class 1H above `offHandBaseScore`, or above
+  `meleeBaseScore` when a primary was JUST bought (the old best drops to the
+  off-hand); a stock line the primary took the last copy of is skipped; the
+  `[econ] bought plan` names it `(second one-hander, dual wield)`. LOOT
+  (`EquipmentContext::wantOffHand` / `offHandBaseScore`, `BuildEquipmentContext`;
+  `LootEquipment` `bestOffHand`, priority after bestRanged, before bestBackup;
+  `LooseEquipmentQualifies` the mirrored rule): a 1H above `offHandBaseScore` is
+  taken and STOCKED (`AcquireEquip` `a_forceStock`) — never into the right hand
+  (it is by construction no better than the primary); Actuation's
+  `PickOffHandWeapon` pairs it at the next combat equip, unchanged. `usesShield`
+  (buy `BuildBuyThresholds` + keep `EconomyProbe`) and `shieldUseless` (both loot
+  sites) gained `roles.offHand != 2` — a dual wielder's left hand is a weapon.
+  `[equip] LOOT-*` prints `offHand= offHandBase=` and tags the second-1H pick.
+  **What breaks:** the three `offHandBaseScore` computations (`BuildEquipmentContext`,
+  `BuildBuyThresholds`) and the keep runner-up must stay the SAME top-2 rule or
+  loot fetches what keep sells; `PlanBuy`'s `plan[c.idx] >= c.avail` skip is what
+  stops the off-hand buy from over-buying a single stock line. **What breaks:** changing
   `kStyleBias` re-orders every loot/keep/buy compare at once (they share ONE
   score by design — never bias one site alone or loot and keep disagree and a
   looted greatsword sells); `preferKinds` must stay `Progression::WeaponKind`
@@ -1395,6 +1419,33 @@ declared there and defined in their home module). Layout:
   disagree; `BuyThresholds` is append-only (do not move the new fields ahead of
   `eligibleSchools`); `ArmorClassSuits` is dead code by design — do not re-add it
   as a gate.
+- **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
+  `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
+  CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet
+  `0001391D`, Leather/Iron Helmet, Shrouded Cowl `000D2842`) carry BOD2 = 31 Hair +
+  42 Circlet with NO bit 30 Head; IA/Dwemer helmets carry 30+31+42+43. Every
+  kHead-only test therefore saw a vanilla helmet as "not a head piece": `ArmorBuySlot`
+  returned -1 → never bought (`PlanBuy`'s per-slot `ArmorBuySlot(a) != slot`), 0 head
+  baseline, never kept (the keep lambda), sold as junk; `ArmorIsBetter`'s `kSlots`
+  had no Hair/Circlet → never looted/worn; and the INVERSE: a bit-30 helmet vs a
+  worn 31+42 one read "bare" and MFO executed a scored DOWNGRADE (`OWNED armor
+  'Dwemer Helmet' [Heavy] 20 <- worn 'Shrouded Cowl' [Light] 32.5`);
+  `LogArmorClassIfChanged` printed `head (bare)` for a worn Cowl. THE FIX: ONE
+  predicate `IsHeadSlotMask(mask)` (`Logistics_internal.h`, `Head|Hair|Circlet` —
+  the SAME three bits `MageClothingSlot` and `WornInLogicalSlot(0)` already use; no
+  third notion). CONSUMERS: `ArmorBuySlot` (`Logistics_Economy.cpp`, public — so
+  `PlanBuy`, the buy baseline `slotScore[0]`, the `[equip] OWNED` diag's `old` read
+  and the redundant-inferior force-sell key `10+ls` all follow), the keep lambda
+  `armorLogicalSlot` (bucket 10), `ArmorIsBetter` (`Logistics_Loot.cpp` — the head
+  is judged ONCE as a logical slot against `WornInLogicalSlot(a_follower, 0)`; the
+  other slots stay per-bit), and the `[armor]` head row (`WornInLogicalSlot(0)`).
+  Rating-0 circlets stay excluded by every consumer's own `rating<=0` gate — this is
+  slot IDENTITY only. The mage-apparel path (`kMageSlots`, `MageApparelKey`'s
+  "never fills a bare circlet bit" rule) is untouched. **What breaks:** a new
+  head consumer that tests `Slot::kHead` alone re-opens the whole class of bug —
+  route it through `IsHeadSlotMask` / `WornInLogicalSlot(0)`; `ArmorIsBetter`'s
+  head compare must stay ONE comparison (per-bit Hair AND Circlet against two
+  `GetWornArmor` reads can double-judge the same worn helmet).
 - `Logistics_Loot.cpp` (2399) — the loot judge + per-category looters,
   claim-and-release, navmesh reach, the armor judge (`ArmorPrefFor:213`,
   `ArmorScore:235`, `LogArmorClassIfChanged:248`, `ArmorClassSuits:303`,
@@ -1890,7 +1941,20 @@ tally already runs) via a deliberate, commented component-1→component-2 includ
 `ProgAllocator.h` in `Progression.cpp` (headers stay acyclic). Consumer:
 `Logistics::ShedOffRoleWeapon` (fists rule). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md`
 MFO-B14** (SEV-4) — the per-list empty-hand rule also matches a "left hand empty"-only
-one-hand perk (no keyword, no right-hand test); tightening shape recorded there. **What breaks:**
+one-hand perk (no keyword, no right-hand test); tightening shape recorded there.
+**STYLE-FACT RANKS ARE NEVER MARGINAL (2026-09-14, `fix/mfo-deck-0914-helmet-offhand-verdict-meo`):**
+at the rank build (`BuildSkill`, right after the `rank.style` merge) a rank with
+`rank.style.Any()` whose `ClassifyRank` verdict is not `kEffective` is PROMOTED to
+`kEffective` (`"style-facts"` appended to its `why`; one `spdlog::debug` line per
+promotion; counted in `SkillTree::stylePromotedRanks` / `Catalog::stylePromotedRanks`,
+printed in the `[prog] census` line — nonzero is the "stale/absent verdicts" tell).
+Belt-and-braces: the field root cause was a stale deployed `MFO_Progression.esl`
+with 0 verdicts (every rank `no-verdict` → marginal → the allocator never spent on
+an equipment-deciding perk → zero style votes), redeployed separately; this makes the
+perk-style decision survive a missing or overhaul-odd verdict. The 92-row verdict
+table, `ReadEntryPointVerdicts`, `ClassifyRank` and the generator are untouched;
+every rank WITHOUT a style fact still follows the declared verdict. Consumers
+(allocator, board, census) unchanged — they read `verdict`. **What breaks:**
 renaming/renumbering `WeaponKind`/`ArmorKind` bits breaks `Logistics::WeaponKindOf` +
 `TradeBridge::BuyThresholds::preferKinds` (same bit space); calling `TallyStyleVotes`
 off the main thread races the allocator's perk writes (the Logistics mirror exists for
@@ -2371,13 +2435,36 @@ scan). Decoupled re-socket of a follower's OWN loose gems (left loose by the
 ungem-then-sell `UnsocketItemGems`) back into his WORN gear's empty sockets, so a gem
 extracted for a sale never stays loose. `RequestGemReconcile` posts the whole pass to
 the main thread (`ReconcileLooseGems`, anon) — GetLooseGems/GetEmptySocketCount/
-GetGemDetails are main-thread-only; SocketGem/UnsocketGem queue to main. **No dedup
-state** — GetEmptySocketCount reflects only LANDED sockets and async ops land within a
-frame or two (<< the ~1 s cadence), so the next pass never re-issues; domain is matched
-here so MEO never rejects into a retry loop. Tier 1 conservation always runs (fill any
-domain-matching gem); tier 2 effect-aware (MCM `bMeoAwareGems`, default OFF) ranks by a
-class-preference heuristic on gid/name + magnitude and swaps up a socketed gem a better
-loose gem beats. Whole feature no-ops below MEO v3.
+GetGemDetails are main-thread-only; SocketGem/UnsocketGem queue to main. The old
+"no dedup state — async ops land within a frame or two, so the next pass never
+re-issues" assumption held for a request MEO accepts and LANDS; the deck log
+(2026-09-14) showed one identical socket request re-issued 192× at the ~1.2 s cadence
+— MEO accepted it (`SocketGem` true means "queued", `MEO_API.h`) and then failed in
+its OWN log. **RETURN LOGGING + STALL DETECTOR (2026-09-14,
+`fix/mfo-deck-0914-helmet-offhand-verdict-meo`):** every `SocketGem` / `UnsocketGem` /
+`MoveGems` bool is logged (`(queued)` on true, `REFUSED by MEO ... -- see MEO.log`
+warn on false — the `EquipSink` move, `UnsocketItemGems`, both reconcile sites).
+`ReconcileLooseGems` keeps a MAIN-THREAD-ONLY per-actor map `g_stuck` (anon, no
+lock — same domain as the pass; VR runs the pass inline off the worker, which nothing
+else shares) keyed `StuckKey{base, uid, slot, gemBase}` → `StuckState{emptyAtIssue,
+passes, reported, backoffUntil, inventoryKey}`: a request re-issued `kStuckPasses`
+(3) passes running with `GetEmptySocketCount` unchanged logs `[meo] reconcile STUCK
+<actor> <item>/<uid> slot <n> gem <base> -- see MEO.log [api] SocketGem` ONCE and
+backs that key off (the gem is still held for that slot in the pass's local `avail`)
+until the follower's loose-gem/worn fingerprint changes or `kStuckBackoff` (60 s —
+principle 9: sized from the ~1.2 s cadence, ~50 passes, never silently forever); then
+it retries from a clean count and reports again if it stalls again. Keys not re-issued
+in a pass are forgotten at its end; the `nLoose == 0` early return drops the actor's
+keys; `ClearTransientState` clears the map (revert/load, `Serialization.cpp`). NOT a
+mask: the failure is loud and retried. Domain is matched here so MEO never rejects
+into a retry loop. Tier 1 conservation always runs (fill any domain-matching gem);
+tier 2 effect-aware (MCM `bMeoAwareGems`, default OFF) ranks by a class-preference
+heuristic on gid/name + magnitude and swaps up a socketed gem a better loose gem
+beats. Whole feature no-ops below MEO v3. **What breaks:** `g_stuck` is written
+without `g_mx` on purpose (a lock held across `g_meo->` calls is the #4 re-entrant
+deadlock class) — never touch it from the worker while the pump is live; lowering
+`kStuckPasses` below 2 turns every first issue into a STUCK line; a `MEO_API.h`
+change is off the table (byte-shared, append-only).
 
 ### APMFBridge.cpp / APMFBridge.h — optional APMF client (MODERATOR model, Phase 3)
 Makes MFO a client of the SEPARATE APMF.dll (AI Package Management Framework) via the
