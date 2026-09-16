@@ -544,6 +544,12 @@ namespace MFO::Logistics {
                     if (a_slot == APMF_API::kEquipSlot_Right)      names += " (R)";
                     else if (a_slot == APMF_API::kEquipSlot_Left)  names += " (L)";
                 }
+                // Drop every entry declared for a named hand (a bound weapon the
+                // engine put THERE outranks the ledger's entry for that hand).
+                void DropHand(std::uint8_t a_slot) {
+                    if (a_slot == APMF_API::kEquipSlot_Default) return;
+                    std::erase_if(entries, [&](const APMF_API::APMF_EquipEntry& e) { return e.slot == a_slot; });
+                }
             };
 
             bool SlotsOverlap(const RE::TESObjectARMO* a, const RE::TESObjectARMO* b) {
@@ -558,11 +564,47 @@ namespace MFO::Logistics {
         }
 
         void ForgetEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); g_playerPicks.erase(a_follower); }
+        void ResendEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); }   // MFO-B41: the change detector only
         void ClearEquipDeclarations() { g_lastDeclared.clear(); g_playerPicks.clear(); }
 
         bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form) {
             const auto it = g_playerPicks.find(a_follower);
             return it != g_playerPicks.end() && it->second.count(a_form) != 0;
+        }
+
+        // ── BOUND WEAPONS (round 4, probe sweep 2026-09-15) ──────────────────
+        // A Bound Sword/Bow/Battleaxe is put in the hand by the engine's own
+        // BoundItemEffect through ActorEquipManager::EquipObject (APMF seat path
+        // `BoundItem`), i.e. an equip of a WEAP the follower never owned. Under
+        // enforcement that is an off-set equip and is REFUSED -- a mage who casts
+        // Bound Sword would hold nothing. So the bound weapon is DECLARED for as
+        // long as its effect is live: the live ActiveEffects on the caster whose
+        // base MGEF archetype is kBoundWeapon carry the weapon as the effect's
+        // associatedForm (EffectSetting::EffectSettingData::associatedForm,
+        // RE/E/EffectSetting.h:71; the archetype at :88). Same active-effect-list
+        // road CasterHasLiveSummon walks (Actuation_Direct.cpp), on the worker,
+        // read-only; a dispelled/inactive effect is over. Sorted, deduped: the
+        // combat road compares it lap to lap to trigger a declaration (a bound
+        // cast is the AI's own as often as MFO's, and neither passes EquipWeapon).
+        std::vector<RE::FormID> LiveBoundWeapons(RE::Actor* a_follower) {
+            std::vector<RE::FormID> out;
+            if (!a_follower) return out;
+            auto* mt = a_follower->AsMagicTarget();
+            auto* list = mt ? mt->GetActiveEffectList() : nullptr;
+            if (!list) return out;
+            using AF = RE::ActiveEffect::Flag;
+            for (auto* ae : *list) {
+                if (!ae || !ae->effect || !ae->effect->baseEffect) continue;
+                if (ae->flags.any(AF::kDispelled, AF::kInactive)) continue;
+                const auto& d = ae->effect->baseEffect->data;
+                if (d.archetype != RE::EffectSetting::Archetype::kBoundWeapon) continue;
+                auto* w = d.associatedForm ? d.associatedForm->As<RE::TESObjectWEAP>() : nullptr;
+                if (!w) continue;
+                out.push_back(w->GetFormID());
+            }
+            std::sort(out.begin(), out.end());
+            out.erase(std::unique(out.begin(), out.end()), out.end());
+            return out;
         }
 
         void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
@@ -627,6 +669,52 @@ namespace MFO::Logistics {
             };
             decl.Add(right, handOf(right, APMF_API::kEquipSlot_Right));
             decl.Add(left,  handOf(left,  APMF_API::kEquipSlot_Left));
+
+            // 1b. BOUND WEAPONS (see LiveBoundWeapons above). Declared while the
+            //     effect is live, with the hand the engine actually put it in when
+            //     it is held (the BoundItemEffect equips into the CASTING hand --
+            //     MFO's gambit spells are cast LEFT, the AI's from either); a
+            //     one-hander not (yet) held goes Right unless the ledger's left
+            //     names it; a bound bow/two-hander is Default. A bound weapon held
+            //     in a hand REPLACES the ledger's entry for that hand (the engine
+            //     already displaced it; declaring both is two items for one slot).
+            //     Logged once per bound form, when it is new since the last
+            //     declaration. Dropped from the set by the next rebuild after the
+            //     effect ends (the combat road triggers on that change too).
+            const auto* lastSent = [&]() -> const std::vector<DeclKey>* {
+                const auto it = g_lastDeclared.find(id);
+                return it == g_lastDeclared.end() ? nullptr : &it->second;
+            }();
+            const auto lastSentHas = [&](RE::FormID a_form) {
+                if (!lastSent) return false;
+                return std::any_of(lastSent->begin(), lastSent->end(), [&](const DeclKey& k) { return k.first == a_form; });
+            };
+            for (const RE::FormID bf : LiveBoundWeapons(a_follower)) {
+                auto* w = RE::TESForm::LookupByID<RE::TESObjectWEAP>(bf);
+                if (!w) continue;
+                const bool oneHand = w->IsOneHandedSword() || w->IsOneHandedDagger() ||
+                                     w->IsOneHandedAxe()   || w->IsOneHandedMace();
+                std::uint8_t hand = APMF_API::kEquipSlot_Default;
+                if (oneHand) {
+                    auto* heldR = a_follower->GetEquippedObject(false);
+                    auto* heldL = a_follower->GetEquippedObject(true);
+                    if (heldR == w)                 hand = APMF_API::kEquipSlot_Right;
+                    else if (heldL == w)            hand = APMF_API::kEquipSlot_Left;
+                    else if (a_holdLeft == bf)      hand = APMF_API::kEquipSlot_Left;
+                    else                            hand = APMF_API::kEquipSlot_Right;
+                    decl.DropHand(hand);
+                } else {
+                    // A bound bow/two-hander takes both hands: nothing else is held.
+                    decl.DropHand(APMF_API::kEquipSlot_Right);
+                    decl.DropHand(APMF_API::kEquipSlot_Left);
+                }
+                decl.Add(w, hand);
+                if (!lastSentHas(bf))
+                    spdlog::info("[equip-auth] {:08X}: declare bound '{}' ({})", id,
+                                 w->GetName() ? w->GetName() : "?",
+                                 hand == APMF_API::kEquipSlot_Right ? "right"
+                                 : hand == APMF_API::kEquipSlot_Left ? "left" : "default");
+            }
 
             // 2. AMMO.
             if (rightRanged || roles.doRanged) {

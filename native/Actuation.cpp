@@ -1847,18 +1847,55 @@ namespace MFO::Actuation {
         // wears armor in combat, so the worn armor is declared as is (F9). No
         // forced re-issue exists (F3): the declaration changes when the ledger
         // does, and APMF places the hands the entries name (ABI v8).
+        // MFO-B41 (round 4): the ledger as this road last declared it, per
+        // follower. A lap whose ledger is UNCHANGED but whose weapon is in
+        // NEITHER hand (something un-seated took it off; the equip rule Fired
+        // again) would compare equal and send nothing -- so the change detector
+        // is dropped first and the same set goes out again, which is APMF's
+        // "give it back". Worker-serial (#4), cleared with the ledger.
+        std::unordered_map<RE::FormID, std::pair<RE::FormID, RE::FormID>> g_lastLedgerDeclared;
+        // ... throttled to APMF's own 3 s per-item re-issue hold, so a weapon the
+        // engine keeps taking back off (observe mode) costs one re-send per 3 s,
+        // never one per lap.
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_lastB41At;
+        constexpr auto kB41Hold = std::chrono::seconds(3);
+
+        // The live bound-weapon set as this road last saw it, per follower --
+        // ReconcileForcedWeapon compares against it every in-combat lap so a
+        // Bound Sword the AI (or MFO) just cast, and its expiry, each trigger ONE
+        // re-declaration (the set itself is rebuilt by Logistics). Worker-serial.
+        std::unordered_map<RE::FormID, std::vector<RE::FormID>> g_boundSeen;
+
         void DeclareFromLedger(RE::Actor* a_follower, const char* a_why) {
             if (!a_follower) return;
-            const auto it = g_followers.find(a_follower->GetFormID());
+            const auto id = a_follower->GetFormID();
+            const auto it = g_followers.find(id);
             if (it == g_followers.end()) return;
             RE::FormID right = 0, left = 0;
             {
                 std::scoped_lock lk(g_forcedMx);
-                if (auto h = g_forcedWeapon.find(a_follower->GetFormID()); h != g_forcedWeapon.end()) {
+                if (auto h = g_forcedWeapon.find(id); h != g_forcedWeapon.end()) {
                     right = h->second.right ? h->second.right->GetFormID() : 0;
                     left  = h->second.left  ? h->second.left->GetFormID()  : 0;
                 }
             }
+            // MFO-B41: unchanged ledger + its weapon in neither hand -> re-send.
+            if (auto prev = g_lastLedgerDeclared.find(id);
+                prev != g_lastLedgerDeclared.end() && prev->second == std::make_pair(right, left)) {
+                auto* hr = a_follower->GetEquippedObject(false);
+                auto* hl = a_follower->GetEquippedObject(true);
+                const auto heldId = [](RE::TESForm* f) { return f ? f->GetFormID() : 0u; };
+                const bool rightGone = right && heldId(hr) != right && heldId(hl) != right;
+                const bool leftGone  = left  && heldId(hl) != left  && heldId(hr) != left;
+                const auto now = std::chrono::steady_clock::now();
+                auto at = g_lastB41At.find(id);
+                if ((rightGone || leftGone) && (at == g_lastB41At.end() || now - at->second >= kB41Hold)) {
+                    g_lastB41At[id] = now;
+                    Logistics::ResendEquipDeclaration(id);
+                    spdlog::info("[equip-auth] {:08X}: ledger weapon in neither hand -- re-declaring (MFO-B41)", id);
+                }
+            }
+            g_lastLedgerDeclared[id] = { right, left };
             Logistics::RefreshEquipDeclaration(a_follower, it->second, right, left,
                                                CastHandHeld(a_follower, kHandLeft), /*judgeArmor*/false, a_why);
         }
@@ -2573,6 +2610,28 @@ namespace MFO::Actuation {
 
     void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance, bool a_condKnownFalse) {
         if (!a_follower) return;
+        // BOUND WEAPONS under the APMF equip authority (round 4): this runs every
+        // in-combat lap for every serviced follower, hold or no hold -- the one
+        // per-lap seat Actuation owns -- so it is where a Bound Sword/Bow the
+        // follower just cast (MFO's gambit or the AI's own; neither passes
+        // EquipWeapon) is noticed and DECLARED before the engine's BoundItemEffect
+        // equip would be refused as off-set, and where its expiry drops it again.
+        // One lap-to-lap compare of the live bound set; a change is ONE
+        // re-declaration (send-on-change inside). Cheap: an active-effect scan,
+        // no inventory walk, and only with the authority live.
+        {
+            const auto id = a_follower->GetFormID();
+            if (Logistics::EquipAuthorityLive(id)) {
+                auto bound = Logistics::LiveBoundWeapons(a_follower);
+                auto& seen = g_boundSeen[id];
+                if (seen != bound) {
+                    seen = std::move(bound);
+                    DeclareFromLedger(a_follower, seen.empty() ? "bound weapon ended" : "bound weapon live");
+                }
+            } else if (auto it = g_boundSeen.find(id); it != g_boundSeen.end()) {
+                g_boundSeen.erase(it);
+            }
+        }
         // KEEP the hold while the feature is ON and an equip gambit of the forced
         // weapon's OWN category held THIS tick (a_wantStance, set by a fired-or-
         // satisfied equip). RELEASE only when we actually KNOW the condition is
@@ -2638,6 +2697,9 @@ namespace MFO::Actuation {
     void ClearForcedWeapons() {
         g_offHandRetryAt.clear();   // worker-serial twin of the ledger (revert/load, #4 path)
         g_leftHeldRefusal.clear();
+        g_lastLedgerDeclared.clear();   // round 4: the declaration road's ledger mirror + bound set
+        g_boundSeen.clear();
+        g_lastB41At.clear();
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
     }
