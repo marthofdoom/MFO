@@ -10,6 +10,8 @@
 #include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside the offense claim
 #include "CastBounds.h"   // Disarm -- drop his MFO-executed-cast bound (§2 registry)
 #include "Logistics.h"
+#include "MainThread.h"   // F7: the deferred dismissal restore under the APMF equip authority
+#include "Diagnostics.h"  // F7: CurrentPumpEpoch / PumpTickGate for its AddTask body
 #include "Forms.h"
 #include "Config.h"
 #include "Vocabulary.h"
@@ -290,11 +292,42 @@ namespace MFO::Followers {
         // the WORKER: from dismissal (Refresh, above) and from the T#78 board
         // MFO-OFF toggle (Scheduler's per-follower tick, same thread). Every call
         // here is idempotent (erase-miss / no-record -> no-op), so re-running it
-        // is safe. ORDER is the dismissal order, unchanged.
+        // is safe. ORDER is the dismissal order, unchanged -- with ONE addition in
+        // front (F7, feat/mfo-equip-authority, Fable round 2 on c66dc80): the APMF
+        // EQUIP AUTHORITY is released FIRST, because the restore right below hands
+        // back the follower's PRE-MFO gear (Loadout::EquipBack), which is off-set
+        // under a live declaration: with the release still queued behind it, an
+        // enforcing APMF would refuse the repay and the follower would leave the
+        // party in MFO's gear. Logistics::OnFollowerRemoved below releases too
+        // (idempotent no-op then) and drops the declaration's change detector.
+        const bool authorityWasLive = APMFBridge::IsEquipAuthorityClaimed(id);
+        APMFBridge::ReleaseEquipAuthority(id);
         //
         // Give back anything MFO put in their hands -- the hit sink is gated on
         // IsTracked, so after a dismissal nothing would ever restore it (#55).
-        Loadout::Restore(id);
+        // Under the authority the restore is DEFERRED past APMF's next Drain (the
+        // Release above is an enqueue, applied on APMF's per-frame game-thread
+        // seat): two MainThread::Post hops land ≥1 full frame later, the same
+        // shape as Actuation's PostHandEquipsDeferred, then the body rides BACK to
+        // the serial AddTask worker under PumpTickGate -- Loadout's ledgers are
+        // worker-serial (no lock, no cross-thread reader; Loadout.cpp:17) and must
+        // not be mutated from the main thread. A revert in between makes the gate
+        // bail, and the revert's ClearTransientState has cleared the ledger anyway.
+        // Without the authority: the direct call, byte-identical to before.
+        if (authorityWasLive) {
+            const auto epoch = Diagnostics::CurrentPumpEpoch();
+            auto restore = [id, epoch]() {
+                SKSE::GetTaskInterface()->AddTask([id, epoch]() {
+                    Diagnostics::PumpTickGate gate(epoch);
+                    if (!gate) return;
+                    Loadout::Restore(id);
+                });
+            };
+            if (MainThread::IsInstalled()) MainThread::Post([restore]() { MainThread::Post(restore); });
+            else                           restore();
+        } else {
+            Loadout::Restore(id);
+        }
         // The commanded-target latch -- the hook does not check IsTracked, so a
         // latch left behind keeps redirecting the follower AND keeps every
         // Character in combat worldwide off the fast path.

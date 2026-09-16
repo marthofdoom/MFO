@@ -893,6 +893,31 @@ namespace MFO::Logistics {
         if (due.time_since_epoch().count() != 0 && now < due) return;
         due = now + kLogisticsInterval;
 
+        // APMF EQUIP AUTHORITY (feat/mfo-equip-authority, 2026-09-15): the OOC
+        // road of the declaration. CLAIM on the first service (the claim alone
+        // changes nothing -- APMF_API.h), then DECLARE the worn set when this
+        // tick is done, whatever it did: the scope guard runs at every exit
+        // below (the excursion driver, the empty-rules return, the fall-through
+        // scan, the economy tail), so a loot/buy/owned-upgrade that changed the
+        // inventory THIS tick is declared THIS tick, and only when the set
+        // changed. Rides the logistics cadence (~1 s) on purpose: one inventory
+        // walk per tick is the affordable rate (kLogisticsInterval's doc), and
+        // a declaration is a change event, not a heartbeat. In combat the
+        // Scheduler never reaches this branch -- Actuation::EquipWeapon refreshes
+        // from the gambit equip itself. a_leftReserved: an OOC heal/offense
+        // claim on the left (ComposedCast, the OOC cast rule) must not have a
+        // shield or left item declared under it -- the bridge's own live-claim
+        // reads, since Actuation's CastHandHeld is not visible here.
+        APMFBridge::ClaimEquipAuthority(id);   // no-op unless supported; refusal logged once
+        struct DeclareAtExit {
+            RE::Actor* f; const FollowerState& st; RE::FormID id;
+            ~DeclareAtExit() {
+                const bool leftReserved = APMFBridge::IsHealCastActive(id) ||
+                                          APMFBridge::IsOwnedCastActiveOnHand(id, APMFBridge::kApmfHandLeft);
+                RefreshEquipDeclaration(f, st, 0, 0, leftReserved, /*judgeArmor*/true, "service");
+            }
+        } declareAtExit{ a_follower, a_state, id };
+
         // Hand back one off-role weapon per idle tick (AI-usable wrong-role gear /
         // pre-1.0.12 leftovers). Cheap when the pack is clean; stops on its own.
         ShedOffRoleWeapon(a_follower, a_state);
@@ -2119,6 +2144,9 @@ namespace MFO::Logistics {
 
     void ClearTransientState() {
         g_nextTick.clear();
+        ClearEquipDeclarations();   // APMF equip authority: the last-sent sets -- the claims themselves
+                                    // go in APMFBridge::ClearTransientState (kPreLoadGame); the first
+                                    // service after the load re-claims and re-declares from scratch
         g_lastCombatSeen.clear();   // post-battle shed dwell -- save-scoped, live-session only
         g_shedFistsLogged.clear();  // the shed's logged fists verdict -- re-log after a load
         g_claim.clear();
@@ -2158,6 +2186,13 @@ namespace MFO::Logistics {
     }
 
     void OnFollowerRemoved(RE::FormID a_id) {
+        // APMF EQUIP AUTHORITY: the standing claim ends with MFO's management of
+        // him -- dismissal AND the T#78 MFO-OFF edge both arrive here through
+        // Followers::ReleaseHeldState. APMF hands the worn set back to the engine
+        // (nothing is unequipped); the change detector goes with it so a re-recruit
+        // declares from scratch. Idempotent (no claim -> no-op, no log).
+        APMFBridge::ReleaseEquipAuthority(a_id);
+        ForgetEquipDeclaration(a_id);
         // A follower dismissed DURING an excursion may still hold alias 0 (Clear
         // hasn't run). With his framework claim gone, MFO's static-60 claim is his
         // sole one -- he'd walk to the stale corpse and re-latch every load.

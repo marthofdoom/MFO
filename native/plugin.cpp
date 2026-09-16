@@ -395,6 +395,17 @@ namespace {
                     "Load an older save, or reinstall the newer MFO before saving.");
             }
             MFO::Probe::ReleaseAll();   // nothing the probe did outlives a session
+            // F2 (feat/mfo-equip-authority, Fable round 2): a New Game started
+            // from a RUNNING session gets no kPreLoadGame, so the kPreLoadGame
+            // release above never ran and APMFBridge still holds last session's
+            // handles -- the same base FormIDs come back, the first service
+            // "keeps" a handle APMF has forgotten, and SetEquipSet on it is a
+            // silent no-op. Drop every claim here too (the pump is stopped: the
+            // revert callback's ResetAllState ran StopPump and Logistics::
+            // ClearTransientState, which dropped the declaration change
+            // detectors, before this message). Harmless on a first launch.
+            if (a_msg->type == SKSE::MessagingInterface::kNewGame)
+                MFO::APMFBridge::ClearTransientState();
             // Mint the eviction marker (#48) BEFORE the reconcile below, so its
             // evictions displace with the marker, not the player. Main-thread
             // here (PlaceObjectAtMe), player guaranteed in-world; the once-

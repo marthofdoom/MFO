@@ -868,7 +868,24 @@ namespace MFO::Logistics {
                               (newRole != WepClass::Ranged || a_myWeap->GetWeaponType() == newWt);
                 }
             }
-            if (equipIt) {
+            // APMF EQUIP AUTHORITY (feat/mfo-equip-authority): with the standing
+            // claim live, ARMOR is never equipped directly from here -- the
+            // declaration RefreshEquipDeclaration sends at this service tick's tail
+            // names the same piece (ComputeOwnedGearPick is the one judge) and APMF
+            // equips it; a direct EquipObject would reach the seat as
+            // External(MFO.dll) against a set that does not yet carry the item.
+            // The transfer (a_src), the keep/sell verdicts and the MEO gem carry
+            // below are untouched. WEAPONS keep the direct equip-in-place hop
+            // (listed "to migrate", Docs/STATUS.md): the declaration carries only
+            // what the hands HOLD, so a just-looted same-role upgrade is armed by
+            // the next combat equip gambit instead.
+            const bool declaredArmor = equipIt && a_item->As<RE::TESObjectARMO>() != nullptr &&
+                                       EquipAuthorityLive(a_follower->GetFormID());
+            if (declaredArmor) {
+                spdlog::info("[equip] {:08X}: '{}' declared -- APMF equip authority carries the equip "
+                             "(no direct EquipObject)", a_follower->GetFormID(),
+                             a_item->GetName() ? a_item->GetName() : "?");
+            } else if (equipIt) {
                 // #62 EQUIP ON THE MAIN THREAD. Capture FormIDs (never the worker's
                 // Actor*/item) and re-resolve on the frame that runs.
                 const RE::FormID folID  = a_follower->GetFormID();

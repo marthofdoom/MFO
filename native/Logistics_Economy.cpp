@@ -4,6 +4,9 @@
 // tome-gate unlock, owned-gear equip pass, and the public GEAR/TOME buy
 // helpers shared with TradeBridge::PlanBuy (see Logistics.h).
 #include "Logistics_internal.h"
+#include "APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
+#include <algorithm>     // std::any_of / std::sort in the declaration builder
+#include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
 namespace MFO::Logistics {
 
@@ -294,15 +297,38 @@ namespace MFO::Logistics {
         // once worn it no-ops -> no thrash. Apparel/armor only here; WEAPONS are left
         // to the combat equip gambit (Loadout::Prepare picks the best in-class at
         // combat), matching the loot judge's stock-not-equip rule for weapons.
-        void EquipBestOwnedGear(RE::Actor* a_follower, const FollowerState& a_state) {
-            if (!a_follower || Config::g_dollsMode.load()) return;
+        namespace {
+            // F10 (Fable round 2): the judged armor pick is computed ONCE per
+            // logistics tick. EquipBestOwnedGear hands its pick here (0 = it ran
+            // and found nothing to wear) and ServiceFollower's exit guard
+            // (RefreshEquipDeclaration below), on the same worker call, consumes
+            // it instead of walking the inventory and scoring every piece a
+            // second time. Keyed by follower so a slot left over from a tick that
+            // never reached the guard (it always does -- the guard is on that
+            // call's stack -- but belt and braces) can never be read for a
+            // different follower. Worker-serial like g_lastDeclared.
+            struct HandedPick { RE::FormID follower = 0; RE::FormID pick = 0; bool set = false; };
+            HandedPick g_handedPick;
+        }
+
+        // THE PICK, factored out of EquipBestOwnedGear VERBATIM (feat/mfo-equip-
+        // authority, 2026-09-15) so the APMF equip-authority DECLARATION below
+        // (RefreshEquipDeclaration) names exactly the piece this pass would
+        // wear -- one judge, not two that can drift. Returns the single best
+        // owned upgrade the follower is not wearing yet (nullptr = nothing to
+        // wear), the ArmorPref the rated branch scored with (for the [equip]
+        // line) and whether the mage-apparel branch decided. Worker; pure
+        // inventory/form reads plus LogArmorClassIfChanged's change-only line.
+        RE::TESBoundObject* ComputeOwnedGearPick(RE::Actor* a_follower, const FollowerState& a_state,
+                                                 ArmorPref& a_outPref, bool& a_outMageMode) {
+            a_outMageMode = false;
+            if (!a_follower || Config::g_dollsMode.load()) return nullptr;
             const bool caster         = IsCasterFollower(a_state);
             const bool useMageApparel = caster && Config::g_mageWearRobes.load();
-            auto* eqObj  = a_follower->GetEquippedObject(false);
-            auto* myWeap = eqObj ? eqObj->As<RE::TESObjectWEAP>() : nullptr;
+            a_outMageMode = useMageApparel;
 
             RE::TESBoundObject* pick = nullptr;
-            ArmorPref           armorPref;   // filled by the rated branch (the [equip] line reads it)
+            ArmorPref&          armorPref = a_outPref;   // filled by the rated branch (the [equip] line reads it)
             if (useMageApparel) {
                 // AUTHORITATIVE mage dress-up (oscillation fix). Compute the single
                 // best OWNED piece per logical slot (deterministic, FormID tiebreak so
@@ -377,7 +403,26 @@ namespace MFO::Logistics {
                 }
             }
 
-            if (!pick || !FitsCarryWeight(a_follower, pick->GetWeight())) return;
+            if (!pick || !FitsCarryWeight(a_follower, pick->GetWeight())) return nullptr;
+            return pick;
+        }
+
+        void EquipBestOwnedGear(RE::Actor* a_follower, const FollowerState& a_state) {
+            if (!a_follower || Config::g_dollsMode.load()) return;
+            auto* eqObj  = a_follower->GetEquippedObject(false);
+            auto* myWeap = eqObj ? eqObj->As<RE::TESObjectWEAP>() : nullptr;
+            ArmorPref armorPref;
+            bool      useMageApparel = false;
+            RE::TESBoundObject* pick = ComputeOwnedGearPick(a_follower, a_state, armorPref, useMageApparel);
+            g_handedPick = { a_follower->GetFormID(), pick ? pick->GetFormID() : 0, true };   // F10: for the declaration guard
+            if (!pick) return;
+            // APMF EQUIP AUTHORITY (feat/mfo-equip-authority): with the standing
+            // claim live, the DECLARATION is the equip path -- this tick's set
+            // (RefreshEquipDeclaration, sent from ServiceFollower's tail) names
+            // this same pick and APMF equips it. The keep/sell/loot decisions and
+            // the MEO gem carry are untouched; only the direct EquipObject hop is
+            // skipped, inside AcquireEquip, which says so in its own line.
+            const bool declared = EquipAuthorityLive(a_follower->GetFormID());
             if (!useMageApparel) {
                 // [equip] DIAGNOSTIC: what goes on, over what, and the score each
                 // side got -- the line that proves (or disproves) the class swap.
@@ -393,13 +438,14 @@ namespace MFO::Logistics {
                     default:              return "Clothing";
                     }
                 };
-                spdlog::info("[equip] {:08X}: OWNED armor '{}' [{}] rat={:.0f} score={:.1f} <- worn '{}' [{}] rat={:.0f} score={:.1f} | class {} bias h/l={:.2f}/{:.2f}",
+                spdlog::info("[equip] {:08X}: OWNED armor '{}' [{}] rat={:.0f} score={:.1f} <- worn '{}' [{}] rat={:.0f} score={:.1f} | class {} bias h/l={:.2f}/{:.2f}{}",
                              a_follower->GetFormID(),
                              na && na->GetFullName() ? na->GetFullName() : "?", typeTag(na),
                              na ? na->GetArmorRating() : 0.0f, na ? ArmorScore(armorPref, na) : 0.0f,
                              old && old->GetFullName() ? old->GetFullName() : "(bare)", typeTag(old),
                              old ? old->GetArmorRating() : 0.0f, old ? ArmorScore(armorPref, old) : 0.0f,
-                             armorPref.heavyClass ? "HEAVY" : "LIGHT", armorPref.heavyBias, armorPref.lightBias);
+                             armorPref.heavyClass ? "HEAVY" : "LIGHT", armorPref.heavyBias, armorPref.lightBias,
+                             declared ? " | declared (APMF equip authority)" : "");
             }
             if (useMageApparel) {
                 // THRASH GUARD for the authoritative mage correction: only OUT OF
@@ -415,6 +461,334 @@ namespace MFO::Logistics {
                 nxt = now + std::chrono::seconds(5);
             }
             AcquireEquip(a_follower, pick, nullptr, myWeap, /*forceStock*/false);   // already owned -> no transfer
+        }
+
+        // ── APMF EQUIP AUTHORITY: THE DECLARATION (feat/mfo-equip-authority, 2026-09-15) ──
+        // Port #1 of an MFO engine mechanism into APMF (ch.17, ABI v7). MFO no
+        // longer holds a follower's gear by force-equipping it and hoping the
+        // engine leaves it alone; it DECLARES the worn set and APMF's #17a seat
+        // refuses every other engine equip on that actor (the AI putting a shield
+        // back on a dual-wielder within <1 s -- Fable 2026-09-15 -- outfit re-
+        // apply, RemoveItem re-equip). DECLARE -> ENFORCE (CLAUDE.md principle 4):
+        // this composes only what MFO already decides elsewhere, never a new
+        // opinion:
+        //   * the HANDS: a_holdRight / a_holdLeft (Actuation's ForcedHold ledger,
+        //     the source of truth for a gambit equip) when set, else the WEAPON
+        //     currently in that hand (a spell is not an item; a torch counts).
+        //     ABI v8: a one-hand weapon carries its HAND (kEquipSlot_Right/Left)
+        //     so APMF places it there itself; everything else is Default.
+        //     Never a weapon the follower is not holding -- a stowed bow beside a
+        //     held sword is not simultaneously wearable (APMF INTEGRATION.md) and
+        //     would make the pass displace one with the other on every event.
+        //     A two-hander/bow in the right empties the declared left.
+        //   * AMMO when the right is ranged OR roles.doRanged (the archer's own
+        //     ammo equip must pass the seat): the worn ammo of the matching kind,
+        //     else the best carried by damage (bolts for a crossbow /
+        //     roles.wantCrossbow, arrows otherwise).
+        //   * the SHIELD: offHand==2 (dual wield by perks) -> NEVER, whatever is
+        //     worn -- that is the field fix; a two-hander/bow right, a left item,
+        //     or a cast holding the left (a_leftReserved) -> none; offHand==1 ->
+        //     the best owned shield by rating (Actuation's PickShield rule);
+        //     offHand==0 -> the worn shield, if any (MFO has no opinion; keep it).
+        //   * the JUDGED ARMOR PICK (OOC road only, a_judgeArmor -- the combat
+        //     road declares worn armor as is, F9): exactly ComputeOwnedGearPick's
+        //     single best owned upgrade (the piece EquipBestOwnedGear would wear
+        //     this tick, handed over from that pass when it ran, F10);
+        //     it REPLACES every worn ARMO its slot mask overlaps (what the engine
+        //     displaces). One pick per declaration, so a multi-slot upgrade
+        //     converges over ticks the same way the direct pass always has, and
+        //     the set is simultaneously wearable by construction.
+        //   * everything else WORN (jewelry, clothing, circlets, cloaks, modded
+        //     slots -- what MFO does not judge) stays declared, so APMF never
+        //     strips it. Dolls mode (no judging) declares the worn set as-is.
+        // Sent only when it CHANGES ("declare, do not tick" -- APMF_API.h's
+        // SetEquipSet doc): the last sent set is kept per follower, sorted, and
+        // compared; a freshly minted claim (F2) forgets it so the new handle is
+        // declared at once. There is deliberately NO forced re-issue (F3).
+        // Gated on FollowerState::mfoEnabled + APMFBridge::EquipAuthoritySupported();
+        // off -> any standing claim is released and the cache dropped, so the
+        // direct equip paths run byte-identical to a world with no APMF.
+        // THREAD: the worker (#4) -- ServiceFollower's tail (OOC, logistics cadence),
+        // Actuation::EquipWeapon (the Scheduler tick, in combat), OnFollowerRemoved.
+        // g_lastDeclared is worker-serial like g_nextTick; cleared on revert.
+        namespace {
+            // The last SENT set per follower, as (form, hand) pairs sorted -- the
+            // change detector. Worker-serial like g_nextTick.
+            using DeclKey = std::pair<RE::FormID, std::uint8_t>;
+            std::unordered_map<RE::FormID, std::vector<DeclKey>> g_lastDeclared;
+
+            // PLAYER AGENCY (round 3, ABI v8): armor the PLAYER put on a follower
+            // through the trade/gift menu (APMF's seat allows `path=PlayerMenu`
+            // by default; MFO does NOT set kEquipAuth_DenyPlayerMenu). Detected as
+            // a worn ARMO that was not in the last declaration and is not this
+            // tick's judged pick -- nothing of MFO's put it there -- and kept per
+            // follower while owned: the mage-apparel pick may not displace it on
+            // a tie (only a STRICTLY better key does; the rated branch is strictly-
+            // better-than-worn by construction), and the economy keeps it instead
+            // of selling it once MFO's pick displaces it (IsPlayerPick below).
+            // Worker-serial; cleared with the declarations.
+            std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_playerPicks;
+
+            struct EquipDecl {
+                std::vector<APMF_API::APMF_EquipEntry> entries;
+                std::string                            names;
+                void Add(RE::TESBoundObject* a_obj, std::uint8_t a_slot = APMF_API::kEquipSlot_Default) {
+                    if (!a_obj) return;
+                    const RE::FormID id = a_obj->GetFormID();
+                    for (const auto& e : entries)
+                        if (e.form == id && e.slot == a_slot) return;   // same form, same hand: once
+                    entries.push_back(APMF_API::APMF_EquipEntry{ id, a_slot, { 0, 0, 0 } });
+                    if (!names.empty()) names += ", ";
+                    const char* nm = a_obj->GetName();
+                    names += (nm && *nm) ? nm : "?";
+                    if (a_slot == APMF_API::kEquipSlot_Right)      names += " (R)";
+                    else if (a_slot == APMF_API::kEquipSlot_Left)  names += " (L)";
+                }
+            };
+
+            bool SlotsOverlap(const RE::TESObjectARMO* a, const RE::TESObjectARMO* b) {
+                if (!a || !b) return false;
+                return (static_cast<std::uint32_t>(a->GetSlotMask()) &
+                        static_cast<std::uint32_t>(b->GetSlotMask())) != 0;
+            }
+        }
+
+        bool EquipAuthorityLive(RE::FormID a_follower) {
+            return APMFBridge::EquipAuthoritySupported() && APMFBridge::IsEquipAuthorityClaimed(a_follower);
+        }
+
+        void ForgetEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); g_playerPicks.erase(a_follower); }
+        void ClearEquipDeclarations() { g_lastDeclared.clear(); g_playerPicks.clear(); }
+
+        bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form) {
+            const auto it = g_playerPicks.find(a_follower);
+            return it != g_playerPicks.end() && it->second.count(a_form) != 0;
+        }
+
+        void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
+                                     RE::FormID a_holdRight, RE::FormID a_holdLeft,
+                                     bool a_leftReserved, bool a_judgeArmor, const char* a_why) {
+            if (!a_follower) return;
+            const RE::FormID id = a_follower->GetFormID();
+            if (!a_state.mfoEnabled || !APMFBridge::EquipAuthoritySupported()) {
+                APMFBridge::ReleaseEquipAuthority(id);   // idempotent; logs only when a claim stood
+                g_lastDeclared.erase(id);
+                return;
+            }
+            bool fresh = false;
+            if (!APMFBridge::ClaimEquipAuthority(id, &fresh)) {
+                // APMF REFUSED (its equip seat is not installed): the bridge logged
+                // it once; IsEquipAuthorityClaimed is false, so every direct equip
+                // path runs for this follower exactly as without APMF (F1/F5).
+                g_lastDeclared.erase(id);
+                return;
+            }
+            // F2: a handle minted since the last declaration (first claim, a
+            // re-mint after APMF forgot the old one, the toggle's OFF->ON, a New
+            // Game) carries NO set on APMF's side -- the change detector must not
+            // answer "unchanged" against it. Forget, so this rebuild is sent.
+            if (fresh) g_lastDeclared.erase(id);
+
+            EquipDecl decl;
+            const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+            auto inv = a_follower->GetInventory();
+            const auto resolve = [](RE::FormID a_fid) -> RE::TESBoundObject* {
+                if (!a_fid) return nullptr;
+                auto* form = RE::TESForm::LookupByID(a_fid);
+                return form ? form->As<RE::TESBoundObject>() : nullptr;
+            };
+
+            // 1. THE HANDS.
+            RE::TESBoundObject* right = resolve(a_holdRight);
+            if (!right)
+                if (auto* eq = a_follower->GetEquippedObject(false)) right = eq->As<RE::TESObjectWEAP>();
+            RE::TESBoundObject* left = resolve(a_holdLeft);
+            if (!left && !a_leftReserved) {
+                if (auto* eq = a_follower->GetEquippedObject(true)) {
+                    if (auto* w = eq->As<RE::TESObjectWEAP>())      left = w;
+                    else if (auto* l = eq->As<RE::TESObjectLIGH>()) left = l;   // a carried torch
+                }
+            }
+            auto* rightW = right ? right->As<RE::TESObjectWEAP>() : nullptr;
+            const bool rightRanged    = rightW && (rightW->IsBow() || rightW->IsCrossbow());
+            const bool rightTwoHanded = rightW && (rightRanged || rightW->IsTwoHandedSword() || rightW->IsTwoHandedAxe());
+            if (rightTwoHanded) left = nullptr;   // wearability: both hands are the right's
+            // THE HAND (ABI v8): a ONE-HAND weapon names its hand -- the ledger's
+            // right/left, or the hand the held weapon is actually in -- so APMF
+            // itself places a dual-wielder's off-hand weapon in the LEFT (the v7
+            // slot-less pass put it in the right and evicted the sword, F2/F3).
+            // A two-hander, a bow, a torch: Default, the engine picks (APMF_API.h).
+            // The same form may stand once per hand (two identical daggers).
+            const auto handOf = [](RE::TESBoundObject* a_obj, std::uint8_t a_hand) -> std::uint8_t {
+                auto* w = a_obj ? a_obj->As<RE::TESObjectWEAP>() : nullptr;
+                const bool oneHand = w && (w->IsOneHandedSword() || w->IsOneHandedDagger() ||
+                                           w->IsOneHandedAxe()   || w->IsOneHandedMace());
+                return oneHand ? a_hand : APMF_API::kEquipSlot_Default;
+            };
+            decl.Add(right, handOf(right, APMF_API::kEquipSlot_Right));
+            decl.Add(left,  handOf(left,  APMF_API::kEquipSlot_Left));
+
+            // 2. AMMO.
+            if (rightRanged || roles.doRanged) {
+                const bool wantBolt = rightRanged ? rightW->IsCrossbow() : roles.wantCrossbow;
+                RE::TESAmmo* worn = nullptr; RE::TESAmmo* best = nullptr; float bestDmg = -1.0f;
+                for (auto& [obj, data] : inv) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* am = obj->As<RE::TESAmmo>();
+                    if (!am || AmmoIsBolt(am) != wantBolt) continue;
+                    if (data.second && data.second->IsWorn()) worn = am;
+                    const float dmg = am->GetRuntimeData().data.damage;
+                    if (!best || dmg > bestDmg) { best = am; bestDmg = dmg; }
+                }
+                decl.Add(worn ? worn : best);
+            }
+
+            // 3. THE SHIELD.
+            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+            RE::TESObjectARMO* shield = nullptr;
+            if (roles.offHand != 2 && !rightTwoHanded && !left && !a_leftReserved) {
+                if (roles.offHand == 1) {
+                    float bestAr = 0.0f;   // Actuation's PickShield: best carried by rating, playable
+                    for (auto& [obj, data] : inv) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* ar = obj->As<RE::TESObjectARMO>();
+                        if (!ar || !ar->IsShield()) continue;
+                        if ((ar->GetFormFlags() & (1u << 2)) != 0) continue;   // non-playable
+                        const float rating = ar->GetArmorRating();
+                        if (!shield || rating >= bestAr) { bestAr = rating; shield = ar; }
+                    }
+                } else {
+                    shield = a_follower->GetWornArmor(Slot::kShield);
+                }
+            }
+            decl.Add(shield);
+
+            // 4. THE JUDGED ARMOR PICK (EquipBestOwnedGear's own pick, one per declaration).
+            //    OOC road only (a_judgeArmor): legacy never wears armor in combat
+            //    (EquipBestOwnedGear is OOC-only, its mage branch !IsInCombat), so
+            //    the combat road (DeclareFromLedger) declares the worn armor as is
+            //    (F9). Consumed from EquipBestOwnedGear's hand-off when that pass
+            //    ran this tick, else computed here (F10).
+            RE::TESObjectARMO* pick = nullptr;
+            if (a_judgeArmor) {
+                RE::TESBoundObject* pickObj = nullptr;
+                if (g_handedPick.set && g_handedPick.follower == id) {
+                    pickObj = resolve(g_handedPick.pick);
+                } else {
+                    ArmorPref pref; bool mageMode = false;
+                    pickObj = ComputeOwnedGearPick(a_follower, a_state, pref, mageMode);
+                }
+                pick = pickObj ? pickObj->As<RE::TESObjectARMO>() : nullptr;
+            }
+            g_handedPick = {};   // one tick's hand-off, consumed or not
+
+            // 4b. THE PLAYER'S OWN CHOICE (round 3, ABI v8: APMF lets the trade/gift
+            //     menu equip through). A worn non-shield ARMO that the last
+            //     declaration did not carry and that is not this tick's pick was put
+            //     there by the player: record it, log it once, and let it stand.
+            //     ONLY UNDER ENFORCEMENT (Fable F-A on e0b52b5): in observe mode APMF
+            //     equips the pick non-forced and the engine takes the old piece
+            //     back, which reads exactly like a trade-menu dress -- so with
+            //     IsEquipAuthorityEnforced() false NOTHING is recorded (the
+            //     "player put on" line cannot occur in observe mode). Under
+            //     enforcement an off-set engine equip is refused, so a new worn
+            //     piece can only be the player's (or a script's) -- and only on a
+            //     tick where MFO is not contesting the slot: this tick's pick is
+            //     absent, or already worn (a landed pick proves MFO took the slot,
+            //     not that something took it back). The rated
+            //     judge only ever picks a STRICTLY better-scored piece than what is
+            //     worn (ArmorIsBetter), so MFO's pick wins back the slot exactly when
+            //     it should; the MAGE judge breaks ties by FormID, so a pick that
+            //     merely ties the player's piece on (tier, metric) is dropped here.
+            //     A displaced player piece stays recorded while owned: the economy
+            //     KEEPS it (IsPlayerPick) instead of selling it as a redundant
+            //     inferior. Prune what the follower no longer owns.
+            auto& picks = g_playerPicks[id];
+            for (auto it = picks.begin(); it != picks.end();) {
+                auto* form = RE::TESForm::LookupByID(*it);
+                auto* obj  = form ? form->As<RE::TESBoundObject>() : nullptr;
+                auto invIt = obj ? inv.find(obj) : inv.end();
+                if (invIt == inv.end() || invIt->second.first <= 0) it = picks.erase(it);
+                else                                                ++it;
+            }
+            const auto* last = [&]() -> const std::vector<DeclKey>* {
+                const auto it = g_lastDeclared.find(id);
+                return it == g_lastDeclared.end() ? nullptr : &it->second;
+            }();
+            const auto lastHas = [&](RE::FormID a_form) {
+                if (!last) return true;   // no declaration yet: nothing can be "new since"
+                return std::any_of(last->begin(), last->end(), [&](const DeclKey& k) { return k.first == a_form; });
+            };
+            const bool pickWorn = [&]() {
+                if (!pick) return false;
+                const auto it = inv.find(pick);
+                return it != inv.end() && it->second.second && it->second.second->IsWorn();
+            }();
+            const bool mayRecordPlayerPick = APMFBridge::IsEquipAuthorityEnforced() && (!pick || pickWorn);
+            if (mayRecordPlayerPick) {
+                for (auto& [obj, data] : inv) {
+                    if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                    auto* ar = obj->As<RE::TESObjectARMO>();
+                    if (!ar || ar->IsShield() || ar == pick) continue;
+                    const RE::FormID f = ar->GetFormID();
+                    if (lastHas(f) || picks.count(f)) continue;
+                    picks.insert(f);
+                    spdlog::info("[equip-auth] {:08X}: player put on '{}' -- kept", id,
+                                 ar->GetName() ? ar->GetName() : "?");
+                }
+            }
+            if (pick && !picks.empty()) {
+                const bool caster = IsCasterFollower(a_state);
+                if (caster && Config::g_mageWearRobes.load()) {
+                    // Mage judge: keep the player's worn piece on a tie of (tier, metric).
+                    const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
+                    const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                    int pt = 0; std::int32_t pm = 0;
+                    const bool pickRanks = MageApparelBuyKey(pick, top2, schoolPrimary, IsNecromancerFollower(a_state), pt, pm);
+                    for (auto& [obj, data] : inv) {
+                        if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                        auto* ar = obj->As<RE::TESObjectARMO>();
+                        if (!ar || ar == pick || !picks.count(ar->GetFormID()) || !SlotsOverlap(ar, pick)) continue;
+                        int wt = 0; std::int32_t wm = 0;
+                        MageApparelBuyKey(ar, top2, schoolPrimary, true, wt, wm);
+                        const bool strictlyBetter = pickRanks && (pt > wt || (pt == wt && pm > wm));
+                        if (!strictlyBetter) { pick = nullptr; break; }   // the player's piece stands
+                    }
+                }
+                // Rated judge: ArmorIsBetter already demands a strictly higher score than the worn piece.
+            }
+            decl.Add(pick);
+
+            // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick displaces.
+            //    Shields went through rule 3 (an off-rule worn shield is NOT kept).
+            for (auto& [obj, data] : inv) {
+                if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                auto* ar = obj->As<RE::TESObjectARMO>();
+                if (!ar || ar->IsShield()) continue;
+                if (pick && ar != pick && SlotsOverlap(ar, pick)) continue;
+                decl.Add(ar);
+            }
+
+            // SEND ONLY ON CHANGE.
+            // SEND ONLY ON CHANGE -- no forced re-issue (F3, Fable round 2): a
+            // re-send is a declaration EVENT, and under the v7 ABI APMF's slot-less
+            // pass answers it by putting the declared off-hand weapon in the RIGHT
+            // hand (evicting the sword) before MFO's own hop puts both back -- four
+            // engine ops and a visible flicker per re-send. The top-up's "give it
+            // back" is Actuation's own explicit placement (PostHandEquipsDeferred),
+            // which needs no re-declaration: the item is already in-set.
+            std::vector<DeclKey> sorted;
+            sorted.reserve(decl.entries.size());
+            for (const auto& e : decl.entries) sorted.emplace_back(e.form, e.slot);
+            std::sort(sorted.begin(), sorted.end());
+            if (auto it = g_lastDeclared.find(id); it != g_lastDeclared.end() && it->second == sorted) return;
+            if (!APMFBridge::DeclareEquipSet(id, decl.entries)) {   // logged in the bridge; retried next refresh
+                g_lastDeclared.erase(id);
+                return;
+            }
+            g_lastDeclared[id] = std::move(sorted);
+            spdlog::info("[equip-auth] {:08X}: declare n={} [{}] ({}{})", id, decl.entries.size(), decl.names,
+                         a_why ? a_why : "?", fresh ? ", new claim" : "");
         }
 
         // ── #21 buy thresholds (Features A + B) ─────────────────────────────────
@@ -983,6 +1357,7 @@ namespace MFO::Logistics {
                 // never keep/wear it; sell it even while worn (RemoveItem unequips it).
                 const bool forceSell = redundantInferior || (armo && IsBlacklistedApparel(armo));
                 if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
+                if (armo && IsPlayerPick(fid, obj->GetFormID())) { sdiag(obj, "playerPick"); continue; }   // the player put it on him: keep, never sell (round 3)
                 if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
                 RE::BGSKeywordForm* kwf = weap
                     ? static_cast<RE::BGSKeywordForm*>(weap)

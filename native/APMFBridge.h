@@ -1,6 +1,8 @@
 #pragma once
 #include <RE/Skyrim.h>
 #include <chrono>   // FacetExpiry()'s std::chrono::milliseconds return type
+#include <vector>   // DeclareEquipSet's declared worn set
+#include "APMF_API.h"   // APMF_EquipEntry -- DeclareEquipSet's entry type (ABI v8)
 #include "Loadout.h"   // Loadout::HandPick -- HandFor's argument type below
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -483,6 +485,117 @@ namespace MFO::APMFBridge {
 
     // Worker-safe. Release the combat-action-deny claim.
     void ReleaseCombatActionDeny(RE::FormID a_follower);
+
+    // ── EQUIP AUTHORITY: a STANDING claim + the DECLARED WORN SET (ch.17, APMF v7) ──
+    // feat/mfo-equip-authority (2026-09-15): port #1 of an MFO engine mechanism
+    // into APMF. MFO used to hold a follower's gear in place by force-equipping it
+    // (the T#76 prevent-removal lock, Actuation.cpp) and still lost the LEFT hand to
+    // the follower's own combat AI within a second (Fable 2026-09-15: the AI
+    // re-equips the shield over the dual-wield off-hand and the engine's forced
+    // displacement strips the hold). Under the authority MFO DECLARES the worn set
+    // instead -- APMF equips every declared item the actor is not wearing and
+    // REFUSES every other engine equip on that actor at its #17a call-site seat
+    // (outfit re-apply, the AI's own weapon/armor choice, combat re-arm, RemoveItem
+    // re-equip, another plugin's equip). The declaration is built by
+    // Logistics_Economy.cpp's RefreshEquipDeclaration (worker) and only SENT when
+    // it changes ("declare, do not tick" -- APMF_API.h's SetEquipSet doc).
+    //
+    // LIFECYCLE. The claim is STANDING: no TTL, no refresh, NEVER swept by Tick()
+    // -- it ends only with ReleaseEquipAuthority (unmanage / dismiss / the T#78
+    // MFO-OFF edge, all via Logistics::OnFollowerRemoved), ClearTransientState
+    // (kPreLoadGame AND kNewGame -- SKSE sends no kPreLoadGame for a New Game
+    // started from a running session, and the new session reuses the same base
+    // FormIDs), or the kill switch (Tick() releases a standing claim the
+    // instant bApmfEquipAuthority reads OFF, so a flipped toggle cannot leave a
+    // set enforced behind it). Re-made on the first service after a load. A KEPT
+    // handle is re-validated against APMF (IsClaimLive, once ≥ 2 s old) on every
+    // claim call and re-minted if APMF has forgotten it (F2) -- so APMF's own
+    // release-all / unload sweep cannot leave MFO declaring into the void.
+    //
+    // THREAD ROAD: the worker (Scheduler tick -> Logistics::ServiceFollower and
+    // Actuation::EquipWeapon), exactly ClaimEquipment's road -- APMF's
+    // RequestEx/Release/SetEquipSet are thread-safe (copy + enqueue, applied on
+    // the game thread at APMF's next Drain), and this bridge's own map is under
+    // g_mx. No g_followers access here (#4/#74); callers pass FormIDs.
+    //
+    // NOT MIXED with ch.15: ClaimEquipment's kIntent_Equipment claim is the PARAM
+    // form (gate only, no engine write), which APMF's INTEGRATION.md states is
+    // unaffected by a ch.17 claim on the same actor. Both stand together.
+
+    // Worker-safe. Is the equip-authority channel available right now -- APMF
+    // present AND its resolved interface carries the v8 SetEquipSetEx slot (the
+    // per-item HAND; v7's slot-less SetEquipSet cannot dual-wield, so v8 is the
+    // floor) AND Config::g_apmfEquipAuthority is on? The exact three non-arbitration early
+    // returns ClaimEquipAuthority/DeclareEquipSet take. UNLIKE the cast facets'
+    // OffenseCastClaimSupported split, a refused CLAIM here does NOT fail closed
+    // (F1/F5, Fable round 2): APMF refuses a ch.17 claim exactly when its #17a
+    // equip seat is not installed, and then nothing on APMF's side can perform or
+    // deny an equip -- so the correct behaviour on refusal is "MFO keeps its own
+    // equips" (IsEquipAuthorityClaimed false -> every direct path runs as without
+    // APMF), and that is what every site does. What DOES fail closed is a
+    // DECLARATION on a standing claim (DeclareEquipSet false with a claim live):
+    // the caller logs and does not equip around it.
+    bool EquipAuthoritySupported();
+
+    // Any thread. APMF's v8 IsEquipAuthorityEnforced: true only when its #17a
+    // seat is INSTALLED and APMF.ini's [EquipAuthority] bEquipObserveOnly is 0 --
+    // an off-set engine equip on a claimed actor is actually REFUSED. False in
+    // observe mode (APMF still equips the declared set, the engine may take it
+    // back off), before kDataLoaded, or when the channel is unsupported. Logged
+    // as `mode=` in the `[equip-auth] <id>: claim` line so a Deck log states
+    // which of the two a session ran under.
+    bool IsEquipAuthorityEnforced();
+
+    // Worker-safe. Ensure a_follower holds the STANDING kIntent_EquipAuthority
+    // claim (param.ival = kEquipAuth_None: scripts/console pass, unequips pass,
+    // observe-only is APMF's own INI decision this cycle). Idempotent: a live claim
+    // is kept, not re-requested -- but a KEPT handle is re-validated with APMF's
+    // v6 IsClaimLive once it is ≥ 2 s old (young claims are not yet in APMF's
+    // published snapshot) and re-minted when APMF no longer knows it (F2: APMF's
+    // hotkey release-all / unload sweep, a New Game from a running session, the
+    // toggle's OFF->ON). Returns true iff a claim handle stands after the call;
+    // `a_outFresh` (optional) is set true when the handle standing now was minted
+    // since the last DeclareEquipSet on it -- RefreshEquipDeclaration drops its
+    // change detector on that, so the new handle gets a declaration at once
+    // instead of "unchanged, nothing sent" against a handle APMF has forgotten.
+    // false + EquipAuthoritySupported() -> APMF REFUSED the claim (APMF refuses
+    // exactly when its equip seat is not installed, so nothing on its side could
+    // perform or deny an equip): the caller keeps MFO's OWN equips for that
+    // follower -- the direct paths run as without APMF. Logged once per streak.
+    // Logs `[equip-auth] <id>: claim` when a handle is minted.
+    bool ClaimEquipAuthority(RE::FormID a_follower, bool* a_outFresh = nullptr);
+
+    // Worker-safe. Release the standing claim (APMF: the engine owns the worn set
+    // again; nothing is unequipped). No-op without one. Logs
+    // `[equip-auth] <id>: release` when a live handle was released.
+    void ReleaseEquipAuthority(RE::FormID a_follower);
+
+    // Worker-safe (mutex-guarded read). Does a_follower hold a live equip-
+    // authority claim handle? THE per-follower switch the direct equip sites
+    // consult (AcquireEquip's armor hop, Actuation's weapon/shield equips):
+    // supported AND claimed -> the declaration is the equip path. Says nothing
+    // about whether the claim currently OWNS the channel (a claim that lost
+    // arbitration keeps its handle and its stored set, which takes effect on the
+    // win) -- that is APMF's business, and MFO must not equip around it either way.
+    bool IsEquipAuthorityClaimed(RE::FormID a_follower);
+
+    // Worker-safe. DECLARE the worn set for a_follower through the v8 SetEquipSetEx
+    // slot on the standing claim. `a_forms` are APMF_EquipEntry {BASE FormID, hand}:
+    // kEquipSlot_Right / kEquipSlot_Left for the hand-held items whose hand MFO
+    // decides (the ForcedHold ledger, or the hand a weapon is actually in),
+    // kEquipSlot_Default (the engine picks, v7 verbatim) for armor, ammo, a bow, a
+    // two-hander, a shield, a torch; the same form may appear once per hand. The
+    // array is COPIED inside APMF's call. An empty set CLEARS the declaration
+    // (pass-through) without releasing the claim.
+    // More than APMF_API::kMaxEquipSet (32) entries is MFO's error: logged as an
+    // error and truncated (APMF treats the excess as off-set). Returns false when
+    // the channel is unsupported OR no claim handle stands (a declaration needs the
+    // claim: call ClaimEquipAuthority first) -- false + EquipAuthoritySupported()
+    // is FAIL CLOSED for the caller (log, do not equip directly). SetEquipSet
+    // itself returns nothing and no-ops silently on a stale handle, so a `true`
+    // means "handed to APMF", not "worn" -- the [apmf][equip-auth] pass line and
+    // the [apmf][equip-obs] verdicts are the readback.
+    bool DeclareEquipSet(RE::FormID a_follower, const std::vector<APMF_API::APMF_EquipEntry>& a_forms);
 
     // ── heal-cast facet CLAIM: PER-CAST, TTL-bounded (ch.8b, APMF v5) ───────────
     // MFO's Composed Forced Cast (Docs/SPEC-FORCED-CAST.md) makes a follower cast
