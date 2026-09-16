@@ -303,6 +303,16 @@ namespace MFO::APMFBridge {
             // change detector so the new handle gets a declaration at once.
             std::chrono::steady_clock::time_point equipAuthMintedAt{};
             bool equipAuthFresh = false;
+            // ABI v9 (feat/mfo-equip-authority-v9): the SCOPE last SENT on this
+            // handle (DeclareEquipScope), mirrored here ONLY for the direct
+            // paths' EquipAuthorityOwns query (EquipTorch's left-hand gate) --
+            // the set itself still lives in Logistics_Economy.cpp. Reset to
+            // APMF's own default {All, 0} when a handle is minted: a fresh claim
+            // carries no declaration, and APMF answers "no declaration -> allow"
+            // until one goes out, so the query reads "owned" only from a SENT
+            // scope (equipAuthFresh false).
+            std::uint32_t equipOwned  = APMF_API::kEquipCat_All;
+            std::uint32_t equipDenied = 0;
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
@@ -1545,21 +1555,37 @@ namespace MFO::APMFBridge {
     // thread-safe enqueues. The three non-arbitration early returns here and in
     // EquipAuthoritySupported() read the SAME g_apmf / abiVersion / toggle, so a
     // `false` from Claim/Declare with Supported() true can only mean APMF refused.
+    // ABI FLOOR = 9 (SetEquipScope). Under v8 MFO's declaration OMITS the hands
+    // it does not hold, and a v8 APMF owns every category by default -- so a v9
+    // declaration on a v8 APMF would refuse every engine weapon equip on the
+    // actor (the F6 freeze, worse than before). A too-old APMF therefore gets NO
+    // authority at all: the direct equip paths run as without APMF. Logged once.
     bool EquipAuthoritySupported() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        return api && api->abiVersion >= 8 && Config::g_apmfEquipAuthority.load();
+        if (!api || !Config::g_apmfEquipAuthority.load()) return false;
+        if (api->abiVersion < 9) {
+            static std::atomic<bool> s_warnedEquipAbi{ false };
+            if (!s_warnedEquipAbi.exchange(true))
+                spdlog::warn("[equip-auth] APMF ABI v{} has no SetEquipScope (need >= 9) -- equip authority "
+                             "OFF: no claim, no declaration; MFO keeps its own equips (degrade to NO "
+                             "authority, never to a blanket lock -- a v9 declaration omits the hands it "
+                             "does not hold and a v8 APMF would own them by default and freeze them).",
+                             api->abiVersion);
+            return false;
+        }
+        return true;
     }
 
     bool IsEquipAuthorityEnforced() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api || api->abiVersion < 8) return false;
+        if (!api || api->abiVersion < 9) return false;
         return reinterpret_cast<const APMF_API::APMF_API_v8*>(api)->IsEquipAuthorityEnforced();
     }
 
     bool ClaimEquipAuthority(RE::FormID a_follower, bool* a_outFresh) {
         if (a_outFresh) *a_outFresh = false;
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api || a_follower == 0 || api->abiVersion < 8 || !Config::g_apmfEquipAuthority.load()) return false;
+        if (!api || a_follower == 0 || api->abiVersion < 9 || !Config::g_apmfEquipAuthority.load()) return false;
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
         if (o.equipAuthHandle != APMF_API::kInvalidHandle) {
@@ -1609,6 +1635,8 @@ namespace MFO::APMFBridge {
         g_equipAuthRefused.erase(a_follower);
         o.equipAuthMintedAt = std::chrono::steady_clock::now();
         o.equipAuthFresh    = true;
+        o.equipOwned        = APMF_API::kEquipCat_All;   // APMF's default on a new claim (v9)
+        o.equipDenied       = 0;
         if (a_outFresh) *a_outFresh = true;
         // mode= is APMF's v8 IsEquipAuthorityEnforced read at claim time (seat
         // installed AND bEquipObserveOnly=0), so a Deck log states observe vs
@@ -1639,9 +1667,47 @@ namespace MFO::APMFBridge {
         return it != g_owned.end() && it->second.equipAuthHandle != APMF_API::kInvalidHandle;
     }
 
+    bool DeclareEquipScope(RE::FormID a_follower, std::uint32_t a_owned, std::uint32_t a_denied) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || a_follower == 0 || api->abiVersion < 9 || !Config::g_apmfEquipAuthority.load()) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) {
+            spdlog::error("[equip-auth] {:08X}: DeclareEquipScope without a standing claim -- "
+                          "ClaimEquipAuthority first (scope NOT sent)", a_follower);
+            return false;
+        }
+        if ((a_owned | a_denied) & ~static_cast<std::uint32_t>(APMF_API::kEquipCat_All))
+            spdlog::error("[equip-auth] {:08X}: scope carries bits outside kEquipCat_All (owned=0x{:X} "
+                          "denied=0x{:X}) -- APMF masks them off (MFO's composition bug)",
+                          a_follower, a_owned, a_denied);
+        // COPIED inside the call (APMF_API.h: read synchronously, never retained);
+        // a stack temporary is the documented shape. Sent BEFORE the set by the
+        // one caller (RefreshEquipDeclaration): both apply in the same Drain, so
+        // the seat never sees a set from one generation and a scope from another.
+        APMF_API::APMF_EquipScope scope{};
+        scope.owned  = a_owned;
+        scope.denied = a_denied;
+        reinterpret_cast<const APMF_API::APMF_API_v9*>(api)->SetEquipScope(it->second.equipAuthHandle, &scope);
+        it->second.equipOwned  = a_owned;
+        it->second.equipDenied = a_denied;
+        // equipAuthFresh is cleared by DeclareEquipSet, which always follows: the
+        // scope alone is not a declaration.
+        return true;
+    }
+
+    bool EquipAuthorityOwns(RE::FormID a_follower, std::uint32_t a_categories) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) return false;
+        if (it->second.equipAuthFresh) return false;   // no declaration out yet: APMF allows everything
+        return (it->second.equipOwned & a_categories) != 0;
+    }
+
     bool DeclareEquipSet(RE::FormID a_follower, const std::vector<APMF_API::APMF_EquipEntry>& a_forms) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api || a_follower == 0 || api->abiVersion < 8 || !Config::g_apmfEquipAuthority.load()) return false;
+        if (!api || a_follower == 0 || api->abiVersion < 9 || !Config::g_apmfEquipAuthority.load()) return false;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
         if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) {

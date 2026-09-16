@@ -1984,7 +1984,7 @@ namespace MFO::Actuation {
                         // the claim live the ledger is written (RecordLeftHold) and
                         // the set is DECLARED with the off-hand as kEquipSlot_Left;
                         // APMF places it. Send-on-change (F3): the new .left IS the
-                        // change. The shield branch is declaration-only too. The
+                        // change. The shield branch is always direct (v9). The
                         // readback (two hops) is the probe's proof of the hand.
                         // Claim-or-keep here as well as in the OOC service, so a
                         // follower first seen IN combat (a load mid-fight) is
@@ -2016,11 +2016,9 @@ namespace MFO::Actuation {
                             }
                         } else if (roles.offHand == 1 && !(leftA && leftA->IsShield())) {
                             if (auto* sh = PickShield(a_follower)) {
-                                if (authority) DeclareFromLedger(a_follower, "shield top-up");   // send-on-change (F3)
-                                else           EquipShieldOnMain(id, sh->GetFormID());
+                                EquipShieldOnMain(id, sh->GetFormID());   // v9: Shield is never owned -- always direct
                                 spdlog::info("[equip] {:08X}: GAMBIT equip shield '{}' (shield by perks, "
-                                             "top-up{})", id, sh->GetFullName() ? sh->GetFullName() : "?",
-                                             authority ? ", declared" : "");
+                                             "top-up)", id, sh->GetFullName() ? sh->GetFullName() : "?");
                             }
                         }
                     }
@@ -2112,7 +2110,7 @@ namespace MFO::Actuation {
                     // seated), the ledger is written exactly as below, and the
                     // set is DECLARED from it with .right as kEquipSlot_Right and
                     // .left as kEquipSlot_Left -- APMF's pass places each in its
-                    // hand. The shield is declaration-only. Without the authority:
+                    // hand. The shield is always direct (v9: never owned). Without the authority:
                     // byte-identical to before (right force-equipped here,
                     // EquipLeftHeld below).
                     authority = APMFBridge::EquipAuthoritySupported() && APMFBridge::ClaimEquipAuthority(id);
@@ -2134,8 +2132,8 @@ namespace MFO::Actuation {
                     if (offHandW) {
                         if (authority) { RecordLeftHold(a_follower, offHandW); offHandHeld = true; }
                         else           offHandHeld = EquipLeftHeld(a_follower, offHandW, &offHandWhyNot);   // force-held, ledger .left
-                    } else if (offHandSh && !authority) {
-                        EquipShieldOnMain(id, offHandSh->GetFormID());   // plain (F3: main thread)
+                    } else if (offHandSh) {
+                        EquipShieldOnMain(id, offHandSh->GetFormID());   // plain (F3: main thread); v9: Shield is never owned, always direct
                     }
                     if (authority) {
                         DeclareFromLedger(a_follower, a_ranged ? "gambit equip ranged" : "gambit equip melee");

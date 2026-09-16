@@ -471,25 +471,38 @@ namespace MFO::Logistics {
         // back on a dual-wielder within <1 s -- Fable 2026-09-15 -- outfit re-
         // apply, RemoveItem re-equip). DECLARE -> ENFORCE (CLAUDE.md principle 4):
         // this composes only what MFO already decides elsewhere, never a new
-        // opinion:
+        // opinion.
+        // SCOPED (ABI v9, feat/mfo-equip-authority-v9, 2026-09-16): the whole-
+        // facet v8 authority froze a follower with NO equip gambit (STATUS F6: the
+        // declaration read "the weapon currently in the hand" and then refused
+        // the AI's own melee<->ranged switch -- 117 would-denies, none against a
+        // hold). Now MFO DECLARES WHAT IT OWNS AND ACTS DIRECTLY IN WHAT IT DOES
+        // NOT: the declaration carries a SCOPE (DeclareEquipScope, sent before
+        // the set) of owned/denied EquipCategory bits, computed here:
+        //   owned  = Armor | Right (a right hold) | Left (a left hold)
+        //          | Right+Left+Ammo (a held bow/crossbow) | Right+Left (a held 2H)
+        //   denied = Shield iff roles.offHand==2 under bWeaponStyleControl
+        // Light never owned; Shield never owned. A hand without a hold is
+        // UNOWNED: the seat allows the AI's own equips there (`owned=0`).
         //   * the HANDS: a_holdRight / a_holdLeft (Actuation's ForcedHold ledger,
-        //     the source of truth for a gambit equip) when set, else the WEAPON
-        //     currently in that hand (a spell is not an item; a torch counts).
-        //     ABI v8: a one-hand weapon carries its HAND (kEquipSlot_Right/Left)
-        //     so APMF places it there itself; everything else is Default.
-        //     Never a weapon the follower is not holding -- a stowed bow beside a
-        //     held sword is not simultaneously wearable (APMF INTEGRATION.md) and
-        //     would make the pass displace one with the other on every event.
-        //     A two-hander/bow in the right empties the declared left.
-        //   * AMMO when the right is ranged OR roles.doRanged (the archer's own
-        //     ammo equip must pass the seat): the worn ammo of the matching kind,
-        //     else the best carried by damage (bolts for a crossbow /
-        //     roles.wantCrossbow, arrows otherwise).
-        //   * the SHIELD: offHand==2 (dual wield by perks) -> NEVER, whatever is
-        //     worn -- that is the field fix; a two-hander/bow right, a left item,
-        //     or a cast holding the left (a_leftReserved) -> none; offHand==1 ->
-        //     the best owned shield by rating (Actuation's PickShield rule);
-        //     offHand==0 -> the worn shield, if any (MFO has no opinion; keep it).
+        //     the source of truth for a gambit equip) and NOTHING ELSE -- the
+        //     v8 "else the weapon currently in that hand" fallback and its torch
+        //     read are gone (they were the F6 freeze). ABI v8: a one-hand weapon
+        //     carries its HAND (kEquipSlot_Right/Left) so APMF places it there
+        //     itself; a bow/two-hander is Default. A two-hander/bow in the right
+        //     empties the declared left. a_leftReserved (a cast on the left):
+        //     nothing left. The OOC service road passes 0/0 (no hold OOC: holds
+        //     release within two OOC ticks), so OOC owns Armor only.
+        //   * BOUND weapons (live BoundItemEffect): declared only into an OWNED
+        //     hand (a one-hander needs its hand, a bound bow/2H both).
+        //   * AMMO only under a bow/crossbow HOLD (Ammo owned exactly then): the
+        //     worn ammo of the matching kind, else the best carried by damage
+        //     (bolts for a crossbow, arrows otherwise). The archer AI's own ammo
+        //     equips pass in the unowned category.
+        //   * the SHIELD: NEVER declared. offHand==2 (dual wield by perks) ->
+        //     the category is DENIED (the field fix, now without owning a hand);
+        //     offHand==1 -> Actuation's direct EquipShieldOnMain (an unowned-
+        //     category equip the seat allows); offHand==0 -> the engine's own.
         //   * the JUDGED ARMOR PICK (OOC road only, a_judgeArmor -- the combat
         //     road declares worn armor as is, F9): exactly ComputeOwnedGearPick's
         //     single best owned upgrade (the piece EquipBestOwnedGear would wear
@@ -502,9 +515,10 @@ namespace MFO::Logistics {
         //     slots -- what MFO does not judge) stays declared, so APMF never
         //     strips it. Dolls mode (no judging) declares the worn set as-is.
         // Sent only when it CHANGES ("declare, do not tick" -- APMF_API.h's
-        // SetEquipSet doc): the last sent set is kept per follower, sorted, and
-        // compared; a freshly minted claim (F2) forgets it so the new handle is
-        // declared at once. There is deliberately NO forced re-issue (F3).
+        // SetEquipSet doc): the last sent (set, owned, denied) is kept per
+        // follower, sorted, and compared; a freshly minted claim (F2) forgets it
+        // so the new handle is declared at once. Scope then set, one call. There
+        // is deliberately NO forced re-issue (F3).
         // Gated on FollowerState::mfoEnabled + APMFBridge::EquipAuthoritySupported();
         // off -> any standing claim is released and the cache dropped, so the
         // direct equip paths run byte-identical to a world with no APMF.
@@ -512,10 +526,35 @@ namespace MFO::Logistics {
         // Actuation::EquipWeapon (the Scheduler tick, in combat), OnFollowerRemoved.
         // g_lastDeclared is worker-serial like g_nextTick; cleared on revert.
         namespace {
-            // The last SENT set per follower, as (form, hand) pairs sorted -- the
-            // change detector. Worker-serial like g_nextTick.
+            // The last SENT declaration per follower: the (form, hand) pairs
+            // sorted PLUS the v9 scope (owned, denied) -- the change detector. A
+            // scope-only change (a new hold owning a hand the set already named)
+            // is a declaration event too. Worker-serial like g_nextTick.
             using DeclKey = std::pair<RE::FormID, std::uint8_t>;
-            std::unordered_map<RE::FormID, std::vector<DeclKey>> g_lastDeclared;
+            struct SentDecl {
+                std::vector<DeclKey> keys;
+                std::uint32_t        owned  = 0;
+                std::uint32_t        denied = 0;
+                bool operator==(const SentDecl&) const = default;
+            };
+            std::unordered_map<RE::FormID, SentDecl> g_lastDeclared;
+
+            // "Armor+Right+Left" / "none" for the declare line (ABI v9 EquipCategory).
+            std::string CategoryNames(std::uint32_t a_mask) {
+                std::string out;
+                const auto add = [&](std::uint32_t bit, const char* name) {
+                    if (!(a_mask & bit)) return;
+                    if (!out.empty()) out += '+';
+                    out += name;
+                };
+                add(APMF_API::kEquipCat_Armor,  "Armor");
+                add(APMF_API::kEquipCat_Shield, "Shield");
+                add(APMF_API::kEquipCat_Right,  "Right");
+                add(APMF_API::kEquipCat_Left,   "Left");
+                add(APMF_API::kEquipCat_Ammo,   "Ammo");
+                add(APMF_API::kEquipCat_Light,  "Light");
+                return out.empty() ? "none" : out;
+            }
 
             // PLAYER AGENCY (round 3, ABI v8): armor the PLAYER put on a follower
             // through the trade/gift menu (APMF's seat allows `path=PlayerMenu`
@@ -640,27 +679,53 @@ namespace MFO::Logistics {
                 return form ? form->As<RE::TESBoundObject>() : nullptr;
             };
 
-            // 1. THE HANDS.
+            // 1. THE HANDS -- the ForcedHold ledger ONLY (ABI v9, SCOPED authority).
+            //    A hand is DECLARED and OWNED iff a hold stands in it. There is
+            //    deliberately NO "else the weapon currently in that hand" read
+            //    and NO torch read any more: that fallback WAS the F6 freeze --
+            //    it declared the AI's own pick and then refused the AI's next
+            //    switch (117 CombatNode would-denies in one deck run, none
+            //    against a hold). With no hold the hands are UNOWNED, the seat
+            //    answers `owned=0 verdict=allow`, and the follower switches
+            //    weapons on his own exactly as without APMF. a_leftReserved (a
+            //    cast holds/claims the left): nothing left, owned or declared --
+            //    the hold yields to the cast anyway (YieldForcedLeftHand).
+            const RE::FormID holdLeft = a_leftReserved ? 0 : a_holdLeft;
             RE::TESBoundObject* right = resolve(a_holdRight);
-            if (!right)
-                if (auto* eq = a_follower->GetEquippedObject(false)) right = eq->As<RE::TESObjectWEAP>();
-            RE::TESBoundObject* left = resolve(a_holdLeft);
-            if (!left && !a_leftReserved) {
-                if (auto* eq = a_follower->GetEquippedObject(true)) {
-                    if (auto* w = eq->As<RE::TESObjectWEAP>())      left = w;
-                    else if (auto* l = eq->As<RE::TESObjectLIGH>()) left = l;   // a carried torch
-                }
-            }
+            RE::TESBoundObject* left  = resolve(holdLeft);
             auto* rightW = right ? right->As<RE::TESObjectWEAP>() : nullptr;
             const bool rightRanged    = rightW && (rightW->IsBow() || rightW->IsCrossbow());
             const bool rightTwoHanded = rightW && (rightRanged || rightW->IsTwoHandedSword() || rightW->IsTwoHandedAxe());
             if (rightTwoHanded) left = nullptr;   // wearability: both hands are the right's
+            // THE SCOPE (ABI v9). Armor is ALWAYS owned (rules 4/4b/5 below: the
+            // judged pick, the player's picks, everything else worn). A hand is
+            // owned iff held; a held bow/crossbow owns BOTH hands and the Ammo it
+            // fires; a held two-hander owns both hands. Shield is NEVER owned
+            // (offHand==1 keeps Actuation's direct EquipShieldOnMain; offHand==0
+            // is the engine's own shield behaviour) and is DENIED by category
+            // when the perks vote dual wield under bWeaponStyleControl -- the
+            // original field fix, now without owning a hand (Cicero's 15 shield
+            // denies stay denies without freezing his bow). Light is never owned:
+            // EquipTorch and the AI's night torch pass, EXCEPT while Left is
+            // owned (EquipTorch's own gate, APMFBridge::EquipAuthorityOwns).
+            // THE HOLD WINS OVER RANGE (F1/F6 precedent, marth 2026-09-14): a
+            // dual-wield hold under an enemy at range is NOT released for it --
+            // the exits are the gambit's own condition, combat end, or a spell
+            // taking the left. Releasing on range would be invented intent.
+            std::uint32_t owned = APMF_API::kEquipCat_Armor;
+            if (right)          owned |= APMF_API::kEquipCat_Right;
+            if (left)           owned |= APMF_API::kEquipCat_Left;
+            if (rightRanged)    owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left | APMF_API::kEquipCat_Ammo;
+            if (rightTwoHanded) owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left;
+            const std::uint32_t denied = (roles.offHand == 2 && Config::g_weaponStyleControl.load())
+                                           ? static_cast<std::uint32_t>(APMF_API::kEquipCat_Shield) : 0u;
             // THE HAND (ABI v8): a ONE-HAND weapon names its hand -- the ledger's
-            // right/left, or the hand the held weapon is actually in -- so APMF
-            // itself places a dual-wielder's off-hand weapon in the LEFT (the v7
-            // slot-less pass put it in the right and evicted the sword, F2/F3).
-            // A two-hander, a bow, a torch: Default, the engine picks (APMF_API.h).
-            // The same form may stand once per hand (two identical daggers).
+            // right/left -- so APMF itself places a dual-wielder's off-hand weapon
+            // in the LEFT (the v7 slot-less pass put it in the right and evicted
+            // the sword, F2/F3). A two-hander, a bow: Default, the engine picks
+            // (APMF_API.h; a two-hander competes for both hands from its TYPE,
+            // never from the slot). The same form may stand once per hand (two
+            // identical daggers).
             const auto handOf = [](RE::TESBoundObject* a_obj, std::uint8_t a_hand) -> std::uint8_t {
                 auto* w = a_obj ? a_obj->As<RE::TESObjectWEAP>() : nullptr;
                 const bool oneHand = w && (w->IsOneHandedSword() || w->IsOneHandedDagger() ||
@@ -678,12 +743,17 @@ namespace MFO::Logistics {
             //     names it; a bound bow/two-hander is Default. A bound weapon held
             //     in a hand REPLACES the ledger's entry for that hand (the engine
             //     already displaced it; declaring both is two items for one slot).
-            //     Logged once per bound form, when it is new since the last
-            //     declaration. Dropped from the set by the next rebuild after the
-            //     effect ends (the combat road triggers on that change too).
+            //     ONLY INTO AN OWNED HAND (v9): an entry in an unowned category
+            //     is one APMF's pass only logs as "unowned entry skipped", and the
+            //     seat lets a BoundItem equip into an unowned hand through
+            //     (`owned=0`) with no declaration at all -- so a one-hander needs
+            //     its hand owned, a bound bow/two-hander needs BOTH. Logged once
+            //     per bound form, when it is new since the last declaration.
+            //     Dropped from the set by the next rebuild after the effect ends
+            //     (the combat road triggers on that change too).
             const auto* lastSent = [&]() -> const std::vector<DeclKey>* {
                 const auto it = g_lastDeclared.find(id);
-                return it == g_lastDeclared.end() ? nullptr : &it->second;
+                return it == g_lastDeclared.end() ? nullptr : &it->second.keys;
             }();
             const auto lastSentHas = [&](RE::FormID a_form) {
                 if (!lastSent) return false;
@@ -700,11 +770,16 @@ namespace MFO::Logistics {
                     auto* heldL = a_follower->GetEquippedObject(true);
                     if (heldR == w)                 hand = APMF_API::kEquipSlot_Right;
                     else if (heldL == w)            hand = APMF_API::kEquipSlot_Left;
-                    else if (a_holdLeft == bf)      hand = APMF_API::kEquipSlot_Left;
+                    else if (holdLeft == bf)        hand = APMF_API::kEquipSlot_Left;
                     else                            hand = APMF_API::kEquipSlot_Right;
+                    const std::uint32_t needs = hand == APMF_API::kEquipSlot_Left
+                                                  ? APMF_API::kEquipCat_Left : APMF_API::kEquipCat_Right;
+                    if (!(owned & needs)) continue;   // unowned hand: the seat lets it through undeclared
                     decl.DropHand(hand);
                 } else {
                     // A bound bow/two-hander takes both hands: nothing else is held.
+                    if ((owned & (APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left)) !=
+                        (APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left)) continue;
                     decl.DropHand(APMF_API::kEquipSlot_Right);
                     decl.DropHand(APMF_API::kEquipSlot_Left);
                 }
@@ -716,9 +791,12 @@ namespace MFO::Logistics {
                                  : hand == APMF_API::kEquipSlot_Left ? "left" : "default");
             }
 
-            // 2. AMMO.
-            if (rightRanged || roles.doRanged) {
-                const bool wantBolt = rightRanged ? rightW->IsCrossbow() : roles.wantCrossbow;
+            // 2. AMMO -- only under a bow/crossbow HOLD (v9: Ammo is owned exactly
+            //    then). With no ranged hold the archer AI's own ammo equips pass
+            //    in an unowned category; declaring ammo there would only be an
+            //    entry the pass skips as unowned.
+            if (rightRanged) {
+                const bool wantBolt = rightW->IsCrossbow();
                 RE::TESAmmo* worn = nullptr; RE::TESAmmo* best = nullptr; float bestDmg = -1.0f;
                 for (auto& [obj, data] : inv) {
                     if (!obj || data.first <= 0) continue;
@@ -731,25 +809,12 @@ namespace MFO::Logistics {
                 decl.Add(worn ? worn : best);
             }
 
-            // 3. THE SHIELD.
-            using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-            RE::TESObjectARMO* shield = nullptr;
-            if (roles.offHand != 2 && !rightTwoHanded && !left && !a_leftReserved) {
-                if (roles.offHand == 1) {
-                    float bestAr = 0.0f;   // Actuation's PickShield: best carried by rating, playable
-                    for (auto& [obj, data] : inv) {
-                        if (!obj || data.first <= 0) continue;
-                        auto* ar = obj->As<RE::TESObjectARMO>();
-                        if (!ar || !ar->IsShield()) continue;
-                        if ((ar->GetFormFlags() & (1u << 2)) != 0) continue;   // non-playable
-                        const float rating = ar->GetArmorRating();
-                        if (!shield || rating >= bestAr) { bestAr = rating; shield = ar; }
-                    }
-                } else {
-                    shield = a_follower->GetWornArmor(Slot::kShield);
-                }
-            }
-            decl.Add(shield);
+            // 3. THE SHIELD: NOT DECLARED (v9). Shield is never an owned category:
+            //    offHand==1 puts it on by Actuation's direct EquipShieldOnMain
+            //    (the pre-authority road, an unowned-category equip the seat
+            //    allows), offHand==2 DENIES the category above (no hand owned for
+            //    it), offHand==0 is the engine's own shield behaviour. A worn
+            //    shield stays out of rule 5 too (it competes for Shield+Left).
 
             // 4. THE JUDGED ARMOR PICK (EquipBestOwnedGear's own pick, one per declaration).
             //    OOC road only (a_judgeArmor): legacy never wears armor in combat
@@ -801,7 +866,7 @@ namespace MFO::Logistics {
             }
             const auto* last = [&]() -> const std::vector<DeclKey>* {
                 const auto it = g_lastDeclared.find(id);
-                return it == g_lastDeclared.end() ? nullptr : &it->second;
+                return it == g_lastDeclared.end() ? nullptr : &it->second.keys;
             }();
             const auto lastHas = [&](RE::FormID a_form) {
                 if (!last) return true;   // no declaration yet: nothing can be "new since"
@@ -848,7 +913,7 @@ namespace MFO::Logistics {
             decl.Add(pick);
 
             // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick displaces.
-            //    Shields went through rule 3 (an off-rule worn shield is NOT kept).
+            //    Shields are never declared (rule 3: an unowned category).
             for (auto& [obj, data] : inv) {
                 if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                 auto* ar = obj->As<RE::TESObjectARMO>();
@@ -865,17 +930,26 @@ namespace MFO::Logistics {
             // engine ops and a visible flicker per re-send. The top-up's "give it
             // back" is Actuation's own explicit placement (PostHandEquipsDeferred),
             // which needs no re-declaration: the item is already in-set.
-            std::vector<DeclKey> sorted;
-            sorted.reserve(decl.entries.size());
-            for (const auto& e : decl.entries) sorted.emplace_back(e.form, e.slot);
-            std::sort(sorted.begin(), sorted.end());
-            if (auto it = g_lastDeclared.find(id); it != g_lastDeclared.end() && it->second == sorted) return;
-            if (!APMFBridge::DeclareEquipSet(id, decl.entries)) {   // logged in the bridge; retried next refresh
+            // The key is (sorted entries, owned, denied): a scope-only change is
+            // sent too. SCOPE FIRST, then the set, in one call -- both are
+            // enqueued and applied in APMF's same Drain (one Publish, both
+            // enforce hops after it), so the seat never pairs the new set with
+            // the old scope or the reverse.
+            SentDecl sent;
+            sent.keys.reserve(decl.entries.size());
+            for (const auto& e : decl.entries) sent.keys.emplace_back(e.form, e.slot);
+            std::sort(sent.keys.begin(), sent.keys.end());
+            sent.owned  = owned;
+            sent.denied = denied;
+            if (auto it = g_lastDeclared.find(id); it != g_lastDeclared.end() && it->second == sent) return;
+            if (!APMFBridge::DeclareEquipScope(id, owned, denied) ||        // logged in the bridge; retried next refresh
+                !APMFBridge::DeclareEquipSet(id, decl.entries)) {
                 g_lastDeclared.erase(id);
                 return;
             }
-            g_lastDeclared[id] = std::move(sorted);
-            spdlog::info("[equip-auth] {:08X}: declare n={} [{}] ({}{})", id, decl.entries.size(), decl.names,
+            g_lastDeclared[id] = std::move(sent);
+            spdlog::info("[equip-auth] {:08X}: declare n={} [{}] owned={} denied={} ({}{})", id,
+                         decl.entries.size(), decl.names, CategoryNames(owned), CategoryNames(denied),
                          a_why ? a_why : "?", fresh ? ", new claim" : "");
         }
 

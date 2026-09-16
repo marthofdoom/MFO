@@ -913,15 +913,24 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   APMF's `hand=left` equip reached the engine (APMF criterion 7). RETIRED in round 3 (v8): the
   round-1/2 `PostHandEquipsDeferred` double-hop placement and `EquipLeftHeld`'s deferred mode —
   they existed only because v7's slot-less pass put a second one-hander in the RIGHT hand
-  (`Loadout.cpp` `EquipBack` doc, Fable F2). `EquipLeftHeld` is LEGACY-ONLY again. The shield
-  branches (`EquipShieldOnMain`) are declaration-only under the authority
-  (`RefreshEquipDeclaration`'s shield rule: `offHand==1` → best by rating, `offHand==2` → NEVER,
-  `0` → the worn one; declared Default, APMF places it). `ReleaseForcedWeapon` /
+  (`Loadout.cpp` `EquipBack` doc, Fable F2). `EquipLeftHeld` is LEGACY-ONLY again. **SCOPED (ABI
+  v9, `feat/mfo-equip-authority-v9` 2026-09-16):** the shield branches (`EquipShieldOnMain`, the
+  gambit equip's `offHandSh` arm and the 5 s top-up's `offHand==1` arm) are ALWAYS DIRECT again,
+  authority or not — Shield is never an owned category, so the direct equip passes the seat
+  (`owned=0`); the top-up no longer calls `DeclareFromLedger` for a shield. `DeclareFromLedger`
+  is unchanged in signature: `RefreshEquipDeclaration` computes the SCOPE from the ledger it is
+  handed (a hand is owned only while a hold stands; see the Logistics_Economy entry) and sends
+  `SetEquipScope` before `SetEquipSetEx`. `ReleaseForcedWeapon` /
   `YieldForcedLeftHand` / `ReconcileForcedWeapon` / the ch.15 `ClaimEquipment` are UNCHANGED (the
   force-unequips on release clear locks where they exist and are plain unequips otherwise; ch.15's
   param form is unaffected by a ch.17 claim, APMF INTEGRATION.md). After a release no refresh is
-  sent: the next OOC `ServiceFollower` declares what the hands then hold. **What breaks:** declaring
-  a one-hand weapon with `kEquipSlot_Default` re-creates F2 (the engine puts it in the RIGHT hand);
+  sent: the next OOC `ServiceFollower` (holds 0/0) declares `owned=Armor` and the AI re-arms
+  (F6 c). **What breaks:** declaring
+  a one-hand weapon with `kEquipSlot_Default` re-creates F2 (the engine puts it in the RIGHT hand)
+  and under v9 competes for BOTH hands (equipped only when both are owned); routing the shield
+  back through the declaration re-freezes the left hand (Left would have to be owned for the pass
+  to place it, and an owned Left refuses the AI's own bow/two-hander); gating the shield's direct
+  equip on `!authority` again leaves an offHand==1 follower shield-less under the authority;
   force-EQUIPPING under the authority puts a lock APMF's pass cannot displace on the next swap and
   reaches the seat as `External(MFO.dll)`; dropping the old-hold force-unequips leaves a legacy
   lock standing across the toggle's OFF→ON; a forced re-declaration from the top-up (F3) is a
@@ -930,9 +939,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   unclaimed until combat end. **Direct equips that remain under the authority (`Docs/STATUS.md`
   "to migrate")**: the `bWeaponStyleControl=0` plain `EquipObject` (`EquipWeapon`'s kill-switch
   branch), `Loadout.cpp` `EquipBack` (the cast-debt repay; in-set when it repays a declared item),
-  `Logistics.cpp` `EquipTorch` and `HealExcludedWeapon`'s best-weapon re-equip, `AcquireEquip`'s
-  WEAPON equip-in-place hop. `DrinkPotion`'s `EquipObject(potion)` is NOT governed (v8: only
-  ARMO/WEAP/AMMO/LIGH are). **BOUND WEAPONS (round 4, `fix/mfo-equip-authority-bound`):** the
+  `Logistics.cpp` `EquipTorch` (v9: skips while Left is owned, `APMFBridge::EquipAuthorityOwns`;
+  otherwise an unowned-category equip the seat allows) and `HealExcludedWeapon`'s best-weapon
+  re-equip, `AcquireEquip`'s WEAPON equip-in-place hop (v9: passes when no hold owns the hand).
+  `DrinkPotion`'s `EquipObject(potion)` is NOT governed (v8: only ARMO/WEAP/AMMO/LIGH are). **BOUND WEAPONS (round 4, `fix/mfo-equip-authority-bound`):** the
   engine's `BoundItemEffect` equips a conjured WEAP through `EquipObject` (seat path `BoundItem`)
   — off-set, refused under enforcement — so `ReconcileForcedWeapon` (every in-combat lap, hold or
   no hold) compares `Logistics::LiveBoundWeapons` lap to lap (`g_boundSeen`, anon) and calls
@@ -1577,31 +1587,46 @@ declared there and defined in their home module). Layout:
   `eligibleSchools`); `ArmorClassSuits` is dead code by design — do not re-add it
   as a gate.
 - **THE DECLARED WORN SET — `RefreshEquipDeclaration` (`Logistics_Economy.cpp`, beside
-  `EquipBestOwnedGear`; `feat/mfo-equip-authority` 2026-09-15, PORT #1).** When
-  `APMFBridge::EquipAuthoritySupported()` (APMF present, ABI ≥ 7, `bApmfEquipAuthority`) and
-  `FollowerState::mfoEnabled`, MFO no longer equips ARMOR (nor, since v8, the HANDS) directly: it
+  `EquipBestOwnedGear`; `feat/mfo-equip-authority` 2026-09-15, PORT #1; SCOPED by
+  `feat/mfo-equip-authority-v9` 2026-09-16).** When
+  `APMFBridge::EquipAuthoritySupported()` (APMF present, ABI ≥ 9, `bApmfEquipAuthority`) and
+  `FollowerState::mfoEnabled`, MFO no longer equips ARMOR (nor a HELD hand) directly: it
   DECLARES the worn set to APMF's ch.17 channel as `APMF_EquipEntry {form, hand}` (v8
-  `SetEquipSetEx`) and APMF equips every declared item the follower is not wearing — in the hand
-  the entry names — and refuses every other engine equip of a governed type (ARMO/WEAP/AMMO/LIGH)
-  on him. HANDS: a one-hand weapon carries `kEquipSlot_Right`/`kEquipSlot_Left` (the ledger's
-  hand, or the hand it is actually in; the same form may stand once per hand); a two-hander, a
-  bow, a torch, a shield, ammo and armor are `kEquipSlot_Default` (the engine picks). RULE 1b,
+  `SetEquipSetEx`) under a SCOPE (v9 `SetEquipScope`, sent FIRST in the same call), and APMF
+  equips every declared item the follower is not wearing — in the hand the entry names, only
+  when every category it competes for is owned — and refuses every other engine equip in an
+  OWNED or DENIED category; an equip in a category the scope neither owns nor denies passes
+  (`owned=0 verdict=allow`). **THE SCOPE (v9 — MFO DECLARES WHAT IT OWNS AND ACTS DIRECTLY IN
+  WHAT IT DOES NOT):** `owned = Armor | Right (a right hold) | Left (a left hold) |
+  Right+Left+Ammo (a held bow/crossbow) | Right+Left (a held two-hander)`; `denied = Shield` iff
+  `roles.offHand==2 && bWeaponStyleControl`. Light never owned, Shield never owned, Armor always
+  owned; a hand is owned ONLY while a `ForcedHold` stands in it (`a_holdRight`/`a_holdLeft`; the
+  OOC service road passes 0/0 → `owned=Armor`). THE HOLD WINS OVER RANGE: a dual-wield hold
+  under an enemy at range is not released for it (F1/F6 precedent; the exits are the gambit's
+  own condition, combat end, a spell taking the left). HANDS: declared from the ledger ONLY — a
+  one-hand hold carries `kEquipSlot_Right`/`kEquipSlot_Left` (the same form may stand once per
+  hand); a held two-hander/bow is `kEquipSlot_Default` (it competes for both hands from its
+  TYPE); ammo and armor are Default. The v8 "else the weapon currently in that hand" and torch
+  reads are DELETED: they were the F6 freeze (117 `CombatNode` would-denies against no hold).
+  `a_leftReserved` (a cast on the left) → nothing left, owned or declared. RULE 1b,
   BOUND WEAPONS (round 4): `LiveBoundWeapons(actor)` = the WEAP `associatedForm` of every live
   (not dispelled/inactive) ActiveEffect whose base MGEF `data.archetype == kBoundWeapon`
   (`RE/E/EffectSetting.h:71` / `:88`; the `CasterHasLiveSummon` road, worker, read-only);
   each is declared while live with the hand it is actually held in, else Right for a one-hander
   unless `a_holdLeft` names it, Default for a bow/two-hander, and REPLACES the ledger's entry for
-  that hand (`EquipDecl::DropHand`); logged `declare bound '<name>' (<hand>)` when new since the
+  that hand (`EquipDecl::DropHand`) — v9: ONLY INTO AN OWNED HAND (a one-hander needs its hand
+  owned, a bound bow/two-hander both; an unowned-hand `BoundItem` equip passes the seat
+  undeclared); logged `declare bound '<name>' (<hand>)` when new since the
   last send. `ResendEquipDeclaration(id)` drops the change detector only (MFO-B41's re-send;
   `ForgetEquipDeclaration` also drops the player picks and is the dismiss road). THE COMPOSITION (declare→enforce, principle 4 — only
   what MFO decides elsewhere): hands = `a_holdRight/a_holdLeft` (Actuation's `ForcedHold`
-  ledger) else the WEAPON in that hand (a torch counts; a spell is not an item; a two-hander/bow
-  in the right empties the left; never a weapon not held — a stowed bow beside a held sword is
-  not simultaneously wearable); AMMO when the right is ranged or `roles.doRanged` (worn of the
-  matching kind, else best carried by damage; bolts for a crossbow / `wantCrossbow`); the SHIELD
-  by `roles.offHand` (2 → NEVER, whatever is worn — THE FIELD FIX; two-hander/bow right, a left
-  item or `a_leftReserved` (a cast on the left) → none; 1 → best owned by rating; 0 → the worn
-  one); the JUDGED ARMOR PICK = `ComputeOwnedGearPick` (EquipBestOwnedGear's own pick, factored
+  ledger) and nothing else (a two-hander/bow in the right empties the left; never a weapon not
+  held — a stowed bow beside a held sword is not simultaneously wearable); AMMO only under a
+  bow/crossbow HOLD (worn of the matching kind, else best carried by damage; bolts for a
+  crossbow) — the archer AI's own ammo equips pass in the unowned category; the SHIELD is NOT
+  DECLARED (v9): `roles.offHand==2` → the Shield category is DENIED (THE FIELD FIX, now without
+  owning a hand); 1 → Actuation's direct `EquipShieldOnMain` (an unowned-category equip the seat
+  allows); 0 → the engine's own; the JUDGED ARMOR PICK = `ComputeOwnedGearPick` (EquipBestOwnedGear's own pick, factored
   out VERBATIM so there is one judge; one pick per declaration, it replaces every worn ARMO its
   slot mask overlaps); everything else WORN (jewelry, clothing, circlets, modded slots) stays
   declared. **PLAYER AGENCY (round 3, v8 — APMF's seat allows `path=PlayerMenu` by default and
@@ -1614,8 +1639,10 @@ declared there and defined in their home module). Layout:
   a pick that only ties the player's piece on (tier, metric) is dropped. Once MFO's strictly
   better pick displaces it, the economy KEEPS it: `IsPlayerPick(fid, form)` in the sell loop
   (`sdiag "playerPick"`), never a sale. Dolls mode declares the worn set as-is. SENT ONLY ON
-  CHANGE: `g_lastDeclared` (anon, worker-serial like `g_nextTick`) holds the last sent set as
-  sorted (form, hand) pairs; a fresh claim handle
+  CHANGE: `g_lastDeclared` (anon, worker-serial like `g_nextTick`) holds the last sent
+  `SentDecl {sorted (form, hand) pairs, owned, denied}` — a scope-only change (a new hold owning
+  a hand) is sent too; `APMFBridge::DeclareEquipScope` then `DeclareEquipSet`, both in one call
+  (one APMF Drain, one Publish); a fresh claim handle
   (F2) forgets it so the new handle is declared at once. **NO forced re-issue (F3, Fable round
   2):** a re-send is a declaration EVENT and under v7 APMF's slot-less pass answers it by putting
   the declared off-hand weapon in the RIGHT hand before MFO's hop puts both back — four ops and
@@ -1625,7 +1652,8 @@ declared there and defined in their home module). Layout:
   because legacy never wears armor in combat — and is computed ONCE per tick (F10):
   `EquipBestOwnedGear` hands its pick to the guard through `g_handedPick` (follower-keyed,
   consumed on the same worker call). Log lines: `[equip-auth] <id>: declare n=<count> [<names>]
-  (<why>[, new claim])`, `claim`, `release`.
+  owned=<Armor+Right+...|none> denied=<Shield|none> (<why>[, new claim])` (`CategoryNames`,
+  anon), `claim`, `release`.
   ROADS: `ServiceFollower` (`Logistics.cpp`, OOC, after the ~1 s cadence gate — CLAIM, then a
   scope guard declares at every exit so a loot/buy/owned-upgrade THIS tick is declared THIS
   tick; `a_leftReserved` from `APMFBridge::IsHealCastActive || IsOwnedCastActiveOnHand(left)`);
@@ -1645,9 +1673,14 @@ declared there and defined in their home module). Layout:
   `| declared (APMF equip authority)`. `bLogistics=0` → no OOC road at all (the combat road
   still claims/declares). **What breaks:** declaring BOTH a held melee weapon and a stowed
   ranged one (or two items for one slot) makes APMF's pass displace one with the other on every
-  declaration event — the set must be simultaneously wearable; declaring the shield for
-  `offHand==2` re-creates the Fable 2026-09-15 shield-over-dagger loop as an APMF-performed
-  equip; a per-tick unconditional send is bounded by APMF (3 s per item) but is exactly the churn
+  declaration event — the set must be simultaneously wearable; declaring the shield at all
+  re-creates the Fable 2026-09-15 shield-over-dagger loop as an APMF-performed equip (and would
+  need Left owned, which refuses the AI's own bow); re-adding ANY "what is in the hand" read to
+  the hands rule re-creates F6 (the AI's own pick declared, its next switch refused); owning a
+  hand without an entry for it makes the AI's every equip there off-set (a blanket lock on that
+  hand); dropping `(owned, denied)` from the change-detector key swallows a scope-only change (a
+  new hold on an already-declared set never reaches APMF); sending the set BEFORE the scope
+  lets APMF's seat pair the new set with the old scope for one Drain; a per-tick unconditional send is bounded by APMF (3 s per item) but is exactly the churn
   the log will show — keep the change detector; computing the armor pick with a second loop
   instead of `ComputeOwnedGearPick` lets the declaration and `EquipBestOwnedGear` drift; a
   refresh from a non-worker thread races `g_lastDeclared` (#4); dropping the `mfoEnabled` gate
@@ -1655,8 +1688,9 @@ declared there and defined in their home module). Layout:
   (`SetEquipSet(h, nullptr, 0)`) is PASS-THROUGH, not "deny all" — never send it as a "hold
   nothing" instruction. APMF-SIDE GAPS THE PROBE MUST SETTLE BEFORE ENFORCEMENT (Docs/STATUS.md):
   all three round-1 gaps were closed by APMF v8 (governed types exclude potions; `PlayerMenu`
-  allowed by default; `SetEquipSetEx` carries the hand) — what remains is the F6 hands-freeze
-  design question (STATUS).
+  allowed by default; `SetEquipSetEx` carries the hand) — and F6 (the hands freeze) is RESOLVED
+  by the v9 scope (STATUS): the field observables are APMF INTEGRATION.md criteria 8-11 plus
+  MFO's `declare ... owned=` line.
 - **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
   `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
   CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet
@@ -2860,14 +2894,27 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   own initiative (its channels are client-declared, arbitration/drive-only). This bridge only ever
   CLAIMS facets (`ClaimOffenseCast`/`ClaimCombatTarget` → `RequestCast`/`RequestEx`/`Repoint`, basis
   200); MFO executes the equip/target/consent half with its OWN mechanisms.
-- **EQUIP AUTHORITY (ch.17, `kIntent_EquipAuthority`, ABI v8 `SetEquipSetEx`; `feat/mfo-equip-
-  authority` 2026-09-15 — PORT #1, the first MFO engine mechanism moved into APMF).** `APMF_API.h`
-  copied byte-for-byte from APMF main `03f04d5` (md5 `aade60882647106ad3c928ada46ee2f2`);
-  `kABIVersion` 6→8, so `Acquire()` now asks an older APMF for v8 and gets nullptr → the WHOLE
-  APMF path degrades (the DLL pair ships together). `EquipAuthoritySupported()` = `Available() &&
-  abiVersion >= 8 && Config::g_apmfEquipAuthority` (v8 is the floor: v7's slot-less `SetEquipSet`
-  cannot dual-wield). `IsEquipAuthorityEnforced()` wraps APMF's v8 read (seat installed AND
-  `bEquipObserveOnly=0`) and is printed as `mode=` in the claim line. `DeclareEquipSet(fid,
+- **EQUIP AUTHORITY (ch.17, `kIntent_EquipAuthority`, ABI v8 `SetEquipSetEx` + ABI v9
+  `SetEquipScope`; `feat/mfo-equip-authority` 2026-09-15 — PORT #1, the first MFO engine
+  mechanism moved into APMF; SCOPED by `feat/mfo-equip-authority-v9` 2026-09-16).** `APMF_API.h`
+  copied byte-for-byte from APMF `feat/equip-authority-v9` `3d5cab8` (md5
+  `6494513d598d4a3bb768579a3e46dc51`; the v8 copy was main `03f04d5`, md5
+  `aade60882647106ad3c928ada46ee2f2`); `kABIVersion` 8→9, so `Acquire()` now asks an older APMF
+  for v9 and gets nullptr → the WHOLE APMF path degrades (the DLL pair ships together).
+  `EquipAuthoritySupported()` = `Available() && abiVersion >= 9 && Config::g_apmfEquipAuthority`
+  (**v9 is the floor**: MFO's v9 declaration OMITS the hands it does not hold, and a v8 APMF owns
+  every category by default — a v9 MFO on a v8 APMF would refuse every engine weapon equip on
+  the actor, the F6 freeze; so a too-old APMF gets NO authority, `warn` once
+  `[equip-auth] APMF ABI v{} has no SetEquipScope (need >= 9)`, never a blanket lock).
+  `IsEquipAuthorityEnforced()` wraps APMF's v8 read (seat installed AND `bEquipObserveOnly=0`)
+  and is printed as `mode=` in the claim line. `DeclareEquipScope(fid, owned, denied)` →
+  `APMF_API_v9::SetEquipScope` with a stack `APMF_EquipScope` (copied inside the call), mirrored
+  on `Owned::equipOwned/equipDenied` (reset to APMF's default `{All, 0}` on mint; NOT the set,
+  which stays in Logistics_Economy); sent by `RefreshEquipDeclaration` immediately BEFORE
+  `DeclareEquipSet` so both apply in one Drain; does not clear `equipAuthFresh` (the set does).
+  `EquipAuthorityOwns(fid, cats)` = a claim stands, a declaration has gone out on it, and the
+  last SENT `owned` overlaps `cats` — THE gate for a direct path writing into a held hand
+  (`Logistics::EquipTorch` on `kEquipCat_Left`). `DeclareEquipSet(fid,
   vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **A REFUSED CLAIM IS NOT FAIL-CLOSED (F1/F5, Fable round 2 on
   `c66dc80`):** APMF refuses a ch.17 claim exactly when its #17a equip seat is not installed, and
   then nothing on APMF's side can perform or deny an equip — so a refusal means "MFO keeps its
@@ -2902,7 +2949,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   declared, so a re-claim never re-sends; passing anything but the standing handle to `SetEquipSet`
   is a silent no-op on APMF's side (no error comes back — the `[apmf][equip-auth]` pass line is the
   only readback); calling `Acquire()` with a header older than APMF's does NOT break (a v7 APMF
-  serves v6), the reverse does.
+  serves v6), the reverse does; lowering the equip floor back to 8 turns a v8 APMF's whole-facet
+  default into a lock on every hand MFO's v9 declaration leaves out; `EquipAuthorityOwns`
+  answering from APMF's `{All, 0}` default on a claim with NO declaration out would skip the
+  torch on every fresh claim for nothing (APMF allows everything until a set is declared).
 - **THE OWNED CAST (default), a real AI-DECIDED animated cast — `Actuation::CastOn` FF-non-self
   hostile branch (`Actuation.cpp:600` `CastOn`, worker).**
   **ORDER OF OPERATIONS, RE-NARRATED 2026-09-07 (`fix/mfo-fourstate-followups`):** this bullet used

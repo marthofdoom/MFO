@@ -406,10 +406,19 @@ namespace MFO::Logistics {
 
     // Equip a carriable torch the follower holds (moved here from combat, #35 --
     // torch is upkeep; pair with "In an interior"/"At night"). No-op if a light is
-    // already in hand or none is carried.
+    // already in hand or none is carried. APMF equip authority (ABI v9): a torch
+    // competes for Light+Left, and Left is owned while a left or bow/two-hander
+    // hold stands -- the equip would only draw an `External(MFO.dll) ...
+    // verdict=deny` at APMF's seat, so it is skipped there (logged). Light itself
+    // is never owned, so with no hold the torch goes on as without APMF.
     bool EquipTorch(RE::Actor* a_follower) {
         if (auto* l = a_follower->GetEquippedObject(true); l && l->As<RE::TESObjectLIGH>())
             return false;
+        if (APMFBridge::EquipAuthorityOwns(a_follower->GetFormID(), APMF_API::kEquipCat_Left)) {
+            spdlog::info("[equip] {:08X}: torch skipped -- the equip authority owns the left hand (a hold stands)",
+                         a_follower->GetFormID());
+            return false;
+        }
         for (auto& [obj, data] : a_follower->GetInventory()) {
             if (!obj || data.first <= 0) continue;
             auto* light = obj->As<RE::TESObjectLIGH>();
