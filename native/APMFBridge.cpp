@@ -292,6 +292,17 @@ namespace MFO::APMFBridge {
             // last-sent copy (the change detector), this file only carries the
             // handle the declaration rides on.
             APMF_API::Handle equipAuthHandle = APMF_API::kInvalidHandle;
+            // F2 (Fable round 2 on c66dc80): a kept handle is RE-VALIDATED with
+            // v6 IsClaimLive once it is old enough to be in APMF's published
+            // snapshot (kEquipAuthValidateAfter below) -- APMF's hotkey
+            // release-all, its unload sweep, a New Game from a running session
+            // and the bApmfEquipAuthority OFF->ON flip all leave MFO holding a
+            // handle SetEquipSet silently no-ops on. `equipAuthFresh` = minted
+            // since the last declaration went out on it; RefreshEquipDeclaration
+            // reads it (through ClaimEquipAuthority's out-param) to drop its
+            // change detector so the new handle gets a declaration at once.
+            std::chrono::steady_clock::time_point equipAuthMintedAt{};
+            bool equipAuthFresh = false;
         };
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
@@ -299,6 +310,12 @@ namespace MFO::APMFBridge {
         // follower). Outside Owned on purpose: a refused claim leaves no handle,
         // so its Owned entry is erased and could not carry the latch. Under g_mx.
         std::unordered_set<RE::FormID>         g_equipAuthRefused;
+        // A just-minted ch.17 claim is not in APMF's published snapshot until
+        // its next per-frame Drain, and IsClaimLive scans ONLY that snapshot --
+        // so validating a handle younger than this reads a live claim as dead
+        // and re-mints a duplicate. A floor sized from the cadence (one Drain
+        // per frame; 2 s covers a stalled frame many times over), not a guess.
+        constexpr auto kEquipAuthValidateAfter = std::chrono::seconds(2);
 
         // ── never-published warn throttle (SEV-3, pre-merge review 2026-09-07) ──
         // Failing closed leaves the claim EMPTY, so the next winning lap mints again
@@ -1533,12 +1550,28 @@ namespace MFO::APMFBridge {
         return api && api->abiVersion >= 7 && Config::g_apmfEquipAuthority.load();
     }
 
-    bool ClaimEquipAuthority(RE::FormID a_follower) {
+    bool ClaimEquipAuthority(RE::FormID a_follower, bool* a_outFresh) {
+        if (a_outFresh) *a_outFresh = false;
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || a_follower == 0 || api->abiVersion < 7 || !Config::g_apmfEquipAuthority.load()) return false;
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
-        if (o.equipAuthHandle != APMF_API::kInvalidHandle) return true;   // standing -- kept, never re-requested
+        if (o.equipAuthHandle != APMF_API::kInvalidHandle) {
+            // F2: standing means "kept", not "believed forever". Once the handle
+            // is old enough to have been published, ask APMF whether it still
+            // knows it; a dead one (released by APMF's hotkey/unload sweep, or a
+            // New Game that reused the base FormIDs) is re-minted below.
+            const auto now = std::chrono::steady_clock::now();
+            if (now - o.equipAuthMintedAt < kEquipAuthValidateAfter ||
+                reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(o.equipAuthHandle)) {
+                if (a_outFresh) *a_outFresh = o.equipAuthFresh;
+                return true;
+            }
+            spdlog::warn("[equip-auth] {:08X}: standing claim handle {} is no longer live on APMF's side "
+                         "(released or swept there; SetEquipSet on it would be a silent no-op) -- re-minting",
+                         a_follower, o.equipAuthHandle);
+            o.equipAuthHandle = APMF_API::kInvalidHandle;   // no Release: APMF already forgot it
+        }
         // param.ival = the EquipAuthFlags word. kEquipAuth_None on purpose:
         // scripts/console pass (a quest author's deliberate act), unequips are
         // never denied by this ABI, and observe-only is APMF's INI decision for
@@ -1548,21 +1581,31 @@ namespace MFO::APMFBridge {
         p.ival = static_cast<std::int32_t>(APMF_API::kEquipAuth_None);
         o.equipAuthHandle = api->RequestEx(a_follower, APMF_API::kIntent_EquipAuthority, kOwnBasis, &p);
         if (o.equipAuthHandle == APMF_API::kInvalidHandle) {
-            // APMF present, capable, and said NO: a bug to surface, never a
-            // condition to route around (the callers keep their direct equips
-            // OFF while Supported() is true). Once per refusal streak.
+            // APMF present at v7 and it REFUSED the claim (F1/F5, Fable round 2:
+            // APMF is being changed to refuse exactly when its #17a equip seat is
+            // NOT installed -- INI off, a site-verify refusal, VR). There is then
+            // nothing on APMF's side that could perform or deny an equip, so
+            // MFO's OWN equip paths are the right ones: every caller reads
+            // `false` here (and IsEquipAuthorityClaimed false) as "the authority
+            // is not live for this follower" and runs its direct equips exactly
+            // as without APMF. Logged once per refusal streak so the field log
+            // shows which followers are on which path.
             if (g_equipAuthRefused.insert(a_follower).second) {
-                spdlog::error("[equip-auth] {:08X}: APMF REFUSED the kIntent_EquipAuthority claim "
-                              "(RequestEx returned kInvalidHandle) -- fail closed: the declaration "
-                              "cannot be sent and MFO does NOT fall back to direct equips",
-                              a_follower);
+                spdlog::warn("[equip-auth] {:08X}: APMF refused the kIntent_EquipAuthority claim "
+                             "(RequestEx returned kInvalidHandle; APMF's equip seat is not installed "
+                             "or the channel is unavailable) -- MFO keeps its own equips for this "
+                             "follower (the direct paths run, as without APMF)",
+                             a_follower);
             }
             EraseIfEmpty(g_owned.find(a_follower));
             return false;
         }
         g_equipAuthRefused.erase(a_follower);
-        spdlog::info("[equip-auth] {:08X}: claim (kIntent_EquipAuthority, basis {}, flags 0)",
-                     a_follower, kOwnBasis);
+        o.equipAuthMintedAt = std::chrono::steady_clock::now();
+        o.equipAuthFresh    = true;
+        if (a_outFresh) *a_outFresh = true;
+        spdlog::info("[equip-auth] {:08X}: claim (kIntent_EquipAuthority, basis {}, flags 0, handle {})",
+                     a_follower, kOwnBasis, o.equipAuthHandle);
         return true;
     }
 
@@ -1605,6 +1648,7 @@ namespace MFO::APMFBridge {
         // COPIED inside the call (APMF_API.h threading contract); a_forms may die.
         reinterpret_cast<const APMF_API::APMF_API_v7*>(api)->SetEquipSet(
             it->second.equipAuthHandle, count ? a_forms.data() : nullptr, count);
+        it->second.equipAuthFresh = false;   // this handle now carries a declaration
         return true;
     }
 

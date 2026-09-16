@@ -1866,8 +1866,12 @@ namespace MFO::Actuation {
         // Declare this follower's worn set from the ledger as it stands NOW
         // (the FollowerState read off g_followers, worker-serial like
         // WeaponRolesFor; a_leftReserved from the lock/claim the equip side
-        // already yields to). a_force: the top-up's "give it back" re-issue.
-        void DeclareFromLedger(RE::Actor* a_follower, const char* a_why, bool a_force = false) {
+        // already yields to). THE COMBAT ROAD: judgeArmor=false -- legacy never
+        // wears armor in combat, so the worn armor is declared as is (F9). No
+        // forced re-issue exists (F3): the top-up's "give it back" is the
+        // explicit placement in PostHandEquipsDeferred, and the declaration only
+        // changes when the ledger does.
+        void DeclareFromLedger(RE::Actor* a_follower, const char* a_why) {
             if (!a_follower) return;
             const auto it = g_followers.find(a_follower->GetFormID());
             if (it == g_followers.end()) return;
@@ -1880,7 +1884,7 @@ namespace MFO::Actuation {
                 }
             }
             Logistics::RefreshEquipDeclaration(a_follower, it->second, right, left,
-                                               CastHandHeld(a_follower, kHandLeft), a_why, a_force);
+                                               CastHandHeld(a_follower, kHandLeft), /*judgeArmor*/false, a_why);
         }
 
         // Off-hand TOP-UP cadence on the equip rule's SATISFIED lap (the AI drew
@@ -1980,7 +1984,12 @@ namespace MFO::Actuation {
                                 RE::FormID oldLeftId = 0;
                                 if (EquipLeftHeld(a_follower, w, &whyNot, authority, &oldLeftId)) {
                                     if (authority) {
-                                        DeclareFromLedger(a_follower, "off-hand top-up", /*force*/true);
+                                        // Send-on-change: the ledger's new .left changes the set
+                                        // (F3: never a forced re-send -- under v7 a re-send makes
+                                        // APMF's slot-less pass evict the sword first). Under a
+                                        // v8 hand-aware SetEquipSet both this hop and the
+                                        // explicit placement below retire.
+                                        DeclareFromLedger(a_follower, "off-hand top-up");
                                         // The right is the AI's own here (left-only hold): re-issued PLAIN.
                                         PostHandEquipsDeferred(id, oldLeftId, 0, rightW->GetFormID(), false,
                                                                w->GetFormID());
@@ -1997,7 +2006,7 @@ namespace MFO::Actuation {
                             }
                         } else if (roles.offHand == 1 && !(leftA && leftA->IsShield())) {
                             if (auto* sh = PickShield(a_follower)) {
-                                if (authority) DeclareFromLedger(a_follower, "shield top-up", /*force*/true);
+                                if (authority) DeclareFromLedger(a_follower, "shield top-up");   // send-on-change (F3)
                                 else           EquipShieldOnMain(id, sh->GetFormID());
                                 spdlog::info("[equip] {:08X}: GAMBIT equip shield '{}' (shield by perks, "
                                              "top-up{})", id, sh->GetFullName() ? sh->GetFullName() : "?",

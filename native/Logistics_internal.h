@@ -1075,14 +1075,16 @@ namespace MFO::Logistics {
                                              ArmorPref& a_outPref, bool& a_outMageMode);
     // Supported AND claimed: the per-follower switch the direct equip sites read.
     bool EquipAuthorityLive(RE::FormID a_follower);
-    // Rebuild the declared worn set and SEND it iff it changed (a_force: send
-    // anyway -- the "give it back" re-issue for a declared item observed unworn).
-    // a_holdRight/a_holdLeft: Actuation's ForcedHold ledger (0 = read the hand);
-    // a_leftReserved: a cast holds/claims the left, so no left item and no shield.
-    // Worker only (#4). Claims on first use; releases when the gate is off.
+    // Rebuild the declared worn set and SEND it iff it changed (never a forced
+    // re-issue, F3). a_holdRight/a_holdLeft: Actuation's ForcedHold ledger (0 =
+    // read the hand); a_leftReserved: a cast holds/claims the left, so no left
+    // item and no shield; a_judgeArmor: include the owned-armor upgrade pick
+    // (the OOC service road) -- the combat road passes false and declares worn
+    // armor as is (F9). Worker only (#4). Claims on first use (re-validating a
+    // kept handle, F2); releases when the gate is off.
     void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
                                  RE::FormID a_holdRight, RE::FormID a_holdLeft,
-                                 bool a_leftReserved, const char* a_why, bool a_force = false);
+                                 bool a_leftReserved, bool a_judgeArmor, const char* a_why);
     void ForgetEquipDeclaration(RE::FormID a_follower);   // one follower's change detector (dismiss)
     void ClearEquipDeclarations();                        // all (revert / load)
 }

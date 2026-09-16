@@ -68,9 +68,52 @@ Read it as history and this block as current.
   allowed only for ≤1 s (the released weapons stay declared until the next OOC service
   re-declares from the hands) — a follower may stand unarmed until his next equip gambit; a
   follower with NO equip gambit keeps whatever he holds (declared as "the current weapon").
-  **Line counts:** `Actuation.cpp` 2803 (was 2678 — over the 2500 cap BEFORE this branch;
+  **FABLE ROUND 2 on `c66dc80` (two SEV-2, five SEV-3; fixed on the branch, second code commit):**
+  F1/F5 — a REFUSED claim is NOT fail-closed: APMF (being changed concurrently) refuses a ch.17
+  claim exactly when its equip seat is not installed, so MFO keeps its own equips on refusal (the
+  bridge's docs and `[equip-auth] ... refused` line now say so; MAP corrected). **Until that APMF
+  change lands: disable the feature via MFO's `bApmfEquipAuthority`, NEVER via APMF's
+  `[EquipAuthority] bEquipAuthority` — with the seat off and the claim still granted, MFO would
+  declare into a channel nothing enforces and skip its own armor equips.** F2 — the standing handle
+  is re-validated with v6 `IsClaimLive` (once ≥ 2 s old) and re-minted when APMF forgot it; a fresh
+  handle forces the next declaration; `plugin.cpp` kNewGame now also clears the bridge's claims
+  (`[equip-auth] ... re-minting` is the log shape). F3 — no forced re-declaration from the 5 s
+  top-up (a re-send made APMF's slot-less pass evict the sword first); send-on-change only. F7 —
+  `Followers::ReleaseHeldState` releases the authority FIRST and defers `Loadout::Restore` past
+  APMF's Drain (two main-thread hops, then back to the AddTask worker under `PumpTickGate`), so a
+  dismissed follower does not leave in MFO's gear under enforcement. F9 — the combat road no longer
+  computes the armor pick (worn armor declared as is). F10 — the pick is computed once per tick
+  (`EquipBestOwnedGear` hands it to the exit guard). F11/F12/F13 → `Docs/REVIEW-BACKLOG.md`
+  MFO-B38/B39/B40. Two touches outside the brief's file list, both required by the findings:
+  `native/plugin.cpp` (kNewGame `APMFBridge::ClearTransientState`) and `native/Followers.cpp`
+  (F7 ordering + deferred restore).
+  **F6 — ENFORCEMENT BLOCKER (design, marth's call; recorded, no code):** with `count>0` EVERY
+  off-set engine equip on the actor is denied, and MFO declares the hands as "what is worn now"
+  (the ledger hold, else the held weapon; never an alternate weapon, because the set must be
+  simultaneously wearable). Under enforcement that freezes the hands to the moment of declaration:
+  (a) the AI's own ranged↔melee switch (the bow in the pack while a sword is held, or the reverse)
+  is refused unless an MFO equip gambit fires for it; (b) the AI's torch equip at night / in an
+  interior is refused (the declaration carries a torch only once worn, and `EquipTorch`'s direct
+  equip is off-set); (c) after `ReleaseForcedWeapon`'s combat-end force-unequip the AI's re-arm is
+  allowed only within the ≤1 s window before the next OOC service re-declares from the (now empty)
+  hands — after that the follower stands unarmed until his next equip gambit; (d) a follower with
+  NO equip gambit is frozen to the weapon worn at declaration for good, and the loot-time weapon
+  upgrade (`AcquireEquip` equip-in-place) is refused. Observe-only shows all four as
+  `path=AiCommand|CombatNode|RemoveItemReequip|External(MFO.dll) verdict=would-deny`. Two ways out,
+  neither in v7: (1) an ABI change — a hands PASS-THROUGH bit (`kEquipAuth_HandsPassThrough`: the
+  seat governs armor/jewelry/ammo only, the hand slots stay the engine's; MFO's ch.15 gate and
+  the T#76 lock keep doing the hands as today) or a category-scoped authority (declare "armor"
+  and "hands" as separate sets with separate enforcement), v9 after the v8 hand extension; or
+  (2) MFO carries an explicit HAND OPINION for every alternate weapon — declare the best melee AND
+  the best ranged AND ammo AND the torch (a declared-but-stowed weapon is NOT equipped by APMF's
+  pass only if the pass learns to skip hand items, which is again an ABI change), and accept that
+  a follower without an equip gambit gets MFO's weapon choice. Recommendation for marth: (1),
+  because it keeps the authority to what MFO actually judges (armor) and leaves the hands on the
+  proven T#76/ch.15 path until the hand-aware v8 declaration is field-proven; (2) turns every
+  follower into a gambit-driven one whether or not the player set one.
+  **Line counts (after round 2):** `Actuation.cpp` 2812 (was 2678 — over the 2500 cap BEFORE this branch;
   reported, not split, per the scope rule), `Logistics_Loot.cpp` 2443, `Logistics.cpp` 2227,
-  `APMFBridge.cpp` 1933, `Logistics_Economy.cpp` 1450. Boundary touch reported:
+  `APMFBridge.cpp` 1977, `Logistics_Economy.cpp` 1495, `Followers.cpp` 520. Boundary touch reported:
   `native/Logistics_internal.h` (+20, the builder's declarations — Actuation.cpp already
   includes it, Logistics.h is public API).
 - **Branch `feat/mfo-1.5.97-pass` (off `main` `5e1c41b`, `origin/main` `2300f7b` merged in,

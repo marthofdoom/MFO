@@ -1587,15 +1587,27 @@ declared there and defined in their home module). Layout:
   out VERBATIM so there is one judge; one pick per declaration, it replaces every worn ARMO its
   slot mask overlaps); everything else WORN (jewelry, clothing, circlets, modded slots) stays
   declared. Dolls mode declares the worn set as-is. SENT ONLY ON CHANGE: `g_lastDeclared`
-  (anon, worker-serial like `g_nextTick`) holds the last sent set sorted; `a_force` bypasses
-  it (the top-up's "give it back" re-issue, bounded by APMF's 3 s per-item hold). Log lines:
-  `[equip-auth] <id>: declare n=<count> [<names>] (<why>[, re-issue])`, `claim`, `release`.
+  (anon, worker-serial like `g_nextTick`) holds the last sent set sorted; a fresh claim handle
+  (F2) forgets it so the new handle is declared at once. **NO forced re-issue (F3, Fable round
+  2):** a re-send is a declaration EVENT and under v7 APMF's slot-less pass answers it by putting
+  the declared off-hand weapon in the RIGHT hand before MFO's hop puts both back — four ops and
+  a flicker per re-send; the top-up's "give it back" is Actuation's explicit placement, which
+  needs no re-declaration (the item is already in-set). **The judged armor pick is the OOC road's
+  only (`a_judgeArmor`, F9)** — the combat road (`DeclareFromLedger`) declares worn armor as is,
+  because legacy never wears armor in combat — and is computed ONCE per tick (F10):
+  `EquipBestOwnedGear` hands its pick to the guard through `g_handedPick` (follower-keyed,
+  consumed on the same worker call). Log lines: `[equip-auth] <id>: declare n=<count> [<names>]
+  (<why>[, new claim])`, `claim`, `release`.
   ROADS: `ServiceFollower` (`Logistics.cpp`, OOC, after the ~1 s cadence gate — CLAIM, then a
   scope guard declares at every exit so a loot/buy/owned-upgrade THIS tick is declared THIS
   tick; `a_leftReserved` from `APMFBridge::IsHealCastActive || IsOwnedCastActiveOnHand(left)`);
   `Actuation::DeclareFromLedger` (combat weapon events; the Scheduler never reaches
   `ServiceFollower` in combat); `OnFollowerRemoved` (dismiss + T#78 MFO-OFF edge via
-  `Followers::ReleaseHeldState`) RELEASES + forgets; `ClearTransientState` →
+  `Followers::ReleaseHeldState`) RELEASES + forgets — and **`ReleaseHeldState` itself releases the
+  authority FIRST (F7) and, when it was live, defers `Loadout::Restore` (the pre-MFO gear repay,
+  off-set) two `MainThread::Post` hops past APMF's next Drain and back onto the serial AddTask
+  worker under `PumpTickGate`, so an enforcing APMF does not refuse the repay and the ledger is
+  never mutated off its thread**; `ClearTransientState` →
   `ClearEquipDeclarations` (the claims go in `APMFBridge::ClearTransientState`, kPreLoadGame),
   so the first service after a load re-claims and re-declares. The gate OFF releases any standing
   claim (and `APMFBridge::Tick` releases on `bApmfEquipAuthority=0` for in-combat followers).
@@ -2824,10 +2836,22 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   copied byte-for-byte from APMF main (md5 `172eb7fd3d37696c555bc457d67ce405`); `kABIVersion` 6→7,
   so `Acquire()` now asks a v6 APMF for v7 and gets nullptr → the WHOLE APMF path degrades (the
   DLL pair ships together). `EquipAuthoritySupported()` = `Available() && abiVersion >= 7 &&
-  Config::g_apmfEquipAuthority` (the OffenseCastClaimSupported split: false + supported = APMF
-  REFUSED = fail closed, `spdlog::error`, never a degrade). `ClaimEquipAuthority(fid)`: a
-  STANDING `RequestEx(kIntent_EquipAuthority, kOwnBasis, ival = kEquipAuth_None)` on
-  `Owned::equipAuthHandle` — kept if live, never re-requested, refusal logged once per streak
+  Config::g_apmfEquipAuthority`. **A REFUSED CLAIM IS NOT FAIL-CLOSED (F1/F5, Fable round 2 on
+  `c66dc80`):** APMF refuses a ch.17 claim exactly when its #17a equip seat is not installed, and
+  then nothing on APMF's side can perform or deny an equip — so a refusal means "MFO keeps its
+  own equips": `IsEquipAuthorityClaimed` stays false and every direct path runs as without APMF
+  (Actuation's `authority=false`, `AcquireEquip`'s `EquipAuthorityLive` false,
+  `RefreshEquipDeclaration` returns without sending). `spdlog::warn` once per streak. Only a
+  DECLARATION on a live claim fails closed (`DeclareEquipSet` false). `ClaimEquipAuthority(fid,
+  bool* a_outFresh)`: a STANDING `RequestEx(kIntent_EquipAuthority, kOwnBasis, ival =
+  kEquipAuth_None)` on `Owned::equipAuthHandle` — kept if live, but **RE-VALIDATED (F2)**: a kept
+  handle ≥ 2 s old (`kEquipAuthValidateAfter`; younger ones are not yet in APMF's published
+  snapshot, which is all `IsClaimLive` scans) is checked with v6 `IsClaimLive` and re-minted when
+  APMF no longer knows it (APMF's hotkey release-all / unload sweep, a New Game, the toggle's
+  OFF→ON); `a_outFresh` reports "minted since the last `DeclareEquipSet`" (`Owned::equipAuthFresh`,
+  cleared by `DeclareEquipSet`) so `RefreshEquipDeclaration` drops its change detector and the new
+  handle gets a declaration at once; `plugin.cpp` kNewGame calls `ClearTransientState` too (SKSE
+  sends no kPreLoadGame for a New Game from a running session); refusal logged once per streak
   (`g_equipAuthRefused`); `ReleaseEquipAuthority(fid)`; `IsEquipAuthorityClaimed(fid)`;
   `DeclareEquipSet(fid, forms)` → `APMF_API_v7::SetEquipSet` (copied inside the call; > kMaxEquipSet
   32 logged as an error and truncated; no claim → error + false). NOT swept by `Tick()` (no cadence

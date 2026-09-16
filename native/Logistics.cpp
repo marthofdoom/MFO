@@ -914,7 +914,7 @@ namespace MFO::Logistics {
             ~DeclareAtExit() {
                 const bool leftReserved = APMFBridge::IsHealCastActive(id) ||
                                           APMFBridge::IsOwnedCastActiveOnHand(id, APMFBridge::kApmfHandLeft);
-                RefreshEquipDeclaration(f, st, 0, 0, leftReserved, "service");
+                RefreshEquipDeclaration(f, st, 0, 0, leftReserved, /*judgeArmor*/true, "service");
             }
         } declareAtExit{ a_follower, a_state, id };
 

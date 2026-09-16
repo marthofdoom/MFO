@@ -285,6 +285,30 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** the 1.5.97 pass brief said "cap relaxed — report, do not split". The file was already over the cap on `main` (the dual-wield / combat-pick work of 2026-09-13 took it from ~2480 to 2605); this branch added 17 comment lines.
 - **Fix shape when drained (verbatim):** a dedicated split brief for `Actuation.cpp` — candidates are the weapon equip block (`WeaponRolesFor` `:1677`, `IsOneHandMelee` `:1685`, `PickOffHandWeapon` `:1695`, `EquipLeftHeld` `:1748`, `EquipWeapon` `:1782`, the `g_forcedWeapon` ledger + `ReconcileForcedWeapon`/`CoLoadForcedWeapons`) into an `Actuation_Equip.cpp` next to `Actuation_Direct.cpp`/`Actuation_Hands.cpp`, shared state through `Actuation_internal.h`, as the two earlier splits did. Full adversarial Fable review, one field cycle on 1.6.1170 before the next feature lands on it.
 
+### MFO-B38 — "one judge" holds for the RATED armor branch only; mage-mode may stock a piece legacy wore
+- **Raised:** Fable tier-3 review of `c66dc80` (`feat/mfo-equip-authority`), SEV-4 (F11).
+- **Severity:** SEV-4
+- **Finding (verbatim):** F11 (one-judge holds for the rated branch only; mage-mode may stock a piece legacy wore).
+- **Reviewer's reasoning:** `ComputeOwnedGearPick` is EquipBestOwnedGear's pick verbatim, but the mage-apparel branch's equip carried a thrash guard (OOC-only + 5 s per follower) that the declaration does not: the declaration names the pick every tick it changes, while the legacy equip would have waited. A piece the mage branch would have worn after its guard can be declared (and worn by APMF) earlier, or — with the pick replacing the overlapping worn clothing in the set — the worn piece drops to stock a tick before legacy would have swapped it.
+- **Why it was NOT fixed:** below the severity floor; the declaration's own change gate bounds it to one send per real change, and the field cycle is observe-only.
+- **Fix shape when drained (verbatim):** carry the mage branch's thrash guard into the declaration (only declare the mage pick when EquipBestOwnedGear's guard would have let it through), or drop the guard from legacy so both roads agree.
+
+### MFO-B39 — `bApmfEquipAuthority` is the first per-feature APMF toggle in the MCM; conflicts with the recorded consolidation plan
+- **Raised:** Fable tier-3 review of `c66dc80` (`feat/mfo-equip-authority`), SEV-5 (F12). marth's call.
+- **Severity:** SEV-5 (policy)
+- **Finding (verbatim):** F12 (bApmfEquipAuthority is the first per-feature APMF toggle in the MCM, conflicts with the recorded consolidation plan — marth call).
+- **Reviewer's reasoning:** memory `mcm-apmf-toggle-consolidation` records the plan to drop per-feature APMF toggles and keep ONE global force-fallback in Debug (default OFF); `bApmfCast`/`bApmfLootTravel`/`bApmfRetreat` are INI-only, this one is exposed in the MCM General tab.
+- **Why it was NOT fixed:** the brief asked for the MCM toggle by name; the consolidation is marth's decision, not a review fix.
+- **Fix shape when drained (verbatim):** either move `bApmfEquipAuthority` to INI-only beside the other three, or fold all four into the planned single Debug-tab fallback switch. The INI key name is frozen either way (MCM-Helper persistence identity).
+
+### MFO-B40 — `Actuation.cpp` 2803: the split brief (MFO-B37) should precede the v8 re-mirror
+- **Raised:** Fable tier-3 review of `c66dc80` (`feat/mfo-equip-authority`), SEV-5 hygiene (F13).
+- **Severity:** SEV-5 (process; no behaviour)
+- **Finding (verbatim):** F13 (Actuation.cpp 2803: split brief B37 should precede the v8 re-mirror).
+- **Reviewer's reasoning:** the branch adds `PostHandEquipsDeferred` / `DeclareFromLedger` and the authority branches inside `EquipWeapon` on top of a file already over the cap (MFO-B37); the v8 hand-aware `SetEquipSetEx` re-mirror will REMOVE the deferred hop and touch the same block again — doing that on a split file costs one review, doing it before the split costs two.
+- **Why it was NOT fixed:** scope rule 1 — a split is its own brief and its own field cycle.
+- **Fix shape when drained (verbatim):** run MFO-B37's split (`Actuation_Equip.cpp`) BEFORE the v8 re-mirror brief; the v8 brief then retires `PostHandEquipsDeferred` inside the new TU.
+
 ### MFO-B34 — should the tier-2 swap-up ever evict a Conduit that an already-socketed off-domain gem depends on?
 - **Raised:** Fable tier-3 review of `1efa3e3` (`fix/mfo-meo-no-loose-gems`), policy question attached to the SEV-2 (fixed on the branch: the candidate is judged against the item WITHOUT the evictee, `sansEvictee`).
 - **Finding (verbatim):** Policy question for marth, record in backlog: should MFO ever evict a Conduit that an already-socketed off-domain gem depends on?

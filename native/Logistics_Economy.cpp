@@ -296,6 +296,20 @@ namespace MFO::Logistics {
         // once worn it no-ops -> no thrash. Apparel/armor only here; WEAPONS are left
         // to the combat equip gambit (Loadout::Prepare picks the best in-class at
         // combat), matching the loot judge's stock-not-equip rule for weapons.
+        namespace {
+            // F10 (Fable round 2): the judged armor pick is computed ONCE per
+            // logistics tick. EquipBestOwnedGear hands its pick here (0 = it ran
+            // and found nothing to wear) and ServiceFollower's exit guard
+            // (RefreshEquipDeclaration below), on the same worker call, consumes
+            // it instead of walking the inventory and scoring every piece a
+            // second time. Keyed by follower so a slot left over from a tick that
+            // never reached the guard (it always does -- the guard is on that
+            // call's stack -- but belt and braces) can never be read for a
+            // different follower. Worker-serial like g_lastDeclared.
+            struct HandedPick { RE::FormID follower = 0; RE::FormID pick = 0; bool set = false; };
+            HandedPick g_handedPick;
+        }
+
         // THE PICK, factored out of EquipBestOwnedGear VERBATIM (feat/mfo-equip-
         // authority, 2026-09-15) so the APMF equip-authority DECLARATION below
         // (RefreshEquipDeclaration) names exactly the piece this pass would
@@ -399,6 +413,7 @@ namespace MFO::Logistics {
             ArmorPref armorPref;
             bool      useMageApparel = false;
             RE::TESBoundObject* pick = ComputeOwnedGearPick(a_follower, a_state, armorPref, useMageApparel);
+            g_handedPick = { a_follower->GetFormID(), pick ? pick->GetFormID() : 0, true };   // F10: for the declaration guard
             if (!pick) return;
             // APMF EQUIP AUTHORITY (feat/mfo-equip-authority): with the standing
             // claim live, the DECLARATION is the equip path -- this tick's set
@@ -472,8 +487,10 @@ namespace MFO::Logistics {
         //     or a cast holding the left (a_leftReserved) -> none; offHand==1 ->
         //     the best owned shield by rating (Actuation's PickShield rule);
         //     offHand==0 -> the worn shield, if any (MFO has no opinion; keep it).
-        //   * the JUDGED ARMOR PICK: exactly ComputeOwnedGearPick's single best
-        //     owned upgrade (the piece EquipBestOwnedGear would wear this tick);
+        //   * the JUDGED ARMOR PICK (OOC road only, a_judgeArmor -- the combat
+        //     road declares worn armor as is, F9): exactly ComputeOwnedGearPick's
+        //     single best owned upgrade (the piece EquipBestOwnedGear would wear
+        //     this tick, handed over from that pass when it ran, F10);
         //     it REPLACES every worn ARMO its slot mask overlaps (what the engine
         //     displaces). One pick per declaration, so a multi-slot upgrade
         //     converges over ticks the same way the direct pass always has, and
@@ -483,9 +500,8 @@ namespace MFO::Logistics {
         //     strips it. Dolls mode (no judging) declares the worn set as-is.
         // Sent only when it CHANGES ("declare, do not tick" -- APMF_API.h's
         // SetEquipSet doc): the last sent set is kept per follower, sorted, and
-        // compared. a_force bypasses that for the ONE legitimate re-issue: a
-        // declared item MFO observes is not worn (the off-hand top-up), which
-        // APMF honours as "give it back" and bounds at 3 s per item.
+        // compared; a freshly minted claim (F2) forgets it so the new handle is
+        // declared at once. There is deliberately NO forced re-issue (F3).
         // Gated on FollowerState::mfoEnabled + APMFBridge::EquipAuthoritySupported();
         // off -> any standing claim is released and the cache dropped, so the
         // direct equip paths run byte-identical to a world with no APMF.
@@ -525,7 +541,7 @@ namespace MFO::Logistics {
 
         void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
                                      RE::FormID a_holdRight, RE::FormID a_holdLeft,
-                                     bool a_leftReserved, const char* a_why, bool a_force) {
+                                     bool a_leftReserved, bool a_judgeArmor, const char* a_why) {
             if (!a_follower) return;
             const RE::FormID id = a_follower->GetFormID();
             if (!a_state.mfoEnabled || !APMFBridge::EquipAuthoritySupported()) {
@@ -533,10 +549,19 @@ namespace MFO::Logistics {
                 g_lastDeclared.erase(id);
                 return;
             }
-            if (!APMFBridge::ClaimEquipAuthority(id)) {   // refused: the bridge logged it; FAIL CLOSED
+            bool fresh = false;
+            if (!APMFBridge::ClaimEquipAuthority(id, &fresh)) {
+                // APMF REFUSED (its equip seat is not installed): the bridge logged
+                // it once; IsEquipAuthorityClaimed is false, so every direct equip
+                // path runs for this follower exactly as without APMF (F1/F5).
                 g_lastDeclared.erase(id);
                 return;
             }
+            // F2: a handle minted since the last declaration (first claim, a
+            // re-mint after APMF forgot the old one, the toggle's OFF->ON, a New
+            // Game) carries NO set on APMF's side -- the change detector must not
+            // answer "unchanged" against it. Forget, so this rebuild is sent.
+            if (fresh) g_lastDeclared.erase(id);
 
             EquipDecl decl;
             const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
@@ -601,9 +626,23 @@ namespace MFO::Logistics {
             decl.Add(shield);
 
             // 4. THE JUDGED ARMOR PICK (EquipBestOwnedGear's own pick, one per declaration).
-            ArmorPref pref; bool mageMode = false;
-            RE::TESBoundObject* pickObj = ComputeOwnedGearPick(a_follower, a_state, pref, mageMode);
-            auto* pick = pickObj ? pickObj->As<RE::TESObjectARMO>() : nullptr;
+            //    OOC road only (a_judgeArmor): legacy never wears armor in combat
+            //    (EquipBestOwnedGear is OOC-only, its mage branch !IsInCombat), so
+            //    the combat road (DeclareFromLedger) declares the worn armor as is
+            //    (F9). Consumed from EquipBestOwnedGear's hand-off when that pass
+            //    ran this tick, else computed here (F10).
+            RE::TESObjectARMO* pick = nullptr;
+            if (a_judgeArmor) {
+                RE::TESBoundObject* pickObj = nullptr;
+                if (g_handedPick.set && g_handedPick.follower == id) {
+                    pickObj = resolve(g_handedPick.pick);
+                } else {
+                    ArmorPref pref; bool mageMode = false;
+                    pickObj = ComputeOwnedGearPick(a_follower, a_state, pref, mageMode);
+                }
+                pick = pickObj ? pickObj->As<RE::TESObjectARMO>() : nullptr;
+            }
+            g_handedPick = {};   // one tick's hand-off, consumed or not
             decl.Add(pick);
 
             // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick displaces.
@@ -617,17 +656,23 @@ namespace MFO::Logistics {
             }
 
             // SEND ONLY ON CHANGE.
+            // SEND ONLY ON CHANGE -- no forced re-issue (F3, Fable round 2): a
+            // re-send is a declaration EVENT, and under the v7 ABI APMF's slot-less
+            // pass answers it by putting the declared off-hand weapon in the RIGHT
+            // hand (evicting the sword) before MFO's own hop puts both back -- four
+            // engine ops and a visible flicker per re-send. The top-up's "give it
+            // back" is Actuation's own explicit placement (PostHandEquipsDeferred),
+            // which needs no re-declaration: the item is already in-set.
             std::vector<RE::FormID> sorted = decl.forms;
             std::sort(sorted.begin(), sorted.end());
-            if (!a_force)
-                if (auto it = g_lastDeclared.find(id); it != g_lastDeclared.end() && it->second == sorted) return;
+            if (auto it = g_lastDeclared.find(id); it != g_lastDeclared.end() && it->second == sorted) return;
             if (!APMFBridge::DeclareEquipSet(id, decl.forms)) {   // logged in the bridge; retried next refresh
                 g_lastDeclared.erase(id);
                 return;
             }
             g_lastDeclared[id] = std::move(sorted);
             spdlog::info("[equip-auth] {:08X}: declare n={} [{}] ({}{})", id, decl.forms.size(), decl.names,
-                         a_why ? a_why : "?", a_force ? ", re-issue" : "");
+                         a_why ? a_why : "?", fresh ? ", new claim" : "");
         }
 
         // ── #21 buy thresholds (Features A + B) ─────────────────────────────────
