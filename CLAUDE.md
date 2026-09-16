@@ -156,6 +156,20 @@ dispatches and merges it.
      it looks, because "CI-identical" is not a claim a split may assert.
    Never downgrade the REVIEWER to a cheap model at any tier. Fable found every defect that mattered this
    week; cheap review is how the 2026-09-06 regression shipped.
+   **COST TABLE (marth 2026-09-15: "we cant have every small change being this expensive … higher
+   risk changes get higher effort checks with better agents"). Tier is decided by the DIFF'S SHAPE:**
+   | Tier | Shape | Author | Review | Rounds |
+   |---|---|---|---|---|
+   | A | engine seat / ABI / byte-shared header / co-save / threading / TU split | Opus | Fable tier 3 | until nothing >SEV-3 |
+   | B | logic inside an existing mechanism (most feature work) | Opus | Fable ONE pass; author fixes; coordinator merges on the author's report + its own diff read | ≤2 |
+   | C | docs / strings / log text / comments / backlog entries / small INI | Opus small brief, or the coordinator inline for one-liners | mechanical (comment-strip diff) | 1 |
+   Two rules that cut the most waste: (1) a CLOSING round (strings, wording, backlog notes) never gets a
+   Fable pass — prove it by comment-strip diff or the coordinator's read; (2) SEV-4/SEV-5 findings go to
+   the backlog, never into the current round "because the author is there" — one drain before the cut
+   (rule 9). Measured 2026-09-15: the equip authority took ~12 agent rounds / ~3M tokens across two repos,
+   and most rounds after the first two were tier-C cleanup reviewed at tier A. Tier A stays expensive on
+   purpose: every real defect this week (the Conduit loop, the null left slot, the AI shield re-equip, the
+   uninstalled-seat claim) was tier A and Fable found all of them.
 
 ## Engineering + design principles — HOW TO THINK HERE (read before designing anything)
 
