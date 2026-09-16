@@ -56,8 +56,8 @@
 // ABI contract; the transport is just how you get the pointer.)
 //
 // ── Threading ──
-// Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet/SetEquipSetEx are SAFE FROM
-// ANY THREAD. They capture POD (a FormID, a copy of the APMF_Param, or — for
+// Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet/SetEquipSetEx/SetEquipScope
+// are SAFE FROM ANY THREAD. They capture POD (a FormID, a copy of the APMF_Param, or — for
 // SetSpellAllowList/SetEquipSet/SetEquipSetEx — a copy of the forms/entries array; for
 // SetEquipScope — a copy of the APMF_EquipScope) and enqueue the
 // work; APMF applies it on the game thread. A client's BSJobs worker may call
@@ -343,8 +343,12 @@ namespace APMF_API {
     // v9 SCOPES the authority. Each governed item COMPETES for one or more of these
     // categories (the map is ONE function, apmf::equipsink::Categorize, used by the
     // seat and by the enforce pass alike):
-    //   ARMO, no shield bit            -> Armor
-    //   ARMO with the shield biped bit -> Shield | Left
+    //   ARMO, no shield bit (or no bits) -> Armor
+    //   ARMO with the shield biped bit   -> Shield | Left
+    //   ARMO with the shield bit AND any other biped bit (a modded "shield on
+    //     back" piece)                   -> Shield | Left | Armor  (both kinds of
+    //                                     bits -> both categories, so an Armor-only
+    //                                     scope still holds the body slot against it)
     //   WEAP two-handed (2H sword, 2H axe, bow, crossbow)  -> Right | Left
     //   WEAP one-handed (incl. staff), equip slot LeftHand  -> Left
     //   WEAP one-handed (incl. staff), equip slot RightHand -> Right
@@ -356,6 +360,7 @@ namespace APMF_API {
     // widens kEquipCat_All in ITS revision only. A v9 APMF masks unknown bits
     // off (logged once per handle), never refuses the call.
     enum EquipCategory : std::uint32_t {
+        kEquipCat_None   = 0,         // a VALUE, not a bit: "no category" (an empty mask)
         kEquipCat_Armor  = 1u << 0,   // every ARMO without the shield bit (body, head, hands, feet, jewelry, cloak ...)
         kEquipCat_Shield = 1u << 1,   // an ARMO carrying BipedObjectSlot::kShield (competes for Left too)
         kEquipCat_Right  = 1u << 2,   // the right hand

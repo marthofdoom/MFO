@@ -15,6 +15,7 @@ Read it as history and this block as current.
 
 - **Branch `feat/mfo-equip-authority-v9` (off `origin/main` `cb97052`) — SCOPED AUTHORITY, ABI v9:
   F6 RESOLVED.** MFO's copy of `native/APMF_API.h` is APMF's v9 header verbatim (branch
+  `main` `9226f77`, the merged v9, md5 `2b941cd753d2e5520a0cdf558adf66f8`; the first cut was
   `feat/equip-authority-v9` `3d5cab8`, md5 `6494513d598d4a3bb768579a3e46dc51`). The whole-facet v8
   authority froze a follower with NO equip gambit out of his own melee<->ranged switch (the first
   deck run: 117 `CombatNode` would-denies, every one against a declaration built from "the weapon

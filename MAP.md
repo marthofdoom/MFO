@@ -1606,7 +1606,10 @@ declared there and defined in their home module). Layout:
   own condition, combat end, a spell taking the left). HANDS: declared from the ledger ONLY — a
   one-hand hold carries `kEquipSlot_Right`/`kEquipSlot_Left` (the same form may stand once per
   hand); a held two-hander/bow is `kEquipSlot_Default` (it competes for both hands from its
-  TYPE); ammo and armor are Default. The v8 "else the weapon currently in that hand" and torch
+  TYPE); ammo and armor are Default. A shield ARMO is NOT Shield-only at APMF's seat: a mixed
+  piece with a shield bit AND a body bit (a modded "shield on back") competes Armor+Shield+Left,
+  so the Armor-owned scope holds the body slot against it — rule 5 excludes every `IsShield()`
+  piece from the set, which is exactly why such a piece is refused, never declared. The v8 "else the weapon currently in that hand" and torch
   reads are DELETED: they were the F6 freeze (117 `CombatNode` would-denies against no hold).
   `a_leftReserved` (a cast on the left) → nothing left, owned or declared. RULE 1b,
   BOUND WEAPONS (round 4): `LiveBoundWeapons(actor)` = the WEAP `associatedForm` of every live
@@ -2897,7 +2900,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **EQUIP AUTHORITY (ch.17, `kIntent_EquipAuthority`, ABI v8 `SetEquipSetEx` + ABI v9
   `SetEquipScope`; `feat/mfo-equip-authority` 2026-09-15 — PORT #1, the first MFO engine
   mechanism moved into APMF; SCOPED by `feat/mfo-equip-authority-v9` 2026-09-16).** `APMF_API.h`
-  copied byte-for-byte from APMF `feat/equip-authority-v9` `3d5cab8` (md5
+  copied byte-for-byte from APMF `main` `9226f77`, the merged v9 (md5
+  `2b941cd753d2e5520a0cdf558adf66f8`; the first v9 cut `3d5cab8` was
   `6494513d598d4a3bb768579a3e46dc51`; the v8 copy was main `03f04d5`, md5
   `aade60882647106ad3c928ada46ee2f2`); `kABIVersion` 8→9, so `Acquire()` now asks an older APMF
   for v9 and gets nullptr → the WHOLE APMF path degrades (the DLL pair ships together).
