@@ -932,7 +932,18 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   branch), `Loadout.cpp` `EquipBack` (the cast-debt repay; in-set when it repays a declared item),
   `Logistics.cpp` `EquipTorch` and `HealExcludedWeapon`'s best-weapon re-equip, `AcquireEquip`'s
   WEAPON equip-in-place hop. `DrinkPotion`'s `EquipObject(potion)` is NOT governed (v8: only
-  ARMO/WEAP/AMMO/LIGH are). Observe-only this cycle (APMF ships `[EquipAuthority]
+  ARMO/WEAP/AMMO/LIGH are). **BOUND WEAPONS (round 4, `fix/mfo-equip-authority-bound`):** the
+  engine's `BoundItemEffect` equips a conjured WEAP through `EquipObject` (seat path `BoundItem`)
+  — off-set, refused under enforcement — so `ReconcileForcedWeapon` (every in-combat lap, hold or
+  no hold) compares `Logistics::LiveBoundWeapons` lap to lap (`g_boundSeen`, anon) and calls
+  `DeclareFromLedger` on a change; the builder's rule 1b declares each live bound weapon (see
+  the Logistics_Economy entry). **MFO-B41 fixed:** `DeclareFromLedger` mirrors the ledger it
+  last declared (`g_lastLedgerDeclared`); unchanged ledger + its weapon in neither hand →
+  `Logistics::ResendEquipDeclaration` (drops the change detector only) so the set is re-sent,
+  throttled by `kB41Hold` 3 s (APMF's per-item re-issue hold); all three maps cleared in
+  `ClearForcedWeapons`. **What breaks:** trigger it from a seat that only runs while a hold
+  stands and the AI's own Bound Sword is never declared; drop the throttle and an observe-mode
+  take-back re-sends every lap. Observe-only this cycle (APMF ships `[EquipAuthority]
   bEquipObserveOnly=1`; the claim line prints `mode=observe-only|ENFORCE` from APMF's v8
   `IsEquipAuthorityEnforced`).
 - `ConcentrationCast` (anon, `Actuation.cpp:470`, COMBAT) = self→`CastSelfDirect`; non-self→
@@ -1574,7 +1585,15 @@ declared there and defined in their home module). Layout:
   the entry names — and refuses every other engine equip of a governed type (ARMO/WEAP/AMMO/LIGH)
   on him. HANDS: a one-hand weapon carries `kEquipSlot_Right`/`kEquipSlot_Left` (the ledger's
   hand, or the hand it is actually in; the same form may stand once per hand); a two-hander, a
-  bow, a torch, a shield, ammo and armor are `kEquipSlot_Default` (the engine picks). THE COMPOSITION (declare→enforce, principle 4 — only
+  bow, a torch, a shield, ammo and armor are `kEquipSlot_Default` (the engine picks). RULE 1b,
+  BOUND WEAPONS (round 4): `LiveBoundWeapons(actor)` = the WEAP `associatedForm` of every live
+  (not dispelled/inactive) ActiveEffect whose base MGEF `data.archetype == kBoundWeapon`
+  (`RE/E/EffectSetting.h:71` / `:88`; the `CasterHasLiveSummon` road, worker, read-only);
+  each is declared while live with the hand it is actually held in, else Right for a one-hander
+  unless `a_holdLeft` names it, Default for a bow/two-hander, and REPLACES the ledger's entry for
+  that hand (`EquipDecl::DropHand`); logged `declare bound '<name>' (<hand>)` when new since the
+  last send. `ResendEquipDeclaration(id)` drops the change detector only (MFO-B41's re-send;
+  `ForgetEquipDeclaration` also drops the player picks and is the dismiss road). THE COMPOSITION (declare→enforce, principle 4 — only
   what MFO decides elsewhere): hands = `a_holdRight/a_holdLeft` (Actuation's `ForcedHold`
   ledger) else the WEAPON in that hand (a torch counts; a spell is not an item; a two-hander/bow
   in the right empties the left; never a weapon not held — a stowed bow beside a held sword is

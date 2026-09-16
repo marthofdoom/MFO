@@ -1085,6 +1085,11 @@ namespace MFO::Logistics {
     void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
                                  RE::FormID a_holdRight, RE::FormID a_holdLeft,
                                  bool a_leftReserved, bool a_judgeArmor, const char* a_why);
+    // The bound WEAP forms whose BoundItemEffect is live on a_follower right now
+    // (sorted, deduped; worker, read-only). The declaration carries them while
+    // live; Actuation's in-combat lap compares this to trigger a re-declaration.
+    std::vector<RE::FormID> LiveBoundWeapons(RE::Actor* a_follower);
     void ForgetEquipDeclaration(RE::FormID a_follower);   // one follower's change detector (dismiss)
+    void ResendEquipDeclaration(RE::FormID a_follower);   // drop ONLY the change detector so the next rebuild is sent (MFO-B41); player picks kept
     void ClearEquipDeclarations();                        // all (revert / load)
 }

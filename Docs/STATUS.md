@@ -13,9 +13,34 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
-- **Branch `feat/mfo-equip-authority` (off `origin/main` `0182234`, v2.0.8 stamped) — PORT #1:
-  MFO's worn-set hold moves into APMF's EQUIP AUTHORITY (ch.17, ABI v7). Pushed, CI GREEN on
-  the code commit `c66dc80` (run 35027862896), NOT merged, NOT deployed, NOT field-tested.** Field context (Fable 2026-09-15,
+- **Branch `fix/mfo-equip-authority-bound` (off `origin/main` `7687fca`, the merged equip
+  authority) — ROUND 4: BOUND WEAPONS under the authority, found by the probe sweep.** The
+  observe-only probe run PASSED 6/7 (criterion 3's last unnamed dispatcher id is named on the
+  APMF side). The MFO gap it found, closed here BEFORE enforcement is flipped: a Bound
+  Sword/Bow/Battleaxe is put in the hand by the engine's `BoundItemEffect` through
+  `ActorEquipManager::EquipObject` (seat path `BoundItem`) — a WEAP the follower never owned, so
+  an off-set equip that enforcement would REFUSE and a mage who casts Bound Sword would hold
+  nothing. Now `Logistics::LiveBoundWeapons` (`Logistics_Economy.cpp`) reads the caster's live
+  ActiveEffects whose base MGEF archetype is `kBoundWeapon` and takes the weapon from the
+  effect's `associatedForm` (`RE/E/EffectSetting.h:71`, archetype `:88`; the same active-effect
+  road `CasterHasLiveSummon` walks), and rule 1b of the declaration carries each one while the
+  effect is live: the hand it is actually held in (the `BoundItemEffect` equips into the CASTING
+  hand — MFO's gambit spells are cast LEFT, the AI's from either), else Right for a one-hander
+  unless the ledger's left names it, Default for a bound bow/two-hander; a held bound weapon
+  replaces the ledger's entry for that hand. `[equip-auth] <id>: declare bound '<name>'
+  (right|left|default)` once per new bound form. TRIGGER in combat (neither MFO's cast nor the
+  AI's passes `EquipWeapon`): `Actuation::ReconcileForcedWeapon` — the one per-lap seat Actuation
+  owns, run every in-combat lap hold or no hold — compares the live bound set lap to lap
+  (`g_boundSeen`) and re-declares on a change (cast and expiry each = one send); OOC the ~1 s
+  service rebuild sees it. MFO-B41 ALSO FIXED here (small): `DeclareFromLedger` keeps the ledger
+  it last declared (`g_lastLedgerDeclared`); an unchanged ledger whose weapon is in NEITHER hand
+  drops only the change detector (`Logistics::ResendEquipDeclaration`, player picks kept) so the
+  same set goes out again — APMF's "give it back" — throttled to APMF's own 3 s per-item hold
+  (`kB41Hold`), logged `ledger weapon in neither hand -- re-declaring (MFO-B41)`. Tier B.
+- **Branch `feat/mfo-equip-authority` — MERGED to `main` (`7687fca`) after four Fable rounds;
+  the bullet below is its history.** (off `origin/main` `0182234`, v2.0.8 stamped) — PORT #1:
+  MFO's worn-set hold moves into APMF's EQUIP AUTHORITY (ch.17, ABI v7→v8). CI GREEN on
+  the code commit `c66dc80` (run 35027862896), NOT deployed, field-tested observe-only (6/7).** Field context (Fable 2026-09-15,
   `agentlogs/fable-dualwield-shield.md`): the dual-wield left-hand equip works, then the
   follower's own combat AI re-equips the shield within <1 s and the engine's forced
   displacement strips MFO's hold; a worn shield on a dual-wielder is neither kept nor sold.
