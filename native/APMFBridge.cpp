@@ -1547,13 +1547,19 @@ namespace MFO::APMFBridge {
     // `false` from Claim/Declare with Supported() true can only mean APMF refused.
     bool EquipAuthoritySupported() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        return api && api->abiVersion >= 7 && Config::g_apmfEquipAuthority.load();
+        return api && api->abiVersion >= 8 && Config::g_apmfEquipAuthority.load();
+    }
+
+    bool IsEquipAuthorityEnforced() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < 8) return false;
+        return reinterpret_cast<const APMF_API::APMF_API_v8*>(api)->IsEquipAuthorityEnforced();
     }
 
     bool ClaimEquipAuthority(RE::FormID a_follower, bool* a_outFresh) {
         if (a_outFresh) *a_outFresh = false;
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api || a_follower == 0 || api->abiVersion < 7 || !Config::g_apmfEquipAuthority.load()) return false;
+        if (!api || a_follower == 0 || api->abiVersion < 8 || !Config::g_apmfEquipAuthority.load()) return false;
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
         if (o.equipAuthHandle != APMF_API::kInvalidHandle) {
@@ -1604,8 +1610,13 @@ namespace MFO::APMFBridge {
         o.equipAuthMintedAt = std::chrono::steady_clock::now();
         o.equipAuthFresh    = true;
         if (a_outFresh) *a_outFresh = true;
-        spdlog::info("[equip-auth] {:08X}: claim (kIntent_EquipAuthority, basis {}, flags 0, handle {})",
-                     a_follower, kOwnBasis, o.equipAuthHandle);
+        // mode= is APMF's v8 IsEquipAuthorityEnforced read at claim time (seat
+        // installed AND bEquipObserveOnly=0), so a Deck log states observe vs
+        // enforce in the line that opens each follower's authority.
+        spdlog::info("[equip-auth] {:08X}: claim (kIntent_EquipAuthority, basis {}, flags 0, handle {}, mode={})",
+                     a_follower, kOwnBasis, o.equipAuthHandle,
+                     reinterpret_cast<const APMF_API::APMF_API_v8*>(api)->IsEquipAuthorityEnforced()
+                         ? "ENFORCE" : "observe-only");
         return true;
     }
 
@@ -1628,9 +1639,9 @@ namespace MFO::APMFBridge {
         return it != g_owned.end() && it->second.equipAuthHandle != APMF_API::kInvalidHandle;
     }
 
-    bool DeclareEquipSet(RE::FormID a_follower, const std::vector<RE::FormID>& a_forms) {
+    bool DeclareEquipSet(RE::FormID a_follower, const std::vector<APMF_API::APMF_EquipEntry>& a_forms) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api || a_follower == 0 || api->abiVersion < 7 || !Config::g_apmfEquipAuthority.load()) return false;
+        if (!api || a_follower == 0 || api->abiVersion < 8 || !Config::g_apmfEquipAuthority.load()) return false;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
         if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) {
@@ -1646,7 +1657,11 @@ namespace MFO::APMFBridge {
                                       ? APMF_API::kMaxEquipSet
                                       : static_cast<std::uint32_t>(a_forms.size());
         // COPIED inside the call (APMF_API.h threading contract); a_forms may die.
-        reinterpret_cast<const APMF_API::APMF_API_v7*>(api)->SetEquipSet(
+        // v8 SetEquipSetEx: one entry per item WITH its hand (kEquipSlot_Right /
+        // kEquipSlot_Left for the hand-held items MFO decides, Default for the
+        // rest), so APMF itself places a dual-wielder's off-hand weapon in the
+        // LEFT hand -- the slot-less v7 pass could not (Loadout.cpp F2).
+        reinterpret_cast<const APMF_API::APMF_API_v8*>(api)->SetEquipSetEx(
             it->second.equipAuthHandle, count ? a_forms.data() : nullptr, count);
         it->second.equipAuthFresh = false;   // this handle now carries a declaration
         return true;

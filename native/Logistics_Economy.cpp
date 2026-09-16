@@ -5,7 +5,8 @@
 // helpers shared with TradeBridge::PlanBuy (see Logistics.h).
 #include "Logistics_internal.h"
 #include "APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
-#include <algorithm>     // std::find / std::sort in the declaration builder
+#include <algorithm>     // std::any_of / std::sort in the declaration builder
+#include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
 namespace MFO::Logistics {
 
@@ -474,6 +475,8 @@ namespace MFO::Logistics {
         //   * the HANDS: a_holdRight / a_holdLeft (Actuation's ForcedHold ledger,
         //     the source of truth for a gambit equip) when set, else the WEAPON
         //     currently in that hand (a spell is not an item; a torch counts).
+        //     ABI v8: a one-hand weapon carries its HAND (kEquipSlot_Right/Left)
+        //     so APMF places it there itself; everything else is Default.
         //     Never a weapon the follower is not holding -- a stowed bow beside a
         //     held sword is not simultaneously wearable (APMF INTEGRATION.md) and
         //     would make the pass displace one with the other on every event.
@@ -509,19 +512,37 @@ namespace MFO::Logistics {
         // Actuation::EquipWeapon (the Scheduler tick, in combat), OnFollowerRemoved.
         // g_lastDeclared is worker-serial like g_nextTick; cleared on revert.
         namespace {
-            std::unordered_map<RE::FormID, std::vector<RE::FormID>> g_lastDeclared;
+            // The last SENT set per follower, as (form, hand) pairs sorted -- the
+            // change detector. Worker-serial like g_nextTick.
+            using DeclKey = std::pair<RE::FormID, std::uint8_t>;
+            std::unordered_map<RE::FormID, std::vector<DeclKey>> g_lastDeclared;
+
+            // PLAYER AGENCY (round 3, ABI v8): armor the PLAYER put on a follower
+            // through the trade/gift menu (APMF's seat allows `path=PlayerMenu`
+            // by default; MFO does NOT set kEquipAuth_DenyPlayerMenu). Detected as
+            // a worn ARMO that was not in the last declaration and is not this
+            // tick's judged pick -- nothing of MFO's put it there -- and kept per
+            // follower while owned: the mage-apparel pick may not displace it on
+            // a tie (only a STRICTLY better key does; the rated branch is strictly-
+            // better-than-worn by construction), and the economy keeps it instead
+            // of selling it once MFO's pick displaces it (IsPlayerPick below).
+            // Worker-serial; cleared with the declarations.
+            std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_playerPicks;
 
             struct EquipDecl {
-                std::vector<RE::FormID> forms;
-                std::string             names;
-                void Add(RE::TESBoundObject* a_obj) {
+                std::vector<APMF_API::APMF_EquipEntry> entries;
+                std::string                            names;
+                void Add(RE::TESBoundObject* a_obj, std::uint8_t a_slot = APMF_API::kEquipSlot_Default) {
                     if (!a_obj) return;
                     const RE::FormID id = a_obj->GetFormID();
-                    if (std::find(forms.begin(), forms.end(), id) != forms.end()) return;
-                    forms.push_back(id);
+                    for (const auto& e : entries)
+                        if (e.form == id && e.slot == a_slot) return;   // same form, same hand: once
+                    entries.push_back(APMF_API::APMF_EquipEntry{ id, a_slot, { 0, 0, 0 } });
                     if (!names.empty()) names += ", ";
                     const char* nm = a_obj->GetName();
                     names += (nm && *nm) ? nm : "?";
+                    if (a_slot == APMF_API::kEquipSlot_Right)      names += " (R)";
+                    else if (a_slot == APMF_API::kEquipSlot_Left)  names += " (L)";
                 }
             };
 
@@ -536,8 +557,13 @@ namespace MFO::Logistics {
             return APMFBridge::EquipAuthoritySupported() && APMFBridge::IsEquipAuthorityClaimed(a_follower);
         }
 
-        void ForgetEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); }
-        void ClearEquipDeclarations() { g_lastDeclared.clear(); }
+        void ForgetEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); g_playerPicks.erase(a_follower); }
+        void ClearEquipDeclarations() { g_lastDeclared.clear(); g_playerPicks.clear(); }
+
+        bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form) {
+            const auto it = g_playerPicks.find(a_follower);
+            return it != g_playerPicks.end() && it->second.count(a_form) != 0;
+        }
 
         void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
                                      RE::FormID a_holdRight, RE::FormID a_holdLeft,
@@ -587,8 +613,20 @@ namespace MFO::Logistics {
             const bool rightRanged    = rightW && (rightW->IsBow() || rightW->IsCrossbow());
             const bool rightTwoHanded = rightW && (rightRanged || rightW->IsTwoHandedSword() || rightW->IsTwoHandedAxe());
             if (rightTwoHanded) left = nullptr;   // wearability: both hands are the right's
-            decl.Add(right);
-            decl.Add(left);
+            // THE HAND (ABI v8): a ONE-HAND weapon names its hand -- the ledger's
+            // right/left, or the hand the held weapon is actually in -- so APMF
+            // itself places a dual-wielder's off-hand weapon in the LEFT (the v7
+            // slot-less pass put it in the right and evicted the sword, F2/F3).
+            // A two-hander, a bow, a torch: Default, the engine picks (APMF_API.h).
+            // The same form may stand once per hand (two identical daggers).
+            const auto handOf = [](RE::TESBoundObject* a_obj, std::uint8_t a_hand) -> std::uint8_t {
+                auto* w = a_obj ? a_obj->As<RE::TESObjectWEAP>() : nullptr;
+                const bool oneHand = w && (w->IsOneHandedSword() || w->IsOneHandedDagger() ||
+                                           w->IsOneHandedAxe()   || w->IsOneHandedMace());
+                return oneHand ? a_hand : APMF_API::kEquipSlot_Default;
+            };
+            decl.Add(right, handOf(right, APMF_API::kEquipSlot_Right));
+            decl.Add(left,  handOf(left,  APMF_API::kEquipSlot_Left));
 
             // 2. AMMO.
             if (rightRanged || roles.doRanged) {
@@ -643,6 +681,65 @@ namespace MFO::Logistics {
                 pick = pickObj ? pickObj->As<RE::TESObjectARMO>() : nullptr;
             }
             g_handedPick = {};   // one tick's hand-off, consumed or not
+
+            // 4b. THE PLAYER'S OWN CHOICE (round 3, ABI v8: APMF lets the trade/gift
+            //     menu equip through). A worn non-shield ARMO that the last
+            //     declaration did not carry and that is not this tick's pick was put
+            //     there by the player (or, in observe mode, by the engine -- same
+            //     treatment): record it, log it once, and let it stand. The rated
+            //     judge only ever picks a STRICTLY better-scored piece than what is
+            //     worn (ArmorIsBetter), so MFO's pick wins back the slot exactly when
+            //     it should; the MAGE judge breaks ties by FormID, so a pick that
+            //     merely ties the player's piece on (tier, metric) is dropped here.
+            //     A displaced player piece stays recorded while owned: the economy
+            //     KEEPS it (IsPlayerPick) instead of selling it as a redundant
+            //     inferior. Prune what the follower no longer owns.
+            auto& picks = g_playerPicks[id];
+            for (auto it = picks.begin(); it != picks.end();) {
+                auto* form = RE::TESForm::LookupByID(*it);
+                auto* obj  = form ? form->As<RE::TESBoundObject>() : nullptr;
+                auto invIt = obj ? inv.find(obj) : inv.end();
+                if (invIt == inv.end() || invIt->second.first <= 0) it = picks.erase(it);
+                else                                                ++it;
+            }
+            const auto* last = [&]() -> const std::vector<DeclKey>* {
+                const auto it = g_lastDeclared.find(id);
+                return it == g_lastDeclared.end() ? nullptr : &it->second;
+            }();
+            const auto lastHas = [&](RE::FormID a_form) {
+                if (!last) return true;   // no declaration yet: nothing can be "new since"
+                return std::any_of(last->begin(), last->end(), [&](const DeclKey& k) { return k.first == a_form; });
+            };
+            for (auto& [obj, data] : inv) {
+                if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                auto* ar = obj->As<RE::TESObjectARMO>();
+                if (!ar || ar->IsShield() || ar == pick) continue;
+                const RE::FormID f = ar->GetFormID();
+                if (lastHas(f) || picks.count(f)) continue;
+                picks.insert(f);
+                spdlog::info("[equip-auth] {:08X}: player put on '{}' -- kept", id,
+                             ar->GetName() ? ar->GetName() : "?");
+            }
+            if (pick && !picks.empty()) {
+                const bool caster = IsCasterFollower(a_state);
+                if (caster && Config::g_mageWearRobes.load()) {
+                    // Mage judge: keep the player's worn piece on a tie of (tier, metric).
+                    const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
+                    const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                    int pt = 0; std::int32_t pm = 0;
+                    const bool pickRanks = MageApparelBuyKey(pick, top2, schoolPrimary, IsNecromancerFollower(a_state), pt, pm);
+                    for (auto& [obj, data] : inv) {
+                        if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                        auto* ar = obj->As<RE::TESObjectARMO>();
+                        if (!ar || ar == pick || !picks.count(ar->GetFormID()) || !SlotsOverlap(ar, pick)) continue;
+                        int wt = 0; std::int32_t wm = 0;
+                        MageApparelBuyKey(ar, top2, schoolPrimary, true, wt, wm);
+                        const bool strictlyBetter = pickRanks && (pt > wt || (pt == wt && pm > wm));
+                        if (!strictlyBetter) { pick = nullptr; break; }   // the player's piece stands
+                    }
+                }
+                // Rated judge: ArmorIsBetter already demands a strictly higher score than the worn piece.
+            }
             decl.Add(pick);
 
             // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick displaces.
@@ -663,15 +760,17 @@ namespace MFO::Logistics {
             // engine ops and a visible flicker per re-send. The top-up's "give it
             // back" is Actuation's own explicit placement (PostHandEquipsDeferred),
             // which needs no re-declaration: the item is already in-set.
-            std::vector<RE::FormID> sorted = decl.forms;
+            std::vector<DeclKey> sorted;
+            sorted.reserve(decl.entries.size());
+            for (const auto& e : decl.entries) sorted.emplace_back(e.form, e.slot);
             std::sort(sorted.begin(), sorted.end());
             if (auto it = g_lastDeclared.find(id); it != g_lastDeclared.end() && it->second == sorted) return;
-            if (!APMFBridge::DeclareEquipSet(id, decl.forms)) {   // logged in the bridge; retried next refresh
+            if (!APMFBridge::DeclareEquipSet(id, decl.entries)) {   // logged in the bridge; retried next refresh
                 g_lastDeclared.erase(id);
                 return;
             }
             g_lastDeclared[id] = std::move(sorted);
-            spdlog::info("[equip-auth] {:08X}: declare n={} [{}] ({}{})", id, decl.forms.size(), decl.names,
+            spdlog::info("[equip-auth] {:08X}: declare n={} [{}] ({}{})", id, decl.entries.size(), decl.names,
                          a_why ? a_why : "?", fresh ? ", new claim" : "");
         }
 
@@ -1241,6 +1340,7 @@ namespace MFO::Logistics {
                 // never keep/wear it; sell it even while worn (RemoveItem unequips it).
                 const bool forceSell = redundantInferior || (armo && IsBlacklistedApparel(armo));
                 if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
+                if (armo && IsPlayerPick(fid, obj->GetFormID())) { sdiag(obj, "playerPick"); continue; }   // the player put it on him: keep, never sell (round 3)
                 if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
                 RE::BGSKeywordForm* kwf = weap
                     ? static_cast<RE::BGSKeywordForm*>(weap)

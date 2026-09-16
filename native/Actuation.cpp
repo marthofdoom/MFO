@@ -1760,16 +1760,12 @@ namespace MFO::Actuation {
         // error line naming the precondition (rate-limited above), and a_whyNot
         // (if given) set to that name so the caller's own line can say it too.
         //
-        // a_defer (feat/mfo-equip-authority): under the APMF equip authority the
-        // ledger is written NOW (it is the source of truth the declaration reads)
-        // but the engine calls are NOT made here -- the caller declares first and
-        // then posts them through PostHandEquipsDeferred, so the weapon reaches
-        // APMF's seat IN-SET. The old left hold that would have been force-
-        // unequipped is handed back in a_outOldLeft for that post. Every
-        // precondition, the ledger write and the return contract are identical.
+        // LEGACY ONLY (APMF absent / the equip authority not live): under the
+        // authority the caller writes the ledger through RecordLeftHold below and
+        // APMF places the weapon in the LEFT hand itself (ABI v8 SetEquipSetEx,
+        // kEquipSlot_Left); no engine call of MFO's is made.
         bool EquipLeftHeld(RE::Actor* a_follower, RE::TESObjectWEAP* a_weap,
-                           const char** a_whyNot = nullptr, bool a_defer = false,
-                           RE::FormID* a_outOldLeft = nullptr) {
+                           const char** a_whyNot = nullptr) {
             auto* mgr  = RE::ActorEquipManager::GetSingleton();
             auto* slot = Loadout::LeftHandSlot();
             const char* why = !a_follower ? "follower"
@@ -1802,12 +1798,9 @@ namespace MFO::Actuation {
                     it->second.left && it->second.left != a_weap)
                     oldLeft = it->second.left;
             }
-            if (a_outOldLeft) *a_outOldLeft = oldLeft ? oldLeft->GetFormID() : 0;
-            if (!a_defer) {
-                if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
-                    mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, slot, true, true);
-                mgr->EquipObject(a_follower, a_weap, nullptr, 1, slot, true, true);
-            }
+            if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
+                mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, slot, true, true);
+            mgr->EquipObject(a_follower, a_weap, nullptr, 1, slot, true, true);
             {
                 std::scoped_lock lk(g_forcedMx);
                 g_forcedWeapon[id].left = a_weap;
@@ -1815,52 +1808,36 @@ namespace MFO::Actuation {
             return true;
         }
 
-        // ── APMF EQUIP AUTHORITY: the hands under the declaration (feat/mfo-equip-authority) ──
-        // WHY MFO STILL PLACES THE WEAPONS ITSELF. APMF's enforce pass equips every
-        // declared item with slot=nullptr (channels/EquipAuthority.cpp) and the v7
-        // ABI carries no hand -- and a slot-less one-hander lands in the RIGHT hand
-        // and displaces the main-hand weapon (Loadout.cpp's EquipBack doc, Fable F2).
-        // So the pass CANNOT dual-wield a follower and, worse, its slot-less equip
-        // of the declared off-hand weapon (not yet worn when the pass runs) evicts
-        // the declared main-hand one. The seat, not the pass, is what this port
-        // needs from APMF for the hands: an item IN the declared set passes the
-        // seat whoever equips it. So: the ledger is written, the set is DECLARED
-        // (Logistics::RefreshEquipDeclaration), and THEN these exact engine calls
-        // -- the old holds force-unequipped, the right force-equipped slot-less,
-        // the left force-equipped into the LEFT slot -- run on the MAIN thread two
-        // pumps later. Two hops, not one: APMF drains its request queue and runs
-        // the pass from the same PlayerCharacter::Update seat MFO's pump hooks, in
-        // an order fixed by install order but unknown to us; a closure posted from
-        // a closure lands at least one full frame after the declaration was
-        // enqueued, i.e. after APMF published it AND after its pass in that frame,
-        // so (a) the seat sees the weapons in-set and (b) MFO's explicit hands are
-        // applied AFTER the pass's slot-less ones and win the queue order. The
-        // right is re-issued even when it was already worn, precisely to undo a
-        // pass that moved the off-hand weapon into it (a_forceRight: the T#76 lock
-        // only when the right is MFO's own hold -- an AI-equipped right beside an
-        // MFO-held left, the left-only state, is re-issued plain so no lock is put
-        // on a weapon the ledger does not own and the release path would never
-        // clear). FormIDs only, re-resolved on the frame that runs (#62). When the
-        // ABI grows a hand, this post is what migrates into the declaration.
-        void PostHandEquipsDeferred(RE::FormID a_follower, RE::FormID a_oldLeft, RE::FormID a_oldRight,
-                                    RE::FormID a_right, bool a_forceRight, RE::FormID a_left) {
-            auto run = [a_follower, a_oldLeft, a_oldRight, a_right, a_forceRight, a_left]() {
-                auto* mgr = RE::ActorEquipManager::GetSingleton();
-                auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_follower);
-                if (!mgr || !fol) return;
-                const auto obj = [](RE::FormID a_id) -> RE::TESBoundObject* {
-                    if (!a_id) return nullptr;
-                    auto* form = RE::TESForm::LookupByID(a_id);
-                    return form ? form->As<RE::TESBoundObject>() : nullptr;
-                };
-                auto* slotL = Loadout::LeftHandSlot();
-                if (auto* o = obj(a_oldLeft))  mgr->UnequipObject(fol, o, nullptr, 1, slotL, true, true);
-                if (auto* o = obj(a_oldRight)) mgr->UnequipObject(fol, o, nullptr, 1, nullptr, true, true);
-                if (auto* o = obj(a_right))    mgr->EquipObject(fol, o, nullptr, 1, nullptr, true, a_forceRight);
-                if (auto* o = obj(a_left))     mgr->EquipObject(fol, o, nullptr, 1, slotL, true, true);
-            };
-            if (MainThread::IsInstalled()) MainThread::Post([run]() { MainThread::Post(run); });
-            else                           run();   // VR: the pump is a no-op; inline, as the loot precedent
+        // Defined in the anon namespace below EquipWeapon (its doc is there): the
+        // two-hop left-hand readback. Under the authority it is the probe's proof
+        // that APMF's `hand=left` equip reached the engine (criterion 7).
+        void LogLeftHandReadback(RE::FormID a_id);
+
+        // ── APMF EQUIP AUTHORITY: the LEFT hold WITHOUT an engine call (ABI v8) ──
+        // Under the authority MFO no longer force-equips either hand: the ledger
+        // is written (it stays the source of truth the declaration reads --
+        // RefreshEquipDeclaration declares .right as kEquipSlot_Right and .left
+        // as kEquipSlot_Left) and APMF's own pass places each weapon in the hand
+        // the entry names. The ONE engine call kept is the force-UNEQUIP of a
+        // DIFFERENT weapon MFO itself had locked in the left (a hold placed by the
+        // legacy path before the authority went live): a prevent-removal lock is
+        // MFO's own, APMF's non-forced equip cannot displace through it, and
+        // unequips are never seated. Returns the old hold it cleared, or nullptr.
+        RE::TESBoundObject* RecordLeftHold(RE::Actor* a_follower, RE::TESObjectWEAP* a_weap) {
+            if (!a_follower || !a_weap) return nullptr;
+            const auto id = a_follower->GetFormID();
+            g_leftHeldRefusal.erase(id);
+            RE::TESBoundObject* oldLeft = nullptr;
+            {
+                std::scoped_lock lk(g_forcedMx);
+                auto& hold = g_forcedWeapon[id];
+                if (hold.left && hold.left != a_weap) oldLeft = hold.left;
+                hold.left = a_weap;
+            }
+            if (oldLeft)
+                if (auto* mgr = RE::ActorEquipManager::GetSingleton())
+                    mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+            return oldLeft;
         }
 
         // Declare this follower's worn set from the ledger as it stands NOW
@@ -1868,9 +1845,8 @@ namespace MFO::Actuation {
         // WeaponRolesFor; a_leftReserved from the lock/claim the equip side
         // already yields to). THE COMBAT ROAD: judgeArmor=false -- legacy never
         // wears armor in combat, so the worn armor is declared as is (F9). No
-        // forced re-issue exists (F3): the top-up's "give it back" is the
-        // explicit placement in PostHandEquipsDeferred, and the declaration only
-        // changes when the ledger does.
+        // forced re-issue exists (F3): the declaration changes when the ledger
+        // does, and APMF places the hands the entries name (ABI v8).
         void DeclareFromLedger(RE::Actor* a_follower, const char* a_why) {
             if (!a_follower) return;
             const auto it = g_followers.find(a_follower->GetFormID());
@@ -1967,12 +1943,12 @@ namespace MFO::Actuation {
                         // runs (principle 9), not a record of success -- a refused
                         // hold retries in kOffHandRetry, and the only success-state
                         // is the ledger .left EquipLeftHeld writes itself.
-                        // APMF EQUIP AUTHORITY (feat/mfo-equip-authority): with the
-                        // claim live the set is DECLARED first (a re-issue: the
-                        // declared off-hand is observed unworn) and the hands are
-                        // placed by PostHandEquipsDeferred (its doc says why MFO
-                        // still places them); the shield branch is declaration-
-                        // only -- APMF equips a shield slot-unambiguously.
+                        // APMF EQUIP AUTHORITY (feat/mfo-equip-authority, ABI v8): with
+                        // the claim live the ledger is written (RecordLeftHold) and
+                        // the set is DECLARED with the off-hand as kEquipSlot_Left;
+                        // APMF places it. Send-on-change (F3): the new .left IS the
+                        // change. The shield branch is declaration-only too. The
+                        // readback (two hops) is the probe's proof of the hand.
                         // Claim-or-keep here as well as in the OOC service, so a
                         // follower first seen IN combat (a load mid-fight) is
                         // claimed on his first equip lap, not at combat end.
@@ -1981,19 +1957,16 @@ namespace MFO::Actuation {
                         if (roles.offHand == 2) {
                             if (auto* w = PickOffHandWeapon(a_follower, roles, daggerMelee, rightW)) {
                                 const char* whyNot = nullptr;
-                                RE::FormID oldLeftId = 0;
-                                if (EquipLeftHeld(a_follower, w, &whyNot, authority, &oldLeftId)) {
-                                    if (authority) {
-                                        // Send-on-change: the ledger's new .left changes the set
-                                        // (F3: never a forced re-send -- under v7 a re-send makes
-                                        // APMF's slot-less pass evict the sword first). Under a
-                                        // v8 hand-aware SetEquipSet both this hop and the
-                                        // explicit placement below retire.
-                                        DeclareFromLedger(a_follower, "off-hand top-up");
-                                        // The right is the AI's own here (left-only hold): re-issued PLAIN.
-                                        PostHandEquipsDeferred(id, oldLeftId, 0, rightW->GetFormID(), false,
-                                                               w->GetFormID());
-                                    }
+                                bool held = false;
+                                if (authority) {
+                                    RecordLeftHold(a_follower, w);
+                                    DeclareFromLedger(a_follower, "off-hand top-up");
+                                    LogLeftHandReadback(id);
+                                    held = true;
+                                } else {
+                                    held = EquipLeftHeld(a_follower, w, &whyNot);
+                                }
+                                if (held) {
                                     a_follower->DrawWeaponMagicHands(true);
                                     spdlog::info("[equip] {:08X}: GAMBIT equip off-hand '{}' (dual wield by "
                                                  "perks, top-up{})", id, w->GetFullName() ? w->GetFullName() : "?",
@@ -2094,23 +2067,24 @@ namespace MFO::Actuation {
                             if (old->second.left  && old->second.left != offHandW) oldLeft = old->second.left;
                         }
                     }
-                    // APMF EQUIP AUTHORITY (feat/mfo-equip-authority): with the
-                    // standing claim live, NO engine call is made from this
-                    // worker lap. The ledger is written exactly as below, the set
-                    // is DECLARED from it, and the very same calls (old holds
-                    // force-unequipped, right force-equipped, left force-equipped
-                    // into its slot) run on the main thread two pumps later via
-                    // PostHandEquipsDeferred (its doc: why MFO still places the
-                    // hands and why two hops). The shield is declaration-only.
-                    // Without the authority: byte-identical to before.
+                    // APMF EQUIP AUTHORITY (feat/mfo-equip-authority, ABI v8): with
+                    // the standing claim live MFO makes NO equip call. The old
+                    // holds are still force-UNEQUIPPED (they may carry MFO's own
+                    // prevent-removal lock from a legacy-path hold, which APMF's
+                    // non-forced equip could not displace; unequips are never
+                    // seated), the ledger is written exactly as below, and the
+                    // set is DECLARED from it with .right as kEquipSlot_Right and
+                    // .left as kEquipSlot_Left -- APMF's pass places each in its
+                    // hand. The shield is declaration-only. Without the authority:
+                    // byte-identical to before (right force-equipped here,
+                    // EquipLeftHeld below).
                     authority = APMFBridge::EquipAuthoritySupported() && APMFBridge::ClaimEquipAuthority(id);
-                    if (!authority) {
-                        if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
-                            mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
-                        if (oldForced)
-                            mgr->UnequipObject(a_follower, oldForced, nullptr, 1, nullptr, true, true);
+                    if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
+                        mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+                    if (oldForced)
+                        mgr->UnequipObject(a_follower, oldForced, nullptr, 1, nullptr, true, true);
+                    if (!authority)
                         mgr->EquipObject(a_follower, best, nullptr, 1, nullptr, true, true);
-                    }
                     {
                         std::scoped_lock lk(g_forcedMx);
                         auto& hold = g_forcedWeapon[id];
@@ -2120,17 +2094,15 @@ namespace MFO::Actuation {
                     // Off-hand (style control ON only -- see the plan above). The
                     // hold's OUTCOME feeds the `[equip]` line below: it says
                     // "+ off-hand" only for a hold that actually happened.
-                    RE::FormID oldLeftFromHeld = 0;   // EquipLeftHeld's own old-left (same object as oldLeft when both apply)
-                    if (offHandW)       offHandHeld = EquipLeftHeld(a_follower, offHandW, &offHandWhyNot, authority,
-                                                                    &oldLeftFromHeld);   // force-held, ledger .left
-                    else if (offHandSh && !authority) EquipShieldOnMain(id, offHandSh->GetFormID()); // plain (F3: main thread)
+                    if (offHandW) {
+                        if (authority) { RecordLeftHold(a_follower, offHandW); offHandHeld = true; }
+                        else           offHandHeld = EquipLeftHeld(a_follower, offHandW, &offHandWhyNot);   // force-held, ledger .left
+                    } else if (offHandSh && !authority) {
+                        EquipShieldOnMain(id, offHandSh->GetFormID());   // plain (F3: main thread)
+                    }
                     if (authority) {
                         DeclareFromLedger(a_follower, a_ranged ? "gambit equip ranged" : "gambit equip melee");
-                        PostHandEquipsDeferred(id,
-                                               oldLeft ? oldLeft->GetFormID() : oldLeftFromHeld,
-                                               oldForced ? oldForced->GetFormID() : 0,
-                                               best->GetFormID(), /*forceRight*/true,
-                                               offHandHeld ? offHandW->GetFormID() : 0);
+                        if (offHandHeld) LogLeftHandReadback(id);   // criterion 7: the hand reached the engine
                     }
                 } else {
                     mgr->EquipObject(a_follower, best);   // kill-switch off: today's behaviour exactly

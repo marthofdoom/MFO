@@ -56,12 +56,13 @@
 // ABI contract; the transport is just how you get the pointer.)
 //
 // ── Threading ──
-// Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet are SAFE FROM
+// Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet/SetEquipSetEx are SAFE FROM
 // ANY THREAD. They capture POD (a FormID, a copy of the APMF_Param, or — for
-// SetSpellAllowList/SetEquipSet — a copy of the forms array) and enqueue the
+// SetSpellAllowList/SetEquipSet/SetEquipSetEx — a copy of the forms/entries array) and enqueue the
 // work; APMF applies it on the game thread. A client's BSJobs worker may call
 // them directly. The APMF_Param pointer passed to RequestEx/Repoint, and the
-// RE::FormID* passed to SetSpellAllowList/SetEquipSet, are READ AND COPIED
+// RE::FormID* passed to SetSpellAllowList/SetEquipSet, and the APMF_EquipEntry*
+// passed to SetEquipSetEx, are READ AND COPIED
 // synchronously inside the call — APMF never retains the client's pointer, so a
 // stack temporary/local array is fine.
 //
@@ -71,6 +72,7 @@
 // degrades to kInvalidHandle / no-op / nullptr, never an unwind into the client's
 // separately compiled DLL (UB).
 // ─────────────────────────────────────────────────────────────────────────────
+#include <cstddef>
 #include <cstdint>
 
 namespace RE {
@@ -81,7 +83,7 @@ namespace RE {
 
 namespace APMF_API {
 
-    inline constexpr std::uint32_t kABIVersion = 7;
+    inline constexpr std::uint32_t kABIVersion = 8;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -227,7 +229,12 @@ namespace APMF_API {
                                      //       call -- at the ONE non-virtual choke point every
                                      //       engine equip funnels through (core/EquipSink.cpp;
                                      //       Docs/INVARIANTS.md #17a). Papyrus/console equips pass
-                                     //       unless kEquipAuth_DenyScript. UNEQUIPS are never
+                                     //       unless kEquipAuth_DenyScript; the PLAYER's own
+                                     //       equips on the actor (the trade/gift menu) pass
+                                     //       unless kEquipAuth_DenyPlayerMenu (ABI v8). Only
+                                     //       ARMO/WEAP/AMMO/LIGH equips are governed at all --
+                                     //       potions, food, scrolls, ingredients and books pass
+                                     //       (ABI v8; see APMF_API_v8). UNEQUIPS are never
                                      //       denied by this ABI (kEquipAuth_DenyUnequip is
                                      //       RESERVED and refused). The engine's own in-worker
                                      //       displacement still handles slot conflicts, so a
@@ -236,6 +243,12 @@ namespace APMF_API {
                                      //       Declare->enforce (CLAUDE.md principle 4): an empty
                                      //       declaration (count 0) CLEARS it and the seat passes
                                      //       everything through again; APMF never invents a set.
+                                     //       ABI v8: the claim is REFUSED (kInvalidHandle) while
+                                     //       the equip seat is not installed (bEquipAuthority=0,
+                                     //       VR, a gated runtime, a site-verify refusal, or before
+                                     //       kDataLoaded) -- a refused claim means KEEP YOUR OWN
+                                     //       EQUIPS; APMF_API_v8::IsEquipAuthorityEnforced tells
+                                     //       observe from enforce for an accepted claim.
     };
 
     // ── Equip-authority flags (kIntent_EquipAuthority's param.ival, ABI v7) ──
@@ -260,6 +273,22 @@ namespace APMF_API {
                                             //   set = observe). The first field build runs in
                                             //   observe mode until the probe criteria in
                                             //   Docs/INTEGRATION.md pass.
+        kEquipAuth_DenyPlayerMenu = 1u << 3, // ABI v8. Also refuse the PLAYER's own equips on
+                                            //   the actor -- the trade/gift/follower inventory
+                                            //   menu (`path=PlayerMenu`). Default OFF (player
+                                            //   agency, marth 2026-09-15): the player dressing
+                                            //   a follower by hand is a deliberate act and
+                                            //   PASSES unless the client sets this bit. The
+                                            //   log line reads `verdict=allow (player agency)`.
+                                            //   The allow is at the seat only: the next enforce
+                                            //   pass re-equips any declared item the player's
+                                            //   equip displaced. A client honouring player agency
+                                            //   must observe the change (that log line, or its own
+                                            //   inventory read) and fold the player's choice into
+                                            //   its next declaration.
+                                            //   A v7 APMF ignores the bit (unknown bits are
+                                            //   not refused), so a v8 client degrades to the
+                                            //   v7 behaviour (PlayerMenu denied) there.
     };
 
     // ABI v7: the bound on SetEquipSet's declared worn set. A full worn set is
@@ -269,6 +298,40 @@ namespace APMF_API {
     // "the excess items are treated as off-set" (denied when the engine equips
     // them, never equipped by APMF; never a crash or an unbounded write).
     inline constexpr std::uint32_t kMaxEquipSet = 32;
+
+    // ── ABI v8: a per-item HAND for SetEquipSetEx ──
+    // The v7 SetEquipSet carries bare FormIDs and APMF equips them slot-less, so
+    // the engine picks the hand: a slot-less one-hander always lands in the RIGHT
+    // hand and displaces whatever was there (MFO measured it, 2026-09-15). That
+    // makes two hand-held items undeclarable -- a dagger meant for the off-hand
+    // evicts the sword. SetEquipSetEx carries one APMF_EquipEntry per item, with
+    // the hand the client wants it in. APPEND-ONLY: never renumber a value.
+    enum EquipSlot : std::uint8_t {
+        kEquipSlot_Default = 0,   // the engine picks (v7 behaviour; the only choice for a
+                                  //   two-hander, a bow, ammo, or body armor)
+        kEquipSlot_Right   = 1,   // the RIGHT hand (Skyrim.esm EQUP 0x00013F42 `RightHand`)
+        kEquipSlot_Left    = 2,   // the LEFT hand  (Skyrim.esm EQUP 0x00013F43 `LeftHand`)
+                                  //   -- a one-hand weapon, a shield, a torch
+    };
+
+    // One declared item. EXACT LAYOUT (byte-shared with the client, pinned below):
+    //   +0  form      RE::FormID (u32)  the item's BASE FormID
+    //   +4  slot      u8                an EquipSlot value; anything else is treated
+    //                                   as kEquipSlot_Default and logged once
+    //   +5  reserved  u8[3]             MUST be 0 (a later ABI may define them; an
+    //                                   APMF built against this one ignores them)
+    //   size 8, alignment 4. Trivially copyable; APMF copies the array synchronously
+    //   inside SetEquipSetEx and never retains the client's pointer.
+    struct APMF_EquipEntry {
+        RE::FormID   form;
+        std::uint8_t slot;
+        std::uint8_t reserved[3];
+    };
+    static_assert(sizeof(APMF_EquipEntry) == 8,  "APMF_EquipEntry is 8 bytes, byte-shared with clients");
+    static_assert(alignof(APMF_EquipEntry) == 4, "APMF_EquipEntry aligns to 4");
+    static_assert(offsetof(APMF_EquipEntry, form)     == 0, "form at +0");
+    static_assert(offsetof(APMF_EquipEntry, slot)     == 4, "slot at +4");
+    static_assert(offsetof(APMF_EquipEntry, reserved) == 5, "reserved at +5");
 
     // ── Combat-action CATEGORY bitmask (kIntent_CombatAction's param.ival) ──────
     // Which combat behavior-tree leaf CATEGORY a kIntent_CombatAction claim
@@ -830,6 +893,67 @@ namespace APMF_API {
         // client a combat-thread re-entrancy hazard it cannot see. The declaration
         // IS the policy; the log line (`[apmf][equip-obs]`) is the observability.
         void (*SetEquipSet)(Handle handle, const RE::FormID* forms, std::uint32_t count);
+    };
+
+    // The v8 interface: APMF_API_v7's members verbatim (prefix EXTENSION), then ONE
+    // appended slot: the per-item-hand form of the equip-authority declaration.
+    // This header is BYTE-SHARED with MFO: the declaration below is authoritative
+    // and must be mirrored byte-identically on the client side.
+    //
+    // WHY A BUMP (INVARIANTS #14b): a new function-pointer slot needs an
+    // `abiVersion >= 8` test before a client may call it. A v1..v7 client reading
+    // this object through its own struct pointer still sees exactly its prefix;
+    // v7's SetEquipSet is unchanged and is now implemented AS SetEquipSetEx with
+    // every entry's slot = kEquipSlot_Default.
+    struct APMF_API_v8 : APMF_API_v7 {
+        // DECLARE the worn set WITH A HAND PER ITEM. Everything SetEquipSet's doc
+        // comment says holds here too (same claim, same clamp to kMaxEquipSet, same
+        // synchronous copy, same clear on count == 0 / entries == nullptr, same
+        // no-op on a stale handle, same declare-do-not-tick rule). The differences:
+        //   * `entries[i].slot` names the hand APMF equips `entries[i].form` into:
+        //     kEquipSlot_Right / kEquipSlot_Left pass the engine's own RightHand /
+        //     LeftHand equip slot (Skyrim.esm EQUP 0x13F42 / 0x13F43) to
+        //     ActorEquipManager::EquipObject; kEquipSlot_Default passes none and the
+        //     engine picks, exactly as v7 does. Use Right/Left ONLY for hand-held
+        //     items (a one-hand weapon, a shield, a torch); declare a two-hander, a
+        //     bow, ammo and body armor with kEquipSlot_Default.
+        //   * "not worn" for a Right/Left entry means "not in THAT hand" (the
+        //     engine's own equipped-object-per-hand read), so a sword the actor holds
+        //     in the right hand, declared Left, is re-equipped into the left hand.
+        //     A Default entry is "not worn" exactly as in v7 (no worn instance).
+        //   * The SAME form may appear twice, once per hand (two identical daggers,
+        //     dual-wielded): APMF counts the instances it needs per hand against the
+        //     inventory count, equips each, and skips (logged) any instance the
+        //     actor does not own enough copies for.
+        //   * The DENY half is unchanged: the seat compares FormIDs only. A declared
+        //     item is in-set whichever hand the engine tries to put it in; the hand
+        //     is what APMF's own equip pass enforces, not what the seat refuses.
+        // GOVERNED TYPES (v8; applies to v7's SetEquipSet too): the seat governs only
+        // ARMO, WEAP, AMMO and LIGH (torch) equips. Every other form type -- a potion,
+        // food, a scroll, an ingredient, a book -- passes the seat untouched (logged
+        // once per actor and type at debug level), so DrinkPotion and the AI's own
+        // potion use are never refused. APMF's equip pass likewise skips (and logs) a
+        // declared item of any other type: equipping a potion is drinking it.
+        void (*SetEquipSetEx)(Handle handle, const APMF_EquipEntry* entries, std::uint32_t count);
+
+        // TRUE only when the equip seat is INSTALLED (the two worker call sites
+        // byte-verified and patched on this runtime) AND APMF.ini's [EquipAuthority]
+        // bEquipObserveOnly is 0 -- i.e. an off-set engine equip on a claimed actor
+        // is actually REFUSED, not merely logged `would-deny`. FALSE in observe
+        // mode, before kDataLoaded, with bEquipAuthority=0, on VR, on a runtime
+        // other than 1.6.1170 / 1.5.97, or after a site-verify refusal. A claim's
+        // own kEquipAuth_ObserveOnly bit is not consulted (the client that set it
+        // knows). Read-only, safe from any thread, may change once at kDataLoaded
+        // and never afterwards.
+        //
+        // WHY (ABI v8, MFO wiring review SEV-2 F1): a client that turns its OWN
+        // equips off on a successful kIntent_EquipAuthority claim must be able to
+        // tell "APMF holds the set" from "APMF is only watching". Paired with the
+        // v8 rule that a kIntent_EquipAuthority Request/RequestEx returns
+        // kInvalidHandle while the seat is NOT installed (so the client's documented
+        // degrade path runs), this call distinguishes the remaining case: claimed
+        // and installed, but observe-only.
+        bool (*IsEquipAuthorityEnforced)(void);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

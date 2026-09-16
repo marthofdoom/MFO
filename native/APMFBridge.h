@@ -2,6 +2,7 @@
 #include <RE/Skyrim.h>
 #include <chrono>   // FacetExpiry()'s std::chrono::milliseconds return type
 #include <vector>   // DeclareEquipSet's declared worn set
+#include "APMF_API.h"   // APMF_EquipEntry -- DeclareEquipSet's entry type (ABI v8)
 #include "Loadout.h"   // Loadout::HandPick -- HandFor's argument type below
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -522,8 +523,9 @@ namespace MFO::APMFBridge {
     // unaffected by a ch.17 claim on the same actor. Both stand together.
 
     // Worker-safe. Is the equip-authority channel available right now -- APMF
-    // present AND its resolved interface carries the v7 SetEquipSet slot AND
-    // Config::g_apmfEquipAuthority is on? The exact three non-arbitration early
+    // present AND its resolved interface carries the v8 SetEquipSetEx slot (the
+    // per-item HAND; v7's slot-less SetEquipSet cannot dual-wield, so v8 is the
+    // floor) AND Config::g_apmfEquipAuthority is on? The exact three non-arbitration early
     // returns ClaimEquipAuthority/DeclareEquipSet take. UNLIKE the cast facets'
     // OffenseCastClaimSupported split, a refused CLAIM here does NOT fail closed
     // (F1/F5, Fable round 2): APMF refuses a ch.17 claim exactly when its #17a
@@ -534,6 +536,15 @@ namespace MFO::APMFBridge {
     // DECLARATION on a standing claim (DeclareEquipSet false with a claim live):
     // the caller logs and does not equip around it.
     bool EquipAuthoritySupported();
+
+    // Any thread. APMF's v8 IsEquipAuthorityEnforced: true only when its #17a
+    // seat is INSTALLED and APMF.ini's [EquipAuthority] bEquipObserveOnly is 0 --
+    // an off-set engine equip on a claimed actor is actually REFUSED. False in
+    // observe mode (APMF still equips the declared set, the engine may take it
+    // back off), before kDataLoaded, or when the channel is unsupported. Logged
+    // as `mode=` in the `[equip-auth] <id>: claim` line so a Deck log states
+    // which of the two a session ran under.
+    bool IsEquipAuthorityEnforced();
 
     // Worker-safe. Ensure a_follower holds the STANDING kIntent_EquipAuthority
     // claim (param.ival = kEquipAuth_None: scripts/console pass, unequips pass,
@@ -568,10 +579,14 @@ namespace MFO::APMFBridge {
     // win) -- that is APMF's business, and MFO must not equip around it either way.
     bool IsEquipAuthorityClaimed(RE::FormID a_follower);
 
-    // Worker-safe. DECLARE the worn set for a_follower through the v7 SetEquipSet
-    // slot on the standing claim. `a_forms` are BASE FormIDs (weapons, armor,
-    // jewelry, ammo, a carried light); the array is COPIED inside APMF's call. An
-    // empty set CLEARS the declaration (pass-through) without releasing the claim.
+    // Worker-safe. DECLARE the worn set for a_follower through the v8 SetEquipSetEx
+    // slot on the standing claim. `a_forms` are APMF_EquipEntry {BASE FormID, hand}:
+    // kEquipSlot_Right / kEquipSlot_Left for the hand-held items whose hand MFO
+    // decides (the ForcedHold ledger, or the hand a weapon is actually in),
+    // kEquipSlot_Default (the engine picks, v7 verbatim) for armor, ammo, a bow, a
+    // two-hander, a shield, a torch; the same form may appear once per hand. The
+    // array is COPIED inside APMF's call. An empty set CLEARS the declaration
+    // (pass-through) without releasing the claim.
     // More than APMF_API::kMaxEquipSet (32) entries is MFO's error: logged as an
     // error and truncated (APMF treats the excess as off-set). Returns false when
     // the channel is unsupported OR no claim handle stands (a declaration needs the
@@ -580,7 +595,7 @@ namespace MFO::APMFBridge {
     // itself returns nothing and no-ops silently on a stale handle, so a `true`
     // means "handed to APMF", not "worn" -- the [apmf][equip-auth] pass line and
     // the [apmf][equip-obs] verdicts are the readback.
-    bool DeclareEquipSet(RE::FormID a_follower, const std::vector<RE::FormID>& a_forms);
+    bool DeclareEquipSet(RE::FormID a_follower, const std::vector<APMF_API::APMF_EquipEntry>& a_forms);
 
     // ── heal-cast facet CLAIM: PER-CAST, TTL-bounded (ch.8b, APMF v5) ───────────
     // MFO's Composed Forced Cast (Docs/SPEC-FORCED-CAST.md) makes a follower cast
