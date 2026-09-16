@@ -685,8 +685,17 @@ namespace MFO::Logistics {
             // 4b. THE PLAYER'S OWN CHOICE (round 3, ABI v8: APMF lets the trade/gift
             //     menu equip through). A worn non-shield ARMO that the last
             //     declaration did not carry and that is not this tick's pick was put
-            //     there by the player (or, in observe mode, by the engine -- same
-            //     treatment): record it, log it once, and let it stand. The rated
+            //     there by the player: record it, log it once, and let it stand.
+            //     ONLY UNDER ENFORCEMENT (Fable F-A on e0b52b5): in observe mode APMF
+            //     equips the pick non-forced and the engine takes the old piece
+            //     back, which reads exactly like a trade-menu dress -- so with
+            //     IsEquipAuthorityEnforced() false NOTHING is recorded (the
+            //     "player put on" line cannot occur in observe mode). Under
+            //     enforcement an off-set engine equip is refused, so a new worn
+            //     piece can only be the player's (or a script's) -- and only on a
+            //     tick where MFO is not contesting the slot: this tick's pick is
+            //     absent, or already worn (a landed pick proves MFO took the slot,
+            //     not that something took it back). The rated
             //     judge only ever picks a STRICTLY better-scored piece than what is
             //     worn (ArmorIsBetter), so MFO's pick wins back the slot exactly when
             //     it should; the MAGE judge breaks ties by FormID, so a pick that
@@ -710,15 +719,23 @@ namespace MFO::Logistics {
                 if (!last) return true;   // no declaration yet: nothing can be "new since"
                 return std::any_of(last->begin(), last->end(), [&](const DeclKey& k) { return k.first == a_form; });
             };
-            for (auto& [obj, data] : inv) {
-                if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
-                auto* ar = obj->As<RE::TESObjectARMO>();
-                if (!ar || ar->IsShield() || ar == pick) continue;
-                const RE::FormID f = ar->GetFormID();
-                if (lastHas(f) || picks.count(f)) continue;
-                picks.insert(f);
-                spdlog::info("[equip-auth] {:08X}: player put on '{}' -- kept", id,
-                             ar->GetName() ? ar->GetName() : "?");
+            const bool pickWorn = [&]() {
+                if (!pick) return false;
+                const auto it = inv.find(pick);
+                return it != inv.end() && it->second.second && it->second.second->IsWorn();
+            }();
+            const bool mayRecordPlayerPick = APMFBridge::IsEquipAuthorityEnforced() && (!pick || pickWorn);
+            if (mayRecordPlayerPick) {
+                for (auto& [obj, data] : inv) {
+                    if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                    auto* ar = obj->As<RE::TESObjectARMO>();
+                    if (!ar || ar->IsShield() || ar == pick) continue;
+                    const RE::FormID f = ar->GetFormID();
+                    if (lastHas(f) || picks.count(f)) continue;
+                    picks.insert(f);
+                    spdlog::info("[equip-auth] {:08X}: player put on '{}' -- kept", id,
+                                 ar->GetName() ? ar->GetName() : "?");
+                }
             }
             if (pick && !picks.empty()) {
                 const bool caster = IsCasterFollower(a_state);

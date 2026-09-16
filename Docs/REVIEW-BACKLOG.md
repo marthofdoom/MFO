@@ -309,6 +309,30 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** scope rule 1 — a split is its own brief and its own field cycle.
 - **Fix shape when drained (verbatim):** run MFO-B37's split (`Actuation_Equip.cpp`) BEFORE the v8 re-mirror brief; the v8 brief then retires `PostHandEquipsDeferred` inside the new TU.
 
+### MFO-B41 — a displaced hand with an unchanged ledger is never re-equipped under the authority; the equip rule re-Fires every lap
+- **Raised:** Fable tier-3 review of `e0b52b5` (`feat/mfo-equip-authority`), SEV-4 (F-B).
+- **Severity:** SEV-4
+- **Finding (verbatim):** F-B (a displaced hand with an unchanged ledger is never re-equipped under the authority; equip rule re-Fires every lap — fix shape: erase g_lastDeclared[id] before DeclareFromLedger when the ledger's weapon is in neither hand and the ledger did not change).
+- **Reviewer's reasoning:** under the authority MFO makes no equip call; the declaration is sent only on change (F3). If something un-seated (a script, an observe-mode engine take-back) removes the ledger's weapon from the hand, the ledger is unchanged, the next lap's `EquipWeapon` Fires again (the hand no longer holds the category), writes the same ledger, and `DeclareFromLedger` compares equal and sends nothing — APMF never re-equips, and the rule Fires every lap.
+- **Why it was NOT fixed:** below the severity floor; the cycle ended at nothing above SEV-3; observe mode is where it shows and enforcement (the seat refusing the take-back) is what stops the common cause.
+- **Fix shape when drained (verbatim):** erase `g_lastDeclared[id]` before `DeclareFromLedger` when the ledger's weapon is in neither hand and the ledger did not change.
+
+### MFO-B42 — `RecordLeftHold` proceeds with a null `LeftHandSlot()`
+- **Raised:** Fable tier-3 review of `e0b52b5` (`feat/mfo-equip-authority`), SEV-5 (F-D).
+- **Severity:** SEV-5
+- **Finding (verbatim):** F-D (RecordLeftHold proceeds with a null LeftHandSlot()).
+- **Reviewer's reasoning:** `EquipLeftHeld` refuses (and logs) when `Loadout::LeftHandSlot()` resolves null; `RecordLeftHold`'s one engine call — the force-unequip of a DIFFERENT weapon MFO had locked in the left — passes that slot without checking it, so on a runtime where the slot form is missing the unequip is slot-less (the F4 unverified path) instead of refused.
+- **Why it was NOT fixed:** below the floor; the slot is the LeftHand form in Skyrim.esm on every runtime (v2.0.8) and the branch only ever runs when a legacy-path lock stands in the left.
+- **Fix shape when drained (verbatim):** mirror `EquipLeftHeld`'s precondition — skip (and log once) the unequip when `LeftHandSlot()` is null.
+
+### MFO-B43 — `g_playerPicks` survives the toggle OFF path
+- **Raised:** Fable tier-3 review of `e0b52b5` (`feat/mfo-equip-authority`), SEV-5 (F-E).
+- **Severity:** SEV-5
+- **Finding (verbatim):** F-E (g_playerPicks survives the toggle OFF path).
+- **Reviewer's reasoning:** `RefreshEquipDeclaration`'s gate-off branch erases `g_lastDeclared[id]` and releases the claim but not `g_playerPicks[id]`; `ForgetEquipDeclaration` (dismiss) and `ClearEquipDeclarations` (revert) clear both. A follower whose authority was turned off keeps his player-pick keep list until dismissal, which only affects the economy's keep verdict for those forms.
+- **Why it was NOT fixed:** below the floor; the effect is a kept piece, never a sold or worn one.
+- **Fix shape when drained (verbatim):** erase `g_playerPicks[id]` beside `g_lastDeclared.erase(id)` in the gate-off branch.
+
 ### MFO-B34 — should the tier-2 swap-up ever evict a Conduit that an already-socketed off-domain gem depends on?
 - **Raised:** Fable tier-3 review of `1efa3e3` (`fix/mfo-meo-no-loose-gems`), policy question attached to the SEV-2 (fixed on the branch: the candidate is judged against the item WITHOUT the evictee, `sansEvictee`).
 - **Finding (verbatim):** Policy question for marth, record in backlog: should MFO ever evict a Conduit that an already-socketed off-domain gem depends on?

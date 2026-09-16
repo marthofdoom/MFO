@@ -36,9 +36,14 @@ Read it as history and this block as current.
   `kEquipSlot_Left`, a held one-hander with no hold → its actual hand, everything else Default;
   APMF places the hands itself, so `PostHandEquipsDeferred` and `EquipLeftHeld`'s deferred mode
   are RETIRED (the ledger stays the source of truth; `RecordLeftHold` writes it under the
-  authority; the two-hop `LogLeftHandReadback` is posted after a left declaration as the
-  criterion-7 proof). PLAYER AGENCY: MFO does NOT set `kEquipAuth_DenyPlayerMenu`; a worn piece
-  the player put on (not in the last declaration, not MFO's pick) is recorded, logged
+  authority; the two-hop `LogLeftHandReadback` is posted after a left declaration as a
+  CORROBORATING read only -- criterion 7 is APMF's own `[apmf][equip-auth] ... hand=left` line
+  plus the follower VISIBLY dual-wielding, Fable F-C). PLAYER AGENCY: MFO does NOT set
+  `kEquipAuth_DenyPlayerMenu`; UNDER ENFORCEMENT ONLY (Fable F-A: in observe mode APMF's
+  non-forced pick equip and the engine's take-back are indistinguishable from a dress, so
+  nothing is recorded there and a `player put on` line CANNOT occur in an observe-mode log) a
+  worn piece the player put on (not in the last declaration, not MFO's pick, on a tick where
+  MFO's pick is absent or already worn) is recorded, logged
   `[equip-auth] <id>: player put on '<name>' -- kept`, left in place until the judge finds a
   STRICTLY better-scored owned piece (the mage judge's FormID tie-break no longer displaces it),
   and then KEPT by the economy (`playerPick`), never sold. The claim line prints
@@ -58,8 +63,10 @@ Read it as history and this block as current.
   (or holding the declared shield/torch left) — plus MFO's own lines: `[equip-auth] <id>: claim
   ... mode=observe-only` once per follower, `declare n=` on changes only (a `declare` every second
   is the churn the design forbids — find the flapping item), `[equip] ... declared` where the
-  direct hop used to be, `[hold] <id>: left readback = <weapon>` after each left declaration, and
-  `player put on` only after a trade-menu dress; (4) only when all seven hold, flip
+  direct hop used to be, `[hold] <id>: left readback = <weapon>` after each left declaration
+  (corroborating only -- it is not the criterion-7 proof), and NO `player put on` line at all in
+  an observe-mode session (under enforce, one means a trade-menu dress); (4) only when all seven
+  hold, flip
   `bEquipObserveOnly=0` in APMF.ini and re-run the same session. **Known observe-mode limitation
   (F3, by design):** a declared item the engine takes back off is NOT re-issued (send-on-change);
   APMF's observe mode is exactly where that shows, and enforcement is what stops it.
