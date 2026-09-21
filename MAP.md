@@ -559,9 +559,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   AND (`SpellHealsHealth` — a beneficial Health effect, the same read `ClassifySpell`'s Heal kind and
   `CastAuto` make — OR any effect whose `EffectSetting::data.associatedSkill == kRestoration`, a plain
   member read, never the `GetAssociatedSkill` vfunc). A hostile Restoration-school spell (Sun Fire,
-  Turn Undead) is OFFENSE and stays AI-fired. Three sites consult it: `CastSelfDirect`
+  Turn Undead) is OFFENSE and stays AI-fired. Five sites consult it: `CastSelfDirect`
   (`Actuation_Direct.cpp:933`) and `CastTargetDirect` (`:1297`) skip `ComposedCast::Try` for a
-  restoration spell and fall to their own kInstant direct force; `CastOn` forks a fire-and-forget
+  restoration spell and fall to their own kInstant direct force, and their two TASK 1
+  concentration-offense claims (`ClaimOffenseCast`, `:~975` / `:~1330`) are gated on it too so a
+  Restoration-school ward streams direct instead of claiming the AI-fired road; `CastOn` forks a fire-and-forget
   restoration cast at an ally/player (`Actuation.cpp:871`, after the concentration fork, non-self
   only) to **`RestorationCastDirect`** (`:412`) = `CastTargetDirect` with the SAME outcome map, LEFT
   hand lock and `CasterConsent::Want` as `ConcentrationCast`'s non-self branch (labels `restoration

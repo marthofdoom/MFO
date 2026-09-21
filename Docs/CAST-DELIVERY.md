@@ -320,7 +320,8 @@ effect or any effect of the Restoration school) now takes the DIRECT road — `C
 `CastTargetDirect`, `CastSpellImmediate` `MainThread::Post`'d, magicka deducted, bounded by the
 reconciles — the same delivery the OOC logistics heal has always used; an OFFENSIVE cast keeps
 the ch.8b AI-fired claim. `CastSelfDirect` and `CastTargetDirect` skip `ComposedCast::Try` for a
-restoration spell, and `CastOn` forks a fire-and-forget restoration cast at an ally/player to
+restoration spell (and their concentration-offense `ClaimOffenseCast` for a Restoration-school
+ward), and `CastOn` forks a fire-and-forget restoration cast at an ally/player to
 `RestorationCastDirect` before the equip/grace/force machinery. Deck 2026-09-21 (Jesper
 750012C6): the CFC claim held the LEFT hand naming Fast Healing, the engine kept re-deliberating
 onto Healing Hands and was DENIED against the claim (`t2c CheckCast DENIED`, 3x `InterruptCast`,
