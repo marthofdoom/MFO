@@ -1683,8 +1683,9 @@ namespace MFO::APMFBridge {
                           a_follower, a_owned, a_denied);
         // COPIED inside the call (APMF_API.h: read synchronously, never retained);
         // a stack temporary is the documented shape. Sent BEFORE the set by the
-        // one caller (RefreshEquipDeclaration): both apply in the same Drain, so
-        // the seat never sees a set from one generation and a scope from another.
+        // one caller (RefreshEquipDeclaration): two enqueues, normally applied in
+        // the same Drain; a Drain landing between them pairs the NEW scope with
+        // the OLD set for one frame (self-healing; MFO-B45), never the reverse.
         APMF_API::APMF_EquipScope scope{};
         scope.owned  = a_owned;
         scope.denied = a_denied;

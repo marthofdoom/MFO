@@ -924,8 +924,14 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `YieldForcedLeftHand` / `ReconcileForcedWeapon` / the ch.15 `ClaimEquipment` are UNCHANGED (the
   force-unequips on release clear locks where they exist and are plain unequips otherwise; ch.15's
   param form is unaffected by a ch.17 claim, APMF INTEGRATION.md). After a release no refresh is
-  sent: the next OOC `ServiceFollower` (holds 0/0) declares `owned=Armor` and the AI re-arms
-  (F6 c). **What breaks:** declaring
+  sent: the next OOC `ServiceFollower` reads the (now empty) ledger through
+  `Actuation::ForcedHoldFor(id)` → `{right, left}` FormIDs under `g_forcedMx` (the ONE public
+  ledger read; Fable F1 on `7857446`) and declares `owned=Armor`, so the AI re-arms (F6 c) — and
+  while a hold STANDS the OOC road keeps owning its hand: `ServiceFollower` runs on ANY OOC
+  service (the T#76 two-tick debounce guards only `ReleaseForcedWeapon`), so passing 0/0 there
+  let a one-tick `IsInCombat` flap demote a standing hold to Armor-only for the rest of the fight
+  (nothing re-declares until the next equip event). **What breaks:** passing 0/0 (or any
+  constant) for the holds on ANY road re-creates that F1 demotion; declaring
   a one-hand weapon with `kEquipSlot_Default` re-creates F2 (the engine puts it in the RIGHT hand)
   and under v9 competes for BOTH hands (equipped only when both are owned); routing the shield
   back through the declaration re-freezes the left hand (Left would have to be owned for the pass
@@ -1600,8 +1606,10 @@ declared there and defined in their home module). Layout:
   WHAT IT DOES NOT):** `owned = Armor | Right (a right hold) | Left (a left hold) |
   Right+Left+Ammo (a held bow/crossbow) | Right+Left (a held two-hander)`; `denied = Shield` iff
   `roles.offHand==2 && bWeaponStyleControl`. Light never owned, Shield never owned, Armor always
-  owned; a hand is owned ONLY while a `ForcedHold` stands in it (`a_holdRight`/`a_holdLeft`; the
-  OOC service road passes 0/0 → `owned=Armor`). THE HOLD WINS OVER RANGE: a dual-wield hold
+  owned; a hand is owned ONLY while a `ForcedHold` stands in it (`a_holdRight`/`a_holdLeft`;
+  EVERY road passes the ledger — the OOC service road through `Actuation::ForcedHoldFor`, Fable
+  F1 on `7857446` — so the scope follows the ledger and an empty ledger → `owned=Armor`). THE
+  HOLD WINS OVER RANGE: a dual-wield hold
   under an enemy at range is not released for it (F1/F6 precedent; the exits are the gambit's
   own condition, combat end, a spell taking the left). HANDS: declared from the ledger ONLY — a
   one-hand hold carries `kEquipSlot_Right`/`kEquipSlot_Left` (the same form may stand once per
@@ -1693,7 +1701,10 @@ declared there and defined in their home module). Layout:
   all three round-1 gaps were closed by APMF v8 (governed types exclude potions; `PlayerMenu`
   allowed by default; `SetEquipSetEx` carries the hand) — and F6 (the hands freeze) is RESOLVED
   by the v9 scope (STATUS): the field observables are APMF INTEGRATION.md criteria 8-11 plus
-  MFO's `declare ... owned=` line.
+  MFO's `declare ... owned=` line. OPEN BACKLOG on this entry (`Docs/REVIEW-BACKLOG.md`, raised
+  against `7857446`): MFO-B44 (owning Ammo under a bow hold pins the archer to one ammo stack —
+  marth's call), MFO-B45 (scope and set are two enqueues; a Drain between them is a one-frame
+  self-healing mismatch), MFO-B46 (the `abiVersion < 9` warn is unreachable belt-and-braces).
 - **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
   `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
   CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet

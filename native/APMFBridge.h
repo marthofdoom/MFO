@@ -603,8 +603,10 @@ namespace MFO::APMFBridge {
     // `a_denied` are APMF_API::EquipCategory masks (see the block doc above for
     // what MFO computes). COPIED inside APMF's call (a stack temporary), applied
     // at its next Drain; the ONE caller (RefreshEquipDeclaration) sends it
-    // immediately BEFORE DeclareEquipSet so both land in the same Drain and the
-    // seat never pairs a set with a stale scope. Bits outside kEquipCat_All are
+    // immediately BEFORE DeclareEquipSet so both normally land in the same Drain
+    // (a Drain between the two enqueues pairs the new scope with the old set for
+    // one self-healing frame, MFO-B45 -- never a stale scope over a new set).
+    // Bits outside kEquipCat_All are
     // MFO's error (logged; APMF masks them). Returns false when the channel is
     // unsupported OR no claim handle stands -- the same discipline as
     // DeclareEquipSet, and the caller treats it the same (fail closed, retry on

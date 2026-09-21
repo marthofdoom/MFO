@@ -491,8 +491,11 @@ namespace MFO::Logistics {
         //     carries its HAND (kEquipSlot_Right/Left) so APMF places it there
         //     itself; a bow/two-hander is Default. A two-hander/bow in the right
         //     empties the declared left. a_leftReserved (a cast on the left):
-        //     nothing left. The OOC service road passes 0/0 (no hold OOC: holds
-        //     release within two OOC ticks), so OOC owns Armor only.
+        //     nothing left. EVERY road passes the ledger (the OOC service road
+        //     through Actuation::ForcedHoldFor, Fable F1 on 7857446): a one-tick
+        //     IsInCombat flap must not demote a standing hold to Armor-only;
+        //     once ReleaseForcedWeapon erases the ledger the next OOC tick
+        //     declares Armor-only on its own.
         //   * BOUND weapons (live BoundItemEffect): declared only into an OWNED
         //     hand (a one-hander needs its hand, a bound bow/2H both).
         //   * AMMO only under a bow/crossbow HOLD (Ammo owned exactly then): the
@@ -931,10 +934,12 @@ namespace MFO::Logistics {
             // back" is Actuation's own explicit placement (PostHandEquipsDeferred),
             // which needs no re-declaration: the item is already in-set.
             // The key is (sorted entries, owned, denied): a scope-only change is
-            // sent too. SCOPE FIRST, then the set, in one call -- both are
-            // enqueued and applied in APMF's same Drain (one Publish, both
-            // enforce hops after it), so the seat never pairs the new set with
-            // the old scope or the reverse.
+            // sent too. SCOPE FIRST, then the set, in one call -- two enqueues,
+            // normally applied in APMF's same Drain (one Publish, both enforce
+            // hops after it). A Drain CAN land between them (Fable F3 on 7857446,
+            // MFO-B45): then the seat sees the new scope with the old set for one
+            // frame, self-healing on the next Drain -- accepted, never a stale
+            // scope over a NEW set (the order is fixed).
             SentDecl sent;
             sent.keys.reserve(decl.entries.size());
             for (const auto& e : decl.entries) sent.keys.emplace_back(e.form, e.slot);

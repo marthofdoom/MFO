@@ -325,6 +325,30 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** below the floor; the slot is the LeftHand form in Skyrim.esm on every runtime (v2.0.8) and the branch only ever runs when a legacy-path lock stands in the left.
 - **Fix shape when drained (verbatim):** mirror `EquipLeftHeld`'s precondition — skip (and log once) the unequip when `LeftHandSlot()` is null.
 
+### MFO-B44 — owning Ammo under a bow hold pins the archer to one ammo stack
+- **Raised:** Fable tier-B review of `7857446` (`feat/mfo-equip-authority-v9`), SEV-4 (F2).
+- **Severity:** SEV-4 (design; marth's call)
+- **Finding (verbatim):** F2 SEV-4 owning Ammo under a bow hold pins the archer to one ammo stack (exhausted stack → engine's switch to another stack denied until a re-declaration; options: do not own Ammo, or re-declare on ammo change — marth's call).
+- **Reviewer's reasoning:** under a bow/crossbow hold the scope owns `Ammo` and the declaration carries the worn (else best) ammo of the matching kind; when that stack runs out the engine's own switch to the next stack is an off-set AMMO equip in an owned category and is refused until the next declaration event rebuilds the set with a new best stack (the OOC service, a ledger change, a bound change).
+- **Why it was NOT fixed:** below the severity floor, and the two fix shapes are a design choice (own Ammo or not) marth owns.
+- **Fix shape when drained (verbatim):** do not own Ammo, or re-declare on ammo change — marth's call.
+
+### MFO-B45 — scope and set are two enqueues; a Drain can land between them
+- **Raised:** Fable tier-B review of `7857446` (`feat/mfo-equip-authority-v9`), SEV-5 (F3).
+- **Severity:** SEV-5
+- **Finding (verbatim):** F3 SEV-5 scope and set are two enqueues, a Drain can land between them (one-frame self-healing mismatch; the comments at Logistics_Economy.cpp:933-937 / APMFBridge.cpp:1685-1688 / APMFBridge.h:588-589 overstate "same Drain" — soften them).
+- **Reviewer's reasoning:** `DeclareEquipScope` and `DeclareEquipSet` are two thread-safe enqueues from the worker; APMF's per-frame Drain on the game thread can run between them, so for one frame the seat pairs the NEW scope with the OLD set. The order is fixed (scope first), so the reverse (a stale scope over a new set) cannot occur, and the next Drain heals it.
+- **Why it was NOT fixed:** below the floor; a one-frame window with a fixed, safe order. The three comments were softened in the same round (they no longer claim "same Drain" as a guarantee).
+- **Fix shape when drained (verbatim):** none needed beyond the comment fix; an atomic scope+set call would be an APMF ABI change.
+
+### MFO-B46 — the `abiVersion < 9` warn in `EquipAuthoritySupported` is unreachable
+- **Raised:** Fable tier-B review of `7857446` (`feat/mfo-equip-authority-v9`), SEV-5 (F5).
+- **Severity:** SEV-5 (note)
+- **Finding (verbatim):** F5 SEV-5 the abiVersion<9 warn is unreachable belt-and-braces (note).
+- **Reviewer's reasoning:** `Acquire()` asks APMF for `kABIVersion` (9) and an older APMF answers nullptr, so `g_apmf` is never a `< 9` interface; the branch exists only as the same defensive shape the v5/v6 guards use.
+- **Why it was NOT fixed:** a note, not a defect; the guard costs nothing and documents the floor.
+- **Fix shape when drained (verbatim):** none; keep as belt-and-braces or drop with the other unreachable ABI guards in one sweep.
+
 ### MFO-B43 — `g_playerPicks` survives the toggle OFF path
 - **Raised:** Fable tier-3 review of `e0b52b5` (`feat/mfo-equip-authority`), SEV-5 (F-E).
 - **Severity:** SEV-5

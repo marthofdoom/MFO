@@ -915,15 +915,23 @@ namespace MFO::Logistics {
         // Scheduler never reaches this branch -- Actuation::EquipWeapon refreshes
         // from the gambit equip itself. a_leftReserved: an OOC heal/offense
         // claim on the left (ComposedCast, the OOC cast rule) must not have a
-        // shield or left item declared under it -- the bridge's own live-claim
-        // reads, since Actuation's CastHandHeld is not visible here.
+        // left item declared under it -- the bridge's own live-claim reads,
+        // since Actuation's CastHandHeld is not visible here. THE HOLDS come
+        // from Actuation's ledger (ForcedHoldFor), never 0/0 (ABI v9, Fable F1
+        // on 7857446): this road runs on ANY out-of-combat service and the T#76
+        // two-tick debounce guards only ReleaseForcedWeapon, so a one-tick
+        // IsInCombat flap declaring 0/0 would send `owned=Armor`, drop the hand
+        // entries, and leave a STANDING hold unowned for the rest of the fight.
+        // The scope follows the ledger on every road; once ReleaseForcedWeapon
+        // erases it, the next OOC tick declares Armor-only on its own.
         APMFBridge::ClaimEquipAuthority(id);   // no-op unless supported; refusal logged once
         struct DeclareAtExit {
             RE::Actor* f; const FollowerState& st; RE::FormID id;
             ~DeclareAtExit() {
                 const bool leftReserved = APMFBridge::IsHealCastActive(id) ||
                                           APMFBridge::IsOwnedCastActiveOnHand(id, APMFBridge::kApmfHandLeft);
-                RefreshEquipDeclaration(f, st, 0, 0, leftReserved, /*judgeArmor*/true, "service");
+                const auto [holdRight, holdLeft] = Actuation::ForcedHoldFor(id);
+                RefreshEquipDeclaration(f, st, holdRight, holdLeft, leftReserved, /*judgeArmor*/true, "service");
             }
         } declareAtExit{ a_follower, a_state, id };
 

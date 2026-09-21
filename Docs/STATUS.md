@@ -45,6 +45,13 @@ Read it as history and this block as current.
   `declare ... owned=` line**: with no hold `owned=Armor`, a follower switches to his bow in
   combat and shoots; under a dual-wield hold `owned=Armor+Right+Left denied=Shield`. Tier B, one
   Fable pass. Boundary touches reported in the hand-back, none outside the brief's list.
+  **Fable tier-B on `7857446`: nothing above SEV-3.** F1 (SEV-3) FIXED: the OOC service road
+  passed holds 0/0, so a one-tick `IsInCombat` flap (the T#76 debounce guards only
+  `ReleaseForcedWeapon`) demoted a STANDING hold to `owned=Armor` for the rest of the fight; now
+  every road passes the ledger (`Actuation::ForcedHoldFor(id)` → `{right, left}`, the one public
+  ledger read, under `g_forcedMx`). F4 (stale `Logistics_internal.h` comment) fixed. F2/F3/F5
+  recorded as REVIEW-BACKLOG MFO-B44/B45/B46 (Ammo ownership pins one ammo stack — marth's call;
+  scope/set two enqueues — comments softened; the `< 9` warn is unreachable).
 - **Branch `fix/mfo-equip-authority-bound` (off `origin/main` `7687fca`, the merged equip
   authority) — ROUND 4: BOUND WEAPONS under the authority, found by the probe sweep.** The
   observe-only probe run PASSED 6/7 (criterion 3's last unnamed dispatcher id is named on the

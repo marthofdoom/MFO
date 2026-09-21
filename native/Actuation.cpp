@@ -2529,6 +2529,14 @@ namespace MFO::Actuation {
         }
     }
 
+    std::pair<RE::FormID, RE::FormID> ForcedHoldFor(RE::FormID a_follower) {
+        std::scoped_lock lk(g_forcedMx);
+        const auto it = g_forcedWeapon.find(a_follower);
+        if (it == g_forcedWeapon.end()) return { 0, 0 };
+        return { it->second.right ? it->second.right->GetFormID() : 0u,
+                 it->second.left  ? it->second.left->GetFormID()  : 0u };
+    }
+
     void ReleaseForcedWeapon(RE::Actor* a_follower) {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();
