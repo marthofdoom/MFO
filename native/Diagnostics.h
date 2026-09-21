@@ -24,6 +24,23 @@ namespace MFO::Diagnostics {
     // Full state dump to MFO.log. Safe to call from the main thread only.
     void DumpReport(const char* a_trigger);
 
+    // ── [atk-obs] passive attack-event probe (feat/mfo-attack-observe) ───────
+    // Print + reset this follower's per-fight attack histogram NOW, if a fight is
+    // open for him. Idempotent: no open fight -> no line, nothing touched. The
+    // probe closes fights itself (~1.5 s after IsInCombat drops, in the sleeper
+    // tick), so this is the EXPLICIT combat-end hook for the Scheduler's own OOC
+    // debounce (Scheduler.cpp `++g_outOfCombatTicks[id] >= 2`) -- wiring it there
+    // aligns the dump with the force-hold release; whichever fires first prints,
+    // the other is a no-op. WORKER / serial-pump domain only (#4): it reads the
+    // slot table's worker-owned fight state.
+    void DumpAttackHistogram(RE::FormID a_actorID);
+
+    // Revert: forget every slot (fid, counters, open fights). Called from
+    // ResetAllState AFTER StopPump drained the worker. The graph sinks stay
+    // registered on whatever graphs survive -- they are static objects, and an
+    // event on a slot whose fid is 0 is ignored, so nothing dangles.
+    void ResetAttackObserve();
+
     // ── Cross-TU pump-drain gate (SEV-1 concurrency wave) ─────────────────────
     // Event sinks in OTHER translation units (Rapport death, Logistics loot,
     // Board focus-fire) queue AddTask bodies that mutate save-scoped state
