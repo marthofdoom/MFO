@@ -380,7 +380,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 ### MFO-B50 — `AtkClearSlot` from `ResetAllState` can race one in-flight `ProcessEvent`
 - **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-4.
 - **Severity:** SEV-4
-- **Finding (verbatim):** `AtkClearSlot` from ResetAllState can race one in-flight ProcessEvent (fid cleared first, counters after) leaving <=1 stale count inherited by the next occupant's fight#1 (cosmetic, no fix).
+- **Finding (verbatim):** `AtkClearSlot` from `ResetAllState` (main) can race one in-flight `ProcessEvent` on the graph thread (Diagnostics.cpp:658-666). `fid` is stored 0 first (release), then counters are stored 0 relaxed; a sink that loaded the old fid before the clear can `fetch_add` after the counter store, leaving <=1 stale count in a free slot that the next occupant inherits into fight#1. Cosmetic (an off-by-one already accepted at fight boundaries). Same for `attachLogged.store(false, relaxed)` vs main's `exchange`. No fix needed; record it.
 - **Reviewer's reasoning:** the sink runs on the graph's dispatch thread, which StopPump does not drain; a `ProcessEvent` that loaded `fid` just before `AtkClearSlot` stored 0 can `fetch_add` one counter after the worker's zeroing pass, and that single count is inherited by whoever next takes the slot.
 - **Why it was NOT fixed:** below the floor; at most one count on one counter at a load boundary, on a diagnostic line.
 - **Fix shape when drained (verbatim):** cosmetic, no fix. (If ever: zero the counters at slot ASSIGNMENT after the fid store, or reject events for a slot whose generation changed.)

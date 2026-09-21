@@ -4225,25 +4225,25 @@ a fresh order.
 
 ### Diagnostics.cpp / Diagnostics.h — event sinks + THE WORKER PUMP ⚠️ RACE LINCHPIN
 Owns the one persistent sleeper thread driving the per-follower tick, four event
-sinks, and `DumpReport`. `Install()` (`:1032`) ← `plugin.cpp:341` (registers
-SpellSink/HitSink/MenuSink + Probe crosshair sink). `SleeperLoop` (`:833`, `kPumpMs=
+sinks, and `DumpReport`. `Install()` (`:1052`) ← `plugin.cpp:341` (registers
+SpellSink/HitSink/MenuSink + Probe crosshair sink). `SleeperLoop` (`:853`, `kPumpMs=
 133`, `kDiagEveryNth=4`) never touches game state directly — only `AddTask`s a lambda
 that re-checks the epoch, sets `TickActiveGuard`, then runs `Followers::Refresh`
 (diag turn), `Scheduler::Tick`, `Loadout::Tick`, `AtkObserveTick`, `Probe::Tick`
-(diag turn), `Board::PublishSnapshot` (`:855-870`). (Line numbers in this entry were
+(diag turn), `Board::PublishSnapshot` (`:875-890`). (Line numbers in this entry were
 refreshed 2026-09-21 when the `[atk-obs]` block, ~500 lines, landed ABOVE
 `SleeperLoop`; older `Diagnostics.cpp:NNN` cross-references elsewhere in this map
 predate that and read ~500 low.)
-- **StopPump-before-clear invariant:** `StopPump()` (`:1054`) is the FIRST statement
+- **StopPump-before-clear invariant:** `StopPump()` (`:1074`) is the FIRST statement
   in `ResetAllState` (`Serialization.cpp:686`) and runs at kPreLoadGame
   (`plugin.cpp:369`). It clears `g_pumpRunning`, bumps `g_pumpEpoch` (strands mid-
-  sleep threads), then spin-waits ≤2000 ms on `g_tickActive` (`:1072`) so any in-
+  sleep threads), then spin-waits ≤2000 ms on `g_tickActive` (`:1092`) so any in-
   flight tick finishes before the maps are wiped (concurrent map insert+clear = UB).
   Reordering it after the clears, dropping the `g_tickActive` drain, or letting a
   sink/tick mutate save-scoped maps unguarded re-opens the load-screen crash (loud
-  error `:1080`). **`kPumpMs` is the evaluator deadline** — changing it re-times the
+  error `:1100`). **`kPumpMs` is the evaluator deadline** — changing it re-times the
   scheduler, not just diagnostics. `DumpReport` uses `find()` not `operator[]`
-  (`:1003`) to avoid persisting a spurious `0xFF`-keyed record.
+  (`:1023`) to avoid persisting a spurious `0xFF`-keyed record.
 - **Wave-1 worker-quiesce API:** every MFO `AddTask` body now runs under a
   `PumpTickGate(epoch)` RAII — STOREs `g_tickActive=true` (seq_cst) then
   re-checks the epoch (Dekker handshake, closes the check-then-set TOCTOU), and
@@ -4261,15 +4261,16 @@ predate that and read ~500 low.)
   `AttackSink` (`:492`, one `BSTEventSink<BSAnimationGraphEvent>` per follower slot,
   `g_atkSinks[16]`), `AtkSlot g_atk[16]` (`:441`, the fixed-size counter rows),
   `g_atkUnk[32]` (`:454`, the session-wide CAS-claimed unknown-tag table),
-  `AtkObserveTick()` (`:775`, called in the sleeper body after `Loadout::Tick`),
+  `AtkObserveTick()` (`:795`, called in the sleeper body after `Loadout::Tick`),
   `AtkPostAttach/Detach` (`:562`, `MainThread::Post`:
   `actor->GetAnimationGraphManager(mgr)` → each `mgr->graphs[i]` →
-  `BSTEventSource<BSAnimationGraphEvent>::AddEventSink`, re-posted at every fight
-  start because graphs rebuild on a 3D reload; AddEventSink dedupes). Public:
-  `DumpAttackHistogram(fid)` (`:896`; idempotent, exported, NO caller today — DECIDED
+  `BSTEventSource<BSAnimationGraphEvent>::AddEventSink`, posted at fight open and
+  re-posted every 2 s while the fight is open because graphs rebuild on a 3D
+  reload, in or out of combat; AddEventSink dedupes). Public:
+  `DumpAttackHistogram(fid)` (`:916`; idempotent, exported, NO caller today — DECIDED
   (Fable round on 2ac4163): NOT wired into the Scheduler's 2-tick OOC debounce,
   which would split one fight into two lines on an `IsInCombat` flap; the probe
-  closes fights itself 1.5 s after `IsInCombat` drops) and `ResetAttackObserve()` (`:905`)
+  closes fights itself 1.5 s after `IsInCombat` drops) and `ResetAttackObserve()` (`:925`)
   ← `Serialization.cpp:742` in `ResetAllState`, after `StopPump`. The attach is
   re-posted every 2 s while a fight is open (`kAtkAttachMs`), not only at fight
   open — a graph rebuilt mid-combat would otherwise leave the fight open with no
@@ -4442,6 +4443,6 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 | `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:303` → `Logistics.cpp:1949` | direction filter mandatory |
 | `MEOBridge::RegisterSink` (TESEquip) | `plugin.cpp:298` → `MEOBridge.cpp:75` | optional |
 | `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:341` → `Diagnostics.cpp` `Install()` | + the worker pump; prints the `[atk-obs] frameworks` line |
-| `[atk-obs]` `BSAnimationGraphEvent` sinks (per follower slot, on his own graphs) | `Diagnostics.cpp` `AtkPostAttach` ← `AtkService` (worker) → `MainThread::Post` | per fight start, deduped; observation only, `bAttackObserve` |
+| `[atk-obs]` `BSAnimationGraphEvent` sinks (per follower slot, on his own graphs) | `Diagnostics.cpp` `AtkPostAttach` ← `AtkService` (worker) → `MainThread::Post` | at fight open + every 2 s while the fight is open (`kAtkAttachMs`), deduped; observation only, `bAttackObserve` |
 | `TradeBridge::RegisterFuncs` (10 Papyrus natives) | `plugin.cpp:422` → `TradeBridge.cpp:365-376` | script ABI |
 | `MEOBridge::Acquire` (MEO interface) | `plugin.cpp:289` | external ABI |

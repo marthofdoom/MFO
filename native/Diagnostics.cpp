@@ -724,9 +724,12 @@ namespace MFO::Diagnostics {
                 //   1. an event at A restarts the run at A; later ticks read last==A,
                 //      A > A is false, the run stays OPEN and keeps accumulating;
                 //   2. a new event at B > A: closes B-A, restarts at B;
-                //   3. the break (leaves reach / sheathes / attacks / fight end)
-                //      with last==B: closes now-B. If an event C > B landed between
-                //      the last tick and the break, it closes C-B THEN now-C.
+                //   3. the break (leaves reach / sheathes / attacks) with last==B:
+                //      closes now-B. If an event C > B landed between the last tick
+                //      and the break, it closes C-B THEN now-C;
+                //   4. combat ends with the run open: closed at the FIRST out-of-
+                //      combat tick (the OOC arm site below), never at the dump, so
+                //      the 1.5 s close debounce is not counted as idle time.
                 const auto* st    = a_actor->AsActorState();
                 const bool  drawn = st->IsWeaponDrawn();
                 const bool  none  = st->GetAttackState() == RE::ATTACK_STATE_ENUM::kNone;
@@ -755,6 +758,23 @@ namespace MFO::Diagnostics {
             if (!s.oocArmed) {
                 s.oocArmed   = true;
                 s.oocSinceMs = a_nowMs;
+                // Case 4 -- combat ends with the run open (Fable SEV-3 on fc386cf):
+                // close it NOW, not at the dump 1.5 s later, or the OOC debounce is
+                // added to the trailing segment and every melee kill (drawn, kNone,
+                // in reach right after the killing blow) prints a >=1500 ms run.
+                // Same pre-event/trailing two-step as the in-combat break. A flap
+                // that re-enters combat inside the debounce simply restarts the run
+                // on the next in-combat tick. AtkDump's close stays as the belt for
+                // the explicit/dismissal path (a no-op once idleRunning is false).
+                if (s.idleRunning) {
+                    const auto last = s.lastAttackMs.load(std::memory_order_relaxed);
+                    if (last > s.idleRunStart) {
+                        AtkCloseIdle(s, last - s.idleRunStart);
+                        s.idleRunStart = last;
+                    }
+                    AtkCloseIdle(s, a_nowMs - s.idleRunStart);
+                    s.idleRunning = false;
+                }
             } else if (a_nowMs - s.oocSinceMs >= kAtkOocMs) {
                 AtkDump(a_slot, "combat end");
             }
