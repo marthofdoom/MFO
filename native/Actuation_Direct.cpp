@@ -966,7 +966,12 @@ namespace MFO::Actuation {
         // REFUSED -> FAIL CLOSED (Declined, logged loudly, no direct-force stream);
         // otherwise the facet was never there (ABI < 5 / toggle raced off) and the
         // direct-force stream below runs, byte-identical to today.
-        if (selfKind != CasterConsent::SpellKind::Heal &&
+        // `!IsRestorationSpell` (fix/mfo-combat-restoration-direct, 2026-09-21):
+        // a Restoration-school concentration self-cast (a ward) is a restoration
+        // cast and takes the direct-force stream below, like every other
+        // restoration cast in combat; only a non-restoration Offense/Buff stream
+        // still claims the AI-fired road here.
+        if (selfKind != CasterConsent::SpellKind::Heal && !IsRestorationSpell(a_spell) &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
             !Config::g_legacyCastHybrid.load()) {
@@ -1325,7 +1330,11 @@ namespace MFO::Actuation {
         // present + CAPABLE means it REFUSED -> FAIL CLOSED (Declined, logged);
         // otherwise the facet was never there and the gate + direct-force stream
         // below runs, byte-identical to today.
-        if (kind != CasterConsent::SpellKind::Heal &&
+        // `!IsRestorationSpell` (fix/mfo-combat-restoration-direct, 2026-09-21):
+        // a Restoration-school concentration cast at an ally is a restoration
+        // cast and takes the direct-force stream below; only a non-restoration
+        // Offense/Buff stream still claims the AI-fired road here.
+        if (kind != CasterConsent::SpellKind::Heal && !IsRestorationSpell(a_spell) &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
             !Config::g_legacyCastHybrid.load()) {
