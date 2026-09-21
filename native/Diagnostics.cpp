@@ -391,6 +391,7 @@ namespace MFO::Diagnostics {
         constexpr std::size_t kAtkCounters = kAtkExact + kAtkFam;
         constexpr std::int64_t kAtkIdleMs  = 1500;   // an idle-in-reach run longer than this counts
         constexpr std::int64_t kAtkOocMs   = 1500;   // IsInCombat low for this long closes the fight
+        constexpr std::int64_t kAtkAttachMs = 2000;  // re-post the (deduped) attach this often while a fight is open
 
         constexpr char AtkLower(char a_c) noexcept { return (a_c >= 'A' && a_c <= 'Z') ? static_cast<char>(a_c + 32) : a_c; }
         bool AtkEq(const char* a_a, const char* a_b) noexcept {
@@ -430,6 +431,7 @@ namespace MFO::Diagnostics {
             std::int64_t  oocSinceMs   = 0;
             bool          idleRunning  = false;
             std::int64_t  idleRunStart = 0;
+            std::int64_t  lastAttachMs = 0;    // attach re-post throttle while a fight is open (SEV-3)
             std::uint32_t idleCount    = 0;
             std::int64_t  idleLongest  = 0;
             char          name[kAtkName]{};
@@ -555,7 +557,8 @@ namespace MFO::Diagnostics {
 
         // Attach / detach: MAIN thread (graph mutation). FormID + slot captured;
         // re-resolve, null-check. AddEventSink dedupes under its spin lock, so
-        // re-posting every fight (graphs are rebuilt on a 3D reload) is idempotent.
+        // re-posting every 2 s while a fight is open (graphs are rebuilt on a 3D
+        // reload, in or out of combat) is idempotent.
         void AtkPostAttach(RE::FormID a_fid, std::size_t a_slot) {
             if (!MainThread::IsInstalled()) {
                 if (!g_atkNoPumpLogged) {
@@ -612,7 +615,14 @@ namespace MFO::Diagnostics {
             auto& s = g_atk[a_slot];
             if (!s.fightOpen) return;
             const auto now = AtkNowMs();
-            if (s.idleRunning) { AtkCloseIdle(s, now - s.idleRunStart); s.idleRunning = false; }
+            if (s.idleRunning) {
+                if (const auto last = s.lastAttackMs.load(std::memory_order_relaxed); last > s.idleRunStart) {
+                    AtkCloseIdle(s, last - s.idleRunStart);
+                    s.idleRunStart = last;
+                }
+                AtkCloseIdle(s, now - s.idleRunStart);
+                s.idleRunning = false;
+            }
             const auto fid = s.fid.load(std::memory_order_acquire);
             std::string line = std::format("[atk-obs] {:08X} '{}' fight#{} {:.1f}s R='{}' L='{}' |",
                                            fid, static_cast<const char*>(s.name), s.fightNo,
@@ -665,6 +675,7 @@ namespace MFO::Diagnostics {
             a_s.fightOpen = false; a_s.fightNo = 0; a_s.fightStartMs = 0;
             a_s.oocArmed = false; a_s.oocSinceMs = 0;
             a_s.idleRunning = false; a_s.idleRunStart = 0; a_s.idleCount = 0; a_s.idleLongest = 0;
+            a_s.lastAttachMs = 0;
             a_s.name[0] = a_s.weapR[0] = a_s.weapL[0] = '\0';
         }
 
@@ -681,7 +692,20 @@ namespace MFO::Diagnostics {
                     s.idleRunning  = false;
                     s.idleCount    = 0;
                     s.idleLongest  = 0;
-                    AtkPostAttach(fid, a_slot);   // per fight: graphs may have been rebuilt since the last one
+                    s.lastAttachMs = 0;
+                }
+                // ATTACH, and KEEP attaching on a throttle while the fight is open
+                // (Fable SEV-3 on 2ac4163): a graph rebuilt while IsInCombat stays
+                // true (catch-up teleport through disable/enable, a door with the
+                // fight continuing) would otherwise leave this fight open with NO
+                // registration and print "(no attack events)" -- a masked failure
+                // (principle 7). AddEventSink dedupes under its spin lock
+                // (BSTEvent.h:41-51), so a re-post costs one LookupByID + one lock
+                // per graph per 2 s per follower on the main thread; the re-attach
+                // line stays at debug.
+                if (a_nowMs - s.lastAttachMs >= kAtkAttachMs) {
+                    s.lastAttachMs = a_nowMs;
+                    AtkPostAttach(fid, a_slot);
                 }
                 // Hands as of the latest in-combat tick (a bow<->melee swap mid-fight
                 // shows the final pair; the [equip] lines carry the history).
@@ -694,6 +718,15 @@ namespace MFO::Diagnostics {
                 // worker (the kActPowerAttack range gate reads distance the same
                 // way on this same tick), never from the sink. A counted attack
                 // event (lastAttackMs) ends a run at the event's own time.
+                // The compare is STRICT (Fable SEV-2 on 2ac4163: `>=` re-closed the
+                // run as 0 ms on every tick after a restart, so "attacks once then
+                // stands in reach 10 s" printed x0). The three cases, re-derived:
+                //   1. an event at A restarts the run at A; later ticks read last==A,
+                //      A > A is false, the run stays OPEN and keeps accumulating;
+                //   2. a new event at B > A: closes B-A, restarts at B;
+                //   3. the break (leaves reach / sheathes / attacks / fight end)
+                //      with last==B: closes now-B. If an event C > B landed between
+                //      the last tick and the break, it closes C-B THEN now-C.
                 const auto* st    = a_actor->AsActorState();
                 const bool  drawn = st->IsWeaponDrawn();
                 const bool  none  = st->GetAttackState() == RE::ATTACK_STATE_ENUM::kNone;
@@ -703,13 +736,17 @@ namespace MFO::Diagnostics {
                     if (!s.idleRunning) {
                         s.idleRunning  = true;
                         s.idleRunStart = a_nowMs;
-                    } else if (const auto last = s.lastAttackMs.load(std::memory_order_relaxed); last >= s.idleRunStart) {
+                    } else if (const auto last = s.lastAttackMs.load(std::memory_order_relaxed); last > s.idleRunStart) {
                         AtkCloseIdle(s, last - s.idleRunStart);
                         s.idleRunStart = last;   // the run restarts at the attack
                     }
                 } else if (s.idleRunning) {
                     const auto last = s.lastAttackMs.load(std::memory_order_relaxed);
-                    AtkCloseIdle(s, (last >= s.idleRunStart ? last : a_nowMs) - s.idleRunStart);
+                    if (last > s.idleRunStart) {
+                        AtkCloseIdle(s, last - s.idleRunStart);   // the segment before the event
+                        s.idleRunStart = last;
+                    }
+                    AtkCloseIdle(s, a_nowMs - s.idleRunStart);    // the trailing segment
                     s.idleRunning = false;
                 }
                 return;
@@ -860,7 +897,7 @@ namespace MFO::Diagnostics {
         if (!a_actorID) return;
         for (std::size_t i = 0; i < kAtkSlots; ++i) {
             if (g_atk[i].fid.load(std::memory_order_acquire) == a_actorID) {
-                AtkDump(i, "combat end (scheduler)");
+                AtkDump(i, "explicit");
                 return;
             }
         }

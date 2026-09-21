@@ -27,11 +27,15 @@ Read it as history and this block as current.
   BFCO.dll= PayloadInterpreter.dll= FollowerParkour.dll= DualWieldParryingNG.dll=`, once per
   session `[atk-obs] sink thread=<id> main=<id> first-tag=` (which thread the graph dispatches
   on), and `[atk-obs] new-tag '<tag>' on <fid>` on first sight of any tag outside the counted
-  list. Sends nothing, holds nothing, no hook. `bAttackObserve` (INI `[Debug]`, default ON this
-  cycle, no MCM face). `Diagnostics::DumpAttackHistogram(fid)` is exposed for wiring at the
-  Scheduler's OOC debounce (`Scheduler.cpp` `++g_outOfCombatTicks[id] >= 2`) so the dump aligns
-  with the force-hold release; unwired on the branch, the probe closes a fight itself 1.5 s after
-  `IsInCombat` drops (whichever fires first prints, the other no-ops).
+  list. Sends nothing, holds nothing, no hook. `bAttackObserve` (INI `[Debug]`, no MCM
+  face). **Compiled default OFF** like every sibling probe flag; the shipped INI
+  says `bAttackObserve = 0` and the Deck test INI sets 1. `Diagnostics::DumpAttackHistogram(fid)`
+  is exported and idempotent but has NO caller: DECIDED after the Fable round on `2ac4163` that it
+  is NOT wired into the Scheduler's 2-tick OOC debounce (~266 ms, would split one fight into two
+  lines on an `IsInCombat` flap); the probe closes a fight itself 1.5 s after `IsInCombat` drops.
+  Fable round fixes on the branch: idle-in-reach compare made strict (`>=` printed x0 for "attacks
+  once then stands there"), attach re-posted every 2 s while a fight is open (a mid-combat graph
+  rebuild no longer masks as "(no attack events)"). Backlog MFO-B47..B51.
   **PROBE PLAN — what the next deck log must show.** If the ER-DW-Sword override theory holds,
   Cicero's lines read `SCAR_ComboStart=0`, `BFCO_NextIsAttackN=0` for every N, `MCO_WinOpen`
   roughly equal to the number of attack starts (`attackStart` + `attackPowerStart*`), and the

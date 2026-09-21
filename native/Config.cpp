@@ -290,7 +290,7 @@ namespace MFO::Config {
             g_probeCastStyle     = false;   // P1 probe -- OFF everywhere by default
             g_castSelf           = false;   // forced self-cast route -- OFF (gated) until deck-confirmed
             g_progProbe          = false;   // progression sinker probe -- OFF everywhere by default
-            g_attackObserve      = true;    // [atk-obs] passive attack-event probe -- ON for the 2026-09-21 cycle
+            g_attackObserve      = false;   // [atk-obs] passive attack-event probe -- OFF everywhere by default (Deck INI arms it)
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
             g_progCatalogDump    = false;   // progression catalog dump -- OFF everywhere by default
             g_progHarness        = false;   // allocator dev harness -- OFF everywhere by default
