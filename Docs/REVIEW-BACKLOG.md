@@ -341,6 +341,34 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** below the floor; a one-frame window with a fixed, safe order. The three comments were softened in the same round (they no longer claim "same Drain" as a guarantee).
 - **Fix shape when drained (verbatim):** none needed beyond the comment fix; an atomic scope+set call would be an APMF ABI change.
 
+### MFO-B47 — the idle-hand floor's unobserved gate is a FOURTH consumer of the contested 4000 ms constant
+- **Raised:** Fable tier-B review of `ed3d9d0` (`fix/mfo-combat-restoration-direct`), SEV-3 (note). Ids `MFO-B47`-`MFO-B49` continue from `main`'s highest, `MFO-B46`.
+- **Severity:** SEV-3 (note; the cycle ended with nothing above SEV-3)
+- **Finding (verbatim):** the floor gate is consumer (d) of the 4000 ms constant.
+- **Reviewer's reasoning:** `kIdleFloorUnobservedMs` aliases `kHealHoldNeverObservedMs`, which `MFO-B8` already records as answering three differently-sized questions (a)-(c). The gate adds (d): an OFFENSE claim's latency WITH an equip cycle in front of it (heals no longer claim on this branch). The header comment as first written asserted "4000 ms clears every measured latency"; `MFO-B7` records the 0908 heal at 4.5-6.1 s (`Docs/DIAG-2026-09-08-field.md:267`), so it does not, and (d) itself is UNMEASURED.
+- **Why it was NOT fixed:** B7's ruling — measure, do not resize from n=2. The comment was corrected in the closing round to cite B7/B8 and the 4.5-6.1 s datum and to say (d) is unmeasured; the constant is unchanged. Cost of the gate firing early is the pre-F10 state (the other hand opens to the AI while a real cast still charges), never a freeze.
+- **Fix shape when drained (verbatim):** read the next Deck log's `[cfc]`/castobs fire timestamps against the `IDLE-HAND FLOOR released -- driving claim has no observed cast` lines; size (d) from that, as its own named constant under B8's scheme.
+
+### MFO-B48 — `bHealAnimPackage` is inert but its MCM help text still promises an animated hand cast
+- **Raised:** Fable tier-B review of `ed3d9d0` (`fix/mfo-combat-restoration-direct`), SEV-4.
+- **Severity:** SEV-4
+- **Finding (verbatim):** `bHealAnimPackage` MCM toggle inert, help text at out/MCM/Config/MFO/config.json:236-239 still promises an animated hand cast.
+- **Reviewer's reasoning:** every `ComposedCast::Try` call site is now gated on `!IsRestorationSpell`, and `Try` is heal-only, so the toggle that enabled the CFC heal claim changes nothing on either table. The MCM entry ("Animated forced casts (experimental) ... Route forced casts (heals, buffs) through a real animated hand cast") describes a road that no longer exists.
+- **Why it was NOT fixed:** the INI key name is a frozen contract (MCM-Helper persistence identity, CLAUDE.md "frozen external contracts"); changing the text or hiding the toggle belongs to the CFC-removal brief, not this field fix.
+- **Fix shape when drained (verbatim):** in the removal brief, reword or hide the MCM entry (key name kept) in the same change that deletes the dormant `Try`/`ClaimHealCast`/F1-hold road.
+
+### MFO-B49 — closing notes on `fix/mfo-combat-restoration-direct` (SEV-5 bundle)
+- **Raised:** Fable tier-B review of `ed3d9d0` (`fix/mfo-combat-restoration-direct`), SEV-5 x4.
+- **Severity:** SEV-5
+- **Findings (verbatim):**
+  1. modded FF Restoration-school Buff at an ally now streams direct with utility cap + dispel;
+  2. `RestorationCastDirect`'s `SelfCast::Held` arm (Actuation.cpp:423) is dead;
+  3. floor pulses ON for the first 4 s of every re-mint of a perpetually silent claim (by design);
+  4. CHANGELOG could say heals are now instant for animated-heal users.
+- **Reviewer's reasoning:** (1) a non-heal Restoration-school FF spell aimed at an ally used to take the equip/grace/force road; on the direct road it is a Buff-kind `CastTargetDirect` stream, so it inherits the utility time cap and the dispel-on-release. (2) `CastTargetDirect` only returns `Held` out of `ComposedCast::Try`, which restoration never reaches, so the arm cannot fire; kept for enum completeness (no `default:` masking). (3) an aged-out re-request re-mints `created`, so a claim that never fires earns a floor for the first 4 s of each re-mint before the gate drops it again — the documented consequence of anchoring on the mint-only clock. (4) user-facing wording.
+- **Why it was NOT fixed:** (1)-(3) are by-design consequences already stated in code comments; (4) was applied in the closing round (CHANGELOG v2.0.8 bullet).
+- **Fix shape when drained (verbatim):** (1) none unless the field shows a ward/buff stream misbehaving; (2) delete the arm when the CFC road is removed; (3) anchor the gate on a per-spell "first minted" stamp if the pulse ever matters; (4) done.
+
 ### MFO-B46 — the `abiVersion < 9` warn in `EquipAuthoritySupported` is unreachable
 - **Raised:** Fable tier-B review of `7857446` (`feat/mfo-equip-authority-v9`), SEV-5 (F5).
 - **Severity:** SEV-5 (note)

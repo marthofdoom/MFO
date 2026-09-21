@@ -392,6 +392,42 @@ namespace MFO::Actuation {
             }
         }
 
+        // ── RESTORATION AT A TARGET: the DIRECT road, fire-and-forget too ──
+        // (fix/mfo-combat-restoration-direct, 2026-09-21.) A restoration cast
+        // (IsRestorationSpell, Actuation.h) aimed at an ally/player on the
+        // COMBAT table is delivered exactly like the concentration stream
+        // above -- CastTargetDirect, CastSpellImmediate straight onto the
+        // target, MainThread::Post'd, magicka deducted, bounded by
+        // TargetCastReconcile -- and NEVER through the ch.8b AI-fired heal
+        // claim (ComposedCast::Try + equip + AI grace + ForceCast). Deck
+        // 2026-09-21: that road held Jesper's left hand on a Fast Healing
+        // claim the engine never fired (it kept re-selecting Healing Hands
+        // and was denied), the idle-hand floor closed his right, and he stood
+        // frozen; the OOC logistics heal on this same direct road delivered
+        // 22/22. Same outcome mapping and hand lock as the non-self branch of
+        // ConcentrationCast (LEFT, the hand every heal/buff plan resolves to);
+        // CasterConsent::Want keeps the slider denying the AI's COMPETING
+        // spells while the rule governs. Self never reaches here (the self
+        // fork intercepts it), and a concentration spell forks first.
+        Outcome RestorationCastDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                      RE::Actor* a_target) {
+            const auto id = a_follower->GetFormID();
+            switch (CastTargetDirect(a_follower, a_spell, a_target)) {
+            case SelfCast::Applied:
+                CasterConsent::Want(id, a_spell->GetFormID());
+                HoldCastLock(id, kHandLeft, a_spell->GetFormID(), a_target->GetFormID());   // TASK 2
+                return { Result::Fired, "restoration (direct force)" };
+            case SelfCast::Refreshed:
+                HoldCastLock(id, kHandLeft, a_spell->GetFormID(), a_target->GetFormID());   // TASK 2
+                return { Result::NoOp, "restoration direct refresh (paced)", true };
+            case SelfCast::Held:
+                return { Result::NoOp, "restoration held off (another heal owns the claim)", true };
+            case SelfCast::Declined:
+            default:
+                return { Result::FailedOther, "restoration direct-force declined", true };
+            }
+        }
+
         // a_rangeGate (#68): true only for an OBVIOUS target (ladder rungs
         // 1-3 -- a selector, an explicit subject, a condition-implied actor).
         // The PLAYER FALLBACK (rung 4) always passes false: a rule that
@@ -823,6 +859,21 @@ namespace MFO::Actuation {
                 RE::MagicSystem::CastingType::kConcentration) {
                 commitPreempt();   // the claim happens inside ConcentrationCast
                 return ConcentrationCast(a_follower, spell, a_target);
+            }
+
+            // RESTORATION forks off HERE (fix/mfo-combat-restoration-direct,
+            // 2026-09-21): a fire-and-forget heal/ward/Restoration-school cast at
+            // an ally or the player takes the DIRECT road (RestorationCastDirect
+            // above) and never the ch.8b AI-fired heal claim + equip/grace/force
+            // machinery below. Offense keeps that road. Everything above this
+            // line (range, competence, magicka reserve, the per-hand lock,
+            // satisfied-in-flight) already ran. `a_target != a_follower`: a self
+            // target only reaches here with bCastSelf OFF, and that dev-only
+            // world keeps its old road byte-identical (the heal twin below
+            // already scopes itself the same way).
+            if (a_target != a_follower && IsRestorationSpell(spell)) {
+                commitPreempt();   // the hand is taken inside CastTargetDirect
+                return RestorationCastDirect(a_follower, spell, a_target);
             }
 
             // THE FOLLOWER CASTS IT -- MFO does not cast on their behalf.

@@ -6,13 +6,42 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-16 (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-09-21 (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `fix/mfo-combat-restoration-direct` (off `origin/main` `9539f09`) — RESTORATION
+  CASTS GO DIRECT IN COMBAT; release-gating field fix, NOT merged, NOT deployed.** Deck
+  2026-09-21 (Jesper 750012C6, Fable diagnosis item 2(b)): combat rule 0 `cast_self` / rule 1
+  `cast_target` Fast Healing went the ch.8b AI-fired heal claim; the claim held the LEFT hand
+  while the engine kept re-selecting Healing Hands and was DENIED against it, the idle-hand
+  floor closed the RIGHT hand under that claim, so no dagger and no heal — frozen. The OOC
+  logistics heal on the direct road delivered 22/22 the same session. Fix: (1)
+  `Actuation::IsRestorationSpell` (not Offense AND a beneficial Health effect or any
+  Restoration-school effect) routes the COMBAT table's restoration casts to `CastSelfDirect` /
+  `CastTargetDirect` (`CastOn` → new `RestorationCastDirect`); offense keeps the AI-fired road.
+  `ComposedCast::Try` is heal-only, so the CFC heal claim and `bHealAnimPackage` are dormant
+  now (kept compiled). (2) The idle-hand floor is released while its driving claim has stood
+  `kIdleFloorUnobservedMs` (4000 ms = `kHealHoldNeverObservedMs`; sized from the 0906 heal's 2.95 s
+  claim → observed, which the 0908 heal exceeded at 4.5-6.1 s — backlog `MFO-B7`/`MFO-B8`: measure,
+  do not resize from n=2; the offense-claim-plus-equip-cycle latency this gate consumes is UNMEASURED
+  and the next Deck log sizes it) with no observed cast — `[apmf] <id> IDLE-HAND FLOOR released -- driving claim has no
+  observed cast`. (3) `APMFBridge::Tick`'s expiry sweep clears the swept claim's `[cfc]` watch
+  (`ComposedCast::ClearWatchHand`), and the OOC concentration label reads the direct road's own
+  registry (`Actuation::TargetStreamLive`) instead of `IsHealCastActive`. `Scheduler.cpp` untouched
+  (a concurrent branch owns it). `Actuation.cpp` is 2903 lines (over cap, reported, not split —
+  MFO-B37). **Field observable:** in a fight a hurt follower/ally is healed by Fast Healing with
+  `[eval] ... restoration (direct force)` / `self-cast channel (direct trigger)` lines and NO
+  `[cfc] claim live ... NO observed cast` for a heal; the dagger arms while healing; a silent
+  offense claim past 4 s prints the floor-released line and the other hand opens. **Field-retest
+  caution:** a `IDLE-HAND FLOOR released -- driving claim has no observed cast` line followed by the
+  AI arming the right hand LOOKS like success even when the driving claim was a real cast still
+  charging (the gate fired early, not the floor doing its job). Read the `[cfc]` / castobs fire
+  timestamps for that claim alongside the release line before calling it either way — that pairing
+  is also the measurement `MFO-B7` is waiting on.
 - **Branch `feat/mfo-equip-authority-v9` (off `origin/main` `cb97052`) — SCOPED AUTHORITY, ABI v9:
   F6 RESOLVED.** MFO's copy of `native/APMF_API.h` is APMF's v9 header verbatim (branch
   `main` `9226f77`, the merged v9, md5 `2b941cd753d2e5520a0cdf558adf66f8`; the first cut was

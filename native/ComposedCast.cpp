@@ -148,6 +148,14 @@ namespace MFO::ComposedCast {
                       kSilentWarnAfter,
                       "the never-observed hold cap must outlast kSilentWarnAfter, so the "
                       "silent-claim warning always precedes the lift in the log");
+        // Same ordering for the idle-hand floor's unobserved gate (fix/mfo-combat-
+        // restoration-direct, 2026-09-21): the "[cfc] ... NO observed cast" line
+        // must reach the log before "IDLE-HAND FLOOR released -- driving claim has
+        // no observed cast" explains itself by it.
+        static_assert(std::chrono::milliseconds(
+                          static_cast<long long>(APMFBridge::kIdleFloorUnobservedMs)) >
+                      kSilentWarnAfter,
+                      "the idle-hand floor's unobserved gate must outlast kSilentWarnAfter");
         // Re-warn at most this often per still-silent claim -- a claim that
         // never fires must not spam the log every Try() tick.
         constexpr auto kSilentWarnEvery = std::chrono::milliseconds(5000);
@@ -707,6 +715,12 @@ namespace MFO::ComposedCast {
     // A caller releasing only ONE hand's claim uses its own targeted clear
     // instead (End() above, for the heal's always-LEFT slot).
     void ClearWatch(RE::FormID a_follower) { g_watch.erase(a_follower); g_lastHold.erase(a_follower); }
+    void ClearWatchHand(RE::FormID a_follower, std::int32_t a_hand) {
+        auto it = g_watch.find(a_follower);
+        if (it == g_watch.end()) return;
+        it->second.hand[WatchSlot(a_hand)] = Watch{};
+        if (it->second.hand[0].spell == 0 && it->second.hand[1].spell == 0) g_watch.erase(it);
+    }
 
     void Reset() {
         // APMFBridge::ClearTransientState (kPreLoadGame) drops the claim;

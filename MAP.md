@@ -552,6 +552,35 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   everywhere), and anything 1.7.104 (no address library; the confirmed 1.7 values are recorded
   in the table for marth's `REL::Offset` decision). `Actuation.cpp` is 2678 lines — over the
   2500 cap, reported not split (rule 1; REVIEW-BACKLOG **MFO-B37** holds the split brief).
+- **CAST-ROAD SELECTION BY SPELL NATURE (`fix/mfo-combat-restoration-direct`, 2026-09-21 — Deck
+  2026-09-21, Jesper 750012C6).** On the COMBAT table a RESTORATION cast takes the DIRECT road and an
+  OFFENSIVE cast keeps the AI-fired road. The classifier is **`Actuation::IsRestorationSpell`**
+  (`Actuation_Direct.cpp:838`, declared `Actuation.h:168`): `CasterConsent::ClassifySpell != Offense`
+  AND (`SpellHealsHealth` — a beneficial Health effect, the same read `ClassifySpell`'s Heal kind and
+  `CastAuto` make — OR any effect whose `EffectSetting::data.associatedSkill == kRestoration`, a plain
+  member read, never the `GetAssociatedSkill` vfunc). A hostile Restoration-school spell (Sun Fire,
+  Turn Undead) is OFFENSE and stays AI-fired. Five sites consult it: `CastSelfDirect`
+  (`Actuation_Direct.cpp:933`) and `CastTargetDirect` (`:1302`) skip `ComposedCast::Try` for a
+  restoration spell and fall to their own kInstant direct force, and their two TASK 1
+  concentration-offense claims (`ClaimOffenseCast`, `:974` / `:1337`) are gated on it too so a
+  Restoration-school ward streams direct instead of claiming the AI-fired road; `CastOn` forks a fire-and-forget
+  restoration cast at an ally/player (`Actuation.cpp:874`, after the concentration fork, non-self
+  only) to **`RestorationCastDirect`** (`:412`) = `CastTargetDirect` with the SAME outcome map, LEFT
+  hand lock and `CasterConsent::Want` as `ConcentrationCast`'s non-self branch (labels `restoration
+  (direct force)` / `restoration direct refresh (paced)`). WHY: the ch.8b AI-fired heal claim held
+  the LEFT hand naming Fast Healing while the engine's kMultipleCast re-deliberation kept selecting
+  Healing Hands and was DENIED against the claim (`t2c CheckCast DENIED`, 3x `InterruptCast`, `[cfc]
+  claim live 7607 ms`), and the idle-hand floor closed the RIGHT hand under it — no dagger, no heal,
+  frozen; the OOC logistics heal on the direct road delivered 22/22 the same session.
+  **CONSEQUENCE, STATED:** `ComposedCast::Try` is HEAL-ONLY and every Heal-kind spell IS restoration,
+  so the CFC heal claim (`ClaimHealCast`, the F1 incumbent hold, `RefreshHealCastClaim`, the
+  `bHealAnimPackage` MCM toggle) is UNREACHABLE from all three of its call sites now — kept compiled,
+  its removal is its own brief. `bHealAnimPackage` is inert on both tables now — on `main` it still
+  reached `Try` on the OOC self road (`CastSelfDirect` asked with no `combatController` test) and on
+  every combat road; only `CastTargetDirect`'s OOC ally road had the controller test. Its MCM help text
+  still promises an animated hand cast (backlog `MFO-B48`). **What breaks if you change this:** re-routing any heal-kind spell
+  back through `Try` re-creates the frozen follower unless the floor gate below holds; a self target
+  reaching `CastOn` with `bCastSelf` OFF keeps its old road on purpose (`a_target != a_follower`).
 - `CastOn` (`Actuation.cpp:600`) escalation, IN EXECUTION ORDER: runtime gate `Runtime::CastPathsVerified()` (`:432`, AE bucket or exactly 1.5.97 — see RUNTIME GATES above) →
   `:624` → `:649` → competence gate `HasSpell` (`:704`) → magicka reserve (`:742-752`) → range/competence/reserve →
   **the Task 2 firing-spell gambit lock, PER-HAND now (`ResolveCastHand`, feat/per-hand-
@@ -3092,6 +3121,29 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   until APMF's TTL. It does NOT deny MFO's own direct force (`CastSpellImmediate` is `MagicCaster`
   vtable slot 01, `CheckCast` is 0A — pinned `include/RE/M/MagicCaster.h:46,55`) and does NOT deny
   weapons (APMF's 0x0F seat is on the spell/staff selector vtables only).
+  **THE UNOBSERVED GATE (`fix/mfo-combat-restoration-direct`, 2026-09-21).** A driving claim earns the
+  floor only while it can be believed to be driving: younger than **`kIdleFloorUnobservedMs`**
+  (`APMFBridge.h`, **4000 ms**, aliased to `kHealHoldNeverObservedMs` — both bound the engine's
+  claim → OBSERVED-CAST latency. **THE DATUM IS CONTESTED — open backlog `MFO-B7` / `MFO-B8`, and
+  this gate is consumer (d) of that constant:** the 0906 heal measured 2.95 s claim-to-observed
+  (`Docs/DIAG-2026-09-06-deny-heal-failures.md`), the 0908 heal **4.5-6.1 s** claim-to-fire
+  (`Docs/DIAG-2026-09-08-field.md:267`, "2.95 s plus one extra equip cycle"), so 4000 ms does NOT
+  clear every measured heal latency; B7's ruling is measure, do not resize from n=2. What this gate
+  consumes — an OFFENSE claim's latency with an equip cycle in front (heals no longer claim) — is
+  UNMEASURED; the next Deck log sizes it), or observed firing within its
+  own lifetime (`ComposedCast::ObservedFiring(follower, c.hand, c.spell, age)`, age from the
+  mint-only `CastClaim::created`). Past that with no observed cast, `ReconcileHandFloorLocked`
+  RELEASES a standing floor, logs `[apmf] <id> IDLE-HAND FLOOR released -- driving claim has no
+  observed cast (...)`, and mints none until the claim is observed (then the floor returns with its
+  usual `claimed` line). The driving claim itself is untouched (TTL / sweep / hold caps end it). Left
+  drives = `offense[0]` AND `heal` both silent; a mirrored DualCast never reaches the gate (both
+  driven). `ComposedCast.cpp` static_asserts the gate outlasts `kSilentWarnAfter` so the `[cfc] NO
+  observed cast` line precedes the release. A claim whose watch was never armed reads silent past the
+  gate and opens the other hand — the pre-F10 state, never a freeze. `APMFBridge.cpp` now includes
+  `ComposedCast.h`; `Tick()` runs INSIDE the AddTask body (`Diagnostics.cpp:346`), i.e. ComposedCast's
+  own serialized context, and ComposedCast never takes `g_mx`. **What breaks:** call the gate from any
+  road that is not the job worker and the lock-free watch map races; shorten N below the measured
+  tail and the other hand opens while a genuine cast is still charging.
   **Recorded, not fixed (understated in the first version of this note):** `Loadout::Prepare` takes no hand
   parameter and always equips into `LeftHandSlot()` (`Loadout.cpp:279, :359`), so on a RIGHT-hand offense
   claim MFO equips the gambit spell into the LEFT hand, which the floor has closed to the AI. The cast still
@@ -3116,7 +3168,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   PER-CAST, TTL-bounded (`kIntent_Cast`, PER-HAND now — see above; refreshed each winning cast
   tick; released crisply by
   `ReleaseOffenseCast` ← `Scheduler.cpp:~901` on `!castSeen`, which also clears the shared `[cfc]`
-  watch, `ComposedCast::ClearWatch`). combat-target = PER-COMBAT (created by EITHER the cast directive
+  watch, `ComposedCast::ClearWatch`; **and since 2026-09-21 `Tick()`'s own FacetExpiry sweep clears the
+  SWEPT claim's hand watch too — `ComposedCast::ClearWatchHand(follower, hand)`, per-hand, hand 0 only
+  when no heal still shares it — so a later same-spell claim no longer inherits a dead `since` (deck:
+  `[cfc] claim live 32383 ms` for a claim swept 19 s earlier)**). combat-target = PER-COMBAT (created by EITHER the cast directive
   OR the ATTACK directive — both `ClaimCombatTarget(create=true)` ← `Actuation.cpp:1212` (and `:1869` from `Fire`) (2026-09-03:
   melee-attack directives now get the same arbitration a caster already had, not just a re-point of a
   pre-existing claim) — re-pointed via APMF `Repoint` when the foe changes; `RefreshCombatTarget` ←
@@ -4073,12 +4128,21 @@ native seats) and ENGINE_NOTES §0.40.
     "delivered": a live claim may sit UNOBSERVED for its whole window. The FIRING
     signal is separate (`Diagnostics.cpp`'s SpellSink → the watch; `[cfc] ... NO
     observed cast` when it never fires). Do not word that back to "delivered" (#7).
+    **Since 2026-09-21 that label is derived from the ROAD, not from claim liveness:**
+    `Logistics.cpp:~1741` reads `Actuation::TargetStreamLive(id, spell, target)`
+    (`Actuation_Direct.cpp:1484`, the direct road's own `g_targetCast` entry) — `IsHealCastActive`
+    answered "any live heal claim on this follower" and labelled a direct Healing Hands "APMF
+    claimed" because rule 0's Fast Healing claim was live (deck 2026-09-21 08:09:39).
 - `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`
   + clears ONLY hand 0's watch slot (heal is always LEFT — a concurrent
   offense watch on hand 1 must survive a heal ending; PER-HAND, feat/per-hand-
   cast-slots). `ClearWatch(follower)` (no hand param) clears BOTH hands —
   reserved for a caller meaning "nothing wanted on this follower at all"
-  (`Scheduler.cpp`'s `!castSeen`, `Followers`' dismissal teardown). Call `End`
+  (`Scheduler.cpp`'s `!castSeen`, `Followers`' dismissal teardown).
+  **`ClearWatchHand(follower, hand)`** (2026-09-21) clears ONE hand's record with none of `End`'s
+  bridge side effects (pure map op, so it is safe under `APMFBridge`'s `g_mx`) — the
+  expiry sweep's clear (`APMFBridge::Tick`). `ObservedFiring` now has a second caller: the
+  idle-hand floor's unobserved gate (`ReconcileHandFloorLocked`, window = the claim's own age). Call `End`
   the instant the gambit stops wanting the heal; the `APMFBridge`
   `FacetExpiry()` backstop (`Tick()`,
   `Diagnostics.cpp` — round-robin/party-size-aware) AND the claim's own TTL (on
