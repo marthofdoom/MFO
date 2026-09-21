@@ -377,15 +377,15 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** a note, not a defect; the guard costs nothing and documents the floor.
 - **Fix shape when drained (verbatim):** none; keep as belt-and-braces or drop with the other unreachable ABI guards in one sweep.
 
-### MFO-B47 — `AtkClearSlot` from `ResetAllState` can race one in-flight `ProcessEvent`
-- **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-4. (Ids B47-B51 were the next free ids on `origin/main` `9539f09` when this was committed; another closing round in flight may also claim B47+ -- renumber the later one at merge.)
+### MFO-B50 — `AtkClearSlot` from `ResetAllState` can race one in-flight `ProcessEvent`
+- **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-4.
 - **Severity:** SEV-4
 - **Finding (verbatim):** `AtkClearSlot` from ResetAllState can race one in-flight ProcessEvent (fid cleared first, counters after) leaving <=1 stale count inherited by the next occupant's fight#1 (cosmetic, no fix).
 - **Reviewer's reasoning:** the sink runs on the graph's dispatch thread, which StopPump does not drain; a `ProcessEvent` that loaded `fid` just before `AtkClearSlot` stored 0 can `fetch_add` one counter after the worker's zeroing pass, and that single count is inherited by whoever next takes the slot.
 - **Why it was NOT fixed:** below the floor; at most one count on one counter at a load boundary, on a diagnostic line.
 - **Fix shape when drained (verbatim):** cosmetic, no fix. (If ever: zero the counters at slot ASSIGNMENT after the fid store, or reject events for a slot whose generation changed.)
 
-### MFO-B48 — pinned 3.7.0 has `Actor::AddAnimationGraphEventSink` / `RemoveAnimationGraphEventSink`
+### MFO-B51 — pinned 3.7.0 has `Actor::AddAnimationGraphEventSink` / `RemoveAnimationGraphEventSink`
 - **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-5 (note).
 - **Severity:** SEV-5 (note)
 - **Finding (verbatim):** pinned 3.7.0 has `Actor::AddAnimationGraphEventSink/RemoveAnimationGraphEventSink` (Actor.h:494/:603, graphs.front() only, equivalent for an NPC).
@@ -393,7 +393,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** a note; the walk is correct and covers a multi-graph holder too.
 - **Fix shape when drained (verbatim):** none required; could swap to the helper for brevity.
 
-### MFO-B49 — `mgr->graphs` walked without `BSAnimationGraphManager::updateLock`
+### MFO-B52 — `mgr->graphs` walked without `BSAnimationGraphManager::updateLock`
 - **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-5 (note).
 - **Severity:** SEV-5 (note)
 - **Finding (verbatim):** `mgr->graphs` walked without `BSAnimationGraphManager::updateLock` (CommonLib helper does the same; engine path not provable, .text is SteamStub-encrypted).
@@ -401,7 +401,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** a note; same shape as the library helper, main-thread only.
 - **Fix shape when drained (verbatim):** none; if a graph-swap race is ever observed, take `mgr->GetRuntimeData().updateLock` around the walk.
 
-### MFO-B50 — `g_atkUnk` unknown-tag table is session-wide by design
+### MFO-B53 — `g_atkUnk` unknown-tag table is session-wide by design
 - **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-5 (note).
 - **Severity:** SEV-5 (note)
 - **Finding (verbatim):** `g_atkUnk` session-wide by design.
@@ -409,7 +409,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** by design (documented in the block header).
 - **Fix shape when drained (verbatim):** none.
 
-### MFO-B51 — `!seen[i]` in the free-slot search is redundant
+### MFO-B54 — `!seen[i]` in the free-slot search is redundant
 - **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-5 (note).
 - **Severity:** SEV-5 (note)
 - **Finding (verbatim):** `!seen[i]` at :770 redundant.

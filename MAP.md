@@ -4275,8 +4275,8 @@ predate that and read ~500 low.)
   open — a graph rebuilt mid-combat would otherwise leave the fight open with no
   registration and print "(no attack events)" (SEV-3 fix). The idle-in-reach
   compare against `lastAttackMs` is STRICT `>` (SEV-2 fix; `>=` closed every run as
-  0 ms after a restart). **Open backlog: `Docs/REVIEW-BACKLOG.md` MFO-B47 (clear-
-  vs-in-flight-event race, ≤1 stale count), B48-B51 (notes: CommonLib's
+  0 ms after a restart). **Open backlog: `Docs/REVIEW-BACKLOG.md` MFO-B50 (clear-
+  vs-in-flight-event race, ≤1 stale count), B51-B54 (notes: CommonLib's
   `Actor::AddAnimationGraphEventSink` equivalent, `updateLock` not taken on the
   walk, session-wide unknown table, redundant `!seen[i]`).**
   **The sink runs on whatever thread the animation graph dispatches on (the

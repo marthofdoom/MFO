@@ -35,7 +35,7 @@ Read it as history and this block as current.
   lines on an `IsInCombat` flap); the probe closes a fight itself 1.5 s after `IsInCombat` drops.
   Fable round fixes on the branch: idle-in-reach compare made strict (`>=` printed x0 for "attacks
   once then stands there"), attach re-posted every 2 s while a fight is open (a mid-combat graph
-  rebuild no longer masks as "(no attack events)"). Backlog MFO-B47..B51.
+  rebuild no longer masks as "(no attack events)"). Backlog MFO-B50..B54.
   **PROBE PLAN — what the next deck log must show.** If the ER-DW-Sword override theory holds,
   Cicero's lines read `SCAR_ComboStart=0`, `BFCO_NextIsAttackN=0` for every N, `MCO_WinOpen`
   roughly equal to the number of attack starts (`attackStart` + `attackPowerStart*`), and the
