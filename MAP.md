@@ -1178,14 +1178,14 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   in one tick); moving `NoteInCombat` back under `ownCombat` lets the shed drop a
   HELD weapon mid-party-fight; dropping the `g_active` walk from the top of `Tick`
   for a per-follower read re-introduces a per-follower "truth" that flaps. **Known,
-  not closed (Fable gate review SEV-4, backlog `MFO-B52`):** a stretch of own-OOC longer
+  not closed (Fable gate review SEV-4, backlog `MFO-B55`):** a stretch of own-OOC longer
   than `MeleeClampDwell` (2-4 s) still releases a FOE-KEYED equip hold through the T#76
   hysteresis path, because `kCondFoeWithinRange` reads false when `currentCombatTarget`
   is null — the engine dropped the target on a LoS loss, NOT because the foe is far — so
   the release is the dwell timing out on an engine-side null, not the gambit's condition
   being genuinely false. Slower than `main`'s 0.3-0.8 s flap release, not faster. Also open
-  from the same review: `MFO-B53` (`Loadout::Tick` erases `g_equipClock` on the OWN flag, so
-  the AI-first grace collapses for an own-OOC hybrid cast) and `MFO-B54` (`[sense] foes=0`
+  from the same review: `MFO-B56` (`Loadout::Tick` erases `g_equipClock` on the OWN flag, so
+  the AI-first grace collapses for an own-OOC hybrid cast) and `MFO-B57` (`[sense] foes=0`
   every 3 s for own-OOC followers; the ready beat is consumed at the party edge).
   **Since the merge with `fix/mfo-combat-restoration-direct` (2026-09-21):** the post-scan
   `serviceOwnOoc(castSeen)` call passes the scan's `castSeen` — a lap on which a combat

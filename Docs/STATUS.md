@@ -36,7 +36,7 @@ Read it as history and this block as current.
   heals; no `ReleaseForcedWeapon` / `owned=Armor` scope flip on Cicero off a flag flap
   shorter than the `MeleeClampDwell` (2-4 s) between `party combat ON` and `party combat
   OFF` (an own-OOC stretch LONGER than the dwell still releases a foe-keyed hold through
-  the T#76 path — backlog `MFO-B52`, not closed); exactly one `party combat OFF` after the
+  the T#76 path — backlog `MFO-B55`, not closed); exactly one `party combat OFF` after the
   last foe dies (the hold release follows it within 2 services). Tier B, one Fable pass.
   Docs: MAP.md Scheduler entry rewritten around the two gates, CHANGELOG v2.0.8 bullet.
   **Merged with `fix/mfo-combat-restoration-direct` (2026-09-21, `708fe7a`):** the gate
