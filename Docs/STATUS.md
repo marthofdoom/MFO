@@ -6,13 +6,37 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-16 (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-09-21 (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `fix/mfo-party-combat-gate` (off `origin/main` `9539f09`, the merged v9 authority) —
+  PARTY COMBAT is the substrate the Scheduler's two combat gates key on.** Deck 2026-09-21
+  (Fable, `agentlogs/fable-v9-enforced-run.md` items 2(a) and 5): Jesper's own `IsInCombat()`
+  read false most of a dragon fight while Cicero and Adelinda fought, so he sat on the OOC
+  table and only the logistics heal could act ("frozen except heals"); the same flap ran Cicero
+  through the 2-tick OOC debounce three times mid-fight (08:09:45, 08:10:07, 08:10:31), each a
+  `ReleaseForcedWeapon` (weapons vanishing and returning). Fix, `native/Scheduler.cpp` only:
+  `g_partyCombat` = player in combat OR any managed active follower in combat OR any managed
+  follower's `CombatSense::FoeCount` (the `[sense] foes=` read) > 0, computed once per tick on
+  the worker from the `g_active` walk (#4), logged `[sched] party combat ON|OFF (player=
+  followers= foes=)` on the edge. Gate 1: the combat table runs while party combat is true
+  (an own-OOC follower's foe-keyed rules fall through transparently, logged once per fight
+  `[sched] <id>: party combat, own combat=0 -- combat table live`). Gate 2: the
+  `ReleaseForcedWeapon` debounce counts party-OOC services (N=2 kept). `NoteInCombat` stamps
+  on every party-combat service (the shed dwell cannot mature inside a party fight).
+  `ReleaseTravelOnCombat` stays on the follower's own flag. A party-combat/own-OOC follower
+  runs the combat table first and `ServiceFollower` only at the no-action exits (empty rules,
+  ready beat, scan without a Fired/opaque hold), so one action per tick per follower holds.
+  **Field observables:** during a fight Jesper's log shows `party combat, own combat=0 --
+  combat table live` and `[eval]` scan lines on his combat rules instead of only `[logistics]`
+  heals; no `ReleaseForcedWeapon` / `owned=Armor` scope flip on Cicero between `party combat
+  ON` and `party combat OFF`; exactly one `party combat OFF` after the last foe dies (the
+  hold release follows it within 2 services). Tier B, one Fable pass. Docs: MAP.md Scheduler
+  entry rewritten around the two gates, CHANGELOG v2.0.8 bullet.
 - **Branch `feat/mfo-equip-authority-v9` (off `origin/main` `cb97052`) — SCOPED AUTHORITY, ABI v9:
   F6 RESOLVED.** MFO's copy of `native/APMF_API.h` is APMF's v9 header verbatim (branch
   `main` `9226f77`, the merged v9, md5 `2b941cd753d2e5520a0cdf558adf66f8`; the first cut was

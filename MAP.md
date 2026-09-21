@@ -855,10 +855,13 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   per-follower CSTY needs `Forms.h` + `CombatStyle.cpp`.
   **SHED INTERACTION (traced 2026-09-14, no fight):** `ShedOffRoleWeapon` (`Logistics.cpp:506`)
   never reads the ledger — it does not need to, by ORDERING: the equip gambit fires only in
-  `Scheduler.cpp`'s in-combat branch, the OOC branch calls `ReleaseForcedWeapon` (`:306-307`,
-  both hands) BEFORE `ServiceFollower` (`:315`), and the shed additionally waits
-  `kShedPostBattleDwell` 3 s (`Logistics_internal.h:122`) past the last in-combat stamp
-  (`NoteInCombat` `:328`). So the shed only ever sees an UNHELD pack; the top-up runs only in
+  `Scheduler.cpp`'s party-combat branch, the party-OOC branch calls `ReleaseForcedWeapon`
+  (`:384-385`, both hands, after 2 party-OOC services) BEFORE `ServiceFollower` (`:393`), and
+  the shed additionally waits `kShedPostBattleDwell` 3 s (`Logistics_internal.h:122`) past
+  the last PARTY-combat stamp (`NoteInCombat` `:409`, stamped on every party-combat service
+  since 2026-09-21 — an own-OOC follower inside a party fight now keeps his hold AND runs
+  `ServiceFollower` via `serviceOwnOoc`, so the dwell must key on the party fight). So the
+  shed only ever sees an UNHELD pack; the top-up runs only in
   combat, picks from `GetInventory()` (a dropped weapon is gone), so it cannot re-equip what the
   shed dropped; and a second one-hander is in-role whenever `roles.melee == OneHand` (or the
   magic-user sidearm rule) — `inRole` (`Logistics.cpp:567`) is per class with no count cap. A
@@ -1101,15 +1104,57 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:28`), pumps packages
-first, runs combat OR logistics table (never both), owns suppression + retreat/loot
-teardown. Runs on the AddTask worker.
-- `Tick()` (`:110`) — caller `Diagnostics.cpp:255`. `Packages::Pump()` must stay
-  first + unconditional (`:135`). Reads `g_followers` (`:190,429,564,663`) — safe
-  only because StopPump brackets the load window. Retreating follower `return`s
-  before the gambit table (`:348`) so a cast rule can't fight the retreat travel.
-- `ClearTransientState` (`:96`) — caller `Serialization.cpp:699`; must run inside
+first, runs the combat table while the PARTY fights and the logistics table when
+it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worker.
+- `Tick()` (`:188`) — caller `Diagnostics.cpp:255`. `Packages::Pump()` must stay
+  first + unconditional (`:213`). Reads `g_followers` — safe only because StopPump
+  brackets the load window. Retreating follower `return`s before the gambit table
+  so a cast rule can't fight the retreat travel.
+- **PARTY COMBAT (2026-09-21, Deck/Fable — the Jesper freeze + the Cicero hold
+  teardown).** `g_partyCombat` (`:150`) = the player `IsInCombat()` OR any managed
+  active follower `IsInCombat()` OR any managed follower's `CombatSense::FoeCount`
+  (the `[sense] foes=` read — his own combat group, no radius) `> 0`. Computed ONCE
+  per tick at `:221-249` on the worker from the same `g_active` walk the round-robin
+  makes (#4: no lock, no off-road roster read), transition-logged
+  `[sched] party combat ON|OFF (player= followers= foes=)` (#79). Reset in
+  `ClearTransientState`. **THE TWO GATES key on it, never on the serviced
+  follower's own flag:** GATE 1 (`:342`) — the OOC branch (retreat/consent/cast-
+  lock/stance teardown + `ServiceFollower` `:393`) runs only while party combat is
+  FALSE, so the combat table runs for every managed follower while the party
+  fights; a follower with no combat controller of his own has every foe-keyed rule
+  fall through transparently (the Evaluator reads HIS group, `Evaluator.cpp:176`)
+  and is logged once per fight `[sched] <id>: party combat, own combat=0 -- combat
+  table live` (`:431`, latch `g_partyCombatNoted`, erased in the party-OOC branch).
+  GATE 2 (`:384`) — the T#76 `ReleaseForcedWeapon` debounce counts consecutive
+  PARTY-OOC services (still N=2). Still keyed on the follower's OWN flag
+  (`ownCombat` `:341`): `ReleaseTravelOnCombat` (`:452`; unconditional eviction, and
+  the own-OOC service below may legitimately arm a loot walk near a fight he is not
+  in — the PLAYER's combat ends every excursion inside `ServiceFollower` anyway),
+  the auto-retreat fill, and `Confidence::Of`. `NoteInCombat` (`:409`) stamps on
+  EVERY party-combat service so the shed dwell cannot mature inside a party fight
+  (the SHED INTERACTION ordering in the Equip force-hold entry rests on it).
+  **Own-OOC inside party combat — the tick order:** combat table first (all of the
+  in-combat branch), then `serviceOwnOoc()` (`:425`) = `Logistics::ServiceFollower`
+  on a re-found record, called ONLY at the no-action exits — empty combat rules
+  (`:603`), the ready beat (`:617`), and the scan ending without a Fired / opaque
+  hold (`:1049`) — and never on a tick that acted or on the retreat-holder exit. So
+  a party-combat/own-OOC follower still gets loot / economy / the equip declaration
+  at the same ~1 s cadence as before, and the §4.3 one-real-action-per-tick bound
+  holds because the second table runs only when the first produced nothing.
+  **What breaks:** keying EITHER gate back on the follower's own `IsInCombat()`
+  re-creates the 2026-09-21 Jesper freeze (own flag false most of a dragon fight →
+  stuck on the OOC table, only the logistics heal could act) and the Cicero hold
+  teardown (three mid-fight `ReleaseForcedWeapon`s off a flapping flag); calling
+  `serviceOwnOoc()` on a Fired tick double-fires (a combat cast + a logistics heal
+  in one tick); moving `NoteInCombat` back under `ownCombat` lets the shed drop a
+  HELD weapon mid-party-fight; dropping the `g_active` walk from the top of `Tick`
+  for a per-follower read re-introduces a per-follower "truth" that flaps. A stretch
+  of own-OOC longer than `MeleeClampDwell` (2-4 s) still releases the hold through
+  the T#76 hysteresis path — that is the gambit's condition genuinely false, by design.
+- `ClearTransientState` (`:168`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
-  (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`.
+  (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
+  plus `g_partyCombat` / `g_partyCombatNoted`.
 - Casts `combatClassOverride` directly to `CombatStyle::Stance` (`:378,578`) — the
   ordinal-equality contract.
 - **T#78 per-follower MFO master switch** — gate right after the `g_followers.find`
@@ -1846,7 +1891,9 @@ anonymous-namespace copy — that silently forks the instance).
   Changing the map's key/value shape or record framing breaks the shed-protection
   ("Gauldurbow fix") — signature gear could get shed (dropped on the floor) after a load.
   **Not** cleared by `ClearTransientState` — cleared separately by `ClearStockGear`.
-- `ServiceFollower` (`Logistics.cpp:674`) — sole caller `Scheduler.cpp:308` (worker). Sets
+- `ServiceFollower` (`Logistics.cpp:802`) — callers `Scheduler.cpp:393` (the party-OOC
+  branch) and `serviceOwnOoc` `Scheduler.cpp:425` (an own-OOC follower inside a party fight,
+  no-action exits only), both on the worker. Sets
   `g_svc` (`Logistics_internal.h:222`) raw pointer valid only for that call — safe only because the
   worker services followers sequentially; parallelizing dangles it.
 - `ShedOffRoleWeapon` (`Logistics.cpp:506`) — one off-role weapon per idle tick, **DROPPED on
@@ -1861,11 +1908,12 @@ anonymous-namespace copy — that silently forks the instance).
   (deterministic CTD, 4x on LoreRim, fixed v2.0.7; principle 6, the third instance).
   Verified against the unpacked 1.6.1170 (`+0x6781D0`) and 1.5.97 (`+0x5E6150`) binaries; on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
   drop off-worker. **POST-BATTLE GATE:** early-returns until `kShedPostBattleDwell`
-  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:2045`) ←
-  `Scheduler.cpp:321` (the in-combat branch — the only place combat=true is seen,
-  since this path is out-of-combat-only). Survives an `IsInCombat()` mid-fight
-  flap: a real combat frame re-stamps `now`, so the dwell can't mature inside a
-  lull (the field 2h-follower-hands-a-looted-mace bug). `g_lastCombatSeen`
+  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:2158`) ←
+  `Scheduler.cpp:409` (the PARTY-combat branch, every party-combat service, own flag or
+  not — since 2026-09-21 this path also runs for an own-OOC follower inside a party fight,
+  via `serviceOwnOoc`). Survives an `IsInCombat()` mid-fight flap: a party-combat service
+  re-stamps `now`, so the dwell can't mature inside a lull or a party fight (the field
+  2h-follower-hands-a-looted-mace bug). `g_lastCombatSeen`
   worker-only/no-lock (#4), cleared in `ClearTransientState`. Guards unchanged
   (never disarm/`inRoleWeapons>0`, `IsStockGear`, `IsCreatureWeapon`, socketed,
   `Catalog::IsExcluded`). **FISTS RULE (2026-09-14, marth: "they can hold them, but
@@ -1902,7 +1950,7 @@ anonymous-namespace copy — that silently forks the instance).
 - **Alias/travel:** `g_travelSlots` (`Logistics_internal.h:323`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
   `Packages::LootTravelClear` (this follower's own combat via `ReleaseTravelOnCombat`
-  `Logistics.cpp:2075` ← `Scheduler.cpp:343`; the PLAYER's combat via the global
+  `Logistics.cpp:2192` ← `Scheduler.cpp:452`, keyed on the follower's OWN flag; the PLAYER's combat via the global
   backstop `Logistics.cpp:~664-728`, see the PLAYER-COMBAT LOOT INTERRUPT note
   above; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
@@ -2400,7 +2448,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   "unmanage, don't touch ... remember the state when dropped and restore it plus
   back debt when re-enrolled").** Before this change `ProgAllocator` never read
   `FollowerState::mfoEnabled` (the Board writes it at `Board.cpp:1203`, the
-  Scheduler/Logistics ticks skip on it at `Scheduler.cpp:256` / `Logistics.cpp:680`)
+  Scheduler/Logistics ticks skip on it at `Scheduler.cpp:318` / `Logistics.cpp:808`)
   — the toggle preserved `ProgState` but did NOT stop progression's actor writes.
   Now `Followers::IsMfoEnabled(id)` (`Followers.cpp`, an **off-worker-safe read of
   the `g_mx`-guarded `g_mfoOff` mirror** that `PublishActiveMirror` republishes from
