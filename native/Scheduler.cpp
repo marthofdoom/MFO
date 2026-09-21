@@ -422,8 +422,42 @@ namespace MFO::Scheduler {
         // too: the retreat travel IS his action, and a loot excursion armed
         // under it would fight it for the actor. Re-finds the record by id at
         // call time (INVARIANTS #2): the scan may have dispatched engine events.
-        const auto serviceOwnOoc = [&]() {
-            if (ownCombat) return;
+        //
+        // a_castFacetHeld -- THE CAST FACET IS THE COMBAT TABLE'S FOR ANY LAP A
+        // COMBAT CAST RULE'S CONDITION HELD (cross-branch SEV-3, Fable
+        // restoration review, 2026-09-21). A restoration cast on the combat
+        // table is a DIRECT stream now (RestorationCastDirect / CastSelfDirect:
+        // the follower's single g_targetCast / g_selfCast channel, paced at
+        // ~1 s), and its paced lap returns a TRANSPARENT NoOp so the rules
+        // below it can run -- which the post-scan exit read as "no action" and
+        // handed the lap to logistics. Logistics' own OOC cast dispatch has no
+        // stream guard: a different (spell, target) at the same hurt ally --
+        // OOC Healing Hands against combat Fast Healing -- hit `stream RELEASE
+        // (switch)`, re-minted with lastApply at the epoch and applied at
+        // once; the next lap the combat rule switched it back. One cast per
+        // lap alternating two heals, magicka drained, TargetCastEndActor
+        // churn, and that lap's OOC DeclareAtExit read the left hand as free
+        // (its leftReserved is claim liveness only) under the direct road's
+        // live LEFT cast lock. The lap OWNER answers it, not Logistics: the
+        // scan's `castSeen` is ALREADY the signal this file defines the cast
+        // lock's lifetime by (`!castSeen` -> ReleaseOffenseCast + ClearWatch
+        // + ClearCastLock below), so "a cast rule's condition held" IS "the
+        // combat table holds the cast facet this lap" -- the same one-action
+        // rule as a Fired lap, applied to a channel that is being SUSTAINED
+        // rather than opened. Deliberately the condition, not a live-stream
+        // read: a Declined lap (unaffordable, out of range) still belongs to
+        // the rule that is asking, exactly as in the follower's own combat
+        // where logistics never runs at all; and on every lap that DOES reach
+        // logistics `castSeen` is false, so the lock was cleared above and the
+        // OOC declaration's claim-only leftReserved is exact again -- both
+        // halves close on one signal. Lower-priority logistics (loot, economy,
+        // the OOC declaration) wait one lap per cast lap -- the same wait the
+        // follower's own combat imposes for the whole fight -- while the
+        // combat road's own declaration sites (EquipWeapon's gambit equip and
+        // top-up, ReconcileForcedWeapon's bound-weapon / B41 re-send) keep
+        // running on those laps as they do in his own combat.
+        const auto serviceOwnOoc = [&](bool a_castFacetHeld) {
+            if (ownCombat || a_castFacetHeld) return;
             if (const auto rec = g_followers.find(id); rec != g_followers.end())
                 Logistics::ServiceFollower(f, rec->second);
         };
@@ -600,7 +634,7 @@ namespace MFO::Scheduler {
                     CombatStyle::Want(id, forced);
                 }
             }
-            serviceOwnOoc();   // no combat action possible -> the OOC road still runs
+            serviceOwnOoc(/*castFacetHeld=*/false);   // no combat rules -> no cast rule can hold the facet -> the OOC road runs
             return;      // no rules -> nothing else to run
         }
 
@@ -614,7 +648,7 @@ namespace MFO::Scheduler {
             const auto hold = std::chrono::milliseconds(
                 200 + static_cast<int>(150.0f * Temperament(id)));
             if (now < beat->second + hold) {
-                serviceOwnOoc();   // the beat holds the combat table only, not logistics
+                serviceOwnOoc(/*castFacetHeld=*/false);   // the beat holds the combat table only (no scan ran -> no cast rule held), not logistics
                 g_lastTickMs = std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - t0).count();
                 return;
@@ -1046,7 +1080,10 @@ namespace MFO::Scheduler {
                     spdlog::info("[eval] {} ({:08X}) {}", name, id, recent.lastChain);
                 }
             }
-            serviceOwnOoc();   // the combat table took no action -> this tick's one action slot goes to logistics
+            // The combat table took no action -> this tick's one action slot goes
+            // to logistics, UNLESS a cast rule's condition held (castSeen): then
+            // the cast facet is the combat table's for this lap (see the lambda).
+            serviceOwnOoc(/*castFacetHeld=*/castSeen);
             g_lastTickMs = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t0).count();
             return;

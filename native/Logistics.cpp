@@ -547,16 +547,20 @@ namespace MFO::Logistics {
         using WT = RE::WEAPON_TYPE;
 
         // POST-BATTLE GATE (the field fix): only shed AFTER a fight, never during
-        // one. The Scheduler runs this path solely out of combat, but IsInCombat()
-        // FLAPS false mid-fight (a moment of LoS loss / a disengage) and the
-        // follower gets serviced through the lull -- which used to drop a looted
-        // off-role weapon MID-FIGHT (field: a 2h follower handed the player a
-        // looted 1h mace during a combat lull). So require a STABLE out-of-combat
-        // window: NoteInCombat stamps g_lastCombatSeen from the Scheduler's
-        // in-combat branch (the only place combat=true is observable here), and we
-        // bail until kShedPostBattleDwell has passed since that stamp. A one-frame
-        // flap re-stamps the instant combat resumes, so the dwell can never mature
-        // inside a lull -- only once the battle has genuinely ended. Worker-only
+        // one. The Scheduler runs this path out of PARTY combat, and ALSO for a
+        // follower whose own IsInCombat() reads false inside a party fight (the
+        // own-OOC road, fix/mfo-party-combat-gate 2026-09-21: the combat table
+        // ran first and took no action). IsInCombat() FLAPS false mid-fight (a
+        // moment of LoS loss / a disengage) and the follower gets serviced
+        // through the lull -- which used to drop a looted off-role weapon
+        // MID-FIGHT (field: a 2h follower handed the player a looted 1h mace
+        // during a combat lull). So require a STABLE out-of-combat window:
+        // NoteInCombat stamps g_lastCombatSeen from the Scheduler's PARTY-combat
+        // branch on every party-combat service, own flag or not, and we bail
+        // until kShedPostBattleDwell has passed since that stamp. A one-frame
+        // flap re-stamps the instant combat resumes, so the dwell can never
+        // mature inside a lull or inside a party fight -- only once the battle
+        // has genuinely ended. Worker-only
         // read, no lock (same BSJobs tick as the stamp, #4). No entry at all ->
         // never fought this session -> shed freely (e.g. a freshly recruited
         // follower carrying off-role gear).
@@ -845,9 +849,12 @@ namespace MFO::Logistics {
         // Hold the leg deadline is stale and would wrongly fire this. The cap
         // catches an excursion whose traveller is no longer being serviced.
         // (THIS follower's OWN combat yield is NOT here -- ServiceFollower is
-        // skipped for in-combat followers, so this backstop never runs for
-        // the traveller himself once he's personally fighting; that yield
-        // lives in the Scheduler's combat branch, ReleaseTravelOnCombat. The
+        // skipped for a follower whose OWN IsInCombat() is true (the Scheduler's
+        // own-OOC road services him inside a party fight only while his own
+        // flag is false), so this backstop never runs for the traveller
+        // himself once he's personally fighting; that yield lives in the
+        // Scheduler's combat branch, ReleaseTravelOnCombat, keyed on his own
+        // flag. The
         // PLAYER's combat is a DIFFERENT signal, checked below -- see
         // playerInCombat.)
         const bool off = !Config::g_logistics.load() || !Config::g_lootTravel.load();
@@ -911,9 +918,13 @@ namespace MFO::Logistics {
         // inventory THIS tick is declared THIS tick, and only when the set
         // changed. Rides the logistics cadence (~1 s) on purpose: one inventory
         // walk per tick is the affordable rate (kLogisticsInterval's doc), and
-        // a declaration is a change event, not a heartbeat. In combat the
-        // Scheduler never reaches this branch -- Actuation::EquipWeapon refreshes
-        // from the gambit equip itself. a_leftReserved: an OOC heal/offense
+        // a declaration is a change event, not a heartbeat. In the follower's
+        // OWN combat the Scheduler never reaches this branch --
+        // Actuation::EquipWeapon refreshes from the gambit equip itself; inside
+        // a PARTY fight an own-OOC follower reaches it on the laps where the
+        // combat table took no action and no cast rule's condition held
+        // (Scheduler's serviceOwnOoc), so the cast lock is clear here and the
+        // claim-only leftReserved below is exact. a_leftReserved: an OOC heal/offense
         // claim on the left (ComposedCast, the OOC cast rule) must not have a
         // left item declared under it -- the bridge's own live-claim reads,
         // since Actuation's CastHandHeld is not visible here. THE HOLDS come
