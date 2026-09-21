@@ -1736,12 +1736,23 @@ namespace MFO::Logistics {
                         // claim FIRING is a separate, independently-logged signal:
                         // Diagnostics.cpp's SpellSink -> ComposedCast's watch, and
                         // the "[cfc] ... NO observed cast" warning when it does not.
-                        const bool isHeal =
-                            CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal;
+                        //
+                        // LABEL FROM THE ROAD, NOT FROM CLAIM LIVENESS (fix/mfo-combat-
+                        // restoration-direct, 2026-09-21). `IsHealCastActive` answers
+                        // "does ANY live heal claim stand on this follower" -- deck
+                        // 2026-09-21 08:09:39/40: rule 0's Fast Healing claim was live
+                        // while THIS Healing Hands went direct, and the line said
+                        // "(APMF claimed)" of a cast the direct force had just
+                        // delivered. The direct road's footprint is its own stream
+                        // registry entry (Actuation::TargetStreamLive); an APMF claim
+                        // never creates one. (Restoration now always takes the direct
+                        // road -- IsRestorationSpell -- so "APMF claimed" is what a
+                        // non-restoration heal-kind spell would print, which does not
+                        // exist today; the read stays honest either way.)
                         spdlog::info("[logistics] {:08X} OOC concentration {:08X} -> {:08X} ({})",
                                      id, sp->GetFormID(), tgt->GetFormID(),
-                                     (isHeal && APMFBridge::IsHealCastActive(id))
-                                         ? "APMF claimed" : "direct force, bounded");
+                                     Actuation::TargetStreamLive(id, sp->GetFormID(), tgt->GetFormID())
+                                         ? "direct force, bounded" : "APMF claimed");
                         // acted = true (NOT just `break`): this `break` only exits the
                         // INNER start-scan; the OUTER "for (pass < 2 && !acted)" loot-
                         // ordering wrapper above (marth's dibs-tier pass 0/1 split) does

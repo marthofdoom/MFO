@@ -143,6 +143,40 @@ namespace MFO::Actuation {
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                               RE::Actor* a_target, std::uint32_t a_stopPct = 0);
 
+    // CAST-ROAD SELECTION: IS THIS A RESTORATION CAST? (fix/mfo-combat-restoration-
+    // direct, 2026-09-21 -- Deck 2026-09-21, Jesper 750012C6.) A RESTORATION cast is
+    // any spell that does NOT harm a foe (CasterConsent::ClassifySpell != Offense)
+    // AND either restores Health (a beneficial Health effect -- the same read
+    // ClassifySpell's Heal kind and CastAuto's SpellHealsHealth make) OR belongs to
+    // the Restoration school (any effect whose associatedSkill is kRestoration:
+    // wards, Turn-Undead-free utility). A Restoration-school spell that harms a foe
+    // (Sun Fire, Turn Undead) is an OFFENSE cast and is NOT restoration here --
+    // offensive spells keep the AI-fired road.
+    //
+    // WHY A ROAD IS CHOSEN BY THIS: on the COMBAT table a restoration cast takes
+    // the DIRECT road (CastSelfDirect / CastTargetDirect: CastSpellImmediate,
+    // MainThread::Post'd, the bounded delivery the OOC logistics heal has always
+    // used -- 22/22 delivered that session) and NEVER the ch.8b AI-fired heal claim
+    // (ComposedCast::Try). The AI-fired road holds one hand with a claim naming
+    // the gambit's spell while the engine's kMultipleCast re-deliberation keeps
+    // selecting a DIFFERENT heal (Healing Hands against a Fast Healing claim ->
+    // `t2c CheckCast DENIED`, 3x InterruptCast, `[cfc] claim live 7607 ms`), and
+    // the idle-hand floor closes the OTHER hand while that claim stands -- so the
+    // dagger cannot be armed either and the follower stands frozen through the
+    // fight. Read by CastOn (Actuation.cpp), CastSelfDirect and CastTargetDirect.
+    // Effect-list read only, no vfunc, worker-safe.
+    bool IsRestorationSpell(RE::SpellItem* a_spell);
+
+    // Does the ON-TARGET direct-force registry (CastTargetDirect's own stream
+    // table) hold a LIVE stream for exactly this (follower, spell, target)? This is
+    // the honest "which road delivered it" read for a CastTargetDirect Applied:
+    // the direct road always creates/refreshes this entry, an APMF claim never
+    // touches it. Logistics.cpp's OOC cast label reads it instead of inferring
+    // the road from heal-claim liveness (which mislabelled a direct Healing Hands
+    // as "APMF claimed" because ANOTHER rule's claim was live on the follower).
+    // Worker-serial, same registry discipline as CastTargetDirect.
+    bool TargetStreamLive(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target);
+
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any
     // lingering ward/buff effect so it cannot persist as a stuck gameplay effect.

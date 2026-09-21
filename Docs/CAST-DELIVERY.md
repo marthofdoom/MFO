@@ -313,6 +313,33 @@ reintroduce AddTarget.
 
 ## COMPOSED FORCED CAST (CFC) — bHealAnimPackage repurposed, DEFAULT OFF
 
+**UNREACHABLE FOR HEALS SINCE `fix/mfo-combat-restoration-direct` (2026-09-21) — read this
+paragraph before the section, which is history from here down.** On the COMBAT table a
+RESTORATION cast (`Actuation::IsRestorationSpell`: not Offense, and either a beneficial Health
+effect or any effect of the Restoration school) now takes the DIRECT road — `CastSelfDirect` /
+`CastTargetDirect`, `CastSpellImmediate` `MainThread::Post`'d, magicka deducted, bounded by the
+reconciles — the same delivery the OOC logistics heal has always used; an OFFENSIVE cast keeps
+the ch.8b AI-fired claim. `CastSelfDirect` and `CastTargetDirect` skip `ComposedCast::Try` for a
+restoration spell (and their concentration-offense `ClaimOffenseCast` for a Restoration-school
+ward), and `CastOn` forks a fire-and-forget restoration cast at an ally/player to
+`RestorationCastDirect` before the equip/grace/force machinery. Deck 2026-09-21 (Jesper
+750012C6): the CFC claim held the LEFT hand naming Fast Healing, the engine kept re-deliberating
+onto Healing Hands and was DENIED against the claim (`t2c CheckCast DENIED`, 3x `InterruptCast`,
+`[cfc] claim live 7607 ms`), the idle-hand floor closed the RIGHT hand under it, and the follower
+stood frozen; the direct road delivered 22/22 the same session. Because `Try` is heal-only and
+every Heal-kind spell is restoration, `ClaimHealCast`, the F1 incumbent hold and
+`bHealAnimPackage` are dormant (kept compiled; removal is its own brief). Two companions shipped
+with it: the idle-hand floor is RELEASED while its driving claim has stood `kIdleFloorUnobservedMs`
+(4000 ms, aliased to `kHealHoldNeverObservedMs` — sized from the 0906 heal's 2.95 s claim → observed
+in `Docs/DIAG-2026-09-06-deny-heal-failures.md`, which the 0908 heal exceeded at 4.5-6.1 s,
+`Docs/DIAG-2026-09-08-field.md:267`; backlog `MFO-B7`/`MFO-B8` rule measure, do not resize from n=2, and
+the offense-claim-with-equip-cycle latency this gate actually consumes is UNMEASURED until the next Deck
+log) with no observed cast (`[apmf] <id> IDLE-HAND FLOOR
+released -- driving claim has no observed cast`), and `APMFBridge::Tick`'s expiry sweep clears the
+swept claim's `[cfc]` watch (`ComposedCast::ClearWatchHand`) so a later same-spell claim no longer
+warns with a dead `since`. The OOC concentration log label now reads the direct road's own registry
+(`Actuation::TargetStreamLive`) instead of heal-claim liveness.
+
 This replaces the old OPT-IN ANIMATED HEAL section (2026-09-04 rework,
 `Docs/SPEC-FORCED-CAST.md`). The M9 forced-casting PACKAGE route is gone.
 `Packages::HealAnimFill`, `g_healAnimMap`, and the two UseMagic PACKs

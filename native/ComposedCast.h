@@ -255,6 +255,16 @@ namespace MFO::ComposedCast {
     void WatchClaim(RE::FormID a_follower, RE::FormID a_spell,
                     std::int32_t a_hand = APMFBridge::kApmfHandLeft, RE::FormID a_proxy = 0);
     void ClearWatch(RE::FormID a_follower);
+    // ClearWatchHand: drop ONE hand's watch record (the other hand's survives) --
+    // the per-hand twin of End()'s left-slot clear, WITHOUT End()'s
+    // ReleaseHealCast/CastBounds side effects. Made for APMFBridge::Tick()'s
+    // expiry sweep (fix/mfo-combat-restoration-direct, 2026-09-21): that sweep
+    // drops a claim whose watch nobody cleared, so the NEXT claim of the same
+    // spell re-armed through WatchArmed's no-reset branch and inherited the dead
+    // claim's `since` -- deck 2026-09-21, a `[cfc] claim live 32383 ms` at 08:10:00
+    // for a claim swept at 08:09:41. Pure map op, safe under the bridge's g_mx
+    // (this module never takes it). Worker-serial like every call here.
+    void ClearWatchHand(RE::FormID a_follower, std::int32_t a_hand);
 
     // Has the watch on THIS hand seen `a_spell` (or its recorded delivery-flip
     // proxy) actually FIRE within the last `a_withinMs`? (0 = "ever", the raw

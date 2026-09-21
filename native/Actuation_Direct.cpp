@@ -827,6 +827,25 @@ namespace MFO::Actuation {
         return false;
     }
 
+    // See Actuation.h. Restoration = not Offense AND (restores Health OR any
+    // effect of the Restoration school). The school read is the EffectSetting's
+    // own data field (pinned CommonLibSSE-NG 3.7.0 include/RE/E/EffectSetting.h:72
+    // `associatedSkill`, a plain member at +0x10 of Data -- NOT the
+    // SpellItem::GetAssociatedSkill vfunc, which this worker-side predicate must
+    // not dispatch through the game's vtable). Offense is decided FIRST by the
+    // same ClassifySpell every other road uses, so a hostile Restoration-school
+    // spell (Sun Fire, Turn Undead) stays on the AI-fired offense road.
+    bool IsRestorationSpell(RE::SpellItem* a_spell) {
+        if (!a_spell) return false;
+        if (CasterConsent::ClassifySpell(a_spell) == CasterConsent::SpellKind::Offense) return false;
+        if (SpellHealsHealth(a_spell)) return true;
+        for (auto* eff : a_spell->effects) {
+            auto* base = eff ? eff->baseEffect : nullptr;
+            if (base && base->data.associatedSkill == RE::ActorValue::kRestoration) return true;
+        }
+        return false;
+    }
+
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell, std::uint32_t a_stopPct) {
         // RUNTIME GATE: Runtime::CastPathsVerified() = the AE bucket (pre-existing)
         // or EXACTLY 1.5.97 (feat/mfo-1.5.97-pass, 2026-09-15; was IsAE()-only as
@@ -900,20 +919,32 @@ namespace MFO::Actuation {
         // erase the very condition the incumbent is being given time to satisfy.
         // ORTHOGONAL to ApmfRefused: Held is MFO-internal slot ownership between
         // two heals (APMF was never asked), ApmfRefused is APMF's own answer.
+        //
+        // RESTORATION TAKES THE DIRECT ROAD, NOT THIS CLAIM (fix/mfo-combat-
+        // restoration-direct, 2026-09-21 -- see IsRestorationSpell in Actuation.h
+        // for the field shape). A self-heal is a restoration cast by definition,
+        // so the ask below is skipped for it and the kInstant direct force further
+        // down delivers -- the same bounded delivery the OOC logistics heal has
+        // always used. Try() is HEAL-ONLY and every Heal-kind spell IS
+        // restoration, so this ask is now reachable only if the two classifiers
+        // ever diverge; it is kept (not deleted) so the F1 hold / ApmfRefused
+        // contract stays compiled and its removal is its own brief.
         const auto selfKind = CasterConsent::ClassifySpell(a_spell);
-        switch (ComposedCast::Try(a_follower, a_spell, a_follower, selfKind, a_stopPct)) {
-        case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
-        case ComposedCast::TryResult::Held:    return SelfCast::Held;
-        case ComposedCast::TryResult::ApmfRefused:
-            // Heals are LEFT always (ClaimHealCast's own hard rule); target 0 = self.
-            LogApmfRefusal(id, "heal-cast (self)", spellID, /*target=*/0, "left");
-            return SelfCast::Declined;
-        // NO `default:` (F3-6, deploy-gate review 2026-09-07): all four enumerators
-        // are listed, so adding a fifth TryResult must BREAK THE BUILD here rather
-        // than silently take the kInstant path below -- exactly the masked fallback
-        // fix/mfo-no-decline-fallback removed.
-        case ComposedCast::TryResult::NotApplicable:
-            break;
+        if (!IsRestorationSpell(a_spell)) {
+            switch (ComposedCast::Try(a_follower, a_spell, a_follower, selfKind, a_stopPct)) {
+            case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
+            case ComposedCast::TryResult::Held:    return SelfCast::Held;
+            case ComposedCast::TryResult::ApmfRefused:
+                // Heals are LEFT always (ClaimHealCast's own hard rule); target 0 = self.
+                LogApmfRefusal(id, "heal-cast (self)", spellID, /*target=*/0, "left");
+                return SelfCast::Declined;
+            // NO `default:` (F3-6, deploy-gate review 2026-09-07): all four enumerators
+            // are listed, so adding a fifth TryResult must BREAK THE BUILD here rather
+            // than silently take the kInstant path below -- exactly the masked fallback
+            // fix/mfo-no-decline-fallback removed.
+            case ComposedCast::TryResult::NotApplicable:
+                break;
+            }
         }
 
         // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)
@@ -935,7 +966,12 @@ namespace MFO::Actuation {
         // REFUSED -> FAIL CLOSED (Declined, logged loudly, no direct-force stream);
         // otherwise the facet was never there (ABI < 5 / toggle raced off) and the
         // direct-force stream below runs, byte-identical to today.
-        if (selfKind != CasterConsent::SpellKind::Heal &&
+        // `!IsRestorationSpell` (fix/mfo-combat-restoration-direct, 2026-09-21):
+        // a Restoration-school concentration self-cast (a ward) is a restoration
+        // cast and takes the direct-force stream below, like every other
+        // restoration cast in combat; only a non-restoration Offense/Buff stream
+        // still claims the AI-fired road here.
+        if (selfKind != CasterConsent::SpellKind::Heal && !IsRestorationSpell(a_spell) &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
             !Config::g_legacyCastHybrid.load()) {
@@ -1253,7 +1289,17 @@ namespace MFO::Actuation {
         //
         // IN COMBAT NOTHING CHANGES -- the claim path runs exactly as it did, and
         // that is the path that produced this session's confirmed animated heals.
-        if (a_follower->GetActorRuntimeData().combatController) {
+        //
+        // RESTORATION TAKES THE DIRECT ROAD ON THE COMBAT TABLE TOO (fix/mfo-
+        // combat-restoration-direct, 2026-09-21 -- IsRestorationSpell, Actuation.h).
+        // The controller test above chose the direct road OUT of combat only; in
+        // combat the claim road produced the frozen follower (a left-hand claim the
+        // engine never fired + the idle-hand floor on the right). So the ask is
+        // made only for a spell that is NOT restoration -- and since Try() is
+        // HEAL-ONLY and every Heal-kind spell is restoration, the claim road below
+        // is unreachable unless the two classifiers diverge (kept compiled, same
+        // reasoning as the self twin above).
+        if (a_follower->GetActorRuntimeData().combatController && !IsRestorationSpell(a_spell)) {
             switch (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct)) {
             case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
             case ComposedCast::TryResult::Held:    return SelfCast::Held;
@@ -1284,7 +1330,11 @@ namespace MFO::Actuation {
         // present + CAPABLE means it REFUSED -> FAIL CLOSED (Declined, logged);
         // otherwise the facet was never there and the gate + direct-force stream
         // below runs, byte-identical to today.
-        if (kind != CasterConsent::SpellKind::Heal &&
+        // `!IsRestorationSpell` (fix/mfo-combat-restoration-direct, 2026-09-21):
+        // a Restoration-school concentration cast at an ally is a restoration
+        // cast and takes the direct-force stream below; only a non-restoration
+        // Offense/Buff stream still claims the AI-fired road here.
+        if (kind != CasterConsent::SpellKind::Heal && !IsRestorationSpell(a_spell) &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
             !Config::g_legacyCastHybrid.load()) {
@@ -1428,6 +1478,12 @@ namespace MFO::Actuation {
             }
         }
         for (const auto id : done) g_targetCast.erase(id);
+    }
+
+    // See Actuation.h. The registry entry IS the direct road's footprint.
+    bool TargetStreamLive(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target) {
+        const auto it = g_targetCast.find(a_follower);
+        return it != g_targetCast.end() && it->second.spell == a_spell && it->second.target == a_target;
     }
 
     // AUTO TARGET INFERENCE for act.cast_target (marth). The board's default
