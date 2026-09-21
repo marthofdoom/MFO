@@ -14,6 +14,7 @@
 #include "Logistics.h"
 #include "State.h"
 #include "Confidence.h"   // retreat probe: the fill gate reads Of()
+#include "CombatSense.h"  // party combat: the [sense] foe tally (FoeCount), reused, not re-scanned
 #include "Forms.h"        // retreat probe: g_retreatPackage for the onPkg readout
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
 #include "Temperament.h"  // flair #1: per-follower timing seed
@@ -123,6 +124,35 @@ namespace MFO::Scheduler {
         // Worker-only, no lock (#4), same as every map above.
         std::unordered_set<RE::FormID> g_mfoDisabledSwept;
 
+        // PARTY COMBAT -- the substrate the two combat gates key on (Deck
+        // 2026-09-21, Fable): a follower's OWN IsInCombat() is not the truth of
+        // whether the party is fighting. In a dragon fight Jesper's flag read
+        // false most of the time while Cicero and Adelinda fought, so he sat on
+        // the OOC table (only the heal rule could act -- "frozen except heals"),
+        // and the same flap ran Cicero through the OOC debounce THREE times
+        // mid-fight, force-unequipping his held weapon each time. So:
+        //   PARTY COMBAT = the player is in combat
+        //              OR any managed active follower is in combat
+        //              OR any managed follower's combat-group foe tally
+        //                 (CombatSense::FoeCount, the [sense] foes= read) > 0.
+        // Computed ONCE per pump tick at the top of Tick() on the worker, from
+        // the same g_active walk the round-robin already makes (#4: worker-only,
+        // no lock, no off-road g_followers read), then read by the per-follower
+        // tick. Gate 1: the combat table runs while party combat is TRUE, own
+        // flag or not (rules that need the follower's own combat state -- the
+        // engine's combat group / target -- fall through transparently when he
+        // has none: the Evaluator's foe selectors read his own group, so with no
+        // controller they simply match nothing). Gate 2: the OOC debounce that
+        // releases the forced hold counts party-OOC services, so an own-flag
+        // flap inside a party fight never tears the hold down. Not save-scoped
+        // (recomputed every tick) but reset on revert so a stale ON cannot log
+        // a phantom OFF transition in the next world.
+        bool g_partyCombat = false;
+        // Once-per-fight latch for the "party combat, own combat=0 -- combat
+        // table live" line: inserted on the first own-OOC party-combat service,
+        // erased with the other per-fight state in the party-OOC branch.
+        std::unordered_set<RE::FormID> g_partyCombatNoted;
+
         // The dials. Fill: confidence below 0.25 (a follower who by the
         // leash tenet WANTS to be at the player's side) while >400u away from
         // the player -- far enough that arrival is an unambiguous pull, not
@@ -140,6 +170,8 @@ namespace MFO::Scheduler {
         g_mfoDisabledSwept.clear();   // T#78: revert/load re-arms the OFF-edge release
         g_outOfCombatTicks.clear();
         g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
+        g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
+        g_partyCombatNoted.clear();
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
@@ -185,6 +217,36 @@ namespace MFO::Scheduler {
 
         const auto t0 = std::chrono::steady_clock::now();
         ++g_ticks;
+
+        // PARTY COMBAT, once per tick, before the round-robin picks anyone: the
+        // player's flag, every managed active follower's flag, and the [sense]
+        // foe tally (CombatSense::FoeCount -- the follower's own combat group,
+        // the same read the [sense] line prints; there is no radius in that
+        // scan and none is added here). O(party) vfunc reads plus one combat-
+        // group read-lock per follower; taken with NO other lock held, so it
+        // cannot nest the group lock the Evaluator's scan warns about. Dead /
+        // disabled followers are skipped exactly as the service below skips
+        // them. Transition-only log (#79): one line per ON/OFF edge.
+        {
+            bool player = false;
+            if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && pc->IsInCombat())
+                player = true;
+            int followersFighting = 0;
+            int foes = 0;
+            for (const auto& h : active) {
+                auto  ptr = h.get();          // HOLD the NiPointer across the group read
+                auto* a   = ptr.get();
+                if (!a || a->IsDead() || a->IsDisabled()) continue;
+                if (a->IsInCombat()) ++followersFighting;
+                foes = std::max(foes, CombatSense::FoeCount(a));
+            }
+            const bool party = player || followersFighting > 0 || foes > 0;
+            if (party != g_partyCombat) {
+                g_partyCombat = party;
+                spdlog::info("[sched] party combat {} (player={} followers={} foes={})",
+                             party ? "ON" : "OFF", player ? 1 : 0, followersFighting, foes);
+            }
+        }
 
         // ROUND-ROBIN, ONE PER TICK. Cost is O(1) in party size; a large party
         // pays in response time, not framerate (§4.1a). Resume AFTER whoever
@@ -260,12 +322,24 @@ namespace MFO::Scheduler {
         }
         g_mfoDisabledSwept.erase(id);
 
-        // THE TWO TABLES NEVER INTERLEAVE (§4.8). Combat runs in combat;
-        // logistics -- upkeep -- runs out of it. Without the split a seeded heal
-        // rule fires while shopping in Whiterun. Logistics is cadence-gated to
-        // the ~1 s idle rate INSIDE ServiceFollower, so calling it every service
-        // is cheap; it acts at most once per idle tick and is off by default.
-        if (!f->IsInCombat()) {
+        // THE TWO TABLES NEVER INTERLEAVE (§4.8) -- keyed on PARTY combat.
+        // Combat runs while the party fights; logistics -- upkeep -- runs out of
+        // it. Without the split a seeded heal rule fires while shopping in
+        // Whiterun. Logistics is cadence-gated to the ~1 s idle rate INSIDE
+        // ServiceFollower, so calling it every service is cheap; it acts at most
+        // once per idle tick and is off by default.
+        //
+        // GATE 1 / GATE 2 key on g_partyCombat, NOT on this follower's own
+        // IsInCombat() (Deck 2026-09-21 -- see the g_partyCombat doc above): his
+        // own flag flaps false mid-fight on a LoS loss, and keying either gate on
+        // it re-creates the Jesper freeze (stuck on the OOC table while the party
+        // fought) and the Cicero hold teardown (the 2-tick debounce below
+        // force-unequipping mid-fight). ownCombat still steers the steps that
+        // genuinely belong to HIS fight (loot-travel eviction, the once-per-fight
+        // "own combat=0" note) and the own-OOC logistics service at the
+        // no-action exits of the combat table.
+        const bool ownCombat = f->IsInCombat();
+        if (!g_partyCombat) {
             // RETREAT PROBE teardown on combat end: release the claim (evict to
             // player -- never a VM Clear, never a priority flip) and re-arm the
             // once-per-combat latch for the next fight.
@@ -296,13 +370,17 @@ namespace MFO::Scheduler {
             // this drops the stale bookkeeping so the next fight re-baselines.
             // Idempotent out of combat (uncontended erase-miss when unowned).
             CombatStyle::Clear(id);
+            g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
             // T#76: the equip force-hold dies with the fight too -- combat end is
             // one of its release points. The prevent-removal LOCK is on the
             // ActorEquipManager (it did NOT die with the controller), so this
-            // force-unequips to clear it. DEBOUNCED over 2 consecutive out-of-
-            // combat services (SEV-2): IsInCombat flaps mid-fight, and releasing
-            // on a single-tick flap would force-unequip then re-force next tick.
-            // Idempotent (no record -> no-op).
+            // force-unequips to clear it. DEBOUNCED over 2 consecutive PARTY-out-
+            // of-combat services (SEV-2, re-keyed 2026-09-21): the follower's own
+            // IsInCombat flaps mid-fight, and counting HIS flag here released
+            // Cicero's hold three times in one dragon fight (08:09:45, 08:10:07,
+            // 08:10:31 -- weapons vanishing and returning). Party combat does not
+            // flap with one actor's LoS, so the same 2-tick count against it is
+            // the real "fight over" debounce. Idempotent (no record -> no-op).
             if (++g_outOfCombatTicks[id] >= 2) {
                 Actuation::ReleaseForcedWeapon(f);
                 // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable
@@ -318,14 +396,39 @@ namespace MFO::Scheduler {
             return;
         }
 
-        g_outOfCombatTicks.erase(id);   // T#76: back in combat -> re-arm the debounce
+        g_outOfCombatTicks.erase(id);   // T#76: party back in combat -> re-arm the debounce
         // POST-BATTLE SHED GATE: stamp "seen fighting" so Logistics only drops
-        // off-role weapons once this follower has been stably out of combat for a
-        // dwell -- never during a mid-fight IsInCombat() lull. This in-combat
-        // branch is the ONLY place combat=true is visible (ServiceFollower, which
-        // owns the shed, is skipped for in-combat followers). Same worker tick as
-        // the shed's read, so the map needs no lock (#4).
+        // off-role weapons once the PARTY has been stably out of combat for a
+        // dwell -- never during a mid-fight IsInCombat() lull. Stamped on every
+        // party-combat service, own flag or not: the shed's "only ever sees an
+        // UNHELD pack" guarantee (MAP, SHED INTERACTION) rests on the hold being
+        // released (the party-OOC branch above) BEFORE the dwell can mature, and
+        // now that the hold survives an own-flag flap inside a party fight, the
+        // dwell must not mature inside one either. Same worker tick as the
+        // shed's read, so the map needs no lock (#4).
         Logistics::NoteInCombat(id);
+
+        // OWN-OOC INSIDE A PARTY FIGHT: the combat table runs (gate 1), but this
+        // follower has no combat controller of his own, so every foe-keyed rule
+        // falls through transparently and the OOC service road must still run
+        // for him -- he is merely NEAR a fight, and logistics (loot, economy,
+        // the equip declaration) must not starve. serviceOwnOoc() is called at
+        // each NO-ACTION exit of the combat table below (empty rules, ready
+        // beat, scan ended without a Fired / opaque hold) and NEVER on a tick
+        // that acted: the combat table and the logistics table each fire at
+        // most one real action per tick (§4.3), and running the second only
+        // when the first produced nothing keeps that to ONE action per tick per
+        // follower -- no rule can double-fire. The retreat-holder exit skips it
+        // too: the retreat travel IS his action, and a loot excursion armed
+        // under it would fight it for the actor. Re-finds the record by id at
+        // call time (INVARIANTS #2): the scan may have dispatched engine events.
+        const auto serviceOwnOoc = [&]() {
+            if (ownCombat) return;
+            if (const auto rec = g_followers.find(id); rec != g_followers.end())
+                Logistics::ServiceFollower(f, rec->second);
+        };
+        if (!ownCombat && g_partyCombatNoted.insert(id).second)
+            spdlog::info("[sched] {:08X}: party combat, own combat=0 -- combat table live", id);
 
         // OWNED MODEL: keep this follower's APMF combat-target claim (if any) alive for
         // the WHOLE fight. Refreshes the expiry timestamp only (no create, no re-point)
@@ -335,12 +438,18 @@ namespace MFO::Scheduler {
         // directives (ClaimCombatTarget). No-op without APMF or if no claim is held.
         APMFBridge::RefreshCombatTarget(id);
 
-        // IN COMBAT: end any loot excursion for this follower FIRST, so he fights
-        // instead of staying claimed by the loot quest at priority 60 (batches
-        // last up to 60 s and would otherwise run right through the fight, making
-        // him look passive). Must be before the combat-rules early-out below, so
-        // it yields even for a follower with no combat gambits.
-        Logistics::ReleaseTravelOnCombat(f);
+        // IN HIS OWN COMBAT: end any loot excursion for this follower FIRST, so he
+        // fights instead of staying claimed by the loot quest at priority 60
+        // (batches last up to 60 s and would otherwise run right through the
+        // fight, making him look passive). Must be before the combat-rules
+        // early-out below, so it yields even for a follower with no combat
+        // gambits. Keyed on HIS flag, not party combat: the eviction is
+        // unconditional, and an own-OOC follower's service (serviceOwnOoc) may
+        // legitimately arm a loot walk near a fight he is not in -- evicting it
+        // every party-combat tick would churn arm/evict at the logistics
+        // cadence. The PLAYER's combat already ends every excursion inside
+        // ServiceFollower (the player-combat interrupt backstop).
+        if (ownCombat) Logistics::ReleaseTravelOnCombat(f);
 
         // ── #59: CONTINUOUS CAST CONTROL -- refresh the persistent filter ────
         // The consent LATCH only stands while a cast rule wins the scan, and
@@ -458,6 +567,8 @@ namespace MFO::Scheduler {
                 // would fill the COMMAND alias (also priority 60) on the same
                 // actor and fight the retreat travel for the alias. A retreating
                 // follower is disengaging, not gambitting -- that is the point.
+                // Deliberately NO serviceOwnOoc() here either: a loot travel
+                // armed under the retreat would fight it for the same actor.
                 g_lastTickMs = std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - t0).count();
                 return;
@@ -489,6 +600,7 @@ namespace MFO::Scheduler {
                     CombatStyle::Want(id, forced);
                 }
             }
+            serviceOwnOoc();   // no combat action possible -> the OOC road still runs
             return;      // no rules -> nothing else to run
         }
 
@@ -502,6 +614,7 @@ namespace MFO::Scheduler {
             const auto hold = std::chrono::milliseconds(
                 200 + static_cast<int>(150.0f * Temperament(id)));
             if (now < beat->second + hold) {
+                serviceOwnOoc();   // the beat holds the combat table only, not logistics
                 g_lastTickMs = std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - t0).count();
                 return;
@@ -933,6 +1046,7 @@ namespace MFO::Scheduler {
                     spdlog::info("[eval] {} ({:08X}) {}", name, id, recent.lastChain);
                 }
             }
+            serviceOwnOoc();   // the combat table took no action -> this tick's one action slot goes to logistics
             g_lastTickMs = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t0).count();
             return;
