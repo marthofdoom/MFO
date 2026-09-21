@@ -1,5 +1,10 @@
 #include "APMFBridge.h"
 #include "APMF_API.h"
+#include "ComposedCast.h"   // ObservedFiring (the idle-hand floor's unobserved gate) + ClearWatchHand
+                            // (the expiry sweep drops the swept claim's [cfc] watch) -- both called
+                            // from Tick() ONLY, which runs inside the AddTask job-worker body
+                            // (Diagnostics.cpp) = ComposedCast's own serialized context; ComposedCast
+                            // never takes g_mx, so calling it under g_mx cannot deadlock.
 #include "Config.h"
 #include "Followers.h"   // g_active.size() -- round-robin-aware expiry sizing (FacetExpiry)
 #include "Loadout.h"     // WeaponHandActive's live-grip read
@@ -1003,6 +1008,50 @@ namespace MFO::APMFBridge {
             if (leftDriven && !rightDriven)      wantHand = kApmfHandRight;
             else if (rightDriven && !leftDriven) wantHand = kApmfHandLeft;
 
+            // THE UNOBSERVED GATE (fix/mfo-combat-restoration-direct, 2026-09-21).
+            // A driving claim earns the floor only while it can be believed to be
+            // DRIVING: younger than kIdleFloorUnobservedMs, or observed firing
+            // (spell or its delivery-flip proxy, ComposedCast's per-hand watch)
+            // within its own lifetime. A claim past that age that the engine has
+            // never fired is a hand held shut for nothing -- and the floor it
+            // earned held the OTHER hand shut too (deck 2026-09-21, Jesper: left on
+            // a Fast Healing claim the engine kept re-deliberating away from, right
+            // floored, no dagger, frozen). The claim itself is NOT touched here:
+            // its own bounds (TTL, FacetExpiry sweep, the hold caps) end it. The
+            // watch is armed by every claim site (CastOn's owned branch, the two
+            // concentration-offense claims, Try) with the ORIGINAL spell, which is
+            // what `c.spell` holds; a claim whose watch was never armed reads as
+            // silent past the gate and opens the other hand -- the pre-F10 state,
+            // never a freeze. `created` is the mint-only age clock (an aged-out
+            // re-request re-mints and restarts the window, documented at the field).
+            const auto now = std::chrono::steady_clock::now();
+            auto silentPastGate = [&](const CastClaim& c) {
+                if (c.handle == APMF_API::kInvalidHandle) return true;   // not driving at all
+                const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - c.created);
+                if (age < std::chrono::milliseconds(kIdleFloorUnobservedMs)) return false;
+                return !ComposedCast::ObservedFiring(follower, c.hand, c.spell,
+                                                     static_cast<std::uint32_t>(age.count()));
+            };
+            if (wantHand != 0) {
+                const bool driverSilent =
+                    wantHand == kApmfHandRight
+                        ? (silentPastGate(o.offense[0]) && silentPastGate(o.heal))   // left drives
+                        : silentPastGate(o.offense[1]);                               // right drives
+                if (driverSilent) {
+                    if (o.floor.handle != APMF_API::kInvalidHandle) {
+                        const auto hadHand = o.floor.hand;
+                        ReleaseClaimLocked(o.floor);
+                        spdlog::info("[apmf] {:08X} IDLE-HAND FLOOR released -- driving claim has no "
+                                     "observed cast ({} hand floor dropped; the {} hand's claim stood "
+                                     ">= {} ms unfired)",
+                                     follower, hadHand == kApmfHandLeft ? "left" : "right",
+                                     wantHand == kApmfHandRight ? "left" : "right",
+                                     kIdleFloorUnobservedMs);
+                    }
+                    return;   // no floor while the driver is silent; it returns once observed
+                }
+            }
+
             if (wantHand == 0) {
                 if (o.floor.handle != APMF_API::kInvalidHandle) {
                     const auto hadHand = o.floor.hand;
@@ -1939,12 +1988,27 @@ namespace MFO::APMFBridge {
             // SAME sweep pass for both -- release the shared handle exactly
             // once (capture the dual-ness BEFORE releasing slot i, since
             // releasing zeroes it).
+            // Each swept claim also drops ITS hand's [cfc] watch (fix/mfo-combat-
+            // restoration-direct, 2026-09-21): this road released the claim and
+            // left the watch armed, so the next claim of the same spell inherited a
+            // dead `since` (deck: `[cfc] claim live 32383 ms` for a claim swept 19 s
+            // earlier). Per-hand (ComposedCast::ClearWatchHand), so a live claim on
+            // the other hand keeps its own record; a mirrored DualCast clears both.
             for (std::size_t i = 0; i < 2; ++i) {
                 auto& c = o.offense[i];
                 if (c.handle != APMF_API::kInvalidHandle && now - c.refreshed >= facetExpiry) {
                     const bool sharedDual = o.offense[1 - i].handle == c.handle;
                     ReleaseClaimLocked(c);
-                    if (sharedDual) o.offense[1 - i] = CastClaim{};
+                    // Hand 0's slot is shared with a heal claim (Try arms it too);
+                    // whichever armed last owns the record, so leave it while a
+                    // heal still stands there -- mirrored below for the heal sweep.
+                    if (i == 1 || o.heal.handle == APMF_API::kInvalidHandle)
+                        ComposedCast::ClearWatchHand(it->first, i == 0 ? kApmfHandLeft : kApmfHandRight);
+                    if (sharedDual) {
+                        o.offense[1 - i] = CastClaim{};
+                        if (i == 0 || o.heal.handle == APMF_API::kInvalidHandle)
+                            ComposedCast::ClearWatchHand(it->first, i == 0 ? kApmfHandRight : kApmfHandLeft);
+                    }
                 }
             }
             if (o.targetHandle != APMF_API::kInvalidHandle && now - o.targetRefreshed >= facetExpiry)
@@ -1959,8 +2023,15 @@ namespace MFO::APMFBridge {
                 ReleaseHandleLocked(o.actionHandle, o.actionMask);
             if (o.equipHandle != APMF_API::kInvalidHandle && now - o.equipRefreshed >= facetExpiry)
                 ReleaseHandleLocked(o.equipHandle, o.equip);
-            if (o.heal.handle != APMF_API::kInvalidHandle && now - o.heal.refreshed >= facetExpiry)
+            if (o.heal.handle != APMF_API::kInvalidHandle && now - o.heal.refreshed >= facetExpiry) {
                 ReleaseClaimLocked(o.heal);
+                // Heals are LEFT always; an offense claim still live on the left
+                // shares that watch slot and must keep it (Try arms hand 0 for the
+                // heal, and the two cannot both be watched there at once -- the
+                // slot's spell is whichever armed last, so clear only if it is ours).
+                if (o.offense[0].handle == APMF_API::kInvalidHandle)
+                    ComposedCast::ClearWatchHand(it->first, kApmfHandLeft);
+            }
             // ── THE IDLE-HAND FLOOR (F10, 2026-09-08) ───────────────────────
             // Reconciled HERE, and only here, AFTER every sweep above -- so it
             // is always derived from the driving claims as they stand at the end

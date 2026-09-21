@@ -853,6 +853,30 @@ namespace MFO::APMFBridge {
     // path, so an OBSERVED heal still runs its full kHealCastTtlMs window.
     inline constexpr std::uint32_t kHealHoldNeverObservedMs = 4000;
 
+    // THE IDLE-HAND FLOOR'S UNOBSERVED GATE (fix/mfo-combat-restoration-direct,
+    // 2026-09-21). How long a DRIVING cast claim may stand with NO observed cast
+    // before the floor it earns on the other hand is RELEASED. Deck 2026-09-21
+    // (Jesper 750012C6): a left-hand claim the engine never fired kept the
+    // right-hand floor up ("nothing un-gambited may arm on this one"), so the
+    // dagger could not be armed either -- a claim that does not fire must not
+    // close the other hand. Past this age with no observed cast within the
+    // claim's lifetime (ComposedCast::ObservedFiring over `created`), the floor
+    // is dropped; the driving claim itself is untouched (its own TTL / sweep /
+    // hold caps bound it), and the floor returns the moment the claim is
+    // observed firing.
+    //
+    // SIZED FROM THE SAME DATUM AS kHealHoldNeverObservedMs, DELIBERATELY THE
+    // SAME NUMBER: both bound one physical quantity -- the engine's claim ->
+    // OBSERVED-CAST latency (Docs/DIAG-2026-09-06-deny-heal-failures.md: 2.95 s
+    // claim-to-observed on the one heal that landed, 2.3-2.5 s claim-to-fire for
+    // an offense Firebolt, fires trailing their [cfc] warns by up to 1.5 s, ~3.9 s
+    // at the tail). 4000 ms clears every measured latency; a tighter gate would
+    // open the other hand to the AI in the window where a genuine cast is still
+    // charging (the F10 shape the floor exists to close). Aliased rather than
+    // copied so a re-measurement moves both. Lap-granular: the check runs on the
+    // pump (~133 ms), so the lift lands within [gate, gate + 133 ms].
+    inline constexpr std::uint32_t kIdleFloorUnobservedMs = kHealHoldNeverObservedMs;
+
     // Returns whether a_follower now holds a LIVE heal-cast claim. As with
     // ClaimOffenseCast above, a `false` IS AMBIGUOUS on its own -- pair it with
     // `HealCastClaimSupported()` to tell "APMF refused" (FAIL CLOSED, never
