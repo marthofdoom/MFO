@@ -1076,9 +1076,11 @@ namespace MFO::Logistics {
     // Supported AND claimed: the per-follower switch the direct equip sites read.
     bool EquipAuthorityLive(RE::FormID a_follower);
     // Rebuild the declared worn set and SEND it iff it changed (never a forced
-    // re-issue, F3). a_holdRight/a_holdLeft: Actuation's ForcedHold ledger (0 =
-    // read the hand); a_leftReserved: a cast holds/claims the left, so no left
-    // item and no shield; a_judgeArmor: include the owned-armor upgrade pick
+    // re-issue, F3). a_holdRight/a_holdLeft: Actuation's ForcedHold ledger (ABI
+    // v9: 0 = no hold, the hand is NOT owned and carries no entry -- never "read
+    // the hand"; every road passes the ledger, Actuation::ForcedHoldFor OOC);
+    // a_leftReserved: a cast holds/claims the left, so nothing left (not owned,
+    // not declared); a_judgeArmor: include the owned-armor upgrade pick
     // (the OOC service road) -- the combat road passes false and declares worn
     // armor as is (F9). Worker only (#4). Claims on first use (re-validating a
     // kept handle, F2); releases when the gate is off.

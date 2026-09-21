@@ -56,13 +56,14 @@
 // ABI contract; the transport is just how you get the pointer.)
 //
 // ── Threading ──
-// Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet/SetEquipSetEx are SAFE FROM
-// ANY THREAD. They capture POD (a FormID, a copy of the APMF_Param, or — for
-// SetSpellAllowList/SetEquipSet/SetEquipSetEx — a copy of the forms/entries array) and enqueue the
+// Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet/SetEquipSetEx/SetEquipScope
+// are SAFE FROM ANY THREAD. They capture POD (a FormID, a copy of the APMF_Param, or — for
+// SetSpellAllowList/SetEquipSet/SetEquipSetEx — a copy of the forms/entries array; for
+// SetEquipScope — a copy of the APMF_EquipScope) and enqueue the
 // work; APMF applies it on the game thread. A client's BSJobs worker may call
 // them directly. The APMF_Param pointer passed to RequestEx/Repoint, and the
 // RE::FormID* passed to SetSpellAllowList/SetEquipSet, and the APMF_EquipEntry*
-// passed to SetEquipSetEx, are READ AND COPIED
+// passed to SetEquipSetEx, and the APMF_EquipScope* passed to SetEquipScope, are READ AND COPIED
 // synchronously inside the call — APMF never retains the client's pointer, so a
 // stack temporary/local array is fine.
 //
@@ -83,7 +84,7 @@ namespace RE {
 
 namespace APMF_API {
 
-    inline constexpr std::uint32_t kABIVersion = 8;
+    inline constexpr std::uint32_t kABIVersion = 9;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -332,6 +333,74 @@ namespace APMF_API {
     static_assert(offsetof(APMF_EquipEntry, form)     == 0, "form at +0");
     static_assert(offsetof(APMF_EquipEntry, slot)     == 4, "slot at +4");
     static_assert(offsetof(APMF_EquipEntry, reserved) == 5, "reserved at +5");
+
+    // ── ABI v9: the equip CATEGORIES a claim OWNS or DENIES (SetEquipScope) ──
+    // v7/v8 took the facet WHOLE: a declaration refused every off-set engine equip
+    // of a governed type on the actor, so a client that only cared about the hands
+    // still had to declare the body armor, the shield, the arrows and the torch --
+    // or watch the engine's outfit refresh get refused for them (the first v8 deck
+    // run: 117 CombatNode/OutfitApply would-denies, all against hand-only intent).
+    // v9 SCOPES the authority. Each governed item COMPETES for one or more of these
+    // categories (the map is ONE function, apmf::equipsink::Categorize, used by the
+    // seat and by the enforce pass alike):
+    //   ARMO, no shield bit (or no bits) -> Armor
+    //   ARMO with the shield biped bit   -> Shield | Left
+    //   ARMO with the shield bit AND any other biped bit (a modded "shield on
+    //     back" piece)                   -> Shield | Left | Armor  (both kinds of
+    //                                     bits -> both categories, so an Armor-only
+    //                                     scope still holds the body slot against it)
+    //   WEAP two-handed (2H sword, 2H axe, bow, crossbow)  -> Right | Left
+    //   WEAP one-handed (incl. staff), equip slot LeftHand  -> Left
+    //   WEAP one-handed (incl. staff), equip slot RightHand -> Right
+    //   WEAP one-handed, any other/no slot (EitherHand)     -> Right | Left  (CONSERVATIVE:
+    //                                     the hand is not known yet, so both are competed)
+    //   AMMO                           -> Ammo
+    //   LIGH (torch)                   -> Light | Left
+    // APPEND-ONLY: never renumber a bit; a later ABI adds bits above bit 5 and
+    // widens kEquipCat_All in ITS revision only. A v9 APMF masks unknown bits
+    // off (logged once per handle), never refuses the call.
+    enum EquipCategory : std::uint32_t {
+        kEquipCat_None   = 0,         // a VALUE, not a bit: "no category" (an empty mask)
+        kEquipCat_Armor  = 1u << 0,   // every ARMO without the shield bit (body, head, hands, feet, jewelry, cloak ...)
+        kEquipCat_Shield = 1u << 1,   // an ARMO carrying BipedObjectSlot::kShield (competes for Left too)
+        kEquipCat_Right  = 1u << 2,   // the right hand
+        kEquipCat_Left   = 1u << 3,   // the left hand
+        kEquipCat_Ammo   = 1u << 4,   // AMMO (arrows, bolts)
+        kEquipCat_Light  = 1u << 5,   // LIGH (a torch; competes for Left too)
+        kEquipCat_All    = 0x3Fu,     // every category this ABI defines
+    };
+
+    // The SCOPE of an equip-authority claim (ABI v9). EXACT LAYOUT (byte-shared
+    // with the client, pinned below):
+    //   +0  owned     u32  EquipCategory mask: the categories the client's declared
+    //                      set is AUTHORITATIVE for. An engine equip competing for
+    //                      any owned category is held to the set (in-set -> allow,
+    //                      off-set -> deny); APMF's enforce pass equips a declared
+    //                      item only when EVERY category it competes for is owned.
+    //   +4  denied    u32  EquipCategory mask: the categories the actor must not
+    //                      equip into AT ALL. An engine equip competing for any
+    //                      denied category is refused even if it is in the set,
+    //                      and the enforce pass never equips into it.
+    //   +8  reserved  u32[2]  MUST be 0 (a later ABI may define them; a v9 APMF
+    //                      ignores them).
+    //   size 16, alignment 4. Trivially copyable; APMF copies it synchronously
+    //   inside SetEquipScope and never retains the client's pointer.
+    // The default scope of every claim is {owned = kEquipCat_All, denied = 0},
+    // which is v8's behaviour verbatim. An equip competing for NO owned and NO
+    // denied category passes the seat untouched (logged, `owned=0`), and the
+    // enforce pass skips a declared item in such a category (logged once per
+    // handle and set). The script/console and player-menu exemptions sit ABOVE
+    // both masks: an exempt path passes whatever the scope says.
+    struct APMF_EquipScope {
+        std::uint32_t owned;
+        std::uint32_t denied;
+        std::uint32_t reserved[2];
+    };
+    static_assert(sizeof(APMF_EquipScope) == 16, "APMF_EquipScope is 16 bytes, byte-shared with clients");
+    static_assert(alignof(APMF_EquipScope) == 4, "APMF_EquipScope aligns to 4");
+    static_assert(offsetof(APMF_EquipScope, owned)    == 0, "owned at +0");
+    static_assert(offsetof(APMF_EquipScope, denied)   == 4, "denied at +4");
+    static_assert(offsetof(APMF_EquipScope, reserved) == 8, "reserved at +8");
 
     // ── Combat-action CATEGORY bitmask (kIntent_CombatAction's param.ival) ──────
     // Which combat behavior-tree leaf CATEGORY a kIntent_CombatAction claim
@@ -860,7 +929,8 @@ namespace APMF_API {
         // WHAT HAPPENS, in order, when the declaring claim OWNS the channel:
         //   1. the set is published into the lock-free snapshot the equip seat reads
         //      (Docs/INVARIANTS.md #12), so from the next engine equip on, any item
-        //      NOT in `forms` is refused for this actor (path-classified and logged;
+        //      NOT in `forms` is refused for this actor (ABI v9: within the claim's
+        //      OWNED categories only, default all -- see SetEquipScope; path-classified and logged;
         //      Papyrus/console pass unless kEquipAuth_DenyScript; observe-only logs
         //      `would-deny` and refuses nothing);
         //   2. one main-thread pass equips each declared item the actor is not
@@ -954,6 +1024,54 @@ namespace APMF_API {
         // degrade path runs), this call distinguishes the remaining case: claimed
         // and installed, but observe-only.
         bool (*IsEquipAuthorityEnforced)(void);
+    };
+
+    // The v9 interface: APMF_API_v8's members verbatim (prefix EXTENSION), then ONE
+    // appended slot: the SCOPE of an equip-authority claim. This header is
+    // BYTE-SHARED with MFO: the declaration below is authoritative and must be
+    // mirrored byte-identically on the client side.
+    //
+    // WHY A BUMP (INVARIANTS #14b): a new function-pointer slot needs an
+    // `abiVersion >= 9` test before a client may call it. A v1..v8 client reading
+    // this object through its own struct pointer still sees exactly its prefix;
+    // every such client runs with the default scope {kEquipCat_All, 0}, which is
+    // v8's whole-facet behaviour unchanged.
+    struct APMF_API_v9 : APMF_API_v8 {
+        // SCOPE the authority of an EXISTING kIntent_EquipAuthority claim (`handle`)
+        // to the categories in `scope->owned`, and refuse the actor's equips into the
+        // categories in `scope->denied` outright. See APMF_EquipScope for what each
+        // mask means and EquipCategory for how an item is mapped to categories.
+        //   * `scope` is READ AND COPIED synchronously inside the call (APMF never
+        //     retains the pointer; a stack temporary is fine). Applied on the game
+        //     thread at the next Drain, like SetEquipSetEx.
+        //   * `scope == nullptr` RESETS the claim to the default {kEquipCat_All, 0}.
+        //   * Bits outside kEquipCat_All are MASKED OFF (logged once per handle),
+        //     never refused: a client built against a later ABI degrades to what
+        //     this APMF knows.
+        //   * A stale/unknown handle, or a handle on a channel other than
+        //     kIntent_EquipAuthority, is a silent no-op (SetEquipSet's discipline).
+        //   * The scope is stored on the claim whether or not it owns the channel
+        //     (non-owning semantics, like a declaration) and rides the SAME snapshot
+        //     read as the set: the seat never sees a set from one generation and a
+        //     scope from another. An applied CHANGE on the OWNING claim is a
+        //     declaration event -> one enforce hop after Publish, exactly like an
+        //     applied SetEquipSetEx. An unchanged re-send fires nothing.
+        //   * The seat's verdict for a governed equip on a claimed actor, in order:
+        //       script/console without DenyScript              -> allow (exempt)
+        //       PlayerMenu without DenyPlayerMenu               -> allow (player agency)
+        //       competes & denied                               -> deny (even if in-set)
+        //       competes & owned: no declaration or in-set      -> allow
+        //       competes & owned: off-set                       -> deny
+        //       else (no owned, no denied category)             -> allow (owned=0)
+        //     Observe-only turns each deny into `would-deny`.
+        //   * The enforce pass equips a declared item only when EVERY category it
+        //     competes for is owned and NONE is denied; the rest are skipped and
+        //     counted (`skipped-unowned` / `skipped-denied` on the pass line). It
+        //     still never unequips anything.
+        // A WEAP declared with kEquipSlot_Default that is one-handed competes for
+        // BOTH hands (the hand is not known until the engine picks); declare the hand
+        // with SetEquipSetEx when only one is owned.
+        void (*SetEquipScope)(Handle handle, const APMF_EquipScope* scope);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

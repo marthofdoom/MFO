@@ -223,6 +223,18 @@ namespace MFO::Actuation {
     // Idempotent (no record -> no-op). Combat end / death / dismissal.
     void ReleaseForcedWeapon(RE::Actor* a_follower);
 
+    // The ledger as it stands NOW for a_follower: {right, left} hold FormIDs, 0 =
+    // no hold in that hand (ABI v9, Fable F1 on 7857446). Read under g_forcedMx,
+    // any worker-serial reader. THE OOC declaration road's source for the
+    // scope: Logistics::ServiceFollower runs on ANY out-of-combat service (the
+    // T#76 two-tick debounce guards only ReleaseForcedWeapon), so a one-tick
+    // IsInCombat flap with holds passed as 0/0 would declare `owned=Armor`, drop
+    // the hand entries, and leave a STANDING hold unowned for the rest of the
+    // fight (nothing re-declares until the next equip event). Passing the ledger
+    // on every road keeps the scope following the ledger; ReleaseForcedWeapon
+    // erasing it then makes the next OOC tick declare Armor-only on its own.
+    std::pair<RE::FormID, RE::FormID> ForcedHoldFor(RE::FormID a_follower);
+
     // Per-tick reconcile from the combat scan: KEEP the force-hold iff the
     // feature is on AND an equip gambit of the forced weapon's OWN category held
     // this tick (a_wantStance: 0=none/condition-false, 1=melee, 2=ranged);

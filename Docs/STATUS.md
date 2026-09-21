@@ -6,13 +6,52 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-09 (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-09-16 (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-equip-authority-v9` (off `origin/main` `cb97052`) — SCOPED AUTHORITY, ABI v9:
+  F6 RESOLVED.** MFO's copy of `native/APMF_API.h` is APMF's v9 header verbatim (branch
+  `main` `9226f77`, the merged v9, md5 `2b941cd753d2e5520a0cdf558adf66f8`; the first cut was
+  `feat/equip-authority-v9` `3d5cab8`, md5 `6494513d598d4a3bb768579a3e46dc51`). The whole-facet v8
+  authority froze a follower with NO equip gambit out of his own melee<->ranged switch (the first
+  deck run: 117 `CombatNode` would-denies, every one against a declaration built from "the weapon
+  currently in the hand", none against a hold). v9 lets the claim say which equip CATEGORIES it
+  OWNS and which it DENIES (`APMF_EquipScope`, `SetEquipScope`); MFO now DECLARES WHAT IT OWNS AND
+  ACTS DIRECTLY IN WHAT IT DOES NOT. `RefreshEquipDeclaration` computes the scope from the
+  ForcedHold ledger and the perk roles: `owned = Armor | Right (right hold) | Left (left hold) |
+  Right+Left+Ammo (a held bow/crossbow) | Right+Left (a held two-hander)`; `denied = Shield` iff
+  `roles.offHand==2` under `bWeaponStyleControl`. Light is never owned, Shield never owned, a hand
+  is owned ONLY while a hold stands in it. The hands are declared from the ledger ONLY (the "else
+  the weapon currently in that hand" fallback and the torch read are GONE, they WERE the freeze),
+  bound weapons only into an owned hand, ammo only under a bow/crossbow hold, the shield is no
+  longer declared at all (offHand==1 is back on Actuation's direct `EquipShieldOnMain` in both the
+  gambit equip and the 5 s top-up; offHand==2 is the deny bit, the original field fix, now without
+  owning a hand). Change detector keyed on `(sorted entries, owned, denied)`; the bridge sends
+  `SetEquipScope` then `SetEquipSetEx` in one call (same Drain, one Publish). Bridge floor is now
+  `abiVersion >= 9`: a v9 MFO on a v8 APMF degrades to NO authority (logged once: a v9 declaration
+  omits the hands it does not hold and a v8 APMF would own them by default and freeze them), never
+  to a blanket lock. New `APMFBridge::DeclareEquipScope` + `EquipAuthorityOwns(id, cats)` (the
+  last SENT scope per claim); `Logistics::EquipTorch` skips while Left is owned (a torch competes
+  for Light+Left). THE HOLD WINS OVER RANGE (F1/F6 precedent): a dual-wield hold under an enemy at
+  range is not released for it. Log: `[equip-auth] <id>: declare n=N [...] owned=Armor+Right+Left
+  denied=Shield (why)`. **Field observables = APMF INTEGRATION.md criteria 8-11** (after a
+  `SET-EQUIP-SCOPE` every `cat=` outside owned/denied reads `owned=0 black=0 verdict=allow`; the
+  deny mask fires `black=1` on the shield of a dual-wielder; the category map agrees with the
+  engine; the pass prints `owned=0x.. denied=0x..` and skips unowned entries) **plus MFO's
+  `declare ... owned=` line**: with no hold `owned=Armor`, a follower switches to his bow in
+  combat and shoots; under a dual-wield hold `owned=Armor+Right+Left denied=Shield`. Tier B, one
+  Fable pass. Boundary touches reported in the hand-back, none outside the brief's list.
+  **Fable tier-B on `7857446`: nothing above SEV-3.** F1 (SEV-3) FIXED: the OOC service road
+  passed holds 0/0, so a one-tick `IsInCombat` flap (the T#76 debounce guards only
+  `ReleaseForcedWeapon`) demoted a STANDING hold to `owned=Armor` for the rest of the fight; now
+  every road passes the ledger (`Actuation::ForcedHoldFor(id)` → `{right, left}`, the one public
+  ledger read, under `g_forcedMx`). F4 (stale `Logistics_internal.h` comment) fixed. F2/F3/F5
+  recorded as REVIEW-BACKLOG MFO-B44/B45/B46 (Ammo ownership pins one ammo stack — marth's call;
+  scope/set two enqueues — comments softened; the `< 9` warn is unreachable).
 - **Branch `fix/mfo-equip-authority-bound` (off `origin/main` `7687fca`, the merged equip
   authority) — ROUND 4: BOUND WEAPONS under the authority, found by the probe sweep.** The
   observe-only probe run PASSED 6/7 (criterion 3's last unnamed dispatcher id is named on the
@@ -128,7 +167,11 @@ Read it as history and this block as current.
   MFO-B38/B39/B40. Two touches outside the brief's file list, both required by the findings:
   `native/plugin.cpp` (kNewGame `APMFBridge::ClearTransientState`) and `native/Followers.cpp`
   (F7 ordering + deferred restore).
-  **F6 — ENFORCEMENT BLOCKER (design, marth's call; recorded, no code):** with `count>0` EVERY
+  **F6 — RESOLVED by v9 scope (branch `feat/mfo-equip-authority-v9`, 2026-09-16; the text below is
+  the original finding, kept as history).** Hands are owned only with a hold; the shield is denied
+  by category for offHand==2; the hold wins over range (F1/F6 precedent). This was way out (1),
+  the category-scoped authority, shipped as APMF ABI v9 `SetEquipScope` (see the top of this delta
+  block). ORIGINAL FINDING: with `count>0` EVERY
   off-set engine equip on the actor is denied, and MFO declares the hands as "what is worn now"
   (the ledger hold, else the held weapon; never an alternate weapon, because the set must be
   simultaneously wearable). Under enforcement that freezes the hands to the moment of declaration:
@@ -140,18 +183,10 @@ Read it as history and this block as current.
   hands — after that the follower stands unarmed until his next equip gambit; (d) a follower with
   NO equip gambit is frozen to the weapon worn at declaration for good, and the loot-time weapon
   upgrade (`AcquireEquip` equip-in-place) is refused. Observe-only shows all four as
-  `path=AiCommand|CombatNode|RemoveItemReequip|External(MFO.dll) verdict=would-deny`. Two ways out,
-  neither in v7: (1) an ABI change — a hands PASS-THROUGH bit (`kEquipAuth_HandsPassThrough`: the
-  seat governs armor/jewelry/ammo only, the hand slots stay the engine's; MFO's ch.15 gate and
-  the T#76 lock keep doing the hands as today) or a category-scoped authority (declare "armor"
-  and "hands" as separate sets with separate enforcement), v9 after the v8 hand extension; or
-  (2) MFO carries an explicit HAND OPINION for every alternate weapon — declare the best melee AND
-  the best ranged AND ammo AND the torch (a declared-but-stowed weapon is NOT equipped by APMF's
-  pass only if the pass learns to skip hand items, which is again an ABI change), and accept that
-  a follower without an equip gambit gets MFO's weapon choice. Recommendation for marth: (1),
-  because it keeps the authority to what MFO actually judges (armor) and leaves the hands on the
-  proven T#76/ch.15 path until the hand-aware v8 declaration is field-proven; (2) turns every
-  follower into a gambit-driven one whether or not the player set one.
+  `path=AiCommand|CombatNode|RemoveItemReequip|External(MFO.dll) verdict=would-deny`. The two ways
+  out weighed at the time: (1) an ABI change — a hands pass-through bit or a category-scoped
+  authority (TAKEN: v9); (2) MFO carries an explicit hand opinion for every alternate weapon
+  (rejected: it turns every follower into a gambit-driven one whether or not the player set one).
   **Line counts (after round 3):** `Actuation.cpp` 2784 (was 2678 — over the 2500 cap BEFORE this branch;
   reported, not split, per the scope rule), `Logistics_Loot.cpp` 2443, `Logistics.cpp` 2227,
   `APMFBridge.cpp` 1992, `Logistics_Economy.cpp` 1595, `Followers.cpp` 520. Boundary touch reported:

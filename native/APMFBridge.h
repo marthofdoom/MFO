@@ -2,7 +2,7 @@
 #include <RE/Skyrim.h>
 #include <chrono>   // FacetExpiry()'s std::chrono::milliseconds return type
 #include <vector>   // DeclareEquipSet's declared worn set
-#include "APMF_API.h"   // APMF_EquipEntry -- DeclareEquipSet's entry type (ABI v8)
+#include "APMF_API.h"   // APMF_EquipEntry -- DeclareEquipSet's entry type (ABI v8); EquipCategory bits (v9)
 #include "Loadout.h"   // Loadout::HandPick -- HandFor's argument type below
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -486,7 +486,7 @@ namespace MFO::APMFBridge {
     // Worker-safe. Release the combat-action-deny claim.
     void ReleaseCombatActionDeny(RE::FormID a_follower);
 
-    // ── EQUIP AUTHORITY: a STANDING claim + the DECLARED WORN SET (ch.17, APMF v7) ──
+    // ── EQUIP AUTHORITY: a STANDING claim + the DECLARED WORN SET (ch.17, APMF v7, SCOPED v9) ──
     // feat/mfo-equip-authority (2026-09-15): port #1 of an MFO engine mechanism
     // into APMF. MFO used to hold a follower's gear in place by force-equipping it
     // (the T#76 prevent-removal lock, Actuation.cpp) and still lost the LEFT hand to
@@ -521,12 +521,32 @@ namespace MFO::APMFBridge {
     // NOT MIXED with ch.15: ClaimEquipment's kIntent_Equipment claim is the PARAM
     // form (gate only, no engine write), which APMF's INTEGRATION.md states is
     // unaffected by a ch.17 claim on the same actor. Both stand together.
+    //
+    // SCOPED (ABI v9, feat/mfo-equip-authority-v9, 2026-09-16). v7/v8 took the
+    // facet WHOLE: every off-set engine equip of a governed type was refused, so
+    // a declaration built from "the weapon currently in the hand" froze a
+    // follower with no equip gambit out of his own melee<->ranged switch (STATUS
+    // F6: 117 CombatNode would-denies in one deck run, none against a hold). v9
+    // SCOPES the claim: MFO DECLARES what it OWNS and ACTS DIRECTLY in what it
+    // does not. The scope (DeclareEquipScope, sent before the set) is
+    //   owned  = Armor | Right (a right hold) | Left (a left hold)
+    //          | Right+Left+Ammo (a bow/crossbow hold) | Right+Left (a 2H hold)
+    //   denied = Shield when the perks vote dual wield (offHand==2) under
+    //            bWeaponStyleControl, else 0
+    // Light is never owned, Shield never owned (offHand==1 keeps the direct
+    // EquipShieldOnMain), a hand is owned only while a ForcedHold stands in it
+    // -- so with no hold the AI re-arms freely (`owned=0 verdict=allow` at the
+    // seat) and a hold WINS over range (a dual-wield hold under an enemy at
+    // range stays: the only exits are the gambit's own condition, combat end,
+    // or a spell taking the left). Computed by RefreshEquipDeclaration.
 
     // Worker-safe. Is the equip-authority channel available right now -- APMF
-    // present AND its resolved interface carries the v8 SetEquipSetEx slot (the
-    // per-item HAND; v7's slot-less SetEquipSet cannot dual-wield, so v8 is the
-    // floor) AND Config::g_apmfEquipAuthority is on? The exact three non-arbitration early
-    // returns ClaimEquipAuthority/DeclareEquipSet take. UNLIKE the cast facets'
+    // present AND its resolved interface carries the v9 SetEquipScope slot (the
+    // SCOPE: v8's whole-facet default would own the hands MFO's v9 declaration
+    // deliberately omits and freeze them, so v9 is the floor -- a too-old APMF
+    // degrades to NO authority, never to a blanket lock, logged once) AND
+    // Config::g_apmfEquipAuthority is on? The exact three non-arbitration early
+    // returns ClaimEquipAuthority/DeclareEquipScope/DeclareEquipSet take. UNLIKE the cast facets'
     // OffenseCastClaimSupported split, a refused CLAIM here does NOT fail closed
     // (F1/F5, Fable round 2): APMF refuses a ch.17 claim exactly when its #17a
     // equip seat is not installed, and then nothing on APMF's side can perform or
@@ -579,14 +599,41 @@ namespace MFO::APMFBridge {
     // win) -- that is APMF's business, and MFO must not equip around it either way.
     bool IsEquipAuthorityClaimed(RE::FormID a_follower);
 
+    // Worker-safe. SCOPE the standing claim (ABI v9 SetEquipScope): `a_owned` /
+    // `a_denied` are APMF_API::EquipCategory masks (see the block doc above for
+    // what MFO computes). COPIED inside APMF's call (a stack temporary), applied
+    // at its next Drain; the ONE caller (RefreshEquipDeclaration) sends it
+    // immediately BEFORE DeclareEquipSet so both normally land in the same Drain
+    // (a Drain between the two enqueues pairs the new scope with the old set for
+    // one self-healing frame, MFO-B45 -- never a stale scope over a new set).
+    // Bits outside kEquipCat_All are
+    // MFO's error (logged; APMF masks them). Returns false when the channel is
+    // unsupported OR no claim handle stands -- the same discipline as
+    // DeclareEquipSet, and the caller treats it the same (fail closed, retry on
+    // the next refresh). Does NOT clear the claim's `fresh` flag: the scope alone
+    // is not a declaration; DeclareEquipSet, which always follows, does.
+    bool DeclareEquipScope(RE::FormID a_follower, std::uint32_t a_owned, std::uint32_t a_denied);
+
+    // Worker-safe (mutex-guarded read). Does the scope last SENT on a_follower's
+    // standing claim own ANY of `a_categories` (an EquipCategory mask)? False
+    // without a claim, and false on a claim no declaration has gone out on yet
+    // (APMF answers "no declaration -> allow" there, so nothing is owned in
+    // effect). THE gate a direct equip path reads before writing into a hand the
+    // authority holds: Logistics::EquipTorch skips while Left is owned (a torch
+    // competes for Light+Left; equipping it under a left or bow hold would only
+    // draw an `External(MFO.dll) ... verdict=deny` at APMF's seat).
+    bool EquipAuthorityOwns(RE::FormID a_follower, std::uint32_t a_categories);
+
     // Worker-safe. DECLARE the worn set for a_follower through the v8 SetEquipSetEx
     // slot on the standing claim. `a_forms` are APMF_EquipEntry {BASE FormID, hand}:
-    // kEquipSlot_Right / kEquipSlot_Left for the hand-held items whose hand MFO
-    // decides (the ForcedHold ledger, or the hand a weapon is actually in),
-    // kEquipSlot_Default (the engine picks, v7 verbatim) for armor, ammo, a bow, a
-    // two-hander, a shield, a torch; the same form may appear once per hand. The
-    // array is COPIED inside APMF's call. An empty set CLEARS the declaration
-    // (pass-through) without releasing the claim.
+    // kEquipSlot_Right / kEquipSlot_Left for the hand-held items MFO holds (the
+    // ForcedHold ledger -- under v9 NOTHING else names a hand: a hand without a
+    // hold is not owned and carries no entry), kEquipSlot_Default (the engine
+    // picks, v7 verbatim) for armor, ammo, a held bow, a held two-hander; the
+    // same form may appear once per hand. Shields and torches are never declared
+    // (their categories are never owned). The array is COPIED inside APMF's
+    // call. An empty set CLEARS the declaration (pass-through) without
+    // releasing the claim.
     // More than APMF_API::kMaxEquipSet (32) entries is MFO's error: logged as an
     // error and truncated (APMF treats the excess as off-set). Returns false when
     // the channel is unsupported OR no claim handle stands (a declaration needs the
