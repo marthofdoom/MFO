@@ -330,8 +330,11 @@ stood frozen; the direct road delivered 22/22 the same session. Because `Try` is
 every Heal-kind spell is restoration, `ClaimHealCast`, the F1 incumbent hold and
 `bHealAnimPackage` are dormant (kept compiled; removal is its own brief). Two companions shipped
 with it: the idle-hand floor is RELEASED while its driving claim has stood `kIdleFloorUnobservedMs`
-(4000 ms, aliased to `kHealHoldNeverObservedMs` — the measured claim → observed-cast latency in
-`Docs/DIAG-2026-09-06-deny-heal-failures.md`) with no observed cast (`[apmf] <id> IDLE-HAND FLOOR
+(4000 ms, aliased to `kHealHoldNeverObservedMs` — sized from the 0906 heal's 2.95 s claim → observed
+in `Docs/DIAG-2026-09-06-deny-heal-failures.md`, which the 0908 heal exceeded at 4.5-6.1 s,
+`Docs/DIAG-2026-09-08-field.md:267`; backlog `MFO-B7`/`MFO-B8` rule measure, do not resize from n=2, and
+the offense-claim-with-equip-cycle latency this gate actually consumes is UNMEASURED until the next Deck
+log) with no observed cast (`[apmf] <id> IDLE-HAND FLOOR
 released -- driving claim has no observed cast`), and `APMFBridge::Tick`'s expiry sweep clears the
 swept claim's `[cfc]` watch (`ComposedCast::ClearWatchHand`) so a later same-spell claim no longer
 warns with a dead `since`. The OOC concentration log label now reads the direct road's own registry

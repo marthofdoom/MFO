@@ -25,8 +25,10 @@ Read it as history and this block as current.
   `CastTargetDirect` (`CastOn` → new `RestorationCastDirect`); offense keeps the AI-fired road.
   `ComposedCast::Try` is heal-only, so the CFC heal claim and `bHealAnimPackage` are dormant
   now (kept compiled). (2) The idle-hand floor is released while its driving claim has stood
-  `kIdleFloorUnobservedMs` (4000 ms = `kHealHoldNeverObservedMs`, the measured claim → observed
-  latency) with no observed cast — `[apmf] <id> IDLE-HAND FLOOR released -- driving claim has no
+  `kIdleFloorUnobservedMs` (4000 ms = `kHealHoldNeverObservedMs`; sized from the 0906 heal's 2.95 s
+  claim → observed, which the 0908 heal exceeded at 4.5-6.1 s — backlog `MFO-B7`/`MFO-B8`: measure,
+  do not resize from n=2; the offense-claim-plus-equip-cycle latency this gate consumes is UNMEASURED
+  and the next Deck log sizes it) with no observed cast — `[apmf] <id> IDLE-HAND FLOOR released -- driving claim has no
   observed cast`. (3) `APMFBridge::Tick`'s expiry sweep clears the swept claim's `[cfc]` watch
   (`ComposedCast::ClearWatchHand`), and the OOC concentration label reads the direct road's own
   registry (`Actuation::TargetStreamLive`) instead of `IsHealCastActive`. `Scheduler.cpp` untouched
@@ -34,7 +36,12 @@ Read it as history and this block as current.
   MFO-B37). **Field observable:** in a fight a hurt follower/ally is healed by Fast Healing with
   `[eval] ... restoration (direct force)` / `self-cast channel (direct trigger)` lines and NO
   `[cfc] claim live ... NO observed cast` for a heal; the dagger arms while healing; a silent
-  offense claim past 4 s prints the floor-released line and the other hand opens.
+  offense claim past 4 s prints the floor-released line and the other hand opens. **Field-retest
+  caution:** a `IDLE-HAND FLOOR released -- driving claim has no observed cast` line followed by the
+  AI arming the right hand LOOKS like success even when the driving claim was a real cast still
+  charging (the gate fired early, not the floor doing its job). Read the `[cfc]` / castobs fire
+  timestamps for that claim alongside the release line before calling it either way — that pairing
+  is also the measurement `MFO-B7` is waiting on.
 - **Branch `feat/mfo-equip-authority-v9` (off `origin/main` `cb97052`) — SCOPED AUTHORITY, ABI v9:
   F6 RESOLVED.** MFO's copy of `native/APMF_API.h` is APMF's v9 header verbatim (branch
   `main` `9226f77`, the merged v9, md5 `2b941cd753d2e5520a0cdf558adf66f8`; the first cut was

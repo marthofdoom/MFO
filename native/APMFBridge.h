@@ -866,15 +866,25 @@ namespace MFO::APMFBridge {
     // observed firing.
     //
     // SIZED FROM THE SAME DATUM AS kHealHoldNeverObservedMs, DELIBERATELY THE
-    // SAME NUMBER: both bound one physical quantity -- the engine's claim ->
-    // OBSERVED-CAST latency (Docs/DIAG-2026-09-06-deny-heal-failures.md: 2.95 s
-    // claim-to-observed on the one heal that landed, 2.3-2.5 s claim-to-fire for
-    // an offense Firebolt, fires trailing their [cfc] warns by up to 1.5 s, ~3.9 s
-    // at the tail). 4000 ms clears every measured latency; a tighter gate would
-    // open the other hand to the AI in the window where a genuine cast is still
-    // charging (the F10 shape the floor exists to close). Aliased rather than
-    // copied so a re-measurement moves both. Lap-granular: the check runs on the
-    // pump (~133 ms), so the lift lands within [gate, gate + 133 ms].
+    // SAME NUMBER, AND THAT DATUM IS CONTESTED -- read Docs/REVIEW-BACKLOG.md
+    // MFO-B7 and MFO-B8 before touching this. Both constants bound one physical
+    // quantity, the engine's claim -> OBSERVED-CAST latency. The 0906 heal
+    // measured 2.95 s claim-to-observed (Docs/DIAG-2026-09-06-deny-heal-
+    // failures.md; the same session's offense Firebolt 2.3-2.5 s claim-to-fire,
+    // ~3.9 s at the tail). The 0908 heal EXCEEDED it: 4.5-6.1 s claim-to-fire
+    // (Docs/DIAG-2026-09-08-field.md:267, "2.95 s plus one extra equip cycle" --
+    // the hand was mid-unequip from a Firebolt churn), so 4000 ms does NOT clear
+    // every measured heal latency, and B7's ruling stands: MEASURE, do not
+    // resize from n=2. What this gate actually consumes is the OFFENSE claim's
+    // latency WITH an equip cycle in front of it (heals no longer claim -- they
+    // take the direct road), and that quantity is UNMEASURED; the next Deck log
+    // sizes it (the [cfc] fire timestamps against the "FLOOR released" lines).
+    // Until then the cost of the gate firing early is the pre-F10 state -- the
+    // other hand opens to the AI while a genuine cast is still charging --
+    // never a freeze. This is consumer (d) of the constant under B8's scheme.
+    // Aliased rather than copied so a re-measurement moves both. Lap-granular:
+    // the check runs on the pump (~133 ms), so the lift lands within
+    // [gate, gate + 133 ms].
     inline constexpr std::uint32_t kIdleFloorUnobservedMs = kHealHoldNeverObservedMs;
 
     // Returns whether a_follower now holds a LIVE heal-cast claim. As with
