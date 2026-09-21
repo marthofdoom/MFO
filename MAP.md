@@ -1177,14 +1177,31 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   `serviceOwnOoc()` on a Fired tick double-fires (a combat cast + a logistics heal
   in one tick); moving `NoteInCombat` back under `ownCombat` lets the shed drop a
   HELD weapon mid-party-fight; dropping the `g_active` walk from the top of `Tick`
-  for a per-follower read re-introduces a per-follower "truth" that flaps. A stretch
-  of own-OOC longer than `MeleeClampDwell` (2-4 s) still releases the hold through
-  the T#76 hysteresis path — that is the gambit's condition genuinely false, by design.
+  for a per-follower read re-introduces a per-follower "truth" that flaps. **Known,
+  not closed (Fable gate review SEV-4, backlog `MFO-B52`):** a stretch of own-OOC longer
+  than `MeleeClampDwell` (2-4 s) still releases a FOE-KEYED equip hold through the T#76
+  hysteresis path, because `kCondFoeWithinRange` reads false when `currentCombatTarget`
+  is null — the engine dropped the target on a LoS loss, NOT because the foe is far — so
+  the release is the dwell timing out on an engine-side null, not the gambit's condition
+  being genuinely false. Slower than `main`'s 0.3-0.8 s flap release, not faster. Also open
+  from the same review: `MFO-B53` (`Loadout::Tick` erases `g_equipClock` on the OWN flag, so
+  the AI-first grace collapses for an own-OOC hybrid cast) and `MFO-B54` (`[sense] foes=0`
+  every 3 s for own-OOC followers; the ready beat is consumed at the party edge).
+  **Since the merge with `fix/mfo-combat-restoration-direct` (2026-09-21):** the post-scan
+  `serviceOwnOoc(castSeen)` call passes the scan's `castSeen` — a lap on which a combat
+  cast rule's condition held does NOT run logistics, because the combat table's direct
+  restoration stream (`RestorationCastDirect` / `CastSelfDirect`, paced = transparent NoOp)
+  and Logistics' OOC cast dispatch would otherwise trade one follower's single
+  `g_targetCast` slot every lap (`stream RELEASE (switch)` churn) and the OOC
+  `DeclareAtExit` would read the left hand as free under the direct road's live LEFT cast
+  lock. `castSeen` is the signal this file already bounds the cast lock by (`!castSeen` →
+  `ClearCastLock`), so every lap that reaches logistics has the lock cleared. Calling
+  `serviceOwnOoc(false)` from the post-scan exit re-opens both.
 - `ClearTransientState` (`:168`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
   plus `g_partyCombat` / `g_partyCombatNoted`.
-- Casts `combatClassOverride` directly to `CombatStyle::Stance` (`:378,578`) — the
+- Casts `combatClassOverride` directly to `CombatStyle::Stance` (`:630,949`) — the
   ordinal-equality contract.
 - **T#78 per-follower MFO master switch** — gate right after the `g_followers.find`
   in the per-follower service (`ServiceFollower`-caller path, `Scheduler.cpp`): if
@@ -1364,7 +1381,7 @@ the AI can't re-arm magic over a forced weapon.
 - `enum Stance {None=0,Melee=1,Ranged=2,Cast=3}` (`CombatStyle.h:36`) — **ordinals
   are a serialized ABI**: equal to `State.h:82 combatClassOverride`, written raw
   (`Serialization.cpp:106`), read v4 (`:380`), cast directly by Scheduler
-  (`:378,578`). Renumbering corrupts every saved override → **requires a
+  (`:630,949`). Renumbering corrupts every saved override → **requires a
   serialization version bump.**
 - `ApplyTick` (`:138`) is NOT a hook — called by Targeting's thunk; writes through
   the live controller, never dereferences the stored pointer (identity-compare only).

@@ -341,6 +341,30 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** below the floor; a one-frame window with a fixed, safe order. The three comments were softened in the same round (they no longer claim "same Drain" as a guarantee).
 - **Fix shape when drained (verbatim):** none needed beyond the comment fix; an atomic scope+set call would be an APMF ABI change.
 
+### MFO-B52 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight
+- **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4. Ids `MFO-B52`-`MFO-B54` continue past `MFO-B51`, which `feat/mfo-attack-observe` took concurrently (`main` was at `MFO-B49` at commit time).
+- **Severity:** SEV-4
+- **Finding (verbatim):** T#76 dwell releases a foe-keyed equip hold after 2-4 s of own-OOC inside a party fight (kCondFoeWithinRange false because currentCombatTarget is null, not because the foe is far); MAP's "genuinely false, by design" over-claims. Slower than main (0.3-0.8 s), so not a regression; backlog.
+- **Reviewer's reasoning:** gate 2 keeps the hold across an own-flag flap, but the equip rule's own condition reads the follower's `currentCombatTarget`, which the engine nulls on a LoS loss; after `MeleeClampDwell` (2-4 s) of that the hysteresis path releases the hold as "condition false" although the foe never left range.
+- **Why it was NOT fixed:** strictly slower than `main`'s flap release (0.3-0.8 s), and the correct fix (a foe-range read that survives a null target for a party-combat follower) is an Evaluator change outside the gate branch's `Scheduler.cpp` boundary. MAP/STATUS wording corrected in the closing round.
+- **Fix shape when drained (verbatim):** none given; candidate: let `kCondFoeWithinRange` fall back to the party's nearest foe (CombatSense) when the follower's own target is null while `g_partyCombat` holds, or exempt a party-combat lap with a null target from the dwell's "known false" count.
+
+### MFO-B53 — `Loadout::Tick` erases `g_equipClock` on own `IsInCombat()==false`, collapsing the AI-first grace for own-OOC hybrid casts
+- **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
+- **Severity:** SEV-4
+- **Finding (verbatim):** Loadout::Tick (Diagnostics.cpp:348, worker pump) erases g_equipClock when own IsInCombat false -> SecondsSinceEquip=1e9 -> AI-first grace collapses for own-OOC hybrid casts -> ForceCast on the second lap. Benign (heal lands), accidental.
+- **Reviewer's reasoning:** `Loadout.cpp:545` keys the clock erase on the follower's OWN flag; under party combat an own-OOC follower on the APMF-absent / non-restoration hybrid road gets `SecondsSinceEquip` = 1e9 and `ForceCast` fires without the grace. Restoration casts no longer take that road (they go direct), so the affected set is the APMF-absent hybrid for non-restoration spells.
+- **Why it was NOT fixed:** benign (the cast lands, unanimated one lap early), `Loadout.cpp` outside the gate branch's boundary, and the hybrid road is the APMF-absent degrade only.
+- **Fix shape when drained (verbatim):** key the `g_equipClock` erase on `Scheduler`'s party-combat state (expose it, or erase from the party-OOC branch) instead of the follower's own flag.
+
+### MFO-B54 — party-combat gate cosmetics: `[sense] foes=0` every 3 s for own-OOC followers; the ready beat is consumed at party entry
+- **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-5 x2.
+- **Severity:** SEV-5
+- **Findings (verbatim):** [sense] line now prints foes=0 every 3 s for own-OOC followers; ready beat consumed at party entry.
+- **Reviewer's reasoning:** the `[sense]` tally reads the follower's OWN combat group, which is empty for an own-OOC follower, so the line repeats a true-but-uninformative 0 at its 3 s cadence for every such follower in a party fight; the once-per-combat ready beat fires on the party-combat edge rather than the follower's own engagement, so his first own-combat lap has no beat.
+- **Why it was NOT fixed:** cosmetic; the `[sense]` line is the field's foe-count diagnostic and silencing it for own-OOC followers hides the very state the gate keys on.
+- **Fix shape when drained (verbatim):** print the party foe max alongside own foes on the `[sense]` line (`foes=0 party=N`); re-arm the ready beat on the own-combat edge as well as the party edge.
+
 ### MFO-B47 — the idle-hand floor's unobserved gate is a FOURTH consumer of the contested 4000 ms constant
 - **Raised:** Fable tier-B review of `ed3d9d0` (`fix/mfo-combat-restoration-direct`), SEV-3 (note). Ids `MFO-B47`-`MFO-B49` continue from `main`'s highest, `MFO-B46`.
 - **Severity:** SEV-3 (note; the cycle ended with nothing above SEV-3)

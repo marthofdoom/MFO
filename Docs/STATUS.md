@@ -33,10 +33,24 @@ Read it as history and this block as current.
   ready beat, scan without a Fired/opaque hold), so one action per tick per follower holds.
   **Field observables:** during a fight Jesper's log shows `party combat, own combat=0 --
   combat table live` and `[eval]` scan lines on his combat rules instead of only `[logistics]`
-  heals; no `ReleaseForcedWeapon` / `owned=Armor` scope flip on Cicero between `party combat
-  ON` and `party combat OFF`; exactly one `party combat OFF` after the last foe dies (the
-  hold release follows it within 2 services). Tier B, one Fable pass. Docs: MAP.md Scheduler
-  entry rewritten around the two gates, CHANGELOG v2.0.8 bullet.
+  heals; no `ReleaseForcedWeapon` / `owned=Armor` scope flip on Cicero off a flag flap
+  shorter than the `MeleeClampDwell` (2-4 s) between `party combat ON` and `party combat
+  OFF` (an own-OOC stretch LONGER than the dwell still releases a foe-keyed hold through
+  the T#76 path — backlog `MFO-B52`, not closed); exactly one `party combat OFF` after the
+  last foe dies (the hold release follows it within 2 services). Tier B, one Fable pass.
+  Docs: MAP.md Scheduler entry rewritten around the two gates, CHANGELOG v2.0.8 bullet.
+  **Merged with `fix/mfo-combat-restoration-direct` (2026-09-21, `708fe7a`):** the gate
+  review's SEV-2 (an own-OOC heal reaching `ComposedCast::Try` with no controller → opaque
+  hold, logistics heal starved) is CLOSED BY CONSTRUCTION on the merged tree — Heal ⊂
+  Restoration (`ClassifySpell` Heal ⇒ `SpellHealsHealth` ⇒ `IsRestorationSpell`), and every
+  `Try` site is skipped for restoration: `cast_target Fast Healing` → `CastOn` → conc fork
+  `:859`/restoration fork `:874` → `CastTargetDirect`, whose `Try` at `Actuation_Direct.cpp:1302`
+  is `combatController && !IsRestorationSpell` (false on both) → the direct stream `:1372`;
+  self-heal with `bCastSelf` ON → `CastSelfDirect` `:933` skips `Try` → `g_selfCast` `:1000`.
+  No controller gate added. The cross-branch SEV-3 (combat direct stream vs OOC cast dispatch
+  trading one `g_targetCast` slot per lap; OOC `DeclareAtExit` blind to the direct LEFT lock)
+  is fixed in `Scheduler.cpp`: `serviceOwnOoc(castSeen)` — a lap on which a combat cast rule's
+  condition held keeps the cast facet, logistics waits (see MAP's Scheduler entry).
 - **Branch `fix/mfo-combat-restoration-direct` (off `origin/main` `9539f09`) — RESTORATION
   CASTS GO DIRECT IN COMBAT; release-gating field fix, NOT merged, NOT deployed.** Deck
   2026-09-21 (Jesper 750012C6, Fable diagnosis item 2(b)): combat rule 0 `cast_self` / rule 1
