@@ -1548,6 +1548,30 @@ namespace MFO::Logistics {
                 // is left alone rather than guessed at, so widening `denied` later
                 // cannot silently start selling armour through this line. gemHold is
                 // untouched.
+                //
+                // A PLAYER-GIFTED SHIELD IS DELIBERATELY SELLABLE HERE. DECIDED BY
+                // MARTH, 2026-09-22: *"Let them sell."* This is NOT an oversight and
+                // NOT a bug to fix later -- it was raised as an open question before
+                // this line shipped, and this is the answer.
+                //
+                // WHY IT NEEDS SAYING AT ALL. `IsPlayerPick` (tested a few lines
+                // above, and the gate that exists precisely to keep what the player
+                // put on a follower) CANNOT protect a shield: the pass that RECORDS
+                // player picks -- RefreshEquipDeclaration rule 4b, ~:885 -- skips
+                // shields outright (`if (!ar || ar->IsShield() || ar == pick)
+                // continue;`), so no shield is ever in `g_playerPicks` for
+                // `IsPlayerPick` to find. So a shield the player handed a follower who
+                // has since taken up dual wielding reaches this line with no
+                // player-intent protection at all, and sells. That is the intended
+                // outcome: the declaration denies the Shield category, nothing can
+                // ever equip it again, and a permanently unusable item on his arm is
+                // worse than the gold.
+                //
+                // WHAT STILL PROTECTS A SHIELD, so this is bounded rather than
+                // blanket: `IsStockGear` (T#69 signature gear, tested first),
+                // `gemHold` and `Catalog::IsExcluded` (artifacts / quest items) all
+                // run and all still stop the sale. Only an ordinary, gemless,
+                // non-signature, non-excluded shield on a dual-wielding follower goes.
                 const bool deniedWorn =
                     armo && armo->IsShield() && data.second && data.second->IsWorn() &&
                     APMFBridge::EquipAuthorityDenies(fid, APMF_API::kEquipCat_Shield);

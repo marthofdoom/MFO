@@ -125,8 +125,12 @@ Read it as history and this block as current.
   is today's, not worse); (c) that `forceEquip = false` leaves NO prevent-removal lock — reasoned
   from the force-unequip's own comment, not from disassembly; (d) whether
   `CombatInventory::Rebuild` can build a Magic-template item for something outside the enumerated
-  classes (`MFO-B65`); (e) that a player-GIFTED shield should be sold — rule 4b never records a
-  shield in `g_playerPicks`, so `IsPlayerPick` does not protect one.
+  classes (`MFO-B65`). Item (e) of this list — whether a player-GIFTED shield should be sold — is
+  **no longer open: DECIDED BY MARTH, 2026-09-22, "Let them sell."** It is recorded here because the
+  mechanism is not obvious: `IsPlayerPick` cannot protect a shield, since the pass that RECORDS player
+  picks (rule 4b, `Logistics_Economy.cpp:~885`) skips shields outright, so no shield is ever in
+  `g_playerPicks`. The behaviour stands as shipped; `IsStockGear`, `gemHold` and `Catalog::IsExcluded`
+  still protect one. No backlog entry was opened for it.
 - **2026-09-21 21:50 PDT Deck run (`aca7d43` deployed) — Fable field diagnosis + branch
   `fix/mfo-field-batch-0921` (off `main` `db8fb7b`, v2.0.9 line; NOT merged, NOT deployed).**
   Evidence: memory note `field-diag-2026-09-21-evening` (the summary + pointers) and the Fable

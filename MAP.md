@@ -1775,6 +1775,15 @@ declared there and defined in their home module). Layout:
   than guessed at, and `gemHold`/`Catalog::IsExcluded` still run after it so a
   gem-socketed or artifact shield is still protected. Log:
   `[sell] <id> '<name>' -> force-sell (worn, category DENIED by our own declaration)`.
+  **A PLAYER-GIFTED SHIELD IS DELIBERATELY SELLABLE — DECIDED BY MARTH, 2026-09-22: "Let them sell."**
+  Raised as an open question before the line shipped; this is the answer, so do NOT "fix" it later.
+  `IsPlayerPick` **cannot** protect a shield: the pass that RECORDS player picks (rule 4b, `:~885`)
+  skips shields outright (`if (!ar || ar->IsShield() || ar == pick) continue;`), so no shield is ever in
+  `g_playerPicks`. A shield the player handed a follower who has since taken up dual wielding therefore
+  reaches this line with no player-intent protection and sells — intended, because the declaration
+  denies the category, nothing can equip it again, and a permanently unusable item on his arm is worse
+  than the gold. Still protecting a shield, so this is bounded rather than blanket: `IsStockGear`
+  (T#69), `gemHold`, and `Catalog::IsExcluded`.
   **What breaks:** widen `denied` without widening the mapping and the new category
   silently keeps its old worn-is-kept behaviour; map a category MFO owns rather than
   denies and the sell path starts selling gear the follower is wearing on purpose), **OPEN BACKLOG — read
