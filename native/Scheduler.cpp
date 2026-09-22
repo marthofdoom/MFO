@@ -86,6 +86,51 @@ namespace MFO::Scheduler {
             return kMeleeClampDwellCenter + (Temperament(a_id) - 0.5f) * kMeleeClampDwellSpread;
         }
 
+        // MFO-B55 (FIXED 2026-09-21, Deck/Fable: Cicero's two mid-fight weapon
+        // vanishes at 21:57:34.226 and 21:57:44.075 were this dwell releasing a
+        // foe-keyed hold while his group still had foes). The equip range rules
+        // (cond.foe_within_range / cond.foe_beyond_range) are TARGET-relative:
+        // the Evaluator reads the follower's currentCombatTarget and returns
+        // "no match" when that handle is null, dead, disabled or non-hostile
+        // (Evaluator.cpp PickFoe, the target-relative branch). The engine nulls
+        // currentCombatTarget on a LoS loss / a group retarget while the combat
+        // GROUP still lists live, known foes -- so on those laps the rule's
+        // condition is not FALSE, it is UNDECIDABLE: the foe never left range,
+        // the follower merely has no target to measure against this instant.
+        // Reading it as known-false let the T#76 dwell (2-4 s) time out on an
+        // engine-side null and ReconcileForcedWeapon release the hold.
+        //
+        // Returns true when an equip rule whose condition is target-relative
+        // was EVALUATED this lap (index below the scan's stop; the whole table
+        // when nothing matched) while the follower's target is unusable AND his
+        // own combat group still has foes (CombatSense::FoeCount: live,
+        // enabled, not kTargetLost -- the same tally the [sense] line and the
+        // party gate read). The caller then treats the equip truth as UNKNOWN:
+        // the dwell clock refreshes, equipCondKnownFalse stays false, and the
+        // hold survives exactly as it does under a higher rule's stop. A
+        // genuinely empty group (FoeCount 0: every foe dead, gone or lost) or a
+        // real party-OOC still reads false and releases through the dwell /
+        // the party-OOC debounce as before. Pure reads; the group lock is taken
+        // inside FoeCount with no other lock held (the Evaluator's nesting
+        // warning).
+        [[nodiscard]] bool EquipRangeUndecidable(RE::Actor* a_self, const std::vector<Gambit>& a_rules, int a_stopIdx) {
+            bool rangeRuleEvaluated = false;
+            for (int i = 0; i < static_cast<int>(a_rules.size()) && i < a_stopIdx; ++i) {
+                const auto& r = a_rules[i];
+                if (r.actionOpcode != Vocab::kActEquipMelee && r.actionOpcode != Vocab::kActEquipRanged) continue;
+                if (r.conditionOpcode == Vocab::kCondFoeWithinRange || r.conditionOpcode == Vocab::kCondFoeBeyondRange) {
+                    rangeRuleEvaluated = true;
+                    break;
+                }
+            }
+            if (!rangeRuleEvaluated) return false;
+            auto  tp  = a_self->GetActorRuntimeData().currentCombatTarget.get();
+            auto* tgt = tp.get();
+            const bool targetUsable = tgt && !tgt->IsDead() && !tgt->IsDisabled() && tgt->IsHostileToActor(a_self);
+            if (targetUsable) return false;            // the rule measured a real target: its truth is real
+            return CombatSense::FoeCount(a_self) > 0;  // no target, foes remain -> undecidable
+        }
+
         // FLAIR #5 -- RETARGET HESITATION. A target SWITCH of an existing latch
         // must win twice before it commits: the first winning service stores
         // the proposal and reports NoOp "sizing up <name>"; the second service
@@ -160,6 +205,11 @@ namespace MFO::Scheduler {
         // lines" promise was wrong. Inserted at the first all-false no-action
         // exit, erased with g_partyCombatNoted in the party-OOC branch.
         std::unordered_set<RE::FormID> g_noneMatchedNoted;
+        // MFO-B55: followers whose last lap read the equip range rule as
+        // UNDECIDABLE (null target, foes remain) -- one log line per fight.
+        // Erased in the party-OOC branch with the other per-fight latches;
+        // cleared on revert.
+        std::unordered_set<RE::FormID> g_equipRangeUndecidableNoted;
 
         // The dials. Fill: confidence below 0.25 (a follower who by the
         // leash tenet WANTS to be at the player's side) while >400u away from
@@ -181,6 +231,7 @@ namespace MFO::Scheduler {
         g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
         g_partyCombatNoted.clear();
         g_noneMatchedNoted.clear();
+        g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
@@ -381,6 +432,7 @@ namespace MFO::Scheduler {
             CombatStyle::Clear(id);
             g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
             g_noneMatchedNoted.erase(id);  // and the once-per-fight "none matched" line
+            g_equipRangeUndecidableNoted.erase(id);   // MFO-B55: and the once-per-fight undecidable note
             // T#76: the equip force-hold dies with the fight too -- combat end is
             // one of its release points. The prevent-removal LOCK is on the
             // ActorEquipManager (it did NOT die with the controller), so this
@@ -899,6 +951,25 @@ namespace MFO::Scheduler {
                 }
             }
         }
+        // MFO-B55 FIX: a "known false" that came from a target-relative equip
+        // rule reading a NULL / dead / non-hostile currentCombatTarget while the
+        // follower's own group still has foes is NOT known -- demote it to
+        // UNKNOWN (see EquipRangeUndecidable). Logged once per fight so the
+        // field log shows the hold being kept on an engine-side null, not silence.
+        bool equipRangeUndecidable = false;
+        if (equipCondKnownFalse && equipHeld == 0) {
+            if (const auto r3 = g_followers.find(id); r3 != g_followers.end()) {
+                const auto& rules = r3->second.combat();
+                const int stopIdx = (choice.ruleIndex < 0) ? static_cast<int>(rules.size()) : choice.ruleIndex;
+                equipRangeUndecidable = EquipRangeUndecidable(f, rules, stopIdx);
+            }
+            if (equipRangeUndecidable) {
+                equipCondKnownFalse = false;
+                if (g_equipRangeUndecidableNoted.insert(id).second)
+                    spdlog::info("[sched] {:08X}: equip range rule has no usable combat target while own group has foes -- "
+                                 "hold kept (truth unknown, not false; MFO-B55)", id);
+            }
+        }
 
         // T#76 HYSTERESIS: gate the RELEASE on MeleeClampDwell(id) of SUSTAINED
         // known-false so a foe crossing the gambit's range threshold back and
@@ -919,7 +990,10 @@ namespace MFO::Scheduler {
         // heldOrder is reused by preserve branch 2 below (stable across the block:
         // only worker Want/Release mutate the equipOrder flag, none run between).
         const bool heldOrder = CombatStyle::HoldsEquipOrder(id);
-        if (equipHeld != 0 || (!equipCondKnownFalse && heldOrder))
+        // MFO-B55: an undecidable lap (null target, foes remain) refreshes the
+        // dwell like an unknown-but-held tick does, with or without a stance
+        // order, so the commit window is measured from the last DECIDABLE lap.
+        if (equipHeld != 0 || (!equipCondKnownFalse && (heldOrder || equipRangeUndecidable)))
             g_meleeClampTrueAt[id] = nowTp;
         bool dwellExpired = true;
         if (const auto dit = g_meleeClampTrueAt.find(id); dit != g_meleeClampTrueAt.end())
