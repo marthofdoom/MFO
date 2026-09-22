@@ -406,3 +406,9 @@ only PlayerControls. Every framework's NPC attack ends in NotifyAnimationGraph w
 **Race ATKD (Tuxborn Skyrim.esm):** DefaultRace 0x19 = 8 ATKE, no Left/Dual. ImperialRace 0x13744 / NordRace
 0x13746 = 27 entries incl. attackStartLeftHand / attackStartDualWield / attackPowerStartDualWield at 1.0.
 CSTY DATA flags: csThalmorMeleeDual 0x5, csMercerFreyMelee 0x6, csHumanMelee_AllD 0x1, MFO_MeleeStyle 0x5.
+
+
+**TRAP (2026-09-22): the AE library that matches `binaries/1.6.1170/SkyrimSE.unpacked.exe` is
+`versionlib-1-6-1170-0.bin`, NOT `versionlib-1-6-1170-0-1.bin`.** The `-0-1` file is a different build and
+resolves every id about 0x930 off, landing mid-function (a plausible-looking wrong answer). Self-check:
+`NotifyAnimationGraph` id 38048 must give `0x6A35F0`; only `-0.bin` does.
