@@ -152,6 +152,14 @@ namespace MFO::Scheduler {
         // table live" line: inserted on the first own-OOC party-combat service,
         // erased with the other per-fight state in the party-OOC branch.
         std::unordered_set<RE::FormID> g_partyCombatNoted;
+        // Once-per-fight latch for the "[eval] ... combat table: N rules, none
+        // matched" line (2026-09-21, Deck/Fable): a follower whose every
+        // condition is false has an EMPTY skip-chain, and the no-action chain
+        // line prints only a non-empty chain -- so Jesper's table ran a whole
+        // dragon fight with no [eval] line at all and STATUS's "[eval] scan
+        // lines" promise was wrong. Inserted at the first all-false no-action
+        // exit, erased with g_partyCombatNoted in the party-OOC branch.
+        std::unordered_set<RE::FormID> g_noneMatchedNoted;
 
         // The dials. Fill: confidence below 0.25 (a follower who by the
         // leash tenet WANTS to be at the player's side) while >400u away from
@@ -172,6 +180,7 @@ namespace MFO::Scheduler {
         g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
         g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
         g_partyCombatNoted.clear();
+        g_noneMatchedNoted.clear();
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
@@ -371,6 +380,7 @@ namespace MFO::Scheduler {
             // Idempotent out of combat (uncontended erase-miss when unowned).
             CombatStyle::Clear(id);
             g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
+            g_noneMatchedNoted.erase(id);  // and the once-per-fight "none matched" line
             // T#76: the equip force-hold dies with the fight too -- combat end is
             // one of its release points. The prevent-removal LOCK is on the
             // ActorEquipManager (it did NOT die with the controller), so this
@@ -1078,6 +1088,20 @@ namespace MFO::Scheduler {
                 if (recent.lastChain != line) {
                     recent.lastChain = std::move(line);
                     spdlog::info("[eval] {} ({:08X}) {}", name, id, recent.lastChain);
+                }
+            } else if (!suppressed) {
+                // EMPTY chain, not suppressed: Evaluate returned no rule on the
+                // first pass -- EVERY condition in the table was false this lap.
+                // Once per follower per fight (g_noneMatchedNoted), so a table
+                // that is visibly RUNNING and matching nothing (an own-OOC
+                // follower inside a party fight: every foe-keyed rule reads his
+                // own empty group) is distinguishable from a table that never
+                // ran. Re-armed in the party-OOC branch.
+                if (g_noneMatchedNoted.insert(id).second) {
+                    std::size_t nRules = 0;
+                    if (const auto rr = g_followers.find(id); rr != g_followers.end())
+                        nRules = rr->second.combat().size();
+                    spdlog::info("[eval] {} ({:08X}) combat table: {} rules, none matched", name, id, nRules);
                 }
             }
             // The combat table took no action -> this tick's one action slot goes
