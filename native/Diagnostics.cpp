@@ -64,6 +64,24 @@ namespace MFO::Diagnostics {
         constexpr std::uint32_t kPumpMs        = 133;
         constexpr std::uint32_t kDiagEveryNth  = 4;    // ~532 ms, the old cadence
         std::atomic<bool>          g_pumpRunning{ false };
+
+        // [hb] HEARTBEAT (2026-09-21, bHeartbeat, default ON). One line per 5 s
+        // from the SLEEPER thread -- MFO's own thread, which only sleeps and
+        // AddTasks, so it keeps printing while everything else hangs:
+        //   [hb] worker ticks=N main drains=M mainAge=<ms> lastWorkerStage='<s>'
+        // ticks: AddTask bodies that ran (the job worker). drains: heartbeat
+        // probes that ran on the MAIN thread (one MainThread::Post per line;
+        // the count freezes when the player's Update stops). mainAge: ms since
+        // the last probe ran. lastWorkerStage: the step the worker body was in
+        // when it last wrote the stage -- on a hung worker it names the callee
+        // that never returned. All relaxed atomics; the stage is a pointer to a
+        // string literal (never freed). Not save-scoped: a session count.
+        constexpr std::uint32_t kHeartbeatMs = 5000;
+        std::atomic<std::uint64_t> g_hbWorkerTicks{ 0 };
+        std::atomic<std::uint64_t> g_hbMainDrains{ 0 };
+        std::atomic<std::int64_t>  g_hbMainLastMs{ 0 };
+        std::atomic<const char*>   g_hbWorkerStage{ "never" };
+        inline void HbStage(const char* a_stage) noexcept { g_hbWorkerStage.store(a_stage, std::memory_order_relaxed); }
         // Generation token: StopPump/StartPump bump it, so a thread that was
         // mid-sleep across a revert->load exits instead of running alongside
         // its own replacement.
@@ -890,24 +908,52 @@ namespace MFO::Diagnostics {
                             InstallTerminateHandlerOnThisThread();
                         }
 
+                        g_hbWorkerTicks.fetch_add(1, std::memory_order_relaxed);   // [hb]
+
                         // Detection and the HUD stay on the old ~532 ms budget;
                         // only the evaluator runs at the deadline.
-                        if (diagTurn) Followers::Refresh();
+                        // [hb] HbStage names the step about to run, so a body that
+                        // never returns leaves its callee's name in the heartbeat.
+                        if (diagTurn) { HbStage("Followers::Refresh"); Followers::Refresh(); }
 
-                        Scheduler::Tick();
-                        Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
-                        Actuation::TargetCastReconcile();   // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
-                        APMFBridge::Tick();                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
-                        APMFBridge::MaybeWarnAbsence();     // gentle corner-toast reminder (~10 min cadence) when APMF is absent; no-op the instant it's present
-                        Loadout::Tick();   // hand back stowed two-handers
-                        AtkObserveTick();  // [atk-obs] passive attack-event probe: slots, fights, idle-in-reach, dumps
+                        HbStage("Scheduler::Tick");               Scheduler::Tick();
+                        HbStage("Actuation::SelfCastReconcile");  Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
+                        HbStage("Actuation::TargetCastReconcile"); Actuation::TargetCastReconcile();  // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
+                        HbStage("APMFBridge::Tick");              APMFBridge::Tick();                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
+                        HbStage("APMFBridge::MaybeWarnAbsence");  APMFBridge::MaybeWarnAbsence();     // gentle corner-toast reminder (~10 min cadence) when APMF is absent; no-op the instant it's present
+                        HbStage("Loadout::Tick");                 Loadout::Tick();   // hand back stowed two-handers
+                        HbStage("AtkObserveTick");                AtkObserveTick();  // [atk-obs] passive attack-event probe: slots, fights, idle-in-reach, dumps
 
-                        if (diagTurn) Probe::Tick();
+                        if (diagTurn) { HbStage("Probe::Tick"); Probe::Tick(); }
                         // The board echoes edits back through the snapshot, so
                         // while it is OPEN publish every tick (133ms) instead of
                         // every 4th -- a half-second echo made DragFloat crawl
                         // and hid whether a click registered (board review M2).
-                        if (diagTurn || Board::IsOpen()) Board::PublishSnapshot();
+                        if (diagTurn || Board::IsOpen()) { HbStage("Board::PublishSnapshot"); Board::PublishSnapshot(); }
+                        HbStage("idle");
+                    });
+                }
+
+                // [hb] the heartbeat line, from THIS thread (sleeps + AddTasks
+                // only, so it survives a worker or main hang). Read the counts,
+                // print, THEN post the next main probe: the line reports probes
+                // that had run by the time it printed, so a stalled main shows
+                // as a drains count that stops moving while ticks (or this line)
+                // keep going. Post is a documented no-op on VR: drains stay 0.
+                if (Config::g_heartbeat.load(std::memory_order_relaxed) && (wake % (kHeartbeatMs / kPumpMs)) == 0) {
+                    const auto nowMs   = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now().time_since_epoch()).count();
+                    const auto lastMain = g_hbMainLastMs.load(std::memory_order_relaxed);
+                    spdlog::info("[hb] worker ticks={} main drains={} mainAge={}ms lastWorkerStage='{}'",
+                                 g_hbWorkerTicks.load(std::memory_order_relaxed),
+                                 g_hbMainDrains.load(std::memory_order_relaxed),
+                                 lastMain ? (nowMs - lastMain) : -1,
+                                 g_hbWorkerStage.load(std::memory_order_relaxed));
+                    MainThread::Post([]() {
+                        g_hbMainDrains.fetch_add(1, std::memory_order_relaxed);
+                        g_hbMainLastMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 std::chrono::steady_clock::now().time_since_epoch()).count(),
+                                             std::memory_order_relaxed);
                     });
                 }
             }
