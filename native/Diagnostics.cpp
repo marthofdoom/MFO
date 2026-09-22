@@ -1153,10 +1153,14 @@ namespace MFO::Diagnostics {
     // needs. No allocation beyond spdlog's own formatting, no engine call, no
     // lock but the sink's. A fault INSIDE the logger on the same thread would
     // re-enter here -- the thread_local guard bails, and the original exception
-    // continues to CrashLogger. Stack overflow (0xC00000FD) has no headroom
-    // for formatting; it gets the flush only. A fault raised while ANOTHER
-    // thread holds the sink mutex waits on that mutex, like CrashLogger's own
-    // handler would -- accepted.
+    // continues to CrashLogger. Known degradation (backlog MFO-B61): a fault
+    // INSIDE log->critical under this handler is a NESTED exception raised
+    // inside MFO.dll; that nested one is what reaches CrashLogger's filter, so
+    // the report names the logger, and the ORIGINAL faulting address is lost.
+    // Stack overflow (0xC00000FD) returns at once with no flush and no log
+    // (see the handler). A fault raised while ANOTHER thread holds the sink
+    // mutex waits on that mutex, like CrashLogger's own handler would --
+    // accepted.
     //
     // std::terminate (an uncaught C++ exception, a noexcept violation) does
     // not raise an SEH exception the vectored handler can see: MSVC's abort()
@@ -1195,6 +1199,9 @@ namespace MFO::Diagnostics {
         // A known image: [base, base+size). Size comes from the PE header the
         // loader mapped (IMAGE_NT_HEADERS64::OptionalHeader.SizeOfImage at
         // NT+0x50: Signature 4 + FileHeader 20 + 56 into the optional header).
+        // `name` is written ONCE, in InstallFatalHook BEFORE the handler is
+        // registered (it is a plain pointer the handler reads on any thread);
+        // RefreshFatalModules re-resolves only the atomic base/size afterwards.
         struct FatalModule {
             const char*                 name = nullptr;
             std::atomic<std::uintptr_t> base{ 0 };
@@ -1241,12 +1248,19 @@ namespace MFO::Diagnostics {
             const auto code = a_ep->record->code;
             // ERROR severity (bits 31+30) without the customer bit (29): 0xC0xxxxxx.
             if ((code & 0xE0000000u) != 0xC0000000u) return kContinueSearch;
+            // STACK_OVERFLOW (0xC00000FD): return AT ONCE -- no flush, no log
+            // (Fable tier-A on 3315848, SEV-4). The thread is standing on its
+            // last guard page; spdlog's flush_() takes the sink mutex and calls
+            // fflush -> WriteFile, and that frame chain can double-fault into
+            // the reserved stack, which kills the process SILENTLY before
+            // CrashLogger's unhandled-exception filter ever runs -- the hook
+            // would then be the thing that lost the report. With flush_on(info)
+            // the FILE* buffer is already empty, so a flush here buys nothing.
+            if (code == 0xC00000FDu) return kContinueSearch;
             if (t_inFatalHandler) return kContinueSearch;           // a fault inside this handler / the logger
             t_inFatalHandler = true;
             if (auto* log = spdlog::default_logger_raw()) {
-                if (code == 0xC00000FDu) {                           // STACK_OVERFLOW: no room to format
-                    log->flush();
-                } else if (g_fatalLines.fetch_add(1, std::memory_order_relaxed) < kFatalMaxLines) {
+                if (g_fatalLines.fetch_add(1, std::memory_order_relaxed) < kFatalMaxLines) {
                     char where[96];
                     FatalDescribe(reinterpret_cast<std::uintptr_t>(a_ep->record->address), where, sizeof where);
                     // critical -> flush_on fires; the flush() after is the belt for a sink
@@ -1285,13 +1299,16 @@ namespace MFO::Diagnostics {
         if (::GetModuleHandleExA(0x4u | 0x2u, reinterpret_cast<const char*>(&FatalVectoredHandler), &self) && self)
             FatalNoteModule(g_fatalModules[0], reinterpret_cast<std::uintptr_t>(self));
         FatalNoteModule(g_fatalModules[1], reinterpret_cast<std::uintptr_t>(::GetModuleHandleA("APMF.dll")));
-        g_fatalModules[2].name = REL::Module::IsVR() ? "SkyrimVR.exe" : "SkyrimSE.exe";   // label only; written before base publishes
-        FatalNoteModule(g_fatalModules[2], REL::Module::get().base());
+        FatalNoteModule(g_fatalModules[2], REL::Module::get().base());   // base/size only; the name is InstallFatalHook's
     }
 
     void InstallFatalHook() {
         static std::atomic<bool> installed{ false };
         if (installed.exchange(true)) return;
+        // The game image's label, set ONCE here, before the handler exists: the
+        // handler reads `name` unsynchronised on whatever thread faults, so it
+        // must never be written again (Fable tier-A on 3315848, SEV-5 threading).
+        g_fatalModules[2].name = REL::Module::IsVR() ? "SkyrimVR.exe" : "SkyrimSE.exe";
         RefreshFatalModules();
         InstallTerminateHandlerOnThisThread();
         void* h = ::AddVectoredExceptionHandler(0 /* last: after every other vectored handler */, &FatalVectoredHandler);
