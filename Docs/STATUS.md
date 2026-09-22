@@ -13,6 +13,65 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-22 Deck run (`47dbd6e` deployed) — Fable field diagnosis + branch
+  `fix/mfo-spell-authority-0922` (off `main` `21fb9c1`, v2.0.9 line; NOT merged, NOT deployed, NO
+  full Fable review on the round by marth's token order).**
+  Evidence: memory notes `field-diag-2026-09-22` and `spell-score-steer-is-activate-only` (READ THE
+  CORRECTED SECTION), Fable agentlog `field-diag-20260922.md` steps 1-9, evidence file
+  `scratchpad/field-20260922/EVIDENCE.md` (session `a935cdde`, not in the repo).
+  **THE HEADLINE, and it reframes what MFO controls:** MFO governs CASTING, but it governed
+  EQUIP/SCORE only on a hand carrying a LIVE cast claim. The "spell score steer" only ever ADDS
+  +1000 to the claimed spell on the claimed hand — it never lowers anything, and a zero would not
+  have worked either, because a zero-scored item stays selectable and only `CheckShouldEquip` 0x0F
+  REMOVES a candidate. So the AI armed an UNGAMBITED spell (Vampiric Bolt `841B8A15`) in BOTH hands
+  and stood there charging it while MFO's consent denied every cast: **~133 s of 221 s of party
+  combat visibly inactive (60%), 100% of fight 1.** Deny-complete, nothing activated — principle 2's
+  exact failure. What the branch does:
+  (1) **CANDIDATE REFUSAL, via an allow-list APMF has shipped since ABI v4 and MFO had never
+  called.** A GATE-ONLY `kIntent_SelectSpell` claim (`param.form == 0`) plus
+  `SetSpellAllowList`, published from `CasterConsent::NoteGambits` — the single writer of the
+  `g_ctrl` set the continuous deny reads, so the deny and the allow-list cannot disagree. APMF
+  consults it at BOTH seats, actor-wide, independent of per-hand claims and of the idle-hand
+  floor. The list carries the gambit spells, APMF's live delivery-flip proxies, and every form
+  MFO's own deny DELIBERATELY EXEMPTS (carried staves + their enchantments, scrolls,
+  powers/lesser-powers/voice-powers) — because `CtrlUnlatchedDeny` is normal-spells-only and
+  APMF's side is a pure FormID-set test. Over 32 forms the gate is NOT claimed at all (a
+  truncated list would DENY the excess and disarm the follower) with a loud error. Lifts
+  completely at fight end. Kill switch `bApmfSpellAllowList` (INI-only, default ON).
+  **Observables:** `[cast-select] <id>: allow-list CLAIMED n=N (...) [forms]` per follower per
+  fight, `... updated` on a change, `... RELEASED` at fight end, and APMF's own
+  `[t2a]`/`[t2c] ... ch.8 select DENY` lines for anything refused. Open: `MFO-B65`.
+  (2) **`kIdleFloorUnobservedMs` re-sized 4000 -> 8000 ms, DE-ALIASED, and armed on CHARGE.**
+  This log is the measurement `MFO-B47` asked for: an offense claim reaches an observed
+  SpellFire in **5.8 s** with an equip cycle in front, so the 4000 ms cap fired early on EVERY
+  offense claim — and the floor lifted **60 ms AFTER** the engine began charging the claimed
+  Firebolt, with the AI charging its own spell in the freed hand 0.78 s later. `silentPastGate`
+  now also refuses to call a claim silent while `Actuation::CastInFlightOnHand` reports the
+  engine charging it. `MFO-B47` DRAINED; `MFO-B7`/`MFO-B8` stay open for
+  `kHealHoldNeverObservedMs`, untouched.
+  (3) **`kSilentWarnAfter` 2000 -> 3500 ms, same in-flight exemption.** At 2000 ms the
+  `[cfc] ... NO observed cast` warning was FALSE on every claim all session (claim -> charge is
+  2.3-2.5 s). A warning now means 3.5 s with the engine not even charging it.
+  (4) **Cicero's shield sells.** The sell gate order is `... keepArmor -> forceSell | worn ->
+  gemHold -> excluded -> SELL`, so **`worn` was the blocker and `gemHold` never was** (it only
+  ever sees an unworn item). A worn item whose APMF equip CATEGORY MFO's OWN declaration DENIES
+  now routes through the existing force-sell branch, whose `RemoveItem` unequips it on sale.
+  Narrow: Shield only (the one category MFO ever denies), only for the follower it is denied for.
+  **Observable:** `[sell] <id> '<name>' -> force-sell (worn, category DENIED by our own
+  declaration)`.
+  (5) **Stand down = SHEATHE, not unequip** (marth: "no one ever sees an unarmed follower, they
+  sheathe weapons. Not unequip."). `ReleaseForcedWeapon(a_follower, a_standDown)`. The
+  force-unequip stays — it is the only way to clear the prevent-removal lock — but on the
+  party-OOC teardown (the ONE site that passes `true`) the same weapon goes back on NON-FORCED
+  and the follower sheathes, so "weapons vanishing and returning" stops being visible. Every
+  other unequip site was audited per-site and left alone on purpose (swaps, the left-hand yield,
+  death/disable, the co-save lock clear, dismissal). **Observable:** `[equip] <id>: stand-down
+  re-arm -- N weapon(s) put back NON-forced and sheathed`. Open: `MFO-B64`.
+  **DEFERRED, NOT FIXED: Jesper's outfit (item 5 of the batch) — `MFO-B63`, SEV-2.** Three
+  independent changes to `RefreshEquipDeclaration` in a round with no full review, and the
+  engine-side trigger (the shield and hood VANISHING from `GetInventory` after `OutfitApply`
+  while APMF still listed the shield) is itself unresolved pending a `TESContainerChangedEvent`
+  probe.
 - **2026-09-21 21:50 PDT Deck run (`aca7d43` deployed) — Fable field diagnosis + branch
   `fix/mfo-field-batch-0921` (off `main` `db8fb7b`, v2.0.9 line; NOT merged, NOT deployed).**
   Evidence: memory note `field-diag-2026-09-21-evening` (the summary + pointers) and the Fable
@@ -191,10 +250,12 @@ Read it as history and this block as current.
   `CastTargetDirect` (`CastOn` → new `RestorationCastDirect`); offense keeps the AI-fired road.
   `ComposedCast::Try` is heal-only, so the CFC heal claim and `bHealAnimPackage` are dormant
   now (kept compiled). (2) The idle-hand floor is released while its driving claim has stood
-  `kIdleFloorUnobservedMs` (4000 ms = `kHealHoldNeverObservedMs`; sized from the 0906 heal's 2.95 s
-  claim → observed, which the 0908 heal exceeded at 4.5-6.1 s — backlog `MFO-B7`/`MFO-B8`: measure,
-  do not resize from n=2; the offense-claim-plus-equip-cycle latency this gate consumes is UNMEASURED
-  and the next Deck log sizes it) with no observed cast — `[apmf] <id> IDLE-HAND FLOOR released -- driving claim has no
+  `kIdleFloorUnobservedMs` (**SUPERSEDED 2026-09-22 — now 8000 ms and de-aliased, and the gate also
+  refuses to fire while the engine is CHARGING the claim; see the 09-22 delta at the top and
+  `MFO-B47` DRAINED.** As shipped in this entry it was 4000 ms = `kHealHoldNeverObservedMs`, sized
+  from the 0906 heal's 2.95 s claim → observed, which the 0908 heal exceeded at 4.5-6.1 s — backlog
+  `MFO-B7`/`MFO-B8`: measure, do not resize from n=2; the offense-claim-plus-equip-cycle latency this
+  gate consumes was UNMEASURED and the 09-22 Deck log measured it at 5.8 s) with no observed cast — `[apmf] <id> IDLE-HAND FLOOR released -- driving claim has no
   observed cast`. (3) `APMFBridge::Tick`'s expiry sweep clears the swept claim's `[cfc]` watch
   (`ComposedCast::ClearWatchHand`), and the OOC concentration label reads the direct road's own
   registry (`Actuation::TargetStreamLive`) instead of `IsHealCastActive`. `Scheduler.cpp` untouched

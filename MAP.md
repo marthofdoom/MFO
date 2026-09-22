@@ -869,7 +869,37 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   gained a slot parameter; shields/stowed two-handers unchanged). On any NEW right-hand equip an old
   left hold not in the plan is unequipped FIRST (a bow or two-hander needs that hand).
   `ReleaseForcedWeapon` (`:2320`) releases BOTH hands; `ClearForcedWeapons` (`:2460`) clears
-  `g_offHandRetryAt` too. **LEFT-SLOT RELEASES + READBACK (F4, principle 5):** every left-hand
+  `g_offHandRetryAt` too.
+  **STAND DOWN = SHEATHE, NOT UNEQUIP (`a_standDown`, marth 2026-09-22: "no one ever sees an unarmed
+  follower, they sheathe weapons. Not unequip.").** `ReleaseForcedWeapon(a_follower, bool a_standDown
+  = false)`. The force-unequip is UNCHANGED and stays LOAD-BEARING — the prevent-removal lock lives on
+  the `ActorEquipManager`, it did NOT die with the combat controller, and a plain unequip is REFUSED
+  against a forced item (a follower locked to a weapon can never cast again, the worse bug). What the
+  unequip also costs is VISIBILITY: an unequipped weapon stops being drawn on the body at all, where a
+  SHEATHED one is still worn — which is the "weapons vanishing and returning" the party-OOC teardown
+  note at `Scheduler.cpp` already records. So with `a_standDown` the SAME weapon(s) go back on
+  **NON-FORCED** (`EquipObject(..., a_forceEquip = false)` — no lock, the AI owns them again) and the
+  follower is sheathed (`Actor::DrawWeaponMagicHands(false)`, vfunc 0A6, pinned
+  `include/RE/A/Actor.h:360`; already used by `Loadout.cpp:341/429` and `Probe.cpp:270`), gated on
+  `!IsInCombat()` so a stand-down racing a fresh fight never puts a drawn weapon away. Runs on the
+  SAME double-`MainThread::Post` idiom as `LogLeftHandReadback` (the unequip is a QUEUED engine op, so
+  re-equipping in the same breath would race it; and #62 puts any equip on the main thread). Re-resolved
+  on the frame that runs; skipped for a dead/disabled follower, for an item no longer owned, and for a
+  hand something has ALREADY armed — it re-arms, it never evicts. **THE ONLY SITE THAT PASSES TRUE** is
+  `Scheduler.cpp`'s party-OOC 2-tick teardown (the fight is genuinely over and no specific item has to
+  leave the hand). Everything else keeps the default `false`, deliberately: the dead/disabled teardown
+  (`Scheduler.cpp:387`, the item must leave so a resurrection is not stuck), `ReconcileForcedWeapon`'s
+  release branch (`Actuation.cpp:~2737` — mid-combat kill-switch / category flip, where re-arming the
+  old category would fight the next gambit), `Followers.cpp:382` (dismissal — OUT OF this change's file
+  boundary), `YieldForcedLeftHand` (the hand must be FREE for a spell), the four swap unequips
+  (`:1853/:1890/:2169/:2171` — a replacement item takes the hand in the same breath) and
+  `CoLoadForcedWeapons` (clearing a stale lock on a possibly-3D-absent actor; an equip there is the
+  #62 invisible-head class). **What breaks:** remove the force-unequip and the lock survives (a
+  follower who can never cast); use `forceEquip = true` on the re-arm and the lock comes straight back;
+  run the re-arm on the job worker and it is a 3D rebuild off the main thread; pass `true` from a
+  mid-combat release and MFO re-arms a category its own next gambit is about to replace.
+  **OPEN BACKLOG — read before editing:** `MFO-B64` (`CoLoadForcedWeapons` still leaves a loaded follower
+  empty-handed; re-arming there needs an `Is3DLoaded()` gate it does not have). **LEFT-SLOT RELEASES + READBACK (F4, principle 5):** every left-hand
   unequip names `Loadout::LeftHandSlot()` (Yield, Release; `CoLoadForcedWeapons` `:2538` picks the
   slot from the LIVE hands because a v1 pair carries no hand — left slot when held left, default
   when held right, BOTH for a same-form count≥2 dual hold, the old slot-less call when held in
@@ -1198,6 +1228,15 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   `NoteInCombat` stamps on EVERY party-combat service so the shed dwell cannot
   mature inside a party fight (the SHED INTERACTION ordering in the Equip
   force-hold entry rests on it).
+  **THE PARTY-OOC TEARDOWN NOW STANDS DOWN INSTEAD OF DISARMING
+  (`fix/mfo-spell-authority-0922`, 2026-09-22).** That branch's `ReleaseForcedWeapon(f)` is the
+  ONE call site in the codebase that passes `a_standDown = true`: the fight is genuinely over (two
+  consecutive party-OOC services), the hold is simply finished and no specific item has to leave the
+  hand, so the lock is still force-cleared but the same weapon goes back on NON-FORCED and the
+  follower sheathes — marth 2026-09-22, "no one ever sees an unarmed follower, they sheathe weapons.
+  Not unequip." Full mechanism + the per-site audit of every other unequip in `Actuation`'s
+  force-hold entry. **What breaks:** pass `true` from the dead/disabled teardown at `:387` and a
+  resurrecting follower is re-armed with a weapon MFO no longer tracks.
   **Own-OOC inside party combat — the tick order:** combat table first (all of the
   in-combat branch), then `serviceOwnOoc(castFacetHeld)` (`:568`) = `Logistics::ServiceFollower`
   on a re-found record, called ONLY at the no-action exits — empty combat rules,
@@ -1420,6 +1459,18 @@ them clobbers unrelated engine vtables).
   the force-YES path, and `CheckCastThunk`'s friendly-fire hold all sit AFTER the
   early-pass return in their respective functions, so a live claim silences all of
   them, never just the concentration bound.
+- **`NoteGambits` ALSO PUBLISHES THE ch.8 ALLOW-LIST (`fix/mfo-spell-authority-0922`, 2026-09-22).**
+  This function is the SINGLE writer of `g_ctrl`, so it is where
+  `APMFBridge::PublishSpellAllowList(follower, spells)` is called — BEFORE it takes `g_mx` — and
+  `Clear` calls `APMFBridge::ReleaseSpellAllowList` before taking `g_mx` for the same reason. The
+  deny (`CtrlUnlatchedDeny`) and APMF's CANDIDATE REFUSAL are therefore built from ONE vector on ONE
+  lap and cannot disagree about what a follower may use. Full design: APMFBridge's "ch.8 CAST-SELECT
+  GATE" entry below. **The asymmetry that matters when reading either side:** `CtrlUnlatchedDeny` is
+  NORMAL SPELLS ONLY (`Is(FormType::Spell)` + `GetSpellType() == kSpell`), so staves, scrolls,
+  shouts, powers and abilities are deliberately NOT denied here — and that is exactly why the
+  allow-list has to ENUMERATE them (APMF's side is a pure FormID-set test). **What breaks:** publish
+  from anywhere else and the two sets drift; call either APMF function while holding `g_mx` and the
+  combat thread's deny hooks queue behind an inventory walk.
 - **Latch lifetime:** the Want latch does NOT clear on cast (spans the whole
   combat); `Want` overwrites SPELL only, never `permitAfter` or pacing breaks.
   Force-YES must NEVER apply to concentration spells (permanent-stream freeze,
@@ -1702,7 +1753,28 @@ declared there and defined in their home module). Layout:
   (`primary = ArmorScore`, key 10+slot), the redundant-inferior force-sell
   (`:926`; slot-best by score so the worn OFF-CLASS piece is what sells — the
   trade's `RemoveItem` is the proven un-wear; worn-is-kept (a) yields to it via
-  `forceSell`), `BuildBuyThresholds:425` → `TradeBridge::BuyThresholds`
+  `forceSell`; **and since `fix/mfo-spell-authority-0922` a THIRD `forceSell`
+  reason: `deniedWorn` — a WORN item whose APMF equip CATEGORY our OWN declaration
+  DENIES** (`APMFBridge::EquipAuthorityDenies(fid, kEquipCat_Shield)`, the mirror of
+  `EquipAuthorityOwns` reading the `denied` half of the scope last SENT). **THE BUG
+  IT FIXES (Cicero's shield, field 2026-09-22):** the gate order is `count<=0 → stock
+  → keepWeap → playerPick → keepArmor → forceSell | worn → gemHold → excluded →
+  SELL`; `worn` is tested BEFORE `gemHold`, so **`gemHold` was never the blocker and
+  `worn` always was**. For a denied category that read is permanently wrong: APMF's
+  seat refuses every re-equip (`RefreshEquipDeclaration` rule 3 denies Shield when
+  `roles.offHand == 2` under `bWeaponStyleControl`), APMF ch.17 never UNEQUIPS an
+  already-worn item, and nothing in MFO takes it off — so it is worn for the rest of
+  the save and never offered. **Deliberately narrow:** only SHIELD is mapped (the
+  only category MFO ever puts in `denied`), an unmapped category is left alone rather
+  than guessed at, and `gemHold`/`Catalog::IsExcluded` still run after it so a
+  gem-socketed or artifact shield is still protected. Log:
+  `[sell] <id> '<name>' -> force-sell (worn, category DENIED by our own declaration)`.
+  **What breaks:** widen `denied` without widening the mapping and the new category
+  silently keeps its old worn-is-kept behaviour; map a category MFO owns rather than
+  denies and the sell path starts selling gear the follower is wearing on purpose), **OPEN BACKLOG — read
+  before editing `RefreshEquipDeclaration`:** `MFO-B63` (the declaration is pick+worn rather than
+  best-per-slot, it is sent into a 3D-absent actor with no re-send, and SEND-ONLY-ON-CHANGE then
+  swallows the correction — a follower stood bare for 2 min 36 s in the field. DEFERRED, SEV-2), `BuildBuyThresholds:425` → `TradeBridge::BuyThresholds`
   **APPENDED** `armorHeavyBias` / `armorLightBias` / `armorBaseScore[5]`
   (`TradeBridge.h:99-107`; `armorBaseRat` keeps the raw rating as a diagnostic — a
   float score truncated into the int32 would tie its own baseline and re-buy every
@@ -3239,16 +3311,19 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   until APMF's TTL. It does NOT deny MFO's own direct force (`CastSpellImmediate` is `MagicCaster`
   vtable slot 01, `CheckCast` is 0A — pinned `include/RE/M/MagicCaster.h:46,55`) and does NOT deny
   weapons (APMF's 0x0F seat is on the spell/staff selector vtables only).
-  **THE UNOBSERVED GATE (`fix/mfo-combat-restoration-direct`, 2026-09-21).** A driving claim earns the
+  **THE UNOBSERVED GATE (`fix/mfo-combat-restoration-direct`, 2026-09-21; RE-SIZED AND ARMED ON CHARGE
+  `fix/mfo-spell-authority-0922`, 2026-09-22).** A driving claim earns the
   floor only while it can be believed to be driving: younger than **`kIdleFloorUnobservedMs`**
-  (`APMFBridge.h`, **4000 ms**, aliased to `kHealHoldNeverObservedMs` — both bound the engine's
-  claim → OBSERVED-CAST latency. **THE DATUM IS CONTESTED — open backlog `MFO-B7` / `MFO-B8`, and
-  this gate is consumer (d) of that constant:** the 0906 heal measured 2.95 s claim-to-observed
-  (`Docs/DIAG-2026-09-06-deny-heal-failures.md`), the 0908 heal **4.5-6.1 s** claim-to-fire
-  (`Docs/DIAG-2026-09-08-field.md:267`, "2.95 s plus one extra equip cycle"), so 4000 ms does NOT
-  clear every measured heal latency; B7's ruling is measure, do not resize from n=2. What this gate
-  consumes — an OFFENSE claim's latency with an equip cycle in front (heals no longer claim) — is
-  UNMEASURED; the next Deck log sizes it), or observed firing within its
+  (`APMFBridge.h`, **8000 ms, NO LONGER ALIASED** to `kHealHoldNeverObservedMs`. The 2026-09-22 Deck
+  log supplied the measurement `MFO-B47` asked for: an OFFENSE claim reaches an observed SpellFire in
+  **5.8 s** with an equip cycle in front (Jesper 750012C6, claim 08:26:59.202 → SpellFire
+  08:27:04.997), so the old 4000 ms fired EARLY on every offense claim — and every claim is an
+  offense claim now that heals take the direct road. 8000 ms clears that by 2.2 s and the worst heal
+  claim-to-fire ever measured (**6.1 s**, `Docs/DIAG-2026-09-08-field.md:267`) by 1.9 s. The two
+  constants are de-aliased because they no longer bound one quantity: `kHealHoldNeverObservedMs`
+  governs a heal claim's heartbeat and the cast-lock hold cap, this one an offense claim's
+  equip+charge+fire pipeline. `MFO-B7`/`MFO-B8` remain open for `kHealHoldNeverObservedMs` itself,
+  which this change did NOT touch), or observed firing within its
   own lifetime (`ComposedCast::ObservedFiring(follower, c.hand, c.spell, age)`, age from the
   mint-only `CastClaim::created`). Past that with no observed cast, `ReconcileHandFloorLocked`
   RELEASES a standing floor, logs `[apmf] <id> IDLE-HAND FLOOR released -- driving claim has no
@@ -3257,8 +3332,16 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   drives = `offense[0]` AND `heal` both silent; a mirrored DualCast never reaches the gate (both
   driven). `ComposedCast.cpp` static_asserts the gate outlasts `kSilentWarnAfter` so the `[cfc] NO
   observed cast` line precedes the release. A claim whose watch was never armed reads silent past the
-  gate and opens the other hand — the pre-F10 state, never a freeze. `APMFBridge.cpp` now includes
-  `ComposedCast.h`; `Tick()` runs INSIDE the AddTask body (`Diagnostics.cpp:346`), i.e. ComposedCast's
+  gate and opens the other hand — the pre-F10 state, never a freeze.
+  **AND THE AGE IS NOT THE WHOLE TEST ANY MORE (2026-09-22).** `silentPastGate` also refuses to call a
+  claim silent while the ENGINE IS ACTUALLY CHARGING IT — `Actuation::CastInFlightOnHand(actor, hand,
+  c.spell, c.proxy)`, THE one in-flight definition (`Actuation_Hands.cpp:251`, a plain read of
+  `ACTOR_RUNTIME_DATA::magicCasters[slot]->state`/`currentSpell`, no virtual call). On 09-22 the floor
+  lifted **60 ms AFTER** the engine began charging the claimed Firebolt and the AI charged its own
+  spell in the freed hand 0.78 s later: a longer timer alone could not have prevented that, only
+  reading the engine could. `ReconcileHandFloorLocked` resolves the actor ONCE per pass
+  (`RE::TESForm::LookupByID<RE::Actor>`); a null actor leaves the age test as the only word, which is
+  the pre-2026-09-22 behaviour. `APMFBridge.cpp` now includes `ComposedCast.h` AND `Actuation.h`; `Tick()` runs INSIDE the AddTask body (`Diagnostics.cpp:346`), i.e. ComposedCast's
   own serialized context, and ComposedCast never takes `g_mx`. **What breaks:** call the gate from any
   road that is not the job worker and the lock-free watch map races; shorten N below the measured
   tail and the other hand opens while a genuine cast is still charging.
@@ -3282,6 +3365,51 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   claim path and must NOT log it as an APMF refusal.
   **What breaks if you change this:** pass anything but the stored tuple and it mints a second claim /
   interrupts the charge — the exact churn F8 removes.
+- **THE ch.8 CAST-SELECT GATE — CANDIDATE REFUSAL (`fix/mfo-spell-authority-0922`, 2026-09-22).**
+  `PublishSpellAllowList` / `ReleaseSpellAllowList` / `IsSpellAllowListClaimed` (`APMFBridge.h`,
+  `APMFBridge.cpp` just above `ClaimHealCast`) + `Owned::selectHandle/selectList/selectRefreshed/
+  selectMintedAt`. A GATE-ONLY `kIntent_SelectSpell` claim (`param.form == 0` — it names no spell and
+  drives nothing) carrying an ABI v4 `SetSpellAllowList` allow-set. **THE HOLE IT CLOSES:** MFO governed
+  CASTING but governed EQUIP/SCORE only on a hand with a live cast claim — the score steer only ADDS
+  +1000 to the claimed spell and never lowers anything, and a zero would not work either (only
+  `CheckShouldEquip` 0x0F REMOVES a candidate). Field 2026-09-22: the AI equipped an ungambited Vampiric
+  Bolt (`841B8A15`) in BOTH hands and charged it while MFO's consent denied every cast — ~133 s of 221 s
+  of party combat visibly inactive. APMF has shipped the allow-list since ABI v4 and MFO had NEVER called
+  it. APMF reads it at `core/Allowance.cpp:60-79` and consults it at BOTH seats, **actor-wide and
+  independent of per-hand cast claims and of the idle-hand floor**: `core/EquipGate.cpp:609` (t2a
+  `CheckShouldEquip`, engine-answer-first — THE candidate refusal) and `core/CastGate.cpp:160` (t2c
+  `CheckCast`). **ONE SOURCE OF TRUTH BY CONSTRUCTION:** published from inside
+  `CasterConsent::NoteGambits` (`CasterConsent.cpp`), the SINGLE writer of the `g_ctrl` set the
+  continuous deny reads, so the deny and the allow-list are built from one vector on one lap and cannot
+  disagree — that disagreement IS the principle-2 violation the fix exists to close. Released from
+  `CasterConsent::Clear` (combat end / dismissal), `ClearTransientState` (revert/load), and `Tick()`'s
+  `FacetExpiry()` sweep + kill-switch check. **THE LIST MUST CARRY MORE THAN THE GAMBITS:**
+  `CtrlUnlatchedDeny` is NORMAL SPELLS ONLY (`Is(FormType::Spell)` + `GetSpellType() == kSpell`), so
+  staves/scrolls/powers are DELIBERATELY exempt from MFO's own deny — and APMF's allowance is a pure
+  FormID-set test that cannot be told "spells only", so `AppendDenyExemptForms` enumerates carried
+  STAVES (the staff form AND its `formEnchanting`, because t2a sees the staff and t2c sees the spell) +
+  carried SCROLLS + `kPower`/`kLesserPower`/`kVoicePower` from `TESNPC::GetSpellList()` and
+  `ACTOR_RUNTIME_DATA::addedSpells`. `kAbility` is deliberately NOT enumerated (passive, never cast, and
+  it alone would exhaust the budget). APMF's own delivery-flip proxies for live cast claims are appended
+  from `Owned`. MFO's own `ConcProxy` pool is NOT enumerated and does not need to be: those are 0xFF
+  `IFormFactory` spells never in any actor's spell list (so `CombatInventory` can never build a candidate)
+  cast via `CastSpellImmediate` (`MagicCaster` vtable slot 01) while APMF hooks 0x0A / 0x0F.
+  **OVERFLOW FAILS OPEN, LOUDLY:** past `kMaxSpellAllowList` (32) APMF's degrade is "the excess are
+  non-exempt", i.e. DENIED, which would disarm the follower — so an oversized list means NO CLAIM AT ALL
+  plus an `[cast-select] ... the gate is NOT claimed` error, and the cast-time deny carries the load
+  (#7). **AT FIGHT END THE GATE LIFTS COMPLETELY** (the decision, recorded in `Clear`): out of combat MFO
+  leaves a follower's own casting alone and the cast-time deny is gone too. Kill switch
+  `bApmfSpellAllowList` (INI-only, default ON, same shape as `bApmfCast`), additionally inert with
+  `bApmfCast` off or cast control off. Log: one `[cast-select] <id>: allow-list CLAIMED/updated n=N [...]`
+  line per claim/change, one `RELEASED` line per release.
+  **What breaks if you change this:** drop a form the follower legitimately needs off the list and MFO's
+  OWN gate disarms him (this has bitten twice — staves and the graduated levels are the two known traps);
+  TRUNCATE instead of refusing on overflow and the excess is silently DENIED; publish it from anywhere
+  but `NoteGambits` and the deny and the allow-list can drift apart; call it while holding
+  CasterConsent's `g_mx` and the combat thread's deny hooks queue behind an inventory walk; forget the
+  `Tick()` sweep and a follower who stops being serviced keeps a DENY nothing can lift.
+  **OPEN BACKLOG — read before editing:** `MFO-B65` (the allow-list is an ENUMERATION and an enumeration
+  can be incomplete; how to identify a missing exempt class from one field log).
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** offense-cast =
   PER-CAST, TTL-bounded (`kIntent_Cast`, PER-HAND now — see above; refreshed each winning cast
   tick; released crisply by
@@ -4165,7 +4293,26 @@ native seats) and ENGINE_NOTES §0.40.
     Must stay ABOVE `kSilentWarnAfter` (`ComposedCast.cpp:95`) so the `[cfc]`
     silent-claim warning precedes the lift — `static_assert`ed at
     `ComposedCast.cpp:101` — and below `kHealCastTtlMs` so it bites before the
-    claim it guards dies on its own.
+    claim it guards dies on its own. **UNCHANGED by `fix/mfo-spell-authority-0922`**
+    (which re-sized `kIdleFloorUnobservedMs` and DE-ALIASED it from this constant —
+    `MFO-B7`/`MFO-B8` stay open for THIS one), but note the ordering budget moved:
+    `kSilentWarnAfter` is now **3500 ms**, so the headroom here is 500 ms.
+  - `kSilentWarnAfter` (`ComposedCast.cpp`) — **RE-SIZED 2000 → 3500 ms and ARMED ON
+    CHARGE (`fix/mfo-spell-authority-0922`, 2026-09-22).** At 2000 ms the `[cfc] ...
+    NO observed cast ... APMF's engine seats may not be firing it` warning was FALSE
+    for the WHOLE 2026-09-22 session: the measured claim → first CHARGE STATE latency
+    for an offense cast is 2.3-2.5 s (claim → observed SpellFire 5.8 s with an equip
+    cycle in front), so every claim tripped it while the seats were firing perfectly
+    (principle 8 — a diagnostic that cries wolf on every claim is worse than none).
+    3500 ms sits above the charge latency and strictly BELOW both
+    `kHealHoldNeverObservedMs` (4000) and `kIdleFloorUnobservedMs` (8000), so both
+    `static_assert`s still hold. **The timer is not the real fix:** `WatchArmed` now
+    also stays quiet while `Actuation::CastInFlightOnHand(actor, hand, spell,
+    w.proxy)` is true — a claim mid-charge is by definition not one the seats are
+    failing to fire. Same predicate, same measurement and the same reasoning as the
+    idle-hand floor's gate, so the two diagnostics are sized off ONE quantity.
+    **What breaks:** raise it at or above 4000 and the `static_assert` fires; drop the
+    in-flight read and the false warnings come straight back.
   - **REACHABILITY — TWO cases, not one.** (i) While the incumbent's condition
     still holds, only a rule ABOVE it can be held (a Claimed incumbent stops all
     three scans), so that hold is a genuine PRIORITY INVERSION. (ii) Once the
