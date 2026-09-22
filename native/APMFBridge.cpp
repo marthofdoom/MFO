@@ -1075,7 +1075,10 @@ namespace MFO::APMFBridge {
             //     between cells) simply leaves the age test as the only word, which
             //     is the pre-existing behaviour.
             const auto now = std::chrono::steady_clock::now();
-            RE::Actor* actor = RE::TESForm::LookupByID<RE::Actor>(follower);
+            // Resolved ONCE per pass, and only when a floor is actually in question
+            // (`wantHand != 0` is the only branch `silentPastGate` is called from) --
+            // this runs for every follower with any claim on every ~133 ms pump.
+            RE::Actor* actor = wantHand != 0 ? RE::TESForm::LookupByID<RE::Actor>(follower) : nullptr;
             auto silentPastGate = [&](const CastClaim& c) {
                 if (c.handle == APMF_API::kInvalidHandle) return true;   // not driving at all
                 const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - c.created);
@@ -1994,7 +1997,10 @@ namespace MFO::APMFBridge {
         g_selectOverflow.erase(a_follower);
 
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        if (!api) return false;   // raced Acquire/unload between the check above and here
+        if (!api) {   // raced Acquire/unload between the check above and here
+            EraseIfEmpty(g_owned.find(a_follower));   // `o` may be the entry we just default-created
+            return false;
+        }
         bool freshClaim = false;
         if (o.selectHandle != APMF_API::kInvalidHandle) {
             // Same F2 re-validation the ch.17 standing claim does, and for the same
