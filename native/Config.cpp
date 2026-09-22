@@ -123,6 +123,7 @@ namespace MFO::Config {
             else if (a_key == "bCastSelf")          setB(g_castSelf);         // forced self-cast gate, dev-only
             else if (a_key == "bProgProbe")         setB(g_progProbe);        // progression sinker probe, dev-only
             else if (a_key == "bAttackObserve")     setB(g_attackObserve);    // [atk-obs] passive attack-event probe, INI-only
+            else if (a_key == "bHeartbeat")         setB(g_heartbeat);        // [hb] 5 s liveness line, INI-only, default ON
             else if (a_key == "iProgProbeKey")      setI(g_progProbeKey, 0, 255);
             else if (a_key == "bProgCatalogDump")   setB(g_progCatalogDump);  // catalog census dump, dev-only
             else if (a_key == "bProgHarness")       setB(g_progHarness);      // allocator dev harness, dev-only
@@ -291,6 +292,7 @@ namespace MFO::Config {
             g_castSelf           = false;   // forced self-cast route -- OFF (gated) until deck-confirmed
             g_progProbe          = false;   // progression sinker probe -- OFF everywhere by default
             g_attackObserve      = false;   // [atk-obs] passive attack-event probe -- OFF everywhere by default (Deck INI arms it)
+            g_heartbeat          = true;    // [hb] 5 s liveness line -- ON (1 line / 5 s; names the stopped thread on a freeze)
             g_progProbeKey       = 0x27;    // DIK semicolon, unbound in vanilla
             g_progCatalogDump    = false;   // progression catalog dump -- OFF everywhere by default
             g_progHarness        = false;   // allocator dev harness -- OFF everywhere by default

@@ -433,6 +433,11 @@ namespace MFO::Config {
     // hands, touches no roster from the sink. bAttackObserve = 1 in
     // Data/SKSE/Plugins/MFO.ini arms the sink and the tick. See Diagnostics.cpp.
     inline std::atomic<bool>  g_attackObserve{ false };
+    // [hb] HEARTBEAT -- DEFAULT ON (one line per 5 s). The sleeper thread prints
+    // `[hb] worker ticks=N main drains=M ...` so a freeze names the thread that
+    // stopped (a stalled worker freezes ticks, a stalled main freezes drains).
+    // INI-only (no MCM face), [Debug] bHeartbeat. See Diagnostics.cpp.
+    inline std::atomic<bool>  g_heartbeat{ true };
     // DIK code for the probe trigger. 0x27 is semicolon — unbound in vanilla
     // (the focus key holds 0x2B backslash). 0 disables the trigger.
     inline std::atomic<int>   g_progProbeKey{ 0x27 };

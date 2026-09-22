@@ -78,10 +78,14 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 The single source of truth for ordering. Everything below depends on it.
 
-- **`SKSEPluginLoad`** (`plugin.cpp:392`): logs version (stale-binary guard #44,
-  `:404`), registers the unique id + the 3
-  serialization callbacks (`:411-414`), the message listener (`:416`), and
-  `TradeBridge::RegisterFuncs` via the Papyrus interface (`:422` — must be here,
+- **`SKSEPluginLoad`** (`plugin.cpp:489`): `SetupLog` (`:76`; rotates the previous
+  `MFO.log` to `MFO.log.1` first — `RotateLog` `:67`, one `[startup]` line — and
+  sets `flush_on(info)`, no background flusher: the per-line flush is the only policy
+  that keeps the tail through a fast-fail / hang+kill, 2026-09-21), then
+  `Diagnostics::InstallFatalHook` (`[fatal]`, needs the logger + `REL::Module`), logs
+  version (stale-binary guard #44), registers the unique id + the 3
+  serialization callbacks, the message listener, and
+  `TradeBridge::RegisterFuncs` via the Papyrus interface (must be here,
   runs each VM init).
 - **`kInputLoaded`** (`:263`): `Config::EnsureMcmDefaults()` — seeds the MCM
   store *before* MCM Helper reads it at its own kDataLoaded (bind-on-first-load).
@@ -90,6 +94,7 @@ The single source of truth for ordering. Everything below depends on it.
   `Gait::Apply` → `Catalog::Load` → `Progression::Init` → `ProgAllocator::Init`
   → `Logistics::ComputeWeakPotionFloor` → `MEOBridge::Acquire` →
   `APMFBridge::Acquire` (APMF cast-select client; null-degrades if APMF absent) →
+  `Diagnostics::RefreshFatalModules` (APMF.dll's range for the `[fatal]` line) →
   `Followers::ResolveQuirks` → `MainThread::Install` → `Targeting::InstallHook`
   → `CasterConsent::InstallHook` → `CombatStyle::InstallEquipGate` →
   **sinks LAST** (`Rapport::RegisterSinks`, `Logistics::RegisterSinks`,
@@ -1135,61 +1140,102 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   READS the active-effect list, the same off-worker read as the other combat guards.
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
-Round-robin one follower per 133 ms tick (`kTickInterval` `:28`), pumps packages
+Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
 first, runs the combat table while the PARTY fights and the logistics table when
 it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worker.
-- `Tick()` (`:188`) — caller `Diagnostics.cpp:255`. `Packages::Pump()` must stay
-  first + unconditional (`:213`). Reads `g_followers` — safe only because StopPump
+- `Tick()` (`:252`) — caller `Diagnostics.cpp:931`. `Packages::Pump()` must stay
+  first + unconditional. Reads `g_followers` — safe only because StopPump
   brackets the load window. Retreating follower `return`s before the gambit table
   so a cast rule can't fight the retreat travel.
 - **PARTY COMBAT (2026-09-21, Deck/Fable — the Jesper freeze + the Cicero hold
-  teardown).** `g_partyCombat` (`:150`) = the player `IsInCombat()` OR any managed
-  active follower `IsInCombat()` OR any managed follower's `CombatSense::FoeCount`
+  teardown; line numbers refreshed on `fix/mfo-field-batch-0921`).** `g_partyCombat`
+  (`:199`) = the player `IsInCombat()` OR any managed active follower `IsInCombat()`
+  OR — for followers whose own flag is TRUE this lap — his `CombatSense::FoeCount`
   (the `[sense] foes=` read — his own combat group, no radius) `> 0`. Computed ONCE
-  per tick at `:221-249` on the worker from the same `g_active` walk the round-robin
+  per tick at `:285-345` on the worker from the same `g_active` walk the round-robin
   makes (#4: no lock, no off-road roster read), transition-logged
   `[sched] party combat ON|OFF (player= followers= foes=)` (#79). Reset in
-  `ClearTransientState`. **THE TWO GATES key on it, never on the serviced
-  follower's own flag:** GATE 1 (`:342`) — the OOC branch (retreat/consent/cast-
-  lock/stance teardown + `ServiceFollower` `:393`) runs only while party combat is
-  FALSE, so the combat table runs for every managed follower while the party
-  fights; a follower with no combat controller of his own has every foe-keyed rule
-  fall through transparently (the Evaluator reads HIS group, `Evaluator.cpp:176`)
-  and is logged once per fight `[sched] <id>: party combat, own combat=0 -- combat
-  table live` (`:465`, latch `g_partyCombatNoted`, erased in the party-OOC branch).
-  GATE 2 (`:384`) — the T#76 `ReleaseForcedWeapon` debounce counts consecutive
-  PARTY-OOC services (still N=2). Still keyed on the follower's OWN flag
-  (`ownCombat` `:341`): `ReleaseTravelOnCombat` (`:486`; unconditional eviction, and
-  the own-OOC service below may legitimately arm a loot walk near a fight he is not
-  in — the PLAYER's combat ends every excursion inside `ServiceFollower` anyway),
-  the auto-retreat fill, and `Confidence::Of`. `NoteInCombat` (`:409`) stamps on
-  EVERY party-combat service so the shed dwell cannot mature inside a party fight
-  (the SHED INTERACTION ordering in the Equip force-hold entry rests on it).
+  `ClearTransientState`. **CONTROLLER LIFETIME (item H of the field batch, tier-A
+  carve-out; `ENGINE_NOTES.md` §0.47):** `FoeCount` derefs `combatController->
+  combatGroup->lock`, and `Actor::combatController` is a raw pointer that
+  `Actor::StopCombat` (vtable slot 0xE5, both runtimes) frees INLINE on BSJobs
+  worker threads with no refcount and no lock — so the group read is gated on a
+  same-lap `IsInCombat()` (`:330`), the pre-build shape. The `foes` term is then
+  implied by `followersFighting`; it survives as the transition line's count.
+  Un-gating it re-opens a per-follower, per-tick, in-AND-out-of-combat read of
+  freed memory through every controller rebuild. **The gate is a strict REDUCTION,
+  not a fix (Fable tier-A on `3315848`):** it removes the null and the
+  allocated-but-inactive phases; a `StopCombat` on a worker thread between the flag
+  read and the group read still frees the controller under the reader, and the
+  Evaluator selectors, the `[sense]` line and `EquipRangeUndecidable` still read the
+  group. A bare controller epoch cannot close it (validate-after-read still derefs
+  `cc->combatGroup->lock` first). The sound next brief is the combat-thread MIRROR —
+  `UpdateCombat` seat publishes `foeCount`/`inCombat` atomics per FormID, a
+  `StopCombat` seat (slot 0xE5: SE `0x625920` / AE `0x6b70a0`) clears them, the
+  worker reads only the mirror — `ENGINE_NOTES.md` §0.47 "Fable's judgement", STATUS
+  "MFO-next: FoeCount/inCombat mirror". Until it lands, every new worker-side
+  `combatController` read is a new instance of this exposure. **THE TWO GATES key on it, never
+  on the serviced follower's own flag:** GATE 1 (`:434`) — the party-OOC branch
+  runs only while party combat is FALSE, so the combat table runs for every managed
+  follower while the party fights; a follower with no combat controller of his own
+  has every foe-keyed rule fall through transparently (the Evaluator reads HIS
+  group, `Evaluator.cpp:176`) and is logged once per fight `[sched] <id>: party
+  combat, own combat=0 -- combat table live` (`:574`, latch `g_partyCombatNoted`,
+  erased in the party-OOC branch). GATE 2 (`:451`, `MFO-B60` fixed, item G) — the
+  WHOLE party-OOC teardown (RetreatClear, the ready-beat / proposal / per-fight
+  latches, `CasterConsent::Clear`, `ClearCastLock`, `CombatStyle::Clear`,
+  `ReleaseForcedWeapon`, the dwell erase) sits behind `++g_outOfCombatTicks[id] >= 2`
+  — two consecutive PARTY-OOC services. Before item G only the hold release waited;
+  a 145 ms party OFF/ON flap (21:57:34.884/35.029, a REAL engine combat-controller
+  restart — the `[wstyle] OWNED` lines re-print) tore down a caster's consent latch
+  and cast lock on the first tick. **Two `party combat OFF` edges in one fight are
+  legitimate on such a restart**; the debounce is what makes them harmless.
+  `Logistics::ServiceFollower` still runs on every party-OOC tick. Still keyed on
+  the follower's OWN flag (`ownCombat`): `ReleaseTravelOnCombat` (unconditional
+  eviction, and the own-OOC service below may legitimately arm a loot walk near a
+  fight he is not in — the PLAYER's combat ends every excursion inside
+  `ServiceFollower` anyway), the auto-retreat fill, and `Confidence::Of`.
+  `NoteInCombat` stamps on EVERY party-combat service so the shed dwell cannot
+  mature inside a party fight (the SHED INTERACTION ordering in the Equip
+  force-hold entry rests on it).
   **Own-OOC inside party combat — the tick order:** combat table first (all of the
-  in-combat branch), then `serviceOwnOoc(castFacetHeld)` (`:459`) = `Logistics::ServiceFollower`
-  on a re-found record, called ONLY at the no-action exits — empty combat rules
-  (`:637`), the ready beat (`:651`), and the scan ending without a Fired / opaque
-  hold (`:1086`, which passes `castSeen`) — and never on a tick that acted or on the retreat-holder exit. So
+  in-combat branch), then `serviceOwnOoc(castFacetHeld)` (`:568`) = `Logistics::ServiceFollower`
+  on a re-found record, called ONLY at the no-action exits — empty combat rules,
+  the ready beat, and the scan ending without a Fired / opaque hold (which passes
+  `castSeen`) — and never on a tick that acted or on the retreat-holder exit. So
   a party-combat/own-OOC follower still gets loot / economy / the equip declaration
   at the same ~1 s cadence as before, and the §4.3 one-real-action-per-tick bound
   holds because the second table runs only when the first produced nothing.
+  **An own-OOC follower whose every condition is false prints NO skip-chain line**
+  (the chain is empty); since item E the no-action exit prints `[eval] <name> (<id>)
+  combat table: N rules, none matched` once per follower per fight (`:1213`, latch
+  `g_noneMatchedNoted`) so a running table is distinguishable from one that never
+  ran. STATUS's earlier "[eval] scan lines" promise for Jesper was wrong: nothing
+  matched, so nothing printed.
+  **`MFO-B55` FIXED (item F, `920a73f`):** `EquipRangeUndecidable` (`:116`) — a lap
+  on which a target-relative equip rule (`cond.foe_within_range` / `_beyond_range`)
+  was evaluated against a null / dead / non-hostile `currentCombatTarget` while
+  `FoeCount(self) > 0` is UNKNOWN, not false: `equipCondKnownFalse` is demoted
+  (`:1006`), the dwell clock refreshes, `ReconcileForcedWeapon` (`:1138`) keeps the
+  hold. Both Cicero mid-fight weapon vanishes (21:57:34.226, 21:57:44.075) were the
+  dwell timing out on an engine-side null; **the dwell path, not the party debounce,
+  was the operative foe-keyed release.** A genuinely empty group (`FoeCount` 0) or a
+  real party-OOC still releases. One `[sched] ... hold kept (truth unknown, not
+  false; MFO-B55)` line per follower per fight.
   **What breaks:** keying EITHER gate back on the follower's own `IsInCombat()`
   re-creates the 2026-09-21 Jesper freeze (own flag false most of a dragon fight →
   stuck on the OOC table, only the logistics heal could act) and the Cicero hold
-  teardown (three mid-fight `ReleaseForcedWeapon`s off a flapping flag); calling
+  teardown (three mid-fight `ReleaseForcedWeapon`s off a flapping flag); moving any
+  teardown call back out of the `>= 2` block re-opens `MFO-B60`; calling
   `serviceOwnOoc()` on a Fired tick double-fires (a combat cast + a logistics heal
   in one tick); moving `NoteInCombat` back under `ownCombat` lets the shed drop a
   HELD weapon mid-party-fight; dropping the `g_active` walk from the top of `Tick`
-  for a per-follower read re-introduces a per-follower "truth" that flaps. **Known,
-  not closed (Fable gate review SEV-4, backlog `MFO-B55`):** a stretch of own-OOC longer
-  than `MeleeClampDwell` (2-4 s) still releases a FOE-KEYED equip hold through the T#76
-  hysteresis path, because `kCondFoeWithinRange` reads false when `currentCombatTarget`
-  is null — the engine dropped the target on a LoS loss, NOT because the foe is far — so
-  the release is the dwell timing out on an engine-side null, not the gambit's condition
-  being genuinely false. Slower than `main`'s 0.3-0.8 s flap release, not faster. Also open
-  from the same review: `MFO-B56` (`Loadout::Tick` erases `g_equipClock` on the OWN flag, so
-  the AI-first grace collapses for an own-OOC hybrid cast) and `MFO-B57` (`[sense] foes=0`
-  every 3 s for own-OOC followers; the ready beat is consumed at the party edge).
+  for a per-follower read re-introduces a per-follower "truth" that flaps; dropping
+  the `EquipRangeUndecidable` demotion re-opens `MFO-B55` (weapons vanishing mid-fight
+  on a LoS loss). Still open from the gate review: `MFO-B56` (`Loadout::Tick` erases
+  `g_equipClock` on the OWN flag, so the AI-first grace collapses for an own-OOC
+  hybrid cast) and `MFO-B57` (`[sense] foes=0` every 3 s for own-OOC followers; the
+  ready beat is consumed at the party edge).
   **Since the merge with `fix/mfo-combat-restoration-direct` (2026-09-21):** the post-scan
   `serviceOwnOoc(castSeen)` call passes the scan's `castSeen` — a lap on which a combat
   cast rule's condition held does NOT run logistics, because the combat table's direct
@@ -1203,10 +1249,11 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   `MFO-B59` (the `ownedCast` explicit-subject ally + Offense road, the stream outliving a
   castSeen-false lap by the reconcile's stale window, a magicka-dry Declined stretch delaying
   logistics) and `MFO-B58` (the Task-1 concentration claims with no controller test).
-- `ClearTransientState` (`:168`) — caller `Serialization.cpp:699`; must run inside
+- `ClearTransientState` (`:230`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
-  plus `g_partyCombat` / `g_partyCombatNoted`.
+  plus `g_partyCombat` / `g_partyCombatNoted` / `g_noneMatchedNoted` /
+  `g_equipRangeUndecidableNoted`.
 - Casts `combatClassOverride` directly to `CombatStyle::Stance` (`:630,949`) — the
   ordinal-equality contract.
 - **T#78 per-follower MFO master switch** — gate right after the `g_followers.find`
@@ -4296,15 +4343,49 @@ a fresh order.
 
 ### Diagnostics.cpp / Diagnostics.h — event sinks + THE WORKER PUMP ⚠️ RACE LINCHPIN
 Owns the one persistent sleeper thread driving the per-follower tick, four event
-sinks, and `DumpReport`. `Install()` (`:1052`) ← `plugin.cpp:341` (registers
-SpellSink/HitSink/MenuSink + Probe crosshair sink). `SleeperLoop` (`:853`, `kPumpMs=
+sinks, `DumpReport`, and (2026-09-21 field batch) the `[fatal]` passive hook and
+the `[hb]` heartbeat. `Install()` (`:1305`) ← `plugin.cpp` kDataLoaded (registers
+SpellSink/HitSink/MenuSink + Probe crosshair sink). `SleeperLoop` (`:893`, `kPumpMs=
 133`, `kDiagEveryNth=4`) never touches game state directly — only `AddTask`s a lambda
 that re-checks the epoch, sets `TickActiveGuard`, then runs `Followers::Refresh`
 (diag turn), `Scheduler::Tick`, `Loadout::Tick`, `AtkObserveTick`, `Probe::Tick`
-(diag turn), `Board::PublishSnapshot` (`:875-890`). (Line numbers in this entry were
-refreshed 2026-09-21 when the `[atk-obs]` block, ~500 lines, landed ABOVE
-`SleeperLoop`; older `Diagnostics.cpp:NNN` cross-references elsewhere in this map
-predate that and read ~500 low.)
+(diag turn), `Board::PublishSnapshot` (`:911-940`), each step preceded by an
+`HbStage("<callee>")` store. (Line numbers refreshed on `fix/mfo-field-batch-0921`;
+older `Diagnostics.cpp:NNN` cross-references elsewhere in this map read low.)
+- **`[hb]` HEARTBEAT (item C; `bHeartbeat`, INI-only `[Debug]`, default ON).** Every
+  37 wakes (~5 s) the SLEEPER thread itself prints `[hb] worker ticks=N main drains=M
+  mainAge=<ms> lastWorkerStage='<callee>'` (`:945-970`): `ticks` = AddTask bodies that
+  ran, `drains` = heartbeat probes that ran on the main thread (one `MainThread::Post`
+  per line, counted when it runs; 0 forever on VR), `mainAge` = ms since the last probe
+  ran, `lastWorkerStage` = the callee the worker body was about to run. Relaxed atomics
+  (`:79-84`), not save-scoped. On a freeze the counter that stops names the thread;
+  the stage names the callee that never returned. Not in the line: a last-main-LABEL
+  (`MainThread::Post` takes none; adding one is a `MainThread.cpp/.h` change).
+- **`[fatal]` PASSIVE FATAL HOOK (item B; `:1180-1303`, installed from
+  `SKSEPluginLoad` right after `SetupLog`).** A LAST-position
+  `AddVectoredExceptionHandler` + `std::set_terminate`. The handler flushes spdlog,
+  prints ONE `[fatal] code=<hex> addr=<module+rva> thread=<id>` line for an
+  error-severity SEH code without the customer bit (0xC0xxxxxx — AV, illegal
+  instruction, stack overflow, int divide, in-page, heap corruption), and returns
+  `EXCEPTION_CONTINUE_SEARCH`: CrashLogger (an unhandled-exception filter, which
+  runs after every vectored handler declines) keeps the report. NEVER handles or
+  swallows. Vectored handlers see FIRST-CHANCE exceptions, so a `[fatal]` line
+  followed by ordinary lines was handled by somebody (SEH probing); the LAST line
+  is the crash. C++ throws (0xE06D7363), .NET, thread-naming codes never print.
+  Capped at 16 lines/session; `thread_local` re-entry guard; STACK_OVERFLOW gets the
+  flush only. Module ranges: MFO by address (`GetModuleHandleExA` FROM_ADDRESS),
+  APMF.dll by name (re-resolved at kDataLoaded, `RefreshFatalModules` `:1280`), the
+  game image from `REL::Module`; size from the mapped PE header (`SizeOfImage` at
+  NT+0x50). Win32 shapes hand-declared at the top of the file (no `<windows.h>`).
+  MSVC keeps the terminate handler PER THREAD: installed on the plugin-load thread,
+  the sleeper (`:894`), the AddTask worker (thread_local latch in the tick body,
+  `:905`) and main (one `MainThread::Post` at `StartPump` `:1405`). The combat-thread
+  hooks are NOT covered. **What breaks:** returning anything but 0 from the handler,
+  or logging inside it for informational codes, hijacks the crash from CrashLogger /
+  spams try-catch traffic; calling the engine or allocating in the handler crashes
+  the crash. The flush policy this pairs with is `flush_on(info)` in `plugin.cpp`
+  `SetupLog` (the 1 s background flusher is gone) — the only policy that keeps the
+  tail through a fast-fail, a hang+kill or an OS teardown, which no handler sees.
 - **StopPump-before-clear invariant:** `StopPump()` (`:1074`) is the FIRST statement
   in `ResetAllState` (`Serialization.cpp:686`) and runs at kPreLoadGame
   (`plugin.cpp:369`). It clears `g_pumpRunning`, bumps `g_pumpEpoch` (strands mid-
@@ -4329,23 +4410,27 @@ predate that and read ~500 low.)
   `IsTrackedFast` before taking the epoch.
 - **`[atk-obs]` passive attack-event probe (feat/mfo-attack-observe, 2026-09-21;
   `bAttackObserve`, INI-only, default OFF; the Deck test INI sets 1).** File-local block before `SleeperLoop`:
-  `AttackSink` (`:492`, one `BSTEventSink<BSAnimationGraphEvent>` per follower slot,
-  `g_atkSinks[16]`), `AtkSlot g_atk[16]` (`:441`, the fixed-size counter rows),
-  `g_atkUnk[32]` (`:454`, the session-wide CAS-claimed unknown-tag table),
-  `AtkObserveTick()` (`:795`, called in the sleeper body after `Loadout::Tick`),
-  `AtkPostAttach/Detach` (`:562`, `MainThread::Post`:
+  `AttackSink` (`:520`, one `BSTEventSink<BSAnimationGraphEvent>` per follower slot,
+  `g_atkSinks[16]`), `AtkSlot g_atk[16]` (`:446`, the fixed-size counter rows),
+  `g_atkUnk[32]` (`:482`, the session-wide CAS-claimed unknown-tag table),
+  `AtkObserveTick()` (`:835`, called in the sleeper body after `Loadout::Tick`),
+  `AtkPostAttach/Detach` (`:590`, `MainThread::Post`:
   `actor->GetAnimationGraphManager(mgr)` → each `mgr->graphs[i]` →
-  `BSTEventSource<BSAnimationGraphEvent>::AddEventSink`, posted at fight open and
-  re-posted every 2 s while the fight is open because graphs rebuild on a 3D
-  reload, in or out of combat; AddEventSink dedupes). Public:
+  `BSTEventSource<BSAnimationGraphEvent>::AddEventSink`, posted whenever the
+  follower is managed AND `Is3DLoaded()` — in OR out of combat, item D of the
+  2026-09-21 field batch, so a non-fighting follower's parkour / stuck tags reach
+  the sink — and re-posted every 2 s (`kAtkAttachMs`) because graphs rebuild on a
+  3D reload; AddEventSink dedupes). Counters, `lastAttackMs` and the dump stay
+  FIGHT-scoped: zeroed at fight open (`AtkService` `:711`); out-of-combat events
+  surface only through the session-wide `new-tag` first-sight line. Public:
   `DumpAttackHistogram(fid)` (`:916`; idempotent, exported, NO caller today — DECIDED
   (Fable round on 2ac4163): NOT wired into the Scheduler's 2-tick OOC debounce,
   which would split one fight into two lines on an `IsInCombat` flap; the probe
   closes fights itself 1.5 s after `IsInCombat` drops) and `ResetAttackObserve()` (`:925`)
   ← `Serialization.cpp:742` in `ResetAllState`, after `StopPump`. The attach is
-  re-posted every 2 s while a fight is open (`kAtkAttachMs`), not only at fight
-  open — a graph rebuilt mid-combat would otherwise leave the fight open with no
-  registration and print "(no attack events)" (SEV-3 fix). The idle-in-reach
+  re-posted every 2 s while the follower is managed + 3D-loaded (`kAtkAttachMs`),
+  not only at fight open — a graph rebuilt mid-combat would otherwise leave the
+  fight open with no registration and print "(no attack events)" (SEV-3 fix). The idle-in-reach
   compare against `lastAttackMs` is STRICT `>` (SEV-2 fix; `>=` closed every run as
   0 ms after a restart). **Open backlog: `Docs/REVIEW-BACKLOG.md` MFO-B50 (clear-
   vs-in-flight-event race, ≤1 stale count), B51-B54 (notes: CommonLib's
@@ -4423,9 +4508,18 @@ concurrency question (distinct threads, mutual exclusion UNPROVEN).
   ← `ProgAllocator::SetClass`; `GetBaseClass` ← `Scheduler.cpp` stance + `Actuation.cpp`
   dagger-melee; `Get/SetFollowerHMS`+`MeasureEngineVitalAward` ← `ProgAllocator::RecomputeHMS`.
   This is the surface Phases 2+ grow (SetSkill/GrantPerk/level-up events) — keep it general.
-- `Refresh` (`:254`, the eviction hub) — **runs on the JOB WORKER** (`Diagnostics.cpp`
+- `Refresh` (`:419`, the eviction hub) — **runs on the JOB WORKER** (`Diagnostics.cpp`
   tick), not the main thread; it rebuilds `g_active`/`g_activeIds` and republishes the
-  `IsTrackedFast`/`ActiveSnapshot` mirror under `g_mx` (`PublishActiveMirror`). On drop
+  `IsTrackedFast`/`ActiveSnapshot` mirror under `g_mx` (`PublishActiveMirror`).
+  **`[follower]` STATE LINE (item D of the 2026-09-21 field batch):** `LogStateLine`
+  (`:99`) prints `[follower] <id> '<name>' pkg=<GetCurrentPackage form> waitingForPlayer=
+  <AV 95> dPlayer=<u> moved=<u since last line> aiEnabled=<IsAIEnabled> inCombat=<0/1>
+  [roster|30s]` on the `+` roster line and every `kStateLineS` (30 s) per active
+  follower from the sweep (`:455-461`); sample map `g_stateSample` is worker-domain
+  like `g_lastCombat`, cleared in `ClearTransientState` (`:190`). Pure reads
+  (pinned 3.7.0 `Actor.h:533/:570`, `ActorValues.h:103`). Why: Follow and Wait are
+  the same vanilla `PlayerFollowerPackage` form branched on `WaitingForPlayer`, and
+  nothing else MFO printed could tell Jesper's three-minute stand-still apart. On drop
   calls `Loadout::Restore`, `Targeting::Clear`, `CombatStyle::Clear`,
   `CasterConsent::Clear`, `Packages::Release`, `Logistics::OnFollowerRemoved`,
   `Packages::RetreatEvictIf`. Several release engine-serialized alias fills — removing
@@ -4470,7 +4564,10 @@ carried as `subjectActorForm`, NOT an enum value, precisely to keep the enum fro
 re-times every "HP below X%" rule + Confidence.
 
 ### Config.cpp / Config.h
-~90 `g_*` atomics read across 22 files (cross-thread-safe by design). `Read` (`:363`,
+~90 `g_*` atomics read across 22 files (cross-thread-safe by design). INI-only
+`[Debug]` keys with no MCM face: `bAttackObserve` (default OFF), `bHeartbeat`
+(default ON, 2026-09-21) — wired in `Apply` + `ResetToDefaults` + the seed INI only,
+NOT in `kMcmDefaults`. `Read` (`:363`,
 ResetToDefaults → seed INI → MCM INI, last wins; runs `Gait::Apply` after) ←
 `plugin.cpp:282` + MCM-close MenuSink. `EnsureMcmDefaults` (`:290`) ← `plugin.cpp:272`.
 **Each INI key is wired in ~6 coupled places** (atomic decl, `Apply` branch,
@@ -4514,6 +4611,7 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 | `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:303` → `Logistics.cpp:1949` | direction filter mandatory |
 | `MEOBridge::RegisterSink` (TESEquip) | `plugin.cpp:298` → `MEOBridge.cpp:75` | optional |
 | `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:341` → `Diagnostics.cpp` `Install()` | + the worker pump; prints the `[atk-obs] frameworks` line |
-| `[atk-obs]` `BSAnimationGraphEvent` sinks (per follower slot, on his own graphs) | `Diagnostics.cpp` `AtkPostAttach` ← `AtkService` (worker) → `MainThread::Post` | at fight open + every 2 s while the fight is open (`kAtkAttachMs`), deduped; observation only, `bAttackObserve` |
+| `[atk-obs]` `BSAnimationGraphEvent` sinks (per follower slot, on his own graphs) | `Diagnostics.cpp` `AtkPostAttach` ← `AtkService` (worker) → `MainThread::Post` | whenever managed + `Is3DLoaded()`, every 2 s (`kAtkAttachMs`), in or out of combat, deduped; counters/dumps fight-scoped; observation only, `bAttackObserve` |
+| `[fatal]` vectored exception handler (LAST) + `std::terminate` handler | `Diagnostics.cpp` `InstallFatalHook` ← `plugin.cpp` `SKSEPluginLoad` after `SetupLog`; terminate copies per thread (sleeper, worker, main via Post) | process lifetime; flush + one `[fatal]` line, `EXCEPTION_CONTINUE_SEARCH`; never handles |
 | `TradeBridge::RegisterFuncs` (10 Papyrus natives) | `plugin.cpp:422` → `TradeBridge.cpp:365-376` | script ABI |
 | `MEOBridge::Acquire` (MEO interface) | `plugin.cpp:289` | external ABI |

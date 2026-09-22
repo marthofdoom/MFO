@@ -53,16 +53,41 @@ namespace {
     //
     // MRO documents the same trick. Fall back to log_directory() if the
     // redirect target is not writable (e.g. running outside MO2).
+    // LOG ROTATION (2026-09-21): the previous session's MFO.log becomes
+    // MFO.log.1 BEFORE the sink truncates the live file, overwriting an older
+    // .1. One generation is enough: the case this exists for is a session that
+    // ended in a freeze or a hard crash, followed by a relaunch to check -- the
+    // relaunch used to truncate the only evidence (the 2026-09-21 freeze
+    // session was lost exactly that way). Same path resolution as the sink:
+    // rotate wherever the sink is about to open. std::filesystem::rename
+    // replaces an existing target on Windows (MoveFileEx REPLACE_EXISTING),
+    // and under MO2/USVFS the rename is redirected like the write is.
+    // Returns 1 rotated, 0 nothing to rotate, -1 rename failed (reported after
+    // the logger is up -- the sink still opens, so no line is lost either way).
+    int RotateLog(const std::filesystem::path& a_live) {
+        std::error_code ec;
+        if (!std::filesystem::exists(a_live, ec) || ec) return 0;
+        std::filesystem::path prev = a_live;
+        prev += ".1";
+        std::filesystem::rename(a_live, prev, ec);
+        return ec ? -1 : 1;
+    }
+
     void SetupLog() {
         std::shared_ptr<spdlog::sinks::basic_file_sink_mt> sink;
+        int                   rotated = 0;
+        std::filesystem::path logPath;
 
         try {
-            sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("Data/SKSE/Plugins/MFO.log", true);
+            logPath = "Data/SKSE/Plugins/MFO.log";
+            rotated = RotateLog(logPath);
+            sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logPath.string(), true);
         } catch (const spdlog::spdlog_ex&) {
             if (auto dir = SKSE::log::log_directory()) {
                 try {
-                    sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-                        (*dir / "MFO.log").string(), true);
+                    logPath = *dir / "MFO.log";
+                    rotated = RotateLog(logPath);
+                    sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logPath.string(), true);
                 } catch (const spdlog::spdlog_ex&) {
                     return;   // no log is survivable; a crash here is not
                 }
@@ -73,19 +98,40 @@ namespace {
 
         auto log = std::make_shared<spdlog::logger>("global", std::move(sink));
         log->set_level(spdlog::level::info);
-        // DISK-WRITE EFFICIENCY (marth): keep EVERY line, but stop flushing per line.
-        // flush_on(info) did an fflush syscall on the game thread for every log line;
-        // in a combat/loot burst that is a lot of small writes and micro-stalls.
-        // Instead each line is a cheap buffered write, and the flush to disk happens
-        // on a 1s BACKGROUND timer -- except warn/err/critical, which flush AT ONCE so
-        // an error and the crash breadcrumbs around it always survive a CTD. Stays
-        // SYNCHRONOUS on purpose: an async queue would be lost with the process on a
-        // hard crash, defeating the [bc] crash-pin method. Trade-off: up to ~1s of
-        // trailing INFO lines can be lost on a hard CTD (errors are not).
-        log->flush_on(spdlog::level::warn);
+        // FLUSH POLICY (2026-09-21): flush on EVERY line again (flush_on(info)).
+        // The previous policy -- buffered writes, a 1 s background flusher, only
+        // warn+ flushed at once -- was chosen for disk-write efficiency (marth:
+        // per-line fflush in a combat/loot burst = many small writes and micro-
+        // stalls). It cost the 2026-09-21 21:57:58 death its last second: the
+        // process ended without an SEH crash report, so no handler ran, the
+        // flusher never got its next turn, and the tail that would have named
+        // the dying thread was still in the FILE* buffer. The [fatal] hook
+        // (Diagnostics.cpp) closes that hole for SEH crashes, but a fast-fail
+        // abort, a hang followed by a kill, or an OS-level teardown never
+        // reaches any handler -- only a per-line flush survives those.
+        // Cost, by reasoning: one WriteFile per line. MFO logs ~10-20 lines/s in
+        // a fight (worker + main + combat thread together); a WriteFile on an
+        // already-open file is ~20-50 us on the deck (Proton; USVFS redirects
+        // the CreateFile, the handle then writes natively). That is ~0.5-1 ms
+        // per second, spread across threads -- below the noise of one AddTask
+        // tick. The one burst that lands on a single frame is DumpReport (Field
+        // Orders cast, ~150 lines on main) at ~5-8 ms once, on an explicit
+        // debug action. Accepted. If the deck ever shows hitching that tracks
+        // the log rate, the fallback is `flush_on(warn)` + `flush_every(250ms)`
+        // (a 250 ms exposure instead of none), one line each.
+        // Stays SYNCHRONOUS on purpose: an async queue would be lost with the
+        // process on a hard crash, defeating the [bc] crash-pin method. With a
+        // per-line flush the background flusher thread is redundant, so it is
+        // not started.
+        log->flush_on(spdlog::level::info);
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
-        spdlog::flush_every(std::chrono::seconds(1));
+
+        if (rotated > 0)
+            spdlog::info("[startup] rotated the previous MFO.log to MFO.log.1 ({})", logPath.string());
+        else if (rotated < 0)
+            spdlog::warn("[startup] could not rotate the previous MFO.log to MFO.log.1 ({}) -- it was truncated",
+                         logPath.string());
     }
 
     // Test seam, now `bSeedTestData` in MFO.ini and DEFAULT OFF.
@@ -329,6 +375,7 @@ namespace {
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::APMFBridge::Acquire();     // APMF cast-selection API (Phase 3); nullptr if APMF absent (degrades)
+            MFO::Diagnostics::RefreshFatalModules();   // [fatal]: every plugin DLL is loaded now -- resolve APMF.dll's range
             MFO::Followers::ResolveQuirks();
             MFO::MainThread::Install();      // the main-thread pump (§0.37) -- the only real
                                              // road to main; AddTask drains on a worker here
@@ -441,6 +488,9 @@ namespace {
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     SKSE::Init(a_skse);
     SetupLog();
+    // [fatal] passive hook: needs the logger (above) and REL::Module (SKSE::Init).
+    // Vectored handler LAST + std::terminate on this thread; never handles.
+    MFO::Diagnostics::InstallFatalHook();
 
     const auto* plugin = SKSE::PluginDeclaration::GetSingleton();
     const auto  ver    = plugin->GetVersion();

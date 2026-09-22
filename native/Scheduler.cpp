@@ -86,6 +86,51 @@ namespace MFO::Scheduler {
             return kMeleeClampDwellCenter + (Temperament(a_id) - 0.5f) * kMeleeClampDwellSpread;
         }
 
+        // MFO-B55 (FIXED 2026-09-21, Deck/Fable: Cicero's two mid-fight weapon
+        // vanishes at 21:57:34.226 and 21:57:44.075 were this dwell releasing a
+        // foe-keyed hold while his group still had foes). The equip range rules
+        // (cond.foe_within_range / cond.foe_beyond_range) are TARGET-relative:
+        // the Evaluator reads the follower's currentCombatTarget and returns
+        // "no match" when that handle is null, dead, disabled or non-hostile
+        // (Evaluator.cpp PickFoe, the target-relative branch). The engine nulls
+        // currentCombatTarget on a LoS loss / a group retarget while the combat
+        // GROUP still lists live, known foes -- so on those laps the rule's
+        // condition is not FALSE, it is UNDECIDABLE: the foe never left range,
+        // the follower merely has no target to measure against this instant.
+        // Reading it as known-false let the T#76 dwell (2-4 s) time out on an
+        // engine-side null and ReconcileForcedWeapon release the hold.
+        //
+        // Returns true when an equip rule whose condition is target-relative
+        // was EVALUATED this lap (index below the scan's stop; the whole table
+        // when nothing matched) while the follower's target is unusable AND his
+        // own combat group still has foes (CombatSense::FoeCount: live,
+        // enabled, not kTargetLost -- the same tally the [sense] line and the
+        // party gate read). The caller then treats the equip truth as UNKNOWN:
+        // the dwell clock refreshes, equipCondKnownFalse stays false, and the
+        // hold survives exactly as it does under a higher rule's stop. A
+        // genuinely empty group (FoeCount 0: every foe dead, gone or lost) or a
+        // real party-OOC still reads false and releases through the dwell /
+        // the party-OOC debounce as before. Pure reads; the group lock is taken
+        // inside FoeCount with no other lock held (the Evaluator's nesting
+        // warning).
+        [[nodiscard]] bool EquipRangeUndecidable(RE::Actor* a_self, const std::vector<Gambit>& a_rules, int a_stopIdx) {
+            bool rangeRuleEvaluated = false;
+            for (int i = 0; i < static_cast<int>(a_rules.size()) && i < a_stopIdx; ++i) {
+                const auto& r = a_rules[i];
+                if (r.actionOpcode != Vocab::kActEquipMelee && r.actionOpcode != Vocab::kActEquipRanged) continue;
+                if (r.conditionOpcode == Vocab::kCondFoeWithinRange || r.conditionOpcode == Vocab::kCondFoeBeyondRange) {
+                    rangeRuleEvaluated = true;
+                    break;
+                }
+            }
+            if (!rangeRuleEvaluated) return false;
+            auto  tp  = a_self->GetActorRuntimeData().currentCombatTarget.get();
+            auto* tgt = tp.get();
+            const bool targetUsable = tgt && !tgt->IsDead() && !tgt->IsDisabled() && tgt->IsHostileToActor(a_self);
+            if (targetUsable) return false;            // the rule measured a real target: its truth is real
+            return CombatSense::FoeCount(a_self) > 0;  // no target, foes remain -> undecidable
+        }
+
         // FLAIR #5 -- RETARGET HESITATION. A target SWITCH of an existing latch
         // must win twice before it commits: the first winning service stores
         // the proposal and reports NoOp "sizing up <name>"; the second service
@@ -134,7 +179,11 @@ namespace MFO::Scheduler {
         //   PARTY COMBAT = the player is in combat
         //              OR any managed active follower is in combat
         //              OR any managed follower's combat-group foe tally
-        //                 (CombatSense::FoeCount, the [sense] foes= read) > 0.
+        //                 (CombatSense::FoeCount, the [sense] foes= read) > 0
+        //                 -- read only for followers whose own flag is TRUE this
+        //                 lap (controller lifetime, see the block in Tick), so
+        //                 the third term is implied by the second and survives
+        //                 as the transition line's foes= count.
         // Computed ONCE per pump tick at the top of Tick() on the worker, from
         // the same g_active walk the round-robin already makes (#4: worker-only,
         // no lock, no off-road g_followers read), then read by the per-follower
@@ -152,6 +201,19 @@ namespace MFO::Scheduler {
         // table live" line: inserted on the first own-OOC party-combat service,
         // erased with the other per-fight state in the party-OOC branch.
         std::unordered_set<RE::FormID> g_partyCombatNoted;
+        // Once-per-fight latch for the "[eval] ... combat table: N rules, none
+        // matched" line (2026-09-21, Deck/Fable): a follower whose every
+        // condition is false has an EMPTY skip-chain, and the no-action chain
+        // line prints only a non-empty chain -- so Jesper's table ran a whole
+        // dragon fight with no [eval] line at all and STATUS's "[eval] scan
+        // lines" promise was wrong. Inserted at the first all-false no-action
+        // exit, erased with g_partyCombatNoted in the party-OOC branch.
+        std::unordered_set<RE::FormID> g_noneMatchedNoted;
+        // MFO-B55: followers whose last lap read the equip range rule as
+        // UNDECIDABLE (null target, foes remain) -- one log line per fight.
+        // Erased in the party-OOC branch with the other per-fight latches;
+        // cleared on revert.
+        std::unordered_set<RE::FormID> g_equipRangeUndecidableNoted;
 
         // The dials. Fill: confidence below 0.25 (a follower who by the
         // leash tenet WANTS to be at the player's side) while >400u away from
@@ -172,6 +234,8 @@ namespace MFO::Scheduler {
         g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
         g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
         g_partyCombatNoted.clear();
+        g_noneMatchedNoted.clear();
+        g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
@@ -219,11 +283,12 @@ namespace MFO::Scheduler {
         ++g_ticks;
 
         // PARTY COMBAT, once per tick, before the round-robin picks anyone: the
-        // player's flag, every managed active follower's flag, and the [sense]
-        // foe tally (CombatSense::FoeCount -- the follower's own combat group,
-        // the same read the [sense] line prints; there is no radius in that
-        // scan and none is added here). O(party) vfunc reads plus one combat-
-        // group read-lock per follower; taken with NO other lock held, so it
+        // player's flag, every managed active follower's flag, and -- for the
+        // followers whose flag is TRUE this lap -- the [sense] foe tally
+        // (CombatSense::FoeCount -- the follower's own combat group, the same
+        // read the [sense] line prints; there is no radius in that scan and
+        // none is added here). O(party) vfunc reads plus one combat-group
+        // read-lock per FIGHTING follower; taken with NO other lock held, so it
         // cannot nest the group lock the Evaluator's scan warns about. Dead /
         // disabled followers are skipped exactly as the service below skips
         // them. Transition-only log (#79): one line per ON/OFF edge.
@@ -237,8 +302,35 @@ namespace MFO::Scheduler {
                 auto  ptr = h.get();          // HOLD the NiPointer across the group read
                 auto* a   = ptr.get();
                 if (!a || a->IsDead() || a->IsDisabled()) continue;
-                if (a->IsInCombat()) ++followersFighting;
-                foes = std::max(foes, CombatSense::FoeCount(a));
+                // CONTROLLER LIFETIME (tier-A carve-out, Fable field diagnosis
+                // 2026-09-21; evidence in ENGINE_NOTES "CombatController lifetime"
+                // and the commit): Actor::combatController is a raw, unguarded
+                // pointer that Actor::StopCombat (vtable slot 0xE5) frees INLINE
+                // and nulls, and StopCombat runs on BSJobs WORKER threads from
+                // the "Combat and magic" frame job (UpdateCombat's only call
+                // site is a job callback) plus 30-odd other virtual call sites
+                // (EvaluatePackage, KillImmediate, the Papyrus native). There is
+                // no refcount and no lock on it; the engine gives this worker
+                // nothing to hold it with. IsInCombat() itself dereferences it
+                // (`cc && !cc->inactive`), so every IsInCombat() read MFO has
+                // ever made carries the same exposure; what this block added
+                // was a SECOND deref -- `cc->combatGroup->lock`, a read-lock
+                // acquire on the group -- for every follower every 133 ms, in
+                // AND out of combat, i.e. through every controller teardown and
+                // rebuild (the engine rebuilt both fighting followers' at
+                // 21:57:34.9). Gate the group read on a same-lap IsInCombat():
+                // that is the pre-build shape (FoeCount ran only inside the
+                // combat branch), it drops the out-of-combat group read to
+                // zero, and it leaves the in-combat one where every [sense] /
+                // Evaluator read already is. The `foes` term of the boolean is
+                // therefore implied by followersFighting; it still feeds the
+                // transition line. A real fix (an atomic controller epoch
+                // published from a StopCombat seat) is an engine seat for its
+                // own brief.
+                if (a->IsInCombat()) {
+                    ++followersFighting;
+                    foes = std::max(foes, CombatSense::FoeCount(a));
+                }
             }
             const bool party = player || followersFighting > 0 || foes > 0;
             if (party != g_partyCombat) {
@@ -340,48 +432,65 @@ namespace MFO::Scheduler {
         // no-action exits of the combat table.
         const bool ownCombat = f->IsInCombat();
         if (!g_partyCombat) {
-            // RETREAT PROBE teardown on combat end: release the claim (evict to
-            // player -- never a VM Clear, never a priority flip) and re-arm the
-            // once-per-combat latch for the next fight.
-            if (Packages::RetreatHolder() == id) {
-                Packages::RetreatClear("combat ended", f);
-            }
-            g_retreatNotes.erase(id);
-            g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
-            g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
-
-            // v1.0.30: the cast-control latch dies with the fight. The [cast]
-            // sink no longer clears it on a successful cast (the latch must
-            // span cast cooldowns -- the between-casts leak), so combat end is
-            // now an explicit release point. Without it, a latch from the last
-            // fight lingers and denies the follower's own casting at the start
-            // of the NEXT fight before his first service, wanting a spell no
-            // rule may still name. Cheap and idempotent out of combat: no
-            // combat caster runs the hook, and Clear on an unlatched id is an
-            // uncontended erase-miss.
-            CasterConsent::Clear(id);
-            // The firing-spell gambit lock (Task 2, feat/cast-gambit-
-            // concentration) dies with the fight too, same reasoning as the
-            // cast-control latch just above -- a lock left standing from the
-            // last fight would hold off the FIRST cast rule of the next one.
-            Actuation::ClearCastLock(id);
-            // Weapon-stance ownership dies with the fight too. The live CSTY
-            // already reverted when the per-combat controller was destroyed;
-            // this drops the stale bookkeeping so the next fight re-baselines.
-            // Idempotent out of combat (uncontended erase-miss when unowned).
-            CombatStyle::Clear(id);
-            g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
-            // T#76: the equip force-hold dies with the fight too -- combat end is
-            // one of its release points. The prevent-removal LOCK is on the
-            // ActorEquipManager (it did NOT die with the controller), so this
-            // force-unequips to clear it. DEBOUNCED over 2 consecutive PARTY-out-
-            // of-combat services (SEV-2, re-keyed 2026-09-21): the follower's own
-            // IsInCombat flaps mid-fight, and counting HIS flag here released
-            // Cicero's hold three times in one dragon fight (08:09:45, 08:10:07,
-            // 08:10:31 -- weapons vanishing and returning). Party combat does not
-            // flap with one actor's LoS, so the same 2-tick count against it is
-            // the real "fight over" debounce. Idempotent (no record -> no-op).
+            // THE WHOLE PARTY-OOC TEARDOWN IS DEBOUNCED over 2 consecutive PARTY-
+            // out-of-combat services (SEV-4, Fable field diagnosis 2026-09-21).
+            // Before this only ReleaseForcedWeapon waited for the second service;
+            // everything else below ran on the FIRST party-OFF tick. A party-OFF/
+            // ON flap of one service is real: at 21:57:34.884/35.029 (145 ms) the
+            // engine tore down and re-created both fighting followers' combat
+            // controllers (the [wstyle] OWNED lines re-printed), the gate mirrored
+            // it, and the first-tick teardown dropped a caster's consent latch,
+            // cast lock and stance ownership mid-fight -- the sub-tick leak
+            // v1.0.32 closed, re-opened for one lap by a controller restart. Party
+            // combat does not flap with one actor's LoS (that is why the gates key
+            // on it), so two consecutive party-OOC services is the real "fight
+            // over" edge for every release here, not just the hold's. The
+            // logistics service below still runs on every party-OOC tick.
+            // Idempotent teardown (every call is an erase-miss / no-op when
+            // nothing is held).
             if (++g_outOfCombatTicks[id] >= 2) {
+                // RETREAT PROBE teardown on combat end: release the claim (evict to
+                // player -- never a VM Clear, never a priority flip) and re-arm the
+                // once-per-combat latch for the next fight.
+                if (Packages::RetreatHolder() == id) {
+                    Packages::RetreatClear("combat ended", f);
+                }
+                g_retreatNotes.erase(id);
+                g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
+                g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
+
+                // v1.0.30: the cast-control latch dies with the fight. The [cast]
+                // sink no longer clears it on a successful cast (the latch must
+                // span cast cooldowns -- the between-casts leak), so combat end is
+                // now an explicit release point. Without it, a latch from the last
+                // fight lingers and denies the follower's own casting at the start
+                // of the NEXT fight before his first service, wanting a spell no
+                // rule may still name. Cheap and idempotent out of combat: no
+                // combat caster runs the hook, and Clear on an unlatched id is an
+                // uncontended erase-miss.
+                CasterConsent::Clear(id);
+                // The firing-spell gambit lock (Task 2, feat/cast-gambit-
+                // concentration) dies with the fight too, same reasoning as the
+                // cast-control latch just above -- a lock left standing from the
+                // last fight would hold off the FIRST cast rule of the next one.
+                Actuation::ClearCastLock(id);
+                // Weapon-stance ownership dies with the fight too. The live CSTY
+                // already reverted when the per-combat controller was destroyed;
+                // this drops the stale bookkeeping so the next fight re-baselines.
+                // Idempotent out of combat (uncontended erase-miss when unowned).
+                CombatStyle::Clear(id);
+                g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
+                g_noneMatchedNoted.erase(id);  // and the once-per-fight "none matched" line
+                g_equipRangeUndecidableNoted.erase(id);   // MFO-B55: and the once-per-fight undecidable note
+                // T#76: the equip force-hold dies with the fight too -- combat end is
+                // one of its release points. The prevent-removal LOCK is on the
+                // ActorEquipManager (it did NOT die with the controller), so this
+                // force-unequips to clear it. This was the FIRST release to be
+                // debounced (SEV-2, re-keyed to party combat 2026-09-21): the
+                // follower's own IsInCombat flaps mid-fight, and counting HIS flag
+                // here released Cicero's hold three times in one dragon fight
+                // (08:09:45, 08:10:07, 08:10:31 -- weapons vanishing and
+                // returning). Idempotent (no record -> no-op).
                 Actuation::ReleaseForcedWeapon(f);
                 // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable
                 // SEV-3): an un-debounced erase on a 1-tick IsInCombat flap would
@@ -889,6 +998,25 @@ namespace MFO::Scheduler {
                 }
             }
         }
+        // MFO-B55 FIX: a "known false" that came from a target-relative equip
+        // rule reading a NULL / dead / non-hostile currentCombatTarget while the
+        // follower's own group still has foes is NOT known -- demote it to
+        // UNKNOWN (see EquipRangeUndecidable). Logged once per fight so the
+        // field log shows the hold being kept on an engine-side null, not silence.
+        bool equipRangeUndecidable = false;
+        if (equipCondKnownFalse && equipHeld == 0) {
+            if (const auto r3 = g_followers.find(id); r3 != g_followers.end()) {
+                const auto& rules = r3->second.combat();
+                const int stopIdx = (choice.ruleIndex < 0) ? static_cast<int>(rules.size()) : choice.ruleIndex;
+                equipRangeUndecidable = EquipRangeUndecidable(f, rules, stopIdx);
+            }
+            if (equipRangeUndecidable) {
+                equipCondKnownFalse = false;
+                if (g_equipRangeUndecidableNoted.insert(id).second)
+                    spdlog::info("[sched] {:08X}: equip range rule has no usable combat target while own group has foes -- "
+                                 "hold kept (truth unknown, not false; MFO-B55)", id);
+            }
+        }
 
         // T#76 HYSTERESIS: gate the RELEASE on MeleeClampDwell(id) of SUSTAINED
         // known-false so a foe crossing the gambit's range threshold back and
@@ -909,7 +1037,10 @@ namespace MFO::Scheduler {
         // heldOrder is reused by preserve branch 2 below (stable across the block:
         // only worker Want/Release mutate the equipOrder flag, none run between).
         const bool heldOrder = CombatStyle::HoldsEquipOrder(id);
-        if (equipHeld != 0 || (!equipCondKnownFalse && heldOrder))
+        // MFO-B55: an undecidable lap (null target, foes remain) refreshes the
+        // dwell like an unknown-but-held tick does, with or without a stance
+        // order, so the commit window is measured from the last DECIDABLE lap.
+        if (equipHeld != 0 || (!equipCondKnownFalse && (heldOrder || equipRangeUndecidable)))
             g_meleeClampTrueAt[id] = nowTp;
         bool dwellExpired = true;
         if (const auto dit = g_meleeClampTrueAt.find(id); dit != g_meleeClampTrueAt.end())
@@ -1078,6 +1209,20 @@ namespace MFO::Scheduler {
                 if (recent.lastChain != line) {
                     recent.lastChain = std::move(line);
                     spdlog::info("[eval] {} ({:08X}) {}", name, id, recent.lastChain);
+                }
+            } else if (!suppressed) {
+                // EMPTY chain, not suppressed: Evaluate returned no rule on the
+                // first pass -- EVERY condition in the table was false this lap.
+                // Once per follower per fight (g_noneMatchedNoted), so a table
+                // that is visibly RUNNING and matching nothing (an own-OOC
+                // follower inside a party fight: every foe-keyed rule reads his
+                // own empty group) is distinguishable from a table that never
+                // ran. Re-armed in the party-OOC branch.
+                if (g_noneMatchedNoted.insert(id).second) {
+                    std::size_t nRules = 0;
+                    if (const auto rr = g_followers.find(id); rr != g_followers.end())
+                        nRules = rr->second.combat().size();
+                    spdlog::info("[eval] {} ({:08X}) combat table: {} rules, none matched", name, id, nRules);
                 }
             }
             // The combat table took no action -> this tick's one action slot goes

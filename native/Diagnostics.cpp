@@ -27,6 +27,16 @@
 // unsigned long. The real header is never in this TU to conflict.
 extern "C" __declspec(dllimport) void*         __stdcall GetModuleHandleA(const char* a_name);
 extern "C" __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId();
+// [fatal] passive hook (2026-09-21), same rule. AddVectoredExceptionHandler(ULONG
+// First, PVECTORED_EXCEPTION_HANDLER) -> PVOID; the handler is LONG NTAPI
+// (EXCEPTION_POINTERS*), taken as void* here and cast inside. GetModuleHandleExA
+// (DWORD, LPCSTR, HMODULE*) -> BOOL (int). See the [fatal] block below.
+extern "C" __declspec(dllimport) void*         __stdcall AddVectoredExceptionHandler(unsigned long a_first, long(__stdcall* a_handler)(void*));
+extern "C" __declspec(dllimport) int           __stdcall GetModuleHandleExA(unsigned long a_flags, const char* a_addr, void** a_out);
+
+#include <cstdio>       // [fatal]: snprintf for the module+rva text (no allocation in the handler)
+#include <cstdlib>      // [fatal]: std::abort
+#include <exception>    // [fatal]: std::set_terminate
 
 // The M3 test instrument.
 //
@@ -54,6 +64,24 @@ namespace MFO::Diagnostics {
         constexpr std::uint32_t kPumpMs        = 133;
         constexpr std::uint32_t kDiagEveryNth  = 4;    // ~532 ms, the old cadence
         std::atomic<bool>          g_pumpRunning{ false };
+
+        // [hb] HEARTBEAT (2026-09-21, bHeartbeat, default ON). One line per 5 s
+        // from the SLEEPER thread -- MFO's own thread, which only sleeps and
+        // AddTasks, so it keeps printing while everything else hangs:
+        //   [hb] worker ticks=N main drains=M mainAge=<ms> lastWorkerStage='<s>'
+        // ticks: AddTask bodies that ran (the job worker). drains: heartbeat
+        // probes that ran on the MAIN thread (one MainThread::Post per line;
+        // the count freezes when the player's Update stops). mainAge: ms since
+        // the last probe ran. lastWorkerStage: the step the worker body was in
+        // when it last wrote the stage -- on a hung worker it names the callee
+        // that never returned. All relaxed atomics; the stage is a pointer to a
+        // string literal (never freed). Not save-scoped: a session count.
+        constexpr std::uint32_t kHeartbeatMs = 5000;
+        std::atomic<std::uint64_t> g_hbWorkerTicks{ 0 };
+        std::atomic<std::uint64_t> g_hbMainDrains{ 0 };
+        std::atomic<std::int64_t>  g_hbMainLastMs{ 0 };
+        std::atomic<const char*>   g_hbWorkerStage{ "never" };
+        inline void HbStage(const char* a_stage) noexcept { g_hbWorkerStage.store(a_stage, std::memory_order_relaxed); }
         // Generation token: StopPump/StartPump bump it, so a thread that was
         // mid-sleep across a revert->load exits instead of running alongside
         // its own replacement.
@@ -391,7 +419,7 @@ namespace MFO::Diagnostics {
         constexpr std::size_t kAtkCounters = kAtkExact + kAtkFam;
         constexpr std::int64_t kAtkIdleMs  = 1500;   // an idle-in-reach run longer than this counts
         constexpr std::int64_t kAtkOocMs   = 1500;   // IsInCombat low for this long closes the fight
-        constexpr std::int64_t kAtkAttachMs = 2000;  // re-post the (deduped) attach this often while a fight is open
+        constexpr std::int64_t kAtkAttachMs = 2000;  // re-post the (deduped) attach this often while managed + 3D-loaded (in or out of combat)
 
         constexpr char AtkLower(char a_c) noexcept { return (a_c >= 'A' && a_c <= 'Z') ? static_cast<char>(a_c + 32) : a_c; }
         bool AtkEq(const char* a_a, const char* a_b) noexcept {
@@ -557,7 +585,7 @@ namespace MFO::Diagnostics {
 
         // Attach / detach: MAIN thread (graph mutation). FormID + slot captured;
         // re-resolve, null-check. AddEventSink dedupes under its spin lock, so
-        // re-posting every 2 s while a fight is open (graphs are rebuilt on a 3D
+        // re-posting every 2 s while the follower is managed + 3D-loaded (graphs are rebuilt on a 3D
         // reload, in or out of combat) is idempotent.
         void AtkPostAttach(RE::FormID a_fid, std::size_t a_slot) {
             if (!MainThread::IsInstalled()) {
@@ -683,6 +711,25 @@ namespace MFO::Diagnostics {
         void AtkService(std::size_t a_slot, RE::Actor* a_actor, std::int64_t a_nowMs) {
             auto&      s   = g_atk[a_slot];
             const auto fid = s.fid.load(std::memory_order_acquire);
+            // ATTACH whenever the follower is managed and 3D-loaded, in OR out of
+            // combat (2026-09-21, Deck/Fable: a non-fighting follower's parkour /
+            // stuck tags never reached the sink because it was only attached at
+            // fight open), and KEEP attaching on the 2 s throttle: a graph rebuilt
+            // (catch-up teleport through disable/enable, a door, a 3D reload)
+            // would otherwise leave a fight open with NO registration and print
+            // "(no attack events)" -- a masked failure (principle 7; Fable SEV-3
+            // on 2ac4163). AddEventSink dedupes under its spin lock
+            // (BSTEvent.h:41-51), so a re-post costs one LookupByID + one lock
+            // per graph per 2 s per follower on the main thread; the re-attach
+            // line stays at debug. Out-of-combat events land in the slot's
+            // counters and the session-wide new-tag table (the `[atk-obs]
+            // new-tag` first-sight line is how they surface); the counters are
+            // zeroed at fight open below, so the per-fight histogram stays
+            // fight-scoped.
+            if (a_actor->Is3DLoaded() && a_nowMs - s.lastAttachMs >= kAtkAttachMs) {
+                s.lastAttachMs = a_nowMs;
+                AtkPostAttach(fid, a_slot);
+            }
             if (a_actor->IsInCombat()) {
                 s.oocArmed = false;
                 if (!s.fightOpen) {
@@ -692,20 +739,13 @@ namespace MFO::Diagnostics {
                     s.idleRunning  = false;
                     s.idleCount    = 0;
                     s.idleLongest  = 0;
-                    s.lastAttachMs = 0;
-                }
-                // ATTACH, and KEEP attaching on a throttle while the fight is open
-                // (Fable SEV-3 on 2ac4163): a graph rebuilt while IsInCombat stays
-                // true (catch-up teleport through disable/enable, a door with the
-                // fight continuing) would otherwise leave this fight open with NO
-                // registration and print "(no attack events)" -- a masked failure
-                // (principle 7). AddEventSink dedupes under its spin lock
-                // (BSTEvent.h:41-51), so a re-post costs one LookupByID + one lock
-                // per graph per 2 s per follower on the main thread; the re-attach
-                // line stays at debug.
-                if (a_nowMs - s.lastAttachMs >= kAtkAttachMs) {
-                    s.lastAttachMs = a_nowMs;
-                    AtkPostAttach(fid, a_slot);
+                    // Fight-scoped counters: drop whatever the always-attached sink
+                    // counted out of combat since the last dump (same exchange(0)
+                    // race window as the dump's own reset -- <=1 event, accepted).
+                    for (auto& c : s.count) c.store(0, std::memory_order_relaxed);
+                    for (auto& c : s.other) c.store(0, std::memory_order_relaxed);
+                    s.otherOverflow.store(0, std::memory_order_relaxed);
+                    s.lastAttackMs.store(0, std::memory_order_relaxed);
                 }
                 // Hands as of the latest in-combat tick (a bow<->melee swap mid-fight
                 // shows the final pair; the [equip] lines carry the history).
@@ -851,6 +891,7 @@ namespace MFO::Diagnostics {
         // This is the M3 stand-in for M5's real scheduler: deliberately dumb
         // and slow, because detection changes are all it needs to catch.
         void SleeperLoop(std::uint64_t a_epoch) {
+            InstallTerminateHandlerOnThisThread();   // [fatal]: per-thread in MSVC; this thread is ours
             std::uint32_t wake = 0;
             while (g_pumpRunning.load() && g_pumpEpoch.load() == a_epoch) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(kPumpMs));
@@ -870,24 +911,61 @@ namespace MFO::Diagnostics {
                         PumpTickGate gate(a_epoch);
                         if (!gate) return;
 
+                        // [fatal]: the terminate handler is per thread (MSVC) and
+                        // this body runs on whichever job worker drains AddTask;
+                        // one TLS read per tick, one install per worker thread.
+                        thread_local bool t_terminateInstalled = false;
+                        if (!t_terminateInstalled) {
+                            t_terminateInstalled = true;
+                            InstallTerminateHandlerOnThisThread();
+                        }
+
+                        g_hbWorkerTicks.fetch_add(1, std::memory_order_relaxed);   // [hb]
+
                         // Detection and the HUD stay on the old ~532 ms budget;
                         // only the evaluator runs at the deadline.
-                        if (diagTurn) Followers::Refresh();
+                        // [hb] HbStage names the step about to run, so a body that
+                        // never returns leaves its callee's name in the heartbeat.
+                        if (diagTurn) { HbStage("Followers::Refresh"); Followers::Refresh(); }
 
-                        Scheduler::Tick();
-                        Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
-                        Actuation::TargetCastReconcile();   // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
-                        APMFBridge::Tick();                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
-                        APMFBridge::MaybeWarnAbsence();     // gentle corner-toast reminder (~10 min cadence) when APMF is absent; no-op the instant it's present
-                        Loadout::Tick();   // hand back stowed two-handers
-                        AtkObserveTick();  // [atk-obs] passive attack-event probe: slots, fights, idle-in-reach, dumps
+                        HbStage("Scheduler::Tick");               Scheduler::Tick();
+                        HbStage("Actuation::SelfCastReconcile");  Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
+                        HbStage("Actuation::TargetCastReconcile"); Actuation::TargetCastReconcile();  // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
+                        HbStage("APMFBridge::Tick");              APMFBridge::Tick();                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
+                        HbStage("APMFBridge::MaybeWarnAbsence");  APMFBridge::MaybeWarnAbsence();     // gentle corner-toast reminder (~10 min cadence) when APMF is absent; no-op the instant it's present
+                        HbStage("Loadout::Tick");                 Loadout::Tick();   // hand back stowed two-handers
+                        HbStage("AtkObserveTick");                AtkObserveTick();  // [atk-obs] passive attack-event probe: slots, fights, idle-in-reach, dumps
 
-                        if (diagTurn) Probe::Tick();
+                        if (diagTurn) { HbStage("Probe::Tick"); Probe::Tick(); }
                         // The board echoes edits back through the snapshot, so
                         // while it is OPEN publish every tick (133ms) instead of
                         // every 4th -- a half-second echo made DragFloat crawl
                         // and hid whether a click registered (board review M2).
-                        if (diagTurn || Board::IsOpen()) Board::PublishSnapshot();
+                        if (diagTurn || Board::IsOpen()) { HbStage("Board::PublishSnapshot"); Board::PublishSnapshot(); }
+                        HbStage("idle");
+                    });
+                }
+
+                // [hb] the heartbeat line, from THIS thread (sleeps + AddTasks
+                // only, so it survives a worker or main hang). Read the counts,
+                // print, THEN post the next main probe: the line reports probes
+                // that had run by the time it printed, so a stalled main shows
+                // as a drains count that stops moving while ticks (or this line)
+                // keep going. Post is a documented no-op on VR: drains stay 0.
+                if (Config::g_heartbeat.load(std::memory_order_relaxed) && (wake % (kHeartbeatMs / kPumpMs)) == 0) {
+                    const auto nowMs   = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now().time_since_epoch()).count();
+                    const auto lastMain = g_hbMainLastMs.load(std::memory_order_relaxed);
+                    spdlog::info("[hb] worker ticks={} main drains={} mainAge={}ms lastWorkerStage='{}'",
+                                 g_hbWorkerTicks.load(std::memory_order_relaxed),
+                                 g_hbMainDrains.load(std::memory_order_relaxed),
+                                 lastMain ? (nowMs - lastMain) : -1,
+                                 g_hbWorkerStage.load(std::memory_order_relaxed));
+                    MainThread::Post([]() {
+                        g_hbMainDrains.fetch_add(1, std::memory_order_relaxed);
+                        g_hbMainLastMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 std::chrono::steady_clock::now().time_since_epoch()).count(),
+                                             std::memory_order_relaxed);
                     });
                 }
             }
@@ -1049,6 +1127,198 @@ namespace MFO::Diagnostics {
         spdlog::info("======================================================");
     }
 
+    // ── [fatal] PASSIVE FATAL HOOK (2026-09-21) ──────────────────────────────
+    // One LAST-position vectored exception handler + a std::terminate handler,
+    // whose whole job is to make the log tail survive the death of the process:
+    // flush spdlog, print ONE `[fatal]` line naming the code, the faulting
+    // address as module+rva (MFO / APMF / the game image; else the raw address)
+    // and the thread, then hand the exception straight back
+    // (EXCEPTION_CONTINUE_SEARCH). It never handles, never swallows, never
+    // unwinds: CrashLogger (an unhandled-exception filter, which runs AFTER
+    // every vectored handler declines) keeps ownership of the crash report.
+    //
+    // What a `[fatal]` line means: an ERROR-severity SEH exception (code
+    // 0xC0xxxxxx: access violation, illegal instruction, stack overflow, int
+    // divide, in-page error, heap corruption, ...) was RAISED on that thread at
+    // that address. Vectored handlers see FIRST-CHANCE exceptions, before any
+    // __try/__except frame, so a line is NOT by itself proof the process died --
+    // a module that probes memory under SEH would print one and carry on. The
+    // log tells them apart: a `[fatal]` that is the LAST line is the crash; one
+    // followed by ordinary lines was handled by somebody. Codes with the
+    // customer bit (0xE06D7363 = a C++ throw, .NET 0xE0434352, thread-naming
+    // 0x406D1388) and every warning/informational code are ignored, so try/catch
+    // traffic never prints. Capped at kFatalMaxLines per session.
+    //
+    // Inside the handler: the process is dying, so do as little as a line
+    // needs. No allocation beyond spdlog's own formatting, no engine call, no
+    // lock but the sink's. A fault INSIDE the logger on the same thread would
+    // re-enter here -- the thread_local guard bails, and the original exception
+    // continues to CrashLogger. Known degradation (backlog MFO-B61): a fault
+    // INSIDE log->critical under this handler is a NESTED exception raised
+    // inside MFO.dll; that nested one is what reaches CrashLogger's filter, so
+    // the report names the logger, and the ORIGINAL faulting address is lost.
+    // Stack overflow (0xC00000FD) returns at once with no flush and no log
+    // (see the handler). A fault raised while ANOTHER thread holds the sink
+    // mutex waits on that mutex, like CrashLogger's own handler would --
+    // accepted.
+    //
+    // std::terminate (an uncaught C++ exception, a noexcept violation) does
+    // not raise an SEH exception the vectored handler can see: MSVC's abort()
+    // fast-fails past exception dispatch. So a terminate handler prints the
+    // same line and then abort()s exactly as the default would. MSVC keeps the
+    // terminate handler PER THREAD (set_terminate stores into the calling
+    // thread's CRT data), so it is installed on each thread MFO owns or runs
+    // on: the plugin-load thread here, the sleeper thread at its start, the
+    // AddTask worker once per thread from the tick body (thread_local latch),
+    // and the main thread through one MainThread::Post at StartPump. The
+    // combat-thread hooks (Targeting / CasterConsent / CombatStyle) are not
+    // covered -- adding a set_terminate there is a change to those files.
+    //
+    // <windows.h> is banned outside the vendored imgui backend (GetObject
+    // hijack, ENGINE_NOTES §9), so the four Win32 shapes below are declared by
+    // hand, exactly like GetModuleHandleA/GetCurrentThreadId at the top of this
+    // file. Layouts are the x64 SDK ones: EXCEPTION_RECORD {DWORD code; DWORD
+    // flags; EXCEPTION_RECORD* next; PVOID address; DWORD nparams; ULONG_PTR
+    // info[15]} (0x98 bytes), EXCEPTION_POINTERS {EXCEPTION_RECORD*; CONTEXT*}.
+    // PVECTORED_EXCEPTION_HANDLER returns LONG; NTAPI is __stdcall, a no-op
+    // on x64. EXCEPTION_CONTINUE_SEARCH is 0.
+    namespace {
+        struct FatalExceptionRecord {
+            unsigned long         code;
+            unsigned long         flags;
+            FatalExceptionRecord* next;
+            void*                 address;
+            unsigned long         numberParameters;
+            std::uintptr_t        information[15];
+        };
+        static_assert(sizeof(FatalExceptionRecord) == 0x98, "EXCEPTION_RECORD x64 layout");
+        struct FatalExceptionPointers {
+            FatalExceptionRecord* record;
+            void*                 context;
+        };
+        // A known image: [base, base+size). Size comes from the PE header the
+        // loader mapped (IMAGE_NT_HEADERS64::OptionalHeader.SizeOfImage at
+        // NT+0x50: Signature 4 + FileHeader 20 + 56 into the optional header).
+        // `name` is written ONCE, in InstallFatalHook BEFORE the handler is
+        // registered (it is a plain pointer the handler reads on any thread);
+        // RefreshFatalModules re-resolves only the atomic base/size afterwards.
+        struct FatalModule {
+            const char*                 name = nullptr;
+            std::atomic<std::uintptr_t> base{ 0 };
+            std::atomic<std::uintptr_t> size{ 0 };
+        };
+        FatalModule g_fatalModules[3] = { { "MFO.dll" }, { "APMF.dll" }, { "SkyrimSE.exe" } };
+
+        std::atomic<int>  g_fatalLines{ 0 };
+        constexpr int     kFatalMaxLines = 16;
+        thread_local bool t_inFatalHandler = false;
+
+        std::size_t PeImageSize(std::uintptr_t a_base) noexcept {
+            if (!a_base) return 0;
+            const auto* b = reinterpret_cast<const unsigned char*>(a_base);
+            if (b[0] != 'M' || b[1] != 'Z') return 0;
+            const auto  lfanew = *reinterpret_cast<const std::int32_t*>(b + 0x3C);
+            const auto* nt     = b + lfanew;
+            if (nt[0] != 'P' || nt[1] != 'E') return 0;
+            return *reinterpret_cast<const std::uint32_t*>(nt + 0x50);
+        }
+        void FatalNoteModule(FatalModule& a_m, std::uintptr_t a_base) noexcept {
+            if (!a_base) return;
+            a_m.size.store(PeImageSize(a_base), std::memory_order_relaxed);
+            a_m.base.store(a_base, std::memory_order_release);
+        }
+        // Resolve "module+rva" for the line. Falls back to the raw address.
+        void FatalDescribe(std::uintptr_t a_addr, char* a_out, std::size_t a_cap) noexcept {
+            for (auto& m : g_fatalModules) {
+                const auto base = m.base.load(std::memory_order_acquire);
+                const auto size = m.size.load(std::memory_order_relaxed);
+                if (base && a_addr >= base && a_addr < base + size) {
+                    std::snprintf(a_out, a_cap, "%s+0x%llX", m.name,
+                                  static_cast<unsigned long long>(a_addr - base));
+                    return;
+                }
+            }
+            std::snprintf(a_out, a_cap, "0x%llX (no known module)", static_cast<unsigned long long>(a_addr));
+        }
+
+        long __stdcall FatalVectoredHandler(void* a_pointers) {
+            constexpr long kContinueSearch = 0;
+            auto* a_ep = static_cast<FatalExceptionPointers*>(a_pointers);
+            if (!a_ep || !a_ep->record) return kContinueSearch;
+            const auto code = a_ep->record->code;
+            // ERROR severity (bits 31+30) without the customer bit (29): 0xC0xxxxxx.
+            if ((code & 0xE0000000u) != 0xC0000000u) return kContinueSearch;
+            // STACK_OVERFLOW (0xC00000FD): return AT ONCE -- no flush, no log
+            // (Fable tier-A on 3315848, SEV-4). The thread is standing on its
+            // last guard page; spdlog's flush_() takes the sink mutex and calls
+            // fflush -> WriteFile, and that frame chain can double-fault into
+            // the reserved stack, which kills the process SILENTLY before
+            // CrashLogger's unhandled-exception filter ever runs -- the hook
+            // would then be the thing that lost the report. With flush_on(info)
+            // the FILE* buffer is already empty, so a flush here buys nothing.
+            if (code == 0xC00000FDu) return kContinueSearch;
+            if (t_inFatalHandler) return kContinueSearch;           // a fault inside this handler / the logger
+            t_inFatalHandler = true;
+            if (auto* log = spdlog::default_logger_raw()) {
+                if (g_fatalLines.fetch_add(1, std::memory_order_relaxed) < kFatalMaxLines) {
+                    char where[96];
+                    FatalDescribe(reinterpret_cast<std::uintptr_t>(a_ep->record->address), where, sizeof where);
+                    // critical -> flush_on fires; the flush() after is the belt for a sink
+                    // whose flush level was raised.
+                    log->critical("[fatal] code=0x{:08X} addr={} thread={} -- continuing search (CrashLogger owns the report)",
+                                  code, static_cast<const char*>(where), ::GetCurrentThreadId());
+                    log->flush();
+                }
+            }
+            t_inFatalHandler = false;
+            return kContinueSearch;
+        }
+
+        [[noreturn]] void FatalTerminateHandler() {
+            if (!t_inFatalHandler) {
+                t_inFatalHandler = true;
+                if (auto* log = spdlog::default_logger_raw()) {
+                    if (g_fatalLines.fetch_add(1, std::memory_order_relaxed) < kFatalMaxLines)
+                        log->critical("[fatal] std::terminate thread={} -- aborting (uncaught C++ exception or noexcept violation)",
+                                      ::GetCurrentThreadId());
+                    log->flush();
+                }
+            }
+            std::abort();
+        }
+    }
+    void InstallTerminateHandlerOnThisThread() {
+        std::set_terminate(FatalTerminateHandler);
+    }
+
+    void RefreshFatalModules() {
+        // Our own image by ADDRESS (no dependence on the file name), the game
+        // image from REL, APMF by name (absent -> stays 0 and never matches).
+        // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS (0x4) | UNCHANGED_REFCOUNT (0x2).
+        void* self = nullptr;
+        if (::GetModuleHandleExA(0x4u | 0x2u, reinterpret_cast<const char*>(&FatalVectoredHandler), &self) && self)
+            FatalNoteModule(g_fatalModules[0], reinterpret_cast<std::uintptr_t>(self));
+        FatalNoteModule(g_fatalModules[1], reinterpret_cast<std::uintptr_t>(::GetModuleHandleA("APMF.dll")));
+        FatalNoteModule(g_fatalModules[2], REL::Module::get().base());   // base/size only; the name is InstallFatalHook's
+    }
+
+    void InstallFatalHook() {
+        static std::atomic<bool> installed{ false };
+        if (installed.exchange(true)) return;
+        // The game image's label, set ONCE here, before the handler exists: the
+        // handler reads `name` unsynchronised on whatever thread faults, so it
+        // must never be written again (Fable tier-A on 3315848, SEV-5 threading).
+        g_fatalModules[2].name = REL::Module::IsVR() ? "SkyrimVR.exe" : "SkyrimSE.exe";
+        RefreshFatalModules();
+        InstallTerminateHandlerOnThisThread();
+        void* h = ::AddVectoredExceptionHandler(0 /* last: after every other vectored handler */, &FatalVectoredHandler);
+        spdlog::info("[fatal] passive hook {} (vectored handler LAST, std::terminate on this thread; MFO.dll @0x{:X} size 0x{:X}, game @0x{:X} size 0x{:X}, APMF {})",
+                     h ? "installed" : "NOT installed (AddVectoredExceptionHandler returned null)",
+                     g_fatalModules[0].base.load(), g_fatalModules[0].size.load(),
+                     g_fatalModules[2].base.load(), g_fatalModules[2].size.load(),
+                     g_fatalModules[1].base.load() ? "resolved" : "absent (re-resolved at kDataLoaded)");
+    }
+
     void Install() {
         auto* holder = RE::ScriptEventSourceHolder::GetSingleton();
         if (holder) {
@@ -1128,6 +1398,11 @@ namespace MFO::Diagnostics {
         spdlog::info("[diag] pump {}ms (evaluator), diagnostics every {}th wake (~{}ms)",
                      kPumpMs, kDiagEveryNth, kPumpMs * kDiagEveryNth);
         std::thread(SleeperLoop, epoch).detach();
+        // [fatal]: the main thread's copy of the terminate handler, once. Post is
+        // a documented no-op on VR (pump not installed) -- then main is uncovered.
+        static std::atomic<bool> mainTerminateQueued{ false };
+        if (!mainTerminateQueued.exchange(true))
+            MainThread::Post([]() { InstallTerminateHandlerOnThisThread(); });
     }
 
 }

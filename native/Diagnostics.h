@@ -24,6 +24,20 @@ namespace MFO::Diagnostics {
     // Full state dump to MFO.log. Safe to call from the main thread only.
     void DumpReport(const char* a_trigger);
 
+    // ── [fatal] passive fatal hook (2026-09-21) ───────────────────────────────
+    // Install once, at plugin load, AFTER the logger exists: a LAST-position
+    // vectored exception handler that flushes spdlog and prints one `[fatal]`
+    // line (code, module+rva, thread) for an error-severity SEH exception, then
+    // returns EXCEPTION_CONTINUE_SEARCH -- CrashLogger keeps the report. Plus a
+    // std::terminate handler on the calling thread. Never handles anything.
+    void InstallFatalHook();
+    // Re-resolve the module table (APMF.dll loads independently of MFO; call at
+    // kDataLoaded when every plugin DLL is in the process). Cheap, idempotent.
+    void RefreshFatalModules();
+    // MSVC keeps the terminate handler per thread; every thread MFO runs on
+    // installs its own copy through this (sleeper, worker, main via Post).
+    void InstallTerminateHandlerOnThisThread();
+
     // ── [atk-obs] passive attack-event probe (feat/mfo-attack-observe) ───────
     // Print + reset this follower's per-fight attack histogram NOW, if a fight is
     // open for him. Idempotent: no open fight -> no line, nothing touched. The
