@@ -6,12 +6,76 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-21 (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-09-22 (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
+
+- **2026-09-21 21:50 PDT Deck run (`aca7d43` deployed) — Fable field diagnosis + branch
+  `fix/mfo-field-batch-0921` (off `main` `db8fb7b`, v2.0.9 line; NOT merged, NOT deployed).**
+  Evidence: `scratchpad/field-20260921/EVIDENCE.md`, agentlog `field-diag-20260921-evening.md`,
+  memory `field-diag-2026-09-21-evening`. What the run showed, corrected against the code:
+  (1) **Jesper's combat table RAN; every condition was false** (his own combat group was
+  empty all fight — `[sense] foes=0`), and an empty skip-chain prints NO `[eval]` line, so the
+  "[eval] scan lines" observable promised below for an own-OOC follower was WRONG. The
+  branch's item E prints `[eval] <name> (<id>) combat table: N rules, none matched` once per
+  follower per fight so a running table is visible. Separately, Jesper never FOLLOWED: he
+  stood still from 21:54:58 on an active vanilla `PlayerFollowerPackage` (`0005C84B`) — the
+  same form for Follow and Wait, branched on `WaitingForPlayer` — and APMF over-deny was
+  REFUTED at the 0x49 seat (one claimed consult all session, Adelinda's retreat). Item D
+  prints `[follower] <id> '<name>' pkg= waitingForPlayer= dPlayer= moved= aiEnabled=
+  inCombat=` on the roster line and every 30 s; the next log decides Follow vs Wait.
+  (2) **Cicero's two mid-fight weapon vanishes (21:57:34.226, 21:57:44.075) were the T#76
+  MeleeClampDwell path — `MFO-B55` — not the party debounce**: `currentCombatTarget` null
+  on a LoS loss / retarget while his group still had foes, read as known-false, the dwell
+  (2-4 s) timed out. **The dwell path, not the party debounce, is the operative foe-keyed
+  release.** Item F fixes it (`EquipRangeUndecidable`: null target + foes remaining = UNKNOWN,
+  hold kept; empty group / real OOC still releases). B55 is DRAINED.
+  (3) **Two `party combat OFF` edges in one fight are legitimate**: the 21:57:34.884/35.029
+  flap (145 ms) was a real engine combat-controller restart (both fighting followers'
+  `[wstyle] OWNED` lines re-printed) that the gate mirrored. The N=2 hold debounce held, but
+  the REST of the party-OOC teardown (consent latch, cast lock, stance, ready beat) ran on
+  the first OFF tick — SEV-4, `MFO-B60`. Item G puts the whole teardown behind the same
+  2-service count. "Exactly one `party combat OFF` after the last foe dies" below is
+  therefore not an invariant; one OFF edge per controller restart is.
+  (4) **The death at ~21:57:58 (window 57.93–59.45) left no CrashLogger file and lost its
+  last second of MFO.log** (1 s background flush). Item A rotates `MFO.log` → `MFO.log.1` at
+  startup (the freeze session was lost to a relaunch); item B adds a passive `[fatal]`
+  vectored handler + terminate handler (flush + one line, `EXCEPTION_CONTINUE_SEARCH`,
+  CrashLogger keeps the report) and switches to `flush_on(info)`; item C prints
+  `[hb] worker ticks= main drains= mainAge= lastWorkerStage=` every 5 s from the sleeper
+  thread so a freeze names the stopped thread (`bHeartbeat`, INI `[Debug]`, default ON).
+  (5) **The tier-A candidate — the party gate reading every follower's raw
+  `combatController->combatGroup->lock` every 133 ms in and out of combat — is now gated on
+  a same-lap `IsInCombat()`** (item H), after disassembling both unpacked runtimes:
+  `Actor::StopCombat` (vtable slot 0xE5) frees the controller INLINE, with no refcount and
+  no lock, and its `UpdateCombat` path runs as BSJobs worker-thread jobs from the "Combat and
+  magic" frame job; the `CombatGroup` outlives the controller and is freed by the
+  CombatManager on main. No engine guard exists for a worker reader; the gate restores the
+  pre-build shape. Full evidence `Docs/ENGINE_NOTES.md` §0.47. NOT proven: that the frame
+  job graph barriers "Combat and magic" against "Post process" (where MFO's worker runs).
+  (6) **The Testing profile is MCO-style behaviour + SCAR.dll. BFCO is INERT: `BFCO.dll=n`
+  and zero `BFCO_*` events all session** — every "BFCO + SCAR" claim below is corrected in
+  place. Cicero's both-hands swings are structural: `ER Dual Wield Sword (MCO)` DAR 2200004
+  clips swing both blades in every attack; the pick cannot change it. A graph sink sees
+  only graph-RAISED events, never `NotifyAnimationGraph` INPUTS (attackStart=0 while
+  bowDrawStart=32). Item D also attaches the `[atk-obs]` sink whenever a follower is managed
+  + 3D-loaded, in or out of combat (counters stay fight-scoped), so a non-fighting
+  follower's parkour / stuck tags surface through the `new-tag` line.
+  **Field observables for the next deck run:** `[startup] rotated the previous MFO.log`;
+  `[fatal] passive hook installed` at load; `[hb]` every 5 s with `ticks` and `drains` both
+  climbing; `[follower] ... pkg=0005C84B waitingForPlayer=1` on a standing Jesper (=Wait)
+  or `=0` with `moved=` near 0 (stuck: pathing / anim); `[eval] Jesper ... combat table: N
+  rules, none matched` once per fight; NO `ReleaseForcedWeapon` on Cicero while any
+  `[sense]` line of his still reads `foes>0` — instead `[sched] ...: equip range rule has no
+  usable combat target while own group has foes -- hold kept`; a `party combat OFF`
+  followed by `ON` within one service tears nothing down (no `[cast] consent cleared` /
+  `[wstyle]` release between them). On a death: the `[fatal]` line is the LAST line, or
+  the `[hb]` counters show which thread stopped. **Not in this branch (scope conflicts
+  reported):** a last-main-LABEL in the heartbeat needs a labelled `MainThread::Post`
+  (`MainThread.cpp/.h`); the combat-thread hooks carry no terminate handler.
 
 - **2026-09-21 23:06 PDT — HOTFIX v2.0.8 SHIPPED (GitHub release, tag `v2.0.8`, branch `hotfix/v2.0.8` off tag `v2.0.5`).**
   Exactly v2.0.5 + the DropObject ABI fix (`7bc1f30`'s Logistics.cpp hunk, md5-identical `efe65afc…`); nothing
@@ -22,10 +86,13 @@ Read it as history and this block as current.
 - **Branch `feat/mfo-attack-observe` (off `origin/main` `9539f09`) — `[atk-obs]` PASSIVE ATTACK-EVENT
   PROBE, the instrument for the dual-wield "same move repeatedly" complaint (Fable diagnosis
   2026-09-21: vanilla NPC attack selection = DefaultRace ATKD, no left/dual entries; the design
-  pass then found the deck profile runs BFCO + SCAR and that Cicero's sword+sword pool is the
+  pass then found the deck profile runs ~~BFCO + SCAR~~ **[CORRECTED 2026-09-21 evening: MCO-style
+  behaviour + SCAR.dll; `BFCO.dll=n`, zero `BFCO_*` events — BFCO is inert on this profile]** and
+  that Cicero's sword+sword pool is the
   `ER Dual Wield Sword (MCO)` DAR set, which carries NO `SCAR_ActionData` / `SCAR_ComboStart`
-  annotations, so SCAR never chains and every attack restarts at `BFCO_Attack1` /
-  `BFCO_PowerAttack1`; the ready-dummy pool makes ONLY power attacks eligible at 125-145u). The
+  annotations, so SCAR never chains and every attack restarts at the pool's first clip
+  (~~`BFCO_Attack1` / `BFCO_PowerAttack1`~~ — the clip files carry BFCO annotations but the loaded
+  behaviour never raises them; the `MCO_*` tags from the same clips do fire); the ready-dummy pool makes ONLY power attacks eligible at 125-145u). The
   probe attaches a `BSAnimationGraphEvent` sink to each managed follower's own animation graphs
   at every fight start and prints, per follower per fight, `[atk-obs] <fid> '<name>' fight#n
   <dur>s R='<weapon>' L='<weapon>' | <every non-zero attack tag count> | idle-in-reach>1500ms xK
@@ -47,12 +114,16 @@ Read it as history and this block as current.
   roughly equal to the number of attack starts (`attackStart` + `attackPowerStart*`), and the
   power-attack count at or above the normal-attack count (the 125-145u band is power-only). A
   non-zero `SCAR_ComboStart` or `BFCO_NextIsAttack2+` means SCAR IS chaining and the theory is
-  wrong. `idle-in-reach>1500ms xK` with a large K and `attackStart` low is the "standing there"
+  wrong. **[RESULT 2026-09-21 21:50 run: `SCAR_ComboStart=0`, every `BFCO_*`=0, `MCO_PowerWinOpen=18`,
+  `weaponSwing=weaponLeftSwing=25`, `attackStart*=0` (a graph sink never sees NotifyAnimationGraph
+  INPUTS — count `MCO_WinOpen` / the first swing instead). Theory held; the both-hands swing is the
+  DAR pool's own clips, not the pick.]** `idle-in-reach>1500ms xK` with a large K and `attackStart` low is the "standing there"
   symptom in numbers; K near 0 with a high attack count says the moveset is the whole complaint.
   The `sink thread=` line decides whether the sink is on the main thread (then the probe could
   grow into a reader of graph variables) or a havok worker (then it stays counters-only). The
   `frameworks` line is the first thing to check: `SCAR.dll=n` on the deck invalidates the whole
-  BFCO/SCAR reading and points back at the vanilla ATKD finding.
+  BFCO/SCAR reading and points back at the vanilla ATKD finding. **[RESULT: `SCAR.dll=y BFCO.dll=n`
+  — the profile is MCO-style behaviour + SCAR, not BFCO.]**
 
 - **Branch `fix/mfo-party-combat-gate` (off `origin/main` `9539f09`, the merged v9 authority) —
   PARTY COMBAT is the substrate the Scheduler's two combat gates key on.** Deck 2026-09-21
@@ -73,12 +144,16 @@ Read it as history and this block as current.
   runs the combat table first and `ServiceFollower` only at the no-action exits (empty rules,
   ready beat, scan without a Fired/opaque hold), so one action per tick per follower holds.
   **Field observables:** during a fight Jesper's log shows `party combat, own combat=0 --
-  combat table live` and `[eval]` scan lines on his combat rules instead of only `[logistics]`
+  combat table live` and ~~`[eval]` scan lines on his combat rules~~ **[WRONG — an all-false table
+  prints no chain line; since `fix/mfo-field-batch-0921` item E it prints `combat table: N rules,
+  none matched` once per fight]** instead of only `[logistics]`
   heals; no `ReleaseForcedWeapon` / `owned=Armor` scope flip on Cicero off a flag flap
   shorter than the `MeleeClampDwell` (2-4 s) between `party combat ON` and `party combat
   OFF` (an own-OOC stretch LONGER than the dwell still releases a foe-keyed hold through
-  the T#76 path — backlog `MFO-B55`, not closed); exactly one `party combat OFF` after the
-  last foe dies (the hold release follows it within 2 services). Tier B, one Fable pass.
+  the T#76 path — ~~backlog `MFO-B55`, not closed~~ **[this WAS the live release on the 21:50 run,
+  both of Cicero's vanishes; FIXED by item F, B55 drained]**); ~~exactly one `party combat OFF` after the
+  last foe dies~~ **[one OFF edge per engine controller restart is legitimate; the whole teardown is
+  debounced since item G]** (the hold release follows it within 2 services). Tier B, one Fable pass.
   Docs: MAP.md Scheduler entry rewritten around the two gates, CHANGELOG v2.0.8 bullet.
   **Merged with `fix/mfo-combat-restoration-direct` (2026-09-21, `708fe7a`):** the gate
   review's SEV-2 (an own-OOC heal reaching `ComposedCast::Try` with no controller → opaque
