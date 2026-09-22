@@ -881,7 +881,13 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **NON-FORCED** (`EquipObject(..., a_forceEquip = false)` — no lock, the AI owns them again) and the
   follower is sheathed (`Actor::DrawWeaponMagicHands(false)`, vfunc 0A6, pinned
   `include/RE/A/Actor.h:360`; already used by `Loadout.cpp:341/429` and `Probe.cpp:270`), gated on
-  `!IsInCombat()` so a stand-down racing a fresh fight never puts a drawn weapon away. Runs on the
+  `!IsInCombat()` so a stand-down racing a fresh fight never puts a drawn weapon away.
+  **A TENSION, STATED:** `Docs/GAMBIT_FLAIR.md:299` rejected a post-combat sheathe flourish with
+  "sheathing is the vanilla AI's; sending sheath/pose animation events against it is a tug-of-war with
+  the engine". This is not that — it is the engine's own call, not a graph event, and it is made only
+  OUT OF COMBAT where the AI wants the weapon sheathed anyway. And it is not the part that delivers
+  the fix: the RE-ARM is (an equipped weapon is drawn on the body, an unequipped one is not), so the
+  sheathe line is deletable on its own if it ever proves to contend. Runs on the
   SAME double-`MainThread::Post` idiom as `LogLeftHandReadback` (the unequip is a QUEUED engine op, so
   re-equipping in the same breath would race it; and #62 puts any equip on the main thread). Re-resolved
   on the frame that runs; skipped for a dead/disabled follower, for an item no longer owned, and for a

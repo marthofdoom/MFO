@@ -2667,6 +2667,20 @@ namespace MFO::Actuation {
                 // combat -- a stand-down that raced a fresh fight must not put a drawn
                 // weapon away (the engine draws it again anyway, but forcing the graph
                 // the other way mid-engagement is not ours to do).
+                //
+                // A TENSION, STATED RATHER THAN BURIED (`Docs/GAMBIT_FLAIR.md:299`
+                // rejected a post-combat sheathe flourish with "sheathing is the
+                // vanilla AI's; sending sheath/pose animation events against it is a
+                // tug-of-war with the engine"). This is NOT that: it is the engine's
+                // own `Actor::DrawWeaponMagicHands(false)` (vfunc 0A6, pinned
+                // `include/RE/A/Actor.h:360`, the same call `Loadout.cpp:341/429` and
+                // `Probe.cpp:270` already make on a follower), not a graph event, and
+                // it is only made OUT OF COMBAT where the vanilla AI wants the weapon
+                // sheathed anyway -- so it agrees with the AI instead of contending
+                // with it. It is also NOT what delivers marth's ask: the RE-ARM above
+                // is (an equipped weapon is drawn on the body, an unequipped one is
+                // not). If this one line ever proves to fight the AI, deleting it
+                // costs nothing and the fix still stands.
                 if (!actor->IsInCombat()) actor->DrawWeaponMagicHands(false);
                 if (put)
                     spdlog::info("[equip] {:08X}: stand-down re-arm -- {} weapon(s) put back NON-forced "
