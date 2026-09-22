@@ -179,7 +179,11 @@ namespace MFO::Scheduler {
         //   PARTY COMBAT = the player is in combat
         //              OR any managed active follower is in combat
         //              OR any managed follower's combat-group foe tally
-        //                 (CombatSense::FoeCount, the [sense] foes= read) > 0.
+        //                 (CombatSense::FoeCount, the [sense] foes= read) > 0
+        //                 -- read only for followers whose own flag is TRUE this
+        //                 lap (controller lifetime, see the block in Tick), so
+        //                 the third term is implied by the second and survives
+        //                 as the transition line's foes= count.
         // Computed ONCE per pump tick at the top of Tick() on the worker, from
         // the same g_active walk the round-robin already makes (#4: worker-only,
         // no lock, no off-road g_followers read), then read by the per-follower
@@ -279,11 +283,12 @@ namespace MFO::Scheduler {
         ++g_ticks;
 
         // PARTY COMBAT, once per tick, before the round-robin picks anyone: the
-        // player's flag, every managed active follower's flag, and the [sense]
-        // foe tally (CombatSense::FoeCount -- the follower's own combat group,
-        // the same read the [sense] line prints; there is no radius in that
-        // scan and none is added here). O(party) vfunc reads plus one combat-
-        // group read-lock per follower; taken with NO other lock held, so it
+        // player's flag, every managed active follower's flag, and -- for the
+        // followers whose flag is TRUE this lap -- the [sense] foe tally
+        // (CombatSense::FoeCount -- the follower's own combat group, the same
+        // read the [sense] line prints; there is no radius in that scan and
+        // none is added here). O(party) vfunc reads plus one combat-group
+        // read-lock per FIGHTING follower; taken with NO other lock held, so it
         // cannot nest the group lock the Evaluator's scan warns about. Dead /
         // disabled followers are skipped exactly as the service below skips
         // them. Transition-only log (#79): one line per ON/OFF edge.
@@ -297,8 +302,35 @@ namespace MFO::Scheduler {
                 auto  ptr = h.get();          // HOLD the NiPointer across the group read
                 auto* a   = ptr.get();
                 if (!a || a->IsDead() || a->IsDisabled()) continue;
-                if (a->IsInCombat()) ++followersFighting;
-                foes = std::max(foes, CombatSense::FoeCount(a));
+                // CONTROLLER LIFETIME (tier-A carve-out, Fable field diagnosis
+                // 2026-09-21; evidence in ENGINE_NOTES "CombatController lifetime"
+                // and the commit): Actor::combatController is a raw, unguarded
+                // pointer that Actor::StopCombat (vtable slot 0xE5) frees INLINE
+                // and nulls, and StopCombat runs on BSJobs WORKER threads from
+                // the "Combat and magic" frame job (UpdateCombat's only call
+                // site is a job callback) plus 30-odd other virtual call sites
+                // (EvaluatePackage, KillImmediate, the Papyrus native). There is
+                // no refcount and no lock on it; the engine gives this worker
+                // nothing to hold it with. IsInCombat() itself dereferences it
+                // (`cc && !cc->inactive`), so every IsInCombat() read MFO has
+                // ever made carries the same exposure; what this block added
+                // was a SECOND deref -- `cc->combatGroup->lock`, a read-lock
+                // acquire on the group -- for every follower every 133 ms, in
+                // AND out of combat, i.e. through every controller teardown and
+                // rebuild (the engine rebuilt both fighting followers' at
+                // 21:57:34.9). Gate the group read on a same-lap IsInCombat():
+                // that is the pre-build shape (FoeCount ran only inside the
+                // combat branch), it drops the out-of-combat group read to
+                // zero, and it leaves the in-combat one where every [sense] /
+                // Evaluator read already is. The `foes` term of the boolean is
+                // therefore implied by followersFighting; it still feeds the
+                // transition line. A real fix (an atomic controller epoch
+                // published from a StopCombat seat) is an engine seat for its
+                // own brief.
+                if (a->IsInCombat()) {
+                    ++followersFighting;
+                    foes = std::max(foes, CombatSense::FoeCount(a));
+                }
             }
             const bool party = player || followersFighting > 0 || foes > 0;
             if (party != g_partyCombat) {

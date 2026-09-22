@@ -2172,6 +2172,94 @@ existing `AcquireEquip` `MainThread::Post` path (#62). The trade's
 `RemoveItem` on a force-sold redundant inferior remains the other proven
 un-wear. See `MAP.md` Logistics family, "ARMOR CLASS BY SKILL + PERKS".
 
+### 0.47 `Actor::combatController` is freed INLINE by `Actor::StopCombat`, on BSJobs WORKER threads, with no refcount and no lock; the `CombatGroup` outlives it and is freed by the CombatManager on MAIN (2026-09-21, disassembly of both unpacked runtimes)
+
+**Why this was traced.** The 2026-09-21 party-combat gate (`Scheduler.cpp` `Tick`) read every
+active follower's `combatController->combatGroup->lock` every 133 ms, in AND out of combat --
+through every controller teardown/rebuild -- and Fable's field diagnosis flagged it as the one
+tier-A candidate for the 21:57:58 death (no proof; the window was silent). The question was:
+which thread frees the controller, and does the engine give a reader anything to hold it with.
+Evidence from `binaries/1.6.1170/SkyrimSE.unpacked.exe` (AE) and `binaries/1.5.97/SkyrimSE.unpacked.exe`
+(SE), `objdump -d -M intel` + the Address Library (`versionlib-1-6-1170-0.bin`, `version-1-5-97-0.bin`).
+RVAs below; VA = 0x140000000 + RVA. The tools and the two listings are in the session scratchpad
+(`re/vt.py`, `re/fn.py`, `re/callers.py`); nothing here needs them to re-verify.
+
+**The vtable slots (Character and Actor share them; SE index == AE index -- CommonLib's
+`RelocateVirtual(0xE3, 0xE5, ...)` second index is VR, not AE):**
+
+| slot | what | SE 1.5.97 | AE 1.6.1170 | body |
+|---|---|---|---|---|
+| 0xE3 | `IsInCombat` | `0x625660` | `0x6b6dd0` | `cc = [this+0x158 / +0x160]; return cc && cc->inactive(+0x43) == 0` -- **it dereferences the controller** |
+| 0xE4 | `UpdateCombat` | `0x625700` (id 37612) | `0x6b6e70` | |
+| 0xE5 | `StopCombat` | `0x625920` (id 37613) | `0x6b70a0` | frees the controller inline, below |
+
+`combatController` = `Actor+0x158` (SE) / `+0x160` (AE); `currentCombatTarget` = `+0xFC` / `+0x104`
+(the CommonLib `RUNTIME_DATA_CONTENT` comments are absolute Actor offsets, runtime data starts at
+`+0xE0` / `+0xE8`).
+
+**1. `StopCombat` frees the controller inline and nulls the two fields.** SE `0x625a88-0x625ac6`:
+`cmp [rsi+0x158],0; je; call 0x5ed420(this); rbx=[rsi+0x158]; if (rbx) { call 0x4fcde0(rbx)
+/*~CombatController*/; call delete(rbx, 0xD8) }; [rsi+0x158]=0; [rsi+0xFC]=0`. AE `0x6b71fe-0x6b7243`:
+same shape, `~CombatController = 0x558500`, `delete(..., 0xE0)`, `[rdi+0x160]=0; [rdi+0x104]=0`.
+0xD8 / 0xE0 are exactly `sizeof(CombatController)` on SE / AE (pinned `CombatController.h`, the
+0.29 AE +8 layout). No refcount is touched anywhere on that path; the pointer is a plain field.
+
+**2. The group is NOT freed with the controller.** `~CombatController` (SE `0x4fcde0`) calls
+`0x76b0f0(combatGroup, ...)` and `0x76aa00(combatGroup, ...)` -- removal of the actor's target /
+member entries from the group -- then frees `behaviorController` (+0x20, 0x78), `state` (+0x08,
+0xC0), `inventory` (+0x10) ... and never `delete`s `[this+0]`. `CombatGroup` (`sizeof 0x168`,
+pinned `CombatGroup.h:110`) is freed by the CombatManager's group prune `0x7a5a50` (id 45570):
+`for each group in this->combatGroups: if (0x76b070(group)) { ~CombatGroup 0x76a030;
+delete(group, 0x168) }` (`0x7a5aa0-0x7a5ac9`). Its two callers are `0x5b2ff0+0x3d6` (id 35565 --
+the frame driver that owns the "Hitched from shader compile" string, i.e. `Main::Update`) and
+`0x5b50e0+0xc0` (id 35586). **So a group outlives its members' controllers and is freed on the
+MAIN thread, from the frame driver.** Reading `cc->combatGroup->lock` therefore faces two
+different frees: the controller (worker threads, any time StopCombat runs) and the group (main,
+once empty).
+
+**3. `UpdateCombat` -- the path that ends most fights -- runs as a JOB on the BSJobs worker
+threads, several actors in parallel.** It has exactly ONE call site on each runtime: SE
+`0x7a8390+0x3c` (id 45602), AE `0x83f5e0+0x3c` (id 46902) -- a callback `(ActorHandle) ->
+resolve -> actor->UpdateCombat()`. That callback is pushed as a job `{fn, handle}` by the
+CombatManager walker (SE `0x7a8500`, id 45604: `for each combatGroups[i]: for each members[j]:
+push`; AE `0x83d070`, singleton `0x31ab798` = id 405246) from the frame job **"Combat and magic"**
+(SE `0x640250`, id 38109; AE `0x6d2920`, id 39065). That job submits the list (SE `0xc32770`:
+`SetEvent` IAT `0x15090e0`) and then WAITS for it (SE `0xc32890`, AE `0xcf76b0`:
+`GetCurrentThreadId` -> run jobs on the calling thread -> `SwitchToThread` ->
+`WaitForSingleObjectEx`; IAT `0x15092a0/0x1509328/0x15090f0` SE, `0x174f4b8/0x174f288/0x174f120`
+AE). The frame job table (`.data` SE `0x1dee210`, id 508691; AE entry "Combat and magic" at
+`0x2011ac0`) is the engine's per-frame job graph: named jobs separated by `JobListEnd` markers
+("Ragdoll animation, VM update, Ragdoll signal/sync, ClonePools Update, **Combat and magic**,
+Destructible, JobListEnd" ... "Non render-safe AI, Anim SG signal/sync, Animated cell object
+update, Cell update signal/sync, **Post process**, Poll controls, JobListEnd"). "Post process" (SE
+`0x640db0`, id 38136; AE `0x6d34b0`, id 39092) is the job the SKSE task queue drains in (§0.30) --
+MFO's worker tick. **The two are in different job lists of the same graph.**
+
+**4. `StopCombat` is not confined to that job.** It is virtual (slot 0xE5, vtable offset `0x728`)
+and has 34 call sites on SE, among them `Actor::EvaluatePackage` (`0x5db310+0xc3`),
+`Actor::KillImmediate` (`0x5fb640+0x1ac`) and the Papyrus native `Actor.StopCombat`
+(`0x94d7b0+0x2a`, registered at `0x95229b` with the `"StopCombat"` string). A script, a package
+evaluation or a kill can free a controller from whatever thread runs those.
+
+**NOT FOUND (stated, not guessed):** (a) a proof that the job graph runs its lists strictly in
+sequence with a barrier between "Combat and magic" and "Post process" -- the graph is built from
+the table by `0x575210` (id 34547) via `0x576a10`, and the executor was not traced; the
+`JobListEnd` naming suggests a barrier and suggestion is not proof; (b) which thread executes the
+Papyrus `Actor.StopCombat` native (tasklet thread vs the VM update job); (c) whether the game's
+allocator ever unmaps a freed 0xD8/0xE0 block (a stale read is UB either way: a garbage
+`combatGroup` pointer, or a `BSReadLockGuard` spinning on freed memory -- the shape of a FREEZE,
+not a crash).
+
+**What MFO does with this (branch `fix/mfo-field-batch-0921`, item H).** There is no engine
+guard a worker can take: no refcount, no lock covering the pointer, and `IsInCombat()` itself is
+the same unguarded deref. So the read is gated on a same-lap `IsInCombat()` -- the pre-build shape
+(`FoeCount` ran only inside the combat branch) -- which drops the out-of-combat group read to
+zero and leaves the in-combat one where every `[sense]` / Evaluator read already is. The `foes`
+term of the party boolean is then implied by `followersFighting` and survives only as the
+transition line's count. The residual is the exposure MFO has carried since the first
+`IsInCombat()` on the worker; closing it means an atomic controller epoch published from a
+StopCombat seat (slot 0xE5, both runtimes above) -- an engine seat, its own tier-A brief.
+
 ---
 
 ## 1. Actor control — Tier A primitives
