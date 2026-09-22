@@ -423,7 +423,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
-  (`Logistics.cpp:~1090-1250`, inside `ServiceFollower`). On that OOC path a **non-AUTO** resolved `cast_target`
+  (`Logistics.cpp:~1138-1298`, inside `ServiceFollower`). On that OOC path a **non-AUTO** resolved `cast_target`
   now routes by nature: a **CONCENTRATION** spell (any non-self target) is
   intercepted FIRST → `CastTargetDirect` (direct force, package-lock-proof); the rest is
   FIRE-AND-FORGET, routed by `CasterConsent::ClassifySpell` + foe test — a **hostile
@@ -649,7 +649,7 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   53029/53829) inside `MainThread::Post` (§0.30 crash class off-worker). `Check`
   (`:93`, worker-safe cache read) → `Actuation.cpp:127,149,234`, `Evaluator.cpp:307`.
   `Want` (`:101`) → `Evaluator.cpp:317`, `Actuation_Direct.cpp:1268` (F7 auto-cast),
-  `Logistics.cpp:1350` (OOC hostile cast — seeds the `Check` at `:1353`; added to
+  `Logistics.cpp:1398` (OOC hostile cast — seeds the `Check` at `:1401`; added to
   close the 2026-08-18 review SEV-3 "Check without a Want → Unknown always passes"
   inert wall-gate). `g_mx` is a strict LEAF (nothing called while held). Fail-open
   by design (cold/stale/VR → Unknown). **Every `Check` must have a `Want` seeding
@@ -689,9 +689,9 @@ internal header. Cross-module state/types/small helpers live as `inline` members
 of `namespace MFO::Logistics` in `Logistics_internal.h` (ONE instance across the
 TUs — it replaces the old single anonymous namespace; big cross-module helpers
 are declared there and defined in their home module). Layout:
-- `Logistics.cpp` (1700) — core tick: `ServiceFollower` (`:625`, INCLUDING the
-  OOC cast dispatch `:~1080-1320` — concentration direct-force `:~1210`,
-  fire-and-forget `:~1300`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
+- `Logistics.cpp` (1748) — core tick: `ServiceFollower` (`:673`, INCLUDING the
+  OOC cast dispatch `:~1128-1368` — concentration direct-force `:~1258`,
+  fire-and-forget `:~1348`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
   `ShedOffRoleWeapon`, sinks, lifecycle + MSTK API, evaluator pure reads.
 - `Logistics_Cast.cpp` (269) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
@@ -710,22 +710,28 @@ Adding shared state? Put it in `_internal.h` as `inline` (never a per-TU
 anonymous-namespace copy — that silently forks the instance).
 - **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`Logistics_internal.h:569`, guarded
   `g_stockMx` `:568`, the one cross-thread map here): the only serialized state the cluster
-  owns. `CopyStockGear` (`Logistics.cpp:1685`) → `Serialization.cpp:209`; `LoadStockRecord`
-  (`:1690`) → `:332`; `ClearStockGear` (`:1695`) → `:256,646`. Only
+  owns. `CopyStockGear` (`Logistics.cpp:1733`) → `Serialization.cpp:209`; `LoadStockRecord`
+  (`:1738`) → `:332`; `ClearStockGear` (`:1743`) → `:256,646`. Only
   `IsPersistableID` FormIDs written, sets capped 512, unresolvable IDs dropped.
   Changing the map's key/value shape or record framing breaks the shed-protection
   ("Gauldurbow fix") — signature gear could get shed (dropped on the floor) after a load.
   **Not** cleared by `ClearTransientState` — cleared separately by `ClearStockGear`.
-- `ServiceFollower` (`Logistics.cpp:625`) — sole caller `Scheduler.cpp:308` (worker). Sets
+- `ServiceFollower` (`Logistics.cpp:673`) — sole caller `Scheduler.cpp:308` (worker). Sets
   `g_svc` (`Logistics_internal.h:222`) raw pointer valid only for that call — safe only because the
   worker services followers sequentially; parallelizing dangles it.
 - `ShedOffRoleWeapon` (`Logistics.cpp:494`) — one off-role weapon per idle tick, **DROPPED on
   the floor** (no longer handed to the player; no value split, no knob — marth
-  simplified). Disposal is `Actor::DropObject` (a world-ref/3D create) so it MUST
-  go through `MainThread::Post` (`doDrop`, mirrors the #62 equip / ActivateRef
-  hops in this file); on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
+  simplified). Disposal is the engine's `DropObject` vfunc (a world-ref/3D create) so it MUST
+  go through `MainThread::Post` (`doDrop` `:595`, mirrors the #62 equip / ActivateRef
+  hops in this file). **`doDrop` calls the vfunc DIRECTLY (slot 0xCB SE/AE, 0xCD VR)
+  with an explicit `ObjectRefHandle* a_out` second parameter -- NEVER through
+  `RE::Actor::DropObject`**: CommonLib 3.7.0's `RelocateVirtual<>` wrapper builds a
+  free-function type with no non-POD-return handling, so MSVC puts the sret slot in
+  `rcx` and `this` in `rdx`; the engine then reads MFO's stack temporary as the Actor
+  (deterministic CTD, 4x on LoreRim, fixed v2.0.7 / hotfix v1.1.5; principle 6, the third instance).
+  Verified against the unpacked 1.6.1170 (`+0x6781D0`) and 1.5.97 (`+0x5E6150`) binaries; on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
   drop off-worker. **POST-BATTLE GATE:** early-returns until `kShedPostBattleDwell`
-  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:1626`) ←
+  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`Logistics.cpp:1674`) ←
   `Scheduler.cpp:321` (the in-combat branch — the only place combat=true is seen,
   since this path is out-of-combat-only). Survives an `IsInCombat()` mid-fight
   flap: a real combat frame re-stamps `now`, so the dwell can't mature inside a
@@ -733,7 +739,7 @@ anonymous-namespace copy — that silently forks the instance).
   worker-only/no-lock (#4), cleared in `ClearTransientState`. Guards unchanged
   (never disarm/`inRoleWeapons>0`, `IsStockGear`, `IsCreatureWeapon`, socketed,
   `Catalog::IsExcluded`).
-- `ClearTransientState` (`Logistics.cpp:1630`) → `Serialization.cpp:641`, after StopPump. Wipes
+- `ClearTransientState` (`Logistics.cpp:1678`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
 - Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`Logistics.cpp:249`),
@@ -743,10 +749,10 @@ anonymous-namespace copy — that silently forks the instance).
   (after `Catalog::Load`).
 - **Alias/travel:** `g_travelSlots` (`Logistics_internal.h:323`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
-  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `Logistics.cpp:1655` ←
+  `Packages::LootTravelClear` (combat via `ReleaseTravelOnCombat` `Logistics.cpp:1703` ←
   `Scheduler.cpp:328`; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
-  **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `Logistics.cpp:~700`) detects an EXTERNAL package
+  **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `Logistics.cpp:~748`) detects an EXTERNAL package
   holding a claimed follower (scene/framework; onTravelPkg=false mid-walk), pauses
   the stall/deadline clocks (`stolenSince`, `kStealGrace=10s` `Logistics_internal.h`) and re-asserts
   via `EvaluatePackage(true,false)`; only a genuine on-package zero-move stall
@@ -757,7 +763,7 @@ anonymous-namespace copy — that silently forks the instance).
   (`Logistics_internal.h`, keyed `StealKey`=follower<<32|target) counts displacements;
   at `kStealStrikeMax=4`, or while `IsInCombat()`, the leg ABANDONS to the transient
   blocklist (`MarkTravelFailed`, never sticky) instead of re-asserting. Reset on
-  arrival (`Logistics.cpp:~820`, provably reachable) or target change (fresh key);
+  arrival (`Logistics.cpp:~868`, provably reachable) or target change (fresh key);
   erased on every give-up. Normal single-steal-then-reclaim path unchanged.
 - **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1477`; cell set built just below it):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
@@ -785,12 +791,12 @@ anonymous-namespace copy — that silently forks the instance).
   verdict); grab paths never consult the blocklist. Weakening (d) or removing the
   walk-skip re-opens the frozen-Erik churn loop; removing (a)'s sort key stalls
   followers on unreachable-first ordering again.
-- **Sinks** (`RegisterSinks` `Logistics.cpp:1583` ← `plugin.cpp:297`): `ContainerSink`
+- **Sinks** (`RegisterSinks` `Logistics.cpp:1631` ← `plugin.cpp:297`): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
   PlayerID()`, `ContainerSink` in `Logistics.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
   only QUEUES to the worker. `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
-  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`Logistics.cpp:1602`) ← `plugin.cpp:360`.
-- `OnFollowerRemoved` (`Logistics.cpp:1668`) ← `Followers.cpp:306` (dismissal alias eviction).
+  → `KeepHeadClear`. `SweepBeastHeadsOnLoad` (`Logistics.cpp:1650`) ← `plugin.cpp:360`.
+- `OnFollowerRemoved` (`Logistics.cpp:1716`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
 - Economy probe (`EconomyProbe`, worker, `Config::g_economy && Po3Present`, now takes
@@ -1373,7 +1379,7 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 | `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:294` | 14 + 1 vtables |
 | `CombatStyle::InstallEquipGate` (CheckShouldEquip 0x0F) | `plugin.cpp:295` | 30 template vtables |
 | `Rapport::RegisterSinks` (TESDeath, TESCombat) | `plugin.cpp:296` → `Rapport.cpp:511` | sinks LAST |
-| `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:297` → `Logistics.cpp:1495` | direction filter mandatory |
+| `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:297` → `Logistics.cpp:1543` | direction filter mandatory |
 | `MEOBridge::RegisterSink` (TESEquip) | `plugin.cpp:298` → `MEOBridge.cpp:75` | optional |
 | `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:299` → `Diagnostics.cpp:397` | + the worker pump |
 | `TradeBridge::RegisterFuncs` (10 Papyrus natives) | `plugin.cpp:407` → `TradeBridge.cpp:209` | script ABI |

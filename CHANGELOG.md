@@ -1,3 +1,7 @@
+## v1.1.5 -- A follower dropping a weapon no longer crashes the game
+
+- **A follower setting down an off role weapon no longer crashes the game.** When a follower dropped a weapon that did not fit its role, the game could crash on the spot. It happened every time a drop ran. The call that hands the weapon to the game was passing its arguments in the wrong order, and the game read a scrap of stack memory as the follower. The drop now calls the game directly and hands it exactly what it expects. Checked against both Skyrim 1.6.1170 and 1.5.97.
+
 ## v1.1.4 -- Faster looting and no more standing around
 
 - **Followers stop freezing up near a pile of bodies.** After a fight a follower could stand and do nothing for minutes while lootable corpses sat right next to it. That happened when a body was somewhere it could not quite path to (on rubble, on stairs, on a heap of other bodies) and the mod wrongly wrote that body off as unreachable for five whole minutes. Now a body it cannot path to grows the follower's reach a little on each try and it just takes the loot from where it stands, and the give-up window dropped from five minutes to one. The dead time is gone.
