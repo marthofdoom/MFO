@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.8 -- A follower dropping a weapon no longer crashes the game
+
+- **A follower setting down an off role weapon no longer crashes the game.** When a follower dropped a weapon that did not fit its role, the game could crash on the spot. It happened every time a drop ran. The call that hands the weapon to the game was passing its arguments in the wrong order, and the game read a scrap of stack memory as the follower. The drop now calls the game directly and hands it exactly what it expects. Checked against both Skyrim 1.6.1170 and 1.5.97. This build is v2.0.5 plus this one fix.
+
 ## v2.0.5 -- Heals are recognised as our own
 
 - **A follower no longer throws away a heal it is already casting.** Another heal rule could take the hand out from under a cast that was part way through, and the game then refused the spell it had just started. The follower now keeps the hand until that cast finishes.
