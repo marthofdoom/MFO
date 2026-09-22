@@ -72,6 +72,61 @@ Read it as history and this block as current.
   engine-side trigger (the shield and hood VANISHING from `GetInventory` after `OutfitApply`
   while APMF still listed the shield) is itself unresolved pending a `TESContainerChangedEvent`
   probe.
+  **VERIFICATION LEDGER for this branch (there was NO full Fable review on this round, by marth's
+  token order, so the author's verification is the record).** Every symbol claim below was checked
+  against the PINNED CommonLibSSE-NG 3.7.0 @ `c4ab853d` only, and every APMF claim against the APMF
+  working tree (read-only; MFO's mirrored `native/APMF_API.h` was NOT re-mirrored):
+  - `APMF_API_v4::SetSpellAllowList(Handle, const RE::FormID*, std::uint32_t)` — MFO's own
+    `native/APMF_API.h:842`, `kMaxSpellAllowList = 32` at `:102`, ABI floor 4.
+    `APMF_API_v6::IsClaimLive` at `:909`.
+  - APMF's allowance semantics — `native/core/Allowance.cpp:60-79`: no claim → ALLOW;
+    `claim.form == 0 && allowCount == 0` → ALLOW; `subjectForm == claim.form` → ALLOW; in the
+    allow-set → ALLOW; else DENY. So a gate-only claim IS `RequestEx(form = 0)` + an allow-set.
+  - Both consult sites — `core/EquipGate.cpp:609` (t2a, after the engine's own YES and after the
+    ch.8b spell/proxy exemptions) and `core/CastGate.cpp:160` (t2c). Both actor-wide.
+  - t2a's scope — `core/EquipGate.cpp:676-708`: 15 `CombatInventoryItemMagic` + 15
+    `CombatInventoryItemStaff` templates. Weapons/fists are NOT hooked (APMF's own documented hole).
+    `subjectForm = a_this->item->GetFormID()` (`:284`), and `CombatInventoryItemStaff :
+    CombatInventoryItemMagic` with `item` a `TESBoundObject*` (pinned
+    `include/RE/C/CombatInventoryItemStaff.h`, `include/RE/C/CombatInventoryItem.h`) — so for a staff
+    template `item` IS THE STAFF WEAP and `GetMagic()` (0x16) is the spell. That is WHY the
+    enumeration puts BOTH the staff form and its `formEnchanting` on the list.
+  - The exemption being mirrored — `CasterConsent.cpp` `CtrlUnlatchedDeny`: `Is(FormType::Spell)` +
+    `GetSpellType() == kSpell`, i.e. scrolls/staves/shouts/powers/abilities are deliberately NOT
+    denied by MFO.
+  - Enumeration symbols — `TESObjectWEAP::IsStaff()` (`include/RE/T/TESObjectWEAP.h:253`),
+    `TESObjectWEAP : TESEnchantableForm` → `formEnchanting` (`:67` / `TESEnchantableForm.h:26`),
+    `ScrollItem` registered in `include/RE/F/FormTraits.h:175` so `As<ScrollItem>()` is a valid
+    form-type switch, `TESNPC::GetSpellList()` (`include/RE/T/TESNPC.h:249`) →
+    `TESSpellList::SpellData { SpellItem** spells; std::uint32_t numSpells; }`
+    (`include/RE/T/TESSpellList.h:44,52`), `ACTOR_RUNTIME_DATA::addedSpells`
+    (`include/RE/A/Actor.h:666`, a `BSTSmallArray` with `begin`/`end`),
+    `MagicSystem::SpellType` `kPower = 2` / `kLesserPower = 3` / `kVoicePower = 11`
+    (`include/RE/M/MagicSystem.h:63,64,77`).
+  - Why MFO's own `ConcProxy` pool needs no entry — `MagicCaster::CastSpellImmediate` is vtable slot
+    01 and `CheckCast` is slot 0A (pinned `include/RE/M/MagicCaster.h:46,55`), and the pool's forms
+    are `IFormFactory`-created 0xFF spells never added to any actor's spell list.
+  - The in-flight predicate — `Actuation::CastInFlightOnHand` (`Actuation_Hands.cpp:251`), a plain
+    read of `ACTOR_RUNTIME_DATA::magicCasters[slot]->currentSpell/state`, already called from this
+    same AddTask job worker; `APMFBridge::Tick` runs inside that same worker body
+    (`Diagnostics.cpp:934`).
+  - The sheathe call — `Actor::DrawWeaponMagicHands(bool)` is vfunc `0A6`
+    (`include/RE/A/Actor.h:360`); `ActorEquipManager::EquipObject`/`UnequipObject` full signatures at
+    `include/RE/A/ActorEquipManager.h:19,22` (`a_forceEquip` is the 7th parameter).
+  - `denied` is only ever `kEquipCat_Shield` — `Logistics_Economy.cpp:723`, iff
+    `roles.offHand == 2 && bWeaponStyleControl`.
+  **WHAT COULD NOT BE VERIFIED, stated rather than assumed:** (a) that
+  `DrawWeaponMagicHands(false)` is HONOURED on an NPC in the field (the symbol is real and MFO
+  already calls it, but no field capture proves the `false` direction, and
+  `Docs/GAMBIT_FLAIR.md:299` records a rejection of contending with the AI's own sheathe — the
+  re-arm, not this line, is what delivers the fix); (b) that two `MainThread::Post` hops are always
+  enough for the queued force-unequip to have drained before the re-equip, and that the engine does
+  not coalesce an unequip+equip of the same object (if not, the re-equip is swallowed and behaviour
+  is today's, not worse); (c) that `forceEquip = false` leaves NO prevent-removal lock — reasoned
+  from the force-unequip's own comment, not from disassembly; (d) whether
+  `CombatInventory::Rebuild` can build a Magic-template item for something outside the enumerated
+  classes (`MFO-B65`); (e) that a player-GIFTED shield should be sold — rule 4b never records a
+  shield in `g_playerPicks`, so `IsPlayerPick` does not protect one.
 - **2026-09-21 21:50 PDT Deck run (`aca7d43` deployed) — Fable field diagnosis + branch
   `fix/mfo-field-batch-0921` (off `main` `db8fb7b`, v2.0.9 line; NOT merged, NOT deployed).**
   Evidence: memory note `field-diag-2026-09-21-evening` (the summary + pointers) and the Fable
