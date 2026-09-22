@@ -80,3 +80,34 @@ copy back.
 4. Spell/grammar clean (published text is polished even if the source notes weren't).
 
 Keep this doc updated as marth gives more voice corrections.
+
+## Talking to another modder (dev-to-dev, 2026-09-22)
+
+A different register from Nexus copy: it is a chat message, not published text, so the hard
+rules still hold (no dashes, no semicolons) but the polish drops. Sample marth actually sent,
+diagnosing a third-party plugin built on APMF:
+
+> "Hmm, ok. I see the issue. You are successfully setting the combat target, but nothing is
+> setting combat itself or handing a combat package. It looks like you are just moving the actor
+> toward the target. I don't yet have a engage combat intent because normally you'd expect the
+> games regular combat package to kick in. But I can add one pretty quick I think. I think one
+> will be needed for certain spells anyway. Lemme keep digging for a little bit."
+
+What that shows, and what to copy:
+- **Think out loud in order.** "Hmm, ok. I see the issue." Lead with the read, not a preamble
+  and not a summary of what they said.
+- **Name what they DID right first,** then the missing piece, in the same breath: "You are
+  successfully setting the combat target, but nothing is setting combat itself."
+- **Own the gap without apology or ceremony.** "I don't yet have a engage combat intent." No
+  "unfortunately", no "I'm sorry to say".
+- **Explain why the gap was reasonable,** in one clause: "normally you'd expect the games
+  regular combat package to kick in."
+- **Hedge estimates honestly.** "pretty quick I think", "I think one will be needed", "Lemme
+  keep digging for a little bit." Never promise a date or a release.
+- **Short paragraphs, no headers, no bullet lists** unless the other person asked for steps.
+  A numbered recipe is fine when it IS the deliverable, but keep it tight and skip the
+  restatement of their own code back at them.
+- **No lecture.** State the engine fact once ("StartCombat does not path anyone to a target they
+  have not detected") and move on. Do not stack every finding in the report into the message,
+  pick the ones that change what they would do next.
+- Contractions stay natural ("you'd", "don't"). Casual words are fine ("Lemme", "pretty quick").
