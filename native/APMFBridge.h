@@ -885,7 +885,36 @@ namespace MFO::APMFBridge {
     // Aliased rather than copied so a re-measurement moves both. Lap-granular:
     // the check runs on the pump (~133 ms), so the lift lands within
     // [gate, gate + 133 ms].
-    inline constexpr std::uint32_t kIdleFloorUnobservedMs = kHealHoldNeverObservedMs;
+    // ── RE-SIZED AND DE-ALIASED FROM THE 2026-09-22 DECK LOG ──────────────────
+    // This constant's own note (above) said "that quantity is UNMEASURED; the next
+    // Deck log sizes it (the [cfc] fire timestamps against the 'FLOOR released'
+    // lines)". THIS IS THAT LOG, and it came back against the 4000 ms alias:
+    //   * An OFFENSE claim reaches an observed SpellFire in 5.8 s with an equip
+    //     cycle in front of it (Jesper 750012C6, claim 08:26:59.202 -> SpellFire
+    //     08:27:04.997) -- so a 4000 ms cap fired EARLY on every offense claim,
+    //     which is every claim now that heals take the direct road.
+    //   * The floor lifted 60 ms AFTER the engine began CHARGING the claimed
+    //     Firebolt, and the AI charged its OWN spell in the freed hand 0.78 s
+    //     later. The gate did not catch a dead claim; it opened a hand out from
+    //     under a live one.
+    // So the alias is BROKEN (the two constants no longer bound the same physical
+    // quantity: kHealHoldNeverObservedMs governs a HEAL claim's heartbeat, and
+    // heals no longer claim at all), and this one is sized from the offense
+    // measurement it actually consumes: 8000 ms clears the measured 5.8 s by
+    // 2.2 s and the worst heal claim-to-fire ever measured (6.1 s,
+    // Docs/DIAG-2026-09-08-field.md:267) by 1.9 s. Lap-granular on the pump, so
+    // the lift lands in [8000, 8000 + 133] ms.
+    //
+    // AND THE AGE IS NO LONGER THE WHOLE TEST. A timer alone cannot tell a dead
+    // claim from a slow one -- that is what this log proved. `silentPastGate`
+    // (APMFBridge.cpp) now also refuses to call a claim silent while the ENGINE
+    // IS ACTUALLY CHARGING IT, read through Actuation::CastInFlightOnHand, THE one
+    // definition of in-flight in this codebase (the follower's own MagicCaster for
+    // that hand is in a live cast state with the claim's spell-or-proxy selected).
+    // That is the "arm on first Charging" half of the fix: the age bounds a claim
+    // the engine never picked up, and the in-flight read protects one it did.
+    // MFO-B47 predicted exactly this failure -- see Docs/REVIEW-BACKLOG.md.
+    inline constexpr std::uint32_t kIdleFloorUnobservedMs = 8000;
 
     // Returns whether a_follower now holds a LIVE heal-cast claim. As with
     // ClaimOffenseCast above, a `false` IS AMBIGUOUS on its own -- pair it with
@@ -1011,6 +1040,113 @@ namespace MFO::APMFBridge {
     // pre-F1 behaviour (the two rules visibly thrash the slot) instead. Inert in
     // practice: kABIVersion is 6 and the DLL pair ships together.
     bool RefreshHealCastClaim(RE::FormID a_follower);
+
+    // ── CAST-SELECT CANDIDATE REFUSAL: a GATE-ONLY ch.8 claim + the ALLOW-LIST ──
+    //    (kIntent_SelectSpell + APMF_API_v4 SetSpellAllowList; fix/mfo-spell-
+    //    authority-0922)
+    //
+    // THE HOLE THIS CLOSES. MFO governs CASTING (CasterConsent's CheckStartCast /
+    // CheckCast denies) but governed EQUIP/SCORE only on a hand carrying a LIVE
+    // cast claim: the score steer only ever ADDS +1000 to the claimed spell, it
+    // never lowers anything, and a zero would not work either (a zero-scored item
+    // stays selectable -- only CheckShouldEquip's 0x0F answer REMOVES a candidate).
+    // So on 2026-09-22 the AI equipped an UNGAMBITED spell (Vampiric Bolt
+    // 841B8A15) in BOTH hands and stood there charging it while MFO's consent
+    // denied every cast: ~133 s of 221 s of party combat visibly inactive.
+    // Deny-complete, nothing activated -- CLAUDE.md principle 2's exact failure.
+    // marth's rule, in his own words (2026-09-07): "MFO by design ONLY is to
+    // allow the gambited spells to occur."
+    //
+    // WHAT IT IS. While a follower is under CONTINUOUS CAST CONTROL, MFO holds an
+    // ACTOR-WIDE, GATE-ONLY kIntent_SelectSpell claim (`param.form == 0`: it
+    // names no spell and drives nothing) and attaches the follower's allowed
+    // forms with SetSpellAllowList. APMF's allowance then reads
+    // (core/Allowance.cpp:60-79, verified against the APMF tree):
+    //     no claim                       -> ALLOW (uncontrolled)
+    //     claim.form==0 && allowCount==0  -> ALLOW (channel default)
+    //     subjectForm == claim.form       -> ALLOW
+    //     subjectForm in the allow-set    -> ALLOW
+    //     otherwise                       -> DENY
+    // and consults it at BOTH seats, ACTOR-WIDE and independent of per-hand cast
+    // claims and of the idle-hand floor:
+    //   * t2a CheckShouldEquip (APMF core/EquipGate.cpp:609) -- engine-answer-
+    //     first, so it only ever flips the engine's YES to NO. THIS is the
+    //     candidate refusal; it is the only surface that can stop an ungambited
+    //     spell reaching a hand at all.
+    //   * t2c CheckCast (APMF core/CastGate.cpp:160) -- a second, redundant-by-
+    //     design deny of the charge itself.
+    // APMF has shipped this since ABI v4 and MFO had NEVER called it
+    // (`git log -S"SetSpellAllowList("` was empty; shelved 2026-09-04).
+    //
+    // ONE SOURCE OF TRUTH, BY CONSTRUCTION. The list is published from inside
+    // CasterConsent::NoteGambits -- the SINGLE writer of the `g_ctrl` set the
+    // continuous deny reads -- so the deny and the allow-list cannot disagree
+    // about "what this follower is allowed to use". That disagreement IS the
+    // principle-2 violation this exists to fix, so it is closed structurally
+    // rather than by two call sites agreeing to stay in step.
+    //
+    // WHAT MUST BE ON THE LIST OR OUR OWN DENY BITES US (it has, twice):
+    //   * every configured cast-gambit spell (bound-weapon and summon gambits are
+    //     just act.cast_self with a Bound/Conjure spell as the param -- there is
+    //     no separate opcode, so the g_ctrl enumeration already covers them);
+    //   * the delivery-flip PROXY forms APMF mints for MFO's live cast claims
+    //     (both seats already exempt a ch.8b claim's own spell-or-proxy BEFORE
+    //     they consult this channel, so this is belt-and-braces against a proxy
+    //     on a hand the seat cannot resolve);
+    //   * EVERYTHING CasterConsent's own deny DELIBERATELY EXEMPTS. That deny is
+    //     NORMAL SPELLS ONLY (CasterConsent.cpp CtrlUnlatchedDeny: `Is(FormType::
+    //     Spell)` + `GetSpellType() == kSpell`), so scrolls, STAVES, shouts,
+    //     powers and abilities are never MFO's to veto. APMF's allowance is a
+    //     pure FormID-set test and cannot be told "spells only", so the exempt
+    //     items must be ENUMERATED onto the list. t2a is installed on 15
+    //     CombatInventoryItemMagic AND 15 CombatInventoryItemStaff templates
+    //     (APMF core/EquipGate.cpp), so a spells-only list would refuse every
+    //     staff the follower carries -- a deny MFO does not make today.
+    //
+    // OVERFLOW FAILS OPEN AND LOUD, NEVER MUTES. kMaxSpellAllowList is 32 and
+    // APMF's documented degrade for a longer list is "the excess are treated as
+    // non-exempt", i.e. DENIED -- which on this channel would silently disarm a
+    // follower. So a list that does not FIT is not truncated: no claim is held at
+    // all for that follower, an error names the counts, and the cast-time deny
+    // carries the load exactly as it did before this existed (#7: an unmasked
+    // failure diagnoses in one field cycle).
+    //
+    // LIFETIME = the deny's lifetime, IN COMBAT ONLY. `g_ctrl` is populated only
+    // from the Scheduler's PARTY-COMBAT service and erased by
+    // CasterConsent::Clear (the 2-tick party-out-of-combat teardown, dismissal)
+    // and ClearAll (revert/load) -- so the claim is released on exactly those
+    // edges. AT FIGHT END THE GATE LIFTS COMPLETELY (the decision, recorded):
+    // out of combat MFO deliberately leaves a follower's own casting alone
+    // (Candlelight, a self-heal, a mage's utility), the cast-time deny is gone
+    // there too, and a gate that outlived the fight would be a mute nothing in
+    // combat asked for. Backstopped by Tick()'s FacetExpiry() sweep on the same
+    // round-robin-aware window every other per-combat facet in this file uses, so
+    // a follower who simply stops being serviced (cell change, pump stall) loses
+    // the gate rather than keeping it forever -- expiry is the SAFE direction
+    // here, since no claim means ALLOW.
+    //
+    // ABI FLOOR 4 (SetSpellAllowList). Below it there is no allow-set to attach,
+    // and a bare gate-only claim would then be `form==0 && allowCount==0` ->
+    // APMF's "channel default -> ALLOW", i.e. a claim that denies nothing: no
+    // claim is made at all. Kill switch: `bApmfSpellAllowList` (default ON), and
+    // it is additionally inert whenever the cast facet is off (`bApmfCast`) or
+    // cast control is off (which empties `g_ctrl`).
+    //
+    // `a_spells` is MFO's gambit set; the proxies and the exempt items are added
+    // here. Returns true when a claim stands and the list it carries is current.
+    // An empty `a_spells` RELEASES (idempotent). Worker road; takes g_mx and must
+    // NOT be called while CasterConsent's own lock is held (the combat thread
+    // reads that lock in both deny hooks).
+    bool PublishSpellAllowList(RE::FormID a_follower, const std::vector<RE::FormID>& a_spells);
+
+    // Drop the gate-only ch.8 claim for one follower. Idempotent; logs only when a
+    // claim actually stood. Called from CasterConsent::Clear (combat end,
+    // dismissal) and by Tick()'s expiry sweep.
+    void ReleaseSpellAllowList(RE::FormID a_follower);
+
+    // Does a gate-only ch.8 claim stand for this follower right now? Diagnostic /
+    // caller-side gating only; nothing in the deny path reads it.
+    bool IsSpellAllowListClaimed(RE::FormID a_follower);
 
     // Release every claim and clear the map. kPreLoadGame / revert, AFTER the pump is
     // drained (so no worker tick races the map).
