@@ -47,6 +47,45 @@ Read it as history and this block as current.
   grow into a reader of graph variables) or a havok worker (then it stays counters-only). The
   `frameworks` line is the first thing to check: `SCAR.dll=n` on the deck invalidates the whole
   BFCO/SCAR reading and points back at the vanilla ATKD finding.
+
+- **Branch `fix/mfo-party-combat-gate` (off `origin/main` `9539f09`, the merged v9 authority) —
+  PARTY COMBAT is the substrate the Scheduler's two combat gates key on.** Deck 2026-09-21
+  (Fable, `agentlogs/fable-v9-enforced-run.md` items 2(a) and 5): Jesper's own `IsInCombat()`
+  read false most of a dragon fight while Cicero and Adelinda fought, so he sat on the OOC
+  table and only the logistics heal could act ("frozen except heals"); the same flap ran Cicero
+  through the 2-tick OOC debounce three times mid-fight (08:09:45, 08:10:07, 08:10:31), each a
+  `ReleaseForcedWeapon` (weapons vanishing and returning). Fix, `native/Scheduler.cpp` only:
+  `g_partyCombat` = player in combat OR any managed active follower in combat OR any managed
+  follower's `CombatSense::FoeCount` (the `[sense] foes=` read) > 0, computed once per tick on
+  the worker from the `g_active` walk (#4), logged `[sched] party combat ON|OFF (player=
+  followers= foes=)` on the edge. Gate 1: the combat table runs while party combat is true
+  (an own-OOC follower's foe-keyed rules fall through transparently, logged once per fight
+  `[sched] <id>: party combat, own combat=0 -- combat table live`). Gate 2: the
+  `ReleaseForcedWeapon` debounce counts party-OOC services (N=2 kept). `NoteInCombat` stamps
+  on every party-combat service (the shed dwell cannot mature inside a party fight).
+  `ReleaseTravelOnCombat` stays on the follower's own flag. A party-combat/own-OOC follower
+  runs the combat table first and `ServiceFollower` only at the no-action exits (empty rules,
+  ready beat, scan without a Fired/opaque hold), so one action per tick per follower holds.
+  **Field observables:** during a fight Jesper's log shows `party combat, own combat=0 --
+  combat table live` and `[eval]` scan lines on his combat rules instead of only `[logistics]`
+  heals; no `ReleaseForcedWeapon` / `owned=Armor` scope flip on Cicero off a flag flap
+  shorter than the `MeleeClampDwell` (2-4 s) between `party combat ON` and `party combat
+  OFF` (an own-OOC stretch LONGER than the dwell still releases a foe-keyed hold through
+  the T#76 path — backlog `MFO-B55`, not closed); exactly one `party combat OFF` after the
+  last foe dies (the hold release follows it within 2 services). Tier B, one Fable pass.
+  Docs: MAP.md Scheduler entry rewritten around the two gates, CHANGELOG v2.0.8 bullet.
+  **Merged with `fix/mfo-combat-restoration-direct` (2026-09-21, `708fe7a`):** the gate
+  review's SEV-2 (an own-OOC heal reaching `ComposedCast::Try` with no controller → opaque
+  hold, logistics heal starved) is CLOSED BY CONSTRUCTION on the merged tree — Heal ⊂
+  Restoration (`ClassifySpell` Heal ⇒ `SpellHealsHealth` ⇒ `IsRestorationSpell`), and every
+  `Try` site is skipped for restoration: `cast_target Fast Healing` → `CastOn` → conc fork
+  `:859`/restoration fork `:874` → `CastTargetDirect`, whose `Try` at `Actuation_Direct.cpp:1302`
+  is `combatController && !IsRestorationSpell` (false on both) → the direct stream `:1372`;
+  self-heal with `bCastSelf` ON → `CastSelfDirect` `:933` skips `Try` → `g_selfCast` `:1000`.
+  No controller gate added. The cross-branch SEV-3 (combat direct stream vs OOC cast dispatch
+  trading one `g_targetCast` slot per lap; OOC `DeclareAtExit` blind to the direct LEFT lock)
+  is fixed in `Scheduler.cpp`: `serviceOwnOoc(castSeen)` — a lap on which a combat cast rule's
+  condition held keeps the cast facet, logistics waits (see MAP's Scheduler entry).
 - **Branch `fix/mfo-combat-restoration-direct` (off `origin/main` `9539f09`) — RESTORATION
   CASTS GO DIRECT IN COMBAT; release-gating field fix, NOT merged, NOT deployed.** Deck
   2026-09-21 (Jesper 750012C6, Fable diagnosis item 2(b)): combat rule 0 `cast_self` / rule 1

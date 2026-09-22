@@ -9,6 +9,10 @@
 //   * POSITIONAL suppression after a real action -- a higher rule always
 //     preempts the window (INVARIANTS #26); it is never an absolute mute
 //   * combat table only, gated on IsInCombat (§4.8: the tables never interleave)
+//     -- since 2026-09-21 gated on PARTY combat (player, any managed follower,
+//     or the [sense] foe tally), never on the follower's own flag: see the
+//     g_partyCombat doc in Scheduler.cpp for why (the Jesper freeze / the
+//     Cicero hold teardown)
 //   * NO jitter, NO urgency tiers, NO distance LOD, NO logistics table
 //
 // Every one of those omissions is designed in §4.1b/§4.2/§4.4 and is a later

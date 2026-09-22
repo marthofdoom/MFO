@@ -341,6 +341,46 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** below the floor; a one-frame window with a fixed, safe order. The three comments were softened in the same round (they no longer claim "same Drain" as a guarantee).
 - **Fix shape when drained (verbatim):** none needed beyond the comment fix; an atomic scope+set call would be an APMF ABI change.
 
+### MFO-B58 — the two Task-1 concentration claims have no `combatController` test (own-OOC party-combat follower)
+- **Raised:** Fable tier-B round 2 on `708fe7a` (`fix/mfo-party-combat-gate` merged with `fix/mfo-combat-restoration-direct`), SEV-4.
+- **Severity:** SEV-4
+- **Finding (verbatim):** the two Task-1 concentration claims -- Actuation_Direct.cpp:974 (self) and :1337 (target) -- gate on `!Heal && !IsRestorationSpell && kConcentration && APMF` with NO `combatController` test. A non-restoration CONCENTRATION Buff on an own-OOC follower (self with bCastSelf ON, or at ally/player through `ConcentrationCast`) reaches `ClaimOffenseCast` on a follower with no caster -> `Applied` -> Fired (opaque) -> a dead claim walls the lap exactly like the closed SEV-2. Vanilla has no such spell on that road (Telekinesis is the only conc self non-restoration; conc buffs at allies are modded). Fix: mirror `:1302`'s `combatController &&` on both Task-1 sites.
+- **Reviewer's reasoning:** as stated in the finding — the restoration branch closed the heal road by construction (Heal ⊂ Restoration), but the non-restoration concentration claim road is the same shape and has only `CastTargetDirect`'s `:1302` heal-twin carrying the controller test.
+- **Why it was NOT fixed:** below the floor for the cycle (SEV-4), no vanilla spell reaches it, and the gate branch's boundary is `Scheduler.cpp` — the fix is two one-line edits in `Actuation_Direct.cpp` for its own brief.
+- **Fix shape when drained (verbatim):** mirror `:1302`'s `combatController &&` on both Task-1 sites.
+
+### MFO-B59 — own-OOC party-combat residuals (SEV-5 bundle)
+- **Raised:** Fable tier-B round 2 on `708fe7a` (`fix/mfo-party-combat-gate`), SEV-5 x3.
+- **Severity:** SEV-5
+- **Findings (verbatim):** (a) `ownedCast` (Actuation.cpp ~:951) with an explicit-subject ally and an Offense spell reaches `ClaimOffenseCast` the same way; (b) the direct STREAM `g_targetCast` outlives a castSeen-false lap by up to `TargetCastReconcile`'s stale window (max(2 s, suppress*1.12 + 0.133*party + 0.5)); benign, holds no hand, at most one `stream RELEASE (switch)` at the condition flip; (c) a magicka-dry Declined stretch skips logistics while the ally stays hurt, same wait own combat imposes; `g_nextTick` leaves `due` in the past so the first post-stretch lap runs at once.
+- **Reviewer's reasoning:** (a) is the offense twin of MFO-B58 (an authored Offense spell aimed at an ally by explicit subject, a misauthored gambit); (b) the `castSeen` gate closes the hand lock on the same lap but the stream registry is bounded by its own reconcile, so one lap's OOC dispatch can still hit a live entry once at the flip; (c) the chosen fix shape (the condition, not a live-stream read) makes a Declined lap the combat rule's, so logistics waits — the same wait the follower's own combat imposes, and the cadence gate does not add a second delay.
+- **Why it was NOT fixed:** (a) misauthored-gambit edge, no vanilla path; (b) benign by the reviewer's own reading; (c) is the documented trade of the chosen fix shape.
+- **Fix shape when drained (verbatim):** (a) with MFO-B58's controller test; (b) none, or clear the direct stream from the `!castSeen` release block beside `ClearCastLock`; (c) none.
+
+### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight
+- **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
+- **Severity:** SEV-4
+- **Finding (verbatim):** T#76 dwell releases a foe-keyed equip hold after 2-4 s of own-OOC inside a party fight (kCondFoeWithinRange false because currentCombatTarget is null, not because the foe is far); MAP's "genuinely false, by design" over-claims. Slower than main (0.3-0.8 s), so not a regression; backlog.
+- **Reviewer's reasoning:** gate 2 keeps the hold across an own-flag flap, but the equip rule's own condition reads the follower's `currentCombatTarget`, which the engine nulls on a LoS loss; after `MeleeClampDwell` (2-4 s) of that the hysteresis path releases the hold as "condition false" although the foe never left range.
+- **Why it was NOT fixed:** strictly slower than `main`'s flap release (0.3-0.8 s), and the correct fix (a foe-range read that survives a null target for a party-combat follower) is an Evaluator change outside the gate branch's `Scheduler.cpp` boundary. MAP/STATUS wording corrected in the closing round.
+- **Fix shape when drained (verbatim):** none given; candidate: let `kCondFoeWithinRange` fall back to the party's nearest foe (CombatSense) when the follower's own target is null while `g_partyCombat` holds, or exempt a party-combat lap with a null target from the dwell's "known false" count.
+
+### MFO-B56 — `Loadout::Tick` erases `g_equipClock` on own `IsInCombat()==false`, collapsing the AI-first grace for own-OOC hybrid casts
+- **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
+- **Severity:** SEV-4
+- **Finding (verbatim):** Loadout::Tick (Diagnostics.cpp:348, worker pump) erases g_equipClock when own IsInCombat false -> SecondsSinceEquip=1e9 -> AI-first grace collapses for own-OOC hybrid casts -> ForceCast on the second lap. Benign (heal lands), accidental.
+- **Reviewer's reasoning:** `Loadout.cpp:545` keys the clock erase on the follower's OWN flag; under party combat an own-OOC follower on the APMF-absent / non-restoration hybrid road gets `SecondsSinceEquip` = 1e9 and `ForceCast` fires without the grace. Restoration casts no longer take that road (they go direct), so the affected set is the APMF-absent hybrid for non-restoration spells.
+- **Why it was NOT fixed:** benign (the cast lands, unanimated one lap early), `Loadout.cpp` outside the gate branch's boundary, and the hybrid road is the APMF-absent degrade only.
+- **Fix shape when drained (verbatim):** key the `g_equipClock` erase on `Scheduler`'s party-combat state (expose it, or erase from the party-OOC branch) instead of the follower's own flag.
+
+### MFO-B57 — party-combat gate cosmetics: `[sense] foes=0` every 3 s for own-OOC followers; the ready beat is consumed at party entry
+- **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-5 x2.
+- **Severity:** SEV-5
+- **Findings (verbatim):** [sense] line now prints foes=0 every 3 s for own-OOC followers; ready beat consumed at party entry.
+- **Reviewer's reasoning:** the `[sense]` tally reads the follower's OWN combat group, which is empty for an own-OOC follower, so the line repeats a true-but-uninformative 0 at its 3 s cadence for every such follower in a party fight; the once-per-combat ready beat fires on the party-combat edge rather than the follower's own engagement, so his first own-combat lap has no beat.
+- **Why it was NOT fixed:** cosmetic; the `[sense]` line is the field's foe-count diagnostic and silencing it for own-OOC followers hides the very state the gate keys on.
+- **Fix shape when drained (verbatim):** print the party foe max alongside own foes on the `[sense]` line (`foes=0 party=N`); re-arm the ready beat on the own-combat edge as well as the party edge.
+
 ### MFO-B47 — the idle-hand floor's unobserved gate is a FOURTH consumer of the contested 4000 ms constant
 - **Raised:** Fable tier-B review of `ed3d9d0` (`fix/mfo-combat-restoration-direct`), SEV-3 (note). Ids `MFO-B47`-`MFO-B49` continue from `main`'s highest, `MFO-B46`.
 - **Severity:** SEV-3 (note; the cycle ended with nothing above SEV-3)

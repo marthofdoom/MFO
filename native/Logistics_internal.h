@@ -94,14 +94,17 @@ namespace MFO::Logistics {
         inline std::unordered_map<RE::FormID, Clock::time_point> g_nextTick;
 
         // POST-BATTLE SHED GATE. The last steady_clock instant each follower was
-        // OBSERVED in combat, stamped by NoteInCombat (below) from the Scheduler's
-        // in-combat branch -- the ONLY place combat=true is visible, because this
-        // whole service path is entered only when the follower reads out of combat
-        // (Scheduler.cpp). ShedOffRoleWeapon requires kShedPostBattleDwell to have
+        // OBSERVED in a fight, stamped by NoteInCombat (below) from the Scheduler's
+        // PARTY-combat branch on every party-combat service, own IsInCombat() or
+        // not (fix/mfo-party-combat-gate, 2026-09-21). This service path is
+        // entered out of party combat, and ALSO for an own-OOC follower inside a
+        // party fight when the combat table took no action (Scheduler.cpp's
+        // serviceOwnOoc). ShedOffRoleWeapon requires kShedPostBattleDwell to have
         // elapsed since that stamp before it drops anything, so a mid-fight
         // IsInCombat() FLAP (a brief LoS loss / disengage that the Scheduler
-        // services the follower straight through) can never mature the dwell: the
-        // next real combat frame re-stamps `now` and resets the clock. Worker-only,
+        // services the follower straight through) can never mature the dwell, and
+        // neither can an own-OOC stretch inside a party fight: the next
+        // party-combat service re-stamps `now` and resets the clock. Worker-only,
         // no lock -- both the stamp and the read run on the same BSJobs worker tick,
         // sequential across followers (#4). Save-scoped: cleared on revert.
         inline std::unordered_map<RE::FormID, Clock::time_point> g_lastCombatSeen;
