@@ -13,6 +13,12 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-21 23:06 PDT — HOTFIX v2.0.8 SHIPPED (GitHub release, tag `v2.0.8`, branch `hotfix/v2.0.8` off tag `v2.0.5`).**
+  Exactly v2.0.5 + the DropObject ABI fix (`7bc1f30`'s Logistics.cpp hunk, md5-identical `efe65afc…`); nothing
+  from v2.0.6/v2.0.7 or the unreleased line. CI 35692062355 on `8863e34`, DLL sha256 `1fd046a7…`, zip
+  `releases/v2.0.8/MFO-v2.0.8.zip`. Nexus serves v2.0.5 → upload this. main's unreleased line is re-stamped
+  **v2.0.9** (CHANGELOG block renamed). A `v1.1.5` GitHub release (same fix on the 1.1 line) also exists, not-latest.
+
 - **Branch `feat/mfo-attack-observe` (off `origin/main` `9539f09`) — `[atk-obs]` PASSIVE ATTACK-EVENT
   PROBE, the instrument for the dual-wield "same move repeatedly" complaint (Fable diagnosis
   2026-09-21: vanilla NPC attack selection = DefaultRace ATKD, no left/dual entries; the design
