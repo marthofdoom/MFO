@@ -2454,8 +2454,12 @@ namespace MFO::APMFBridge {
             { RE::FormID dummy = 0; ReleaseHandleLocked(o.equipAuthHandle, dummy); }
             // ch.8 gate-only claim: same road, same reasoning. A gate left standing
             // across a revert/load would be a DENY with no MFO-side handle able to
-            // lift it. (CasterConsent::ClearAll runs on this same road and clears
-            // the g_ctrl set this gate mirrors, so the two stay in step.)
+            // lift it. The g_ctrl set this gate mirrors is cleared on the same
+            // load window by `CasterConsent::ClearTransientState` -> `ClearAll`
+            // (`Serialization.cpp:718`, the revert callback) while this runs from
+            // plugin.cpp's kPreLoadGame/kNewGame -- two different messages inside
+            // one drained-pump window, not one call, so neither can leave the other
+            // holding state for a world that no longer exists.
             { RE::FormID dummy = 0; ReleaseHandleLocked(o.selectHandle, dummy); }
             o.selectList.clear();
         }
