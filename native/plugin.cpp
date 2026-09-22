@@ -53,16 +53,41 @@ namespace {
     //
     // MRO documents the same trick. Fall back to log_directory() if the
     // redirect target is not writable (e.g. running outside MO2).
+    // LOG ROTATION (2026-09-21): the previous session's MFO.log becomes
+    // MFO.log.1 BEFORE the sink truncates the live file, overwriting an older
+    // .1. One generation is enough: the case this exists for is a session that
+    // ended in a freeze or a hard crash, followed by a relaunch to check -- the
+    // relaunch used to truncate the only evidence (the 2026-09-21 freeze
+    // session was lost exactly that way). Same path resolution as the sink:
+    // rotate wherever the sink is about to open. std::filesystem::rename
+    // replaces an existing target on Windows (MoveFileEx REPLACE_EXISTING),
+    // and under MO2/USVFS the rename is redirected like the write is.
+    // Returns 1 rotated, 0 nothing to rotate, -1 rename failed (reported after
+    // the logger is up -- the sink still opens, so no line is lost either way).
+    int RotateLog(const std::filesystem::path& a_live) {
+        std::error_code ec;
+        if (!std::filesystem::exists(a_live, ec) || ec) return 0;
+        std::filesystem::path prev = a_live;
+        prev += ".1";
+        std::filesystem::rename(a_live, prev, ec);
+        return ec ? -1 : 1;
+    }
+
     void SetupLog() {
         std::shared_ptr<spdlog::sinks::basic_file_sink_mt> sink;
+        int                   rotated = 0;
+        std::filesystem::path logPath;
 
         try {
-            sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("Data/SKSE/Plugins/MFO.log", true);
+            logPath = "Data/SKSE/Plugins/MFO.log";
+            rotated = RotateLog(logPath);
+            sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logPath.string(), true);
         } catch (const spdlog::spdlog_ex&) {
             if (auto dir = SKSE::log::log_directory()) {
                 try {
-                    sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-                        (*dir / "MFO.log").string(), true);
+                    logPath = *dir / "MFO.log";
+                    rotated = RotateLog(logPath);
+                    sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logPath.string(), true);
                 } catch (const spdlog::spdlog_ex&) {
                     return;   // no log is survivable; a crash here is not
                 }
@@ -86,6 +111,12 @@ namespace {
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
         spdlog::flush_every(std::chrono::seconds(1));
+
+        if (rotated > 0)
+            spdlog::info("[startup] rotated the previous MFO.log to MFO.log.1 ({})", logPath.string());
+        else if (rotated < 0)
+            spdlog::warn("[startup] could not rotate the previous MFO.log to MFO.log.1 ({}) -- it was truncated",
+                         logPath.string());
     }
 
     // Test seam, now `bSeedTestData` in MFO.ini and DEFAULT OFF.
