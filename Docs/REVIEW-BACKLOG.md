@@ -308,6 +308,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** the branch adds `PostHandEquipsDeferred` / `DeclareFromLedger` and the authority branches inside `EquipWeapon` on top of a file already over the cap (MFO-B37); the v8 hand-aware `SetEquipSetEx` re-mirror will REMOVE the deferred hop and touch the same block again — doing that on a split file costs one review, doing it before the split costs two.
 - **Why it was NOT fixed:** scope rule 1 — a split is its own brief and its own field cycle.
 - **Fix shape when drained (verbatim):** run MFO-B37's split (`Actuation_Equip.cpp`) BEFORE the v8 re-mirror brief; the v8 brief then retires `PostHandEquipsDeferred` inside the new TU.
+- **Still growing, 2026-09-22 (`fix/mfo-spell-authority-0922`, REPORTED not acted on):** `Actuation.cpp` is now **2978** lines — the stand-down re-arm added ~75 to a file already over the cap. Per CLAUDE.md's scope rule the cap is a STOP-and-report, never a licence to split inside an unrelated task, so nothing was split. **Also now on the watch list: `APMFBridge.cpp` is 2471** and the ch.8 gate put ~200 of that there, so the next addition to that file crosses the cap as well and `MFO-B37`'s split brief should be scoped to cover both.
 
 ### MFO-B41 — a displaced hand with an unchanged ledger is never re-equipped under the authority; the equip rule re-Fires every lap
 - **Raised:** Fable tier-3 review of `e0b52b5` (`feat/mfo-equip-authority`), SEV-4 (F-B).
