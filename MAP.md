@@ -563,7 +563,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (`Actuation_Direct.cpp:933`) and `CastTargetDirect` (`:1302`) skip `ComposedCast::Try` for a
   restoration spell and fall to their own kInstant direct force, and their two TASK 1
   concentration-offense claims (`ClaimOffenseCast`, `:974` / `:1337`) are gated on it too so a
-  Restoration-school ward streams direct instead of claiming the AI-fired road; `CastOn` forks a fire-and-forget
+  Restoration-school ward streams direct instead of claiming the AI-fired road (**open `MFO-B58`:**
+  those two sites carry NO `combatController` test, so a non-restoration concentration Buff on an
+  own-OOC party-combat follower reaches `ClaimOffenseCast` with no caster — mirror `:1302`'s
+  `combatController &&` there when drained); `CastOn` forks a fire-and-forget
   restoration cast at an ally/player (`Actuation.cpp:874`, after the concentration fork, non-self
   only) to **`RestorationCastDirect`** (`:412`) = `CastTargetDirect` with the SAME outcome map, LEFT
   hand lock and `CasterConsent::Want` as `ConcentrationCast`'s non-self branch (labels `restoration
@@ -1153,20 +1156,20 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   fights; a follower with no combat controller of his own has every foe-keyed rule
   fall through transparently (the Evaluator reads HIS group, `Evaluator.cpp:176`)
   and is logged once per fight `[sched] <id>: party combat, own combat=0 -- combat
-  table live` (`:431`, latch `g_partyCombatNoted`, erased in the party-OOC branch).
+  table live` (`:465`, latch `g_partyCombatNoted`, erased in the party-OOC branch).
   GATE 2 (`:384`) — the T#76 `ReleaseForcedWeapon` debounce counts consecutive
   PARTY-OOC services (still N=2). Still keyed on the follower's OWN flag
-  (`ownCombat` `:341`): `ReleaseTravelOnCombat` (`:452`; unconditional eviction, and
+  (`ownCombat` `:341`): `ReleaseTravelOnCombat` (`:486`; unconditional eviction, and
   the own-OOC service below may legitimately arm a loot walk near a fight he is not
   in — the PLAYER's combat ends every excursion inside `ServiceFollower` anyway),
   the auto-retreat fill, and `Confidence::Of`. `NoteInCombat` (`:409`) stamps on
   EVERY party-combat service so the shed dwell cannot mature inside a party fight
   (the SHED INTERACTION ordering in the Equip force-hold entry rests on it).
   **Own-OOC inside party combat — the tick order:** combat table first (all of the
-  in-combat branch), then `serviceOwnOoc()` (`:425`) = `Logistics::ServiceFollower`
+  in-combat branch), then `serviceOwnOoc(castFacetHeld)` (`:459`) = `Logistics::ServiceFollower`
   on a re-found record, called ONLY at the no-action exits — empty combat rules
-  (`:603`), the ready beat (`:617`), and the scan ending without a Fired / opaque
-  hold (`:1049`) — and never on a tick that acted or on the retreat-holder exit. So
+  (`:637`), the ready beat (`:651`), and the scan ending without a Fired / opaque
+  hold (`:1086`, which passes `castSeen`) — and never on a tick that acted or on the retreat-holder exit. So
   a party-combat/own-OOC follower still gets loot / economy / the equip declaration
   at the same ~1 s cadence as before, and the §4.3 one-real-action-per-tick bound
   holds because the second table runs only when the first produced nothing.
@@ -1196,7 +1199,10 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   `DeclareAtExit` would read the left hand as free under the direct road's live LEFT cast
   lock. `castSeen` is the signal this file already bounds the cast lock by (`!castSeen` →
   `ClearCastLock`), so every lap that reaches logistics has the lock cleared. Calling
-  `serviceOwnOoc(false)` from the post-scan exit re-opens both.
+  `serviceOwnOoc(false)` from the post-scan exit re-opens both. Residuals recorded, not fixed:
+  `MFO-B59` (the `ownedCast` explicit-subject ally + Offense road, the stream outliving a
+  castSeen-false lap by the reconcile's stale window, a magicka-dry Declined stretch delaying
+  logistics) and `MFO-B58` (the Task-1 concentration claims with no controller test).
 - `ClearTransientState` (`:168`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
@@ -1938,7 +1944,7 @@ anonymous-namespace copy — that silently forks the instance).
   ("Gauldurbow fix") — signature gear could get shed (dropped on the floor) after a load.
   **Not** cleared by `ClearTransientState` — cleared separately by `ClearStockGear`.
 - `ServiceFollower` (`Logistics.cpp:802`) — callers `Scheduler.cpp:393` (the party-OOC
-  branch) and `serviceOwnOoc` `Scheduler.cpp:425` (an own-OOC follower inside a party fight,
+  branch) and `serviceOwnOoc` `Scheduler.cpp:459` (an own-OOC follower inside a party fight,
   no-action exits only), both on the worker. Sets
   `g_svc` (`Logistics_internal.h:222`) raw pointer valid only for that call — safe only because the
   worker services followers sequentially; parallelizing dangles it.
@@ -1996,7 +2002,7 @@ anonymous-namespace copy — that silently forks the instance).
 - **Alias/travel:** `g_travelSlots` (`Logistics_internal.h:323`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
   `Packages::LootTravelClear` (this follower's own combat via `ReleaseTravelOnCombat`
-  `Logistics.cpp:2192` ← `Scheduler.cpp:452`, keyed on the follower's OWN flag; the PLAYER's combat via the global
+  `Logistics.cpp:2192` ← `Scheduler.cpp:486`, keyed on the follower's OWN flag; the PLAYER's combat via the global
   backstop `Logistics.cpp:~664-728`, see the PLAYER-COMBAT LOOT INTERRUPT note
   above; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.

@@ -341,6 +341,22 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** below the floor; a one-frame window with a fixed, safe order. The three comments were softened in the same round (they no longer claim "same Drain" as a guarantee).
 - **Fix shape when drained (verbatim):** none needed beyond the comment fix; an atomic scope+set call would be an APMF ABI change.
 
+### MFO-B58 — the two Task-1 concentration claims have no `combatController` test (own-OOC party-combat follower)
+- **Raised:** Fable tier-B round 2 on `708fe7a` (`fix/mfo-party-combat-gate` merged with `fix/mfo-combat-restoration-direct`), SEV-4.
+- **Severity:** SEV-4
+- **Finding (verbatim):** the two Task-1 concentration claims -- Actuation_Direct.cpp:974 (self) and :1337 (target) -- gate on `!Heal && !IsRestorationSpell && kConcentration && APMF` with NO `combatController` test. A non-restoration CONCENTRATION Buff on an own-OOC follower (self with bCastSelf ON, or at ally/player through `ConcentrationCast`) reaches `ClaimOffenseCast` on a follower with no caster -> `Applied` -> Fired (opaque) -> a dead claim walls the lap exactly like the closed SEV-2. Vanilla has no such spell on that road (Telekinesis is the only conc self non-restoration; conc buffs at allies are modded). Fix: mirror `:1302`'s `combatController &&` on both Task-1 sites.
+- **Reviewer's reasoning:** as stated in the finding — the restoration branch closed the heal road by construction (Heal ⊂ Restoration), but the non-restoration concentration claim road is the same shape and has only `CastTargetDirect`'s `:1302` heal-twin carrying the controller test.
+- **Why it was NOT fixed:** below the floor for the cycle (SEV-4), no vanilla spell reaches it, and the gate branch's boundary is `Scheduler.cpp` — the fix is two one-line edits in `Actuation_Direct.cpp` for its own brief.
+- **Fix shape when drained (verbatim):** mirror `:1302`'s `combatController &&` on both Task-1 sites.
+
+### MFO-B59 — own-OOC party-combat residuals (SEV-5 bundle)
+- **Raised:** Fable tier-B round 2 on `708fe7a` (`fix/mfo-party-combat-gate`), SEV-5 x3.
+- **Severity:** SEV-5
+- **Findings (verbatim):** (a) `ownedCast` (Actuation.cpp ~:951) with an explicit-subject ally and an Offense spell reaches `ClaimOffenseCast` the same way; (b) the direct STREAM `g_targetCast` outlives a castSeen-false lap by up to `TargetCastReconcile`'s stale window (max(2 s, suppress*1.12 + 0.133*party + 0.5)); benign, holds no hand, at most one `stream RELEASE (switch)` at the condition flip; (c) a magicka-dry Declined stretch skips logistics while the ally stays hurt, same wait own combat imposes; `g_nextTick` leaves `due` in the past so the first post-stretch lap runs at once.
+- **Reviewer's reasoning:** (a) is the offense twin of MFO-B58 (an authored Offense spell aimed at an ally by explicit subject, a misauthored gambit); (b) the `castSeen` gate closes the hand lock on the same lap but the stream registry is bounded by its own reconcile, so one lap's OOC dispatch can still hit a live entry once at the flip; (c) the chosen fix shape (the condition, not a live-stream read) makes a Declined lap the combat rule's, so logistics waits — the same wait the follower's own combat imposes, and the cadence gate does not add a second delay.
+- **Why it was NOT fixed:** (a) misauthored-gambit edge, no vanilla path; (b) benign by the reviewer's own reading; (c) is the documented trade of the chosen fix shape.
+- **Fix shape when drained (verbatim):** (a) with MFO-B58's controller test; (b) none, or clear the direct stream from the `!castSeen` release block beside `ClearCastLock`; (c) none.
+
 ### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight
 - **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
 - **Severity:** SEV-4
