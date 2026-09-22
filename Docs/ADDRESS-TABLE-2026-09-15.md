@@ -357,3 +357,52 @@ derivation re-proven against 1.7's base TD.
 | `CombatBehaviorWaitBehindCover` | 267193 -> `0x16a36f8` | 214382 -> `0x18e8bd0` | `0x19671c0` |
 | `CombatBehaviorTreeCreateContextNode1_CombatBehaviorContextMagic` | 266702 -> `0x169dad8` | 213692 -> `0x18e35a8` | `0x1961b70` |
 | `CombatBehaviorTreeCreateContextNodeBase_CombatBehaviorContextMagic` | 550933 -> `0x169da80` | 213681 -> `0x18e3550` | `0x1961b18` |
+
+## 5. ATTACK-SELECTION PASS (2026-09-21) -- NPC attack pick chain, all ids from the Address Library, layout facts from the images
+
+Source: APMF `Docs/SPEC-ATTACK-SELECTION-FACET.md` (Fable design pass) + the coordinator's byte reads on the
+UNPACKED binaries (below). RVAs; VA = 0x140000000 + RVA. "AE" = 1.6.1170, "SE" = 1.5.97.
+
+**Unpacked binaries are PERMANENT now (marth 2026-09-21):** `binaries/1.6.1170/SkyrimSE.unpacked.exe`,
+`binaries/1.5.97/SkyrimSE.unpacked.exe` (SteamStub v3.1.2 decrypted, layout preserved, .text va 0x1000 raw
+0x400 so raw = 0x400 + rva - 0x1000). `binaries/1.7.104/SkyrimSE.exe` is plaintext as shipped (stub flags
+0x6 = NoEncryption). Tools: `Linux-Native-Tools/tools/steamstub-rtti/`. Never re-derive "no unpacked binary".
+
+**TRAP -- Address Library ids can resolve to a 5-byte `jmp rel32` THUNK (E9 + INT3 pad), not the body.
+Follow the jump before reading a prologue/signature.** Verified 2026-09-21:
+| Symbol | AE id -> rva | AE body | SE id -> rva | SE body |
+|---|---|---|---|---|
+| IAnimationGraphManagerHolder::NotifyAnimationGraph impl (vfunc 01) | 38048 -> 0x6a35f0 (thunk) | **0x54c450** | 37020 -> 0x60f240 (thunk) | **0x4f12c0** |
+| CombatBehaviorContextMelee StartAttack | 49170 -> 0x8a28b0 (body, `48 8b c4 55 41 54 41 55`) | same | 48139 -> 0x80c020 (body, `48 8b c4 55 56 57 41 54`) | same |
+| CombatAnimation::Execute (= "PerformAttackAction" target, = APMF T4 crash addr module+0x7F9470) | 44440 -> 0x7f9470 | same | 43239 -> 0x75ff10 | same |
+| GatherAttackData (SE only) | NOT FOUND | | 48145 -> 0x80d1d0 (body) | |
+| CheckAttack (SE only) | NOT FOUND | | 48140 -> 0x80c6f0 (body) | |
+
+**CombatAnimation::Execute bytes on BOTH runtimes are `48 8b 01 48 ff 60 28` = `mov rax,[rcx]; jmp [rax+0x28]`:
+a pure virtual tail-jump to slot 5 (0x28/8) of whatever object rcx points at (TESActionData::Process).** The
+design pass graded seat S4 (`VTABLE_TESActionData` slot 5) as "devirtualised on the AI path" -- this byte
+read says the CALL is virtual; what remains unproven is which VTABLE the AI's by-value TESActionData carries
+(standard VTABLE_TESActionData AE 188603 / SE 232777, or a derived one). Brief A step 0 must settle it from
+the unpacked image before S4 is discarded. Do not re-derive; start from these bytes.
+
+**Vanilla chain ids (AE / SE):** VTABLE_Character[3] (IAnimationGraphManagerHolder sub-vtable, COL offset
+0x38): 207892 (vt 0x18a5ee0) / 261400 (vt 0x165e3c8); VTABLE_Actor[3]: 207517 / 260541 (same impl).
+CombatBehaviorAttack leaf act/pop/update: 49199/49202/49213 / 48171/48174/48188. SpecialAttack
+49200/49203/49214 / 48172/48175/48189. Bash 47861/47865/47881 / 46660/46664/46685. BlockAttack
+47863/47867/47883 / 46662/46666/46687. Melee context node2 (`CombatBehaviorTreeCreateContextNode2<
+CombatBehaviorContextMelee, MemberFunc<EquipContext::GetItem>, ATTACK_TYPE{WeaponRight,Shield,WeaponLeft}>`)
+act/pop: 49198/49201 (vt 0x18e3ee8 id 213763) / 48170/48173 (vt 0x169e440 id 266745). Block context node2
+47860/47864 / 46659/46663. VTABLE_TESActionData 188603 (0x178c478) / 232777 (0x1548198). VTABLE_BGSAttackData
+200768 / 252900. SE-only (AE NOT FOUND): CheckAttackRange 48141, FinishedAttack 48142, CalculateAnimationData
+48146. `BGSAttackData::attackChance` @+4 (pinned B/BGSAttackData.h:27). StartAttack call sites:
+GetAttackAngle +0x3F1 SE / +0x493 AE; PerformAttackAction +0x4D7 SE / +0x435 AE (E8 bytes NEEDS-READ at
+0x8a2ce5 AE / 0x80c4f7 SE -- SCAR and Valhalla patch these, which is why the #17a seat is DISQUALIFIED).
+
+**Frameworks:** SCAR.dll (AE support) rewrites the two StartAttack sites (ids 48139/49170 loaded as
+0xbc0b/0xc012) and vtable-writes VTABLE_Character[2] slot 1 (BSTEventSink<BSAnimationGraphEvent>::ProcessEvent,
+ids 261399/207890) = Hook_AttackCombo. Valhalla Combat patches the same PerformAttackAction site. BFCO.dll hooks
+only PlayerControls. Every framework's NPC attack ends in NotifyAnimationGraph with a vanilla ATKE string.
+
+**Race ATKD (Tuxborn Skyrim.esm):** DefaultRace 0x19 = 8 ATKE, no Left/Dual. ImperialRace 0x13744 / NordRace
+0x13746 = 27 entries incl. attackStartLeftHand / attackStartDualWield / attackPowerStartDualWield at 1.0.
+CSTY DATA flags: csThalmorMeleeDual 0x5, csMercerFreyMelee 0x6, csHumanMelee_AllD 0x1, MFO_MeleeStyle 0x5.
