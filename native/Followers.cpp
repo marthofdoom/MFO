@@ -454,17 +454,16 @@ namespace MFO::Followers {
                                             : "teammate");
                 g_stateSample.erase(id);       // a re-join starts the moved= baseline fresh
                 LogStateLine(a, id, "roster");
-            } else if (const auto sit = g_stateSample.find(id);
-                       sit == g_stateSample.end() ||
-                       std::chrono::duration<float>(std::chrono::steady_clock::now() - sit->second.at).count() >= kStateLineS) {
-                LogStateLine(a, id, "30s");
-            }
                 // Two independent reasons to withhold a record. Checking only
                 // IsCommandedActor was the gap: a cloned/spawned teammate is
                 // not commanded but still has a 0xFF id.
                 if (!isSummon) {
                     TryEnsureRecord(id);
                 }
+            } else if (const auto sit = g_stateSample.find(id);
+                       sit == g_stateSample.end() ||
+                       std::chrono::duration<float>(std::chrono::steady_clock::now() - sit->second.at).count() >= kStateLineS) {
+                LogStateLine(a, id, "30s");
             }
         }
         for (const auto id : before) {
