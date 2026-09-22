@@ -400,50 +400,65 @@ namespace MFO::Scheduler {
         // no-action exits of the combat table.
         const bool ownCombat = f->IsInCombat();
         if (!g_partyCombat) {
-            // RETREAT PROBE teardown on combat end: release the claim (evict to
-            // player -- never a VM Clear, never a priority flip) and re-arm the
-            // once-per-combat latch for the next fight.
-            if (Packages::RetreatHolder() == id) {
-                Packages::RetreatClear("combat ended", f);
-            }
-            g_retreatNotes.erase(id);
-            g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
-            g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
-
-            // v1.0.30: the cast-control latch dies with the fight. The [cast]
-            // sink no longer clears it on a successful cast (the latch must
-            // span cast cooldowns -- the between-casts leak), so combat end is
-            // now an explicit release point. Without it, a latch from the last
-            // fight lingers and denies the follower's own casting at the start
-            // of the NEXT fight before his first service, wanting a spell no
-            // rule may still name. Cheap and idempotent out of combat: no
-            // combat caster runs the hook, and Clear on an unlatched id is an
-            // uncontended erase-miss.
-            CasterConsent::Clear(id);
-            // The firing-spell gambit lock (Task 2, feat/cast-gambit-
-            // concentration) dies with the fight too, same reasoning as the
-            // cast-control latch just above -- a lock left standing from the
-            // last fight would hold off the FIRST cast rule of the next one.
-            Actuation::ClearCastLock(id);
-            // Weapon-stance ownership dies with the fight too. The live CSTY
-            // already reverted when the per-combat controller was destroyed;
-            // this drops the stale bookkeeping so the next fight re-baselines.
-            // Idempotent out of combat (uncontended erase-miss when unowned).
-            CombatStyle::Clear(id);
-            g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
-            g_noneMatchedNoted.erase(id);  // and the once-per-fight "none matched" line
-            g_equipRangeUndecidableNoted.erase(id);   // MFO-B55: and the once-per-fight undecidable note
-            // T#76: the equip force-hold dies with the fight too -- combat end is
-            // one of its release points. The prevent-removal LOCK is on the
-            // ActorEquipManager (it did NOT die with the controller), so this
-            // force-unequips to clear it. DEBOUNCED over 2 consecutive PARTY-out-
-            // of-combat services (SEV-2, re-keyed 2026-09-21): the follower's own
-            // IsInCombat flaps mid-fight, and counting HIS flag here released
-            // Cicero's hold three times in one dragon fight (08:09:45, 08:10:07,
-            // 08:10:31 -- weapons vanishing and returning). Party combat does not
-            // flap with one actor's LoS, so the same 2-tick count against it is
-            // the real "fight over" debounce. Idempotent (no record -> no-op).
+            // THE WHOLE PARTY-OOC TEARDOWN IS DEBOUNCED over 2 consecutive PARTY-
+            // out-of-combat services (SEV-4, Fable field diagnosis 2026-09-21).
+            // Before this only ReleaseForcedWeapon waited for the second service;
+            // everything else below ran on the FIRST party-OFF tick. A party-OFF/
+            // ON flap of one service is real: at 21:57:34.884/35.029 (145 ms) the
+            // engine tore down and re-created both fighting followers' combat
+            // controllers (the [wstyle] OWNED lines re-printed), the gate mirrored
+            // it, and the first-tick teardown dropped a caster's consent latch,
+            // cast lock and stance ownership mid-fight -- the sub-tick leak
+            // v1.0.32 closed, re-opened for one lap by a controller restart. Party
+            // combat does not flap with one actor's LoS (that is why the gates key
+            // on it), so two consecutive party-OOC services is the real "fight
+            // over" edge for every release here, not just the hold's. The
+            // logistics service below still runs on every party-OOC tick.
+            // Idempotent teardown (every call is an erase-miss / no-op when
+            // nothing is held).
             if (++g_outOfCombatTicks[id] >= 2) {
+                // RETREAT PROBE teardown on combat end: release the claim (evict to
+                // player -- never a VM Clear, never a priority flip) and re-arm the
+                // once-per-combat latch for the next fight.
+                if (Packages::RetreatHolder() == id) {
+                    Packages::RetreatClear("combat ended", f);
+                }
+                g_retreatNotes.erase(id);
+                g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
+                g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
+
+                // v1.0.30: the cast-control latch dies with the fight. The [cast]
+                // sink no longer clears it on a successful cast (the latch must
+                // span cast cooldowns -- the between-casts leak), so combat end is
+                // now an explicit release point. Without it, a latch from the last
+                // fight lingers and denies the follower's own casting at the start
+                // of the NEXT fight before his first service, wanting a spell no
+                // rule may still name. Cheap and idempotent out of combat: no
+                // combat caster runs the hook, and Clear on an unlatched id is an
+                // uncontended erase-miss.
+                CasterConsent::Clear(id);
+                // The firing-spell gambit lock (Task 2, feat/cast-gambit-
+                // concentration) dies with the fight too, same reasoning as the
+                // cast-control latch just above -- a lock left standing from the
+                // last fight would hold off the FIRST cast rule of the next one.
+                Actuation::ClearCastLock(id);
+                // Weapon-stance ownership dies with the fight too. The live CSTY
+                // already reverted when the per-combat controller was destroyed;
+                // this drops the stale bookkeeping so the next fight re-baselines.
+                // Idempotent out of combat (uncontended erase-miss when unowned).
+                CombatStyle::Clear(id);
+                g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
+                g_noneMatchedNoted.erase(id);  // and the once-per-fight "none matched" line
+                g_equipRangeUndecidableNoted.erase(id);   // MFO-B55: and the once-per-fight undecidable note
+                // T#76: the equip force-hold dies with the fight too -- combat end is
+                // one of its release points. The prevent-removal LOCK is on the
+                // ActorEquipManager (it did NOT die with the controller), so this
+                // force-unequips to clear it. This was the FIRST release to be
+                // debounced (SEV-2, re-keyed to party combat 2026-09-21): the
+                // follower's own IsInCombat flaps mid-fight, and counting HIS flag
+                // here released Cicero's hold three times in one dragon fight
+                // (08:09:45, 08:10:07, 08:10:31 -- weapons vanishing and
+                // returning). Idempotent (no record -> no-op).
                 Actuation::ReleaseForcedWeapon(f);
                 // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable
                 // SEV-3): an un-debounced erase on a 1-tick IsInCombat flap would

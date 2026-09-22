@@ -357,13 +357,12 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** (a) misauthored-gambit edge, no vanilla path; (b) benign by the reviewer's own reading; (c) is the documented trade of the chosen fix shape.
 - **Fix shape when drained (verbatim):** (a) with MFO-B58's controller test; (b) none, or clear the direct stream from the `!castSeen` release block beside `ClearCastLock`; (c) none.
 
-### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight
-- **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
+### MFO-B60 — the party-OOC teardown other than `ReleaseForcedWeapon` ran on the FIRST party-OFF service (undebounced)
+- **Raised:** Fable field diagnosis of the 2026-09-21 21:50 Deck run (`aca7d43`, agentlog `field-diag-20260921-evening.md`), SEV-4.
 - **Severity:** SEV-4
-- **Finding (verbatim):** T#76 dwell releases a foe-keyed equip hold after 2-4 s of own-OOC inside a party fight (kCondFoeWithinRange false because currentCombatTarget is null, not because the foe is far); MAP's "genuinely false, by design" over-claims. Slower than main (0.3-0.8 s), so not a regression; backlog.
-- **Reviewer's reasoning:** gate 2 keeps the hold across an own-flag flap, but the equip rule's own condition reads the follower's `currentCombatTarget`, which the engine nulls on a LoS loss; after `MeleeClampDwell` (2-4 s) of that the hysteresis path releases the hold as "condition false" although the foe never left range.
-- **Why it was NOT fixed:** strictly slower than `main`'s flap release (0.3-0.8 s), and the correct fix (a foe-range read that survives a null target for a party-combat follower) is an Evaluator change outside the gate branch's `Scheduler.cpp` boundary. MAP/STATUS wording corrected in the closing round.
-- **Fix shape when drained (verbatim):** none given; candidate: let `kCondFoeWithinRange` fall back to the party's nearest foe (CombatSense) when the follower's own target is null while `g_partyCombat` holds, or exempt a party-combat lap with a null target from the dwell's "known false" count.
+- **Finding (verbatim):** "Party OFF tick 34.884: Jesper was the serviced follower (his loot scan 34.885 + latch re-print 35.301); [wstyle] OWNED lines 34.936/34.967 = engine re-created both controllers -> genuine engine combat restart, gate mirrored it; 145 ms flap released nothing (N=2 debounce). But the OTHER party-OOC teardowns (:343-373) are NOT debounced -> SEV-4." Memory note: "New SEV-4: party-OFF tick tears down consent latch/cast lock/style undebounced."
+- **Reviewer's reasoning:** `Scheduler.cpp` `:343-373` (RetreatClear, `g_combatEnteredAt.erase`, `g_proposedTarget.erase`, `CasterConsent::Clear`, `Actuation::ClearCastLock`, `CombatStyle::Clear`, the per-fight latches) ran on the first party-OFF tick while only `ReleaseForcedWeapon` (`:384`) waited two services. A 145 ms OFF/ON flap -- an engine combat-controller restart, which the field log shows is real -- would drop a caster's consent latch and cast lock mid-fight: the sub-tick leak v1.0.32 closed, re-opened for one lap.
+- **FIXED-IN the item-G commit of `fix/mfo-field-batch-0921`** (this edit's commit): the whole party-OOC teardown now sits behind the same `++g_outOfCombatTicks[id] >= 2` count as the hold release; `Logistics::ServiceFollower` still runs on every party-OOC tick. Pending its Fable review on the branch.
 
 ### MFO-B56 — `Loadout::Tick` erases `g_equipClock` on own `IsInCombat()==false`, collapsing the AI-first grace for own-OOC hybrid casts
 - **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
@@ -473,6 +472,15 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** when `det` holds a Conduit AND an off-domain gem, exclude the Conduit from the weakest-gem search (it is load-bearing); or rank a Conduit by the gem it carries.
 
 ## DRAINED
+
+### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight
+- **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
+- **Severity:** SEV-4
+- **Finding (verbatim):** T#76 dwell releases a foe-keyed equip hold after 2-4 s of own-OOC inside a party fight (kCondFoeWithinRange false because currentCombatTarget is null, not because the foe is far); MAP's "genuinely false, by design" over-claims. Slower than main (0.3-0.8 s), so not a regression; backlog.
+- **Reviewer's reasoning:** gate 2 keeps the hold across an own-flag flap, but the equip rule's own condition reads the follower's `currentCombatTarget`, which the engine nulls on a LoS loss; after `MeleeClampDwell` (2-4 s) of that the hysteresis path releases the hold as "condition false" although the foe never left range.
+- **Why it was NOT fixed:** strictly slower than `main`'s flap release (0.3-0.8 s), and the correct fix (a foe-range read that survives a null target for a party-combat follower) is an Evaluator change outside the gate branch's `Scheduler.cpp` boundary. MAP/STATUS wording corrected in the closing round.
+- **Fix shape when drained (verbatim):** none given; candidate: let `kCondFoeWithinRange` fall back to the party's nearest foe (CombatSense) when the follower's own target is null while `g_partyCombat` holds, or exempt a party-combat lap with a null target from the dwell's "known false" count.
+- **FIXED-IN `920a73f`** (`fix/mfo-field-batch-0921`, item F of the 2026-09-21 field batch). Promoted from the backlog by the 2026-09-21 21:50 Deck field diagnosis: Cicero's two mid-fight weapon vanishes (21:57:34.226, 21:57:44.075) were exactly this path (`Scheduler.cpp` `ReconcileForcedWeapon(f, 0, true)` via the MeleeClampDwell with `currentCombatTarget` null while `CombatSense::FoeCount(self) > 0`). Fix shape taken: the second candidate -- a lap on which a target-relative equip rule was evaluated against a null / dead / non-hostile target while the follower's own group still has foes is UNKNOWN, not false (`EquipRangeUndecidable`, Scheduler-only; the Evaluator stays pure); the dwell clock refreshes and `equipCondKnownFalse` stays false. A genuinely empty group or a real party-OOC still releases. Pending its Fable review on the branch.
 
 ### MFO-B4 — `IncumbentTargetLost` and `PickAlly` disagree on "resolves"
 - **Raised:** Fable review of `1044816`, taken as a comment by `625f3b7`; the review of `625f3b7` asked for a reword once the heartbeat cap exists.
