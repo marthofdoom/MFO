@@ -13,6 +13,40 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **Branch `feat/mfo-attack-observe` (off `origin/main` `9539f09`) — `[atk-obs]` PASSIVE ATTACK-EVENT
+  PROBE, the instrument for the dual-wield "same move repeatedly" complaint (Fable diagnosis
+  2026-09-21: vanilla NPC attack selection = DefaultRace ATKD, no left/dual entries; the design
+  pass then found the deck profile runs BFCO + SCAR and that Cicero's sword+sword pool is the
+  `ER Dual Wield Sword (MCO)` DAR set, which carries NO `SCAR_ActionData` / `SCAR_ComboStart`
+  annotations, so SCAR never chains and every attack restarts at `BFCO_Attack1` /
+  `BFCO_PowerAttack1`; the ready-dummy pool makes ONLY power attacks eligible at 125-145u). The
+  probe attaches a `BSAnimationGraphEvent` sink to each managed follower's own animation graphs
+  at every fight start and prints, per follower per fight, `[atk-obs] <fid> '<name>' fight#n
+  <dur>s R='<weapon>' L='<weapon>' | <every non-zero attack tag count> | idle-in-reach>1500ms xK
+  longest=<ms> | other: <top-8 unknown tags>`. Plus once at load `[atk-obs] frameworks SCAR.dll=
+  BFCO.dll= PayloadInterpreter.dll= FollowerParkour.dll= DualWieldParryingNG.dll=`, once per
+  session `[atk-obs] sink thread=<id> main=<id> first-tag=` (which thread the graph dispatches
+  on), and `[atk-obs] new-tag '<tag>' on <fid>` on first sight of any tag outside the counted
+  list. Sends nothing, holds nothing, no hook. `bAttackObserve` (INI `[Debug]`, no MCM
+  face). **Compiled default OFF** like every sibling probe flag; the shipped INI
+  says `bAttackObserve = 0` and the Deck test INI sets 1. `Diagnostics::DumpAttackHistogram(fid)`
+  is exported and idempotent but has NO caller: DECIDED after the Fable round on `2ac4163` that it
+  is NOT wired into the Scheduler's 2-tick OOC debounce (~266 ms, would split one fight into two
+  lines on an `IsInCombat` flap); the probe closes a fight itself 1.5 s after `IsInCombat` drops.
+  Fable round fixes on the branch: idle-in-reach compare made strict (`>=` printed x0 for "attacks
+  once then stands there"), attach re-posted every 2 s while a fight is open (a mid-combat graph
+  rebuild no longer masks as "(no attack events)"). Backlog MFO-B50..B54.
+  **PROBE PLAN — what the next deck log must show.** If the ER-DW-Sword override theory holds,
+  Cicero's lines read `SCAR_ComboStart=0`, `BFCO_NextIsAttackN=0` for every N, `MCO_WinOpen`
+  roughly equal to the number of attack starts (`attackStart` + `attackPowerStart*`), and the
+  power-attack count at or above the normal-attack count (the 125-145u band is power-only). A
+  non-zero `SCAR_ComboStart` or `BFCO_NextIsAttack2+` means SCAR IS chaining and the theory is
+  wrong. `idle-in-reach>1500ms xK` with a large K and `attackStart` low is the "standing there"
+  symptom in numbers; K near 0 with a high attack count says the moveset is the whole complaint.
+  The `sink thread=` line decides whether the sink is on the main thread (then the probe could
+  grow into a reader of graph variables) or a havok worker (then it stays counters-only). The
+  `frameworks` line is the first thing to check: `SCAR.dll=n` on the deck invalidates the whole
+  BFCO/SCAR reading and points back at the vanilla ATKD finding.
 - **Branch `fix/mfo-combat-restoration-direct` (off `origin/main` `9539f09`) — RESTORATION
   CASTS GO DIRECT IN COMBAT; release-gating field fix, NOT merged, NOT deployed.** Deck
   2026-09-21 (Jesper 750012C6, Fable diagnosis item 2(b)): combat rule 0 `cast_self` / rule 1

@@ -739,6 +739,7 @@ namespace MFO {
                                               // and a resumed RunTrade with a stale token
                                               // fails SAFE (GetVendorChest -> none -> abort)
         MEOBridge::ClearTransientState();   // audit: pending gem-move map was never cleared
+        Diagnostics::ResetAttackObserve();  // [atk-obs] slot table is session-scoped like every sibling (worker drained above)
         Probe::ReleaseAll();                // audit: watch handles outlived a revert (were
                                             // cleared only at kPostLoadGame, not here)
         Rapport::ResetSessionCounters();

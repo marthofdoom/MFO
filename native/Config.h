@@ -423,6 +423,16 @@ namespace MFO::Config {
     // write lands in any save taken after. bProgProbe = 1 in
     // Data/SKSE/Plugins/MFO.ini, then trigger with iProgProbeKey below.
     inline std::atomic<bool>  g_progProbe{ false };
+    // [atk-obs] PASSIVE ATTACK-EVENT PROBE -- DEFAULT OFF everywhere, like every
+    // sibling probe flag in this block (the Deck test INI sets it to 1 for the
+    // 2026-09-21 cycle). INI-only (no MCM face, like bWeaponStyleControl). Counts every
+    // animation-graph attack event a managed follower's own graphs fire during a
+    // fight (attackStart / power / bash / MCO / BFCO / SCAR / PIE / Parkour tags)
+    // and prints one [atk-obs] histogram line per follower per fight, plus an
+    // idle-in-reach measure. Observation ONLY: it sends no events, holds no
+    // hands, touches no roster from the sink. bAttackObserve = 1 in
+    // Data/SKSE/Plugins/MFO.ini arms the sink and the tick. See Diagnostics.cpp.
+    inline std::atomic<bool>  g_attackObserve{ false };
     // DIK code for the probe trigger. 0x27 is semicolon — unbound in vanilla
     // (the focus key holds 0x2B backslash). 0 disables the trigger.
     inline std::atomic<int>   g_progProbeKey{ 0x27 };

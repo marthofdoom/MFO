@@ -377,6 +377,46 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** a note, not a defect; the guard costs nothing and documents the floor.
 - **Fix shape when drained (verbatim):** none; keep as belt-and-braces or drop with the other unreachable ABI guards in one sweep.
 
+### MFO-B50 — `AtkClearSlot` from `ResetAllState` can race one in-flight `ProcessEvent`
+- **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-4.
+- **Severity:** SEV-4
+- **Finding (verbatim):** `AtkClearSlot` from `ResetAllState` (main) can race one in-flight `ProcessEvent` on the graph thread (Diagnostics.cpp:658-666). `fid` is stored 0 first (release), then counters are stored 0 relaxed; a sink that loaded the old fid before the clear can `fetch_add` after the counter store, leaving <=1 stale count in a free slot that the next occupant inherits into fight#1. Cosmetic (an off-by-one already accepted at fight boundaries). Same for `attachLogged.store(false, relaxed)` vs main's `exchange`. No fix needed; record it.
+- **Reviewer's reasoning:** the sink runs on the graph's dispatch thread, which StopPump does not drain; a `ProcessEvent` that loaded `fid` just before `AtkClearSlot` stored 0 can `fetch_add` one counter after the worker's zeroing pass, and that single count is inherited by whoever next takes the slot.
+- **Why it was NOT fixed:** below the floor; at most one count on one counter at a load boundary, on a diagnostic line.
+- **Fix shape when drained (verbatim):** cosmetic, no fix. (If ever: zero the counters at slot ASSIGNMENT after the fid store, or reject events for a slot whose generation changed.)
+
+### MFO-B51 — pinned 3.7.0 has `Actor::AddAnimationGraphEventSink` / `RemoveAnimationGraphEventSink`
+- **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-5 (note).
+- **Severity:** SEV-5 (note)
+- **Finding (verbatim):** pinned 3.7.0 has `Actor::AddAnimationGraphEventSink/RemoveAnimationGraphEventSink` (Actor.h:494/:603, graphs.front() only, equivalent for an NPC).
+- **Reviewer's reasoning:** the CommonLib helper registers on the first graph only; MFO's `AtkPostAttach` walks every graph in `mgr->graphs`. An NPC has one graph, so the two are equivalent there; the hand-rolled walk is a superset.
+- **Why it was NOT fixed:** a note; the walk is correct and covers a multi-graph holder too.
+- **Fix shape when drained (verbatim):** none required; could swap to the helper for brevity.
+
+### MFO-B52 — `mgr->graphs` walked without `BSAnimationGraphManager::updateLock`
+- **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-5 (note).
+- **Severity:** SEV-5 (note)
+- **Finding (verbatim):** `mgr->graphs` walked without `BSAnimationGraphManager::updateLock` (CommonLib helper does the same; engine path not provable, .text is SteamStub-encrypted).
+- **Reviewer's reasoning:** the walk runs on the main thread inside `MainThread::Post`; CommonLib's own `AddAnimationGraphEventSink` reads `graphs` the same way without the lock; whether the engine takes `updateLock` around graph replacement could not be read from the encrypted binary.
+- **Why it was NOT fixed:** a note; same shape as the library helper, main-thread only.
+- **Fix shape when drained (verbatim):** none; if a graph-swap race is ever observed, take `mgr->GetRuntimeData().updateLock` around the walk.
+
+### MFO-B53 — `g_atkUnk` unknown-tag table is session-wide by design
+- **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-5 (note).
+- **Severity:** SEV-5 (note)
+- **Finding (verbatim):** `g_atkUnk` session-wide by design.
+- **Reviewer's reasoning:** the 32-entry table is process-lifetime (survives a revert) so "new-tag" first-sight lines print once per session, not once per save; a table filled by one profile's tags stays filled.
+- **Why it was NOT fixed:** by design (documented in the block header).
+- **Fix shape when drained (verbatim):** none.
+
+### MFO-B54 — `!seen[i]` in the free-slot search is redundant
+- **Raised:** Fable tier-A review of `2ac4163` (`feat/mfo-attack-observe`), SEV-5 (note).
+- **Severity:** SEV-5 (note)
+- **Finding (verbatim):** `!seen[i]` at :770 redundant.
+- **Reviewer's reasoning:** a slot with `fid == 0` cannot have been marked seen in the same pass (seen is set only after a fid is stored or matched), so the extra test never changes the result.
+- **Why it was NOT fixed:** harmless; a closing-round nit.
+- **Fix shape when drained (verbatim):** drop the `&& !seen[i]`.
+
 ### MFO-B43 — `g_playerPicks` survives the toggle OFF path
 - **Raised:** Fable tier-3 review of `e0b52b5` (`feat/mfo-equip-authority`), SEV-5 (F-E).
 - **Severity:** SEV-5
