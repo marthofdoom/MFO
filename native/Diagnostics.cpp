@@ -419,7 +419,7 @@ namespace MFO::Diagnostics {
         constexpr std::size_t kAtkCounters = kAtkExact + kAtkFam;
         constexpr std::int64_t kAtkIdleMs  = 1500;   // an idle-in-reach run longer than this counts
         constexpr std::int64_t kAtkOocMs   = 1500;   // IsInCombat low for this long closes the fight
-        constexpr std::int64_t kAtkAttachMs = 2000;  // re-post the (deduped) attach this often while a fight is open
+        constexpr std::int64_t kAtkAttachMs = 2000;  // re-post the (deduped) attach this often while managed + 3D-loaded (in or out of combat)
 
         constexpr char AtkLower(char a_c) noexcept { return (a_c >= 'A' && a_c <= 'Z') ? static_cast<char>(a_c + 32) : a_c; }
         bool AtkEq(const char* a_a, const char* a_b) noexcept {
@@ -585,7 +585,7 @@ namespace MFO::Diagnostics {
 
         // Attach / detach: MAIN thread (graph mutation). FormID + slot captured;
         // re-resolve, null-check. AddEventSink dedupes under its spin lock, so
-        // re-posting every 2 s while a fight is open (graphs are rebuilt on a 3D
+        // re-posting every 2 s while the follower is managed + 3D-loaded (graphs are rebuilt on a 3D
         // reload, in or out of combat) is idempotent.
         void AtkPostAttach(RE::FormID a_fid, std::size_t a_slot) {
             if (!MainThread::IsInstalled()) {
@@ -711,6 +711,25 @@ namespace MFO::Diagnostics {
         void AtkService(std::size_t a_slot, RE::Actor* a_actor, std::int64_t a_nowMs) {
             auto&      s   = g_atk[a_slot];
             const auto fid = s.fid.load(std::memory_order_acquire);
+            // ATTACH whenever the follower is managed and 3D-loaded, in OR out of
+            // combat (2026-09-21, Deck/Fable: a non-fighting follower's parkour /
+            // stuck tags never reached the sink because it was only attached at
+            // fight open), and KEEP attaching on the 2 s throttle: a graph rebuilt
+            // (catch-up teleport through disable/enable, a door, a 3D reload)
+            // would otherwise leave a fight open with NO registration and print
+            // "(no attack events)" -- a masked failure (principle 7; Fable SEV-3
+            // on 2ac4163). AddEventSink dedupes under its spin lock
+            // (BSTEvent.h:41-51), so a re-post costs one LookupByID + one lock
+            // per graph per 2 s per follower on the main thread; the re-attach
+            // line stays at debug. Out-of-combat events land in the slot's
+            // counters and the session-wide new-tag table (the `[atk-obs]
+            // new-tag` first-sight line is how they surface); the counters are
+            // zeroed at fight open below, so the per-fight histogram stays
+            // fight-scoped.
+            if (a_actor->Is3DLoaded() && a_nowMs - s.lastAttachMs >= kAtkAttachMs) {
+                s.lastAttachMs = a_nowMs;
+                AtkPostAttach(fid, a_slot);
+            }
             if (a_actor->IsInCombat()) {
                 s.oocArmed = false;
                 if (!s.fightOpen) {
@@ -720,20 +739,13 @@ namespace MFO::Diagnostics {
                     s.idleRunning  = false;
                     s.idleCount    = 0;
                     s.idleLongest  = 0;
-                    s.lastAttachMs = 0;
-                }
-                // ATTACH, and KEEP attaching on a throttle while the fight is open
-                // (Fable SEV-3 on 2ac4163): a graph rebuilt while IsInCombat stays
-                // true (catch-up teleport through disable/enable, a door with the
-                // fight continuing) would otherwise leave this fight open with NO
-                // registration and print "(no attack events)" -- a masked failure
-                // (principle 7). AddEventSink dedupes under its spin lock
-                // (BSTEvent.h:41-51), so a re-post costs one LookupByID + one lock
-                // per graph per 2 s per follower on the main thread; the re-attach
-                // line stays at debug.
-                if (a_nowMs - s.lastAttachMs >= kAtkAttachMs) {
-                    s.lastAttachMs = a_nowMs;
-                    AtkPostAttach(fid, a_slot);
+                    // Fight-scoped counters: drop whatever the always-attached sink
+                    // counted out of combat since the last dump (same exchange(0)
+                    // race window as the dump's own reset -- <=1 event, accepted).
+                    for (auto& c : s.count) c.store(0, std::memory_order_relaxed);
+                    for (auto& c : s.other) c.store(0, std::memory_order_relaxed);
+                    s.otherOverflow.store(0, std::memory_order_relaxed);
+                    s.lastAttackMs.store(0, std::memory_order_relaxed);
                 }
                 // Hands as of the latest in-combat tick (a bow<->melee swap mid-fight
                 // shows the final pair; the [equip] lines carry the history).

@@ -77,6 +77,42 @@ namespace MFO::Followers {
         constexpr int kMissesBeforeDrop = 3;
         std::unordered_map<RE::FormID, int> g_missStreak;
 
+        // [follower] STATE LINE (2026-09-21, Deck/Fable: Jesper stood still for
+        // three minutes on an ACTIVE PlayerFollowerPackage and nothing MFO
+        // printed could tell Follow from Wait -- both are the same package
+        // form, branched on the WaitingForPlayer actor value). Printed on the
+        // `+` roster line and then every ~kStateLineS per active follower from
+        // the worker sweep:
+        //   [follower] <id> '<name>' pkg=<current package form> waitingForPlayer=<AV 95>
+        //              dPlayer=<u> moved=<u since the last line> aiEnabled=<kProcessMe> inCombat=<0/1>
+        // Pure reads (GetCurrentPackage -> currentProcess->GetRunningPackage,
+        // AsActorValueOwner()->GetActorValue, IsAIEnabled = boolBits kProcessMe;
+        // pinned 3.7.0 Actor.h:533/:570, ActorValues.h:103). Worker/serial-pump
+        // domain like every map above; cleared with them.
+        constexpr float kStateLineS = 30.0f;
+        struct StateSample {
+            std::chrono::steady_clock::time_point at{};
+            RE::NiPoint3                          pos{};
+        };
+        std::unordered_map<RE::FormID, StateSample> g_stateSample;
+
+        void LogStateLine(RE::Actor* a_actor, RE::FormID a_id, const char* a_why) {
+            auto&       smp    = g_stateSample[a_id];
+            const auto  now    = std::chrono::steady_clock::now();
+            const auto  pos    = a_actor->GetPosition();
+            const float moved  = (smp.at.time_since_epoch().count() != 0) ? pos.GetDistance(smp.pos) : 0.0f;
+            const auto* pkg    = a_actor->GetCurrentPackage();
+            const float wait   = a_actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kWaitingForPlayer);
+            float       dPlayer = -1.0f;
+            if (auto* pc = RE::PlayerCharacter::GetSingleton()) dPlayer = pos.GetDistance(pc->GetPosition());
+            spdlog::info("[follower] {:08X} '{}' pkg={:08X} waitingForPlayer={:.0f} dPlayer={:.0f} moved={:.0f} aiEnabled={} inCombat={} [{}]",
+                         a_id, a_actor->GetName() ? a_actor->GetName() : "?",
+                         pkg ? pkg->GetFormID() : 0u, wait, dPlayer, moved,
+                         a_actor->IsAIEnabled() ? 1 : 0, a_actor->IsInCombat() ? 1 : 0, a_why);
+            smp.at  = now;
+            smp.pos = pos;
+        }
+
         // ── off-worker membership mirror + active snapshot (SEV-1) ──────────
         // g_active / g_activeIds are rebuilt by Refresh on the JOB WORKER
         // (ENGINE_NOTES §0.37) and are read UNLOCKED by main/worker callers.
@@ -154,6 +190,7 @@ namespace MFO::Followers {
     void ClearTransientState() {
         g_missStreak.clear();
         g_lastCombat.clear();
+        g_stateSample.clear();   // [follower] state-line sample (position + time)
         g_activeIds.clear();
         // Keep the off-worker mirror consistent with the just-emptied lists, or
         // IsTrackedFast/ActiveSnapshot would report stale membership across a
@@ -415,6 +452,13 @@ namespace MFO::Followers {
                              isSummon      ? "summon, session-only"
                              : !persistable ? "runtime form, session-only"
                                             : "teammate");
+                g_stateSample.erase(id);       // a re-join starts the moved= baseline fresh
+                LogStateLine(a, id, "roster");
+            } else if (const auto sit = g_stateSample.find(id);
+                       sit == g_stateSample.end() ||
+                       std::chrono::duration<float>(std::chrono::steady_clock::now() - sit->second.at).count() >= kStateLineS) {
+                LogStateLine(a, id, "30s");
+            }
                 // Two independent reasons to withhold a record. Checking only
                 // IsCommandedActor was the gap: a cloned/spawned teammate is
                 // not commanded but still has a 0xFF id.
