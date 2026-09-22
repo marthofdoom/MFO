@@ -364,6 +364,22 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** `Scheduler.cpp` `:343-373` (RetreatClear, `g_combatEnteredAt.erase`, `g_proposedTarget.erase`, `CasterConsent::Clear`, `Actuation::ClearCastLock`, `CombatStyle::Clear`, the per-fight latches) ran on the first party-OFF tick while only `ReleaseForcedWeapon` (`:384`) waited two services. A 145 ms OFF/ON flap -- an engine combat-controller restart, which the field log shows is real -- would drop a caster's consent latch and cast lock mid-fight: the sub-tick leak v1.0.32 closed, re-opened for one lap.
 - **FIXED-IN `e0ea399`** (`fix/mfo-field-batch-0921`, item G): the whole party-OOC teardown now sits behind the same `++g_outOfCombatTicks[id] >= 2` count as the hold release; `Logistics::ServiceFollower` still runs on every party-OOC tick. Pending its Fable review on the branch.
 
+### MFO-B61 — a fault inside the `[fatal]` handler's own log call degrades CrashLogger's report to the nested exception
+- **Raised:** Fable tier-A review of `7520e3e` / `3315848` (`fix/mfo-field-batch-0921`, item B), closing round.
+- **Severity:** SEV-5 (documented degradation, no fix shape without moving the line off the faulting thread)
+- **Finding (verbatim):** handler-fault degrades the report: a fault inside log->critical under the VEH makes the NESTED exception (inside MFO.dll) reach CrashLogger and the original address is lost; document in the block comment too.
+- **Reviewer's reasoning:** the vectored handler runs on the faulting thread before any filter; the `thread_local` re-entry guard makes the nested fault fall straight through to CrashLogger, so the report names MFO's logger frame (module MFO.dll) rather than the original faulting address. The original `[fatal]` line is never written in that case.
+- **Why it was NOT fixed:** the only shapes that avoid it (formatting into a pre-reserved static buffer with no allocation and writing with a raw `WriteFile`, or handing the line to another thread) are a separate mechanism; the block comment now states the degradation (`Diagnostics.cpp` `[fatal]` block comment, `3c733c9`).
+- **Fix shape when drained (verbatim):** none given; candidate: pre-reserved static buffer + hand-declared `WriteFile` on the already-open log handle, no spdlog call inside the handler.
+
+### MFO-B62 — `EquipRangeUndecidable` answers for the FIRST range-conditioned equip rule above the stop, even if a second non-range equip rule above the stop was genuinely false
+- **Raised:** Fable tier-A review of `7520e3e` / `3315848` (`fix/mfo-field-batch-0921`, item F), closing round.
+- **Severity:** SEV-5 (conservative; matches the intent)
+- **Finding (verbatim):** EquipRangeUndecidable returns true on the first range-conditioned equip rule above the stop even if a second non-range equip rule above the stop was genuinely false (conservative, matches intent).
+- **Reviewer's reasoning:** `Scheduler.cpp` `EquipRangeUndecidable` scans rules `< stopIdx` for the first equip rule whose condition is target-relative and answers for that one; a table with a range-conditioned equip rule AND a second, non-range equip rule (e.g. `cond.always` → `act.equip_melee`) both above the stop reads UNKNOWN on a null-target lap although the second rule's truth was genuinely known. The effect is one extra hold-kept lap per null-target stretch, in the direction the fix intends (keep the weapon).
+- **Why it was NOT fixed:** conservative in the safe direction, two equip rules above the stop is not an authored layout the field has shown, and the per-rule answer would need the Evaluator to report which rule it evaluated (an `Evaluator.h` change outside item F's boundary).
+- **Fix shape when drained (verbatim):** none given; candidate: have the Evaluator mark per rule whether the target-relative read was undecidable, and let the Scheduler demote only when EVERY evaluated equip rule was undecidable.
+
 ### MFO-B56 — `Loadout::Tick` erases `g_equipClock` on own `IsInCombat()==false`, collapsing the AI-first grace for own-OOC hybrid casts
 - **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
 - **Severity:** SEV-4

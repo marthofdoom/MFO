@@ -2252,13 +2252,30 @@ not a crash).
 
 **What MFO does with this (branch `fix/mfo-field-batch-0921`, item H).** There is no engine
 guard a worker can take: no refcount, no lock covering the pointer, and `IsInCombat()` itself is
-the same unguarded deref. So the read is gated on a same-lap `IsInCombat()` -- the pre-build shape
-(`FoeCount` ran only inside the combat branch) -- which drops the out-of-combat group read to
-zero and leaves the in-combat one where every `[sense]` / Evaluator read already is. The `foes`
-term of the party boolean is then implied by `followersFighting` and survives only as the
-transition line's count. The residual is the exposure MFO has carried since the first
-`IsInCombat()` on the worker; closing it means an atomic controller epoch published from a
-StopCombat seat (slot 0xE5, both runtimes above) -- an engine seat, its own tier-A brief.
+the same unguarded deref. So the PARTY BLOCK's read is gated on a same-lap `IsInCombat()` -- the
+pre-build shape (`FoeCount` ran only inside the combat branch) -- which drops THAT block's
+out-of-combat group read to zero. It is not the only worker group read: the Evaluator's own-OOC
+foe selectors, the `[sense]` line, and item F's `EquipRangeUndecidable` call `FoeCount` too, and
+all of them still read the group during the controller-INACTIVE phase (the controller allocated,
+`+0x43` set by `CombatController::SetInactive`, SE `0x4ff290`). Total worker group reads after
+the gate are fewer than on `main`, not zero.
+
+**Fable's judgement (tier-A review of `3315848`, verified on both images):** the same-lap
+`IsInCombat()` gate is a STRICT REDUCTION, not a fix. It removes two phases -- the NULL phase
+(no controller: `IsInCombat()` is false, nothing derefs) and the allocated-but-INACTIVE phase
+(`+0x43` set: `IsInCombat()` is false, the group is not read) -- and leaves the live phase, where
+a `StopCombat` on a worker thread between the flag read and the group read still frees the
+controller under the reader. A bare controller EPOCH (an atomic bumped from a StopCombat seat,
+validated after the read) is INSUFFICIENT: validate-after-read still dereferences
+`cc->combatGroup->lock` first, and that first deref is the fault. **The sound next brief is the
+combat-thread MIRROR:** the existing `UpdateCombat` seat (the per-actor job callback above)
+publishes `foeCount` / `inCombat` into per-follower atomics keyed by FormID; a `StopCombat` seat
+on slot 0xE5 (SE `0x625920` / AE `0x6b70a0`) clears them; the worker reads ONLY the mirror and
+never touches `combatController` at all. That is the same shape `Targeting` / `CasterConsent`
+already use for combat-thread state (FormIDs and atomic mirrors, never the follower lists), and
+it retires every worker-side controller deref -- the party block, the `[sense]` line, the
+Evaluator selectors and `EquipRangeUndecidable` -- in one move. Recorded in STATUS as "MFO-next:
+FoeCount/inCombat mirror"; cross-referenced from MAP's Scheduler "What breaks".
 
 ---
 

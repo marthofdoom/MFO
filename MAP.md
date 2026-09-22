@@ -1143,7 +1143,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
 first, runs the combat table while the PARTY fights and the logistics table when
 it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worker.
-- `Tick()` (`:252`) — caller `Diagnostics.cpp:915`. `Packages::Pump()` must stay
+- `Tick()` (`:252`) — caller `Diagnostics.cpp:931`. `Packages::Pump()` must stay
   first + unconditional. Reads `g_followers` — safe only because StopPump
   brackets the load window. Retreating follower `return`s before the gambit table
   so a cast rule can't fight the retreat travel.
@@ -1163,7 +1163,18 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   same-lap `IsInCombat()` (`:330`), the pre-build shape. The `foes` term is then
   implied by `followersFighting`; it survives as the transition line's count.
   Un-gating it re-opens a per-follower, per-tick, in-AND-out-of-combat read of
-  freed memory through every controller rebuild. **THE TWO GATES key on it, never
+  freed memory through every controller rebuild. **The gate is a strict REDUCTION,
+  not a fix (Fable tier-A on `3315848`):** it removes the null and the
+  allocated-but-inactive phases; a `StopCombat` on a worker thread between the flag
+  read and the group read still frees the controller under the reader, and the
+  Evaluator selectors, the `[sense]` line and `EquipRangeUndecidable` still read the
+  group. A bare controller epoch cannot close it (validate-after-read still derefs
+  `cc->combatGroup->lock` first). The sound next brief is the combat-thread MIRROR —
+  `UpdateCombat` seat publishes `foeCount`/`inCombat` atomics per FormID, a
+  `StopCombat` seat (slot 0xE5: SE `0x625920` / AE `0x6b70a0`) clears them, the
+  worker reads only the mirror — `ENGINE_NOTES.md` §0.47 "Fable's judgement", STATUS
+  "MFO-next: FoeCount/inCombat mirror". Until it lands, every new worker-side
+  `combatController` read is a new instance of this exposure. **THE TWO GATES key on it, never
   on the serviced follower's own flag:** GATE 1 (`:434`) — the party-OOC branch
   runs only while party combat is FALSE, so the combat table runs for every managed
   follower while the party fights; a follower with no combat controller of his own
@@ -4368,7 +4379,7 @@ older `Diagnostics.cpp:NNN` cross-references elsewhere in this map read low.)
   NT+0x50). Win32 shapes hand-declared at the top of the file (no `<windows.h>`).
   MSVC keeps the terminate handler PER THREAD: installed on the plugin-load thread,
   the sleeper (`:894`), the AddTask worker (thread_local latch in the tick body,
-  `:905`) and main (one `MainThread::Post` at `StartPump` `:1382`). The combat-thread
+  `:905`) and main (one `MainThread::Post` at `StartPump` `:1405`). The combat-thread
   hooks are NOT covered. **What breaks:** returning anything but 0 from the handler,
   or logging inside it for informational codes, hijacks the crash from CrashLogger /
   spams try-catch traffic; calling the engine or allocating in the handler crashes

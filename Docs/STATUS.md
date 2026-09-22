@@ -15,8 +15,9 @@ Read it as history and this block as current.
 
 - **2026-09-21 21:50 PDT Deck run (`aca7d43` deployed) — Fable field diagnosis + branch
   `fix/mfo-field-batch-0921` (off `main` `db8fb7b`, v2.0.9 line; NOT merged, NOT deployed).**
-  Evidence: `scratchpad/field-20260921/EVIDENCE.md`, agentlog `field-diag-20260921-evening.md`,
-  memory `field-diag-2026-09-21-evening`. What the run showed, corrected against the code:
+  Evidence: memory note `field-diag-2026-09-21-evening` (the summary + pointers) and the Fable
+  agentlog `field-diag-20260921-evening.md` (session `a935cdde`; the evidence file it reads is
+  session-scratchpad-only and not on disk in the repo). What the run showed, corrected against the code:
   (1) **Jesper's combat table RAN; every condition was false** (his own combat group was
   empty all fight — `[sense] foes=0`), and an empty skip-chain prints NO `[eval]` line, so the
   "[eval] scan lines" observable promised below for an own-OOC follower was WRONG. The
@@ -76,6 +77,17 @@ Read it as history and this block as current.
   the `[hb]` counters show which thread stopped. **Not in this branch (scope conflicts
   reported):** a last-main-LABEL in the heartbeat needs a labelled `MainThread::Post`
   (`MainThread.cpp/.h`); the combat-thread hooks carry no terminate handler.
+  **Fable tier-A on `3315848`: CLEARED (no SEV-2/3), item H verified on both images; closing
+  round `3c733c9` (STACK_OVERFLOW returns at once from the `[fatal]` handler; the game-image
+  label written once before the handler exists) + backlog `MFO-B61`/`MFO-B62`.**
+  **MFO-next (tier A brief ON RECORD, not dispatched): FoeCount/inCombat MIRROR from the
+  `UpdateCombat` seat + a `StopCombat` seat (slot 0xE5: SE `0x625920` / AE `0x6b70a0`), the
+  worker reads atomics only.** Item H's same-lap `IsInCombat()` gate is a strict reduction,
+  not a fix (`ENGINE_NOTES.md` §0.47 "Fable's judgement"): a `StopCombat` on a worker thread
+  between the flag read and the group read still frees the controller under the reader, the
+  Evaluator / `[sense]` / `EquipRangeUndecidable` reads remain, and a bare controller epoch
+  cannot close it because validate-after-read derefs `cc->combatGroup->lock` first. The
+  mirror retires every worker-side `combatController` deref in one move.
 
 - **2026-09-21 23:06 PDT — HOTFIX v2.0.8 SHIPPED (GitHub release, tag `v2.0.8`, branch `hotfix/v2.0.8` off tag `v2.0.5`).**
   Exactly v2.0.5 + the DropObject ABI fix (`7bc1f30`'s Logistics.cpp hunk, md5-identical `efe65afc…`); nothing
