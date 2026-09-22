@@ -491,7 +491,17 @@ namespace MFO::Scheduler {
                 // here released Cicero's hold three times in one dragon fight
                 // (08:09:45, 08:10:07, 08:10:31 -- weapons vanishing and
                 // returning). Idempotent (no record -> no-op).
-                Actuation::ReleaseForcedWeapon(f);
+                //
+                // STAND DOWN (marth 2026-09-22: "no one ever sees an unarmed follower,
+                // they sheathe weapons. Not unequip."). THIS is the site that reads as a
+                // stand-down: the party fight is genuinely over (two consecutive party-OOC
+                // services), the hold is simply finished and no specific item has to leave
+                // the hand. The lock is still force-cleared -- it has to be -- but the same
+                // weapon goes straight back on NON-forced and the follower sheathes, so the
+                // "weapons vanishing" this comment already describes stops being visible.
+                // See ReleaseForcedWeapon's doc in Actuation.h for why the unequip itself
+                // cannot go away.
+                Actuation::ReleaseForcedWeapon(f, /*a_standDown=*/true);
                 // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable
                 // SEV-3): an un-debounced erase on a 1-tick IsInCombat flap would
                 // drop the dwell, and the flap-back tick at the gambit's false edge

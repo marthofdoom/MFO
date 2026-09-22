@@ -1814,6 +1814,17 @@ namespace MFO::APMFBridge {
         return (it->second.equipOwned & a_categories) != 0;
     }
 
+    // The MIRROR of EquipAuthorityOwns, on the `denied` half of the same sent scope.
+    // Same guards, same lock, same "no declaration out yet -> nothing is in effect".
+    bool EquipAuthorityDenies(RE::FormID a_follower, std::uint32_t a_categories) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.equipAuthHandle == APMF_API::kInvalidHandle) return false;
+        if (it->second.equipAuthFresh) return false;   // no declaration out yet: APMF denies nothing
+        return (it->second.equipDenied & a_categories) != 0;
+    }
+
     bool DeclareEquipSet(RE::FormID a_follower, const std::vector<APMF_API::APMF_EquipEntry>& a_forms) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || a_follower == 0 || api->abiVersion < 9 || !Config::g_apmfEquipAuthority.load()) return false;

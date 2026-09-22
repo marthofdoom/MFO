@@ -624,6 +624,23 @@ namespace MFO::APMFBridge {
     // draw an `External(MFO.dll) ... verdict=deny` at APMF's seat).
     bool EquipAuthorityOwns(RE::FormID a_follower, std::uint32_t a_categories);
 
+    // Worker-safe (mutex-guarded read), the exact MIRROR of EquipAuthorityOwns above
+    // and with the same two guards: false without a standing claim, and false on a
+    // claim no declaration has gone out on yet (nothing is denied in effect until a
+    // scope is SENT). Reads the `denied` half of the scope last sent, so it answers
+    // "MFO's OWN declaration currently refuses this category for this follower".
+    //
+    // WHY IT EXISTS (fix/mfo-spell-authority-0922): the economy's sell scan tests
+    // `worn` BEFORE anything else and reads a worn item as "keep". For a category
+    // MFO's own declaration DENIES -- today only Shield, denied when the perks vote
+    // dual-wield under bWeaponStyleControl -- that read is wrong in one direction
+    // only: nothing can ever re-equip the item (APMF refuses the category) and
+    // nothing ever UNEQUIPS an already-worn one (APMF ch.17 never unequips), so it
+    // is worn forever and never sold. Cicero's shield, field 2026-09-22. The sell
+    // path routes such an item through its existing FORCE-SELL branch, whose
+    // RemoveItem unequips on sale.
+    bool EquipAuthorityDenies(RE::FormID a_follower, std::uint32_t a_categories);
+
     // Worker-safe. DECLARE the worn set for a_follower through the v8 SetEquipSetEx
     // slot on the standing claim. `a_forms` are APMF_EquipEntry {BASE FormID, hand}:
     // kEquipSlot_Right / kEquipSlot_Left for the hand-held items MFO holds (the

@@ -2588,7 +2588,7 @@ namespace MFO::Actuation {
                  it->second.left  ? it->second.left->GetFormID()  : 0u };
     }
 
-    void ReleaseForcedWeapon(RE::Actor* a_follower) {
+    void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown) {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();
         ForcedHold hold;
@@ -2612,6 +2612,67 @@ namespace MFO::Actuation {
         if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
             if (hold.left)  mgr->UnequipObject(a_follower, hold.left,  nullptr, 1, Loadout::LeftHandSlot(), true, true);
             if (hold.right) mgr->UnequipObject(a_follower, hold.right, nullptr, 1, nullptr, true, true);
+        }
+        // ── STAND DOWN = SHEATHE, NOT UNEQUIP (marth 2026-09-22) ─────────────────
+        // The force-unequip above stays exactly as it was -- it is the only way to
+        // clear the prevent-removal lock, and a follower left locked to a weapon can
+        // never cast again. What it also does is take the weapon OFF THE BODY, so the
+        // follower stands there empty-handed until something re-arms him: the field saw
+        // Cicero's weapons "vanishing and returning" three times in one dragon fight,
+        // and at a real combat end nothing re-arms until the NEXT fight.
+        //
+        // So on a stand-down the SAME weapon(s) go straight back on, NON-FORCED (no
+        // lock, so the AI owns them again and may swap them whenever it likes), and the
+        // follower is sheathed. Nothing else changes: the ledger is already erased, the
+        // ch.15 claim is released below, and with no hold the ch.17 declaration leaves
+        // both hands UNOWNED (RefreshEquipDeclaration rule 1), so APMF's seat refuses
+        // none of this.
+        //
+        // TWO MAIN-THREAD HOPS, deliberately. The unequip above is a QUEUED engine op
+        // (a_queueEquip = true) and re-equipping the same object in the same breath
+        // would race it, so this rides the SAME double-post idiom LogLeftHandReadback
+        // in this file already uses to observe a settled hold -- roughly two frames,
+        // far below anything a player can see. It is also the #62 rule: an equip
+        // rebuilds biped 3D and belongs on the main thread, never on this job worker.
+        // Re-resolved on the frame that runs (the captured pointers may be stale by
+        // then), skipped for a dead/disabled follower, skipped for an item the follower
+        // no longer owns (sold/handed back between the hops), and skipped for a hand
+        // something has ALREADY put a weapon into -- it re-arms, it never evicts.
+        if (a_standDown && (hold.left || hold.right) && MainThread::IsInstalled()) {
+            const RE::FormID rightID = hold.right ? hold.right->GetFormID() : 0;
+            const RE::FormID leftID  = hold.left  ? hold.left->GetFormID()  : 0;
+            auto reArm = [id, rightID, leftID]() {
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+                auto* mgr   = RE::ActorEquipManager::GetSingleton();
+                if (!actor || !mgr || actor->IsDead() || actor->IsDisabled()) return;
+                auto inv = actor->GetInventory();
+                const auto owns = [&inv](RE::FormID a_form) -> RE::TESBoundObject* {
+                    if (a_form == 0) return nullptr;
+                    auto* form = RE::TESForm::LookupByID(a_form);
+                    auto* obj  = form ? form->As<RE::TESBoundObject>() : nullptr;
+                    if (!obj) return nullptr;
+                    const auto it = inv.find(obj);
+                    return (it != inv.end() && it->second.first > 0) ? obj : nullptr;
+                };
+                int put = 0;
+                if (auto* r = owns(rightID); r && !actor->GetEquippedObject(false)) {
+                    mgr->EquipObject(actor, r, nullptr, 1, nullptr, true, false);   // forceEquip = FALSE
+                    ++put;
+                }
+                if (auto* l = owns(leftID); l && !actor->GetEquippedObject(true)) {
+                    mgr->EquipObject(actor, l, nullptr, 1, Loadout::LeftHandSlot(), true, false);
+                    ++put;
+                }
+                // SHEATHE: drop the drawn state, leave the weapon equipped. Only out of
+                // combat -- a stand-down that raced a fresh fight must not put a drawn
+                // weapon away (the engine draws it again anyway, but forcing the graph
+                // the other way mid-engagement is not ours to do).
+                if (!actor->IsInCombat()) actor->DrawWeaponMagicHands(false);
+                if (put)
+                    spdlog::info("[equip] {:08X}: stand-down re-arm -- {} weapon(s) put back NON-forced "
+                                 "and sheathed (the hold is over; the AI owns them again)", id, put);
+            };
+            MainThread::Post([reArm]() { MainThread::Post(reArm); });
         }
         // APMF ch.15: hands are free again -- release the equipment claim too, so
         // MFO's own EquipGateThunk re-enforces immediately if APMF is absent (no-op
