@@ -1592,6 +1592,18 @@ namespace MFO::Logistics {
                 if (Actuation::CasterHasLiveSummon(a_follower, sp)) {
                     start = choice.ruleIndex + 1; continue;
                 }
+                // 86e39pz55: a summon goes to a GROUND POINT in front of the
+                // follower (Actuation::CastSummonAtGround), whatever this row
+                // targets -- never an actor road. Fired is this tick's action;
+                // anything else (in flight, unaffordable) falls to the next rule.
+                if (Actuation::TargetKindFor(sp) == Actuation::CastTargetKind::Position) {
+                    if (Actuation::CastSummonAtGround(a_follower, sp, "ooc").result ==
+                        Actuation::Result::Fired) {
+                        acted = true;
+                        break;
+                    }
+                    start = choice.ruleIndex + 1; continue;
+                }
                 // Resolve the EFFECT target: self, the player, or the current foe.
                 RE::Actor* tgt = a_follower;
                 if (op == Vocab::kActCastPlayer) {

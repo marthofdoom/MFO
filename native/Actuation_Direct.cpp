@@ -929,6 +929,263 @@ namespace MFO::Actuation {
         return false;
     }
 
+    // ── SPELL TARGET ARCHETYPE (ClickUp 86e39pz55; first case of 86e3dmtr1) ──
+    // See Actuation.h. The ONE place a spell's archetype decides what kind of
+    // target MFO hands the engine. Today only a SUMMON gets Position; Self and
+    // Actor just name what every existing road already does. Runes, walls and
+    // other location spells join here later, each as its own brief.
+    //
+    // A SUMMON is: any effect of archetype kSummonCreature on a spell whose
+    // delivery is kTargetLocation or kAimed (the two projectile deliveries --
+    // vanilla conjurations are Target Location). Bound weapons are kBoundWeapon
+    // + Self delivery and never match; Reanimate (a corpse-targeted TargetActor
+    // spell) does not match either -- it NEEDS an actor, a dead one.
+    CastTargetKind TargetKindFor(RE::SpellItem* a_spell) {
+        if (!a_spell) return CastTargetKind::Actor;
+        const auto delivery = a_spell->GetDelivery();
+        if (delivery == RE::MagicSystem::Delivery::kTargetLocation ||
+            delivery == RE::MagicSystem::Delivery::kAimed) {
+            for (auto* eff : a_spell->effects) {
+                auto* base = eff ? eff->baseEffect : nullptr;
+                if (base && base->GetArchetype() == RE::EffectArchetypes::ArchetypeID::kSummonCreature)
+                    return CastTargetKind::Position;
+            }
+        }
+        if (delivery == RE::MagicSystem::Delivery::kSelf) return CastTargetKind::Self;
+        return CastTargetKind::Actor;
+    }
+
+    namespace {
+        // How far in front of the caster the summon point sits. 180u is about
+        // 2.6 m: past the caster's own capsule (~35u radius) plus the widest
+        // vanilla summon (a Storm/Frost Atronach, ~80u), so the creature never
+        // spawns inside the follower, yet close enough that in a dungeon
+        // corridor it rarely reaches a wall (the wall ray below clamps it when
+        // it does). The same ballpark as where a player's own conjure lands at
+        // a short aim.
+        constexpr float kSummonAhead       = 180.0f;
+        // Ray origin height above the caster's feet (chest-ish). The forward
+        // ray runs at this height so a steep upslope or a low wall clamps the
+        // point, and the down ray starts here so it stays under a dungeon
+        // ceiling (a 96u start never reaches the floor of the level above).
+        constexpr float kSummonRayHeight   = 96.0f;
+        // How far below the caster's feet the ground may be (a drop-off or a
+        // stair run). No ground inside this is a snap FAILURE, never a guess.
+        constexpr float kSummonDropMax     = 512.0f;
+        // A wall hit pulls the point this far back toward the caster so the
+        // creature is not placed flush against the wall face.
+        constexpr float kSummonWallMargin  = 40.0f;
+        // After a dispatch, this summon is "in flight" for this long: the
+        // projectile flies and the SummonCreatureEffect starts before
+        // CasterHasLiveSummon can see it, and the combat scan would otherwise
+        // re-fire it on the next 133 ms lap. If the summon never lands, the
+        // gambit re-fires once per window -- loud in the log, never a loop.
+        constexpr float kSummonInFlightSec = 5.0f;
+
+        // (follower, spell) -> dispatch time. WORKER-SERIAL (Fire and the
+        // Logistics service both run on the AddTask job worker, #4), cleared in
+        // ClearSelfCasts after StopPump -- the same discipline as g_autoCast.
+        std::unordered_map<std::uint64_t, SelfClock::time_point> g_summonInFlight;
+
+        // follower -> the XMarker ref its LAST summon was aimed at. Written and
+        // read on the MAIN thread (inside the posted cast), cleared from
+        // ClearSelfCasts on revert -- a different thread, so a leaf mutex.
+        // One marker per follower at most: the previous one is deleted when
+        // the next summon mints its own, by which time its projectile is long
+        // gone. The marker is NOT force-persisted.
+        // The marker's POSITION is kept too: a created ref's 0xFF FormID is
+        // recycled once the engine frees it (a non-persistent ref in an unloaded
+        // cell), so a FormID match alone could name someone else's XMarker. Only
+        // a ref that is still an XMarker AND still at our point is retired.
+        struct SummonMarker {
+            RE::FormID   id = 0;
+            RE::NiPoint3 at{};
+        };
+        std::mutex                                   g_summonMarkerMx;
+        std::unordered_map<RE::FormID, SummonMarker> g_summonMarker;
+
+        // MAIN THREAD ONLY. Casts a ray from `a_from` to `a_to` (game units)
+        // on the kCharController layer in the caster's system group (so the
+        // caster's own capsule is skipped) -- the layer Sightline's field-
+        // proven occlusion ray uses: it stops on floors, terrain, walls and
+        // statics, i.e. "where could a body stand". Returns the hit fraction
+        // in [0,1), or a negative value on no hit.
+        float SummonRay(RE::bhkWorld* a_world, std::uint32_t a_filter,
+                        const RE::NiPoint3& a_from, const RE::NiPoint3& a_to) {
+            const float scale = RE::bhkWorld::GetWorldScale();
+            RE::bhkPickData pick;
+            pick.rayInput.from = a_from * scale;
+            pick.rayInput.to   = a_to * scale;
+            pick.rayInput.enableShapeCollectionFilter = false;
+            pick.rayInput.filterInfo = a_filter;
+            a_world->PickObject(pick);
+            if (!pick.rayOutput.HasHit()) return -1.0f;
+            return std::clamp(pick.rayOutput.hitFraction, 0.0f, 1.0f);
+        }
+    }
+
+    Outcome CastSummonAtGround(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                               const char* a_context) {
+        if (!Runtime::CastPathsVerified())
+            return { Result::FailedOther,
+                     "cast control is verified on 1.6 and 1.5.97 only (this runtime uses the follower's own AI casting)", true };
+        if (!a_follower || !a_spell) return { Result::FailedOther, "no summon spell", true };
+        // The ray and the marker mutate/query the cell -> the TRUE main thread
+        // only. No pump (VR) means no summon road at all, loudly, never an
+        // inline physics query on the worker.
+        if (!MainThread::IsInstalled()) {
+            spdlog::error("[summon] {:08X} {:08X}: no main-thread pump -- summon NOT cast",
+                          a_follower->GetFormID(), a_spell->GetFormID());
+            return { Result::FailedOther, "summon needs the main-thread pump", true };
+        }
+        if (!a_follower->HasSpell(a_spell))
+            return { Result::FailedSkill, "follower does not know this spell", true };
+
+        const auto id      = a_follower->GetFormID();
+        const auto spellID = a_spell->GetFormID();
+        const auto now     = SelfClock::now();
+        const auto key     = RecastKey(id, spellID);
+        if (auto it = g_summonInFlight.find(key); it != g_summonInFlight.end() &&
+            std::chrono::duration<float>(now - it->second).count() < kSummonInFlightSec)
+            return { Result::NoOp, "summon in flight", true };
+
+        // COMPETENCE IS NOT PERMISSION (DESIGN §5.3) -- the same magicka + reserve
+        // gate CastOn and CastSelfDirect apply. Transparent: fall to the next rule.
+        if (auto* avo = a_follower->AsActorValueOwner()) {
+            const float cost = a_spell->CalculateMagickaCost(a_follower);
+            const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
+            if (cost > have)
+                return { Result::FailedSkill,
+                         std::format("insufficient magicka (needs {:.0f})", cost), true };
+            const float reserve = Config::g_magickaReserve.load();
+            if (reserve > 0.0f) {
+                const float mx = avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
+                    a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
+                                                      RE::ActorValue::kMagicka);
+                if (mx > 0.0f && (have - cost) < reserve * mx)
+                    return { Result::FailedSkill,
+                             std::format("magicka reserve (floor {:.0f})", reserve * mx), true };
+            }
+        }
+
+        g_summonInFlight[key] = now;
+        std::string ctx = a_context ? a_context : "?";
+        MainThread::Post([id, spellID, ctx = std::move(ctx)] {
+            auto* f  = RE::TESForm::LookupByID<RE::Actor>(id);
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
+            if (!f || !sp) return;
+            const char* spName = sp->GetName() ? sp->GetName() : "?";
+            auto fail = [&](const char* a_why) {
+                spdlog::error("[summon] {:08X} {} ({:08X}) road=direct-position ({}): {} -- "
+                              "summon NOT cast (no actor-target fallback)",
+                              id, spName, spellID, ctx, a_why);
+            };
+            if (!f->Is3DLoaded()) { fail("caster has no 3D"); return; }
+            auto* cell  = f->GetParentCell();
+            auto* world = cell ? cell->GetbhkWorld() : nullptr;
+            if (!world) { fail("no havok world for the caster's cell"); return; }
+
+            std::uint32_t casterFilter = 0;
+            if (auto* cc = f->GetCharController()) cc->GetCollisionFilterInfo(casterFilter);
+            const std::uint32_t rayFilter =
+                ((casterFilter >> 16) << 16) |
+                static_cast<std::uint32_t>(RE::COL_LAYER::kCharController);
+
+            // The point: caster position + kSummonAhead along its FACING.
+            // Skyrim heading is clockwise from +Y, so forward = (sin h, cos h).
+            const RE::NiPoint3 feet = f->GetPosition();
+            const float        h    = f->GetAngleZ();
+            const RE::NiPoint3 fwd{ std::sin(h), std::cos(h), 0.0f };
+            const RE::NiPoint3 eye{ feet.x, feet.y, feet.z + kSummonRayHeight };
+
+            float ahead = kSummonAhead;
+            bool  wallClamped = false;
+            RE::NiPoint3 chosen{};
+            RE::NiPoint3 ground{};
+            float groundFrac = -1.0f;
+            {
+                RE::BSReadLockGuard lock(world->worldLock);
+                const float wall = SummonRay(world, rayFilter, eye, eye + fwd * kSummonAhead);
+                if (wall >= 0.0f) {
+                    ahead = std::max(0.0f, wall * kSummonAhead - kSummonWallMargin);
+                    wallClamped = true;
+                }
+                chosen = eye + fwd * ahead;
+                const RE::NiPoint3 down{ chosen.x, chosen.y,
+                                         feet.z - kSummonDropMax };
+                groundFrac = SummonRay(world, rayFilter, chosen, down);
+                if (groundFrac >= 0.0f)
+                    ground = chosen + (down - chosen) * groundFrac;
+            }
+            if (groundFrac < 0.0f) {
+                spdlog::error("[summon] {:08X} {} ({:08X}) road=direct-position ({}): point "
+                              "({:.0f},{:.0f},{:.0f}) ahead={:.0f}{} snap=FAILED (no ground "
+                              "within {:.0f}u below) -- summon NOT cast (no actor-target fallback)",
+                              id, spName, spellID, ctx, chosen.x, chosen.y, chosen.z, ahead,
+                              wallClamped ? " wall-clamped" : "", kSummonRayHeight + kSummonDropMax);
+                return;
+            }
+
+            // The engine has no cast-at-coordinates entry (CommonLib 3.7.0
+            // MagicCaster: CastSpellImmediate takes a TESObjectREFR*). Vanilla's
+            // own "here" is a marker REFERENCE, so mint a non-persistent XMarker
+            // (0x3B, the base Packages' evict marker uses) at the ground point and
+            // cast at it. CreateReferenceAtLocation is the call PlaceObjectAtMe
+            // wraps, with our point instead of the caller's own position.
+            auto* base = RE::TESForm::LookupByID<RE::TESObjectSTAT>(0x0000003B);   // vanilla XMarker
+            auto* tdh  = RE::TESDataHandler::GetSingleton();
+            if (!base || !tdh) { fail("XMarker 0x3B or TESDataHandler missing"); return; }
+            const RE::NiPoint3 rot{ 0.0f, 0.0f, h };
+            auto markerPtr = tdh->CreateReferenceAtLocation(base, ground, rot, cell,
+                                                            f->GetWorldspace(), nullptr, nullptr,
+                                                            RE::ObjectRefHandle(),
+                                                            /*forcePersist=*/false,
+                                                            /*arg11=*/true).get();
+            auto* marker = markerPtr.get();
+            if (!marker) { fail("could not place the ground marker"); return; }
+
+            // Retire this follower's previous marker (its projectile is long gone:
+            // the in-flight window alone is 5 s). Only if it still resolves to an
+            // XMarker ref -- never touch a FormID that got reused by something else.
+            SummonMarker prev{};
+            {
+                std::lock_guard lk(g_summonMarkerMx);
+                auto& slot = g_summonMarker[id];
+                prev = slot;
+                slot = { marker->GetFormID(), marker->GetPosition() };
+            }
+            if (prev.id && prev.id != marker->GetFormID()) {
+                if (auto* old = RE::TESForm::LookupByID<RE::TESObjectREFR>(prev.id);
+                    old && !old->IsDeleted() && old->GetBaseObject() &&
+                    old->GetBaseObject()->GetFormID() == 0x3B &&
+                    old->GetPosition().GetDistance(prev.at) < 1.0f) {
+                    old->Disable();
+                    old->SetDelete(true);
+                }
+            }
+
+            auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+            if (!caster) { fail("no instant magic caster"); return; }
+            auto* mavo = f->AsActorValueOwner();
+            const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+            caster->CastSpellImmediate(sp, false, marker, 1.0f, false, 0.0f, f);
+            // CastSpellImmediate spends no magicka (ENGINE_NOTES §0.22): deduct by
+            // hand, clamped to the pool so it never goes negative.
+            const float cost  = sp->CalculateMagickaCost(f);
+            const float spend = mavo ? std::min(cost, pool) : 0.0f;
+            if (mavo && spend > 0.0f)
+                mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                        RE::ActorValue::kMagicka, -spend);
+            spdlog::info("[summon] {:08X} {} ({:08X}) road=direct-position ({}): point "
+                         "({:.0f},{:.0f},{:.0f}) ahead={:.0f}{} snap=HIT ground z={:.0f} "
+                         "(feet z={:.0f}, dz={:+.0f}) marker={:08X} magicka -{:.0f}",
+                         id, spName, spellID, ctx, ground.x, ground.y, ground.z, ahead,
+                         wallClamped ? " wall-clamped" : "", ground.z, feet.z,
+                         ground.z - feet.z, marker->GetFormID(), spend);
+        });
+        return { Result::Fired, "summon cast at a ground point" };
+    }
+
     // See Actuation.h. Restoration = not Offense AND (restores Health OR any
     // effect of the Restoration school). The school read is the EffectSetting's
     // own data field (pinned CommonLibSSE-NG 3.7.0 include/RE/E/EffectSetting.h:72
@@ -1287,6 +1544,13 @@ namespace MFO::Actuation {
         ComposedCast::Reset();        // drop executor streams/backoff/expected-cast set
         ClearCastLocks();             // Task 2: drop every firing-spell gambit lock
         g_lastApmfRefusal.clear();    // this file's APMF-refusal log dedup, session-scoped
+        g_summonInFlight.clear();     // 86e39pz55: summon in-flight windows (worker state)
+        {
+            // The previous game's summon markers: forget the FormIDs, touch no
+            // ref -- after a load a 0xFF id can name a DIFFERENT created ref.
+            std::lock_guard lk(g_summonMarkerMx);
+            g_summonMarker.clear();
+        }
     }
 
     // F3-7 (deploy-gate review 2026-09-07). Drop ONE follower's APMF-refusal log

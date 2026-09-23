@@ -2387,6 +2387,10 @@ namespace MFO::Actuation {
                 sp && CasterHasLiveSummon(a_follower, sp)) {
                 return { Result::NoOp, "summon still live", true };
             }
+            // 86e39pz55: a summon goes to a GROUND POINT, never an actor road.
+            if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
+                sp && TargetKindFor(sp) == CastTargetKind::Position)
+                return CastSummonAtGround(a_follower, sp, "combat");
             // (APMF cast ownership is engaged inside CastOn's FF-non-self hostile
             // branch, where the RESOLVED target is known -- see the OWNED cast model
             // there. Not here: the target is not resolved for kActCastTarget yet.)

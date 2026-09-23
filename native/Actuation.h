@@ -231,6 +231,37 @@ namespace MFO::Actuation {
     // candlelight/buff/heal pacing is untouched. Worker/main context, list read only.
     bool CasterHasLiveSummon(RE::Actor* a_caster, RE::SpellItem* a_spell);
 
+    // SPELL TARGET ARCHETYPE (ClickUp 86e39pz55, the first worked case of the
+    // "complex spells" design 86e3dmtr1). The ONE place a spell's archetype
+    // decides what kind of target MFO hands the engine:
+    //   Position -- a SUMMON (a kSummonCreature effect on a Target Location or
+    //               Aimed spell). Delivered by CastSummonAtGround at a ground
+    //               point in front of the caster, NEVER at an actor.
+    //   Self     -- Self delivery (the existing self roads).
+    //   Actor    -- everything else (the existing actor roads, unchanged).
+    // Bound weapons (Self delivery) and Reanimate (TargetActor, needs a corpse)
+    // are NOT Position. Runes, walls and other location spells are meant to
+    // join here later; they are not wired yet.
+    enum class CastTargetKind : std::uint8_t { Actor, Self, Position };
+    CastTargetKind TargetKindFor(RE::SpellItem* a_spell);
+
+    // THE SUMMON ROAD. Both gambit dispatchers (combat Fire and the Logistics
+    // OOC service) route a Position spell here instead of any actor road, for
+    // every cast op (self / player / target / AUTO): the row's target does not
+    // pick where a creature appears. Worker side: competence, magicka + reserve,
+    // and a 5 s in-flight window per (follower, spell) so the scan cannot
+    // re-fire before CasterHasLiveSummon can see the summon. Main side (posted):
+    // point = caster + 180u along its facing (a forward ray clamps it short of a
+    // wall), snapped DOWN to the ground by a physics ray, a non-persistent
+    // XMarker minted there, and CastSpellImmediate(kInstant) aimed at that
+    // marker -- no actor target. One [summon] info line per cast (spell, road,
+    // point, snap). A failed snap logs an ERROR and casts NOTHING: there is no
+    // actor-target fallback. Returns Fired once posted (optimistic, like every
+    // posted cast), else a transparent decline. a_context names the caller for
+    // the log ("combat" / "ooc").
+    Outcome CastSummonAtGround(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                               const char* a_context);
+
     // (CONCENTRATION delivery is DIRECT FORCE everywhere -- Docs/CAST-DELIVERY.md.
     // COMBAT: CastOn's concentration fork -> ConcentrationCast -> CastTargetDirect
     // (self -> CastSelfDirect); the v1.0.58-65 package stream is REMOVED -- it
