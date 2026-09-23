@@ -51,6 +51,14 @@ namespace MFO::Actuation {
             SelfClock::time_point lastFired{};   // last time the rule re-fired (release clock)
             SelfClock::time_point lastApply{};   // last effect/magicka application (apply pacing)
             float                 cap   = 0.0f;  // per-stream randomized time cap (DrawConcCap)
+            // CHARGE FOR TIME (v2.0.12): a TIMED stream (momentary concentration --
+            // see StreamCharge) is billed for the seconds its effect actually ran.
+            // paidThrough = the instant the caster has paid up to (epoch = nothing
+            // paid yet); window = the sustain window the beats pin, i.e. how long
+            // the effect keeps running past the last beat. Worker-serial.
+            SelfClock::time_point paidThrough{};
+            float                 window = 0.0f;
+            bool                  timed  = false;
         };
         std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
 
@@ -139,6 +147,10 @@ namespace MFO::Actuation {
             SelfClock::time_point    lastFired{};
             SelfClock::time_point    lastApply{};
             float                    cap    = 0.0f;  // per-stream randomized time cap (DrawConcCap)
+            // CHARGE FOR TIME (v2.0.12): same meaning as SelfCastState's trio.
+            SelfClock::time_point    paidThrough{};
+            float                    window = 0.0f;
+            bool                     timed  = false;
         };
         std::unordered_map<RE::FormID, TargetCastState> g_targetCast;
 
@@ -335,10 +347,99 @@ namespace MFO::Actuation {
             return a_src;
         }
 
+        // A MOMENTARY concentration spell (value-modifier: heal/drain) -- the kind
+        // whose sustained effect genuinely channels between beats and whose beat
+        // is never skipped by the already-active guard. ONE predicate for both the
+        // guard bypass in ApplySelfEffect (main thread) and the worker's decision
+        // that a self stream is TIMED (charged for time). Reads form data only.
+        bool ConcMomentary(RE::SpellItem* a_sp) {
+            if (!a_sp || a_sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration)
+                return false;
+            auto* ei   = a_sp->GetCostliestEffectItem();
+            auto* mgef = ei ? ei->baseEffect : nullptr;
+            return mgef &&
+                   (mgef->data.archetype == RE::EffectArchetypes::ArchetypeID::kValueModifier ||
+                    mgef->data.archetype == RE::EffectArchetypes::ArchetypeID::kDualValueModifier);
+        }
+
+        // ── CHARGE FOR TIME (v2.0.12, ClickUp 86e3d6dp0) ─────────────────────────
+        // CalculateMagickaCost on a concentration spell is the caster's effective
+        // cost PER SECOND. The direct road used to charge ONE second per beat, but
+        // beats land ~1.2-2.0 s apart and a released stream's effect ran on up to
+        // its sustain window past the last beat: followers paid for ~48% of the
+        // healing seconds they delivered (44 field streams). A TIMED stream now
+        // pays for the seconds its effect actually ran. All clocks are WORKER-side
+        // (the stream maps); only the resulting seconds cross to the main-thread
+        // deduct, BY VALUE, exactly like the spell/target ids already do.
+        //
+        // Seconds to bill on a beat at a_now. First beat of a stream (paidThrough
+        // at epoch): one second, as before (it pays the channel's first second in
+        // advance). Later beats: the time since paidThrough, but only up to where
+        // the PREVIOUS beat's sustain window ran out (a_prevApply + a_window) -- if
+        // the beats were sparser than the window the effect lapsed and the gap was
+        // not channeled. Advances paidThrough. An untimed stream bills 1 (FF, or a
+        // guarded sticky ward: per application, unchanged).
+        float BeatChargeSec(bool a_timed, SelfClock::time_point& a_paidThrough,
+                            SelfClock::time_point a_prevApply, float a_window,
+                            SelfClock::time_point a_now) {
+            if (!a_timed) return 1.0f;
+            if (a_paidThrough == SelfClock::time_point{}) {
+                a_paidThrough = a_now + std::chrono::duration_cast<SelfClock::duration>(
+                                            std::chrono::duration<float>(kConcApplyPeriod));
+                return kConcApplyPeriod;
+            }
+            const auto ranTo = std::min(a_now, a_prevApply + std::chrono::duration_cast<SelfClock::duration>(
+                                                                 std::chrono::duration<float>(a_window)));
+            const float sec  = std::max(0.0f, std::chrono::duration<float>(ranTo - a_paidThrough).count());
+            a_paidThrough    = std::max(a_paidThrough, a_now);
+            return sec;
+        }
+
+        // Seconds still owed when a timed stream is RELEASED at a_now: from
+        // paidThrough to where the effect stops -- the release itself (it is
+        // dispelled, or re-streamed at once on a cap-only self release) or the
+        // last beat's sustain window running out, whichever is first. 0 when
+        // untimed, never applied, or already paid past that point.
+        float SettleSec(bool a_timed, SelfClock::time_point a_paidThrough,
+                        SelfClock::time_point a_lastApply, float a_window, SelfClock::time_point a_now) {
+            if (!a_timed || a_paidThrough == SelfClock::time_point{}) return 0.0f;
+            const auto ranTo = std::min(a_now, a_lastApply + std::chrono::duration_cast<SelfClock::duration>(
+                                                                 std::chrono::duration<float>(a_window)));
+            return std::max(0.0f, std::chrono::duration<float>(ranTo - a_paidThrough).count());
+        }
+
+        // Post the release-time SETTLE deduct (main thread, like every other
+        // deduct on this road): a_sec x the caster's per-second cost, clamped to
+        // the live pool (#6). a_reason / a_road are string literals (static
+        // storage), safe to carry across the post.
+        void PostSettle(RE::FormID a_casterID, RE::FormID a_spellID, float a_sec,
+                        const char* a_road, const char* a_reason) {
+            if (a_sec <= 0.0f) return;
+            MainThread::Post([a_casterID, a_spellID, a_sec, a_road, a_reason] {
+                auto* caster = RE::TESForm::LookupByID<RE::Actor>(a_casterID);
+                auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+                if (!caster || !sp) return;
+                auto* avo = caster->AsActorValueOwner();
+                if (!avo) return;
+                const float before = avo->GetActorValue(RE::ActorValue::kMagicka);
+                const float cost   = sp->CalculateMagickaCost(caster);
+                const float spend  = std::clamp(cost * a_sec, 0.0f, std::max(0.0f, before));
+                if (spend > 0.0f)
+                    avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                           RE::ActorValue::kMagicka, -spend);
+                const float after = avo->GetActorValue(RE::ActorValue::kMagicka);
+                spdlog::info("[cast] {:08X} {} SETTLE ({}) spell {:08X} -- {:.2f}s x {:.1f}/s, "
+                             "magicka {:.0f}->{:.0f} (spent {:.1f})",
+                             a_casterID, a_road, a_reason, a_spellID, a_sec, cost, before, after, spend);
+            });
+        }
+
         // Apply the effect + spend magicka for ONE fire (main thread). §5.3:
-        // CastSpellImmediate spends nothing (§0.22), so deduct the real cost.
-        void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID) {
-            MainThread::Post([a_id, a_spellID] {
+        // CastSpellImmediate spends nothing (§0.22), so deduct the real cost:
+        // a_chargeSec x CalculateMagickaCost (the seconds BeatChargeSec billed
+        // for a timed concentration stream; 1 = one cast's / one second's cost).
+        void ApplySelfEffect(RE::FormID a_id, RE::FormID a_spellID, float a_chargeSec) {
+            MainThread::Post([a_id, a_spellID, a_chargeSec] {
                 auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_id);
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
                 if (!a || !sp) return;
@@ -361,11 +462,7 @@ namespace MFO::Actuation {
                 // it and the channel expires at the window instead of rolling.
                 // The guard's CTD case (lights/duration buffs) is not value-
                 // modifier and stays guarded.
-                const bool concMomentary =
-                    sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
-                    mgef &&
-                    (mgef->data.archetype == RE::EffectArchetypes::ArchetypeID::kValueModifier ||
-                     mgef->data.archetype == RE::EffectArchetypes::ArchetypeID::kDualValueModifier);
+                const bool concMomentary = ConcMomentary(sp);
                 if (auto* mt = a->AsMagicTarget();
                     !concMomentary && mgef && mt && mt->HasMagicEffect(mgef)) {
                     spdlog::info("[cast] {:08X} cast_self skipped -- {} ({:08X}) already active",
@@ -400,15 +497,17 @@ namespace MFO::Actuation {
                 const float cost  = sp->CalculateMagickaCost(a);
                 // #6: clamp to the current pool so a deduct never drives magicka
                 // negative (AUTO/self validate cost against ONE worker snapshot).
-                const float spend = avo ? std::min(cost, before) : 0.0f;
+                // CHARGE FOR TIME: a_chargeSec seconds of the per-second cost.
+                const float spend = avo ? std::clamp(cost * a_chargeSec, 0.0f, std::max(0.0f, before)) : 0.0f;
                 if (avo && spend > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                            RE::ActorValue::kMagicka, -spend);
                 const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 spdlog::info("[cast] {:08X} {} SELF-CAST {} ({:08X}) -- effect applied, "
-                             "magicka {:.0f}->{:.0f} (cost {:.0f})",
+                             "magicka {:.0f}->{:.0f} (cost {:.0f} x {:.2f}s = {:.1f})",
                              a_id, a->GetName() ? a->GetName() : "?",
-                             sp->GetName() ? sp->GetName() : "?", a_spellID, before, after, cost);
+                             sp->GetName() ? sp->GetName() : "?", a_spellID, before, after, cost,
+                             a_chargeSec, spend);
             });
         }
 
@@ -441,12 +540,13 @@ namespace MFO::Actuation {
         // fine" ruling).
         //   a_guard TRUE  (sticky ward/buff): skip if the buff is already active on
         //                 the target, so a duration buff is not re-stacked.
-        //   a_guard FALSE (heal / damage -- MOMENTARY): every paced beat deducts a
-        //                 second's cost and re-arms the sustained effect, so the
+        //   a_guard FALSE (heal / damage -- MOMENTARY): every paced beat deducts
+        //                 the seconds billed since the last charge (a_chargeSec,
+        //                 CHARGE FOR TIME) and re-arms the sustained effect, so the
         //                 target is topped up steadily while the rule wins.
         void ApplyTargetEffect(RE::FormID a_casterID, RE::FormID a_targetID,
-                               RE::FormID a_spellID, bool a_guard) {
-            MainThread::Post([a_casterID, a_targetID, a_spellID, a_guard] {
+                               RE::FormID a_spellID, bool a_guard, float a_chargeSec) {
+            MainThread::Post([a_casterID, a_targetID, a_spellID, a_guard, a_chargeSec] {
                 auto* caster = RE::TESForm::LookupByID<RE::Actor>(a_casterID);
                 auto* tgt    = RE::TESForm::LookupByID<RE::Actor>(a_targetID);
                 auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
@@ -519,17 +619,19 @@ namespace MFO::Actuation {
                 // concentration stream still drain?), which code review cannot do. Per the
                 // brief's rule -- never guess a magicka path; breaking the economy is worse
                 // than the flag -- this is left EXACTLY as-is and flagged for a field A/B.
+                // CHARGE FOR TIME: a_chargeSec seconds of the per-second cost
+                // (BeatChargeSec, worker-side); #6: clamped, never negative.
                 const float cost  = sp->CalculateMagickaCost(caster);
-                const float spend = avo ? std::min(cost, before) : 0.0f;   // #6: never negative
+                const float spend = avo ? std::clamp(cost * a_chargeSec, 0.0f, std::max(0.0f, before)) : 0.0f;
                 if (avo && spend > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                            RE::ActorValue::kMagicka, -spend);
                 const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 spdlog::info("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X} -- effect applied, "
-                             "magicka {:.0f}->{:.0f} (cost {:.0f})",
+                             "magicka {:.0f}->{:.0f} (cost {:.0f} x {:.2f}s = {:.1f})",
                              a_casterID, caster->GetName() ? caster->GetName() : "?",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
-                             before, after, cost);
+                             before, after, cost, a_chargeSec, spend);
             });
         }
 
@@ -1002,6 +1104,11 @@ namespace MFO::Actuation {
         // A DIFFERENT spell was channeling -> end it (stop its VFX) before this
         // one, so shaders never stack.
         if (it != g_selfCast.end() && it->second.spell != spellID) {
+            // CHARGE FOR TIME: settle the old stream's unpaid seconds first.
+            PostSettle(id, it->second.spell,
+                       SettleSec(it->second.timed, it->second.paidThrough, it->second.lastApply,
+                                 it->second.window, now),
+                       "self-stream", "switch");
             SelfCastEndActor(id, it->second.spell);
             g_selfCast.erase(it);
             it = g_selfCast.end();
@@ -1021,6 +1128,12 @@ namespace MFO::Actuation {
             sc.spell = spellID; sc.started = now;
             sc.lastFired = now; sc.lastApply = {};   // epoch -> apply the effect immediately
             sc.cap = DrawConcCap(CasterConsent::ClassifySpell(a_spell));   // per-stream random cap
+            // CHARGE FOR TIME: a momentary concentration self stream is billed for
+            // the seconds it ran; window = the sustain window ApplySelfEffect pins.
+            sc.timed  = ConcMomentary(a_spell);
+            sc.window = CasterConsent::ClassifySpell(a_spell) == CasterConsent::SpellKind::Heal
+                            ? kConcHealCap : kConcSelfUtilityCap;
+            sc.paidThrough = {};
             it = g_selfCast.find(id);
         } else {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
@@ -1030,7 +1143,8 @@ namespace MFO::Actuation {
         // while the rule wins. CADENCE CONTRACT (kConcApplyPeriod): a
         // CONCENTRATION spell's cost is authored PER SECOND and the engine
         // channels its magnitude through the SUSTAINED real effect, so the ~1 s
-        // beat deducts one second's cost and re-arms that effect's rolling
+        // beat deducts the seconds run since the last charge (BeatChargeSec --
+        // CHARGE FOR TIME, v2.0.12) and re-arms that effect's rolling
         // window (fCastCooldown pacing would under-charge 4x and let the
         // channel lapse between re-arms -- "heals feel broken"). A
         // FIRE-AND-FORGET spell keeps the configured fCastCooldown beat (its
@@ -1042,8 +1156,10 @@ namespace MFO::Actuation {
                 ? kConcApplyPeriod
                 : std::max(1.0f, Config::g_castCooldown.load());
         if (std::chrono::duration<float>(now - it->second.lastApply).count() >= interval) {
+            const float chargeSec = BeatChargeSec(it->second.timed, it->second.paidThrough,
+                                                  it->second.lastApply, it->second.window, now);
             it->second.lastApply = now;
-            ApplySelfEffect(id, spellID);
+            ApplySelfEffect(id, spellID, chargeSec);
             return SelfCast::Applied;   // effect + magicka landed THIS tick
         }
         // Rule winning, channel kept alive, but paced out this tick -- a
@@ -1144,6 +1260,12 @@ namespace MFO::Actuation {
                                    : (a && !stale && !concCapped) ? "gone"
                                    : concCapped ? "cap" : "stale";
                 spdlog::info("[cast] {:08X} self-stream RELEASE ({}) spell {:08X}", id, reason, sc.spell);
+                // CHARGE FOR TIME: settle the seconds the effect ran past the last
+                // paid beat (skipped when the caster is gone: nothing to bill).
+                if (a)
+                    PostSettle(id, sc.spell,
+                               SettleSec(sc.timed, sc.paidThrough, sc.lastApply, sc.window, now),
+                               "self-stream", reason);
                 if (a && (kind == CasterConsent::SpellKind::Buff || stale || healedFull || magickaDry))
                     SelfCastEndActor(id, sc.spell);
                 done.push_back(id);
@@ -1378,6 +1500,11 @@ namespace MFO::Actuation {
         if (it != g_targetCast.end() &&
             (it->second.spell != spellID || it->second.target != targetID)) {
             spdlog::info("[cast] {:08X} stream RELEASE (switch)", id);
+            // CHARGE FOR TIME: settle the old stream's unpaid seconds first.
+            PostSettle(id, it->second.spell,
+                       SettleSec(it->second.timed, it->second.paidThrough, it->second.lastApply,
+                                 it->second.window, now),
+                       "stream", "switch");
             TargetCastEndActor(it->second.target, it->second.spell, id);
             g_targetCast.erase(it);
             it = g_targetCast.end();
@@ -1387,6 +1514,14 @@ namespace MFO::Actuation {
             tc.spell = spellID; tc.target = targetID; tc.kind = kind;
             tc.started = now; tc.lastFired = now; tc.lastApply = {};   // epoch -> apply now
             tc.cap = DrawConcCap(kind);   // per-stream random cap (8-15s heal/util, 2-6s offense)
+            // CHARGE FOR TIME: a MOMENTARY concentration stream (heal/offense --
+            // ApplyTargetEffect's guard is off, so no beat is ever skipped as
+            // already-active) is billed for the seconds it ran. A sticky Buff ward
+            // keeps the per-application charge. window = ApplyTargetEffect's pin.
+            tc.timed  = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+                        kind != CasterConsent::SpellKind::Buff;
+            tc.window = kind == CasterConsent::SpellKind::Heal ? kConcHealCap : kConcUtilityHold;
+            tc.paidThrough = {};
             it = g_targetCast.find(id);
         } else {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
@@ -1395,7 +1530,8 @@ namespace MFO::Actuation {
         // SELF-PACE the beat. CADENCE CONTRACT (kConcApplyPeriod): a
         // CONCENTRATION spell's cost is authored PER SECOND and the engine
         // channels its magnitude through the SUSTAINED real effect, so the ~1 s
-        // beat deducts one second's cost and re-arms that effect's rolling
+        // beat deducts the seconds run since the last charge (BeatChargeSec --
+        // CHARGE FOR TIME, v2.0.12) and re-arms that effect's rolling
         // window (fCastCooldown pacing would under-charge 4x and let the
         // channel lapse between re-arms -- "heals feel broken"). An FF spell
         // (this function can be handed one) keeps the fCastCooldown beat; a
@@ -1406,9 +1542,11 @@ namespace MFO::Actuation {
                 ? kConcApplyPeriod
                 : std::max(1.0f, Config::g_castCooldown.load());
         if (std::chrono::duration<float>(now - it->second.lastApply).count() >= interval) {
+            const float chargeSec = BeatChargeSec(it->second.timed, it->second.paidThrough,
+                                                  it->second.lastApply, it->second.window, now);
             it->second.lastApply = now;
             // GUARD only sticky (Buff) buffs; heal/damage re-apply freely (momentary).
-            ApplyTargetEffect(id, targetID, spellID, kind == CasterConsent::SpellKind::Buff);
+            ApplyTargetEffect(id, targetID, spellID, kind == CasterConsent::SpellKind::Buff, chargeSec);
             return SelfCast::Applied;
         }
         return SelfCast::Refreshed;   // winning but paced out this tick (transparent)
@@ -1473,6 +1611,14 @@ namespace MFO::Actuation {
                                                  : "cap";
                 spdlog::info("[cast] {:08X} stream RELEASE ({}) tgt {:08X} spell {:08X}",
                              id, reason, tc.target, tc.spell);
+                // CHARGE FOR TIME: settle the seconds the effect ran past the last
+                // paid beat -- posted before the dispel, same main-thread queue.
+                // Skipped when the CASTER is gone (nothing to bill); a gone TARGET
+                // still settles, the effect ran on it until now.
+                if (f)
+                    PostSettle(id, tc.spell,
+                               SettleSec(tc.timed, tc.paidThrough, tc.lastApply, tc.window, now),
+                               "stream", reason);
                 TargetCastEndActor(tc.target, tc.spell, id);   // dispel + interrupt + free slot
                 done.push_back(id);
             }
