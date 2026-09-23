@@ -521,7 +521,10 @@ namespace MFO::Logistics {
         // SetEquipSet doc): the last sent (set, owned, denied) is kept per
         // follower, sorted, and compared; a freshly minted claim (F2) forgets it
         // so the new handle is declared at once. Scope then set, one call. There
-        // is deliberately NO forced re-issue (F3).
+        // is deliberately NO forced re-issue (F3) -- but under ENFORCEMENT a
+        // declared ARMO that is not worn at the next service IS a change and is
+        // re-sent, throttled to kDeclDriftHold (MFO-B63, MFO-B41's shape for
+        // armor), and nothing is declared at all while the actor's 3D is absent.
         // Gated on FollowerState::mfoEnabled + APMFBridge::EquipAuthoritySupported();
         // off -> any standing claim is released and the cache dropped, so the
         // direct equip paths run byte-identical to a world with no APMF.
@@ -541,6 +544,18 @@ namespace MFO::Logistics {
                 bool operator==(const SentDecl&) const = default;
             };
             std::unordered_map<RE::FormID, SentDecl> g_lastDeclared;
+
+            // MFO-B63: WHEN the last declaration actually went out, per follower.
+            // APMF exposes no "the enforcement pass ran" query -- its pass is a
+            // posted hop, and the field caught one posted at 08:23:16 that did not
+            // run until 08:24:42 (85 s) -- so "nothing is in flight" is answered by
+            // TIME, and by the only clock MFO owns: how long ago it last sent. The
+            // hold is APMF's own 3 s per-item re-issue hold, the same constant
+            // MFO-B41's weapon detector throttles on (Actuation.cpp kB41Hold), so a
+            // piece the engine keeps taking back off costs one re-send per 3 s and
+            // never one per service tick (~1 s). Worker-serial like g_lastDeclared.
+            std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_lastDeclSentAt;
+            constexpr auto kDeclDriftHold = std::chrono::seconds(3);
 
             // "Armor+Right+Left" / "none" for the declare line (ABI v9 EquipCategory).
             std::string CategoryNames(std::uint32_t a_mask) {
@@ -605,9 +620,11 @@ namespace MFO::Logistics {
             return APMFBridge::EquipAuthoritySupported() && APMFBridge::IsEquipAuthorityClaimed(a_follower);
         }
 
-        void ForgetEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); g_playerPicks.erase(a_follower); }
+        void ForgetEquipDeclaration(RE::FormID a_follower) {
+            g_lastDeclared.erase(a_follower); g_playerPicks.erase(a_follower); g_lastDeclSentAt.erase(a_follower);
+        }
         void ResendEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); }   // MFO-B41: the change detector only
-        void ClearEquipDeclarations() { g_lastDeclared.clear(); g_playerPicks.clear(); }
+        void ClearEquipDeclarations() { g_lastDeclared.clear(); g_playerPicks.clear(); g_lastDeclSentAt.clear(); }
 
         bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form) {
             const auto it = g_playerPicks.find(a_follower);
@@ -672,6 +689,27 @@ namespace MFO::Logistics {
             // Game) carries NO set on APMF's side -- the change detector must not
             // answer "unchanged" against it. Forget, so this rebuild is sent.
             if (fresh) g_lastDeclared.erase(id);
+
+            // MFO-B63: NEVER DECLARE INTO A 3D-ABSENT ACTOR. APMF's equip pass
+            // needs a loaded actor: with the 3D gone it RECORDS the set, skips the
+            // pass and says so ("not loaded (actor resolved, 3D absent) --
+            // declaration of 7 item(s) recorded, equip pass skipped. Re-declare
+            // once the actor is loaded"), and by contract it has no re-assert tick
+            // of its own -- re-declaring is MFO's job. The field failure was
+            // exactly this: the Followers sweep dropped and re-added all three
+            // followers across a load screen, the re-add declared into a 3D-absent
+            // Jesper, and SEND-ONLY-ON-CHANGE then swallowed every later rebuild
+            // because it matched the set APMF had filed and never applied.
+            // Skipping the send ALSO marks him dirty (the cache is dropped), so the
+            // first loaded tick sends the rebuild as a change. The standing claim
+            // above is kept either way -- it is what makes the scope hold across
+            // the transition.
+            if (!a_follower->Is3DLoaded()) {
+                g_lastDeclared.erase(id);
+                g_lastDeclSentAt.erase(id);   // no drift hold against the first loaded tick
+                g_handedPick = {};            // F10's hand-off is still ONE tick's, consumed or not
+                return;
+            }
 
             EquipDecl decl;
             const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
@@ -946,13 +984,53 @@ namespace MFO::Logistics {
             std::sort(sent.keys.begin(), sent.keys.end());
             sent.owned  = owned;
             sent.denied = denied;
-            if (auto it = g_lastDeclared.find(id); it != g_lastDeclared.end() && it->second == sent) return;
+            // ... EXCEPT that "unchanged" must not mean "already on his body"
+            // (MFO-B63, MFO-B41's shape generalised from the weapon ledger to
+            // armor). A declared ARMO that is NOT WORN at this service is a piece
+            // APMF was told to put on and did not: the enforcement hop never ran,
+            // or it ran into a 3D-absent actor, or the engine took the piece back
+            // off. That is a CHANGE on the body even though the set compares equal,
+            // and swallowing it is what left a follower bare for 2 min 36 s while
+            // MFO re-picked the right robes seven times. So: re-send, throttled to
+            // kDeclDriftHold since the last send, which is also the "nothing is in
+            // flight" test (there is no APMF query for it -- see g_lastDeclSentAt).
+            // A piece he no longer owns is skipped: the next rebuild drops it
+            // anyway, and it would otherwise re-send forever. ARMO keys only --
+            // weapons and ammo are MFO-B41's business, not this detector's.
+            // OBSERVE MODE IS EXEMPT: with bEquipObserveOnly APMF equips non-forced
+            // and the engine is free to take the piece straight back off, so
+            // "declared but not worn" is the DESIGNED state there and re-sending
+            // would only churn the log and the engine ops it warns about above.
+            if (auto it = g_lastDeclared.find(id); it != g_lastDeclared.end() && it->second == sent) {
+                bool resend = false;
+                if (APMFBridge::IsEquipAuthorityEnforced()) {
+                    RE::TESObjectARMO* adrift = nullptr;
+                    for (const auto& k : sent.keys) {
+                        auto* ar = RE::TESForm::LookupByID<RE::TESObjectARMO>(k.first);
+                        if (!ar) continue;                                          // not an ARMO: skip
+                        const auto iit = inv.find(ar);
+                        if (iit == inv.end() || iit->second.first <= 0) continue;    // not owned any more
+                        if (iit->second.second && iit->second.second->IsWorn()) continue;
+                        adrift = ar;
+                        break;
+                    }
+                    const auto at = g_lastDeclSentAt.find(id);
+                    resend = adrift != nullptr &&
+                             (at == g_lastDeclSentAt.end() ||
+                              std::chrono::steady_clock::now() - at->second >= kDeclDriftHold);
+                    if (resend)
+                        spdlog::info("[equip-auth] {:08X}: declared '{}' is not worn -- re-declaring (MFO-B63)",
+                                     id, adrift->GetName() ? adrift->GetName() : "?");
+                }
+                if (!resend) return;
+            }
             if (!APMFBridge::DeclareEquipScope(id, owned, denied) ||        // logged in the bridge; retried next refresh
                 !APMFBridge::DeclareEquipSet(id, decl.entries)) {
                 g_lastDeclared.erase(id);
                 return;
             }
             g_lastDeclared[id] = std::move(sent);
+            g_lastDeclSentAt[id] = std::chrono::steady_clock::now();   // MFO-B63: the drift throttle's clock
             spdlog::info("[equip-auth] {:08X}: declare n={} [{}] owned={} denied={} ({}{})", id,
                          decl.entries.size(), decl.names, CategoryNames(owned), CategoryNames(denied),
                          a_why ? a_why : "?", fresh ? ", new claim" : "");

@@ -2182,6 +2182,19 @@ existing `AcquireEquip` `MainThread::Post` path (#62). The trade's
 `RemoveItem` on a force-sold redundant inferior remains the other proven
 un-wear. See `MAP.md` Logistics family, "ARMOR CLASS BY SKILL + PERKS".
 
+**ADDENDUM (2026-09-22, field): the auto-equip is not the only wearer — the
+load-time OUTFIT APPLY is the other, and it fires on CELL TRANSITIONS.**
+`OutfitApply` (AE id `418622`, 1.6.1170 `@0x3BD380`) re-applies the follower's
+SPID/base outfit whenever the cell around him loads, which shoves off whatever
+MFO dressed him in. Two consequences MFO has to live with: the displaced piece
+is not worn at the next service, so anything keyed on "what he is wearing" loses
+it; and the outfit piece it put on IS worn, so anything keyed on "what he is
+wearing" adopts it. Both bit `MFO-B63`. The denial of the outfit piece (APMF's
+ch.17 seat) is NOT a removal — disassembly shows no `RemoveItem` after the denied
+call at `0x3BD690`, so why the shield and hood helmet then VANISHED from
+`GetInventory()` is still NOT DETERMINABLE and wants a
+`TESContainerChangedEvent` probe.
+
 ### 0.47 `Actor::combatController` is freed INLINE by `Actor::StopCombat`, on BSJobs WORKER threads, with no refcount and no lock; the `CombatGroup` outlives it and is freed by the CombatManager on MAIN (2026-09-21, disassembly of both unpacked runtimes)
 
 **Why this was traced.** The 2026-09-21 party-combat gate (`Scheduler.cpp` `Tick`) read every

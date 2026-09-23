@@ -13,6 +13,28 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-22 branch `fix/mfo-declaration-hygiene-b63` (off `main` `e522f61` = v2.0.10 released;
+  NOT merged, NOT deployed). Drains TWO of the three parts of backlog `MFO-B63`, the "follower gets
+  naked" bug marth confirmed still live on v2.0.10.** No Fable review on this round by marth's
+  token order (LOW TOKEN WEEK): coordinator diff read plus green CI only. The diagnosis was NOT
+  re-derived — it is Fable's, in memory `field-diag-2026-09-22` (F1). Both changes are in
+  `Logistics_Economy.cpp` `RefreshEquipDeclaration` and nothing else:
+  (1) a declared ARMO that is **not worn** at the next service is now a CHANGE and the set is
+  re-sent, under enforcement only, throttled to 3 s (`kDeclDriftHold` / `g_lastDeclSentAt`) —
+  `MFO-B41`'s weapon-ledger detector generalised to armor. This is the part that actually closes
+  the bare body: the set still held the robes, APMF correctly denied the engine's outfit piece, and
+  SEND-ONLY-ON-CHANGE then swallowed seven correct re-picks.
+  (2) **nothing is declared while `!Is3DLoaded()`** and both caches are dropped, which IS the dirty
+  mark, so the first loaded tick re-sends. APMF records a set for an unloaded actor, skips the pass
+  and says so, and by contract has no re-assert tick.
+  **CUT BY MARTH, deliberately still open:** best-per-slot instead of `pick + everything else
+  worn`. It fixes a different window (the outfit piece being adopted into the set because it is
+  worn, which reads as "wearing the wrong thing") and is a restructure of the judge's output. It
+  was written and then backed out; the ready-to-dispatch notes are in ClickUp `86e3d6ay6` and
+  summarised in `Docs/REVIEW-BACKLOG.md` `MFO-B63`. Also still open and untouched: the
+  `TESContainerChangedEvent` probe for the shield and hood helmet vanishing from `GetInventory()`
+  after the same `OutfitApply`.
+
 - **2026-09-23 Deck run (v2.0.9 line deployed) -- Fable field diagnosis + branch
   `fix/mfo-cast-latch-gambit-set` (off `main` `10a28b2`; NOT merged, NOT deployed; NO full Fable
   review on the round by marth's token order, coordinator diff read + green CI only).**
