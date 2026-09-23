@@ -304,7 +304,7 @@ namespace MFO::Config {
     // the road is re-decided only at a fresh DISPATCH, and a leg already in flight
     // is retargeted and released on whichever road started it.
     // Wholly inert unless APMF v0.9.5+ is in the load order. No save state.
-    inline std::atomic<bool>  g_lootTravelViaApmfTravel{ false };
+    inline std::atomic<bool>  g_lootTravelViaApmfTravel{ true };
 
     // Same principle, the RETREAT counterpart: when APMF is present,
     // RetreatFill (Packages.cpp) -- shared by act.flee and the opt-in

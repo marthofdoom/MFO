@@ -276,7 +276,7 @@ namespace MFO::Config {
             g_legacyCastHybrid   = false;   // default = APMF owned cast model (animated)
             g_apmfSpellAllowList = true;    // default = gate the AI to the gambit spells (ch.8 allow-list), inert without APMF v4+
             g_apmfLootTravel     = true;    // default = APMF package-offer loot-travel, inert without APMF
-            g_lootTravelViaApmfTravel = false;  // default OFF = the proven MFO-package road is the CONTROL (A/B)
+            g_lootTravelViaApmfTravel = true;   // default ON (marth 2026-09-23: ship 1): loot walks on APMF ch.19 when APMF v10+ is present, else MFO's own road
             g_apmfRetreat        = true;    // default = APMF package-offer retreat, inert without APMF
             g_apmfEquipAuthority = true;    // default = declare the worn set to APMF (equip authority), inert without APMF v7+
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
