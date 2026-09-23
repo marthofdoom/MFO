@@ -267,7 +267,7 @@ releases **by eviction** with a non-actor XMarker.
   TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
   EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
   followers (Lucien, prio-80 quest). So self routes through
-  **`Actuation::CastSelfDirect`** (`Actuation_Direct.cpp:829`, public) — effect + magicka only,
+  **`Actuation::CastSelfDirect`** (`Actuation_Direct.cpp:951`, public) — effect + magicka only,
   **NO equip, NO channel** (registry `g_selfCast`, worker-serial; `SelfCastReconcile`
   ticks it from `Diagnostics` before `Loadout::Tick`; `ClearSelfCasts` on revert).
   **NEVER equips the spell**: `CastSpellImmediate`(kInstant) applies the effect
@@ -303,7 +303,7 @@ releases **by eviction** with a non-actor XMarker.
 - **CONCENTRATION = DIRECT FORCE everywhere, no package (`CastTargetDirect`) — see
   `Docs/CAST-DELIVERY.md` (canonical).** BOTH the Logistics OOC dispatch AND combat's
   `ConcentrationCast` deliver EVERY non-self concentration cast (player/ally/foe)
-  through `Actuation::CastTargetDirect` (`Actuation_Direct.cpp:1141`) — `CastSpellImmediate` straight onto the target
+  through `Actuation::CastTargetDirect` (`Actuation_Direct.cpp:1317`) — `CastSpellImmediate` straight onto the target
   + magicka deduct, the SAME known-working force `CastSelfDirect` uses, touching NO
   package. Why: the package route `§4.6`-DECLINED every tick for a **package-locked
   custom follower** (Lucien 2F00591F, prio-80 quest owns the cast alias) — OOC his
@@ -314,7 +314,27 @@ releases **by eviction** with a non-actor XMarker.
   §0.13), so the AI stays denied while MFO's stream delivers. **CADENCE CONTRACT
   (`kConcApplyPeriod`, 1 s):** a concentration magnitude/cost is authored PER SECOND,
   so the channel re-applies every ~1 s (fCastCooldown pacing quartered heal throughput
-  — the "heals feel broken" bug); FF spells keep the fCastCooldown beat. **REAL-EFFECT
+  — the "heals feel broken" bug); FF spells keep the fCastCooldown beat. **CHARGE FOR TIME
+  (v2.0.12, ClickUp 86e3d6dp0) — the direct road's deduct sites:** the engine charges
+  nothing on this road (ENGINE_NOTES §0.22), so MFO deducts `CalculateMagickaCost(caster)`
+  (the caster's EFFECTIVE cost: skill curve + `kModSpellCost` perk entry point; per
+  SECOND for concentration; the SAME function the engine's own `MagicCaster::
+  GetCurrentSpellCost` uses) × SECONDS, inside the existing main-thread posts:
+  `ApplySelfEffect` (`Actuation_Direct.cpp:441`, deduct `:501`), `ApplyTargetEffect`
+  (`:547`, deduct `:625`), and the release-time `PostSettle` (`:415`, deduct `:426`). A
+  TIMED stream (`SelfCastState`/`TargetCastState::timed`: momentary concentration —
+  self `ConcMomentary` `:355`, target = concentration && kind != Buff) keeps a WORKER-side
+  `paidThrough` clock in the stream map: `BeatChargeSec` (`:382`) bills 1 s on the first
+  beat, then the time since `paidThrough` capped at the previous beat + sustain `window`;
+  `SettleSec` (`:403`) bills the remainder on EVERY release (self switch `:1108`, self
+  reconcile `:1266`, target switch `:1504`, target reconcile `:1619`). Only the seconds
+  cross threads, by value. Sticky wards (guarded — a skipped beat must not advance the
+  clock) and FF keep the flat per-application charge. AUTO's `ApplyEffectFromTo` (`:775`,
+  no stream, no release) is NOT timed. Clamp = the live pool (#6); running dry ends the
+  stream via the unchanged MAGICKA-OUT release. **What breaks:** moving a deduct off the
+  main-thread post, or advancing `paidThrough` on a beat the post can skip, mis-bills;
+  resetting `paidThrough` anywhere but stream creation double-charges the first second.
+  The AI-fired road is charged by the engine and must never gain an MFO deduct. **REAL-EFFECT
   CONTRACT (`SustainConcentrationEffect`, main thread — marth's ruling, supersedes the
   removed `ApplyConcentrationBeat` RestoreActorValue recreation):** a bare one-shot
   `CastSpellImmediate` applies ~0 of a per-second concentration magnitude (rate × ~one

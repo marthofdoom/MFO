@@ -35,7 +35,8 @@ fire-and-forget or concentration — with a single engine call:
 ```
 follower->GetMagicCaster(kInstant)->CastSpellImmediate(spell, false, target, 1.0f, false, 0.0f, follower);
 // then hand-deduct the follower's real magicka (CastSpellImmediate spends none, §0.22):
-//   spend = min(CalculateMagickaCost(follower), pool);  RestoreActorValue(kDamage, kMagicka, -spend);
+//   spend = min(CalculateMagickaCost(follower) x seconds, pool);  RestoreActorValue(kDamage, kMagicka, -spend);
+//   (seconds = 1 for an FF cast; the time actually channeled for a concentration stream, see THE BEAT CADENCE)
 // ALWAYS on the main thread (MainThread::Post), re-resolving actors by FormID inside the post.
 ```
 
@@ -268,9 +269,30 @@ the stream cap. Keep each window larger than the beat gap.
 ## THE BEAT CADENCE
 
 A concentration spell's cost is authored **per second**, so a stream beats about once per
-second (`kConcApplyPeriod` = 1 s) while its rule wins: each beat deducts one second's cost
-(clamped to the pool) and re-arms the sustained effect's window. Fire-and-forget spells beat at
-`fCastCooldown` instead (their magnitude is per CAST; a 1 s beat would multiply it).
+second (`kConcApplyPeriod` = 1 s) while its rule wins and re-arms the sustained effect's window
+on each beat. Fire-and-forget spells beat at `fCastCooldown` instead (their magnitude is per
+CAST; a 1 s beat would multiply it).
+
+**Cost: charged for the time channeled (v2.0.12, ClickUp 86e3d6dp0).** `CalculateMagickaCost(caster)`
+is the caster's EFFECTIVE cost (skill cost curve, then the `kModSpellCost` perk entry point, which
+is also where perk-borne Fortify-School reductions land; disassembled AE 11321 / SE 11213, and the
+engine's own `MagicCaster::GetCurrentSpellCost` calls the same function), and for a concentration
+spell it is a cost PER SECOND. Until v2.0.12 each beat deducted ONE second, but beats land
+~1.2-2.0 s apart and a released stream's sustained effect ran on up to its window past the last
+beat: across 44 field streams followers paid for 48% of the healing seconds they delivered. Now a
+TIMED stream (a momentary concentration stream: heal/damage, self or target, proxy included) keeps a
+worker-side `paidThrough` clock. The first beat pays one second ahead. Each later beat pays the
+seconds since `paidThrough`, up to where the previous beat's sustain window ran out (a gap longer
+than the window was not channeled). Every release (switch, stale, cap, heal-full, magicka-out,
+gone) SETTLES the rest: the seconds from `paidThrough` to the release, capped at the last beat plus
+its window. Every deduct stays in its main-thread post, clamped to the live pool; running dry still
+ends the stream through the MAGICKA-OUT release. Sticky concentration wards (their beats are skipped
+while the ward is up) and FF casts keep the per-application charge. AUTO's fan-out
+(`ApplyEffectFromTo`) has no stream to time and is unchanged. Log: the `SELF-CAST` / `FORCE-CAST`
+line shows `cost C x S s = spent`, and a release logs `SETTLE (reason) -- S s x C/s`.
+Worked example (4/s effective, beats 1.5 s apart at 0 / 1.5 / 3.0 / 4.5 s, released 2.8 s after the
+last beat at 7.3 s): before 4 beats x 4 = 16 for 7.3 s of healing (55%); now 4 + 2 + 6 + 6 + settle
+11.2 = 29.2 = 7.3 s x 4 (100%).
 
 ## GATES (every apply)
 

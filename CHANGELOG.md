@@ -8,6 +8,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 ## v2.0.12 -- Unreleased
 
 - **The [L] on the board now lights while a follower walks to loot.** Before, it only lit for a moment when he actually picked something up. It now also stays lit for the whole walk, but only once he is really on his way. A trip that has been sent but that he has not started yet stays dark.
+- **Followers pay the full magicka for a held heal.** A follower channeling a heal or a damage stream on MFO's direct road paid for about half of it. He was charged one second of the spell's cost per beat, but beats land more than a second apart, and the heal kept running for a few seconds after the last beat. He now pays for every second the spell actually ran, and the rest is settled when the stream ends. He can never be charged more magicka than he has. When he runs dry the stream stops, as before.
+- **The cost itself was already right.** MFO asks the game for the spell's price, and that price already includes the caster's skill and his cost perks. It is the same number the game uses when a follower casts on his own.
 - **The walk-to-loot gait setting is marked as not working.** Followers run on loot trips whatever the setting says, and it looks like it never changed anything. Run is the speed built into the travel packages and also the default, so it only ever appeared to work. The MCM now says so instead of pretending. A real fix is planned.
 
 ## v2.0.11 -- A follower who ends up bare gets dressed again
