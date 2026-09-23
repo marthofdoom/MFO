@@ -1679,7 +1679,7 @@ declared there and defined in their home module). Layout:
 - `Logistics_Cast.cpp` (269) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
   `TopTwoSchoolMask`, `LearnCarriedTomes:137`, school name/keyword helpers.
-- `Logistics_Economy.cpp` (1188) — #21 economy: mage-apparel scoring,
+- `Logistics_Economy.cpp` (1914 as of v2.0.11; the older "1188" was stale) — #21 economy: mage-apparel scoring,
   `UnlockCollegeTomes:226`, `EquipBestOwnedGear:297`, `BuildBuyThresholds:425`,
   `EconomyProbe:543`, public buy helpers (`MageApparelBuyKey:1148` et al).
 - **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
@@ -1808,7 +1808,15 @@ declared there and defined in their home module). Layout:
   (`Logistics_Economy.cpp:297`) — THE WEAR DECISION:** highest-scored owned piece
   that beats the worn score → the existing `AcquireEquip` `MainThread::Post` path
   (#62; equipping auto-unequips the displaced piece), the keep buckets
-  (`primary = ArmorScore`, key 10+slot), the redundant-inferior force-sell
+  (`primary = ArmorScore`, key 10+slot) — **NOTE the two different notions of
+  "slot" here, found the hard way on `MFO-B63`: `ArmorIsBetter` judges per BIPED
+  BIT (a candidate must beat the worn piece on EVERY bit it covers), while
+  `ArmorBuySlot` / `MageClothingSlot` / `WornInLogicalSlot` are LOGICAL slots
+  (0 head, 1 body, 2 hands, 3 feet, +4 shield / 4 ring, 5 amulet). They do NOT
+  agree: a piece can be the best-scored candidate for its logical slot and still
+  be refused by `ArmorIsBetter` because another bit it also covers is beaten. Any
+  per-slot restructure of the wear/declare path has to pick one and say which** —
+  the redundant-inferior force-sell
   (`:926`; slot-best by score so the worn OFF-CLASS piece is what sells — the
   trade's `RemoveItem` is the proven un-wear; worn-is-kept (a) yields to it via
   `forceSell`; **and since `fix/mfo-spell-authority-0922` a THIRD `forceSell`
@@ -1839,9 +1847,13 @@ declared there and defined in their home module). Layout:
   **What breaks:** widen `denied` without widening the mapping and the new category
   silently keeps its old worn-is-kept behaviour; map a category MFO owns rather than
   denies and the sell path starts selling gear the follower is wearing on purpose), **OPEN BACKLOG — read
-  before editing `RefreshEquipDeclaration`:** `MFO-B63` (the declaration is pick+worn rather than
-  best-per-slot, it is sent into a 3D-absent actor with no re-send, and SEND-ONLY-ON-CHANGE then
-  swallows the correction — a follower stood bare for 2 min 36 s in the field. DEFERRED, SEV-2), `BuildBuyThresholds:425` → `TradeBridge::BuyThresholds`
+  before editing `RefreshEquipDeclaration`:** `MFO-B63` is PARTLY drained in v2.0.11
+  (`fix/mfo-declaration-hygiene-b63`): the 3D gate and the not-worn re-send SHIPPED (see THE
+  DECLARED WORN SET below). **STILL OPEN:** the declaration is `pick + everything else worn`
+  rather than best-per-slot, so a piece the engine's `OutfitApply` displaced is not in the set and
+  the outfit piece it put on is adopted into the set BECAUSE it is worn — a different window from
+  the bare body (it reads as "wearing the wrong thing"), and a restructure of the judge's output,
+  so it was deliberately NOT taken with the other two, `BuildBuyThresholds:425` → `TradeBridge::BuyThresholds`
   **APPENDED** `armorHeavyBias` / `armorLightBias` / `armorBaseScore[5]`
   (`TradeBridge.h:99-107`; `armorBaseRat` keeps the raw rating as a diagnostic — a
   float score truncated into the int32 would tie its own baseline and re-buy every
@@ -1941,7 +1953,26 @@ declared there and defined in their home module). Layout:
   2):** a re-send is a declaration EVENT and under v7 APMF's slot-less pass answers it by putting
   the declared off-hand weapon in the RIGHT hand before MFO's hop puts both back — four ops and
   a flicker per re-send; the top-up's "give it back" is Actuation's explicit placement, which
-  needs no re-declaration (the item is already in-set). **The judged armor pick is the OOC road's
+  needs no re-declaration (the item is already in-set). **THE TWO EXCEPTIONS TO "UNCHANGED MEANS
+  SILENT" (`MFO-B63` parts 2+3, v2.0.11).** (1) **A DECLARED ARMO THAT IS NOT WORN IS A CHANGE.**
+  Under ENFORCEMENT only (`IsEquipAuthorityEnforced` — in observe mode APMF equips non-forced and
+  the engine is free to take the piece back off, so declared-and-not-worn is the designed state
+  there), a set that compares equal is still re-sent when any declared ARMO the follower still
+  owns is not on his body: that is a piece APMF was told to put on and did not (the hop never ran,
+  it ran into a 3D-absent actor, or the engine took the piece back). Throttled to
+  `kDeclDriftHold` = 3 s since the last send, which is also the only "nothing is in flight" test
+  MFO has — APMF exposes no "the pass ran" query, and the field caught one hop posted at
+  `08:23:16` that did not run until `08:24:42` (85 s). `g_lastDeclSentAt` (anon, worker-serial) is
+  the clock; this is `MFO-B41`'s weapon-ledger detector generalised to armor, on the same 3 s hold
+  (`Actuation.cpp` `kB41Hold`). Non-ARMO keys are skipped (`MFO-B41` owns the hands), as is a form
+  the follower no longer owns (the next rebuild drops it; without that skip a vanished piece would
+  re-send forever). Logged `[equip-auth] <id>: declared '<name>' is not worn -- re-declaring
+  (MFO-B63)`. (2) **NOTHING IS DECLARED WHILE `!Is3DLoaded()`** — APMF's pass needs a loaded actor:
+  with the 3D gone it records the set, skips the pass and says so ("declaration of N item(s)
+  recorded, equip pass skipped. Re-declare once the actor is loaded"), and BY CONTRACT it has no
+  re-assert tick, so re-declaring is MFO's job. The send is skipped and `g_lastDeclared` +
+  `g_lastDeclSentAt` are dropped, which IS the dirty mark: the first loaded tick sends the rebuild
+  as a change. The standing claim is kept across the transition. **The judged armor pick is the OOC road's
   only (`a_judgeArmor`, F9)** — the combat road (`DeclareFromLedger`) declares worn armor as is,
   because legacy never wears armor in combat — and is computed ONCE per tick (F10):
   `EquipBestOwnedGear` hands its pick to the guard through `g_handedPick` (follower-keyed,

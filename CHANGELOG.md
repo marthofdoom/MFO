@@ -5,6 +5,11 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.11 -- A follower who ends up bare gets dressed again
+
+- **Gear MFO asked for and did not get is asked for again.** Skyrim puts a follower's own starting outfit back on whenever the cell around him loads, which shoves off whatever MFO dressed him in. MFO and Harbinger between them had the right answer the whole time, but MFO only spoke up when its gear list changed, so once the right list had been sent nothing was ever sent again, even with not one piece of it on the follower's body. On the deck that left a follower standing bare for two and a half minutes while MFO worked out the right robes seven times over and said nothing. A piece that is on the list and not on the follower is now treated as a change and the list goes out again, at most once every three seconds. This is the same fix the forced weapon in a follower's hand already had, now covering armor and clothing.
+- **MFO no longer dresses a follower who is not there yet.** During a load screen the follower exists but his body does not, and a gear list sent in that window is filed and never worn. MFO now waits until he is really loaded in and sends the list then.
+
 ## v2.0.10 -- A follower with two spell gambits casts both of them
 
 - **A follower with two spell gambits now casts both of them.** MFO picked one spell, put it in a hand and then refused every cast of any other spell for as long as that pick stood. The second spell you gave that follower was one of the spells being refused. So a mage set up with a heal and two attack spells cast the first attack spell over and over and never once cast the other, even while holding it charged and ready in the free hand. A spell you gave a follower as a gambit is now allowed to cast whenever the game reaches for it. Only spells you never gave them are refused. There are two hands and both of them work now.
