@@ -137,11 +137,26 @@ namespace MFO::Forms {
     // Also load-bearing for the PACKAGE-THEFT guard (Logistics.cpp): a follower
     // legitimately running his APMF-delivered package must read as "on the travel
     // package", never as "stolen". Unresolved extras compare as nullptr (safe).
+    // APMF ch.19 kIntent_Travel's OWN packages (APMF.esl local 0x800..0x807, APMF
+    // native/channels/Travel.cpp kTravelPkgBase/kTravelSlots). Loot-travel ROAD 2
+    // (bLootTravelViaApmfTravel) walks the follower on one of these, so they must
+    // read as "on the travel package" or the theft guard abandons every road-2 leg
+    // after kStealGrace. Resolved in Resolve(); all null when APMF.esl is absent.
+    inline constexpr const char* kAPMFPlugin        = "APMF.esl";
+    inline constexpr RE::FormID  kAPMFCh19TravelBase = 0x800;
+    inline constexpr int         kAPMFCh19TravelSlots = 8;
+    inline RE::TESPackage* g_apmfCh19TravelPackage[kAPMFCh19TravelSlots]{};
+
     inline bool IsTravelPackage(const RE::TESPackage* a_pkg) {
-        return a_pkg && (a_pkg == g_travelPackage  || a_pkg == g_travelPackage1 ||
-                         a_pkg == g_travelPackage2 || a_pkg == g_travelPackage3 ||
-                         a_pkg == g_apmfLootTravelPackage0 || a_pkg == g_apmfLootTravelPackage1 ||
-                         a_pkg == g_apmfLootTravelPackage2 || a_pkg == g_apmfLootTravelPackage3);
+        if (!a_pkg) return false;
+        if (a_pkg == g_travelPackage  || a_pkg == g_travelPackage1 ||
+            a_pkg == g_travelPackage2 || a_pkg == g_travelPackage3 ||
+            a_pkg == g_apmfLootTravelPackage0 || a_pkg == g_apmfLootTravelPackage1 ||
+            a_pkg == g_apmfLootTravelPackage2 || a_pkg == g_apmfLootTravelPackage3)
+            return true;
+        for (auto* p : g_apmfCh19TravelPackage)
+            if (p && a_pkg == p) return true;
+        return false;
     }
     inline RE::TESQuest*   g_retreatQuest   = nullptr; // RETREAT PROBE
     inline RE::TESPackage* g_retreatPackage = nullptr; // RETREAT PROBE
