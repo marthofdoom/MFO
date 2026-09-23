@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.12 -- Unreleased
+
+- **The [L] on the board now lights while a follower walks to loot.** Before, it only lit for a moment when he actually picked something up. It now also stays lit for the whole walk, but only once he is really on his way. A trip that has been sent but that he has not started yet stays dark.
+
 ## v2.0.11 -- A follower who ends up bare gets dressed again
 
 - **Gear MFO asked for and did not get is asked for again.** Skyrim puts a follower's own starting outfit back on whenever the cell around him loads, which shoves off whatever MFO dressed him in. MFO and Harbinger between them had the right answer the whole time, but MFO only spoke up when its gear list changed, so once the right list had been sent nothing was ever sent again, even with not one piece of it on the follower's body. On the deck that left a follower standing bare for two and a half minutes while MFO worked out the right robes seven times over and said nothing. A piece that is on the list and not on the follower is now treated as a change and the list goes out again, at most once every three seconds. This is the same fix the forced weapon in a follower's hand already had, now covering armor and clothing.

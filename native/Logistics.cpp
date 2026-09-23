@@ -802,6 +802,18 @@ namespace MFO::Logistics {
         auto it = g_justLooted.find(a_id);
         return it != g_justLooted.end() && Clock::now() < it->second;
     }
+    // [L] while WALKING (marth 2026-09-23): lit while the follower holds a live
+    // loot leg (Walking phase) AND his current package really is a travel
+    // package -- the same engine read the service's onTravelNow/legEngaged uses.
+    // A dispatched leg the engine has not adopted yet (still on his follow
+    // package) reads false. Live read each snapshot, so no window is needed:
+    // a walk lasts seconds, far past the round-robin revisit gap.
+    bool WalkingLootLeg(RE::Actor* a_follower) {
+        if (!a_follower) return false;
+        const auto* tr = SlotOf(a_follower->GetFormID());
+        return tr && tr->phase == TravelPhase::Walking &&
+               Forms::IsTravelPackage(a_follower->GetCurrentPackage());
+    }
 
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;

@@ -66,8 +66,9 @@ namespace MFO::Board {
         // Activity glyphs for the HUD [C][L][T] strip + the Followers-tab status
         // word. Precomputed on the worker (Logistics::JustLooted/IsTrading) so
         // the render thread reads only these plain bools (#4). `looting` is a
-        // brief true-on-confirmed-acquisition pulse (marth 2026-09-06), NOT
-        // "currently on a loot excursion" -- see Logistics.h's JustLooted doc.
+        // brief true-on-confirmed-acquisition pulse (marth 2026-09-06) OR the
+        // follower is walking a loot leg ON the travel package (2026-09-23) --
+        // see Logistics.h's JustLooted / WalkingLootLeg docs.
         // Mutually exclusive in practice -- looting/trading are out-of-combat
         // only, and a follower never trades mid-loot excursion.
         bool          looting = false;
