@@ -623,3 +623,6 @@ fixes for a symptom neither one fixed (the real cause was that a `BSTEventSink`
 cannot consume, which `49c9d1b` addresses). They are not known-wrong, but they are
 unproven and were kept only because they are independently defensible. If a review
 finds either is a no-op or harmful, reverting is fine.
+
+- **MFO-B73 (SEV-4, raised against f5ea00e, Opus 5.5 tier-A round 2).** "An outside positive write larger than W is measured as an award and permanently inflates W by X - W_old." With W >= X the detection line prints and the hold reverts the write; with W < X (any new or low-level follower) the write is counted as an engine award, withheld with no credit, W becomes X and no line prints, so later real awards are under-measured by X - W_old for good. Belongs with MFO-B70 (what to do about outside changes).
+- **MFO-B74 (SEV-5, raised against f5ea00e).** "A false 'outside change' line prints once for a granted fixed-stat follower on a load-time re-slam." The difference is -G (the granted points). Latched, one line, noise not correctness.

@@ -428,7 +428,10 @@ namespace MFO::ProgAllocator {
             // lowering hold after it, in whatever later session, heals exactly the
             // drop. Never above full (<= the damage held). Health only.
             if (a_st.hmsTarget[0] < cur[0]) {
-                const float drop = std::max(0.0f, heldPrevH - a_st.hmsTarget[0]);
+                // Clamp to the live base (review SEV-5 on f5ea00e): the current-health
+                // drop is min(held, live) - target, so an engine re-slam that set Health
+                // between target and held cannot be over-healed.
+                const float drop = std::max(0.0f, std::min(heldPrevH, cur[0]) - a_st.hmsTarget[0]);
                 const float dmg  = std::max(0.0f, -a_actor->GetActorValueModifier(
                                        RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth));
                 const float heal = std::min(drop, dmg);
